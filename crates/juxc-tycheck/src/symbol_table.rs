@@ -75,9 +75,21 @@ pub struct SymbolTable {
     pub method_selections: HashMap<juxc_source::Span, usize>,
     /// Top-level interfaces indexed by FQN. Same shape as `classes`.
     pub interfaces: HashMap<String, InterfaceSig>,
-    /// Top-level functions (outside any class) indexed by FQN.
-    /// Overloads aren't supported yet — a duplicate emits `E0400`.
+    /// Top-level functions (outside any class) indexed by FQN. When a name
+    /// is OVERLOADED this holds member 0; the whole group is in
+    /// [`Self::function_overloads`].
     pub functions: HashMap<String, FunctionSig>,
+    /// Free-function overload GROUPS (T.3.1, which names free functions in
+    /// the candidate set). Present only for a name declared more than once,
+    /// and then it holds every member INCLUDING the one in
+    /// [`Self::functions`] at index 0. Member 0 emits under the plain name,
+    /// member K under `name__ovK` -- the same identity scheme methods use, so
+    /// both kinds of overloading behave alike from the call site out.
+    pub function_overloads: HashMap<String, Vec<FunctionSig>>,
+    /// Free-function overload selections recorded by the checker -- call span
+    /// -> index into [`Self::function_overloads`]. The mirror of
+    /// [`Self::method_selections`], read by the backend at call emission.
+    pub function_selections: HashMap<juxc_source::Span, usize>,
     /// Type aliases (`type Name<...>? = TypeRef;`) indexed by FQN.
     /// Tycheck expands a reference to an alias into its target
     /// before further inference — `Ty::User` never holds an alias
@@ -481,6 +493,46 @@ impl SymbolTable {
                     .collect();
                 (same_arity.len() == 1).then(|| same_arity[0])
             })
+    }
+
+    /// The overload group for a free function named by an exact FQN key, or
+    /// by a bare name exactly one key ends with. `None` when the name is not
+    /// overloaded, which callers read as "member 0, plain name".
+    pub fn function_overload_group(&self, bare_or_fqn: &str) -> Option<&Vec<FunctionSig>> {
+        if let Some(g) = self.function_overloads.get(bare_or_fqn) {
+            return Some(g);
+        }
+        if bare_or_fqn.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{bare_or_fqn}");
+        let mut hits = self
+            .function_overloads
+            .iter()
+            .filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((_, g)), None) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// The group index a free-function DECLARATION emits under -- the number
+    /// in `name__ovK`. `None` means the name is not overloaded, which is the
+    /// plain name, same as index 0.
+    ///
+    /// Matched on the parameter-type shape, the way a method declaration
+    /// finds its own index, so the declaration and every call site agree
+    /// without either of them counting occurrences.
+    pub fn function_overload_index(
+        &self,
+        bare_or_fqn: &str,
+        param_types: &[TypeRef],
+    ) -> Option<usize> {
+        let group = self.function_overload_group(bare_or_fqn)?;
+        let want = type_list_shape_key(param_types);
+        group
+            .iter()
+            .position(|fs| param_shape_key(&fs.params) == want)
     }
 
     /// Method-overload pick (§T.3, Phase-1 count rule): when
@@ -3379,13 +3431,7 @@ fn ensure_top_level_unique(
         || table.functions.contains_key(name)
         || table.consts.contains_key(name)
     {
-        diagnostics.push(
-            Diagnostic::error(
-                code::Code::E0400_DuplicateDeclaration,
-                format!("`{name}` is declared more than once at the top level"),
-            )
-            .with_span(span),
-        );
+        report_duplicate_top_level(name, span, diagnostics);
         false
     } else {
         true
@@ -3782,12 +3828,17 @@ fn insert_function(
     } else {
         make_fqn(package, &fn_decl.name.text)
     };
-    if !ensure_top_level_unique(table, &fqn, fn_decl.span, diagnostics) {
+    // A name already taken by a TYPE or a CONST is a duplicate however it is
+    // spelled -- only a function on a function is overloading. `main` is
+    // never overloadable: a program has exactly one entry point (§E).
+    if table.is_type_name(&fqn)
+        || table.consts.contains_key(&fqn)
+        || (fqn == "main" && table.functions.contains_key(&fqn))
+    {
+        report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
         return;
     }
-    table.functions.insert(
-        fqn,
-        FunctionSig {
+    let sig = FunctionSig {
             visibility: fn_decl.visibility,
             wheres: fn_decl
                 .wheres
@@ -3833,13 +3884,40 @@ fn insert_function(
                 fn_decl.body.clone()
             },
             span: fn_decl.span,
-        },
-    );
+    };
+    // A second declaration of the name is an OVERLOAD (§T.3.1) as long as it
+    // differs in its parameter shape. Identical shapes are a real duplicate
+    // and still fire E0400 -- the call site could not tell them apart.
+    if let Some(first) = table.functions.get(&fqn).cloned() {
+        let group = table
+            .function_overloads
+            .entry(fqn.clone())
+            .or_insert_with(|| vec![first]);
+        let want = param_shape_key(&sig.params);
+        if group.iter().any(|fs| param_shape_key(&fs.params) == want) {
+            report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
+            return;
+        }
+        group.push(sig);
+        return;
+    }
+    table.functions.insert(fqn, sig);
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// The E0400 a second declaration of a top-level name earns.
+fn report_duplicate_top_level(name: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.push(
+        Diagnostic::error(
+            code::Code::E0400_DuplicateDeclaration,
+            format!("`{name}` is declared more than once at the top level"),
+        )
+        .with_span(span),
+    );
+}
 
 fn field_sig(field: &FieldDecl) -> FieldSig {
     FieldSig {

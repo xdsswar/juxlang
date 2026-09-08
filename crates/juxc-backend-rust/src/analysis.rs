@@ -3093,6 +3093,43 @@ impl crate::RustEmitter {
     /// interface value flowing on must be `Rc`-cloned.
     ///
     /// See [`Self::iface_coercion_to`] / [`Self::emit_expr_coerced_to_iface`].
+    /// The target of an interface upcast, with any generic argument that names
+    /// a type parameter out of scope HERE replaced by Rust's inference
+    /// placeholder.
+    ///
+    /// The target type is the callee's DECLARED slot -- `Container<T>` for
+    /// `render(Container<T> c)` -- and `T` belongs to the callee, not to the
+    /// caller. Emitting it literally produced
+    /// `as Rc<dyn Container<T>>` at a call site that has no `T`
+    /// (rustc E0425). `Rc<dyn Container<_>>` is legal in expression position
+    /// and infers the argument the value actually implements, which is the
+    /// right answer without the backend having to redo the call's generic
+    /// inference.
+    fn cast_type_in_caller_scope(&self, ty: &TypeRef) -> TypeRef {
+        let mut out = ty.clone();
+        for arg in &mut out.generic_args {
+            let juxc_ast::GenericArg::Type(t) = arg else { continue };
+            let bare = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            // A bare single-segment name that resolves to no type at all is a
+            // type PARAMETER of whatever declared the slot.
+            let is_callee_type_param = t.generic_args.is_empty()
+                && t.array_shape.is_none()
+                && t.name.segments.len() == 1
+                && !self.current_type_params.contains(bare)
+                && crate::types::jux_primitive_to_rust(t).is_none()
+                && !self.bare_name_is_user_type(bare)
+                && self.lookup_class_by_bare_or_fqn(bare).is_none()
+                && self.lookup_interface_by_bare_or_fqn(bare).is_none();
+            if is_callee_type_param {
+                t.name.segments = vec![juxc_ast::Ident {
+                    text: "_".to_string(),
+                    span: t.span,
+                }];
+            }
+        }
+        out
+    }
+
     pub(crate) fn iface_coercion_to(
         &self,
         target_ty: &TypeRef,
@@ -3339,13 +3376,12 @@ impl crate::RustEmitter {
                 // Produces `std::rc::Rc<dyn Trait>` (value-position emission).
                 // For a `T?` slot the `as` targets the INNER trait object, not
                 // the `Option<…>` — peel the nullable for the cast type.
+                let mut cast_ty = target_ty.clone();
                 if nullable {
-                    let mut inner = target_ty.clone();
-                    inner.nullable = false;
-                    self.emit_value_type_as_rust(&inner);
-                } else {
-                    self.emit_value_type_as_rust(target_ty);
+                    cast_ty.nullable = false;
                 }
+                let cast_ty = self.cast_type_in_caller_scope(&cast_ty);
+                self.emit_value_type_as_rust(&cast_ty);
                 self.w.push(')');
             }
             IfaceCoercion::CloneDyn { clone_first } => {

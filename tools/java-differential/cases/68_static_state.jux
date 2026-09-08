@@ -1,0 +1,36 @@
+public class Ids {
+    private static int next = 0;
+
+    public static int take() {
+        Ids.next = Ids.next + 1;
+        return Ids.next;
+    }
+
+    public static int peek() { return Ids.next; }
+    public static void reset() { Ids.next = 0; }
+}
+
+public class Node {
+    private int id;
+    private String tag;
+    public Node(String tag) {
+        this.id = Ids.take();
+        this.tag = tag;
+    }
+    public String describe() { return this.id + ":" + this.tag; }
+}
+
+public void main() {
+    print(Ids.peek());
+    var a = new Node("a");
+    var b = new Node("b");
+    print(a.describe());
+    print(b.describe());
+    print(Ids.peek());
+    print(Ids.take());
+    Ids.reset();
+    print(Ids.peek());
+    var c = new Node("c");
+    print(c.describe());
+    print(a.describe());
+}

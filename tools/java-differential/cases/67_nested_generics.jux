@@ -1,0 +1,52 @@
+public class Cell<T> {
+    private T v;
+    public Cell(T v) { this.v = v; }
+    public T get() { return this.v; }
+    public void set(T v) { this.v = v; }
+    public String show() { return "Cell(" + this.v + ")"; }
+}
+
+public int sumRows(Vec<Vec<int>> rows) {
+    int t = 0;
+    for (var row : rows) {
+        for (var x : row) {
+            t = t + x;
+        }
+    }
+    return t;
+}
+
+public void main() {
+    var rows = new Vec<Vec<int>>();
+    var r0 = new Vec<int>();
+    r0.push(1);
+    r0.push(2);
+    var r1 = new Vec<int>();
+    r1.push(10);
+    r1.push(20);
+    rows.push(r0);
+    rows.push(r1);
+    print(sumRows(rows));
+    print(rows.len());
+    print(rows[0].len());
+    print(rows[1][0]);
+
+    // The row is a reference: writing through the handle is visible in both.
+    r0.push(3);
+    print(rows[0].len());
+    print(sumRows(rows));
+
+    var deep = new Cell<Cell<Cell<int>>>(new Cell<Cell<int>>(new Cell<int>(5)));
+    print(deep.get().get().get());
+    print(deep.get().get().show());
+    deep.get().get().set(9);
+    print(deep.get().get().get());
+
+    var cells = new Vec<Cell<String>>();
+    cells.push(new Cell<String>("a"));
+    cells.push(new Cell<String>("b"));
+    print(cells[0].show());
+    print(cells[1].get());
+    cells[0].set("z");
+    print(cells[0].get());
+}

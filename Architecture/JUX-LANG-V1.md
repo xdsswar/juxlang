@@ -2621,6 +2621,47 @@ opposite directions:
 
 **Primitives can be nullable.** Per `ERRATA.md` E5, `T?` is well-formed for any type `T`, reference or primitive. A nullable primitive (`int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics) lowers to a stack `Option` with no boxing: `None` is a discriminant, so a null primitive costs no heap allocation (no Java-style `Integer` boxing). The two spellings `T?` and `Option<T>` denote the same shape (§K.3.1). Nullability is uniform across the type system; there is no reference-only restriction. A `?.` chain whose last segment produces a primitive therefore has type `int?` (or the matching nullable primitive), and a null test / smart-cast remains available when a plain non-null result is wanted.
 
+**Narrowing on a null test (smart-cast).** A local or parameter declared `T?`
+reads as plain `T` wherever the control flow has already proved it non-null.
+Three positions qualify, and they are one rule seen from three sides:
+
+```java
+public String describe(String? s) {
+    if (s != null) {
+        return s.toUpperCase();      // then-branch of `!= null`
+    }
+    return "none";
+}
+
+public String orDash(String? s) {
+    if (s == null) {
+        return "-";                  // the guard clause...
+    }
+    return s.toUpperCase();          // ...narrows the REST of the block
+}
+
+public String pick(String? s) {
+    if (s == null) {
+        return "-";
+    } else {
+        return s.toUpperCase();      // else-branch of `== null`
+    }
+}
+```
+
+The third form is the second one written out. A guard clause narrows only
+when its branch cannot fall through -- it ends in `return` or `throw` on
+every path -- because that is exactly the condition under which the code
+after it is unreachable from the null case.
+
+Narrowing is lexical: it ends where the enclosing block does, and a block that
+REBINDS the name gets none of it. `s = maybeNull();` anywhere in the block --
+before the test or after it -- puts the declared `T?` back for the whole block,
+because a lexical rule cannot promise anything about what a later assignment
+holds. Writing THROUGH the binding is not rebinding it: `s.field = v` and
+`xs[0] = v` leave the binding itself alone and narrow normally, which is what
+makes a guard clause followed by writes to the guarded object work at all.
+
 ### 7.11. Error Handling
 
 Jux uses checked exceptions, compiled internally to discriminated unions for zero-overhead propagation:

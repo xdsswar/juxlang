@@ -2103,6 +2103,45 @@ impl RustEmitter {
                 }
             }
         }
+        // **A Display bound travels in through a signature type too.** An
+        // interface whose default body formats its own `T` declares
+        // `trait Container<T: Display>`, so `render(Container<T> c)` cannot
+        // name that trait unless the FUNCTION's `T` carries the bound as
+        // well -- the same rule the class path applies to its `implements`
+        // list, applied to the positions a signature mentions. Runs before
+        // the early return below: this need has nothing to do with what the
+        // body does.
+        let signature_types = fn_decl.params.iter().map(|p| &p.ty).chain(
+            match &fn_decl.return_type {
+                juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => Some(t),
+                juxc_ast::ReturnType::Void => None,
+            },
+        );
+        let mut from_signature: HashSet<String> = HashSet::new();
+        for ty in signature_types {
+            let Some(seg) = ty.name.segments.last() else { continue };
+            let Some(iface_decl) = self.interface_ast_by_bare(&seg.text).cloned() else {
+                continue;
+            };
+            let bounded = self.interface_displayed_generic_params(&iface_decl);
+            if bounded.is_empty() {
+                continue;
+            }
+            for (p, a) in iface_decl
+                .generic_params
+                .iter()
+                .zip(ty.generic_args.iter())
+            {
+                if !bounded.contains(&p.name.text) {
+                    continue;
+                }
+                let Some(arg_ty) = a.as_type() else { continue };
+                if let Some(tp) = bare_param(arg_ty) {
+                    from_signature.insert(tp);
+                }
+            }
+        }
+        displayed.extend(from_signature);
         if generic_members.is_empty() {
             return displayed;
         }

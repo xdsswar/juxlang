@@ -1257,6 +1257,17 @@ impl RustEmitter {
                     self.w.push(')');
                     self.emitting_format_arg = prev_fmt;
                     self.emitting_comparison_operand = prev_cmp;
+                    // `unwrap` CONSUMES the `Option`, so asserting on the same
+                    // bare local twice moved it -- a use-after-move on a
+                    // program that only ever read. Share the handle instead:
+                    // for a class or a collection that is a refcount bump,
+                    // which is what every other read of one already does. A
+                    // field or an index read has cloned out of its container
+                    // before reaching here, and a `Copy` payload needs
+                    // nothing, so neither takes this.
+                    if self.not_null_operand_shares(inner) {
+                        self.w.push_str(".clone()");
+                    }
                     self.w.push_str(
                         ".unwrap_or_else(|| panic!(\"NullPointerException: \
                          `!!` asserted on a null value\"))",
@@ -1266,6 +1277,36 @@ impl RustEmitter {
                 }
             }
         }
+    }
+
+    /// Whether a `!!` operand must be SHARED rather than consumed.
+    ///
+    /// True for a bare local or parameter whose payload is not `Copy` -- the
+    /// one shape where `unwrap` moves a binding the program still owns. A
+    /// field or element read has already cloned out of its container, and a
+    /// `Copy` payload (`int?`, `bool?`) copies on its own, where a `.clone()`
+    /// would only be noise in the emitted Rust.
+    fn not_null_operand_shares(&self, inner: &Expr) -> bool {
+        let Expr::Path(qn) = inner else { return false };
+        if qn.segments.len() != 1 || self.bare_name_is_instance_member(&qn.segments[0].text) {
+            return false;
+        }
+        let ty = self
+            .local_types
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned())
+            .or_else(|| self.expr_types.get(&expr_span_of(inner)).cloned());
+        matches!(
+            ty,
+            Some(juxc_tycheck::Ty::Nullable(ref t))
+                if matches!(
+                    **t,
+                    juxc_tycheck::Ty::User { .. }
+                        | juxc_tycheck::Ty::String
+                        | juxc_tycheck::Ty::Array { .. }
+                )
+        )
     }
 
     /// Lower `await expr` to Rust's postfix `.await`.

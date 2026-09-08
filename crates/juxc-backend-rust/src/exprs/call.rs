@@ -405,6 +405,24 @@ impl RustEmitter {
             .cloned()
     }
 
+    /// Append the `__ovK` suffix when this call resolved to an overloaded free
+    /// function (§T.3.1).
+    ///
+    /// Tycheck recorded the group index by call span; member 0 keeps the plain
+    /// name. Only a NAMED callee can be one -- a method call arrives as a
+    /// `Field` and carries its own suffix through `pending_method_suffix`.
+    fn emit_fn_overload_suffix(&mut self, call: &CallExpr) {
+        if !matches!(call.callee.as_ref(), Expr::Path(_)) {
+            return;
+        }
+        if let Some(k) = self.symbols.function_selections.get(&call.span) {
+            if *k > 0 {
+                let sfx = format!("__ov{k}");
+                self.w.push_str(&sfx);
+            }
+        }
+    }
+
     /// The `__ovK` suffix a `super.<name>(…)` call targets, picked by argument
     /// count within the enclosing class's merged overload group.
     ///
@@ -1772,6 +1790,7 @@ impl RustEmitter {
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
         let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
         self.emit_expr(&call.callee);
+        self.emit_fn_overload_suffix(call);
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
         self.emitting_call_callee = prev_callee;
@@ -3007,6 +3026,7 @@ impl RustEmitter {
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
         let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
         self.emit_expr(&call.callee);
+        self.emit_fn_overload_suffix(call);
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
         self.emitting_call_callee = prev_callee;

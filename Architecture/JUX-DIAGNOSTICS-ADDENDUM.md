@@ -324,7 +324,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 
 | Code     | Description                                         | Source                        |
 |----------|-----------------------------------------------------|-------------------------------|
-| `E0400`  | Duplicate top-level declaration (class, record, enum, interface, or function) | Single-namespace rule |
+| `E0400`  | Duplicate top-level declaration (class, record, enum, interface, or function) | Single-namespace rule. Two FUNCTIONS of one name form an overload group (T.3.1), not a duplicate, unless their parameter shapes are identical |
 | `E0401`  | Duplicate field in the same class body              | —                              |
 | `E0402`  | Duplicate method in the same class body (lifted once overload resolution lands) | Type system §T.3 |
 | `E0403`  | Duplicate variant in the same enum body             | —                              |

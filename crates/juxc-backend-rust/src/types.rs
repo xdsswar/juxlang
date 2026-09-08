@@ -134,6 +134,19 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // Rust's inference placeholder, put here by
+        // [`crate::RustEmitter::cast_type_in_caller_scope`] for a generic
+        // argument naming a type parameter the CALLEE owns. It is a type
+        // position like any other, but it names nothing to look up.
+        if ty
+            .name
+            .segments
+            .last()
+            .is_some_and(|s| s.text == Self::INFER_PLACEHOLDER)
+        {
+            self.w.push('_');
+            return;
+        }
         // **Kind-trait type-param substitution.** While a subclass's
         // `impl <Ancestor>Kind for Sub<U>` block is being emitted, the member
         // signatures come from the ancestor and name the ancestor's params
@@ -674,6 +687,12 @@ impl RustEmitter {
     /// where a value of the type is stored or passed; keep
     /// [`Self::emit_type_as_rust`] for trait-impl headers, generic bounds,
     /// and `From<>` headers where the bare name is required.
+    /// The Rust inference placeholder, spelled as a one-segment type name so
+    /// it can travel inside a `TypeRef`. Only produced by
+    /// [`crate::RustEmitter::cast_type_in_caller_scope`], for a generic
+    /// argument that names a type parameter belonging to the callee.
+    pub(crate) const INFER_PLACEHOLDER: &'static str = "_";
+
     pub(crate) fn emit_value_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         let prev = self.in_value_type_position;
         self.in_value_type_position = true;

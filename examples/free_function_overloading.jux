@@ -1,0 +1,47 @@
+// Overloaded free functions (§T.3.1).
+//
+// The candidate set §T.3.1 describes has always named them -- "for free
+// functions, in-scope free functions and statics" -- but a second declaration
+// of the same name was rejected outright, so the pair below was a compile
+// error while the identical pair written as METHODS resolved fine.
+//
+// They resolve by the same rule methods use: filter to the members whose
+// argument count fits, then score the rest against the argument types. Member
+// 0 emits under the plain name and member K as `name__ovK`, so a call reaches
+// the same body whichever kind of callee it names.
+
+public String show(int v) { return "int:" + v; }
+public String show(double v) { return "double:" + v; }
+public String show(String v) { return "string:" + v; }
+public String show(int a, int b) { return "two:" + (a + b); }
+
+// Overloads need not agree on a return type -- the picked member's is the
+// call's, so `size("x")` is an int and `size(1, 2)` is a String.
+public int size(String s) { return s.length(); }
+public String size(int a, int b) { return "pair"; }
+
+public class Fmt {
+    public String of(int v) { return "m-int:" + v; }
+    public String of(String v) { return "m-string:" + v; }
+}
+
+public void main() {
+    print(show(1));
+    print(show(2.5));
+    print(show("x"));
+    print(show(3, 4));
+
+    int n = 9;
+    String s = "text";
+    print(show(n));
+    print(show(s));
+
+    print(size("abcd"));
+    print(size(1, 2));
+    print(size("abcd") + 1);
+
+    // The method form, for contrast: same rule, same result.
+    var f = new Fmt();
+    print(f.of(7));
+    print(f.of("y"));
+}

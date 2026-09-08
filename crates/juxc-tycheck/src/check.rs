@@ -283,6 +283,14 @@ pub(crate) struct Checker<'a> {
     /// into `SymbolTable::method_selections` after the walk. Mirrors
     /// `ctor_selections`.
     pub(crate) method_selections: HashMap<Span, usize>,
+    /// Free-function overload selections (call span → group index),
+    /// absorbed into `SymbolTable::function_selections`. The same
+    /// mechanism as `method_selections`, for the other kind of callee.
+    pub(crate) function_selections: HashMap<Span, usize>,
+    /// Names the block being checked assigns to, anywhere inside it. Read by
+    /// [`Self::narrowable`]: an assignment can put a null back, so a binding
+    /// the block writes to is never narrowed by a null test (§7.10).
+    pub(crate) assigned_in_block: std::collections::HashSet<String>,
     /// `Some(index)` while walking constructor `index`'s body —
     /// `this(...)` delegation is only legal there (and only as the
     /// first statement), and a delegation may not resolve back to
@@ -376,6 +384,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, Vec<crate::ArgSource>>,
     HashMap<Span, usize>,
     HashMap<Span, usize>,
+    HashMap<Span, usize>,
 );
 
 impl<'a> Checker<'a> {
@@ -391,6 +400,8 @@ impl<'a> Checker<'a> {
             call_expansions: HashMap::new(),
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
+            function_selections: HashMap::new(),
+            assigned_in_block: std::collections::HashSet::new(),
             current_ctor: None,
             in_init_block: false,
             checked_escapes: Vec::new(),
@@ -504,6 +515,7 @@ impl<'a> Checker<'a> {
             self.call_expansions,
             self.ctor_selections,
             self.method_selections,
+            self.function_selections,
         )
     }
 
@@ -2729,12 +2741,35 @@ impl<'a> Checker<'a> {
     /// scope; callers wrap if they need scope nesting (e.g. method
     /// body, for-each loop body).
     fn check_block(&mut self, block: &Block) {
+        // Null-test narrowing (§7.10) is dropped by an assignment, so each
+        // block carries the set of names it assigns anywhere inside itself.
+        // Computed per block rather than per function so a narrowing only
+        // answers for the region it actually covers.
+        let saved = std::mem::replace(
+            &mut self.assigned_in_block,
+            crate::assigned::names_assigned_in(block),
+        );
         for stmt in &block.statements {
             self.check_stmt(stmt);
+        }
+        self.assigned_in_block = saved;
+    }
+
+    /// `(name, non-null type)` when `name` is a binding currently typed `T?`
+    /// that this block never assigns to -- the two conditions a null-test
+    /// narrowing needs. `None` otherwise, which reads as "do not narrow".
+    fn narrowable(&self, name: &str) -> Option<(String, Ty)> {
+        if self.assigned_in_block.contains(name) {
+            return None;
+        }
+        match self.env.lookup(name) {
+            Some(Ty::Nullable(inner)) => Some((name.to_string(), (**inner).clone())),
+            _ => None,
         }
     }
 
     /// Walk one statement, emitting diagnostics where types disagree.
+    /// (see `match_null_test` below for the null-test shapes)
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::VarDecl(v) => {
@@ -2957,14 +2992,44 @@ impl<'a> Checker<'a> {
                     }
                     None
                 };
+                // Null-test narrowing (§7.10). `x != null` proves it in the
+                // then-branch, `x == null` proves it in the else -- and, when
+                // the then-branch cannot fall through, for everything after
+                // the `if` as well. That last form is the guard clause, and
+                // it is the one this language could not previously express.
+                let narrow_then = match_null_test(&if_stmt.condition, false)
+                    .and_then(|n| self.narrowable(n));
+                let narrow_else = match_null_test(&if_stmt.condition, true)
+                    .and_then(|n| self.narrowable(n));
+
                 self.env.push_scope();
                 if let Some((name, ty)) = &smartcast {
+                    self.env.declare(name, ty.clone());
+                }
+                if let Some((name, ty)) = &narrow_then {
                     self.env.declare(name, ty.clone());
                 }
                 self.check_block(&if_stmt.then_block);
                 self.env.pop_scope();
                 if let Some(else_branch) = &if_stmt.else_branch {
+                    self.env.push_scope();
+                    if let Some((name, ty)) = &narrow_else {
+                        self.env.declare(name, ty.clone());
+                    }
                     self.check_else_branch(else_branch);
+                    self.env.pop_scope();
+                }
+                // The guard clause. With no `else`, and a then-branch that
+                // always leaves, the statements after this `if` are reachable
+                // only when the test was false -- so the binding is non-null
+                // for the rest of the enclosing block, which is the scope
+                // this `declare` lands in.
+                if let Some((name, ty)) = narrow_else {
+                    if if_stmt.else_branch.is_none()
+                        && !crate::return_check::body_can_fall_through(&if_stmt.then_block)
+                    {
+                        self.env.declare(&name, ty);
+                    }
                 }
             }
 
@@ -5708,11 +5773,23 @@ impl<'a> Checker<'a> {
                         .filter(|fqn| self.symbols.functions.contains_key(fqn))
                 };
                 if let Some(fqn) = resolved_fqn {
-                    let fn_sig = self
-                        .symbols
-                        .functions
-                        .get(&fqn)
-                        .expect("resolved_fqn is a known function key");
+                    // An overloaded free function (§T.3.1) resolves to one
+                    // member of its group; record which, so the backend emits
+                    // the matching `name__ovK`, and check the arguments
+                    // against THAT member rather than against member 0.
+                    let picked =
+                        crate::infer::select_function_overload_typed(self.symbols, &fqn, c, &self.env);
+                    if let Some((k, _)) = &picked {
+                        self.function_selections.insert(c.span, *k);
+                    }
+                    let fn_sig = match &picked {
+                        Some((_, s)) => s,
+                        None => self
+                            .symbols
+                            .functions
+                            .get(&fqn)
+                            .expect("resolved_fqn is a known function key"),
+                    };
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
                     let callee_unsafe = fn_sig.is_unsafe;
@@ -8280,6 +8357,30 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// `x == null` (when `want_eq`) or `x != null` (when not), in either operand
+/// order, with `x` a bare single-segment name. `None` for every other shape --
+/// narrowing only claims what it can see plainly.
+fn match_null_test(cond: &Expr, want_eq: bool) -> Option<&str> {
+    let Expr::Binary(b) = cond else { return None };
+    let matches_op = match b.op {
+        juxc_ast::BinaryOp::Eq => want_eq,
+        juxc_ast::BinaryOp::NotEq => !want_eq,
+        _ => return None,
+    };
+    if !matches_op {
+        return None;
+    }
+    let target = match (&*b.left, &*b.right) {
+        (juxc_ast::Expr::Literal(juxc_ast::Literal::Null), other) => other,
+        (other, juxc_ast::Expr::Literal(juxc_ast::Literal::Null)) => other,
+        _ => return None,
+    };
+    match target {
+        Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.as_str()),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {

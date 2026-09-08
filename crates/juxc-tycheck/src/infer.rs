@@ -39,7 +39,7 @@ use juxc_ast::{
 };
 
 use crate::env::TypeEnv;
-use crate::symbol_table::{MethodSig, SymbolTable};
+use crate::symbol_table::{FunctionSig, MethodSig, ParamSig, SymbolTable};
 use crate::ty::{
     compose_extends_substitution, explicit_generic_arg_map, infer_generic_args, lower_member_type,
     primitive_from_name, substitute, substitute_via_inference, ty_from_ref, ArrayKind, Primitive,
@@ -81,27 +81,67 @@ pub(crate) fn select_method_overload_typed(
         // is the plain name.
         return None;
     }
+    let lists: Vec<&[ParamSig]> = group.iter().map(|m| m.params.as_slice()).collect();
+    let k = best_overload_by_args(&lists, c, env, symbols)?;
+    Some((k, group[k].clone()))
+}
+
+/// Free-function overload pick (§T.3.1, which names free functions in the
+/// candidate set alongside methods). `None` when the name is not overloaded,
+/// which the caller reads as "the single signature in `symbols.functions`".
+pub(crate) fn select_function_overload_typed(
+    symbols: &SymbolTable,
+    fqn: &str,
+    c: &CallExpr,
+    env: &TypeEnv,
+) -> Option<(usize, FunctionSig)> {
+    let group = symbols.function_overload_group(fqn)?;
+    let lists: Vec<&[ParamSig]> = group.iter().map(|fs| fs.params.as_slice()).collect();
+    let k = best_overload_by_args(&lists, c, env, symbols)?;
+    Some((k, group[k].clone()))
+}
+
+/// The §T.3 pick, over nothing but parameter lists.
+///
+/// Filter to the members whose acceptable-argument-count range covers the
+/// call, then, with more than one left, score each against the inferred
+/// argument types -- 2 for an exact parameter match, 1 for a merely
+/// assignable one, disqualified on a mismatch -- and take the best. A tie or
+/// a total washout falls back to the first applicable member, so a call
+/// always resolves to something and the argument checks report the real
+/// problem rather than "no such function".
+///
+/// Shared by methods and free functions on purpose: the rule is about a
+/// parameter list, not about what declares it.
+fn best_overload_by_args(
+    param_lists: &[&[ParamSig]],
+    c: &CallExpr,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<usize> {
     let count = c.args.len();
-    let candidates: Vec<(usize, &MethodSig)> = group
+    let candidates: Vec<usize> = param_lists
         .iter()
         .enumerate()
-        .filter(|(_, m)| {
-            let (lo, hi) = crate::symbol_table::ctor_arity_range(&m.params);
+        .filter(|(_, params)| {
+            let (lo, hi) = crate::symbol_table::ctor_arity_range(params);
             count >= lo && hi.map_or(true, |h| count <= h)
         })
+        .map(|(k, _)| k)
         .collect();
     match candidates.len() {
         0 => None,
-        1 => Some((candidates[0].0, candidates[0].1.clone())),
+        1 => Some(candidates[0]),
         _ => {
             let arg_tys: Vec<Ty> = c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
-            let mut best: Option<(i32, usize, &MethodSig)> = None;
-            for (k, m) in &candidates {
+            let mut best: Option<(i32, usize)> = None;
+            for k in &candidates {
+                let params = param_lists[*k];
                 let mut score = 0i32;
                 let mut ok = true;
                 for (i, at) in arg_tys.iter().enumerate() {
                     // Defaults / varargs tails score neutrally.
-                    let Some(p) = m.params.get(i) else { continue };
+                    let Some(p) = params.get(i) else { continue };
                     let pt = ty_from_ref(&p.ty, env, symbols);
                     if pt == *at {
                         score += 2;
@@ -115,12 +155,11 @@ pub(crate) fn select_method_overload_typed(
                 if !ok {
                     continue;
                 }
-                if best.as_ref().map_or(true, |(bs, ..)| score > *bs) {
-                    best = Some((score, *k, m));
+                if best.as_ref().map_or(true, |(bs, _)| score > *bs) {
+                    best = Some((score, *k));
                 }
             }
-            best.map(|(_, k, m)| (k, m.clone()))
-                .or_else(|| Some((candidates[0].0, candidates[0].1.clone())))
+            best.map(|(_, k)| k).or(Some(candidates[0]))
         }
     }
 }
@@ -713,7 +752,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     .map(|a| infer_expr(a, env, symbols))
                     .unwrap_or(Ty::Unknown);
             }
-            if let Some((_, fn_sig)) = symbols.lookup_function(name) {
+            if let Some((fqn, only)) = symbols.lookup_function(name) {
+                // An overloaded name (§T.3.1) resolves to one member, and
+                // members may differ in their return type -- `show(int)` and
+                // `show(String)` need not both return `String`.
+                let picked = select_function_overload_typed(symbols, fqn, c, env);
+                let fn_sig = picked.as_ref().map_or(only, |(_, s)| s);
                 // Generic inference (spec §T.4): when the callee is
                 // generic and the call site didn't write explicit
                 // `<…>`, try to recover the type args from the

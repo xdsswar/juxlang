@@ -1,0 +1,44 @@
+public class Shape {
+    public String name() { return "shape"; }
+    public int area() { return 0; }
+}
+
+public class Square extends Shape {
+    private int side;
+    public Square(int side) { this.side = side; }
+    public String name() { return "square"; }
+    public int area() { return this.side * this.side; }
+}
+
+public <T extends Shape> String describe(T s) {
+    return s.name() + "=" + s.area();
+}
+
+public <T extends Shape> int totalOf(Vec<T> shapes) {
+    int t = 0;
+    for (var s : shapes) {
+        t = t + s.area();
+    }
+    return t;
+}
+
+public class Holder<T extends Shape> {
+    private T item;
+    public Holder(T item) { this.item = item; }
+    public String render() { return "held " + this.item.name(); }
+    public T get() { return this.item; }
+}
+
+public void main() {
+    print(describe(new Square(3)));
+    print(describe(new Shape()));
+
+    var squares = new Vec<Square>();
+    squares.push(new Square(2));
+    squares.push(new Square(3));
+    print(totalOf(squares));
+
+    var h = new Holder<Square>(new Square(5));
+    print(h.render());
+    print(h.get().area());
+}

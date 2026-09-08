@@ -322,6 +322,19 @@ impl RustEmitter {
             self.w.push_str("__jux_args_main");
         } else {
             self.w.push_str(&to_rust_ident(&fn_decl.name.text));
+            // An overloaded free function (§T.3.1) emits member 0 under the
+            // plain name and member K as `name__ovK` -- the identity scheme
+            // methods already use, so a call site resolves the same way for
+            // either kind of callee.
+            let param_types: Vec<juxc_ast::TypeRef> =
+                fn_decl.params.iter().map(|p| p.ty.clone()).collect();
+            if let Some(k) = self
+                .symbols
+                .function_overload_index(&fn_decl.name.text, &param_types)
+                .filter(|k| *k > 0)
+            {
+                self.w.push_str(&format!("__ov{k}"));
+            }
         }
         // Use the combined generics list so synthetic params land on
         // the signature. `<__W0: AnimalKind + Clone, …>` is emitted

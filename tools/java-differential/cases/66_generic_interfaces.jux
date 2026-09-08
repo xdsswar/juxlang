@@ -1,0 +1,43 @@
+public interface Container<T> {
+    T get();
+    String label();
+
+    default String show() {
+        return this.label() + "(" + this.get() + ")";
+    }
+}
+
+public class IntBox implements Container<int> {
+    private int v;
+    public IntBox(int v) { this.v = v; }
+    public int get() { return this.v; }
+    public String label() { return "int-box"; }
+}
+
+public class Wrapper<T> implements Container<T> {
+    private T v;
+    public Wrapper(T v) { this.v = v; }
+    public T get() { return this.v; }
+    public String label() { return "wrapper"; }
+}
+
+public <T> String render(Container<T> c) {
+    return "[" + c.show() + "]";
+}
+
+public void main() {
+    var a = new IntBox(7);
+    print(a.show());
+    print(a.get() + 1);
+
+    var b = new Wrapper<String>("hi");
+    print(b.show());
+    print(b.get());
+
+    print(render(a));
+    print(render(b));
+
+    var c = new Wrapper<Wrapper<int>>(new Wrapper<int>(3));
+    print(c.get().show());
+    print(c.get().get());
+}

@@ -1,0 +1,92 @@
+// Narrowing on a null test (§7.10).
+//
+// A `T?` binding reads as plain `T` wherever the flow has proved it non-null.
+// Three positions qualify and they are one rule seen from three sides: the
+// then-branch of `!= null`, the else-branch of `== null`, and -- the guard
+// clause every Java-family program is written with -- everything after
+// `if (x == null) { return; }`.
+//
+// The guard form narrows only when its branch cannot fall through, which is
+// exactly when the code after it is unreachable from the null case. And a
+// block that REBINDS the name gets no narrowing at all: a lexical rule cannot
+// promise anything about what a later assignment holds. Writing THROUGH the
+// binding is not rebinding it, which is what makes a guard followed by writes
+// to the guarded object work.
+
+public class Node {
+    public int value;
+    public Node? next;
+    public Node(int value) {
+        this.value = value;
+        this.next = null;
+    }
+}
+
+public String shout(String? s) {
+    if (s != null) {
+        return s.toUpperCase();
+    }
+    return "none";
+}
+
+public String orDash(String? s) {
+    if (s == null) {
+        return "-";
+    }
+    return s.toUpperCase();
+}
+
+public String pick(String? s) {
+    if (s == null) {
+        return "-";
+    } else {
+        return s.toUpperCase();
+    }
+}
+
+public int lengthOr(String? s, int fallback) {
+    if (s == null) {
+        return fallback;
+    }
+    return s.length();
+}
+
+// A guard, then writes THROUGH the guarded object -- which is not a rebinding,
+// so the narrowing holds for the whole tail of the block.
+public Node append(Node? head, int value) {
+    if (head == null) {
+        return new Node(value);
+    }
+    head.next = new Node(value);
+    return head;
+}
+
+public String chain(Node? head) {
+    if (head == null) {
+        return "(empty)";
+    }
+    String out = "" + head.value;
+    if (head.next != null) {
+        out = out + "->" + head.next!!.value;
+    }
+    return out;
+}
+
+public void main() {
+    print(shout("ok"));
+    print(shout(null));
+    print(orDash("ok"));
+    print(orDash(null));
+    print(pick("ok"));
+    print(pick(null));
+    print(lengthOr("abcd", -1));
+    print(lengthOr(null, -1));
+
+    Node? list = null;
+    list = append(list, 1);
+    list = append(list, 2);
+    print(chain(list));
+    print(chain(null));
+    print(list!!.value);
+    print(list!!.next!!.value);
+}

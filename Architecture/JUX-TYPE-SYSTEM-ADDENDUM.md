@@ -184,6 +184,18 @@ The analysis follows inheritance and nesting: a bound needed by a method inherit
 > in that position is therefore treated as the overridden one, provided it is
 > the only such candidate — with two same-arity members the declaration
 > appends rather than guess.
+>
+> **Free functions overload on the same terms (added 2026-09-08).** The
+> candidate set in T.3.1 has always named them, but a second declaration of
+> the name used to be rejected as a duplicate, so a pair that resolved
+> perfectly well as methods did not compile as free functions. They now share
+> one implementation of the pick, because the rule is about a parameter list
+> and not about what declares it. Member 0 emits under the plain name and
+> member K as `name__ovK`, the identity scheme methods use, so a call site
+> resolves the same way for either kind of callee, and the picked member's own
+> return type is the call's. Two declarations with the SAME parameter shape
+> are still a duplicate (`E0400`): no call could tell them apart. And `main`
+> is never overloadable, since a program has one entry point.
 
 When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
 

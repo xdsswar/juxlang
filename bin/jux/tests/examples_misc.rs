@@ -628,3 +628,52 @@ fn index_target_side_effects() {
         &["1", "1", "10", "40", "4", "9", "9", "1"],
     );
 }
+
+
+#[test]
+fn free_function_overloading() {
+    // Overloaded free functions (§T.3.1): the pick, and the return type
+    // coming from the member that was picked rather than from member 0.
+    common::expect_output(
+        "free_function_overloading",
+        "free-function-overloading",
+        &[
+            "int:1",
+            "double:2.5",
+            "string:x",
+            "two:7",
+            "int:9",
+            "string:text",
+            "4",
+            "pair",
+            "5",
+            "m-int:7",
+            "m-string:y",
+        ],
+    );
+}
+
+
+#[test]
+fn null_narrowing() {
+    // Narrowing on a null test (§7.10): the then-branch, the else-branch,
+    // and the guard clause that narrows the rest of the block.
+    common::expect_output(
+        "null_narrowing",
+        "null-narrowing",
+        &[
+            "OK",
+            "none",
+            "OK",
+            "-",
+            "OK",
+            "-",
+            "4",
+            "-1",
+            "1->2",
+            "(empty)",
+            "1",
+            "2",
+        ],
+    );
+}

@@ -345,24 +345,33 @@ impl RustEmitter {
 /// stash the result into a local anyway. A future smart-cast
 /// pass can extend this.
 fn match_simple_not_null_check(cond: &Expr) -> Option<&str> {
+    match_null_comparison(cond, juxc_ast::BinaryOp::NotEq)
+}
+
+/// `x == null` / `null == x`, with `x` a bare identifier. The mirror of
+/// [`match_simple_not_null_check`]; it proves the binding non-null on the
+/// other side of the branch (§7.10).
+fn match_simple_null_check(cond: &Expr) -> Option<&str> {
+    match_null_comparison(cond, juxc_ast::BinaryOp::Eq)
+}
+
+/// The shape behind both: `x <op> null` or `null <op> x`, where the non-null
+/// side is a bare identifier (single-segment path) and the other side is the
+/// `null` literal.
+fn match_null_comparison(cond: &Expr, want: juxc_ast::BinaryOp) -> Option<&str> {
     let Expr::Binary(b) = cond else { return None };
-    if !matches!(b.op, juxc_ast::BinaryOp::NotEq) {
+    if b.op != want {
         return None;
     }
-    // The non-null side must be a bare identifier (single-segment
-    // path). The null side must be the `null` literal.
-    let (target, other) = match (&*b.left, &*b.right) {
-        (Expr::Literal(Literal::Null), other) => (other, &*b.left),
-        (other, Expr::Literal(Literal::Null)) => (other, &*b.right),
+    let target = match (&*b.left, &*b.right) {
+        (Expr::Literal(Literal::Null), other) => other,
+        (other, Expr::Literal(Literal::Null)) => other,
         _ => return None,
     };
-    let _ = other;
-    if let Expr::Path(qn) = target {
-        if qn.segments.len() == 1 {
-            return Some(qn.segments[0].text.as_str());
-        }
+    match target {
+        Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.as_str()),
+        _ => None,
     }
-    None
 }
 
 /// One active loop-control threading channel (O2). A `try` statement
@@ -490,6 +499,12 @@ impl RustEmitter {
     /// `emit_indent()` per statement and delegates to [`Self::emit_stmt`]
     /// for the statement text itself.
     pub(crate) fn emit_block_contents(&mut self, block: &Block) {
+        // A block is a scope, and so is the narrowing inside it: a guard
+        // clause makes a `T?` binding read as `T` for the REST OF THIS BLOCK
+        // (§7.10) and no further. Snapshotting here is also right for the
+        // locals the block declares -- they leave `nullable_locals` with the
+        // block they were declared in.
+        let outer_nullable = self.nullable_locals.clone();
         for stmt in &block.statements {
             // Per-statement source-map marker (only when `source` is
             // attached on the emitter — see `lower_with_source`).
@@ -500,6 +515,7 @@ impl RustEmitter {
             self.w.emit_indent();
             self.emit_stmt(stmt);
         }
+        self.nullable_locals = outer_nullable;
     }
 
     /// Emit a single statement. The writer's current indent level is
@@ -3539,7 +3555,7 @@ impl RustEmitter {
     /// parameter or one of this lowering's own temporaries.
     ///
     /// A member read borrows the owner; a binding read does not.
-    fn bare_name_is_instance_member(&self, name: &str) -> bool {
+    pub(crate) fn bare_name_is_instance_member(&self, name: &str) -> bool {
         if name.starts_with("__jux_")
             || self.current_fn_params.contains(name)
             || self.local_types.iter().any(|scope| scope.contains_key(name))
@@ -4125,6 +4141,16 @@ impl RustEmitter {
         let was_nullable = cast_name
             .as_ref()
             .is_some_and(|n| self.nullable_locals.contains(n));
+        // The mirror test, `x == null`, proves the binding non-null on the
+        // OTHER side: in the `else`, and -- when the then-branch always
+        // leaves -- for everything after the `if`. That second form is the
+        // guard clause, and it is how most Java-family code is written.
+        let null_name: Option<String> = match_simple_null_check(&if_stmt.condition)
+            .map(|s| s.to_string())
+            .filter(|n| self.nullable_locals.contains(n));
+        let guard_narrows = null_name.is_some()
+            && if_stmt.else_branch.is_none()
+            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block);
 
         // Type-test smart-cast: `if (x => Dog d) { … }` lowers to
         // `if let Some(d) = x.__jux_as_Dog() { … }` — `d` is a fresh `Dog`
@@ -4203,6 +4229,13 @@ impl RustEmitter {
                 ElseBranch::Block(block) => {
                     self.w.push_str(" else {\n");
                     self.w.indent_inc();
+                    // `if (x == null) { .. } else { .. }` -- the else is the
+                    // branch where `x` is there. Shadow the `Option` with its
+                    // contents so the body reads the plain value (§7.10).
+                    if let Some(name) = null_name.as_deref() {
+                        self.emit_unwrap_shadow(name);
+                        self.nullable_locals.remove(name);
+                    }
                     self.emit_block_contents(block);
                     self.w.indent_dec();
                     self.w.emit_indent();
@@ -4212,6 +4245,29 @@ impl RustEmitter {
             }
         }
         self.w.push('\n');
+        // The guard clause. Past this point the null case has already left,
+        // so the binding holds a value for the rest of the block -- and
+        // `emit_block_contents` is what puts `nullable_locals` back at the
+        // block's end, which is exactly the scope §7.10 gives the narrowing.
+        if guard_narrows {
+            if let Some(name) = null_name.as_deref() {
+                self.w.emit_indent();
+                self.emit_unwrap_shadow(name);
+                self.nullable_locals.remove(name);
+            }
+        }
+    }
+
+    /// `let x = x.unwrap();` -- shadow a narrowed `T?` binding with its
+    /// contents, on its own line at the current indent.
+    ///
+    /// The name stays the one the Jux source wrote, so every later read emits
+    /// unchanged and the lowered Rust reads the way a person would have
+    /// written it. `unwrap` is not a leap of faith here: the only paths that
+    /// reach this line are ones the null test has already ruled out.
+    fn emit_unwrap_shadow(&mut self, name: &str) {
+        let ident = to_rust_ident(name);
+        self.w.line(&format!("let {ident} = {ident}.unwrap();"));
     }
 }
 
