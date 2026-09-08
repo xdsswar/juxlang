@@ -6,7 +6,7 @@
 use juxc_ast::OperatorKind;
 
 use crate::analysis::{
-    field_supports_copy, field_supports_display, field_supports_eq, field_supports_hash,
+    field_supports_copy, field_supports_eq, field_supports_hash,
 };
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
@@ -72,7 +72,17 @@ impl RustEmitter {
         // impl[<T: Clone, U: Clone>] Name<T, U> { pub fn new(…) }
         self.w.emit_indent();
         self.w.push_str("impl");
-        self.emit_generic_params_with_clone_bound(&record_decl.generic_params);
+        {
+            // A parameter formatted in one of the record's methods needs
+            // `Display`, exactly as a class's does (§T.2.1).
+            let displayed = self.record_displayed_generic_params(record_decl);
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &record_decl.generic_params,
+                &displayed,
+                &none,
+            );
+        }
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(&record_decl.name.text));
         self.emit_generic_params_as_args(&record_decl.generic_params);
@@ -169,12 +179,18 @@ impl RustEmitter {
             .operators
             .iter()
             .any(|o| o.kind == OperatorKind::ToString);
-        let display_ok = record_decl.generic_params.is_empty()
-            && !has_string_override
+        // A component typed as one of the record's own parameters counts:
+        // the impl below bounds that parameter `Display`.
+        let own_params: std::collections::HashSet<String> = record_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.clone())
+            .collect();
+        let display_ok = !has_string_override
             && record_decl
                 .components
                 .iter()
-                .all(|c| field_supports_display(&c.ty));
+                .all(|c| crate::analysis::field_supports_display_in(&c.ty, &own_params));
         if display_ok {
             self.emit_record_display_impl(record_decl);
         }
@@ -284,10 +300,11 @@ impl RustEmitter {
 ");
     }
 
-    /// Called by [`Self::emit_record_decl`] only when
-    /// [`field_supports_display`] returns true for every component AND
-    /// the record has no generic parameters — keeps the emitted Rust
-    /// guaranteed to compile.
+    /// Called by [`Self::emit_record_decl`] only when every component is
+    /// displayable (`field_supports_display_in`). A GENERIC record gets the
+    /// impl too, with a `Display` bound on each parameter it uses as a bare
+    /// component type -- without one it could not be another generic's type
+    /// argument, since a formatted parameter carries that bound (§T.2.1).
     fn emit_record_display_impl(&mut self, record_decl: &juxc_ast::RecordDecl) {
         let name = &record_decl.name.text;
         // Build the format string and arg list in one pass — keeping
@@ -306,8 +323,22 @@ impl RustEmitter {
         fmt_body.push(')');
 
         self.w.emit_indent();
-        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str("impl");
+        if !record_decl.generic_params.is_empty() {
+            let displayed = crate::analysis::displayed_bare_params(
+                &record_decl.generic_params,
+                record_decl.components.iter().map(|c| &c.ty),
+            );
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &record_decl.generic_params,
+                &displayed,
+                &none,
+            );
+        }
+        self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(name));
+        self.emit_generic_params_as_args(&record_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");

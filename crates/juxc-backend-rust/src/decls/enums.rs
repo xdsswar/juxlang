@@ -382,11 +382,7 @@ impl RustEmitter {
         // which the conditional-derive machinery doesn't yet compute. A generic
         // enum still lowers, prints via `Debug`, and is fully usable; the
         // value-rendering Display lands with the bound-inference work.
-        if !enum_decl.variants.is_empty()
-            && !has_string_override
-            && !string_deleted
-            && enum_decl.generic_params.is_empty()
-        {
+        if !enum_decl.variants.is_empty() && !has_string_override && !string_deleted {
             self.emit_enum_auto_display(enum_decl);
         }
 
@@ -469,8 +465,32 @@ impl RustEmitter {
     /// `match` lowers to `r#match` and compiles.
     fn emit_enum_auto_display(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         self.w.emit_indent();
-        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str("impl");
+        // A GENERIC enum gets the impl too, bounding each parameter it uses as
+        // a bare PAYLOAD type -- those are the ones the arms format. Skipping
+        // the impl left the enum printable only through `Debug`, and left it
+        // unable to be another generic's type argument, since a formatted
+        // parameter carries a `Display` bound (§T.2.1).
+        if !enum_decl.generic_params.is_empty() {
+            let payloads: Vec<&juxc_ast::TypeRef> = enum_decl
+                .variants
+                .iter()
+                .flat_map(|v| v.payload.iter().map(|p| &p.ty))
+                .collect();
+            let displayed = crate::analysis::displayed_bare_params(
+                &enum_decl.generic_params,
+                payloads.into_iter(),
+            );
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &enum_decl.generic_params,
+                &displayed,
+                &none,
+            );
+        }
+        self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(&enum_decl.name.text));
+        self.emit_generic_params_as_args(&enum_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");

@@ -144,6 +144,12 @@ A Jux type parameter carries the bounds the program writes. The lowering needs a
 
 The analysis follows inheritance and nesting: a bound needed by a method inherited from a generic base reaches the subclass too, and `Vec<HashMap<K, V>>` pins `K` exactly as a bare `HashMap<K, V>` does. Only parameters that are actually used that way get the bound, so a generic class that merely STORES a value stays usable with types that satisfy none of it.
 
+**Every declaration that can carry a type parameter is covered** — a class, an interface, a record, an enum, a free function, and a METHOD's own parameters. The rule is about how a parameter is used, and a function uses one the same way a class does. Applying it to some kinds and not others is not a smaller rule but a wrong one: the bound is what makes the renderer resolve to `Display` rather than fall back to `Debug`, so a parameter that misses it prints a `String` **with quotes** — a difference visible only in output, never at the declaration.
+
+**A value reached through `!!` counts as a use**, as does a payload read from a nullable (`T?`) field or component. `"has " + this.value!!` formats `T`, whatever the slot's own nullability says.
+
+**A type argument must satisfy the bounds its parameter acquired.** Every Jux type can: `Clone` and `Debug` are universal, and every class, record and enum has a string form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1) — including a generic one, and including the `dyn` handle a polymorphic base becomes. That last part is what makes an inferred bound safe to add at all: a rule the compiler applies on the user's behalf must never make a legal type argument illegal.
+
 ## §T.3 — Overload Resolution
 
 > **Phase-1 implementation note (updated 2026-06-12).** METHOD

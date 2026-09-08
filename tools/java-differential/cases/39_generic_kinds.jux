@@ -1,0 +1,33 @@
+// DIVERGES: a record auto-derives `Cell(value: in)`; Java writes
+// `Cell[value=in]`. A deliberate rendering choice (JUX-OPERATORS-ADDENDUM
+// O.3.1), not a defect -- everything else on both sides must still agree,
+// including a generic record used as another generic's type ARGUMENT and a
+// generic method formatting its parameter, which are what this case is for.
+// Every generic declaration kind, formatted. Java gives each of these a
+// toString by construction; Jux had to be told that a generic record and a
+// generic enum have a string form at all, and that a formatted type parameter
+// on a METHOD needs the same bound a class's does.
+public record Cell<T>(T value) {
+    public String show() { return "cell(" + this.value + ")"; }
+}
+public record Duo<A, B>(A left, B right) {
+    public String show() { return "pair(" + this.left + ", " + this.right + ")"; }
+}
+public class Wrap<T> {
+    private T v;
+    public Wrap(T v) { this.v = v; }
+    public String show() { return "wrap(" + this.v + ")"; }
+}
+public class Emitter {
+    public <T> String mark(T x) { return "m:" + x; }
+}
+public void main() {
+    print(new Cell<int>(5).show());
+    print(new Cell<String>("x").show());
+    print(new Duo<int, String>(1, "two").show());
+    print(new Wrap<String>("plain").show());
+    print(new Wrap<Cell<String>>(new Cell<String>("in")).show());
+    var e = new Emitter();
+    print(e.mark("s"));
+    print(e.mark(7));
+}

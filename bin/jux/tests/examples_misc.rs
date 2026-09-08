@@ -506,3 +506,32 @@ fn safe_navigation() {
         ],
     );
 }
+
+#[test]
+fn generic_declarations_print() {
+    // Every generic declaration kind has a string form and formats a type
+    // parameter without quoting it. Generic records and enums had NO string
+    // form, so they could not be another generic's type argument; generic
+    // methods, records and enums were missing the `Display` bound, so a
+    // `String` payload printed with quotes.
+    common::expect_output(
+        "generic_declarations_print",
+        "generic-declarations-print",
+        &[
+            "cell(5)",
+            // `cell(x)`, NOT `cell("x")`.
+            "cell(x)",
+            "Cell(value: y)",
+            "pair(1, two)",
+            "Some(value: hi)",
+            "None",
+            // A generic record and a generic enum as a type ARGUMENT: these
+            // did not compile at all.
+            "wrap(Cell(value: in))",
+            "wrap(Some(value: deep))",
+            // A generic method: `m:s`, not `m:"s"`.
+            "m:s",
+            "m:7",
+        ],
+    );
+}

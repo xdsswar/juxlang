@@ -1127,6 +1127,18 @@ impl RustEmitter {
             self.w.push_str(": ");
             let user_bounds: Vec<juxc_ast::TypeRef> = p.bounds.clone();
             for bound in &user_bounds {
+                // A bound that NAMES another in-scope type param (`<R extends K>`)
+                // has no Rust `R: K` form -- expand it to that param's own bounds,
+                // exactly as `emit_generic_params_with_clone_bound` does. The two
+                // emitters differed here, which stayed invisible until a generic
+                // METHOD started coming through this one.
+                if let Some(expanded) = self.type_param_bound_expansion(bound) {
+                    for b in &expanded {
+                        self.emit_bound_type(b);
+                        self.w.push_str(" + ");
+                    }
+                    continue;
+                }
                 self.emit_bound_type(bound);
                 self.w.push_str(" + ");
             }

@@ -1,0 +1,93 @@
+// Every kind of generic declaration has a string form, and formats a type
+// parameter without quoting it.
+//
+// Two rules, and each was true of some declaration kinds and not others:
+//
+//   1. Every type has a string form. A class with no `operator string` gets
+//      `TypeName@<addr>`; a record and an enum auto-derive theirs from their
+//      fields (O.7.1). Generic records and generic enums got NONE, which is
+//      not merely cosmetic -- a type with no string form cannot be another
+//      generic's type ARGUMENT, because a formatted type parameter carries a
+//      `Display` bound (T.2.1).
+//   2. A type parameter whose values reach a format position gets that bound.
+//      Classes, interfaces and free functions had it; generic METHODS,
+//      records and enums did not, so a `String` payload printed WITH QUOTES.
+//
+// Expected output:
+//   cell(5)
+//   cell(x)
+//   Cell(value: y)
+//   pair(1, two)
+//   Some(value: hi)
+//   None
+//   wrap(Cell(value: in))
+//   wrap(Some(value: deep))
+//   m:s
+//   m:7
+
+/// A generic RECORD whose method formats its component.
+public record Cell<T>(T value) {
+    public String show() {
+        return "cell(" + this.value + ")";
+    }
+}
+
+/// Two parameters, both formatted.
+public record Duo<A, B>(A left, B right) {
+    public String show() {
+        return "pair(" + this.left + ", " + this.right + ")";
+    }
+}
+
+/// A generic ENUM with a payload.
+public enum Maybe<T> {
+    None,
+    Some(T value)
+}
+
+/// A generic class holding any of the above, and formatting it. This is the
+/// case that could not compile: the payload has to have a string form.
+public class Wrap<T> {
+    private T v;
+
+    public Wrap(T v) {
+        this.v = v;
+    }
+
+    public String show() {
+        return "wrap(" + this.v + ")";
+    }
+}
+
+public class Emitter {
+    /// A generic METHOD, formatting its own type parameter.
+    public <T> String mark(T x) {
+        return "m:" + x;
+    }
+}
+
+public void main() {
+    // A record method formatting a component: `cell(x)`, not `cell("x")`.
+    print(new Cell<int>(5).show());
+    print(new Cell<String>("x").show());
+    // And the auto-derived string form of the same generic record.
+    print(new Cell<String>("y"));
+
+    print(new Duo<int, String>(1, "two").show());
+
+    // A generic enum, both variants.
+    Maybe<String> some = Maybe.Some("hi");
+    Maybe<String> none = Maybe.None;
+    print(some);
+    print(none);
+
+    // A generic record and a generic enum as another generic's ARGUMENT.
+    print(new Wrap<Cell<String>>(new Cell<String>("in")).show());
+    Maybe<String> deep = Maybe.Some("deep");
+    print(new Wrap<Maybe<String>>(deep).show());
+
+    // A generic method, on both a String and an int.
+    var e = new Emitter();
+    print(e.mark("s"));
+    print(e.mark(7));
+}

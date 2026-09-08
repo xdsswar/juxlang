@@ -1812,11 +1812,13 @@ pub(crate) fn field_supports_default(ty: &juxc_ast::TypeRef) -> bool {
 ///   implements `Display`).
 /// - Arrays: no (`Vec<T>` and `[T; N]` don't implement `Display`).
 /// - Nullable types: no (`Option<T>` doesn't implement `Display`).
-/// - Generic params, user types, multi-segment paths: conservatively
-///   **disqualify**. A future turn with a real symbol-table walk could
-///   recognize Display-bearing user types and add a `T: Display` bound
-///   to the generated `impl`; today we skip the impl entirely so we
-///   never emit Rust that fails to compile.
+/// - A bare TYPE PARAMETER of the enclosing declaration: yes, via
+///   [`field_supports_display_in`] — the generated `impl` carries a
+///   `Display` bound for it. Skipping the impl instead was not merely
+///   cosmetic: a type with no `Display` cannot satisfy the bound §T.2.1
+///   adds to a formatted type parameter, so a generic record could not be
+///   another generic's type argument.
+/// - User types and multi-segment paths: conservatively **disqualify**.
 pub(crate) fn field_supports_display(ty: &juxc_ast::TypeRef) -> bool {
     if ty.array_shape.is_some() || ty.nullable {
         return false;
@@ -1826,6 +1828,47 @@ pub(crate) fn field_supports_display(ty: &juxc_ast::TypeRef) -> bool {
     }
     let name = ty.name.segments[0].text.as_str();
     name == "String" || is_copy_eq_primitive(name) || is_float_primitive(name)
+}
+
+/// [`field_supports_display`], plus the enclosing declaration's own type
+/// parameters — which are displayable exactly because the generated `impl`
+/// bounds them. `params` is that declaration's parameter names.
+pub(crate) fn field_supports_display_in(
+    ty: &juxc_ast::TypeRef,
+    params: &std::collections::HashSet<String>,
+) -> bool {
+    if field_supports_display(ty) {
+        return true;
+    }
+    ty.array_shape.is_none()
+        && !ty.nullable
+        && ty.generic_args.is_empty()
+        && ty.name.segments.len() == 1
+        && params.contains(&ty.name.segments[0].text)
+}
+
+/// The type parameters of `params` that `types` uses as a bare parameter --
+/// the ones a generated `Display` impl must bound.
+pub(crate) fn displayed_bare_params<'a>(
+    params: &[juxc_ast::TypeParam],
+    types: impl Iterator<Item = &'a juxc_ast::TypeRef>,
+) -> std::collections::HashSet<String> {
+    let names: std::collections::HashSet<String> =
+        params.iter().map(|p| p.name.text.clone()).collect();
+    let mut used = std::collections::HashSet::new();
+    for ty in types {
+        if ty.array_shape.is_none()
+            && !ty.nullable
+            && ty.generic_args.is_empty()
+            && ty.name.segments.len() == 1
+        {
+            let n = &ty.name.segments[0].text;
+            if names.contains(n) {
+                used.insert(n.clone());
+            }
+        }
+    }
+    used
 }
 
 /// True if `ty` is exactly the Jux primitive `String` — single-segment

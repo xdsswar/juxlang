@@ -196,13 +196,23 @@ The borrow checker treats wildcards as opaque: a `List<? extends Animal>` expose
 > **A *generic class* may be a polymorphic base.** `Container<int> b = new
 > Box<int>(…)` (with `class Box<T> extends Container<T>`) dispatches virtually
 > like any other base. The lowering parameterizes the base's `Kind` trait by the
-> class's own type params — `trait ContainerKind<T>: Debug { fn get(&self) -> T; }`
+> class's own type params — `trait ContainerKind<T>: Debug + Display { fn get(&self) -> T; }`
 > — so a base-typed slot is the trait object `Rc<dyn ContainerKind<isize>>`.
 > Rust traits stay dyn-compatible with generic *trait* parameters (only generic
 > *methods* break object safety), so downcast hooks, field accessors and the
 > upcast coercion all work unchanged.
 >
-> Each subclass implements its ancestors' traits with the type arguments its
+> > **The `Kind` trait's supertraits are `Debug + Display`, plus every interface
+> the base implements.** `Display` is there for the same reason the concrete
+> class has an identity string form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1): a
+> base-typed value is what a variable of that type holds, and a type parameter
+> that reaches a format position carries a `Display` bound
+> (`JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1). Without it a polymorphic class could
+> not be another generic's type argument — `Loud<Store<int>>` did not compile
+> while `Loud<int>` did. Every class emits the identity form, so nothing can
+> implement a `Kind` trait without satisfying it.
+
+Each subclass implements its ancestors' traits with the type arguments its
 > `extends` clause supplies, composed down the chain: `Box<U> extends
 > Container<U>` emits `impl<U> ContainerKind<U> for Box<U>`, and `IntBox extends
 > Container<int>` emits `impl ContainerKind<isize> for IntBox`. A subclass whose

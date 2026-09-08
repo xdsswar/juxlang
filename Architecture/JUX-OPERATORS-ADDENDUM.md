@@ -419,6 +419,8 @@ Where `<stringify x>` is:
 - For value types (records/structs/enums): the auto-derived or user-overridden `operator string()` call.
 - For class types with `operator string` defined: the user's operator.
 - For class types without: synthesized "TypeName@<addr>" string.
+
+**Generic parameters do not change any of this.** A `Cell<T>` has a string form on the same terms a `Cell` would, a generic record and a generic enum auto-derive theirs from their components and payloads, and a base-typed value — which is a `dyn <Class>Kind` handle, not a concrete struct — has the identity form of the class it points at. This is not a nicety: a type parameter that reaches a format position acquires a `Display` bound (`JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1), so a type WITHOUT a string form cannot be another generic's type argument at all.
 - For `String`: passthrough (already a string).
 - For `String?`: `null` if null, else passthrough.
 

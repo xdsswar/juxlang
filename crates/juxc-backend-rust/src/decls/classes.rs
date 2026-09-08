@@ -2112,6 +2112,57 @@ impl RustEmitter {
         displayed
     }
 
+    /// The type parameters of a RECORD that need a `std::fmt::Display`
+    /// bound -- the ones whose values reach a format position in one of its
+    /// method bodies.
+    ///
+    /// A record's generic members are its COMPONENTS, which are readable both
+    /// as `this.name` and bare. The auto-derived string form is handled
+    /// separately (every component is formatted there by construction); this
+    /// is about what the record's own methods do.
+    pub(crate) fn record_displayed_generic_params(
+        &self,
+        record_decl: &juxc_ast::RecordDecl,
+    ) -> HashSet<String> {
+        let mut displayed: HashSet<String> = HashSet::new();
+        if record_decl.generic_params.is_empty() {
+            return displayed;
+        }
+        let names: HashSet<&str> = record_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        let mut generic_members: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for c in &record_decl.components {
+            if c.ty.generic_args.is_empty()
+                && c.ty.array_shape.is_none()
+                && c.ty.fn_shape.is_none()
+                && c.ty.name.segments.len() == 1
+            {
+                let n = c.ty.name.segments[0].text.as_str();
+                if names.contains(n) {
+                    generic_members.insert(c.name.text.clone(), n.to_string());
+                }
+            }
+        }
+        if generic_members.is_empty() {
+            return displayed;
+        }
+        for m in &record_decl.methods {
+            if let Some(body) = &m.body {
+                Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
+            }
+        }
+        for op in &record_decl.operators {
+            if let Some(body) = &op.body {
+                Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
+            }
+        }
+        displayed
+    }
+
     pub(crate) fn class_displayed_generic_params(
         &self,
         class_decl: &juxc_ast::ClassDecl,
@@ -4919,7 +4970,18 @@ impl RustEmitter {
         if combined.is_empty() {
             self.emit_generic_params(&method.generic_params);
         } else {
-            self.emit_generic_params_with_clone_bound(&combined);
+            // A METHOD's own type parameter needs `Display` when its values
+            // reach a format position, exactly as a class's does (§T.2.1).
+            // Without it the universal renderer falls back to `Debug` and a
+            // `String` prints with quotes. Methods are `FnDecl`, so the same
+            // collector the free-function path uses applies unchanged.
+            let displayed = self.fn_displayed_generic_params(method);
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &combined,
+                &displayed,
+                &none,
+            );
         }
         self.w.push('(');
         for (i, param) in method.params.iter().enumerate() {
@@ -5076,7 +5138,17 @@ impl RustEmitter {
         if combined_method_generics.is_empty() {
             self.emit_generic_params(&method.generic_params);
         } else {
-            self.emit_generic_params_with_clone_bound(&combined_method_generics);
+            // A METHOD's own type parameter needs `Display` when its values
+            // reach a format position, exactly as a class's does (§T.2.1).
+            // Without it the universal renderer falls back to `Debug` and a
+            // `String` argument prints with quotes.
+            let displayed = self.fn_displayed_generic_params(method);
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &combined_method_generics,
+                &displayed,
+                &none,
+            );
         }
         self.w.push('(');
         // Static methods have no implicit receiver in Rust either —
