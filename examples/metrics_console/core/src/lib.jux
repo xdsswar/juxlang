@@ -1,0 +1,2 @@
+// Library root for `demo.core`. The crate root carries no package; the code
+// lives under `src/demo/core/` and the build picks up every `.jux` beneath.

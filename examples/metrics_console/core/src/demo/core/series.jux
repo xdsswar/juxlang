@@ -1,0 +1,72 @@
+// Generic containers the rest of the workspace is built on.
+//
+// `Ring<T>` is a fixed-capacity window: pushing past the capacity drops the
+// oldest sample, which is what a live metric wants and what makes the memory
+// bounded. `Series<T>` gives one a name and a unit so a widget can label it
+// without being told twice.
+
+package demo.core;
+
+public class Ring<T> {
+    private Vec<T> items;
+    private int cap;
+
+    public Ring(int cap) {
+        this.items = new Vec<T>();
+        this.cap = cap;
+    }
+
+    /// Append a sample, dropping the oldest once the window is full.
+    public void push(T value) {
+        this.items.push(value);
+        while (this.items.len() > this.cap) {
+            this.items.remove(0);
+        }
+    }
+
+    public int len() { return this.items.len(); }
+    public int capacity() { return this.cap; }
+    public bool isEmpty() { return this.items.len() == 0; }
+
+    /// The i-th sample, oldest first.
+    public T at(int i) { return this.items[i]; }
+
+    /// The most recent sample. Callers check `isEmpty` first; there is no
+    /// sensible `T` to invent for an empty window.
+    public T last() { return this.items[this.items.len() - 1]; }
+
+    /// A copy of the window, oldest first. The Ring keeps its own storage --
+    /// handing out the live one would let a caller resize it.
+    public Vec<T> snapshot() {
+        var out = new Vec<T>();
+        for (var v : this.items) {
+            out.push(v);
+        }
+        return out;
+    }
+}
+
+public class Series<T> {
+    private String label;
+    private String unit;
+    private Ring<T> window;
+
+    public Series(String label, String unit, int capacity) {
+        this.label = label;
+        this.unit = unit;
+        this.window = new Ring<T>(capacity);
+    }
+
+    public String label() { return this.label; }
+    public String unit() { return this.unit; }
+    public Ring<T> window() { return this.window; }
+
+    public void record(T sample) { this.window.push(sample); }
+    public int count() { return this.window.len(); }
+    public bool isEmpty() { return this.window.isEmpty(); }
+    public T latest() { return this.window.last(); }
+
+    public String describe() {
+        return this.label + " (" + this.unit + ") x" + this.window.len();
+    }
+}

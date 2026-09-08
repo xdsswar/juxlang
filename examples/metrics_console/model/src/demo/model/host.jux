@@ -1,0 +1,123 @@
+// A machine the console is watching, and the fleet of them.
+
+package demo.model;
+
+import demo.core.Series;
+import demo.core.Ring;
+import demo.core.Table;
+import demo.core.Aggregate;
+
+/// One named reading over time. Generic in the sample type so a host can
+/// carry percentages, byte counts and latencies without three classes.
+public class Metric<T> {
+    private Series<T> series;
+    private Aggregate<T> summary;
+
+    public Metric(String label, String unit, int window, Aggregate<T> summary) {
+        this.series = new Series<T>(label, unit, window);
+        this.summary = summary;
+    }
+
+    public String label() { return this.series.label(); }
+    public String unit() { return this.series.unit(); }
+    public Series<T> series() { return this.series; }
+    public Ring<T> window() { return this.series.window(); }
+    public void record(T sample) { this.series.record(sample); }
+    public bool isEmpty() { return this.series.isEmpty(); }
+
+    /// The one number this metric reports, per its own aggregate.
+    public double summary() { return this.summary.over(this.series.window()); }
+
+    /// The legend line: what the aggregate calls itself, and its value.
+    public String legend() { return this.summary.render(this.series.window()); }
+}
+
+public class Host {
+    private String name;
+    private String region;
+    private Metric<int> cpu;
+    private Metric<int> memory;
+    private Metric<int> latency;
+
+    public Host(String name, String region, Aggregate<int> cpuSummary) {
+        this.name = name;
+        this.region = region;
+        this.cpu = new Metric<int>("cpu", "%", 32, cpuSummary);
+        this.memory = new Metric<int>("mem", "%", 32, cpuSummary);
+        this.latency = new Metric<int>("p99", "ms", 32, cpuSummary);
+    }
+
+    public String name() { return this.name; }
+    public String region() { return this.region; }
+    public Metric<int> cpu() { return this.cpu; }
+    public Metric<int> memory() { return this.memory; }
+    public Metric<int> latency() { return this.latency; }
+
+    public void observe(int cpuPct, int memPct, int latencyMs) {
+        this.cpu.record(cpuPct);
+        this.memory.record(memPct);
+        this.latency.record(latencyMs);
+    }
+
+    /// The worst of the two percentage readings decides the host's level.
+    public Severity severity() {
+        if (this.cpu.isEmpty()) {
+            return Severity.Ok;
+        }
+        var byCpu = Severity.forPercent(this.cpu.window().last());
+        var byMem = Severity.forPercent(this.memory.window().last());
+        if (byMem.atLeast(byCpu)) {
+            return byMem;
+        }
+        return byCpu;
+    }
+}
+
+/// Every host the console knows about, in the order they were added -- a
+/// dashboard that reorders its rows between frames is unreadable.
+public class Fleet {
+    private Table<String, Host> hosts;
+
+    public Fleet() {
+        this.hosts = new Table<String, Host>();
+    }
+
+    public void add(Host h) { this.hosts.put(h.name(), h); }
+    public int size() { return this.hosts.len(); }
+    public Vec<Host> all() { return this.hosts.values(); }
+    public Host? byName(String name) { return this.hosts.get(name); }
+
+    /// How many hosts are at or above a level -- the header's alert count.
+    public int countAtLeast(Severity level) {
+        int n = 0;
+        for (var h : this.hosts.values()) {
+            if (h.severity().atLeast(level)) {
+                n = n + 1;
+            }
+        }
+        return n;
+    }
+
+    /// How many hosts sit in each region, in the order the regions first
+    /// appeared. The value is read back through `Table.get`, which is
+    /// nullable -- a region with no hosts is absent, not zero.
+    public Table<String, int> byRegion() {
+        var counts = new Table<String, int>();
+        for (var h : this.hosts.values()) {
+            var seen = counts.get(h.region());
+            counts.put(h.region(), seen == null ? 1 : seen!! + 1);
+        }
+        return counts;
+    }
+
+    /// The worst level anything in the fleet is at.
+    public Severity worst() {
+        var worst = Severity.Ok;
+        for (var h : this.hosts.values()) {
+            if (h.severity().atLeast(worst)) {
+                worst = h.severity();
+            }
+        }
+        return worst;
+    }
+}

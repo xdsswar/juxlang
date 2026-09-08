@@ -1,0 +1,61 @@
+// How bad a reading is, and what that means for the console.
+//
+// The severity is an enum with behaviour rather than a bare tag: the widget
+// asks it for a colour and a rank instead of holding a switch of its own, so
+// adding a level is one edit here rather than one per drawing site.
+
+package demo.model;
+
+public enum Severity {
+    Ok,
+    Watch,
+    Warn,
+    Critical;
+
+    /// The threshold at or above which a percentage reading takes this level.
+    public int floor() {
+        return switch (this) {
+            case Severity.Ok -> 0;
+            case Severity.Watch -> 60;
+            case Severity.Warn -> 80;
+            case Severity.Critical -> 92;
+        };
+    }
+
+    /// 0xRRGGBB, the colour a widget paints this level in.
+    public int colour() {
+        return switch (this) {
+            case Severity.Ok -> 0x4f9d69;
+            case Severity.Watch -> 0xc9a227;
+            case Severity.Warn -> 0xd07b2c;
+            case Severity.Critical -> 0xc2413b;
+        };
+    }
+
+    /// A single glyph for the compact table column.
+    public String badge() {
+        return switch (this) {
+            case Severity.Ok -> ".";
+            case Severity.Watch -> "-";
+            case Severity.Warn -> "!";
+            case Severity.Critical -> "#";
+        };
+    }
+
+    public bool atLeast(Severity other) {
+        return this.ordinal() >= other.ordinal();
+    }
+
+    /// The level a percentage reading falls into: the highest level whose
+    /// floor it reaches. `values()` walks the variants in declaration order,
+    /// so the last match is the most severe.
+    public static Severity forPercent(int pct) {
+        var chosen = Severity.Ok;
+        for (var level : Severity.values()) {
+            if (pct >= level.floor()) {
+                chosen = level;
+            }
+        }
+        return chosen;
+    }
+}

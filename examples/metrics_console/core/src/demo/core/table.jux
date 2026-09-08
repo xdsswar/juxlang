@@ -1,0 +1,55 @@
+// An insertion-ordered key/value store.
+//
+// A `HashMap` is the right structure for the lookup and the wrong one for the
+// drawing: a dashboard that reorders its rows between frames is unreadable.
+// This keeps both -- the map for `get`, a key list for the order -- which is
+// the same trade a `LinkedHashMap` makes, spelled out.
+
+package demo.core;
+
+import rust.std.HashMap;
+
+public class Table<K, V> {
+    private HashMap<K, V> byKey;
+    private Vec<K> order;
+
+    public Table() {
+        this.byKey = new HashMap<K, V>();
+        this.order = new Vec<K>();
+    }
+
+    /// Insert or replace. A replacement keeps the key's original position,
+    /// so a value that updates every frame does not jump around.
+    public void put(K key, V value) {
+        if (!this.byKey.contains_key(key)) {
+            this.order.push(key);
+        }
+        this.byKey.insert(key, value);
+    }
+
+    public V? get(K key) { return this.byKey.get(key); }
+    public bool has(K key) { return this.byKey.contains_key(key); }
+    public int len() { return this.order.len(); }
+    public bool isEmpty() { return this.order.len() == 0; }
+
+    /// The keys in insertion order.
+    public Vec<K> keys() {
+        var out = new Vec<K>();
+        for (var k : this.order) {
+            out.push(k);
+        }
+        return out;
+    }
+
+    /// The values in insertion order.
+    public Vec<V> values() {
+        var out = new Vec<V>();
+        for (var k : this.order) {
+            var v = this.byKey.get(k);
+            if (v != null) {
+                out.push(v!!);
+            }
+        }
+        return out;
+    }
+}

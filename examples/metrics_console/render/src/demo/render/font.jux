@@ -1,0 +1,93 @@
+// A 5x7 bitmap font, written as pictures.
+//
+// Each glyph is seven rows of five, written with a `|` between rows so the
+// source shows the letter it draws. That costs a few hundred bytes over a
+// packed bitmask and buys a table anyone can correct by looking at it.
+//
+// Only the characters the console actually prints are here. An unknown one
+// draws as a blank, which is the right failure for a dashboard: a missing
+// glyph should leave a gap, not stop the frame.
+
+package demo.render;
+
+import rust.std.HashMap;
+
+public class Font {
+    private HashMap<String, String> glyphs;
+
+    public static int WIDTH = 5;
+    public static int HEIGHT = 7;
+
+    public Font() {
+        this.glyphs = new HashMap<String, String>();
+        this.put(" ", ".....|.....|.....|.....|.....|.....|.....");
+        this.put("A", ".###.|#...#|#...#|#####|#...#|#...#|#...#");
+        this.put("B", "####.|#...#|####.|#...#|#...#|#...#|####.");
+        this.put("C", ".###.|#...#|#....|#....|#....|#...#|.###.");
+        this.put("D", "####.|#...#|#...#|#...#|#...#|#...#|####.");
+        this.put("E", "#####|#....|####.|#....|#....|#....|#####");
+        this.put("F", "#####|#....|####.|#....|#....|#....|#....");
+        this.put("G", ".###.|#...#|#....|#.###|#...#|#...#|.###.");
+        this.put("H", "#...#|#...#|#####|#...#|#...#|#...#|#...#");
+        this.put("I", ".###.|..#..|..#..|..#..|..#..|..#..|.###.");
+        this.put("J", "....#|....#|....#|....#|#...#|#...#|.###.");
+        this.put("K", "#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#");
+        this.put("L", "#....|#....|#....|#....|#....|#....|#####");
+        this.put("M", "#...#|##.##|#.#.#|#...#|#...#|#...#|#...#");
+        this.put("N", "#...#|##..#|#.#.#|#..##|#...#|#...#|#...#");
+        this.put("O", ".###.|#...#|#...#|#...#|#...#|#...#|.###.");
+        this.put("P", "####.|#...#|#...#|####.|#....|#....|#....");
+        this.put("Q", ".###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#");
+        this.put("R", "####.|#...#|#...#|####.|#.#..|#..#.|#...#");
+        this.put("S", ".####|#....|#....|.###.|....#|....#|####.");
+        this.put("T", "#####|..#..|..#..|..#..|..#..|..#..|..#..");
+        this.put("U", "#...#|#...#|#...#|#...#|#...#|#...#|.###.");
+        this.put("V", "#...#|#...#|#...#|#...#|#...#|.#.#.|..#..");
+        this.put("W", "#...#|#...#|#...#|#.#.#|#.#.#|##.##|#...#");
+        this.put("X", "#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#");
+        this.put("Y", "#...#|#...#|.#.#.|..#..|..#..|..#..|..#..");
+        this.put("Z", "#####|....#|...#.|..#..|.#...|#....|#####");
+        this.put("0", ".###.|#...#|#..##|#.#.#|##..#|#...#|.###.");
+        this.put("1", "..#..|.##..|..#..|..#..|..#..|..#..|.###.");
+        this.put("2", ".###.|#...#|....#|...#.|..#..|.#...|#####");
+        this.put("3", "####.|....#|....#|.###.|....#|....#|####.");
+        this.put("4", "...#.|..##.|.#.#.|#..#.|#####|...#.|...#.");
+        this.put("5", "#####|#....|####.|....#|....#|#...#|.###.");
+        this.put("6", ".###.|#...#|#....|####.|#...#|#...#|.###.");
+        this.put("7", "#####|....#|...#.|..#..|.#...|.#...|.#...");
+        this.put("8", ".###.|#...#|#...#|.###.|#...#|#...#|.###.");
+        this.put("9", ".###.|#...#|#...#|.####|....#|#...#|.###.");
+        this.put("%", "##..#|##..#|...#.|..#..|.#...|#..##|#..##");
+        this.put("-", ".....|.....|.....|#####|.....|.....|.....");
+        this.put(".", ".....|.....|.....|.....|.....|.##..|.##..");
+        this.put(":", ".....|.##..|.##..|.....|.##..|.##..|.....");
+        this.put("/", "....#|...#.|...#.|..#..|.#...|.#...|#....");
+        this.put("!", "..#..|..#..|..#..|..#..|..#..|.....|..#..");
+        this.put("#", ".#.#.|#####|.#.#.|.#.#.|#####|.#.#.|.....");
+        this.put("(", "...#.|..#..|.#...|.#...|.#...|..#..|...#.");
+        this.put(")", ".#...|..#..|...#.|...#.|...#.|..#..|.#...");
+    }
+
+    /// Store a glyph, dropping the row separators the table uses for
+    /// legibility. What is kept is 35 characters, five per row.
+    private void put(String ch, String picture) {
+        this.glyphs.insert(ch, picture.replace("|", ""));
+    }
+
+    /// True when the glyph for `ch` paints the pixel at (col, row).
+    /// An unknown character is blank everywhere.
+    public bool lit(String ch, int col, int row) {
+        var picture = this.glyphs.get(ch);
+        if (picture == null) {
+            return false;
+        }
+        int idx = row * 5 + col;
+        var p = picture!!;
+        if (idx < 0 || idx >= p.length()) {
+            return false;
+        }
+        return p.substring(idx, idx + 1) == "#";
+    }
+
+    public bool has(String ch) { return this.glyphs.contains_key(ch); }
+}

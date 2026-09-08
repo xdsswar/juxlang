@@ -1,0 +1,48 @@
+// Drawing a string with the bitmap font.
+//
+// Separate from `Font` because the font is a table and this is a policy:
+// spacing, scaling, and what to do with a character the table has no picture
+// for. Widgets take a `Text`, not a `Font`, so none of them has to know either.
+
+package demo.render;
+
+public class Text {
+    private Font font;
+    private int tracking;
+
+    public Text() {
+        this.font = new Font();
+        this.tracking = 1;
+    }
+
+    /// Width in pixels a string will occupy at the given scale.
+    public int widthOf(String s, int scale) {
+        int glyphs = s.length();
+        if (glyphs == 0) {
+            return 0;
+        }
+        return glyphs * (Font.WIDTH + this.tracking) * scale - this.tracking * scale;
+    }
+
+    public void draw(Canvas c, String s, int x, int y, int colour) {
+        this.drawScaled(c, s, x, y, colour, 1);
+    }
+
+    /// One pixel of the font becomes a `scale` x `scale` block, which is how
+    /// the big readout is drawn without a second font table.
+    public void drawScaled(Canvas c, String s, int x, int y, int colour, int scale) {
+        int penX = x;
+        for (int i = 0; i < s.length(); i++) {
+            var ch = s.substring(i, i + 1);
+            for (int row = 0; row < Font.HEIGHT; row++) {
+                for (int col = 0; col < Font.WIDTH; col++) {
+                    if (!this.font.lit(ch, col, row)) {
+                        continue;
+                    }
+                    c.rect(penX + col * scale, y + row * scale, scale, scale, colour);
+                }
+            }
+            penX = penX + (Font.WIDTH + this.tracking) * scale;
+        }
+    }
+}

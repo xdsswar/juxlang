@@ -1,0 +1,157 @@
+// Jux Metrics Console -- the entry point.
+//
+//   jux run                          -- render one frame, preview it as text
+//   jux run -- --snapshot out.ppm    -- write the frame to a file
+//   jux run -- --size 1000x620       -- pick the frame size
+//
+// The console itself draws into a plain pixel buffer, so this file is the only
+// one that knows where the frame ends up. That is what lets the same drawing
+// code be checked by a test with no display attached.
+
+import demo.core.Mean;
+import demo.model.Fleet;
+import demo.model.Host;
+import demo.render.Canvas;
+import demo.render.Console;
+import demo.render.Theme;
+import jux.std.io.File;
+
+public void main(String[] args) {
+    int w = 900;
+    int h = 560;
+    String? out = null;
+
+    int i = 0;
+    while (i < args.length) {
+        var a = args[i];
+        if (a == "--snapshot" && i + 1 < args.length) {
+            out = args[i + 1];
+            i = i + 1;
+        } else if (a == "--size" && i + 1 < args.length) {
+            var dims = args[i + 1].split("x");
+            if (dims.length == 2) {
+                w = parseInt(dims[0], w);
+                h = parseInt(dims[1], h);
+            }
+            i = i + 1;
+        }
+        i = i + 1;
+    }
+
+    var console = new Console(sampleFleet(), Theme.midnight());
+    var canvas = new Canvas(w, h);
+    console.render(canvas);
+
+    if (out != null) {
+        writePpm(canvas, out!!);
+        print("wrote " + w + "x" + h + " frame to " + out!!);
+        return;
+    }
+    preview(canvas);
+}
+
+/// A fixed fleet with a fixed sequence of readings, so a snapshot is
+/// reproducible and can be diffed.
+public Fleet sampleFleet() {
+    var fleet = new Fleet();
+
+    var web1 = new Host("web-01", "eu-west", new Mean());
+    var web2 = new Host("web-02", "eu-west", new Mean());
+    var web3 = new Host("web-03", "eu-west", new Mean());
+    var db1 = new Host("db-01", "eu-west", new Mean());
+    var cache1 = new Host("cache-01", "us-east", new Mean());
+    var cache2 = new Host("cache-02", "us-east", new Mean());
+    var edge = new Host("edge-01", "ap-south", new Mean());
+
+    // A rising ramp, two steady hosts, a spiky one, and the quiet ones.
+    int seed = 7;
+    for (int t = 0; t < 28; t++) {
+        seed = (seed * 31 + 17) % 97;
+        web1.observe(30 + t * 2, 40 + t, 90 + seed / 4);
+        web2.observe(52 + seed % 9, 58 + seed % 7, 120 + seed);
+        web3.observe(44 + seed % 11, 49 + seed % 9, 110 + seed);
+        db1.observe(60 + (seed % 40), 71 + (seed % 12), 200 + seed * 2);
+        cache1.observe(8 + seed % 5, 21 + seed % 4, 30 + seed / 8);
+        cache2.observe(11 + seed % 7, 26 + seed % 6, 34 + seed / 6);
+        edge.observe(19 + seed % 13, 33 + seed % 10, 61 + seed / 3);
+    }
+
+    fleet.add(web1);
+    fleet.add(web2);
+    fleet.add(web3);
+    fleet.add(db1);
+    fleet.add(cache1);
+    fleet.add(cache2);
+    fleet.add(edge);
+    return fleet;
+}
+
+/// Parse a decimal size, falling back rather than failing: a mistyped
+/// `--size` should still draw something.
+public int parseInt(String s, int fallback) {
+    int value = 0;
+    if (s.length() == 0) {
+        return fallback;
+    }
+    for (int i = 0; i < s.length(); i++) {
+        var ch = s.substring(i, i + 1);
+        int digit = "0123456789".indexOf(ch);
+        if (digit < 0) {
+            return fallback;
+        }
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+/// The frame as a plain-text PPM (P3).
+///
+/// Verbose on purpose: no image library, no binary I/O, and any viewer or
+/// one-line script reads it back. This is the path the test uses.
+public void writePpm(Canvas c, String path) {
+    // `+=` on a String appends in place; `sb = sb + ...` would copy the
+    // whole buffer on every one of half a million pixels.
+    var sb = "P3\n" + c.width() + " " + c.height() + "\n255\n";
+    for (int y = 0; y < c.height(); y++) {
+        for (int x = 0; x < c.width(); x++) {
+            int p = c.get(x, y);
+            sb += ((p >> 16) & 255) + " ";
+            sb += ((p >> 8) & 255) + " ";
+            sb += (p & 255) + "\n";
+        }
+    }
+    File.writeText(path, sb);
+}
+
+/// A coarse text preview, so `jux run` with no arguments shows the frame
+/// rather than nothing. Each cell is the brightest pixel in a block, which
+/// keeps the panels and the bars legible at a fortieth of the size.
+public void preview(Canvas c) {
+    int cols = 90;
+    int rows = 30;
+    int cw = c.width() / cols;
+    int ch = c.height() / rows;
+    var ramp = " .:-=+*#%@";
+
+    for (int ry = 0; ry < rows; ry++) {
+        var line = "";
+        for (int rx = 0; rx < cols; rx++) {
+            int best = 0;
+            for (int dy = 0; dy < ch; dy = dy + 2) {
+                for (int dx = 0; dx < cw; dx = dx + 2) {
+                    int p = c.get(rx * cw + dx, ry * ch + dy);
+                    int lum = ((p >> 16) & 255) + ((p >> 8) & 255) * 2 + (p & 255);
+                    if (lum > best) {
+                        best = lum;
+                    }
+                }
+            }
+            int idx = best * 9 / 1020;
+            if (idx > 9) {
+                idx = 9;
+            }
+            line += ramp.substring(idx, idx + 1);
+        }
+        print(line);
+    }
+}

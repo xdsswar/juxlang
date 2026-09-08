@@ -1,0 +1,45 @@
+// The console's palette, in one place.
+//
+// A theme is a class rather than a set of constants so a widget takes one as a
+// parameter and can be drawn light or dark without knowing which.
+
+package demo.render;
+
+public class Theme {
+    private String name;
+    private int background;
+    private int panel;
+    private int grid;
+    private int ink;
+    private int inkDim;
+    private int accent;
+
+    private Theme(String name, int background, int panel, int grid,
+                  int ink, int inkDim, int accent) {
+        this.name = name;
+        this.background = background;
+        this.panel = panel;
+        this.grid = grid;
+        this.ink = ink;
+        this.inkDim = inkDim;
+        this.accent = accent;
+    }
+
+    public static Theme midnight() {
+        return new Theme("midnight", 0x0f141a, 0x172029, 0x243140,
+                         0xd6e2f0, 0x7d8a99, 0x5aa9e6);
+    }
+
+    public static Theme paper() {
+        return new Theme("paper", 0xeef1f5, 0xffffff, 0xd3dae2,
+                         0x1b2530, 0x66727f, 0x2b4c9b);
+    }
+
+    public String name() { return this.name; }
+    public int background() { return this.background; }
+    public int panel() { return this.panel; }
+    public int grid() { return this.grid; }
+    public int ink() { return this.ink; }
+    public int inkDim() { return this.inkDim; }
+    public int accent() { return this.accent; }
+}

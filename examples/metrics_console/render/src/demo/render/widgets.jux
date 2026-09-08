@@ -1,0 +1,217 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+public interface Widget {
+    /// What to draw inside the panel, in canvas coordinates.
+    void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h);
+
+    /// The panel's caption.
+    String title();
+
+    /// Panel chrome: fill, border, title, then the widget's own content
+    /// inset below the caption. A widget that wants the whole rectangle
+    /// overrides this; none here do.
+    default void render(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        c.rect(x, y, w, h, t.panel());
+        c.frame(x, y, w, h, t.grid());
+        text.draw(c, this.title().toUpperCase(), x + 6, y + 5, t.inkDim());
+        this.paint(c, t, text, x + 6, y + 16, w - 12, h - 22);
+    }
+}
+
+/// A run of samples as columns, most recent at the right.
+public class Sparkline implements Widget {
+    private String label;
+    private Ring<int> window;
+    private int ceiling;
+
+    public Sparkline(String label, Ring<int> window, int ceiling) {
+        this.label = label;
+        this.window = window;
+        this.ceiling = ceiling;
+    }
+
+    public String title() { return this.label; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        // A baseline and a midline: enough grid to read a height against,
+        // not enough to compete with the data.
+        int baseline = y + h - 1;
+        c.hline(x, baseline, w, t.grid());
+        c.hline(x, y + h / 2, w, t.grid());
+
+        var samples = this.window.snapshot();
+        if (samples.len() == 0) {
+            text.draw(c, "NO DATA", x, y + h / 2 - 3, t.inkDim());
+            return;
+        }
+
+        // Spread the window across the panel rather than assuming a fixed
+        // column width: a 24-sample window in a 500px panel drew a fifth of
+        // it and left the rest blank.
+        int count = samples.len();
+        int slot = w / count;
+        if (slot < 2) {
+            slot = 2;
+        }
+        if (slot > 24) {
+            slot = 24;
+        }
+        int startX = x + w - count * slot;
+        if (startX < x) {
+            startX = x;
+        }
+        for (int i = 0; i < count; i++) {
+            int v = samples[i];
+            int scaled = v * (h - 2) / this.ceiling;
+            if (scaled > h - 2) {
+                scaled = h - 2;
+            }
+            if (scaled < 1) {
+                scaled = 1;
+            }
+            // Colour against THIS chart's ceiling, not against 100: a
+            // latency in milliseconds is not a percentage, and grading it as
+            // one painted every bar critical.
+            var level = Severity.forPercent(v * 100 / this.ceiling);
+            c.column(startX + i * slot, baseline - 1, scaled, slot - 1, level.colour());
+        }
+    }
+}
+
+/// One host per row: name, a severity badge, and a proportional bar.
+public class FleetTable implements Widget {
+    private Fleet fleet;
+
+    public FleetTable(Fleet fleet) { this.fleet = fleet; }
+
+    public String title() { return "fleet"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        int row = 0;
+        int rowHeight = 12;
+        for (var host : this.fleet.all()) {
+            int ry = y + row * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var level = host.severity();
+            c.rect(x, ry, 3, 8, level.colour());
+            text.draw(c, host.name().toUpperCase(), x + 8, ry, t.ink());
+            text.draw(c, level.badge(), x + 78, ry, level.colour());
+
+            // The bar is the host's current cpu reading against the row's
+            // remaining width.
+            int barX = x + 92;
+            int barW = w - 92;
+            if (barW > 4 && !host.cpu().isEmpty()) {
+                int pct = host.cpu().window().last();
+                int filled = barW * pct / 100;
+                c.rect(barX, ry + 1, barW, 6, t.grid());
+                c.rect(barX, ry + 1, filled, 6, level.colour());
+            }
+            row = row + 1;
+        }
+    }
+}
+
+/// A single number, large, with its aggregate's own caption under it.
+public class Readout implements Widget {
+    private String label;
+    private Ring<int> window;
+    private Aggregate<int> summary;
+
+    public Readout(String label, Ring<int> window, Aggregate<int> summary) {
+        this.label = label;
+        this.window = window;
+        this.summary = summary;
+    }
+
+    public String title() { return this.label; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        if (this.window.isEmpty()) {
+            text.draw(c, "--", x, y, t.inkDim());
+            return;
+        }
+        // The number is the AGGREGATE's answer, not the last sample --
+        // otherwise all three readouts show the same figure and the
+        // `Aggregate` contract does no work.
+        double value = this.summary.over(this.window);
+        var level = Severity.forPercent((int) value);
+        text.drawScaled(c, Num.fixed1(value), x, y, level.colour(), 3);
+        text.draw(c, this.summary.render(this.window).toUpperCase(),
+                  x, y + 26, t.inkDim());
+    }
+}
+
+/// Hosts per region, as a labelled bar per key.
+///
+/// Reads its data straight out of a `Table<String, int>`: the keys carry the
+/// insertion order, and every value comes back through the table's nullable
+/// getter, so a key with no entry is skipped rather than drawn as a zero.
+public class RegionBreakdown implements Widget {
+    private Table<String, int> counts;
+
+    public RegionBreakdown(Table<String, int> counts) {
+        this.counts = counts;
+    }
+
+    public String title() { return "by region"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        var keys = this.counts.keys();
+        if (keys.len() == 0) {
+            text.draw(c, "NO HOSTS", x, y, t.inkDim());
+            return;
+        }
+
+        // Scale every bar against the busiest region, so the widest bar
+        // always reaches the panel edge whatever the absolute numbers are.
+        int peak = 1;
+        for (var k : keys) {
+            var n = this.counts.get(k);
+            if (n != null && n!! > peak) {
+                peak = n!!;
+            }
+        }
+
+        int rowHeight = 14;
+        int labelW = 76;
+        for (int i = 0; i < keys.len(); i++) {
+            int ry = y + i * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var key = keys[i];
+            var n = this.counts.get(key);
+            if (n == null) {
+                continue;
+            }
+            text.draw(c, key.toUpperCase(), x, ry + 1, t.ink());
+
+            int barW = w - labelW - 18;
+            int filled = barW * n!! / peak;
+            c.rect(x + labelW, ry + 1, barW, 7, t.grid());
+            c.rect(x + labelW, ry + 1, filled, 7, t.accent());
+            // Measured, not a fixed offset: a two-digit count drawn at
+            // `w - 10` runs into the panel border.
+            var count = "" + n!!;
+            text.draw(c, count, x + w - text.widthOf(count, 1), ry + 1, t.inkDim());
+        }
+    }
+}

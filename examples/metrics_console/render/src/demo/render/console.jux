@@ -1,0 +1,140 @@
+// The layout: which widgets, where, and the header above them.
+//
+// This is the only file that knows the console's shape. A widget knows how to
+// draw itself into a rectangle and nothing about its neighbours, so moving a
+// panel is an edit here and nowhere else.
+
+package demo.render;
+
+import demo.core.Latest;
+import demo.core.Mean;
+import demo.core.Peak;
+import demo.model.Fleet;
+import demo.model.Host;
+import demo.model.Severity;
+
+public class Console {
+    private Fleet fleet;
+    private Theme theme;
+    private Text text;
+
+    public Console(Fleet fleet, Theme theme) {
+        this.fleet = fleet;
+        this.theme = theme;
+        this.text = new Text();
+    }
+
+    public Fleet fleet() { return this.fleet; }
+    public Theme theme() { return this.theme; }
+
+    public void render(Canvas c) {
+        var t = this.theme;
+        c.clear(t.background());
+
+        int pad = 12;
+        int headerH = 34;
+        this.header(c, pad, pad, c.width() - pad * 2, headerH);
+
+        int top = pad + headerH + pad;
+        int bodyH = c.height() - top - pad;
+        int leftW = (c.width() - pad * 3) * 3 / 5;
+        int rightW = c.width() - pad * 3 - leftW;
+        int rightX = pad + leftW + pad;
+
+        // Left column: the fleet table above a full-width sparkline of the
+        // busiest host, which is the one a reader looks at first.
+        // Size the table to the fleet it holds. A fixed fraction left a
+        // panel two thirds empty under four hosts, and clipped rows under
+        // twenty.
+        int tableH = 26 + this.fleet.size() * 12;
+        int tableCap = bodyH * 3 / 5;
+        if (tableH > tableCap) {
+            tableH = tableCap;
+        }
+        var table = new FleetTable(this.fleet);
+        table.render(c, t, this.text, pad, top, leftW, tableH);
+
+        // Two charts for the busiest host: cpu above memory, on the same
+        // scale, so the pair reads as a comparison.
+        var busiest = this.busiest();
+        if (busiest != null) {
+            int chartTop = top + tableH + pad;
+            int chartH = bodyH - tableH - pad;
+            int cpuH = (chartH - pad) * 3 / 5;
+
+            new Sparkline(busiest!!.name() + " cpu", busiest!!.cpu().window(), 100)
+                .render(c, t, this.text, pad, chartTop, leftW, cpuH);
+            new Sparkline(busiest!!.name() + " mem", busiest!!.memory().window(), 100)
+                .render(c, t, this.text, pad, chartTop + cpuH + pad,
+                        leftW, chartH - cpuH - pad);
+        }
+
+        // Right column: three readouts over ONE window, each with a
+        // different aggregate -- which is the whole point of the `Aggregate`
+        // contract -- and the region breakdown under them.
+        //
+        // A readout is sized to the number it draws rather than to a third of
+        // the column, so the space left over goes to a widget with something
+        // in it.
+        int cell = 58;
+        int used = 0;
+        if (busiest != null) {
+            var w = busiest!!.cpu().window();
+            new Readout("now", w, new Latest())
+                .render(c, t, this.text, rightX, top, rightW, cell);
+            new Readout("mean", w, new Mean())
+                .render(c, t, this.text, rightX, top + cell + pad, rightW, cell);
+            new Readout("peak", w, new Peak())
+                .render(c, t, this.text, rightX, top + (cell + pad) * 2, rightW, cell);
+            used = (cell + pad) * 3;
+        }
+
+        // The breakdown takes the height its rows need; whatever is left
+        // goes to the latency chart, which is the one reading here that is
+        // not a percentage -- hence its own ceiling.
+        var regions = this.fleet.byRegion();
+        int regionH = 26 + regions.len() * 14;
+        new RegionBreakdown(regions)
+            .render(c, t, this.text, rightX, top + used, rightW, regionH);
+
+        if (busiest != null) {
+            int tailTop = top + used + regionH + pad;
+            new Sparkline("p99 latency ms", busiest!!.latency().window(), 320)
+                .render(c, t, this.text, rightX, tailTop,
+                        rightW, top + bodyH - tailTop);
+        }
+    }
+
+    /// Title bar: the product name, the fleet's worst level, and a count.
+    private void header(Canvas c, int x, int y, int w, int h) {
+        var t = this.theme;
+        c.rect(x, y, w, h, t.panel());
+        c.frame(x, y, w, h, t.grid());
+
+        this.text.drawScaled(c, "JUX METRICS", x + 8, y + 8, t.ink(), 2);
+
+        var worst = this.fleet.worst();
+        int warn = this.fleet.countAtLeast(Severity.Warn);
+        var status = worst.name().toUpperCase() + "  " + warn + "/" + this.fleet.size();
+        int sw = this.text.widthOf(status, 1);
+        this.text.draw(c, status, x + w - sw - 24, y + 13, worst.colour());
+        c.rect(x + w - 16, y + 12, 8, 8, worst.colour());
+    }
+
+    /// The host with the highest current cpu, or null on an empty fleet.
+    private Host? busiest() {
+        Host? best = null;
+        int bestPct = -1;
+        for (var h : this.fleet.all()) {
+            if (h.cpu().isEmpty()) {
+                continue;
+            }
+            int pct = h.cpu().window().last();
+            if (pct > bestPct) {
+                bestPct = pct;
+                best = h;
+            }
+        }
+        return best;
+    }
+}

@@ -1,0 +1,51 @@
+// Number formatting, because a dashboard that prints 75.83333333333333 is
+// not a dashboard.
+//
+// Jux renders a `double` the way Rust does, at full precision. A console
+// wants a fixed number of decimals, and it wants them without a format
+// string, so this is a small class rather than a dependency.
+
+package demo.core;
+
+public class Num {
+    /// Round half-away-from-zero to `places` decimals and render the result.
+    ///
+    /// Done in integer arithmetic on purpose: scaling by a power of ten and
+    /// rounding once avoids the "0.30000000000000004" that any float path
+    /// through this would reintroduce at the last step.
+    public static String fixed(double value, int places) {
+        long scale = 1;
+        for (int i = 0; i < places; i++) {
+            scale = scale * 10;
+        }
+
+        bool negative = value < 0.0;
+        double magnitude = negative ? -value : value;
+        long scaled = (long) (magnitude * (double) scale + 0.5);
+
+        long whole = scaled / scale;
+        long frac = scaled - whole * scale;
+
+        var sign = negative && scaled != 0 ? "-" : "";
+        if (places == 0) {
+            return sign + whole;
+        }
+        return sign + whole + "." + pad(frac, places);
+    }
+
+    /// One decimal, the console's default.
+    public static String fixed1(double value) {
+        return fixed(value, 1);
+    }
+
+    /// Left-pad a fractional part with the zeros its magnitude dropped:
+    /// 5 hundredths is ".05", not ".5".
+    private static String pad(long frac, int width) {
+        var digits = "" + frac;
+        var out = "";
+        for (int i = digits.length(); i < width; i++) {
+            out += "0";
+        }
+        return out + digits;
+    }
+}

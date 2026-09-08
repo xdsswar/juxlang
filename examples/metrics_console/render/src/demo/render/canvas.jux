@@ -1,0 +1,90 @@
+// A pixel buffer and the handful of primitives everything else is drawn from.
+//
+// The console owns its pixels: `Canvas` is a flat `Vec<int>` of 0xRRGGBB, and
+// the window library at the edge of the program is handed that buffer once a
+// frame. Nothing below this file knows a window exists, which is why the same
+// drawing code produces the snapshot the tests compare.
+
+package demo.render;
+
+public class Canvas {
+    private int w;
+    private int h;
+    private Vec<int> pixels;
+
+    public Canvas(int w, int h) {
+        this.w = w;
+        this.h = h;
+        this.pixels = new Vec<int>();
+        int n = w * h;
+        for (int i = 0; i < n; i++) {
+            this.pixels.push(0);
+        }
+    }
+
+    public int width() { return this.w; }
+    public int height() { return this.h; }
+
+    /// The raw buffer, for handing to a window or a file writer.
+    public Vec<int> buffer() { return this.pixels; }
+
+    public void clear(int colour) {
+        int n = this.w * this.h;
+        for (int i = 0; i < n; i++) {
+            this.pixels[i] = colour;
+        }
+    }
+
+    /// Paint one pixel. Out-of-bounds is a no-op rather than an error: a
+    /// widget that runs off the edge should be clipped, not fatal.
+    public void set(int x, int y, int colour) {
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) {
+            return;
+        }
+        this.pixels[y * this.w + x] = colour;
+    }
+
+    public int get(int x, int y) {
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) {
+            return 0;
+        }
+        return this.pixels[y * this.w + x];
+    }
+
+    public void rect(int x, int y, int w, int h, int colour) {
+        for (int dy = 0; dy < h; dy++) {
+            for (int dx = 0; dx < w; dx++) {
+                this.set(x + dx, y + dy, colour);
+            }
+        }
+    }
+
+    public void frame(int x, int y, int w, int h, int colour) {
+        this.hline(x, y, w, colour);
+        this.hline(x, y + h - 1, w, colour);
+        this.vline(x, y, h, colour);
+        this.vline(x + w - 1, y, h, colour);
+    }
+
+    public void hline(int x, int y, int len, int colour) {
+        for (int i = 0; i < len; i++) {
+            this.set(x + i, y, colour);
+        }
+    }
+
+    public void vline(int x, int y, int len, int colour) {
+        for (int i = 0; i < len; i++) {
+            this.set(x, y + i, colour);
+        }
+    }
+
+    /// A vertical bar grown from a baseline, which is how every chart here
+    /// draws a sample.
+    public void column(int x, int baseline, int height, int width, int colour) {
+        for (int dx = 0; dx < width; dx++) {
+            for (int dy = 0; dy < height; dy++) {
+                this.set(x + dx, baseline - dy, colour);
+            }
+        }
+    }
+}

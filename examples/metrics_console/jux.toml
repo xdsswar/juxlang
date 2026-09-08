@@ -1,0 +1,11 @@
+# A four-package Jux workspace.
+#
+#   demo.core    generic containers and the aggregation contract
+#   demo.model   the domain: hosts, metrics, severities, alerts
+#   demo.render  a pixel canvas and the widgets drawn on it
+#   demo.app     wires the three together and decides where the frame goes
+#
+# Each member is its own module with its own manifest; the dependency edges
+# between them are path deps, so the whole thing builds from this root.
+[workspace]
+members = ["core", "model", "render", "app"]

@@ -1,0 +1,10 @@
+[package]
+name = "demo.app"
+version = "0.1.0"
+
+# The application depends on all three libraries, which also makes it last in
+# the workspace's topological order -- and so the target `jux run` picks.
+[dependencies]
+"demo.core" = { path = "../core" }
+"demo.model" = { path = "../model" }
+"demo.render" = { path = "../render" }
