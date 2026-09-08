@@ -61,3 +61,7 @@ _bugtest/
 tools/java-differential/emit/
 tools/java-differential/shared/
 tools/java-differential/results.txt
+
+# Reference checkouts of other languages' editor/web tooling. Read-only, not
+# ours, and not part of the build -- see reference/README.md.
+/reference/
