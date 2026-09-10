@@ -38,7 +38,14 @@ if not os.path.exists(JUXC):
 # A crash is any of these. Note that a NON-ZERO exit is expected and fine --
 # broken input SHOULD be rejected. What must never happen is a panic, an
 # assertion, an overflow, or a hang.
+#
+# The first marker is the one that fires now: juxc catches its own panics and
+# reports them (`juxc_driver::ice`), so Rust's default `panicked at` banner is
+# suppressed. The rest are kept because they still reach the terminal from a
+# path the handler cannot cover -- a stack overflow or an abort unwinds nothing
+# -- and because the panic message itself is quoted inside the report.
 CRASH_MARKERS = (
+    'internal compiler error',
     'panicked at',
     'internal error',
     'RUST_BACKTRACE',

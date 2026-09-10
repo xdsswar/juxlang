@@ -186,11 +186,44 @@ enum TargetCmd {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    // Same reason as `juxc`: the front end runs in-process here, it recurses
-    // with source nesting, and its frames are large enough that a default main
-    // stack aborts the process around 60 levels deep. See
-    // `juxc_driver::big_stack`.
-    juxc_driver::big_stack::run(move || run_cli(cli))
+    // What `jux` was pointed at, kept for an ICE report.
+    let inputs = ice_inputs(&cli);
+    // Same contract as `juxc`: a panic in here is a compiler bug and reports
+    // itself as one. See `juxc_driver::ice`.
+    juxc_driver::ice::guard("jux", &inputs, move || {
+        // Same reason as `juxc`: the front end runs in-process here, it recurses
+        // with source nesting, and its frames are large enough that a default
+        // main stack aborts the process around 60 levels deep. See
+        // `juxc_driver::big_stack`.
+        juxc_driver::big_stack::run(move || {
+            juxc_driver::ice::selftest_trip();
+            run_cli(cli)
+        })
+    })
+}
+
+/// What this invocation was pointed at, for an internal-compiler-error report.
+///
+/// Single-file mode carries the `.jux` path in the sub-command, project mode
+/// carries a manifest (explicit or, most often, none at all because it was
+/// found by walking up from the working directory). Either is worth naming: an
+/// ICE report that says only "jux crashed" cannot be reproduced.
+fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    let file = match &cli.command {
+        CliCommand::Check { file, .. }
+        | CliCommand::Build { file, .. }
+        | CliCommand::Run { file, .. } => file.clone(),
+        // The rest are project-wide or take no path at all.
+        CliCommand::New { .. }
+        | CliCommand::Test { .. }
+        | CliCommand::Update
+        | CliCommand::Metadata { .. }
+        | CliCommand::Target { .. } => None,
+    };
+    inputs.extend(file);
+    inputs.extend(cli.manifest_path.clone());
+    inputs
 }
 
 /// Dispatch one parsed command line. Split out of `main` so the whole of it

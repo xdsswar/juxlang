@@ -89,12 +89,21 @@ struct Cli {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    // The front end recurses in step with source nesting and its frames are
-    // large; on a default 8 MB main stack that caps out around 60 levels of
-    // nested expression and then aborts the process with no diagnostic. Give it
-    // room -- see `juxc_driver::big_stack`.
-    juxc_driver::big_stack::run(move || {
-        run_juxc(cli).map(|c| c.unwrap_or(ExitCode::SUCCESS))
+    // Kept for the report: `cli` is moved onto the compilation thread below,
+    // and an ICE needs to name the files that were being compiled.
+    let inputs = cli.inputs.clone();
+    // A panic anywhere in the compiler is a bug in the compiler, and it should
+    // say so rather than dumping a Rust backtrace that reads like the user's
+    // program crashed -- see `juxc_driver::ice`.
+    juxc_driver::ice::guard("juxc", &inputs, move || {
+        // The front end recurses in step with source nesting and its frames are
+        // large; on a default 8 MB main stack that caps out around 60 levels of
+        // nested expression and then aborts the process with no diagnostic. Give
+        // it room -- see `juxc_driver::big_stack`.
+        juxc_driver::big_stack::run(move || {
+            juxc_driver::ice::selftest_trip();
+            run_juxc(cli).map(|c| c.unwrap_or(ExitCode::SUCCESS))
+        })
     })
 }
 
