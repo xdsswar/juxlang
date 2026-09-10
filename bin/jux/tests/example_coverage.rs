@@ -78,7 +78,21 @@ fn all_test_sources(root: &Path) -> String {
 /// (`expect_output("name", ...)`). Never as a bare word: several tests mention
 /// an example in prose, and counting that as coverage would hide exactly the
 /// gaps this is looking for.
-fn is_covered(tests: &str, name: &str) -> bool {
+fn is_covered(root: &Path, tests: &str, name: &str) -> bool {
+    // The strongest form of coverage, and the one that needs no mention at all:
+    // `bin/jux/tests/run.rs` discovers the corpus at runtime and pins each
+    // example's exact output, so a blessed expectation IS the test. This is
+    // what let the per-example test files go: they asserted less, and they
+    // asserted it six times slower.
+    if root
+        .join("tests")
+        .join("expected")
+        .join("examples")
+        .join(format!("{name}.expected"))
+        .is_file()
+    {
+        return true;
+    }
     tests.contains(&format!("\"{name}.jux\""))
         || tests.contains(&format!("join(\"{name}\")"))
         || tests.contains(&format!("\"{name}\""))
@@ -120,7 +134,7 @@ fn every_example_is_named_by_a_test() {
         if excluded.contains(name.as_str()) {
             continue;
         }
-        if !is_covered(&tests, &name) {
+        if !is_covered(&root, &tests, &name) {
             missing.push(name);
         }
     }

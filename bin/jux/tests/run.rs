@@ -65,6 +65,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("stress_jux_std_parallel", "thread interleaving and timings"),
     ("ffi_strings", "prints a heap address"),
     ("ffi_struct", "prints a heap address"),
+    // Needs `target/it-io-time-data/` to exist before it runs, because
+    // `File.writeText` does not create parent directories. That is setup, not
+    // output, so it stays with `tests/io_and_time.rs`, which does the
+    // `create_dir_all` first. Blessed here it recorded a Rust panic instead.
+    ("io_and_time", "needs a directory created first; covered by tests/io_and_time.rs"),
 ];
 
 /// How many examples to compile at once.
@@ -109,6 +114,12 @@ fn run_example(root: &Path, name: &str) -> String {
         .arg("--emit-dir")
         .arg(&emit_dir)
         .arg(&source)
+        // From the repository root, because that is where a person stands when
+        // they run `jux run`, and examples resolve relative paths against it.
+        // Cargo starts a test in its own package directory (`bin/jux`), so
+        // without this an example doing file I/O writes somewhere else entirely
+        // and dies. `examples/io_and_time.jux` did exactly that.
+        .current_dir(root)
         .output()
         .unwrap_or_else(|e| panic!("spawning jux for {name}: {e}"));
 
@@ -168,6 +179,13 @@ fn normalize(raw: &str, root: &Path) -> String {
 const SUSPICIOUS: &[(&str, &str)] = &[
     ("RefCell {", "a handle's Debug leaking instead of what it holds"),
     ("error[E", "a rustc error leaked through, which is a juxc bug"),
+    // A Rust panic is never something a Jux program asks for. An uncaught Jux
+    // exception is, and reads as `Exception in thread "main" jux.std...`, so
+    // the two are told apart by shape. This entry exists because the first
+    // blessing pass recorded `io_and_time` panicking on a missing directory and
+    // nothing said so.
+    ("panicked at", "the emitted Rust panicked, which a Jux program cannot ask for"),
+    ("Result::unwrap()", "an unwrap on an Err reached the user as a crash"),
     ("Some(", "an Option rendered instead of unwrapped (s?.length() printed Some(4))"),
     ("Ok(", "a Result rendered instead of unwrapped"),
     ("Rc(", "a handle's Debug leaking"),
