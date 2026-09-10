@@ -7,6 +7,49 @@
 //! Before this existed the same twenty lines were copy-pasted into every test
 //! file, which is why so few examples had one: the cost of gating an example
 //! was writing the boilerplate again.
+//!
+//! # What the suite costs, and where the cost is
+//!
+//! Measured 2026-09-09 on Windows, warm `target/`: `cargo test --workspace` is
+//! **529s** for 1425 tests across 215 binaries. That number had never been
+//! written down, and a gate whose cost nobody knows is a gate that gets
+//! switched off.
+//!
+//! Nearly all of it is in one place. Cargo runs test BINARIES sequentially but
+//! runs the tests INSIDE a binary in parallel, so an example costs six times
+//! more when it has a test file to itself:
+//!
+//! | shape | binaries | examples | per example |
+//! |---|---|---|---|
+//! | one test per file | 158 | 158 | 2.49s |
+//! | clustered (this helper) | 9 | 129 | 0.42s |
+//!
+//! At the clustered rate those 158 would take 66s instead of 393s. Clustering
+//! is worth roughly 327s of the 529s, which is the single biggest lever in the
+//! suite, and it is a reason to prefer a cluster runner over a new file per
+//! example that has nothing to do with how strongly anything is asserted.
+//!
+//! ## One shared `CARGO_TARGET_DIR` was tried, and is not worth it
+//!
+//! Every emitted crate depends on `futures` with the `thread-pool` feature, and
+//! each test gets its own `target/it-<tag>/target`, so that dependency tree is
+//! built once per example: 314 copies at roughly 57 MB each. Pointing the whole
+//! corpus at one build directory (which `juxc_driver::cargo_target_dir`
+//! supports, and which `crate_name_for_input` makes collision-free) looks like
+//! an obvious win. Measured on `examples_misc`, 45 tests, in isolation:
+//!
+//! | | cold | warm | disk |
+//! |---|---|---|---|
+//! | per-test directories | 59.1s | **10.7s** | ~2.5 GB |
+//! | one shared directory | **28.2s** | 18.9s | ~0.6 GB |
+//!
+//! Cold it is twice as fast; warm it is nearly twice as slow, because cargo
+//! takes a file lock on the directory and the parallel tests inside a binary
+//! then serialize on it, and because each fingerprint check now walks a
+//! directory holding every crate in the corpus instead of one. Warm is the case
+//! that matters for a gate run before a commit, so the per-test directories
+//! stay. Revisit only if the trade changes: a fresh clone, or a run where disk
+//! matters more than wall-clock.
 
 #![allow(dead_code)]
 
