@@ -1,0 +1,7 @@
+# `cargo xtask` is the project's own command runner.
+#
+# The alias exists so the gate is one word with no extra toolchain to install:
+# `cargo xtask gate` runs everything that has to be green before a commit.
+# See `xtask/src/main.rs`.
+[alias]
+xtask = "run --quiet --package xtask --"
