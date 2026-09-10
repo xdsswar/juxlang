@@ -102,6 +102,7 @@ pub(crate) fn cross_target() -> Option<String> {
 }
 
 pub mod big_stack;
+pub mod diagnostic_order;
 pub mod git_deps;
 pub mod grammar_export;
 pub mod ice;

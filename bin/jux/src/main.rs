@@ -1251,7 +1251,10 @@ fn default_emit_dir(input: &Path) -> PathBuf {
 /// the offending file in a multi-file workspace. Otherwise fall back to the
 /// bare `[E0xxx] level: message` form.
 fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
-    for d in diagnostics {
+    // Source order, and de-duplicated, exactly as `juxc` shows them. This
+    // used to print in whatever order the phases produced, so the two tools
+    // disagreed about the same file and `jux` is the one people type.
+    for d in juxc_driver::diagnostic_order::in_source_order(diagnostics) {
         match (d.file, d.primary_span) {
             (Some(i), Some(span)) if i < sources.len() => {
                 let src = &sources[i];

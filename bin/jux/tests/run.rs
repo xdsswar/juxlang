@@ -394,3 +394,60 @@ fn diagnostics_come_out_in_the_same_order_every_time() {
         }
     }
 }
+
+/// Diagnostics come out in the order a reader meets them.
+///
+/// `juxc` has sorted by file, then byte offset, then code since the phase-order
+/// fix. `jux` never did: it printed whatever order resolve and tycheck happened
+/// to produce, so the two tools disagreed about the same file, and `jux` is the
+/// one people type. On `reentrancy_notnull_local.jux` that meant line 16 before
+/// line 8.
+///
+/// Asserted as a PROPERTY of `jux` alone rather than as agreement between the
+/// two binaries. A cross-binary comparison would have to find `juxc` beside
+/// `jux` on disk and would quietly pass against a stale copy, which is the kind
+/// of test that looks like cover and is not.
+#[test]
+fn diagnostics_are_printed_in_source_order() {
+    let root = common::workspace_root();
+    // Two warnings, deliberately not in the order the scan produces them.
+    let case = root.join("examples").join("reentrancy_notnull_local.jux");
+    assert!(case.is_file(), "the two-warning case is missing");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jux"))
+        .arg("check")
+        .arg(&case)
+        .current_dir(&root)
+        .output()
+        .expect("spawn jux check");
+    let blob = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // `…/foo.jux:16:12: [W0457] warning: …` -> (16, 12)
+    let positions: Vec<(u32, u32)> = blob
+        .lines()
+        .filter_map(|line| {
+            let rest = line.split(".jux:").nth(1)?;
+            let mut parts = rest.split(':');
+            let line_no = parts.next()?.parse().ok()?;
+            let column = parts.next()?.parse().ok()?;
+            Some((line_no, column))
+        })
+        .collect();
+
+    assert!(
+        positions.len() >= 2,
+        "expected at least two located diagnostics, got {positions:?} from:\n{blob}"
+    );
+    let mut sorted = positions.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        positions, sorted,
+        "diagnostics came out in {positions:?}, which is not source order. \
+         `jux` and `juxc` must both print through \
+         `juxc_driver::diagnostic_order::in_source_order`.",
+    );
+}
