@@ -910,4 +910,68 @@ mod catalog_tests {
             "emitted but absent from JUX-DIAGNOSTICS-ADDENDUM.md §D.4: {missing:?}",
         );
     }
+
+    /// And the catalog may not promise a check the compiler cannot perform.
+    ///
+    /// The test above closes one direction: nothing is emitted that the spec
+    /// does not document. On its own that let the other direction rot. The
+    /// catalog allocated 169 codes and the compiler implemented 108, so 61
+    /// described checks that could never fire, including an entire borrow
+    /// checker. A specification is a promise made in the user's name, and a
+    /// reader has no way to tell an unbuilt check from a built one.
+    ///
+    /// So every catalog row must either exist in the `Code` enum or carry
+    /// `*(reserved)*`. Implementing a reserved code means deleting the marker;
+    /// documenting a new one without building it means adding it. Neither can
+    /// happen by accident now.
+    #[test]
+    fn the_catalog_promises_nothing_the_compiler_cannot_raise() {
+        let source = include_str!("code.rs");
+        let catalog = include_str!("../../../Architecture/JUX-DIAGNOSTICS-ADDENDUM.md");
+
+        let implemented: Vec<String> = source
+            .lines()
+            .filter_map(|line| line.split_once("=> \""))
+            .filter_map(|(_, rest)| rest.split_once('"'))
+            .map(|(code, _)| code.to_string())
+            .filter(|code| {
+                code.len() == 5
+                    && matches!(code.as_bytes()[0], b'E' | b'W')
+                    && code[1..].bytes().all(|b| b.is_ascii_digit())
+            })
+            .collect();
+
+        // Catalog rows look like: `| `E0432`  | Description | Source |`
+        let mut unmarked: Vec<String> = Vec::new();
+        let mut rows = 0usize;
+        for line in catalog.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix("| `") else { continue };
+            let Some((code, after)) = rest.split_once('`') else { continue };
+            let is_code = code.len() == 5
+                && matches!(code.as_bytes()[0], b'E' | b'W')
+                && code[1..].bytes().all(|b| b.is_ascii_digit());
+            if !is_code {
+                continue;
+            }
+            rows += 1;
+            // The description cell is everything up to the next column break.
+            let description = after.split('|').nth(1).unwrap_or("");
+            // `(reserved` rather than `(reserved)`: a row may qualify the
+            // marker, as E0261 does with "(reserved; statement form is E0440)".
+            if !implemented.iter().any(|c| c == code) && !description.contains("(reserved") {
+                unmarked.push(code.to_string());
+            }
+        }
+        assert!(rows > 100, "the catalog scan found {rows} rows -- did the table format change?");
+
+        assert!(
+            unmarked.is_empty(),
+            "JUX-DIAGNOSTICS-ADDENDUM.md §D.4 documents {} code(s) that no `Code` \
+             variant can raise, and does not mark them *(reserved)*: {unmarked:?}.\n\
+             Either implement them, or mark them reserved so the spec stops \
+             promising a check the compiler cannot perform.",
+            unmarked.len(),
+        );
+    }
 }

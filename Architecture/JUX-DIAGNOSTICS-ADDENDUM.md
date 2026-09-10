@@ -320,10 +320,10 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0100`  | Invalid character in source                          | Grammar §A.1                   |
 | `E0101`  | Unterminated string literal                          | Grammar §A.1.5                 |
 | `E0102`  | Invalid digit separator placement                    | Grammar §A.1.4                 |
-| `E0103`  | Invalid Unicode escape (surrogate code point)         | Grammar §A.1.5                 |
-| `E0104`  | Block comment never terminated                       | Grammar §A.1.2                 |
-| `E0105`  | Numeric literal out of range for its declared type   | Grammar §A.1.4                 |
-| `E0150`  | Invalid `@cfg(...)` predicate syntax                 | Pipeline §C.2.5                |
+| `E0103`  | Invalid Unicode escape (surrogate code point) *(reserved)*| Grammar §A.1.5                 |
+| `E0104`  | Block comment never terminated *(reserved)*          | Grammar §A.1.2                 |
+| `E0105`  | Numeric literal out of range for its declared type *(reserved)*| Grammar §A.1.4                 |
+| `E0150`  | Invalid `@cfg(...)` predicate syntax *(reserved)*    | Pipeline §C.2.5                |
 
 ### Syntax (`E0200–E0299`)
 
@@ -442,14 +442,34 @@ reserved for it. `E0506` onward are the `unsafe` / C-interop checks, which
 landed here first and cannot be moved: §D.5.1 forbids reassigning a published
 code, and all of `E0506`–`E0510` are emitted today.
 
+> **Jux has no user-visible borrow checker, and is not getting one.**
+>
+> This is a decision, not a gap. Every class lowers to a shared handle
+> (`Rc<RefCell<T>>`, §CR), so a Jux program has no borrows for a user to get
+> wrong: aliasing is the normal case and the language is designed around it,
+> the way Java is. There is no `&`, no lifetime to name, and nothing a
+> programmer could write that `E0500`–`E0505`, `E0610`–`E0612` or `E0820`
+> would refuse.
+>
+> Those nine codes stay allocated because §D.5.1 forbids reusing a number, and
+> they stay *(reserved)* because a specification that describes checks the
+> compiler cannot perform is making a promise in the user's name. If the
+> representation model ever gains a tier where a borrow IS visible, this is the
+> band to build in. Until then, treat the absence as intended.
+>
+> What does the work instead: the shared-handle discipline is enforced at
+> lowering time (§CR.4.1's statement-scoped borrows), and a program that would
+> alias itself into trouble gets a runtime `RefCell` panic rather than a
+> compile error. That is the honest trade Phase 1 makes.
+
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0500`  | Cannot use value: borrowed                                  | Type system §T.7               |
-| `E0501`  | Borrow outlives source                                       | Type system §T.7               |
-| `E0502`  | Cannot mutate while borrowed (whole-object rule)            | Inheritance §6.9.1, §6.9.7    |
-| `E0503`  | Cannot move while borrowed                                  | Type system §T.7               |
-| `E0504`  | Use after move                                              | Lowering §C.6.1                |
-| `E0505`  | Cannot hold exclusive borrow across `await`                  | Async §18.1.6                 |
+| `E0500`  | Cannot use value: borrowed *(reserved)*                     | Type system §T.7               |
+| `E0501`  | Borrow outlives source *(reserved)*                          | Type system §T.7               |
+| `E0502`  | Cannot mutate while borrowed (whole-object rule) *(reserved)*| Inheritance §6.9.1, §6.9.7    |
+| `E0503`  | Cannot move while borrowed *(reserved)*                     | Type system §T.7               |
+| `E0504`  | Use after move *(reserved)*                                 | Lowering §C.6.1                |
+| `E0505`  | Cannot hold exclusive borrow across `await` *(reserved)*     | Async §18.1.6                 |
 | `E0506`  | `unsafe` operation outside `unsafe` block                    | Layout-ABI §L.5.2              |
 | `E0507`  | `delete` is not a Jux keyword — use a `drop { }` block       | Missing-defs §M (drop blocks)  |
 | `E0508`  | Type has no stable C representation in an FFI signature      | Layout-ABI §L.4                |
@@ -462,9 +482,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0600`  | Field not definitely assigned                               | Semantics §S.4.5               |
 | `E0601`  | Local read before it is definitely assigned                 | Semantics §S.4.6               |
-| `E0610`  | `drop` block in `jux-core` may not throw                    | Semantics §S.5.3               |
-| `E0611`  | Use of moved-from binding                                   | Lowering §C.6.1                |
-| `E0612`  | Conditional move requires re-initialization on join          | Lowering §C.6.1                |
+| `E0610`  | `drop` block in `jux-core` may not throw *(reserved)*       | Semantics §S.5.3               |
+| `E0611`  | Use of moved-from binding *(reserved)*                      | Lowering §C.6.1                |
+| `E0612`  | Conditional move requires re-initialization on join *(reserved)*| Lowering §C.6.1                |
 
 ### Async / Generators (`E0700–E0799`)
 
@@ -488,23 +508,23 @@ code, and all of `E0506`–`E0510` are emitted today.
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0800`  | `unsafe` operation in const context                         | Type system §T.11              |
-| `E0810`  | Operation requires `unsafe` block                            | Layout-ABI §L.5.2              |
-| `E0820`  | Inferred closure capture violates lifetime                  | Type system §T.9.4            |
-| `E0830`  | `protected` member access through unrelated type            | Type system §T.10.3           |
+| `E0800`  | `unsafe` operation in const context *(reserved)*            | Type system §T.11              |
+| `E0810`  | Operation requires `unsafe` block *(reserved)*               | Layout-ABI §L.5.2              |
+| `E0820`  | Inferred closure capture violates lifetime *(reserved)*     | Type system §T.9.4            |
+| `E0830`  | `protected` member access through unrelated type *(reserved)*| Type system §T.10.3           |
 | `E0840`  | Const evaluation exceeded resource limits                    | Type system §T.11.4           |
 | `E0841`  | Non-const operation in const context                         | Type system §T.11.6           |
 | `E0842`  | Const evaluation panicked at compile time                    | Type system §T.11.6           |
-| `E0850`  | Heap-requiring construct in `jux-core`                       | Pipeline §C.2.6                |
+| `E0850`  | Heap-requiring construct in `jux-core` *(reserved)*          | Pipeline §C.2.6                |
 
 ### Backend / Codegen (`E0900–E0999`)
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0900`  | Backend cannot lower construct                              | Pipeline §C.9.4                |
-| `E0905`  | Cannot resolve dependency                                   | Build system §B.5.4            |
-| `E0908`  | Dynamic linkage unavailable in `core` profile                | Build system §B.14.6           |
-| `E0910`  | `init` block escapes `this`                                  | Missing-defs §M.1.3            |
+| `E0900`  | Backend cannot lower construct *(reserved)*                 | Pipeline §C.9.4                |
+| `E0905`  | Cannot resolve dependency *(reserved)*                      | Build system §B.5.4            |
+| `E0908`  | Dynamic linkage unavailable in `core` profile *(reserved)*   | Build system §B.14.6           |
+| `E0910`  | `init` block escapes `this` *(reserved)*                     | Missing-defs §M.1.3            |
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
 | `E0932`  | An operator must be `public`                                 | Operators §O.2.8               |
@@ -514,37 +534,56 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |
 | `E0944`  | Misuse of the `out` parameter modifier (`out` + `final`/`ref`/`weak`/varargs/default, or on a constructor param) | Missing-defs §M.4.1 / §M.14.5 |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
-| `E0950`  | Orphan operator overload                                    | Runtime/ABI §R.3.3             |
-| `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |
-| `E0952`  | Orphan free-function operator definition                    | Runtime/ABI §R.3.6             |
-| `E0961`  | Mutable static requires thread-safe wrapper                  | Missing-defs §M.12.3           |
+| `E0950`  | Orphan operator overload *(reserved)*                       | Runtime/ABI §R.3.3             |
+| `E0951`  | Duplicate operator overload across modules *(reserved)*     | Runtime/ABI §R.3.3             |
+| `E0952`  | Orphan free-function operator definition *(reserved)*       | Runtime/ABI §R.3.6             |
+| `E0961`  | Mutable static requires thread-safe wrapper *(reserved)*     | Missing-defs §M.12.3           |
 | `E0970`  | Write to a read-only or computed (get-only) property outside its settable window | Missing-defs §M.7.2 / Properties §P.1.5 |
 | `E0972`  | Property accessor visibility violation (setter more visible than getter; `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 / Properties §P.1.3 / §P.3.5 |
-| `E0973`  | Direct assignment to a bound property                       | Properties §P.4.2              |
+| `E0973`  | Direct assignment to a bound property *(reserved)*          | Properties §P.4.2              |
 | `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
 | `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
-| `E0980`  | Method reference is ambiguous                               | Missing-defs §M.8.3            |
-| `E0991`  | Inner classes not supported                                 | Missing-defs §M.9.2            |
-| `E0992`  | Anonymous classes not supported                             | Missing-defs §M.9.2            |
-| `E0993`  | Local classes not supported                                 | Missing-defs §M.9.2            |
+| `E0980`  | Method reference is ambiguous *(reserved)*                  | Missing-defs §M.8.3            |
+| `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
+| `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |
+| `E0993`  | Local classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
+
+> **These three do not describe the compiler as it stands (checked 2026-09-09).**
+>
+> `E0992` is retired in all but number. Anonymous classes ARE supported:
+> `new Initializable() { … }` compiles and runs, and
+> `examples/stress_anonymous_minimal.jux` is one of several gating it. The
+> restriction the code names no longer exists, so nothing will ever raise it.
+> It keeps its number because §D.5.1 forbids reuse.
+>
+> `E0993` describes something true, but the compiler does not say it. A `class`
+> declared inside a method body is not rejected with one clear diagnostic; it
+> falls out of the parser as a cascade, `E0200 expected expression` followed by
+> four more errors about names the failed parse then could not find. The
+> restriction is real and intended; the diagnostic is the missing part, and this
+> is the code to raise when it is written.
+>
+> `E0991` is genuinely reserved. Static nested types work (§M.9.1,
+> `examples/nested_types.jux`); a non-static inner class holding an implicit
+> reference to its enclosing instance does not.
 
 ### Warnings (`W0100–W0999`)
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `W0001`  | Doc comment in non-attaching position                       | Grammar §A.1.2                 |
-| `W0210`  | Module declares no exported symbols                         | Build system §B.3.4            |
+| `W0001`  | Doc comment in non-attaching position *(reserved)*          | Grammar §A.1.2                 |
+| `W0210`  | Module declares no exported symbols *(reserved)*            | Build system §B.3.4            |
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation *(reserved)* | Missing-defs §M.3 / Operators §O.9 |
-| `W0301`  | Equality chained with reference identity                    | Grammar §A.4                   |
+| `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
-| `W0530`  | Cyclic class initialization within a module                 | Semantics §S.4.2               |
+| `W0530`  | Cyclic class initialization within a module *(reserved)*    | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
-| `W0820`  | `unsafe` block missing `// SAFETY:` justification           | Layout-ABI §L.5.5              |
-| `W0960`  | Mutable static in single-threaded profile                    | Missing-defs §M.12.3           |
-| `W0970`  | `observer<T>` attached but never detached and target has no `drop` | Properties §P.6         |
-| `W0971`  | Property declared `{ get; set; }` but never observed or bound | Properties §P.7.2            |
-| `W0972`  | Binding source property has `private set` — binding will never update | Properties §P.6      |
-| `W0973`  | Early `return` in a custom setter body may skip the observer fire | Properties §P.7.6        |
+| `W0820`  | `unsafe` block missing `// SAFETY:` justification *(reserved)*| Layout-ABI §L.5.5              |
+| `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |
+| `W0970`  | `observer<T>` attached but never detached and target has no `drop` *(reserved)*| Properties §P.6         |
+| `W0971`  | Property declared `{ get; set; }` but never observed or bound *(reserved)*| Properties §P.7.2            |
+| `W0972`  | Binding source property has `private set` — binding will never update *(reserved)*| Properties §P.6      |
+| `W0973`  | Early `return` in a custom setter body may skip the observer fire *(reserved)*| Properties §P.7.6        |
 | `W0974`  | Property name not PascalCase (naming convention — preferred, never an error) | Properties §P.1.1 / §P.7.1 |
 
 ### Notes (`N0xxx`)
