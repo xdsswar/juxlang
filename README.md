@@ -188,6 +188,56 @@ what is broken far better than a test suite you wrote from imagination.
 
 ---
 
+## And one that reflows: the operations dashboard
+
+![The Jux operations dashboard, running as a resizable native window](screenshots/dashboard-operations-wide.png)
+
+The metrics console proved a Jux program can be an application. This one asks
+the harder question: can it be a *responsive* one? Same rules as before. No UI
+framework, no layout engine, no drawing library.
+[`examples/dashboard`](examples/dashboard) is integer arithmetic writing
+`0x00RRGGBB` pixels into a buffer: rounded panels, filled line charts, bar
+tracks, gauge rings, and a 5x7 bitmap font that lives in the source as plain
+numbers.
+
+```bash
+cd examples/dashboard
+jux run                                          # live window, resizable
+jux run -- --snapshot frame.ppm --size 900x620   # one frame to a file
+```
+
+`Layout` is the only code in the whole program that decides where anything
+goes. It reads the surface size, picks a breakpoint, and hands every widget the
+rectangle it has to fit inside:
+
+| Breakpoint | Width | Stat tiles | Charts | Side column |
+|---|---|---|---|---|
+| Wide | 1080+ | 4 across | 2 columns | yes |
+| Medium | 720-1079 | 2 across | 1 column | yes, narrower |
+| Compact | under 720 | stacked | 1 column | dropped |
+
+Drag the window edge and the four stat tiles become two and then one, the
+charts collapse into a single column, and the side rail drops away. No widget
+knows the window resized; they are simply asked to draw somewhere else. The
+header prints the breakpoint it chose beside the surface size and the frame
+counter, the `WIDE 1571X789 FRAME 2199` in the shot above, so the rearrangement
+is something you can see rather than something I claim.
+
+The `dash` package still knows nothing about windows. That is what lets the
+same frame go to a resizable `rust.minifb` window or straight to a file, and it
+is why a test can render three different sizes headless and check the layout
+really does respond.
+
+**Writing it found seven more compiler bugs**, none of them about dashboards. A
+cast on the left of a shift did not compile, and `r as u32 << 16` is every
+pixel-packing routine ever written. `char` arithmetic skipped promotion when
+one operand was a literal, so `ch - '0'` was wrong. A `for`-each variable had
+no type unless it was a class. An early `return;` in a constructor returned
+nothing. A static call moved its arguments, so `Font.draw(text, Font.width(text))`
+failed over a value the program never gave away. All seven are fixed.
+
+---
+
 ## A taste of Jux
 
 If you've written Java or C#, none of this needs a tutorial:
