@@ -1,0 +1,25 @@
+sum 6
+name ada
+name grace
+gen 0
+gen 10
+gen 20
+gen 30
+after null
+even 2
+even 4
+controlFlow done
+cell 110
+cell 120
+cell 130
+cell 210
+labeled done
+combo 20
+combo 30
+tail 3
+tail 4
+tail 9
+empty ok
+cleanup
+seen 3
+shared 1 2

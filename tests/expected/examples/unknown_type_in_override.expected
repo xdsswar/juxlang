@@ -1,0 +1,2 @@
+examples/unknown_type_in_override.jux:14:22: [E0417] error: unknown type `T` -- no primitive, in-scope generic parameter, or class/record/enum/interface of that name is visible here. If this overrides a member of a generic supertype, name the concrete type argument it was bound to (e.g. `Object` under `implements Holder<Object>`), not the supertype's type-parameter name
+[exit: 1]

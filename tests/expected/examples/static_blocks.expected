@@ -1,0 +1,3 @@
+static init: configured
+first read: retries=3
+after construct: mode=production, retries=3

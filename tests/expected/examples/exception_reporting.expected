@@ -1,0 +1,6 @@
+retry 1
+retry 2
+retry 3
+4
+caught as supertype: outer
+finally ran

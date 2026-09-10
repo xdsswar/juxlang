@@ -1,0 +1,6 @@
+handling
+cleanup A
+7
+cleanup B
+outer caught: second
+9

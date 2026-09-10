@@ -1507,7 +1507,17 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
     };
 
     // Warn once per class, on the first field that completes a cycle back to it.
-    for (fqn, outs) in &edges {
+    //
+    // Walked in sorted key order, not `HashMap` order. `HashMap` seeds its
+    // hasher per process, so iterating it here let the ORDER of the warnings
+    // change between two runs of the same unchanged program. That is a
+    // compiler that cannot be trusted to say the same thing twice, and it is
+    // invisible until something pins exact output: `bin/jux/tests/run.rs`
+    // caught it on its second run.
+    let mut keys: Vec<&String> = edges.keys().collect();
+    keys.sort();
+    for fqn in keys {
+        let outs = &edges[fqn];
         if is_stdlib(fqn) {
             continue;
         }

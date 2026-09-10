@@ -1,0 +1,4 @@
+a = 100 USD
+a.isZero = false
+zero.isZero = true
+total = 400 USD

@@ -1,0 +1,7 @@
+3
+i1/1
+1
+i1
+i9
+i7/7
+examples/generics_nested_matrix.jux:25:13: [W0457] warning: field `kids` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)

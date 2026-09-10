@@ -1,0 +1,6 @@
+a<b: true
+a<=c: true
+b>a: true
+a>=c: true
+a==c: true
+a==b: false

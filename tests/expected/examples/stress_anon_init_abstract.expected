@@ -1,0 +1,4 @@
+widget anonymous init: first block
+widget anonymous init: second block, n=7
+<widget>
+[rendered]

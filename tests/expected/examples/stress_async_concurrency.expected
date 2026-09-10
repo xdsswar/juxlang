@@ -1,0 +1,16 @@
+--- 3 yielding tasks under one parallel(...) ---
+[A] step 0
+[B] step 0
+[C] step 0
+[A] step 1
+[B] step 1
+[C] step 1
+[A] step 2
+[B] step 2
+[C] step 2
+[A] done
+[B] done
+[C] done
+results: A=3, B=3, C=3
+--- if it were truly sequential, A would finish before B started ---
+--- the interleaved output above is the proof of concurrency ---

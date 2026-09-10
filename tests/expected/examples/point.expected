@@ -1,0 +1,4 @@
+p = (3, 4)
+distance^2 = 25
+after shift: (13, 24)
+distance^2 = 745

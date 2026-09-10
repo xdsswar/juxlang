@@ -1,0 +1,11 @@
+score 0 -> 7
+size: 1
+own 5->6
+score 7 -> 9
+tag none->deep
+gsize: 1
+score 9 -> 42
+bound: 42
+score 42 -> 50
+after unbind: 42
+done

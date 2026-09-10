@@ -1,0 +1,10 @@
+cell(5)
+cell(x)
+Cell(value: y)
+pair(1, two)
+Some(value: hi)
+None
+wrap(Cell(value: in))
+wrap(Some(value: deep))
+m:s
+m:7

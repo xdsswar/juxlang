@@ -1,0 +1,34 @@
+=== List<T> methods ===
+size       = 3
+length     = 3
+isEmpty    = false
+contains 20 = true
+contains 99 = false
+indexOf 30 = 2
+indexOf 99 = -1
+first      = 10
+last       = 30
+get(1)     = 20
+after add(6) -> size=6, last=6
+after remove(0) -> first=2, size=5
+after insert(0, 99) -> first=99, size=6
+after reverse -> first=6, last=99
+after sort -> first=2, last=99
+after clear -> isEmpty=true
+=== String methods ===
+length     = 21
+trimmed    = 'Hello, Jux World!'
+upper      =   HELLO, JUX WORLD!
+lower      =   hello, jux world!
+contains J = true
+startsWith = true
+endsWith   = true
+indexOf J  = 9
+replace    = Hello, Rust World!
+substring  = 'Jux'
+charAt(0)  = H
+isEmpty    = false
+empty.isEmpty = true
+split size = 2
+split[0]   = 'Hello'
+split[1]   = 'Jux World!'

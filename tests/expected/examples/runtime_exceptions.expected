@@ -1,0 +1,6 @@
+NPE caught
+CCE caught
+AE caught: / by zero
+caught as RuntimeException
+caught as Throwable
+outer NPE

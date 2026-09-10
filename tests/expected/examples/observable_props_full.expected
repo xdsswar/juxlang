@@ -1,0 +1,17 @@
+full: / -> Ada/
+full: Ada/ -> Ada/Lovelace
+a after b=5: 5
+a after unbind + b=9: 5
+b after a=7: 9
+t follows: 3
+caught: bound assign refused
+after unbind set: 4
+watch Value 0->1
+size with owner: 1
+size after owner death: 0
+initial sync: 10
+follows: 42
+level: 0 -> 3
+level: 3 -> 7
+static size: 1
+done

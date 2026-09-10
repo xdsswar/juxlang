@@ -1,0 +1,2 @@
+examples/nullable_arg_mismatch.jux:16:22: [E0410] error: argument 1 to `pluck`: expected Animal, found Animal?
+[exit: 1]

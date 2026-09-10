@@ -1,0 +1,13 @@
+post-inc value: 5
+x after post-inc: 6
+pre-inc value: 7
+x after pre-inc: 7
+post-dec value: 5
+pre-dec value: 3
+a: 10 b: 12 n: 12
+arr[i++]: 10
+i now: 1
+arr[i]: 20
+got: 0 counts1: 1
+pre: 2 counts1: 2
+done

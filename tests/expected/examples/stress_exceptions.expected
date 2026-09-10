@@ -1,0 +1,7 @@
+risky(7) ok
+finally block 1
+caught: negative input: -3
+finally block 2
+risky(42) ok
+finally block 3
+after all tries

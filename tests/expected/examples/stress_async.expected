@@ -1,0 +1,12 @@
+users      = 42
+parallel ints:
+42
+117
+9
+parallel strings:
+hello, alice
+hello, bob
+hello, carol
+doubled (seq)  = 84
+loader         = loader[jux-runtime]
+done.

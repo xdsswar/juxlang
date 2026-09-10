@@ -1,0 +1,31 @@
+work 1
+fin 1
+fin 2
+work 3
+fin 3
+fin 4
+bodyEscapes done
+ok 1
+ok 2
+caught stop
+catchEscapes done
+cell 11
+cleanup
+cell 12
+cleanup
+cell 13
+cleanup
+cell 21
+cleanup
+cleanup
+labeledEscape done
+probe 1
+probe 2
+probe 3
+9
+probe 1
+probe 2
+probe 3
+probe 4
+-1
+33

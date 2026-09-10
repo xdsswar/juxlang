@@ -1,0 +1,5 @@
+3
+jux-lang
+JUX
+greeting: hello, jux
+TOOL=juxc VERSION=0.0.1

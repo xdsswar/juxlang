@@ -1,0 +1,5 @@
+ok(70)
+err(negative: -3)
+ok(0)
+err(direct)
+ok(99)

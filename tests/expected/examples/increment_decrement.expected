@@ -1,0 +1,8 @@
+sum: 10
+j: 9
+j2: 10
+arr0: 1
+countdown 3
+countdown 2
+countdown 1
+done

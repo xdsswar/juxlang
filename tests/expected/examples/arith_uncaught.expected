@@ -1,0 +1,3 @@
+before
+Exception in thread "main" jux.std.exceptions.ArithmeticException: / by zero
+[exit: 101]

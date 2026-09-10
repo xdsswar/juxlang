@@ -1,0 +1,20 @@
+=== 1. mutating async method ===
+counter = 1, 2, 3
+=== 2. async interface dispatch ===
+https://example.com/api
+=== 3. await inside try/catch ===
+caught: simulated failure
+=== 4. await inside for-each loop ===
+loop total = 20
+=== 5. await inside ternary expression ===
+chosen = 20
+=== 6. generic async return ===
+wrapped = 42
+=== 7. nested parallel ===
+batch1 = 2, 4
+batch2 = 6, 8
+top    = 200, 400
+=== 8. parallel of async methods on instances ===
+http://a
+http://b
+done.

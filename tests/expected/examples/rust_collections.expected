@@ -1,0 +1,4 @@
+vec len=3 sum=60 v1=20
+map has_a=true a=1 miss_null=true
+set len=2 iterated=2 has2=true
+deque len=3 front=1 back=3

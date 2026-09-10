@@ -1,0 +1,6 @@
+red for 30s; switching to green
+green 25s + left arrow; switching to yellow
+green 25s; switching to yellow
+yellow for 5s; switching to red
+transitions counted: 4
+signature: TL-2026

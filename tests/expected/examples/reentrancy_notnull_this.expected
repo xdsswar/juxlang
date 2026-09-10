@@ -1,0 +1,3 @@
+count=1
+examples/reentrancy_notnull_this.jux:24:12: [W0457] warning: field `back` forms a reference cycle on class `Inner` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)
+examples/reentrancy_notnull_this.jux:12:12: [W0457] warning: field `inner` forms a reference cycle on class `Outer` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)

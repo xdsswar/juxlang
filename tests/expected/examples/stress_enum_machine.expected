@@ -1,0 +1,7 @@
+PUSH 42
+PUSH 7
+ADD
+PUSH 3
+MUL
+POP
+ops run: 6

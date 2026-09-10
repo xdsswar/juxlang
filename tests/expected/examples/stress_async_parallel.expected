@@ -1,0 +1,27 @@
+--- batch 1: 4 integer tasks in parallel ---
+  [task 1] starting (amount=10)
+  [task 2] starting (amount=20)
+  [task 3] starting (amount=30)
+  [task 4] starting (amount=40)
+results:
+10
+40
+90
+160
+--- batch 2: 3 fetch tasks in parallel ---
+  [fetch] GET /users
+  [fetch] GET /orders
+  [fetch] GET /sessions
+<body of /users>
+<body of /orders>
+<body of /sessions>
+--- batch 3: nested parallels ---
+  [task 5] starting (amount=50)
+  [task 6] starting (amount=60)
+  [fetch] GET /a
+  [fetch] GET /b
+250
+360
+<body of /a>
+<body of /b>
+done.

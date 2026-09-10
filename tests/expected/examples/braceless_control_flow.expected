@@ -1,0 +1,10 @@
+big
+while -> 3
+cfor 0
+cfor 1
+cfor 2
+foreach 1
+foreach 2
+foreach 3
+do-while -> 2
+done

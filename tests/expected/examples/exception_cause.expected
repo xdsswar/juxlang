@@ -1,0 +1,4 @@
+error: config load failed
+caused by: bad syntax at line 3
+suppressed: 1
+true

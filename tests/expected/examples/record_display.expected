@@ -1,0 +1,2 @@
+point=Point(x: 3, y: 4)
+user=User(name: alice, age: 30)

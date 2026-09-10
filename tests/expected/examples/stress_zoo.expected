@@ -1,0 +1,8 @@
+Rex: Woof!
+Rex: Woof!
+Fang: Woof!
+<dog>
+<bat>
+legs (rex)=4, sound=Woof!
+Animal.liveCount=3
+Dog.barkCount=3

@@ -1,0 +1,10 @@
+normal
+finally-normal
+finally-before-return
+1
+caught: nf
+finally-caught
+finally-before-propagate
+outer caught: up
+rethrow: rethrown
+done

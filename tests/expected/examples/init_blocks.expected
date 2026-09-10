@@ -1,0 +1,8 @@
+init sees count=100 tag=fresh
+second init block, in textual order
+body(int)
+a: count=7 tag=explicit inits=1
+init sees count=100 tag=fresh
+second init block, in textual order
+body()
+b: count=100 tag=fresh

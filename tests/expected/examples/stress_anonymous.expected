@@ -1,0 +1,5 @@
+initialize called with location=42
+<initializable>
+==== HEADER ====
+render(width=80)
+[paint]

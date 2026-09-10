@@ -1,0 +1,8 @@
+Hello, world!
+Hello, world! . Loco this is nice
+a = INITIAL VALUE
+counter = 0
+a = REASSIGNED
+counter = 42
+This is a crazy exmaple of static members in jux : REASSIGNED and 42
+NULL

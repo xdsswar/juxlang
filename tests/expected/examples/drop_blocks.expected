@@ -1,0 +1,7 @@
+open a
+open inner
+using inner
+close inner
+aliased a
+end of main
+close a

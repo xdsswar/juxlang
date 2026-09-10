@@ -1,0 +1,8 @@
+first=10 last=30
+contains20=true contains99=false
+empty=false len=3
+reversedFirst=30
+hasAlpha=true
+sorted=10,30
+binarySearch20=1
+get0=10

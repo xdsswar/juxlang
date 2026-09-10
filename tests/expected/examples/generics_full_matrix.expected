@@ -1,0 +1,16 @@
+1
+1|y|2.5
+c=2.5
+4
+i4#4
+3
+Node
+r
+Dot#7
+Round#1
+black
+Woof
+any
+Woof
+ping+pong
+examples/generics_full_matrix.jux:58:13: [W0457] warning: field `kids` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)
