@@ -1,0 +1,9 @@
+[package]
+name = "demo.http_server"
+version = "0.1.0"
+
+# A real crates.io HTTP server, consumed in Jux syntax. `rust.<crate>`
+# generates a `.jux.d` stub from the crate's rustdoc JSON (type-checking) and
+# links the crate into the emitted binary.
+[dependencies]
+"rust.tiny_http" = "0.12"
