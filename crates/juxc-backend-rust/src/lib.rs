@@ -6585,11 +6585,65 @@ pub struct PathDep {
 /// the `.jux.d` stub only puts the crate's API in scope at type-check time.
 #[derive(Debug, Clone)]
 pub struct RegistryDep {
-    /// The published crate name as written after `rust.` (`serde_json`).
+    /// The crate name as written after `rust.` (`serde_json`).
     pub crate_name: String,
     /// The version requirement string (`"1.0"`, `"0.27"`); `"*"` when the
-    /// manifest left it unspecified.
+    /// manifest left it unspecified. Also carried for a git or path source,
+    /// where Cargo treats it as an additional constraint.
     pub version: String,
+    /// Where the crate comes from. A published crate is the common case and
+    /// stays the default; the other two are what let a project bind a crate
+    /// that is not on crates.io at all.
+    pub source: CrateSource,
+}
+
+/// Where a bound Rust crate is fetched from, mirroring Cargo's own three
+/// dependency sources and §B.5.5's `path > git > registry` priority.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CrateSource {
+    /// crates.io (or a configured alternative registry): version only.
+    #[default]
+    Registry,
+    /// A crate directory on this machine. The path is already absolute --
+    /// the manifest resolved it against the project root -- because the
+    /// emitted crate lives somewhere else entirely and a relative path
+    /// would be read from the wrong base.
+    Path(String),
+    /// A git repository, optionally pinned. `pin` is the `branch`/`tag`/`rev`
+    /// key and its value, already chosen by the manifest.
+    Git { url: String, pin: Option<(String, String)> },
+}
+
+/// One `[dependencies]` line for a bound Rust crate.
+///
+/// The three forms are Cargo's own. A registry dep keeps the short string
+/// spelling (`serde_json = "1.0"`) because that is what a person would have
+/// written; the others need the table form to carry their source.
+pub(crate) fn registry_dep_line(d: &RegistryDep) -> String {
+    registry_dep_line_for(&d.crate_name, &d.version, &d.source)
+}
+
+/// [`registry_dep_line`] from the parts, for callers that have a source but
+/// no [`RegistryDep`] -- notably the throwaway Cargo project rustdoc runs in,
+/// which must name the same crate the emitted one does.
+pub fn registry_dep_line_for(crate_name: &str, version: &str, source: &CrateSource) -> String {
+    match source {
+        CrateSource::Registry => {
+            format!("{crate_name} = \"{}\"\n", escape_toml(version))
+        }
+        CrateSource::Path(path) => format!(
+            "{crate_name} = {{ path = \"{}\" }}\n",
+            escape_toml(path),
+        ),
+        CrateSource::Git { url, pin } => {
+            let mut line = format!("{crate_name} = {{ git = \"{}\"", escape_toml(url));
+            if let Some((key, value)) = pin {
+                line.push_str(&format!(", {key} = \"{}\"", escape_toml(value)));
+            }
+            line.push_str(" }\n");
+            line
+        }
+    }
 }
 
 /// Build the `Cargo.toml` for an emitted crate of a given [`CrateTarget`],
@@ -6668,11 +6722,7 @@ pub fn cargo_toml_for_target(
             deps.push_str("futures = { version = \"0.3\", features = [\"thread-pool\"] }\n");
         }
         for d in registry_deps {
-            deps.push_str(&format!(
-                "{} = \"{}\"\n",
-                d.crate_name,
-                escape_toml(&d.version),
-            ));
+            deps.push_str(&registry_dep_line(d));
         }
         for d in path_deps {
             deps.push_str(&format!(

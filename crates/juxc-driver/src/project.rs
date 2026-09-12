@@ -332,6 +332,16 @@ fn collect_dep_closure(
     seen: &mut BTreeSet<String>,
 ) -> Result<()> {
     for dep in &m.dependencies {
+        // A FOREIGN dep (`rust.*`, `c.*`, `cpp.*`) is not a Jux package, and
+        // a `path`/`git` on one names a Rust crate directory rather than a
+        // Jux project. Routing it through the loader below asked for a
+        // `jux.toml` that was never going to exist, and reported its absence
+        // as the error -- so binding a local crate looked like a malformed
+        // dependency. It links through the emitted `Cargo.toml` instead
+        // (`collect_registry_deps`).
+        if crate::stubs::foreign_dep_kind(&dep.name).is_some() {
+            continue;
+        }
         // Source priority per §B.5.5: path > git > registry. Registry
         // deps aren't resolvable yet (no registry in Phase 1) and are
         // skipped; git deps fetch into the user cache and then behave
@@ -511,7 +521,13 @@ fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
             continue; // ordinary Jux path dependency — handled elsewhere
         };
         if let Err(e) =
-            crate::stubs::resolve_crate_stub(root, kind, crate_name, dep.version.as_deref())
+            crate::stubs::resolve_crate_stub(
+                root,
+                kind,
+                crate_name,
+                dep.version.as_deref(),
+                &crate::stubs::crate_source_of(dep),
+            )
         {
             eprintln!(
                 "jux: warning: could not resolve stub for `{}.{crate_name}` \
@@ -580,6 +596,7 @@ pub fn ensure_project_stubs(root: &Path) -> StubSyncReport {
                 kind,
                 crate_name,
                 dep.version.as_deref(),
+                &crate::stubs::crate_source_of(dep),
             ) {
                 Ok(path) => report.resolved.push(path),
                 Err(e) => report

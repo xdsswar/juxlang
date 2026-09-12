@@ -257,6 +257,26 @@ url = "https://registry.internal.example.com"
 
 **`[dependencies]`**. Dependency names use the reverse-DNS scheme for Jux packages, or a typed prefix (`rust.`, `c.`, `cpp.`) for foreign-language dependencies. The value is either a SemVer version string or a table with options.
 
+**Foreign dependency sources.** A `rust.<crate>` dependency takes the same three sources a Jux one does, with the same `path > git > registry` priority:
+
+```toml
+[dependencies]
+"rust.serde_json" = "1.0"                               # crates.io
+"rust.mylocal"    = { path = "../mylocal" }             # a crate on this machine
+"rust.patched"    = { git = "https://github.com/u/p", tag = "v1.2" }
+```
+
+The source names a **Rust crate directory**, not a Jux package, so no `jux.toml` is read from it. Whatever source is chosen is used twice and must be the same both times: to link the crate into the emitted binary, and to generate the `.jux.d` API stub the editor and type-checker read. A stub records the source it was generated from, so repointing a dependency regenerates rather than serving the previous crate's API.
+
+Generating that stub reads rustdoc JSON, which is a nightly-only feature. A project that binds a Rust crate therefore needs:
+
+```
+rustup toolchain install nightly
+rustup component add rust-docs-json --toolchain nightly
+```
+
+A missing toolchain or component is reported as such, with the command to run. It is not fatal to a build that does not need the stub: resolution warns and continues, and only an `import rust.<crate>.X` that cannot be resolved fails.
+
 Dependency-table options:
 
 - `version = "..."`: SemVer requirement (defaults to compatible-with-major if omitted on a registry dep).

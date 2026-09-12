@@ -1045,10 +1045,15 @@ fn sanitize_crate(name: &str) -> String {
     name.replace('-', "_")
 }
 
-/// Collect a package's foreign `rust.<crate>` `[dependencies]` as emitted-crate
-/// registry deps. Only `rust` foreign deps are linkable in this phase; `c.*` /
-/// `cpp.*` need a native build seam and are skipped here (their stubs still load
-/// for type-checking). An unspecified version becomes `*`.
+/// Collect a package's foreign `rust.<crate>` `[dependencies]` as
+/// dependencies of the emitted crate. Only `rust` foreign deps are linkable
+/// in this phase; `c.*` / `cpp.*` need a native build seam and are skipped
+/// here (their stubs still load for type-checking). An unspecified version
+/// becomes `*`.
+///
+/// The dep's SOURCE comes along: a bound crate may live on crates.io, in a
+/// directory on this machine, or in a git repository, and the emitted
+/// `Cargo.toml` has to name the same one the stub was generated from.
 fn collect_registry_deps(manifest: &Manifest) -> Vec<juxc_backend_rust::RegistryDep> {
     manifest
         .dependencies
@@ -1061,6 +1066,7 @@ fn collect_registry_deps(manifest: &Manifest) -> Vec<juxc_backend_rust::Registry
             Some(juxc_backend_rust::RegistryDep {
                 crate_name: crate_name.to_string(),
                 version: dep.version.clone().unwrap_or_else(|| "*".to_string()),
+                source: crate::stubs::crate_source_of(dep),
             })
         })
         .collect()

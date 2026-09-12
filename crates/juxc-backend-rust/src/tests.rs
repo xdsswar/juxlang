@@ -4756,12 +4756,69 @@ fn cargo_toml_registry_dep_is_linked() {
     let reg = vec![RegistryDep {
         crate_name: "minifb".to_string(),
         version: "0.27".to_string(),
+        source: CrateSource::Registry,
     }];
     let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &reg, false);
     // The foreign `rust.minifb` dep becomes a version line under [dependencies].
     assert!(toml.contains("minifb = \"0.27\""), "{toml}");
     // futures (async) and the registry dep share one [dependencies] table.
     assert_eq!(toml.matches("[dependencies]").count(), 1, "{toml}");
+}
+
+/// A bound crate that lives on this machine rather than on crates.io.
+///
+/// The whole point of carrying a source: without it this emitted a bare
+/// `mylocal = "*"`, which either fails to resolve or -- worse -- silently
+/// links a same-named crate from the registry.
+#[test]
+fn cargo_toml_path_dep_names_the_local_crate() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let reg = vec![RegistryDep {
+        crate_name: "mylocal".to_string(),
+        version: "*".to_string(),
+        source: CrateSource::Path("/home/me/crates/mylocal".to_string()),
+    }];
+    let toml = cargo_toml_for_target(&target, false, &CargoMeta::default(), &[], &reg, false);
+    assert!(
+        toml.contains("mylocal = { path = \"/home/me/crates/mylocal\" }"),
+        "{toml}"
+    );
+    // No version line: the path IS the source.
+    assert!(!toml.contains("mylocal = \"*\""), "{toml}");
+}
+
+/// A bound crate from a git repository, pinned to a tag.
+#[test]
+fn cargo_toml_git_dep_carries_its_pin() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let reg = vec![
+        RegistryDep {
+            crate_name: "pinned".to_string(),
+            version: "*".to_string(),
+            source: CrateSource::Git {
+                url: "https://github.com/u/pinned".to_string(),
+                pin: Some(("tag".to_string(), "v1.2".to_string())),
+            },
+        },
+        RegistryDep {
+            crate_name: "floating".to_string(),
+            version: "*".to_string(),
+            source: CrateSource::Git {
+                url: "https://github.com/u/floating".to_string(),
+                pin: None,
+            },
+        },
+    ];
+    let toml = cargo_toml_for_target(&target, false, &CargoMeta::default(), &[], &reg, false);
+    assert!(
+        toml.contains("pinned = { git = \"https://github.com/u/pinned\", tag = \"v1.2\" }"),
+        "{toml}"
+    );
+    // An unpinned git dep tracks the default branch, with no stray key.
+    assert!(
+        toml.contains("floating = { git = \"https://github.com/u/floating\" }"),
+        "{toml}"
+    );
 }
 
 /// An anonymous class implementing an interface emits each method with the

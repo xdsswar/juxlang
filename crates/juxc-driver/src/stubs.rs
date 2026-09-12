@@ -99,18 +99,31 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// at 1 alongside the snake_case-verbatim naming switch.
 const CRATE_STUB_CACHE_VERSION: u32 = 2;
 
-/// First-line marker a generated crate stub must carry to be trusted fresh.
-fn crate_cache_header() -> String {
-    format!("// juxc crate stub cache-version {CRATE_STUB_CACHE_VERSION}\n")
+/// The first-line marker a generated crate stub must carry to be trusted.
+///
+/// Carries both the bindgen cache version and the crate's SOURCE, so a stub
+/// is re-generated when either the rules that produced it or the crate it
+/// described has changed.
+fn crate_cache_header_for(source: &juxc_backend_rust::CrateSource) -> String {
+    format!(
+        "// juxc crate stub cache-version {CRATE_STUB_CACHE_VERSION} source {}\n",
+        crate_source_tag(source),
+    )
 }
 
-/// True when a generated `rust.*` crate stub on disk carries the current cache
-/// version marker. A stub written by an older toolchain (or hand-vendored
-/// without the marker) is treated as stale so it regenerates against the current
-/// bindgen rules.
-fn crate_stub_cache_is_fresh(path: &Path) -> bool {
+/// True when a generated `rust.*` crate stub on disk carries the current
+/// marker for `source`.
+///
+/// A stub written by an older toolchain (or hand-vendored without a marker)
+/// is stale, so it regenerates against the current bindgen rules. So is one
+/// generated from a different source: a dependency repointed from crates.io
+/// to a local checkout must not keep serving the registry crate's API.
+fn crate_stub_cache_is_fresh_for(
+    path: &Path,
+    source: &juxc_backend_rust::CrateSource,
+) -> bool {
     match std::fs::read_to_string(path) {
-        Ok(text) => text.starts_with(crate_cache_header().trim_end()),
+        Ok(text) => text.starts_with(crate_cache_header_for(source).trim_end()),
         Err(_) => false,
     }
 }
@@ -498,11 +511,51 @@ pub fn crate_stub_cache_path(project_root: &Path, kind: &str, crate_name: &str) 
 /// Returns `Err` with context when generation is attempted but fails (rustdoc
 /// JSON requires a nightly toolchain and network access for the crate's deps),
 /// so the caller can downgrade to a diagnostic rather than aborting the build.
+/// Where a foreign dependency's crate comes from, as the backend spells it.
+///
+/// One conversion, used by both the emitted `Cargo.toml` and the throwaway
+/// manifest rustdoc runs in -- so the stub always describes the crate the
+/// build links. The §B.5.5 source priority (`path > git > registry`) is the
+/// manifest's; this only translates the answer it already reached.
+pub fn crate_source_of(dep: &crate::manifest::Dependency) -> juxc_backend_rust::CrateSource {
+    if let Some(path) = &dep.path {
+        return juxc_backend_rust::CrateSource::Path(path.display().to_string());
+    }
+    if let Some(url) = &dep.git {
+        let pin = dep.git_ref.as_ref().map(|r| match r {
+            crate::manifest::GitRef::Branch(b) => ("branch".to_string(), b.clone()),
+            crate::manifest::GitRef::Tag(t) => ("tag".to_string(), t.clone()),
+            crate::manifest::GitRef::Rev(r) => ("rev".to_string(), r.clone()),
+        });
+        return juxc_backend_rust::CrateSource::Git { url: url.clone(), pin };
+    }
+    juxc_backend_rust::CrateSource::Registry
+}
+
+/// A short, stable tag for a crate source, folded into the stub cache header.
+///
+/// A stub is cached under the crate's NAME. Without the source in the key,
+/// pointing a dependency at a local checkout would keep serving the stub
+/// generated from the crates.io release -- an API mismatch that reads as a
+/// compiler bug. A changed tag regenerates, exactly as a changed toolchain
+/// version does.
+fn crate_source_tag(source: &juxc_backend_rust::CrateSource) -> String {
+    match source {
+        juxc_backend_rust::CrateSource::Registry => "registry".to_string(),
+        juxc_backend_rust::CrateSource::Path(p) => format!("path:{p}"),
+        juxc_backend_rust::CrateSource::Git { url, pin } => match pin {
+            Some((k, v)) => format!("git:{url}#{k}={v}"),
+            None => format!("git:{url}"),
+        },
+    }
+}
+
 pub fn resolve_crate_stub(
     project_root: &Path,
     kind: &str,
     crate_name: &str,
     version: Option<&str>,
+    source: &juxc_backend_rust::CrateSource,
 ) -> anyhow::Result<PathBuf> {
     let cache = crate_stub_cache_path(project_root, kind, crate_name);
     if cache.is_file() {
@@ -510,7 +563,7 @@ pub fn resolve_crate_stub(
         // so trust them as-is. A generated `rust.*` stub is trusted only when its
         // cache-version marker matches; a stale one (pre-snake_case naming) falls
         // through to regeneration.
-        if kind != "rust" || crate_stub_cache_is_fresh(&cache) {
+        if kind != "rust" || crate_stub_cache_is_fresh_for(&cache, source) {
             return Ok(cache);
         }
     }
@@ -522,14 +575,14 @@ pub fn resolve_crate_stub(
         );
     }
 
-    let json = run_cargo_rustdoc_json(crate_name, version)?;
+    let json = run_cargo_rustdoc_json(crate_name, version, source)?;
     let package = format!("rust.{crate_name}");
     let body = generate_stub_from_rustdoc_json(&json, &package).map_err(|e| {
         anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}")
     })?;
     // Prepend the cache-version marker so a future toolchain can detect a stale
     // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
-    let stub = format!("{}{body}", crate_cache_header());
+    let stub = format!("{}{body}", crate_cache_header_for(source));
 
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
@@ -558,24 +611,43 @@ pub fn generate_stub_from_rustdoc_json(
 /// `cargo +nightly rustdoc -p <crate>` inside it, and read the emitted
 /// `target/doc/<crate>.json`. `version` is the manifest requirement
 /// (`"0.27"`, …) — `*` when unspecified.
-fn run_cargo_rustdoc_json(crate_name: &str, version: Option<&str>) -> anyhow::Result<String> {
+fn run_cargo_rustdoc_json(
+    crate_name: &str,
+    version: Option<&str>,
+    source: &juxc_backend_rust::CrateSource,
+) -> anyhow::Result<String> {
     let work = rustdoc_gen_dir(crate_name)
         .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
     std::fs::create_dir_all(work.join("src"))?;
     // A minimal package whose only purpose is to pull `crate_name` into a
     // resolvable dependency graph for rustdoc.
     let sanitized = crate_name.replace('-', "_");
-    let ver = version.unwrap_or("*");
+    // The SAME dependency line the emitted crate gets, so the stub
+    // describes the crate the build links rather than a same-named
+    // crates.io release that happens to exist.
+    let dep_line = juxc_backend_rust::registry_dep_line_for(
+        crate_name,
+        version.unwrap_or("*"),
+        source,
+    );
     let cargo_toml = format!(
         "[package]\nname = \"__juxc_doc_{sanitized}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
-         [dependencies]\n{crate_name} = \"{ver}\"\n",
+         [dependencies]\n{dep_line}",
     );
     std::fs::write(work.join("Cargo.toml"), cargo_toml)?;
     std::fs::write(work.join("src").join("lib.rs"), "")?;
 
+    // Pin the target directory instead of letting cargo choose it. A user
+    // with CARGO_TARGET_DIR set in their environment -- a common way to share
+    // one build cache across projects -- would otherwise have the JSON written
+    // somewhere else entirely, and the read below would fail with a bare
+    // "cannot find the path specified" naming a directory cargo never used.
+    let doc_target = work.join("target");
     let output = Command::new("cargo")
         .arg("+nightly")
         .arg("rustdoc")
+        .arg("--target-dir")
+        .arg(&doc_target)
         .arg("-p")
         .arg(crate_name)
         .arg("--")
@@ -585,18 +657,42 @@ fn run_cargo_rustdoc_json(crate_name: &str, version: Option<&str>) -> anyhow::Re
         .arg("json")
         .current_dir(&work)
         .output()
-        .map_err(|e| anyhow::anyhow!("failed to spawn `cargo +nightly rustdoc`: {e}"))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "could not run `cargo`: {e}. Jux generates a crate's API stub \
+                 from rustdoc JSON, so `cargo` must be on PATH."
+            )
+        })?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // rustup says this when the toolchain is absent; it is the single
+        // most common reason a first `rust.<crate>` dependency fails, and the
+        // fix is one command.
+        if stderr.contains("is not installed") || stderr.contains("no such toolchain") {
+            anyhow::bail!(
+                "the `nightly` toolchain is required to read a crate's API \
+                 (rustdoc JSON is a nightly feature) and is not installed.\n\
+                 Install it with:\n    rustup toolchain install nightly\n\
+                 Then add the docs component:\n    \
+                 rustup component add rust-docs-json --toolchain nightly"
+            );
+        }
         anyhow::bail!(
-            "`cargo +nightly rustdoc --output-format json` failed for `{crate_name}`:\n{}",
-            String::from_utf8_lossy(&output.stderr)
+            "`cargo +nightly rustdoc --output-format json` failed for `{crate_name}`:\n{stderr}"
         );
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
     let json_name = format!("{sanitized}.json");
-    let json_path = work.join("target").join("doc").join(&json_name);
-    std::fs::read_to_string(&json_path)
-        .map_err(|e| anyhow::anyhow!("rustdoc JSON not found at {}: {e}", json_path.display()))
+    let json_path = doc_target.join("doc").join(&json_name);
+    std::fs::read_to_string(&json_path).map_err(|e| {
+        anyhow::anyhow!(
+            "rustdoc reported success but wrote no JSON for `{crate_name}` \
+             (looked at {}): {e}.\n\
+             This usually means the nightly toolchain is missing its docs \
+             component:\n    rustup component add rust-docs-json --toolchain nightly",
+            json_path.display(),
+        )
+    })
 }
 
 /// The throwaway-Cargo-project directory used to rustdoc one foreign crate:
@@ -613,6 +709,95 @@ fn rustdoc_gen_dir(crate_name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// Where a bound crate comes from, and the §B.5.5 priority between the
+    /// three spellings.
+    #[test]
+    fn crate_source_follows_manifest_priority() {
+        use juxc_backend_rust::CrateSource;
+
+        let registry = crate::manifest::Dependency {
+            name: "rust.serde_json".to_string(),
+            path: None,
+            version: Some("1.0".to_string()),
+            git: None,
+            git_ref: None,
+        };
+        assert_eq!(crate_source_of(&registry), CrateSource::Registry);
+
+        let git = crate::manifest::Dependency {
+            name: "rust.mine".to_string(),
+            path: None,
+            version: None,
+            git: Some("https://example.com/mine".to_string()),
+            git_ref: Some(crate::manifest::GitRef::Tag("v1".to_string())),
+        };
+        assert_eq!(
+            crate_source_of(&git),
+            CrateSource::Git {
+                url: "https://example.com/mine".to_string(),
+                pin: Some(("tag".to_string(), "v1".to_string())),
+            },
+        );
+
+        // path wins over git, per §B.5.5.
+        let both = crate::manifest::Dependency {
+            name: "rust.mine".to_string(),
+            path: Some(std::path::PathBuf::from("/crates/mine")),
+            version: None,
+            git: Some("https://example.com/mine".to_string()),
+            git_ref: None,
+        };
+        assert!(matches!(crate_source_of(&both), CrateSource::Path(_)));
+    }
+
+    /// The cache marker separates stubs generated from different sources.
+    ///
+    /// Without this, repointing `rust.mine` from crates.io at a local
+    /// checkout would keep serving the registry crate's API from the cache,
+    /// and the editor would describe methods the linked crate does not have.
+    #[test]
+    fn stub_cache_marker_distinguishes_sources() {
+        use juxc_backend_rust::CrateSource;
+
+        let registry = crate_cache_header_for(&CrateSource::Registry);
+        let local = crate_cache_header_for(&CrateSource::Path("/crates/mine".to_string()));
+        let git = crate_cache_header_for(&CrateSource::Git {
+            url: "https://example.com/mine".to_string(),
+            pin: None,
+        });
+        assert_ne!(registry, local);
+        assert_ne!(registry, git);
+        assert_ne!(local, git);
+
+        // A stub written for one source is stale for another.
+        let dir = std::env::temp_dir().join(format!("juxc-stub-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mine.jux.d");
+        std::fs::write(&path, format!("{local}package rust.mine;\n")).unwrap();
+
+        assert!(crate_stub_cache_is_fresh_for(
+            &path,
+            &CrateSource::Path("/crates/mine".to_string())
+        ));
+        assert!(!crate_stub_cache_is_fresh_for(&path, &CrateSource::Registry));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dependency line a local crate gets is a path table, not a version.
+    #[test]
+    fn rustdoc_manifest_names_the_same_crate_the_build_links() {
+        use juxc_backend_rust::CrateSource;
+        let line = juxc_backend_rust::registry_dep_line_for(
+            "mylocal",
+            "*",
+            &CrateSource::Path("/crates/mylocal".to_string()),
+        );
+        assert_eq!(line, "mylocal = { path = \"/crates/mylocal\" }\n");
+    }
 
     #[test]
     fn stub_path_recognised_by_double_extension() {
@@ -674,9 +859,18 @@ mod tests {
             .join("rust")
             .join("serde_json.jux.d");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
-        std::fs::write(&cached, "package rust.serde_json;\n").unwrap();
+        // WITH the cache marker: a stub that lacks one is stale by
+        // definition, so a bare package line here would send the call below
+        // to `cargo rustdoc` and the test would not be testing a cache hit.
+        let source = juxc_backend_rust::CrateSource::Registry;
+        std::fs::write(
+            &cached,
+            format!("{}package rust.serde_json;\n", crate_cache_header_for(&source)),
+        )
+        .unwrap();
 
-        let got = resolve_crate_stub(&dir, "rust", "serde_json", None).expect("cache hit");
+        let got = resolve_crate_stub(&dir, "rust", "serde_json", None, &source)
+            .expect("cache hit");
         assert_eq!(got, cached);
         let _ = std::fs::remove_dir_all(&dir);
     }
