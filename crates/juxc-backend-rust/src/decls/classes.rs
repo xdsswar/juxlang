@@ -5945,6 +5945,7 @@ fn substitute_fn_signature(
             ty: substitute_type_ref(&p.ty, &effective),
             is_final: p.is_final,
             is_ref: p.is_ref,
+            is_mut_ref: p.is_mut_ref,
             default: p.default.clone(),
             is_varargs: p.is_varargs,
             is_out: p.is_out,

@@ -279,9 +279,7 @@ impl RustEmitter {
                 owner = by_name.or_else(by_value);
                 owner
                     .as_ref()
-                    .and_then(|fqn| self.symbols.classes.get(fqn))
-                    .filter(|c| c.is_external)
-                    .and_then(|c| c.methods.get(method))
+                    .and_then(|fqn| self.external_type_method(fqn, method))
                     .map(|m| m.return_type.clone())
             }
             _ => None,
@@ -396,6 +394,9 @@ impl RustEmitter {
                 if let Expr::Path(qn) = &*f.object {
                     if let Some(last) = qn.segments.last() {
                         if let Some(fqn) = self.symbols.find_fqn_by_bare(&last.text) {
+                            if let Some(m) = self.external_type_method(&fqn, method) {
+                                return m.is_foreign_result;
+                            }
                             if let Some(cls) = self.symbols.classes.get(&fqn) {
                                 if let Some(m) = cls.methods.get(method) {
                                     return m.is_foreign_result;
@@ -408,6 +409,22 @@ impl RustEmitter {
                 if let Some(juxc_tycheck::Ty::User { name, .. }) =
                     self.receiver_ty_for_call(&f.object)
                 {
+                    // The method may be the type's own or one a trait it
+                    // implements provides -- `stream.read(buf)` is the latter,
+                    // and its `Result` needs opening just the same. The type
+                    // may also arrive under its bare name, so resolve it the
+                    // way every other foreign lookup does.
+                    let fqn = if self.symbols.classes.contains_key(&name) {
+                        Some(name.clone())
+                    } else {
+                        self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))
+                    };
+                    if let Some(m) = fqn
+                        .as_deref()
+                        .and_then(|fqn| self.external_type_method(fqn, method))
+                    {
+                        return m.is_foreign_result;
+                    }
                     if let Some(cls) = self.symbols.classes.get(&name) {
                         if let Some(m) = cls.methods.get(method) {
                             return m.is_foreign_result;
@@ -428,11 +445,18 @@ impl RustEmitter {
         if let Expr::Path(qn) = recv {
             if qn.segments.len() == 1 {
                 let bare = qn.segments[0].text.as_str();
+                // An UNKNOWN entry is not an answer, it is the absence of one:
+                // a local whose initializer the scope pass could not type is
+                // still recorded, and taking that as final skipped the
+                // `expr_types` lookup that does know. `var (stream, _) = pair;`
+                // is the case -- the element binding reads `.0` off a synthetic
+                // temp, which the scope pass does not follow.
                 if let Some(ty) = self
                     .local_types
                     .iter()
                     .rev()
                     .find_map(|scope| scope.get(bare).cloned())
+                    .filter(|ty| !matches!(ty, juxc_tycheck::Ty::Unknown))
                 {
                     return Some(ty);
                 }
@@ -527,6 +551,9 @@ impl RustEmitter {
             return;
         }
         self.owning_borrowed_string = false;
+        // A method reached through a foreign trait needs that trait in scope in
+        // the emitted crate; record it now, splice the `use` in later.
+        self.note_foreign_trait_use(&call.callee);
         // Nested calls inside this one are separate statements' worth of
         // borrows again, so release the guard immediately.
         self.wrapping_handle_call = false;
@@ -1897,11 +1924,8 @@ impl RustEmitter {
             }
             // §G.9.2: a borrowed parameter (`&T`) of an external method gets the
             // call-site `&` back — `m.containsKey("a")` → `m.contains_key(&"a"…)`.
-            if self.callee_param_is_ref(&call.callee, i)
-                || self.callee_param_is_foreign_slice(&call.callee, i)
-            {
-                self.w.push('&');
-            }
+            let borrow = self.callee_param_borrow_prefix(&call.callee, i);
+            self.w.push_str(borrow);
             // C6: a foreign-collection param lowered to `&mut T` takes the
             // call-site `&mut <place>` (Java container-passing). Two-phase
             // borrows cover the common `f(v)` shape; an arg that re-reads
@@ -2348,11 +2372,8 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i)
-                || self.callee_param_is_foreign_slice(&call.callee, i)
-            {
-                self.w.push('&');
-            }
+            let borrow = self.callee_param_borrow_prefix(&call.callee, i);
+            self.w.push_str(borrow);
             if taken.iter().any(|(ti, _)| *ti == i) {
                 self.w.push_str(&format!("&mut __jux_byref{i}"));
             } else if self.arg_is_byref(call, i) {
@@ -3120,11 +3141,8 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i)
-                || self.callee_param_is_foreign_slice(&call.callee, i)
-            {
-                self.w.push('&');
-            }
+            let borrow = self.callee_param_borrow_prefix(&call.callee, i);
+            self.w.push_str(borrow);
             // C6 by-ref arg: borrow the original place directly (it was
             // NOT hoisted into a temp above).
             if self.arg_is_byref(call, i) {
@@ -3248,11 +3266,8 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i)
-                || self.callee_param_is_foreign_slice(&call.callee, i)
-            {
-                self.w.push('&');
-            }
+            let borrow = self.callee_param_borrow_prefix(&call.callee, i);
+            self.w.push_str(borrow);
             // C6 by-ref arg: borrow the place directly (not hoisted).
             if self.arg_is_byref(call, i) {
                 self.emit_byref_arg(arg);
@@ -4999,6 +5014,12 @@ impl RustEmitter {
         // value-position auto-`.clone()` (an `Rc` bump, the wrong thing here)
         // stays out of the way.
         if let Some(borrow) = self.foreign_arg_handle_lend(&call.callee, i, arg) {
+            // A RESLICED lend (`[..]`) is unsized, and this one is going into a
+            // `let`, so it is bound BY REFERENCE. The call site re-adds its own
+            // `&`, and `&&[T]` reaches `&[T]` by deref coercion.
+            if borrow.ends_with("[..]") {
+                self.w.push('&');
+            }
             self.emitting_method_receiver = true;
             self.emit_expr(arg);
             self.emitting_method_receiver = false;

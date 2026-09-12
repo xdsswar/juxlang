@@ -83,6 +83,12 @@ fn render_type(out: &mut String, t: &StubType) {
         TypeKind::Enum => "enum",
     };
     let generics = render_generics(&t.generics);
+    // The traits this type implements, so its trait-provided methods resolve.
+    let implements = if t.implements.is_empty() {
+        String::new()
+    } else {
+        format!(" implements {}", t.implements.join(", "))
+    };
 
     // Records carry their components in the header; everything else uses a body.
     if t.kind == TypeKind::Record {
@@ -101,7 +107,7 @@ fn render_type(out: &mut String, t: &StubType) {
         return;
     }
 
-    let _ = writeln!(out, "public {keyword} {}{generics} {{", t.name);
+    let _ = writeln!(out, "public {keyword} {}{generics}{implements} {{", t.name);
 
     if t.kind == TypeKind::Enum {
         render_variants(out, &t.variants);
@@ -251,7 +257,11 @@ fn render_params(params: &[crate::model::StubParam]) -> String {
             // type is unchanged (borrow vanishes, §G.3.4), but the parser reads
             // the `&` back into a per-parameter flag so codegen re-adds the
             // call-site borrow.
-            let amp = if p.by_ref { "&" } else { "" };
+            let amp = match (p.by_ref, p.by_mut_ref) {
+                (_, true) => "&mut ",
+                (true, false) => "&",
+                (false, false) => "",
+            };
             format!("{amp}{} {}", p.ty, p.name)
         })
         .collect::<Vec<_>>()
@@ -269,6 +279,7 @@ mod tests {
             name: name.into(),
             ty,
             by_ref: false,
+            by_mut_ref: false,
         }
     }
 

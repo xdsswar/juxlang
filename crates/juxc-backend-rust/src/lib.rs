@@ -1249,6 +1249,10 @@ struct RustEmitter {
     /// True while re-entering a call whose foreign method returns a
     /// BORROWED string, so the `to_string()` wrapper does not wrap itself.
     pub(crate) owning_borrowed_string: bool,
+    /// Real Rust paths of the foreign traits this unit calls a method through,
+    /// collected during emission and spliced into the `use` block after.
+    /// Ordered, because the emitted crate must be byte-identical run to run.
+    pub(crate) needed_trait_uses: std::collections::BTreeSet<String>,
     /// Receiver places (written as text: `d`, `this.items`) whose collection
     /// calls in the CURRENT statement conflict over one `RefCell` and so need
     /// the statement-scoping wrapper (§6.5.1).
@@ -4599,6 +4603,7 @@ impl RustEmitter {
             emitting_call_callee: false,
             wrapping_handle_call: false,
             owning_borrowed_string: false,
+            needed_trait_uses: std::collections::BTreeSet::new(),
             handle_conflict_receivers: std::collections::HashSet::new(),
             emitting_method_receiver: false,
             in_lambda_body: false,
@@ -4740,9 +4745,11 @@ impl RustEmitter {
         if package.is_empty() {
             // No package — emit flat at crate root, same as before.
             self.emit_imports(&unit.imports, /*inside_package_mod=*/ false);
+            let mark = self.w.mark();
             for item in &unit.items {
                 self.emit_top_level_decl(item);
             }
+            self.splice_foreign_trait_uses(mark, "");
             return;
         }
 
@@ -4762,9 +4769,13 @@ impl RustEmitter {
         // — that anchors at the crate root and matches the `pub mod`
         // structure the workspace emits per-unit.
         self.emit_imports(&unit.imports, /*inside_package_mod=*/ true);
+        let mark = self.w.mark();
         for item in &unit.items {
             self.emit_top_level_decl(item);
         }
+        // Indented to the module depth the imports were written at.
+        let indent = "    ".repeat(package.len());
+        self.splice_foreign_trait_uses(mark, &indent);
         for _ in &package {
             self.w.indent_dec();
             self.w.line("}");
@@ -5883,6 +5894,56 @@ impl RustEmitter {
         // readable and matches `cargo fmt` defaults.
         if emitted_any {
             self.w.newline();
+        }
+    }
+
+    /// Splice in a `use <trait> as _;` for every foreign trait the unit's
+    /// bodies turned out to call through, at `mark`.
+    ///
+    /// A Rust trait's methods are reachable only while the trait is IN SCOPE.
+    /// Jux has no such rule: the stub says `class TcpStream implements Read`,
+    /// the resolver inherits `read` from the interface, and the call
+    /// type-checks -- and then rustc answers "no method named `read` found for
+    /// struct `TcpStream`", naming a trait the Jux programmer never wrote. So
+    /// the backend writes the `use` a person would have written.
+    ///
+    /// `as _` binds no NAME, only the trait's methods, so it cannot collide
+    /// with anything the unit declares.
+    ///
+    /// The set is collected DURING emission, where each call's receiver type is
+    /// known, and spliced back at a mark taken before the bodies. Deciding it
+    /// beforehand would mean guessing from the source text, and a guess is not
+    /// free: `use std::slice::Join as _;` is `E0658` on stable, so a program
+    /// that merely wrote `.join(",")` -- reaching the stable inherent method --
+    /// stopped compiling.
+    fn splice_foreign_trait_uses(&mut self, mark: usize, indent: &str) {
+        if self.needed_trait_uses.is_empty() {
+            return;
+        }
+        let mut block = String::new();
+        // A `BTreeSet` already orders them, which the emitted crate needs: it
+        // has to be byte-identical from one run to the next.
+        for path in std::mem::take(&mut self.needed_trait_uses) {
+            let line = format!("{indent}use {path} as _;\n");
+            if self.emitted_uses_in_module.insert(line.clone()) {
+                block.push_str(&line);
+            }
+        }
+        if !block.is_empty() {
+            block.push('\n');
+            self.w.insert_at(mark, &block);
+        }
+    }
+
+    /// Record that this call reaches its method through a foreign trait, so
+    /// [`Self::splice_foreign_trait_uses`] brings that trait into scope.
+    pub(crate) fn note_foreign_trait_use(&mut self, callee: &juxc_ast::Expr) {
+        let juxc_ast::Expr::Field(f) = callee else { return };
+        let Some(fqn) = self.foreign_receiver_class_fqn(callee) else {
+            return;
+        };
+        if let Some(path) = self.foreign_trait_providing(&fqn, f.field.text.as_str()) {
+            self.needed_trait_uses.insert(path);
         }
     }
 

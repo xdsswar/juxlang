@@ -820,10 +820,16 @@ impl<'a> Parser<'a> {
             if binder.text == "_" {
                 continue;
             }
+            // The element READ gets the binder's span; the temp it reads
+            // from gets the statement's. Giving both the binder's span made
+            // them collide in the span-keyed type map, and the tuple's type
+            // won -- so `var (stream, _) = pair;` left `stream` typed as the
+            // whole tuple, and every question the backend asks about a
+            // receiver by name got the wrong answer.
             let elem_init = Expr::Field(juxc_ast::FieldExpr {
                 object: Box::new(Expr::Path(juxc_ast::QualifiedName {
-                    segments: vec![juxc_ast::Ident { text: tmp_name.clone(), span: binder.span }],
-                    span: binder.span,
+                    segments: vec![juxc_ast::Ident { text: tmp_name.clone(), span: start }],
+                    span: start,
                 })),
                 field: juxc_ast::Ident { text: i.to_string(), span: binder.span },
                 safe: false,

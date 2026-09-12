@@ -416,6 +416,7 @@ fn build_struct(
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
     st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
+    st.implements = implemented_trait_names(krate, item.id, &s.impls);
     st
 }
 
@@ -430,6 +431,7 @@ fn build_enum(
     st.generics = generic_param_names(&e.generics);
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item, public);
+    st.implements = implemented_trait_names(krate, item.id, &e.impls);
 
     for vid in &e.variants {
         let Some(vitem) = krate.index.get(vid) else {
@@ -653,8 +655,19 @@ fn map_params(f: &Function) -> Vec<StubParam> {
             name: param_name(n),
             ty: map_param_type(ty, &f.generics),
             by_ref: is_borrow_param(ty),
+            by_mut_ref: is_mut_borrow_param(ty),
         })
         .collect()
+}
+
+/// Is this Rust parameter a MUTABLE borrow -- `&mut T` or `&mut [T]`?
+///
+/// The slice case matters as much as the scalar one: `Read::read`'s buffer is
+/// `&mut [u8]`, which [`is_borrow_param`] deliberately does not count as a
+/// borrow (a Jux array reaches a slice on its own), but the call site still has
+/// to lend it mutably.
+fn is_mut_borrow_param(ty: &Type) -> bool {
+    matches!(ty, Type::BorrowedRef { is_mutable: true, .. })
 }
 
 /// Like [`map_type`], but with closure-parameter recovery: a parameter typed
@@ -747,9 +760,14 @@ fn map_return(krate: &Crate, output: &Option<Type>) -> (JuxType, Option<JuxType>
             // is not a type -- it does not parse, and a stub that does not
             // parse takes its whole crate surface down with it. The opaque
             // `Error` says the same thing the unit error says.
+            // A `throws` clause names a TYPE, so an error that has no name to
+            // write -- a tuple, a slice, a function -- becomes the opaque
+            // `Error` like the unit and the one-argument alias. `throws (T, T)`
+            // does not parse, and an unparsable line takes the whole stub with
+            // it (G.12).
             let err = args
                 .get(1)
-                .filter(|t| !matches!(t, JuxType::Void))
+                .filter(|t| matches!(t, JuxType::User { .. } | JuxType::Param(_)))
                 .cloned()
                 .or_else(|| Some(JuxType::user("Error")));
             (ok, err)
@@ -827,6 +845,69 @@ fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
 ///
 /// Synthetic impls are excluded: rustdoc emits those for auto traits
 /// (`Send`/`Sync`), which are not what any caller here is asking about.
+/// The traits `own` implements that the stub can NAME, sorted.
+///
+/// A trait's methods live on the trait, so without this a foreign type has
+/// none of them: `TcpStream::read` is a `std::io::Read` member, and the stub
+/// that did not say `implements Read` made every socket unreadable.
+///
+/// Three restrictions, each because the stub could not write the result
+/// otherwise:
+///
+/// * the trait must be PUBLIC and LOCAL to this crate, because that is exactly
+///   the set the stub emits as interfaces -- a name it never declares would not
+///   resolve;
+/// * the trait must carry no generic PARAMETERS, since `implements Extend`
+///   would need a type argument rustdoc records per-impl and the Jux clause has
+///   nowhere to put;
+/// * the impl must be written for this type in its own plain generic form, the
+///   same restriction [`implements_collection_trait`] makes and for the same
+///   reason.
+///
+/// `Clone`, `Index` and the collection traits are deliberately still read
+/// through their own markers (`@RustClone`, `@RustIndexRef`,
+/// `@RustCollection`): Jux gives them language meaning rather than a method
+/// surface.
+fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in impls {
+        let Some(item) = krate.index.get(id) else {
+            continue;
+        };
+        let ItemEnum::Impl(im) = &item.inner else {
+            continue;
+        };
+        if im.is_synthetic || im.is_negative {
+            continue;
+        }
+        let Some(tr) = &im.trait_ else { continue };
+        if !impl_target_is_the_plain_type(own, &im.for_) {
+            continue;
+        }
+        let Some(decl) = krate.index.get(&tr.id) else {
+            continue;
+        };
+        let ItemEnum::Trait(t) = &decl.inner else {
+            continue;
+        };
+        if decl.crate_id != 0 || !is_public(&decl.visibility) {
+            continue;
+        }
+        if t.generics
+            .params
+            .iter()
+            .any(|p| matches!(p.kind, GenericParamDefKind::Type { .. }))
+        {
+            continue;
+        }
+        let Some(name) = &decl.name else { continue };
+        out.push(name.clone());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Is this type a COLLECTION -- something you can build from elements and add
 /// more to?
 ///

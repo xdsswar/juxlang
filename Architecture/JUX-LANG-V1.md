@@ -562,6 +562,8 @@ public <int N> byte[N] copy(byte[N] src) {
 
 `T[]` and `T[N]` are interchangeable when passing a fixed-size array to a function expecting a runtime-sized one — the size information is simply not preserved. Going the other way requires a check.
 
+A `new T[n]` expression whose value is not going into a slot declared `T[N]` produces the runtime-sized form. It is what Java's array expression means, and it is the only reading that makes the sentence above true: a value that is only ever a fixed array cannot be handed to a `T[]` parameter without copying it, and copying it would break the reference semantics of 6.5.2. The stack form is what an explicit `T[N]` slot asks for, and it stays exactly that.
+
 **Multi-dimensional arrays.** An array type may stack any number of dimension suffixes. Following Java, the type reads left-to-right as nesting from the outside in: `int[][]` is "an array of (arrays of `int`)", and the leftmost `[…]` is the OUTERMOST dimension. Dimensions may be dynamic (`[]`), fixed (`[N]`), or a mix:
 
 ```java

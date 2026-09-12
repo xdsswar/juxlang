@@ -110,6 +110,20 @@ impl fmt::Display for JuxType {
             // crucially, parses — so the enclosing member survives into the
             // symbol table and autocompletes. (The unit tuple `()` never reaches
             // here: `map_type` folds it to `void`.)
+            // A tuple is written in the real `(A, B)` form (grammar A.2.7),
+            // which is what makes `.0` / `.1` work on the value: the nominal
+            // `Tuple<A, B>` this used to emit is an ordinary user type to
+            // everything downstream, with no elements to index. It was a
+            // stand-in from before the parser had tuple types, and
+            // `listener.accept()` is the cost of keeping it -- the destructured
+            // `stream` had no type at all, so every foreign-method question
+            // about it silently answered "not foreign".
+            //
+            // The degenerate arities keep the nominal, because they do not
+            // parse as tuples: the unit `()` is reserved with no meaning, and
+            // `(T)` needs at least two elements. `map_type` already folds `()`
+            // to `void`, so only Rust's rare `(T,)` lands here.
+            JuxType::Tuple(ts) if ts.len() >= 2 => write!(f, "({})", join(ts)),
             JuxType::Tuple(ts) => write!(f, "Tuple<{}>", join(ts)),
             JuxType::Fn { params, ret, is_async } => {
                 if *is_async {

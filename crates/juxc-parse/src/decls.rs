@@ -2219,7 +2219,28 @@ impl<'a> Parser<'a> {
     /// discriminator and `scan_fn_type_at`.
     fn scan_type_at(&self, mut i: usize) -> Option<usize> {
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
-            return self.scan_fn_type_at(i);
+            if let Some(j) = self.scan_fn_type_at(i) {
+                return Some(j);
+            }
+            // A `(` with no `->` after the closing paren is a TUPLE type
+            // (`(A, B)`, grammar A.2.7), which is a perfectly good return type
+            // -- bindgen writes one for every Rust method returning a tuple.
+            // Falling through to `None` here classified the whole member as a
+            // field, and the errors that produced named the line above it.
+            i += 1;
+            let mut depth: u32 = 1;
+            while depth > 0 {
+                match self.tokens.get(i).map(|t| &t.kind) {
+                    Some(TokenKind::LParen) => depth += 1,
+                    Some(TokenKind::RParen) => depth -= 1,
+                    Some(TokenKind::Eof) | None => return None,
+                    _ => {}
+                }
+                i += 1;
+            }
+            // A tuple takes the same `?` / `[…]` / `*` suffixes as any other
+            // type, so the shared loop below runs for it too.
+            return Some(self.scan_type_suffixes_at(i));
         }
         match self.tokens.get(i).map(|t| &t.kind) {
             Some(TokenKind::Kw(Keyword::Void)) => {
@@ -2255,8 +2276,17 @@ impl<'a> Parser<'a> {
         {
             i += 2;
         }
-        // Interleaved `?` / `[…]` / `*` suffixes (`*` is the FFI raw
-        // pointer marker, §G — bindgen stubs surface `T*` returns).
+        Some(self.scan_type_suffixes_at(i))
+    }
+
+    /// Advance past the `?` / `[…]` / `*` suffixes a type may carry.
+    ///
+    /// Shared by the nominal and tuple arms of [`Self::scan_type_at`]: both
+    /// take the same suffixes, and having one of them answer differently is
+    /// how a member gets misclassified.
+    fn scan_type_suffixes_at(&self, mut i: usize) -> usize {
+        // `*` is the FFI raw-pointer marker (§G) — bindgen stubs surface `T*`
+        // returns.
         loop {
             match self.tokens.get(i).map(|t| &t.kind) {
                 Some(TokenKind::Question) | Some(TokenKind::Star) => i += 1,
@@ -2276,7 +2306,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             }
         }
-        Some(i)
+        i
     }
 
     fn skip_balanced_angle_brackets(&mut self) {
@@ -2745,6 +2775,15 @@ impl<'a> Parser<'a> {
         // (§G.9.2). It carries no Jux type meaning (borrows vanish, §G.3.4) — we
         // record it as a flag so codegen re-adds the call-site borrow.
         let is_ref = self.eat(&TokenKind::Amp);
+        // `&mut T` -- the borrow is a MUTABLE one, so the call site lends
+        // `&mut`. `mut` is not a Jux keyword; it is recognised contextually,
+        // and only in the one position where a type name could never be it.
+        let is_mut_ref = is_ref
+            && matches!(self.peek(), TokenKind::Ident(t) if t == "mut")
+            && {
+                self.advance();
+                true
+            };
         let mut ty = self.parse_type_ref()?;
         // Variadic marker — `T... name` (§7.2). Desugars the declared
         // type to the dynamic-array form so the body sees `T[]`; the
@@ -2823,6 +2862,7 @@ impl<'a> Parser<'a> {
             ty,
             is_final,
             is_ref,
+            is_mut_ref,
             default,
             is_varargs,
             is_out,

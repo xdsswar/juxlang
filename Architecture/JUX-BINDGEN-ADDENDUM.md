@@ -163,6 +163,10 @@ marker on the stub, and the compiler clones the borrowed value out. Like
 `@MutSelf`, it is discovered from the real rustdoc signature; unlike a list of
 method names, it cannot go stale when the library grows one.
 
+**One exception: a MUTABLE borrow is marked.** A parameter the callee writes through is not interchangeable with one it only reads: `Read::read(&mut self, buf: &mut [u8])` fills the buffer, and handing it a shared borrow is a type error, not a nuance. So a `&mut` parameter is surfaced as `&mut T` in the stub -- the same foreign-only marker as `&`, with `mut` recognised contextually right after it (it is not a Jux keyword, and a type in that position could never be spelled `mut`). The declared Jux type is unchanged; the call site lends `&mut` instead of `&`, and a collection handle lends its interior exclusively.
+
+Every read-into-a-buffer API in Rust has this shape, so without the marker the whole of `std::io` type-checks and then fails to compile.
+
 ### G.3.5. Phase-1 Nominal Placeholders — Tuples and Raw Pointers
 
 The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, §A.2.7, `unsafe`-only) but the Phase-1 parser does not yet read either spelling back in. Because a generated stub must **parse** for its enclosing member to survive into the symbol table (and thus autocomplete), `bindgen` surfaces these two types under nominal placeholders until the real type-syntax features land (the pointer/tuple work travels with the broader `unsafe` / C-interop effort):
@@ -173,6 +177,12 @@ The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, 
 Both spellings keep the element/pointee types visible in signatures, hover, and completion. `Tuple<…>` / `Ptr<T>` are not declared types in Phase 1 — they read as opaque foreign names, which is harmless because a stub's own signatures are never validated (§G.9.1). When `tuple-type` / `pointer-type` gain parser and lowering support, this section is removed and the §G.3.1 rows revert to `(A, B)` / `T*`.
 
 ---
+
+### G.3.5.1. Tuples
+
+A Rust tuple is written as a Jux tuple: `(TcpStream, SocketAddr)`, the form grammar A.2.7 gives. It was once surfaced as a nominal `Tuple<A, B>`, from before the parser had tuple types, and the difference is not cosmetic: a nominal type has no elements to index, so `var (stream, addr) = listener.accept();` bound `stream` to the whole pair, and every question the compiler later asked about that receiver got the wrong answer silently.
+
+The two degenerate arities keep the nominal, because neither parses as a tuple: the unit `()` is reserved with no v1 meaning (and `Result`'s unit error is folded away before it reaches here), and `(T)` needs at least two elements.
 
 ## §G.4 — Naming Transforms
 
@@ -373,6 +383,16 @@ A `.jux.d` stub is **signature-only** (§G.2), which constrains how three Rust c
 
 These are surfacing choices, not language changes: the real crate provides every body, value, and static dispatch at link time.
 
+**A type records the traits it implements.** A Rust trait's methods live on the TRAIT, so a stub that says only what `TcpStream` declares gives it no `read` and no `write_all` -- those are `std::io::Read` and `std::io::Write` members. bindgen therefore writes the `implements` clause, discovered from the type's real trait impls, and the resolver inherits the methods the way it does for any implementor.
+
+Three restrictions, each because the stub could not write the result otherwise:
+
+- the trait must be PUBLIC and LOCAL to the crate being ingested, which is exactly the set the stub emits as interfaces: a name the stub never declares would not resolve;
+- the trait must carry no generic PARAMETERS, since `implements Extend` would need a type argument rustdoc records per-impl and the clause has nowhere to put;
+- the impl must be written for the type in its own plain generic form, the same restriction G.6.6 makes and for the same reason.
+
+`Clone`, `Index` and the collection traits stay outside this, read through their own markers (`@RustClone`, `@RustIndexRef`, `@RustCollection`): Jux gives those language meaning rather than a method surface. In std the rule leaves 66 traits over 46 types, `std::io`'s among them.
+
 ### G.6.5. First-Class `import rust.X`
 
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**
@@ -554,6 +574,10 @@ The mapping from Jux stub name to real symbol is recorded in a sidecar emitted a
 
 So the definition path is used only when every module along it is public, and otherwise the path is read off the crate's re-exports. Both `pub use` forms count: a named one (`pub use self::copy::copy;`) names its target, and a GLOB (`pub use owned::*;`, which is how all of `std::os::fd` is published) is expanded against the target module's own public items. Where several public paths reach one item the shortest wins, ties broken lexicographically, so a regenerated stub is identical to the last one.
 
+
+**A called trait is brought into scope.** Rust reaches a trait's methods only while the trait is imported, and Jux has no such rule: the stub says `class TcpStream implements Read`, the resolver inherits `read`, the call type-checks -- and then rustc answers "no method named `read` found for struct `TcpStream`", naming a trait the programmer never wrote. So the backend emits `use <trait path> as _;`, which binds no name and so cannot collide with anything the unit declares.
+
+Which traits is decided DURING emission, from each call's receiver type, and spliced into the `use` block afterwards. Deciding it beforehand means guessing from the source text, and a guess is not free here: `use std::slice::Join as _;` is `E0658` on stable, so a program that merely wrote `.join(",")` -- reaching the stable inherent method -- stopped compiling.
 
 ### G.9.3. No Borrow-Check of Foreign Bodies
 

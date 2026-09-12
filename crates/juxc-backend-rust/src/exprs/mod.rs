@@ -1522,6 +1522,7 @@ impl RustEmitter {
                             ty: p.ty.clone(),
                             is_final: false,
                             is_ref: false,
+                            is_mut_ref: false,
                             default: None,
                             is_varargs: false,
                             is_out: false,

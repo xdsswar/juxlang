@@ -2377,34 +2377,37 @@ impl crate::RustEmitter {
         false
     }
 
-    /// True when arg `arg_idx` of a method call `recv.method(...)` maps to a
-    /// **borrowed** parameter (`&T`) of an **external** (`rust.std` / crate)
-    /// method — so codegen must re-add the call-site `&` (§G.9.2): a Rust
-    /// `contains_key(&Q)` needs `&arg`, not `arg`. The receiver's type is read
-    /// from `expr_types`; the method is looked up by its Jux (camelCase) name and
-    /// the parameter's `is_ref` flag (set from the stub's `&` marker) consulted.
-    pub(crate) fn callee_param_is_ref(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
-        self.foreign_callee_param(callee, arg_idx)
-            .map(|p| p.is_ref)
-            .unwrap_or(false)
-    }
-
-    /// True when arg `arg_idx` of `callee` maps to an **external** method
-    /// parameter typed as a Jux array (`T[]`) — which bindgen produces for a
-    /// Rust **slice** borrow (`&[T]` / `&mut [T]`). Unlike a scalar `&T`
-    /// borrow, a slice param does NOT carry the stub's `&` marker (so `is_ref`
-    /// is false), yet the real Rust signature still takes it by reference. The
-    /// call slot must therefore borrow the argument: a Jux array (`Vec<T>` or
-    /// `[T; N]`) coerces to `&[T]` through `&__jux_argN`, which is exactly what
-    /// `update_with_buffer(&[u32], …)` and similar foreign APIs expect.
-    pub(crate) fn callee_param_is_foreign_slice(
+    /// The borrow argument `arg_idx` of `callee` needs: `""`, `"&"`, or
+    /// `"&mut "`.
+    ///
+    /// One answer for what used to be two separate questions, because a MUTABLE
+    /// borrow is both of them at once: `Read::read(buf: &mut [u8])` is a slice
+    /// parameter AND has to be lent exclusively, and lending it shared is
+    /// "types differ in mutability".
+    ///
+    /// The three shapes, from the stub:
+    ///
+    /// * `&mut T` -- an exclusive borrow the callee writes through (G.3.4);
+    /// * `&T` -- a shared borrow whose `&` G.3.4 dropped from the Jux type, so
+    ///   the call site re-adds it: Rust's `contains_key(&Q)` wants `&arg`;
+    /// * an ARRAY parameter, which bindgen produces for a Rust slice borrow
+    ///   (`&[T]`) and which carries no marker of its own, since a Jux array
+    ///   reaches a slice on its own once borrowed.
+    pub(crate) fn callee_param_borrow_prefix(
         &self,
         callee: &juxc_ast::Expr,
         arg_idx: usize,
-    ) -> bool {
-        self.foreign_callee_param(callee, arg_idx)
-            .map(|p| p.ty.array_shape.is_some() && !p.is_ref)
-            .unwrap_or(false)
+    ) -> &'static str {
+        let Some(p) = self.foreign_callee_param(callee, arg_idx) else {
+            return "";
+        };
+        if p.is_mut_ref {
+            return "&mut ";
+        }
+        if p.is_ref || p.ty.array_shape.is_some() {
+            return "&";
+        }
+        ""
     }
 
     /// The borrow a §6.5.1 collection HANDLE needs to reach a FOREIGN
@@ -2463,8 +2466,28 @@ impl crate::RustEmitter {
         // ARRAY in the same slot has always done.
         let lends_from_a_binding =
             matches!(arg, juxc_ast::Expr::Path(qn) if qn.segments.len() == 1);
-        Some(if aliases_receiver || !lends_from_a_binding {
-            ".borrow().clone()"
+        // A slot the callee WRITES through needs the exclusive guard, and it
+        // cannot be satisfied by a copy: the point of `read(buf)` is that the
+        // caller sees the bytes afterwards.
+        //
+        // A SLICE slot needs the reslice as well, either way. `&mut guard` is a
+        // `&mut RefMut<[u8; 64]>`, and Rust will not both deref through the
+        // guard and unsize the array in one coercion, so the slice is taken
+        // explicitly.
+        if p.is_mut_ref {
+            return Some(if p.ty.array_shape.is_some() {
+                ".borrow_mut()[..]"
+            } else {
+                ".borrow_mut()"
+            });
+        }
+        if aliases_receiver || !lends_from_a_binding {
+            // A copy is an owned sequence, and `&owned` reaches `&[T]` in one
+            // coercion, so it needs no reslice.
+            return Some(".borrow().clone()");
+        }
+        Some(if p.ty.array_shape.is_some() {
+            ".borrow()[..]"
         } else {
             ".borrow()"
         })
@@ -2499,6 +2522,110 @@ impl crate::RustEmitter {
         self.foreign_callee_method(callee)?.params.get(arg_idx)
     }
 
+    /// The fully-qualified name of the FOREIGN class a method call's receiver
+    /// has, or `None` when the receiver is not one.
+    ///
+    /// Split out of [`Self::foreign_callee_method`] because the trait-use
+    /// collector asks the same question, and a second copy of these rules would
+    /// drift from this one.
+    pub(crate) fn foreign_receiver_class_fqn(&self, callee: &juxc_ast::Expr) -> Option<String> {
+        let juxc_ast::Expr::Field(f) = callee else {
+            return None;
+        };
+        if matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String)) {
+            return self.resolve_bare_class_fqn("String");
+        }
+        if let juxc_ast::Expr::Path(qn) = &*f.object {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                return Some(class_fqn);
+            }
+        }
+        let recv_ty_opt = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&f.object))
+            .cloned()
+            .or_else(|| {
+                if let juxc_ast::Expr::Path(qn) = &*f.object {
+                    if qn.segments.len() == 1 {
+                        return self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                    }
+                }
+                None
+            });
+        let recv_ty = match recv_ty_opt {
+            Some(juxc_tycheck::Ty::User { name, .. }) => name,
+            Some(juxc_tycheck::Ty::Nullable(inner)) => match *inner {
+                juxc_tycheck::Ty::User { name, .. } => name,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if self.symbols.classes.contains_key(&recv_ty) {
+            return Some(recv_ty);
+        }
+        self.resolve_bare_class_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty))
+    }
+
+    /// A foreign type's method `name`, looked up on the type itself and then on
+    /// every trait it implements.
+    ///
+    /// A Rust trait's methods live on the TRAIT: `TcpStream` declares no
+    /// `read`, `std::io::Read` does, and the stub records the connection as an
+    /// `implements` clause. Every call-site question about a foreign method --
+    /// which parameters borrow, whether the return unwraps a `Result` -- has to
+    /// follow that clause, or it answers "not a foreign method" for the whole
+    /// `std::io` surface.
+    ///
+    /// The clause is followed one level, which is what a stub produces: bindgen
+    /// writes the traits a type implements, flat.
+    pub(crate) fn external_type_method(
+        &self,
+        class_fqn: &str,
+        name: &str,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
+        let sig = self.symbols.classes.get(class_fqn)?;
+        if !sig.is_external {
+            return None;
+        }
+        if let Some(m) = sig.methods.get(name) {
+            return Some(m);
+        }
+        sig.implements.iter().find_map(|t| {
+            let bare = t.name.segments.last()?.text.as_str();
+            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
+            if !iface.is_external {
+                return None;
+            }
+            iface.methods.get(name)
+        })
+    }
+
+    /// The foreign TRAIT that provides `name` for `class_fqn`, by its real Rust
+    /// path -- `None` when the type declares the method itself, or when no
+    /// implemented trait does.
+    ///
+    /// This is what a call site needs in order to bring the trait into scope: a
+    /// Rust trait's methods are reachable only while the trait is, and Jux never
+    /// makes the programmer say so.
+    pub(crate) fn foreign_trait_providing(&self, class_fqn: &str, name: &str) -> Option<String> {
+        let sig = self.symbols.classes.get(class_fqn)?;
+        if !sig.is_external || sig.methods.contains_key(name) {
+            return None;
+        }
+        sig.implements.iter().find_map(|t| {
+            let bare = t.name.segments.last()?.text.as_str();
+            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
+            if !iface.is_external || !iface.methods.contains_key(name) {
+                return None;
+            }
+            iface.rust_path.clone()
+        })
+    }
+
     /// The FOREIGN method `callee` names, or `None` when the receiver is not a
     /// foreign type (or the method is not one the stub declares).
     ///
@@ -2516,9 +2643,8 @@ impl crate::RustEmitter {
         // where a borrow was wanted, and rustc said so.
         if matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String)) {
             return self
-                .lookup_class_by_bare_or_fqn("String")
-                .filter(|c| c.is_external)
-                .and_then(|c| c.methods.get(f.field.text.as_str()));
+                .resolve_bare_class_fqn("String")
+                .and_then(|fqn| self.external_type_method(&fqn, f.field.text.as_str()));
         }
         // Static call `ClassName.method(...)`: the receiver is a class NAME, not
         // a value, so it never appears in `expr_types`. Resolve the class
@@ -2528,7 +2654,9 @@ impl crate::RustEmitter {
             if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                 if let Some(c) = self.symbols.classes.get(&class_fqn) {
                     if c.is_external {
-                        if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                        if let Some(m) =
+                            self.external_type_method(&class_fqn, f.field.text.as_str())
+                        {
                             if m.is_static {
                                 return Some(m);
                             }
@@ -2565,15 +2693,12 @@ impl crate::RustEmitter {
             },
             _ => return None,
         };
-        let sig = if let Some(c) = self.symbols.classes.get(&recv_ty) {
-            c
+        let fqn = if self.symbols.classes.contains_key(&recv_ty) {
+            recv_ty.clone()
         } else {
-            self.lookup_class_by_bare_or_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty))?
+            self.resolve_bare_class_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty))?
         };
-        if !sig.is_external {
-            return None;
-        }
-        sig.methods.get(f.field.text.as_str())
+        self.external_type_method(&fqn, f.field.text.as_str())
     }
 
     /// Does this call return a BORROWED string -- a foreign method whose real

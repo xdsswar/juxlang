@@ -1086,6 +1086,9 @@ pub struct ParamSig {
     /// The parameter is a foreign borrow (`&T`) — codegen re-adds the call-site
     /// `&` when invoking this (external) method (§G.9.2). False for user params.
     pub is_ref: bool,
+    /// The foreign borrow was MUTABLE (`&mut T`): the callee writes through it,
+    /// so codegen lends `&mut` at the call site. False for user params.
+    pub is_mut_ref: bool,
     /// Default-value expression (`int port = 80`), cloned from the
     /// declaration. The call-sugar expansion pass clones it again into
     /// every call site that omits the argument (§S.1.3 call-site
@@ -1351,6 +1354,12 @@ pub struct InterfaceSig {
     /// Drives the `Box<dyn Trait>` (owned foreign trait object) vs
     /// `Rc<dyn Trait>` (Jux-internal shared) wrapper choice in the backend.
     pub is_external: bool,
+    /// The real, fully-qualified Rust path of a foreign trait
+    /// (`std::io::Read`), from the stub's `@rust("...")` annotation. Mirrors
+    /// [`ClassSig::rust_path`], and the backend needs it for a reason a class
+    /// does not have: a Rust trait's methods are callable only while the trait
+    /// is IN SCOPE, so a call to one emits `use <rust_path> as _;`.
+    pub rust_path: Option<String>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -4090,6 +4099,7 @@ fn insert_interface(
             methods,
             fields,
             is_external,
+            rust_path: rust_path_annotation(&interface_decl.annotations),
             span: interface_decl.span,
         },
     );
@@ -4408,6 +4418,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         name: p.name.text.clone(),
         ty: p.ty.clone(),
         is_ref: p.is_ref,
+        is_mut_ref: p.is_mut_ref,
         default: p.default.clone(),
         is_varargs: p.is_varargs,
         is_out: p.is_out,

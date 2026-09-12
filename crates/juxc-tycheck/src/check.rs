@@ -6965,6 +6965,7 @@ impl<'a> Checker<'a> {
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_ref: false,
+                    is_mut_ref: false,
                     default: None,
                     is_varargs: false,
                     is_out: false,

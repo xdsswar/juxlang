@@ -46,6 +46,20 @@ impl Writer {
         self.buf.push_str(s);
     }
 
+    /// The current end of the buffer, for a later [`Writer::insert_at`].
+    ///
+    /// Some lines can only be written once the rest is known -- the `use` for
+    /// a foreign trait is decided by the calls in the bodies below it -- and a
+    /// mark is how they still land in the right place.
+    pub(crate) fn mark(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Splice `text` in at a position taken from [`Writer::mark`].
+    pub(crate) fn insert_at(&mut self, at: usize, text: &str) {
+        self.buf.insert_str(at, text);
+    }
+
     /// Append a single character verbatim.
     pub(crate) fn push(&mut self, ch: char) {
         self.buf.push(ch);

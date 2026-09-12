@@ -1,0 +1,62 @@
+// Raw sockets, in Jux.
+//
+// `TcpListener` and `TcpStream` are Rust's own, reached through the `rust.std`
+// surface. What makes them usable is that `read` and `write_all` are not their
+// methods at all: they belong to the `std::io::Read` and `std::io::Write`
+// TRAITS, which the scanned stub records as an `implements` clause
+// (JUX-BINDGEN-ADDENDUM G.6.4). Nothing here has to name a trait, and nothing
+// here has to know that Rust wants one in scope to call through it.
+//
+// The program is its own client: a worker connects, sends a line and reads the
+// echo back, while the main thread serves exactly one connection. So it runs to
+// completion with no external input.
+
+import rust.std.TcpListener;
+import rust.std.TcpStream;
+
+/** Where the two halves meet. */
+public const String ADDRESS = "127.0.0.1:9188";
+
+/** Send one line and read whatever comes back. */
+public String roundTrip(String message) {
+    TcpStream client = TcpStream.connect(ADDRESS);
+    client.write_all(message.as_bytes());
+    client.flush();
+
+    var reply = new ubyte[64];
+    uint got = client.read(reply);
+    return decode(reply, got);
+}
+
+/** The bytes of `buf` up to `len`, as text. */
+public String decode(ubyte[] buf, uint len) {
+    var out = "";
+    for (uint i = 0; i < len; i = i + 1) {
+        out = out + (char) buf[i];
+    }
+    return out;
+}
+
+public void main() {
+    // Bind BEFORE the client starts, so there is no race to connect.
+    var listener = TcpListener.bind(ADDRESS);
+    print("listening on " + ADDRESS);
+
+    var client = Worker.spawn(() -> roundTrip("hello sockets"));
+
+    // `accept` hands back a `(TcpStream, SocketAddr)` pair, which destructures
+    // like any other tuple.
+    var pair = listener.accept();
+    var (stream, peer) = pair;
+
+    var request = new ubyte[64];
+    uint n = stream.read(request);
+    String text = decode(request, n);
+    print("server read " + n + " bytes: " + text);
+
+    // Only the bytes that arrived: `request` is 64 long and the rest is zeros.
+    stream.write_all(("echo: " + text).as_bytes());
+    stream.flush();
+
+    print("client got: " + client.join());
+}

@@ -219,7 +219,17 @@ impl RustEmitter {
                     .collect()
             })
             .unwrap_or_default();
-        self.emit_new_array_dim(n, &sizes, 0, &target_dims);
+        // Whether there is a DECLARED array slot at all. Without one,
+        // `new T[n]` is Java's array expression and produces `T[]` -- the
+        // dynamic form -- because that is the only thing it can be passed to
+        // (JUX-LANG-V1 5.6, and 563: "`T[]` and `T[N]` are interchangeable when
+        // passing a fixed-size array to a function expecting a runtime-sized
+        // one"). Defaulting to the stack form instead made `var b = new
+        // ubyte[64]; read(b);` a type error between two spellings of `ubyte[]`.
+        // The stack array is what an explicit `T[N]` slot asks for, and it stays
+        // exactly that.
+        let has_target = self.target_array_shape.is_some() || self.dynamic_array_target;
+        self.emit_new_array_dim(n, &sizes, 0, &target_dims, has_target);
     }
 
     /// Recursively emit ONE dimension of a `new T[…]…` allocation,
@@ -238,6 +248,7 @@ impl RustEmitter {
         sizes: &[&Expr],
         depth: usize,
         target_dims: &[bool],
+        has_target: bool,
     ) {
         let size = sizes[depth];
         let is_innermost = depth + 1 == sizes.len();
@@ -285,7 +296,7 @@ impl RustEmitter {
         } else {
             false
         };
-        let want_dynamic = lhs_says_dynamic || !size_is_const;
+        let want_dynamic = lhs_says_dynamic || !size_is_const || !has_target;
 
         if want_dynamic {
             if is_innermost && elem_is_type_param {
@@ -317,7 +328,7 @@ impl RustEmitter {
                 self.emit_array_repeat_len(size);
                 self.w.push_str(").map(|_| ");
                 self.w.push_str(open);
-                self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+                self.emit_new_array_dim(n, sizes, depth + 1, target_dims, has_target);
                 self.w.push_str(close);
                 self.w.push_str(").collect::<Vec<_>>()");
                 return;
@@ -326,7 +337,7 @@ impl RustEmitter {
             if is_innermost {
                 self.emit_default_value_for(&n.element_type);
             } else {
-                self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+                self.emit_new_array_dim(n, sizes, depth + 1, target_dims, has_target);
             }
             self.w.push_str("; ");
             self.emit_array_repeat_len(size);
@@ -356,7 +367,7 @@ impl RustEmitter {
             let (open, close) = self.array_handle_new(&elem);
             self.w.push_str("std::array::from_fn(|_| ");
             self.w.push_str(open);
-            self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+            self.emit_new_array_dim(n, sizes, depth + 1, target_dims, has_target);
             self.w.push_str(close);
             self.w.push(')');
             return;
@@ -365,7 +376,7 @@ impl RustEmitter {
         if is_innermost {
             self.emit_default_value_for(&n.element_type);
         } else {
-            self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+            self.emit_new_array_dim(n, sizes, depth + 1, target_dims, has_target);
         }
         self.w.push_str("; ");
         self.emit_array_repeat_len(size);

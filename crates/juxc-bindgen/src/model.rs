@@ -95,6 +95,15 @@ pub struct StubType {
     /// the backend reads to decide whether a value of this type takes the
     /// 6.5.1 shared handle.
     pub is_collection: bool,
+    /// Names of the traits this type implements, in sorted order. Rendered as
+    /// the Jux `implements` clause, which is what gives a foreign type its
+    /// trait-provided methods: `TcpStream`'s `read` and `write_all` are
+    /// `std::io::Read` and `std::io::Write` members and live nowhere else.
+    ///
+    /// Only traits the stub also emits appear here (see
+    /// `implemented_trait_names`), since a name the stub never declares would
+    /// not resolve.
+    pub implements: Vec<String>,
 }
 
 impl StubType {
@@ -113,6 +122,7 @@ impl StubType {
             index_ref: false,
             is_clone: false,
             is_collection: false,
+            implements: Vec::new(),
         }
     }
 }
@@ -191,6 +201,10 @@ pub struct StubParam {
     /// `arg`. Surfaced in the `.jux.d` as a leading `&` marker that the parser
     /// consumes back into a per-parameter flag.
     pub by_ref: bool,
+    /// The Rust parameter was a MUTABLE borrow (`&mut T` or `&mut [T]`). The
+    /// callee writes through it, so the call site must lend `&mut`. Surfaced in
+    /// the `.jux.d` as `&mut` before the type.
+    pub by_mut_ref: bool,
 }
 
 /// An enum variant. `payload` empty = unit variant; `discriminant` set for

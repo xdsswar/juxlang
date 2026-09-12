@@ -933,6 +933,11 @@ pub struct Param {
     /// borrow when invoking the foreign method (`contains_key(&arg)`). Always
     /// `false` for ordinary user-written parameters.
     pub is_ref: bool,
+    /// `true` when that bindgen borrow was a MUTABLE one (`&mut T`). The callee
+    /// writes through it, so the call site must hand over `&mut` rather than
+    /// `&` -- `Read::read(&mut self, buf: &mut [u8])` fills the buffer, and a
+    /// shared borrow there is a type error. Only ever set from a `.jux.d`.
+    pub is_mut_ref: bool,
     /// Default value, if any.
     pub default: Option<Expr>,
     /// `true` for a variadic parameter — `T... name` (§7.2). The
