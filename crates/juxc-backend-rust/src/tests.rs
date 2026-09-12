@@ -5228,7 +5228,7 @@ fn extern_block_lowers_to_link_and_extern_c() {
     assert!(rust.contains("#[link(name = \"c\")]"), "missing #[link]: {rust}");
     assert!(rust.contains("extern \"C\" {"), "missing extern C: {rust}");
     assert!(
-        rust.contains("pub fn malloc(size: u64) -> *mut core::ffi::c_void"),
+        rust.contains("pub fn malloc(size: core::ffi::c_ulong) -> *mut core::ffi::c_void"),
         "malloc signature wrong: {rust}"
     );
     assert!(
@@ -5309,9 +5309,11 @@ fn extern_out_param_passes_addr_of_mut() {
         "@extern(lib = \"c\") unsafe native { i32 f(out long count); } \
          public void main() { unsafe { long c = 0; i32 r = f(out c); } }",
     );
+    // `*mut c_long`: an `out long` is a pointer to a C `long`, four bytes on
+    // Windows and eight elsewhere (§8.1.1).
     assert!(
-        rust.contains("pub fn f(count: *mut i64)"),
-        "out param should be *mut i64: {rust}"
+        rust.contains("pub fn f(count: *mut core::ffi::c_long)"),
+        "out param should be *mut c_long: {rust}"
     );
     assert!(
         rust.contains("::core::ptr::addr_of_mut!(c)"),
@@ -5387,7 +5389,12 @@ fn extern_string_and_out_combine() {
          public void main() { unsafe { long h = 0; i32 rc = open(\"db\", out h); } }",
     );
     assert!(rust.contains("path: *const core::ffi::c_char"), "String param: {rust}");
-    assert!(rust.contains("handle: *mut i64"), "out param: {rust}");
+    // `*mut c_long`, not `*mut i64`: C's `long` is four bytes on Windows, so
+    // a pointer to one is not a pointer to an `i64` there (§8.1.1).
+    assert!(
+        rust.contains("handle: *mut core::ffi::c_long"),
+        "out param: {rust}"
+    );
     assert!(rust.contains("::std::ffi::CString::new("), "String marshalling: {rust}");
     assert!(rust.contains("::core::ptr::addr_of_mut!(h)"), "out arg: {rust}");
 }
@@ -5402,18 +5409,92 @@ fn export_fn_gets_c_linkage() {
          @export(name = \"jux_mul\") public int mul(int a, int b) { return a * b; } \
          public void main() {}",
     );
-    assert!(rust.contains("#[no_mangle]"), "plain @export → #[no_mangle]: {rust}");
+    // The wrapper names its symbol explicitly: `#[no_mangle]` would publish
+    // the wrapper's own Rust name (`__jux_cabi_add`), which no C caller asks
+    // the linker for.
     assert!(
-        rust.contains("pub extern \"C\" fn add(a: isize, b: isize) -> isize"),
+        rust.contains("#[export_name = \"add\"]"),
+        "the C symbol is the Jux name: {rust}"
+    );
+    // C widths, not Jux ones (§8.1.1). A C caller compiled against
+    // `int add(int, int)` and an `extern "C" fn add(isize, isize)` disagree
+    // about every argument; they only appear to agree on x86-64 because both
+    // sides pass whole registers.
+    assert!(
+        rust.contains("fn __jux_cabi_add(a: core::ffi::c_int, b: core::ffi::c_int)")
+            && rust.contains("-> core::ffi::c_int"),
         "add C ABI signature: {rust}"
+    );
+    // And the shim converts, so the Jux body still sees Jux types.
+    assert!(
+        rust.contains("let a = a as isize;"),
+        "inbound conversion to the Jux width: {rust}"
     );
     assert!(
         rust.contains("#[export_name = \"jux_mul\"]"),
         "named export → #[export_name]: {rust}"
     );
+    // `mul` takes the converting wrapper too (its `int`s are C `int`s), so
+    // the Rust fn is the prefixed one and the attribute carries the symbol.
     assert!(
-        rust.contains("pub extern \"C\" fn mul("),
-        "mul keeps its Jux name on the Rust fn: {rust}"
+        rust.contains("pub extern \"C\" fn __jux_cabi_mul("),
+        "mul's wrapper keeps the prefixed Rust name: {rust}"
+    );
+}
+
+
+/// §8.1.1: a `native` block declares C types, and three Jux names mean a
+/// different machine type there than they do in ordinary code.
+///
+/// This is the mapping that used to be silently wrong. `int mathx_sum(int*,
+/// int)` was emitted as `fn(*mut isize, isize)`, so a Jux `int[]` passed to
+/// it was read by the C side with half the stride: `{1, 2, 3, 4}` summed to
+/// 3 instead of 10, with no diagnostic anywhere.
+#[test]
+fn native_block_declares_c_widths() {
+    let rust = emit(
+        "@extern(lib = \"m\") unsafe native { \
+             int c_int_fn(int a); \
+             long c_long_fn(long a); \
+             short c_short_fn(short a); \
+             int sum(int* values, int count); \
+         } \
+         public void main() {}",
+    );
+    assert!(rust.contains("pub fn c_int_fn(a: core::ffi::c_int)"), "{rust}");
+    assert!(rust.contains("-> core::ffi::c_int"), "{rust}");
+    // `long` is 32-bit on Windows and 64-bit elsewhere; `c_long` is that
+    // difference spelled once, so one declaration is right on both.
+    assert!(rust.contains("pub fn c_long_fn(a: core::ffi::c_long)"), "{rust}");
+    assert!(rust.contains("pub fn c_short_fn(a: core::ffi::c_short)"), "{rust}");
+    // The POINTEE carries the C width too -- otherwise the callee walks the
+    // buffer with the wrong stride, which is the silent case.
+    assert!(rust.contains("values: *mut core::ffi::c_int"), "{rust}");
+}
+
+/// A foreign call converts its arguments and its result at the boundary,
+/// the way a C compiler converts against a prototype (§8.1.1).
+#[test]
+fn foreign_call_converts_at_the_boundary() {
+    let rust = emit(
+        "@extern(lib = \"m\") unsafe native { int twice(int a); } \
+         public void main() { unsafe { int n = 21; int m = twice(n); print(m); } }",
+    );
+    assert!(rust.contains("as core::ffi::c_int"), "argument converts: {rust}");
+    assert!(rust.contains("__ret as isize"), "result converts back: {rust}");
+}
+
+/// A type that means the same thing on both sides needs no shim, so the
+/// export stays inline and the emitted Rust stays readable.
+#[test]
+fn export_with_matching_widths_stays_inline() {
+    let rust = emit(
+        "@export public double scale(double v, i32 by) { return v; } \
+         public void main() {}",
+    );
+    assert!(
+        rust.contains("pub extern \"C\" fn scale(v: f64, by: i32) -> f64"),
+        "no wrapper for types that already agree: {rust}"
     );
 }
 
@@ -5433,10 +5514,15 @@ fn export_string_emits_marshalling_wrapper() {
         rust.contains("pub fn greet(name: String, n: isize) -> String"),
         "real fn keeps Jux String signature: {rust}"
     );
-    // Wrapper: no_mangle extern "C", C-string params/return.
-    assert!(rust.contains("#[no_mangle]"), "wrapper is #[no_mangle]: {rust}");
+    // Wrapper: `extern "C"` with C-string params/return, and an explicit
+    // `#[export_name]` -- `#[no_mangle]` would publish `__jux_cabi_greet`,
+    // which is not the symbol a C caller links.
     assert!(
-        rust.contains("pub extern \"C\" fn __jux_cabi_greet(name: *const core::ffi::c_char, n: isize) -> *const core::ffi::c_char"),
+        rust.contains("#[export_name = \"greet\"]"),
+        "wrapper names its symbol: {rust}"
+    );
+    assert!(
+        rust.contains("pub extern \"C\" fn __jux_cabi_greet(name: *const core::ffi::c_char, n: core::ffi::c_int) -> *const core::ffi::c_char"),
         "wrapper C-ABI signature: {rust}"
     );
     assert!(rust.contains("::std::ffi::CStr::from_ptr(name)"), "inbound CStr copy: {rust}");
@@ -5448,9 +5534,13 @@ fn export_string_emits_marshalling_wrapper() {
 /// (no wrapper, no marshalling) — the wrapper is only for `String` signatures.
 #[test]
 fn export_primitive_has_no_wrapper() {
-    let rust = emit("@export int add(int a, int b) { return a + b; } public void main() {}");
+    // `i32`, not `int`: a Jux `int` is pointer-sized and a C `int` is not
+    // (§8.1.1), so an `int` export needs the converting wrapper and is no
+    // longer the "no wrapper" case this test is about. `i32` means the same
+    // thing on both sides, so it stays inline.
+    let rust = emit("@export i32 add(i32 a, i32 b) { return a + b; } public void main() {}");
     assert!(
-        rust.contains("pub extern \"C\" fn add(a: isize, b: isize) -> isize"),
+        rust.contains("pub extern \"C\" fn add(a: i32, b: i32) -> i32"),
         "inline C ABI: {rust}"
     );
     assert!(!rust.contains("__jux_cabi_add"), "no wrapper for a primitive export: {rust}");

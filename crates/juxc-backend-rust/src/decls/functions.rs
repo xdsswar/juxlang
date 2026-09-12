@@ -70,15 +70,39 @@ fn type_ref_is_string(t: &juxc_ast::TypeRef) -> bool {
 /// `String` types) PLUS a thin `extern "C"` marshalling wrapper (Layout-ABI
 /// §L.3.2) — rather than the inline `#[no_mangle] extern "C"` treatment used for
 /// a purely-primitive export, because `String` cannot cross the C ABI directly.
+/// True when `t` means a different machine type in C than it does in Jux
+/// (§8.1.1), so an `@export` carrying it cannot be emitted inline.
+///
+/// The list is short and each entry is a real difference, not a spelling
+/// one: `int` is pointer-sized in Jux and four bytes in C; `long` is always
+/// 64-bit in Jux and 32-bit in C on Windows; `char` is a Unicode scalar in
+/// Jux and a byte in C. `byte`, `short` and the `i32` family are the same
+/// type in both and need no shim.
+fn export_type_differs_in_c(t: &juxc_ast::TypeRef) -> bool {
+    if t.ptr_depth != 0 || t.array_shape.is_some() {
+        return false; // a pointer is a pointer
+    }
+    if t.name.segments.len() != 1 {
+        return false;
+    }
+    matches!(
+        t.name.segments[0].text.as_str(),
+        "int" | "uint" | "long" | "ulong" | "char",
+    )
+}
+
 fn export_needs_string_wrapper(fn_decl: &FnDecl) -> bool {
     if export_symbol_name(fn_decl).is_none() {
         return false;
     }
-    let ret_is_string = matches!(
+    let ret_needs = matches!(
         &fn_decl.return_type,
-        ReturnType::Type(t) if type_ref_is_string(t)
+        ReturnType::Type(t) if type_ref_is_string(t) || export_type_differs_in_c(t)
     );
-    ret_is_string || fn_decl.params.iter().any(|p| type_ref_is_string(&p.ty))
+    ret_needs
+        || fn_decl.params.iter().any(|p| {
+            type_ref_is_string(&p.ty) || export_type_differs_in_c(&p.ty)
+        })
 }
 
 impl RustEmitter {
@@ -160,11 +184,31 @@ impl RustEmitter {
             self.w.push_str("core::ffi::c_void");
             return;
         }
-        // `char` at the boundary is a C `char` (1 byte), not a Jux/Rust `char`
-        // (4-byte Unicode scalar). The call site converts (`emit_extern_c_call`).
-        if t.ptr_depth == 0 && t.array_shape.is_none() && last == "char" {
-            self.w.push_str("core::ffi::c_char");
-            return;
+        // An integer primitive at the boundary is the C type of that name
+        // (§8.1.1), which for three of them is NOT the Jux type of that name:
+        // Jux `int` is pointer-sized where C's is not, Jux `long` is always
+        // 64-bit where C's is 32 on Windows, and Jux `char` is a Unicode
+        // scalar where C's is a byte. Getting this wrong is silent -- the
+        // program computes a different answer and says nothing -- so the
+        // mapping is by C name, through `core::ffi`, which is correct per
+        // target by construction.
+        //
+        // A POINTER is not remapped: `int*` is a C `int*` whatever the
+        // pointee spelling, and the pointee itself goes through the same
+        // table below via `emit_value_type_as_rust`'s pointer handling.
+        if t.array_shape.is_none() && !t.nullable {
+            if let Some(c) = c_abi_type(last) {
+                // A POINTER to a C primitive points at the C width too:
+                // `int*` is a pointer to a four-byte int, not to whatever
+                // `int` means in Jux. Getting this wrong is the silent kind
+                // -- the callee walks the buffer with the wrong stride and
+                // reads every other half of every element.
+                for _ in 0..t.ptr_depth {
+                    self.w.push_str("*mut ");
+                }
+                self.w.push_str(c);
+                return;
+            }
         }
         self.emit_value_type_as_rust(t);
     }
@@ -723,13 +767,16 @@ impl RustEmitter {
             &fn_decl.return_type,
             ReturnType::Type(t) if type_ref_is_string(t)
         );
-        // Header: #[no_mangle] (or #[export_name]) pub extern "C" fn <sym>(...).
+        // Header: ALWAYS `#[export_name = "<sym>"]`, never `#[no_mangle]`.
+        //
+        // `#[no_mangle]` exports the RUST name, and this function's Rust
+        // name is the `__jux_cabi_` one below -- so a wrapper marked
+        // no-mangle published `__jux_cabi_add`, and a C program linking
+        // `add` could not find it. The attribute is the only thing that
+        // sets the symbol here, so it must name it even when the symbol
+        // equals the Jux name.
         self.w.emit_indent();
-        if sym == fn_decl.name.text {
-            self.w.push_str("#[no_mangle]\n");
-        } else {
-            self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
-        }
+        self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
         self.w.emit_indent();
         // The wrapper's Rust fn name is the Jux name with a `__jux_cabi_` prefix
         // (the C symbol itself is set by the attribute above), so it never
@@ -766,6 +813,15 @@ impl RustEmitter {
                     "let {n} = if {n}.is_null() {{ String::new() }} else {{ \
                      unsafe {{ ::std::ffi::CStr::from_ptr({n}) }}.to_string_lossy().into_owned() }};\n",
                 ));
+                continue;
+            }
+            // Inbound: each integer param arrives at its C width and the Jux
+            // function takes the Jux one (§8.1.1). `int` is the common case:
+            // four bytes in, pointer-sized wanted.
+            if let Some(jux) = jux_int_rust_type_for_export(&p.ty) {
+                let n = to_rust_ident(&p.name.text);
+                self.w.emit_indent();
+                self.w.push_str(&format!("let {n} = {n} as {jux};\n"));
             }
         }
         // Call the real Jux fn by name, forwarding every parameter.
@@ -791,8 +847,13 @@ impl RustEmitter {
                  Ok(__s) => __s.into_raw() as *const core::ffi::c_char, \
                  Err(_) => ::core::ptr::null() }\n",
             );
-        } else if !matches!(fn_decl.return_type, ReturnType::Void) {
-            self.w.line("__r");
+        } else if let ReturnType::Type(t) = &fn_decl.return_type {
+            // Outbound: the Jux result leaves at the C width it was declared
+            // with.
+            match c_abi_type_for_int(t) {
+                Some(c) => self.w.line(&format!("__r as {c}")),
+                None => self.w.line("__r"),
+            }
         }
         self.w.indent_dec();
         self.w.line("}");
@@ -1111,4 +1172,54 @@ impl RustEmitter {
             _ => unreachable!("emit_tail_stmt called on non-Return stmt"),
         }
     }
+}
+
+/// The Rust spelling of a Jux primitive's **C** type (§8.1.1).
+///
+/// `None` for a name that is not a C primitive (a user type, `void`, a
+/// pointer), which the caller then maps the ordinary way.
+///
+/// Deliberately `core::ffi::*` rather than `i32`/`i64`: `c_long` is 32-bit on
+/// Windows and 64-bit on Linux, and a declaration that says `long` should
+/// mean the same thing on both without the author choosing a target.
+pub(crate) fn c_abi_type(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "bool" | "boolean" => "bool",
+        "byte" => "core::ffi::c_schar",
+        "ubyte" => "core::ffi::c_uchar",
+        "char" => "core::ffi::c_char",
+        "short" => "core::ffi::c_short",
+        "ushort" => "core::ffi::c_ushort",
+        "int" => "core::ffi::c_int",
+        "uint" => "core::ffi::c_uint",
+        "long" => "core::ffi::c_long",
+        "ulong" => "core::ffi::c_ulong",
+        "float" => "core::ffi::c_float",
+        "double" => "core::ffi::c_double",
+        _ => return None,
+    })
+}
+
+/// The C type of an integer parameter/return in an `@export` signature, or
+/// `None` when it is not an integer primitive.
+fn c_abi_type_for_int(t: &juxc_ast::TypeRef) -> Option<&'static str> {
+    if t.ptr_depth != 0 || t.array_shape.is_some() || t.nullable {
+        return None;
+    }
+    if t.name.segments.len() != 1 {
+        return None;
+    }
+    match t.name.segments[0].text.as_str() {
+        "byte" | "ubyte" | "short" | "ushort" | "int" | "uint" | "long" | "ulong" => {
+            c_abi_type(&t.name.segments[0].text)
+        }
+        _ => None,
+    }
+}
+
+/// The Rust type the Jux side of an `@export` integer parameter has --
+/// the counterpart of [`c_abi_type_for_int`] on the other side of the shim.
+fn jux_int_rust_type_for_export(t: &juxc_ast::TypeRef) -> Option<&'static str> {
+    c_abi_type_for_int(t)?;
+    crate::types::jux_primitive_to_rust(t)
 }

@@ -304,7 +304,22 @@ impl RustEmitter {
             // a `*mut T` (a Rust reference `&x` is a different type). The
             // operand is a place, so it's emitted verbatim inside the macro.
             self.w.push_str("core::ptr::addr_of_mut!(");
+            // The operand is a PLACE being addressed mutably, not a value
+            // being read. That distinction matters for a collection or array
+            // element: reading `xs[0]` goes through `xs.borrow()`, and taking
+            // a `*mut` into an immutable guard does not compile (rustc
+            // E0596). The lvalue flag is what tells the index emitter to take
+            // `borrow_mut()` instead -- the same flag an assignment target
+            // sets, for the same reason.
+            //
+            // The guard is a temporary of the ENCLOSING STATEMENT, so it
+            // outlives the call the pointer is passed to and drops after it
+            // returns. That is exactly the window a C function may use the
+            // pointer in.
+            let prev_lvalue = self.emitting_lvalue;
+            self.emitting_lvalue = true;
             self.emit_expr(&u.operand);
+            self.emitting_lvalue = prev_lvalue;
             self.w.push(')');
             return;
         }

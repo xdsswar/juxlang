@@ -22,6 +22,10 @@ enum FfiArg {
     /// An `out <place>` argument (§M.4): the C callee writes through it, so we
     /// pass `addr_of_mut!(place)` (a `*mut T`) instead of the value.
     Out,
+    /// An integer converted to the C width the parameter declares (§8.1.1) --
+    /// `c_int`, `c_long`, and the rest. Jux `int` is pointer-sized and C's is
+    /// not, so without this the two are different types on a 64-bit target.
+    Int(&'static str),
 }
 
 /// How a foreign-call RETURN crosses the C boundary (§L.7).
@@ -34,6 +38,9 @@ enum FfiRet {
     Str { nullable: bool },
     /// A C `char` widened back to a Jux `char`.
     Char,
+    /// A C integer widened (or narrowed) back to the Jux type of the same
+    /// name -- `c_int` to `int`, and so on.
+    Int(&'static str),
 }
 
 /// Classify a foreign parameter type into its [`FfiArg`] marshalling kind.
@@ -42,9 +49,40 @@ fn ffi_arg_kind(t: &juxc_ast::TypeRef) -> FfiArg {
         FfiArg::Str
     } else if type_ref_is_char(t) {
         FfiArg::Char
+    } else if let Some(c) = ffi_int_c_type(t) {
+        FfiArg::Int(c)
     } else {
         FfiArg::Plain
     }
+}
+
+/// The C type a foreign INTEGER parameter/return crosses as, or `None` when
+/// `t` is not one (a pointer, a float, a user type).
+///
+/// Floats are excluded deliberately: `c_float`/`c_double` are `f32`/`f64` on
+/// every target Rust supports, so a conversion would be noise in the emitted
+/// code for no behaviour.
+fn ffi_int_c_type(t: &juxc_ast::TypeRef) -> Option<&'static str> {
+    if t.ptr_depth != 0 || t.array_shape.is_some() || t.nullable {
+        return None;
+    }
+    if t.name.segments.len() != 1 {
+        return None;
+    }
+    match t.name.segments[0].text.as_str() {
+        "byte" | "ubyte" | "short" | "ushort" | "int" | "uint" | "long" | "ulong" => {
+            crate::decls::functions::c_abi_type(&t.name.segments[0].text)
+        }
+        _ => None,
+    }
+}
+
+/// The RUST type a foreign integer return converts back to: the Jux meaning
+/// of the same name, which for `int` is pointer-sized and for `long` is
+/// always 64-bit.
+fn jux_int_rust_type(t: &juxc_ast::TypeRef) -> Option<&'static str> {
+    ffi_int_c_type(t)?;
+    crate::types::jux_primitive_to_rust(t)
 }
 
 /// True when `t` is the Jux `String` type (or `String?`) at the value level: a
@@ -2118,11 +2156,17 @@ impl RustEmitter {
                 }
             })
             .collect();
+        // An `out` parameter is a pointer to the place, and a pointer is not
+        // converted (§8.1.1) -- the place must already have the C width.
         let ret = match &sig.return_type {
             juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => FfiRet::Str {
                 nullable: t.nullable,
             },
             juxc_ast::ReturnType::Type(t) if type_ref_is_char(t) => FfiRet::Char,
+            juxc_ast::ReturnType::Type(t) => match jux_int_rust_type(t) {
+                Some(rust) => FfiRet::Int(rust),
+                None => FfiRet::Plain,
+            },
             _ => FfiRet::Plain,
         };
         Some((args, ret))
@@ -2187,6 +2231,14 @@ impl RustEmitter {
                     self.emit_expr(arg);
                     self.w.push_str(") as core::ffi::c_char");
                 }
+                // Integer arg: converted to the width the parameter declares,
+                // which is what a C compiler does against a prototype.
+                Some(FfiArg::Int(c_ty)) => {
+                    self.w.push('(');
+                    self.emit_expr(arg);
+                    self.w.push_str(") as ");
+                    self.w.push_str(c_ty);
+                }
                 // `out <place>` arg: a `*mut T` aimed at the place, so the C
                 // callee writes through it. `Expr::Out(inner)` carries the place.
                 Some(FfiArg::Out) => {
@@ -2229,6 +2281,12 @@ impl RustEmitter {
             }
             // A C `char` widens back to a Jux/Rust `char` (via the byte value).
             FfiRet::Char => self.w.push_str("; (__ret as u8) as char"),
+            // A C integer converts back to the Jux type of the same name --
+            // `c_int` to `int`, which is pointer-sized and so usually wider.
+            FfiRet::Int(rust) => {
+                self.w.push_str("; __ret as ");
+                self.w.push_str(rust);
+            }
         }
         self.w.push_str(" }");
     }

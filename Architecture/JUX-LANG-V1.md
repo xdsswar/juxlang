@@ -3309,6 +3309,36 @@ public final class Database {
 
 Users of `Database` see only a safe Jux class. The raw pointer is `private` and never leaks.
 
+#### 8.1.1. C type mapping (NORMATIVE)
+
+Inside a `native` block, and on the signature of an `@export` function, a type name denotes the **C** type of that name, not the Jux type. This is the one place the two differ, and they must: a declaration in a `native` block describes a function someone else compiled with a C compiler, so its parameter widths are C's.
+
+| Jux, in a `native` block | C type | Rust ABI type |
+|---|---|---|
+| `bool` | `_Bool` | `bool` |
+| `byte` / `ubyte` | `signed char` / `unsigned char` | `c_schar` / `c_uchar` |
+| `char` | `char` | `c_char` |
+| `short` / `ushort` | `short` / `unsigned short` | `c_short` / `c_ushort` |
+| `int` / `uint` | `int` / `unsigned int` | `c_int` / `c_uint` |
+| `long` / `ulong` | `long` / `unsigned long` | `c_long` / `c_ulong` |
+| `float` / `double` | `float` / `double` | `c_float` / `c_double` |
+| `String` | `const char*` | `*const c_char` |
+| `T*` | `T*` | `*mut T` |
+| `void*` | `void*` | `*mut c_void` |
+| `out T` | `T*` (callee writes) | `*mut T` |
+
+Three of these are **not** the mapping the same name has in ordinary Jux code, and those three are exactly where a quiet mismatch used to live:
+
+- Jux `int` is pointer-sized; C's `int` is not. On a 64-bit target the two differ by a factor of two, which corrupts every array crossing the boundary.
+- Jux `long` is 64-bit; C's `long` is 32-bit on Windows and 64-bit elsewhere. `c_long` is that difference, spelled once.
+- Jux `char` is a Unicode scalar; C's `char` is a byte.
+
+The Rust column names `core::ffi` types rather than fixed-width ones on purpose: they are correct per target by construction, so a program that is right on Linux is right on Windows without a second declaration.
+
+**Conversion happens at the boundary.** An argument is converted to the declared parameter type, and a result to the Jux type of the slot it lands in, exactly as a C compiler converts against a prototype. So passing a Jux `int` to a `native` `int` parameter narrows to `c_int`, and that narrowing is the program's meaning, not an accident of layout. Where a value would not survive the trip, say so at the call: convert deliberately, or declare the parameter with the width you meant.
+
+A **pointer** is not converted. `int*` is a C `int*`, and `&xs[0]` on a Jux `int[]` does not produce one, because the element widths differ. Give the array the element type the C function expects.
+
 ### 8.2. Rust Library Interop
 
 Rust libraries can be consumed in three layers, ordered by ambition:
