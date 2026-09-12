@@ -245,6 +245,7 @@
     "layout"
   ],
   "builtins": [
+    "AnnotatedItem",
     "Arc",
     "ArithmeticException",
     "AsyncMutex",

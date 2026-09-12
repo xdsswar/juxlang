@@ -1,0 +1,70 @@
+// Reading annotations at startup, with no reflection (§A.8).
+//
+// Jux has no runtime reflection, and a compiled language should not grow one
+// just so a framework can ask "which methods carry @Route?". The compiler
+// already knows at build time, so it writes the answer down: every
+// RUNTIME-retention annotation applied anywhere becomes a row in a generated
+// `jux.meta.Registry`, which is ordinary Jux source compiled like any other
+// file. A program with no annotations gets an empty registry and pays
+// nothing.
+//
+// This is the Spring-Boot shape: declare what a thing IS, and let a framework
+// find it.
+
+import jux.meta.Registry;
+
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+    String method() default "GET";
+}
+
+@Retention(RUNTIME)
+public annotation Cacheable {
+    int ttlSeconds() default 60;
+    String[] tags() default {};
+}
+
+/// Not RUNTIME, so it is checked at compile time and recorded nowhere. A
+/// binary-retention annotation costs the finished program nothing at all.
+@Retention(BINARY)
+public annotation Internal { }
+
+public class UserController {
+
+    @Route(path = "/users")
+    @Cacheable(ttlSeconds = 300, tags = {"user", "profile"})
+    public String listUsers() { return "[]"; }
+
+    @Route(path = "/users", method = "POST")
+    public String createUser() { return "created"; }
+
+    @Route(path = "/health")
+    @Internal
+    public String health() { return "ok"; }
+}
+
+public void main() {
+    // What a router does at startup.
+    print("routes:");
+    for (var r : Registry.annotated("Route")) {
+        // `method` is recorded even where it was not written: the default
+        // comes along, so a reader never has to know which were spelled out.
+        print("  " + r.get("method")!! + " " + r.get("path")!!
+              + " -> " + r.owner() + "." + r.target());
+    }
+
+    print("cache policy:");
+    for (var c : Registry.annotated("Cacheable")) {
+        var tags = c.list("tags");
+        print("  " + c.target() + " ttl=" + c.getInt("ttlSeconds", 0)
+              + " tags=" + tags.len());
+        for (var t : tags) {
+            print("    " + t);
+        }
+    }
+
+    // `@Internal` is BINARY retention, so it is absent from the registry.
+    print("internal recorded: " + Registry.annotated("Internal").len());
+    print("total: " + Registry.all().len());
+}

@@ -213,7 +213,58 @@ Applying a non-`@Repeatable` annotation more than once is `E0473` (`annotation n
 
 ## §A.8 — Reading Annotations at Runtime
 
-With `reflection = "annotations"` or `reflection = "full"` in `jux.toml`, runtime annotations are accessible via the reflection API:
+### A.8.0. The compile-time registry (IMPLEMENTED)
+
+Jux has no runtime reflection, and a compiled language should not grow one just so a framework can ask "which methods carry `@Route`?". The compiler already knows at build time, so it writes the answer down.
+
+Every `RUNTIME`-retention annotation applied anywhere in a program becomes a row in a generated `jux.meta.Registry`:
+
+```java
+import jux.meta.Registry;
+
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+    String method() default "GET";
+}
+
+public class UserController {
+    @Route(path = "/users")             public String listUsers()  { … }
+    @Route(path = "/users", method = "POST") public String createUser() { … }
+}
+
+public void main() {
+    for (var r : Registry.annotated("Route")) {
+        router.add(r.get("method")!!, r.get("path")!!, r.owner(), r.target());
+    }
+}
+```
+
+The registry is generated as **ordinary Jux source** and compiled like any other file. There is no new runtime type, no intrinsic, and nothing the backend special-cases; the generated code is what a person would have written by hand. A program that declares no runtime annotations gets an empty registry.
+
+Each row is a `jux.std.meta.AnnotatedItem`:
+
+| Member | Answers |
+|---|---|
+| `name()` | the annotation's bare name (`Route`) |
+| `kind()` | `class`, `method`, `field`, or `function` |
+| `owner()` | the enclosing type's name, empty for a top-level declaration |
+| `target()` | the annotated declaration's own name |
+| `get(key)` | the value, or null when the annotation has no such parameter |
+| `getOr` / `getInt` / `getBool` | the same with a fallback, converted |
+| `list(key)` | an array parameter's elements |
+
+Three properties are worth stating, because they are what make the registry usable rather than merely present:
+
+- **Defaults are recorded.** A parameter left to its default appears with that default, so a reader never has to know which arguments were written out. `method` above is `"GET"` at both sites.
+- **Retention decides cost.** Only `RUNTIME` annotations are recorded. A `BINARY` one (the default, §A.4) is checked at compile time and costs the finished program nothing.
+- **An array parameter is recorded once per element**, which is what `list` returns. An empty array records nothing, so `list` on it is empty rather than one empty string.
+
+### A.8.1. Reflection (NOT IMPLEMENTED)
+
+The route below is the Java-shaped one, and it is what §M.11's reflection system would enable. It is specified, not built. The registry above covers the framework cases it was written for, at no runtime cost, and does not need a `reflection` mode to be chosen.
+
+With `reflection = "annotations"` or `reflection = "full"` in `jux.toml`, runtime annotations would be accessible via the reflection API:
 
 ```java
 import std.reflection.{getAnnotations, getMethods};
@@ -231,7 +282,7 @@ public void processCacheable(Object instance) {
 
 The reflection API surface is specified in `JUX-MISSING-DEFS-ADDENDUM.md` §M.11. Annotations are the primary motivator for the opt-in reflection system.
 
-### A.8.1. Reflection Modes and Cost
+### A.8.2. Reflection Modes and Cost
 
 | Mode in `jux.toml`             | What's accessible                              | Approximate per-class cost |
 |--------------------------------|------------------------------------------------|----------------------------|

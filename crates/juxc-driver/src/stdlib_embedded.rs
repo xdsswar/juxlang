@@ -745,6 +745,140 @@ public class Path {
     }
 }
 "###),
+    ("meta/AnnotatedItem.jux", r###"/**
+ * jux.std.meta.AnnotatedItem
+ *
+ * One entry in the compile-time annotation registry: a declaration that
+ * carried a `RUNTIME`-retention annotation, and the values it was given.
+ *
+ * Jux has no runtime reflection, and this stands in its place. The compiler
+ * walks every declaration at build time and generates `jux.meta.Registry`
+ * holding one of these per application, so a framework can ask "what carries
+ * @Route?" at startup without the program paying for a reflection system it
+ * may not use. A project with no annotations generates an empty registry.
+ *
+ * Values are kept as text. An annotation's arguments are compile-time
+ * constants, so their spelling is all there is to preserve, and the typed
+ * getters convert on demand.
+ */
+package jux.std.meta;
+
+public class AnnotatedItem {
+    private String label;
+    private String kind;
+    private String owner;
+    private String target;
+
+    // Parallel lists rather than a map: an annotation has a handful of
+    // parameters, so a linear scan is faster than hashing and pulls no
+    // dependency into the stdlib. An ARRAY-valued parameter appears once per
+    // element, which is what lets `list` return them without the compiler
+    // having to pick a separator no value could contain.
+    private Vec<String> keys;
+    private Vec<String> values;
+
+    public AnnotatedItem(String label, String kind, String owner, String target,
+                         Vec<String> keys, Vec<String> values) {
+        this.label = label;
+        this.kind = kind;
+        this.owner = owner;
+        this.target = target;
+        this.keys = keys;
+        this.values = values;
+    }
+
+    /** The annotation's bare name, as declared -- `Route`, `Service`. */
+    public String name() { return this.label; }
+
+    /** What was annotated: `class`, `method`, `field`, or `function`. */
+    public String kind() { return this.kind; }
+
+    /**
+     * The enclosing type's name for a member, or the empty string for a
+     * top-level declaration.
+     */
+    public String owner() { return this.owner; }
+
+    /** The annotated declaration's own name. */
+    public String target() { return this.target; }
+
+    /**
+     * The value given for `key`, or null when the annotation has no such
+     * parameter. A parameter left to its default is recorded with that
+     * default, so a reader never has to know which were written out.
+     */
+    public String? get(String key) {
+        for (int i = 0; i < this.keys.len(); i++) {
+            if (this.keys[i] == key) {
+                return this.values[i];
+            }
+        }
+        return null;
+    }
+
+    /** `get` with a fallback, for the common "read it or use mine" shape. */
+    public String getOr(String key, String fallback) {
+        var found = this.get(key);
+        return found == null ? fallback : found!!;
+    }
+
+    /** `get` parsed as an integer, or `fallback` when absent or unparsable. */
+    public int getInt(String key, int fallback) {
+        var raw = this.get(key);
+        if (raw == null) {
+            return fallback;
+        }
+        var text = raw!!;
+        if (text.length() == 0) {
+            return fallback;
+        }
+        bool negative = text.substring(0, 1) == "-";
+        int start = negative ? 1 : 0;
+        if (start >= text.length()) {
+            return fallback;
+        }
+        int value = 0;
+        for (int i = start; i < text.length(); i++) {
+            int digit = "0123456789".indexOf(text.substring(i, i + 1));
+            if (digit < 0) {
+                return fallback;
+            }
+            value = value * 10 + digit;
+        }
+        return negative ? -value : value;
+    }
+
+    /** `get` read as a boolean, or `fallback` when absent. */
+    public bool getBool(String key, bool fallback) {
+        var raw = this.get(key);
+        if (raw == null) {
+            return fallback;
+        }
+        return raw!! == "true";
+    }
+
+    /**
+     * Every value recorded for `key`, in order.
+     *
+     * An array-valued parameter is recorded once per element, so this returns
+     * the elements; a single-valued one returns a list of one, and an absent
+     * parameter an empty list.
+     */
+    public Vec<String> list(String key) {
+        var out = new Vec<String>();
+        for (int i = 0; i < this.keys.len(); i++) {
+            if (this.keys[i] == key) {
+                out.push(this.values[i]);
+            }
+        }
+        return out;
+    }
+
+    public String string() {
+        return "@" + this.label + " on " + this.kind + " " + this.target;
+    }
+}
+"###),
     ("io/Console.jux", r###"/**
  * jux.std.io.Console
  *

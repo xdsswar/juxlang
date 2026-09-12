@@ -101,6 +101,7 @@ pub(crate) fn cross_target() -> Option<String> {
     }
 }
 
+pub mod annotations;
 pub mod big_stack;
 pub mod diagnostic_order;
 pub mod git_deps;
@@ -247,6 +248,17 @@ where
     // §G.3). These units are flagged `external` below so the backend never
     // lowers them — the real Rust std provides the bodies at link time.
     all_sources.extend(stubs::load_std_stub_sources());
+    // The compile-time annotation registry (§A.8). Generated from the USER's
+    // sources -- annotations are applied in user code -- and appended before
+    // anything is lexed, because every token carries its file's index and a
+    // source added later would be stamped wrong. A program with no runtime
+    // annotations gets an empty registry, which costs a few bytes and lets
+    // `Registry.annotated(...)` always resolve.
+    // Pushed with the other GENERATED units, ahead of the user's own, so the
+    // user's sources stay last in the list. The CLI and the LSP rely on that
+    // ordering to map a diagnostic's file index back to the file a person
+    // actually opened.
+    all_sources.push(crate::annotations::synthesize_registry(&sources));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -328,6 +340,17 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     // bodies can use `Map`, `Throwable`, etc.
     let mut all_sources = stdlib::load_std_sources();
     all_sources.extend(stubs::load_std_stub_sources());
+    // The compile-time annotation registry (§A.8). Generated from the USER's
+    // sources -- annotations are applied in user code -- and appended before
+    // anything is lexed, because every token carries its file's index and a
+    // source added later would be stamped wrong. A program with no runtime
+    // annotations gets an empty registry, which costs a few bytes and lets
+    // `Registry.annotated(...)` always resolve.
+    // Pushed with the other GENERATED units, ahead of the user's own, so the
+    // user's sources stay last in the list. The CLI and the LSP rely on that
+    // ordering to map a diagnostic's file index back to the file a person
+    // actually opened.
+    all_sources.push(crate::annotations::synthesize_registry(&sources));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -441,6 +464,17 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     // (which routes through `check_workspace`) surfaces Rust std types and
     // methods in completion/hover, in Jux syntax (§G.10).
     all_sources.extend(stubs::load_std_stub_sources());
+    // The compile-time annotation registry (§A.8). Generated from the USER's
+    // sources -- annotations are applied in user code -- and appended before
+    // anything is lexed, because every token carries its file's index and a
+    // source added later would be stamped wrong. A program with no runtime
+    // annotations gets an empty registry, which costs a few bytes and lets
+    // `Registry.annotated(...)` always resolve.
+    // Pushed with the other GENERATED units, ahead of the user's own, so the
+    // user's sources stay last in the list. The CLI and the LSP rely on that
+    // ordering to map a diagnostic's file index back to the file a person
+    // actually opened.
+    all_sources.push(crate::annotations::synthesize_registry(&sources));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —

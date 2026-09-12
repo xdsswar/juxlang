@@ -1,0 +1,10 @@
+routes:
+  GET /users -> UserController.listUsers
+  POST /users -> UserController.createUser
+  GET /health -> UserController.health
+cache policy:
+  listUsers ttl=300 tags=2
+    user
+    profile
+internal recorded: 0
+total: 4

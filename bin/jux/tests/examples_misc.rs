@@ -34,6 +34,35 @@ fn annotations_user() {
     );
 }
 
+/// The compile-time annotation registry (§A.8): a program reading its own
+/// annotations at startup, with no reflection runtime.
+///
+/// What this pins is the whole contract at once -- defaults recorded even
+/// where they were not written, array parameters returned as elements, and
+/// BINARY retention costing the finished program nothing (`internal
+/// recorded: 0`).
+#[test]
+fn annotations_registry() {
+    common::expect_output(
+        "annotations_registry",
+        "annotations-registry",
+        &[
+            // The helper compares TRIMMED lines, so the example's indentation
+            // is not part of what is pinned.
+            "routes:",
+            "GET /users -> UserController.listUsers",
+            "POST /users -> UserController.createUser",
+            "GET /health -> UserController.health",
+            "cache policy:",
+            "listUsers ttl=300 tags=2",
+            "user",
+            "profile",
+            "internal recorded: 0",
+            "total: 4",
+        ],
+    );
+}
+
 #[test]
 fn bounded_generic() {
     common::expect_output(
