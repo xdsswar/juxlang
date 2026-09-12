@@ -5,9 +5,9 @@
 //! reorganization. Behavior is identical to the original methods.
 
 use juxc_ast::{
-    ClassDecl, ConstructorDecl, EnumDecl, EnumPayload, EnumVariant, FieldDecl, FnDecl, FnModifier,
-    InterfaceDecl, OperatorDecl, OperatorKind, Param, RecordComponent, RecordDecl, ReturnType,
-    TypeRef, Visibility,
+    Annotation, AnnotationDecl, AnnotationParam, ClassDecl, ConstructorDecl, EnumDecl, EnumPayload,
+    EnumVariant, Expr, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl, OperatorKind,
+    Param, RecordComponent, RecordDecl, ReturnType, TypeRef, Visibility,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
@@ -556,11 +556,36 @@ impl<'a> Parser<'a> {
         if is_named {
             let name = self.parse_ident()?;
             self.expect(&TokenKind::Eq, "'=' in named annotation arg");
-            let value = self.parse_expr()?;
+            let value = self.parse_annotation_arg_value()?;
             return Some(juxc_ast::AnnotationArg::Named { name, value });
         }
-        let value = self.parse_expr()?;
+        let value = self.parse_annotation_arg_value()?;
         Some(juxc_ast::AnnotationArg::Positional(value))
+    }
+
+    /// One annotation argument value: an ordinary constant expression, or a
+    /// brace list for an array parameter (§A.5).
+    fn parse_annotation_arg_value(&mut self) -> Option<Expr> {
+        if !self.at(&TokenKind::LBrace) {
+            return self.parse_expr();
+        }
+        let start = self.peek_span();
+        self.advance(); // `{`
+        let mut elements = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            elements.push(self.parse_expr()?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' to close the annotation value list");
+        let end = self.last_consumed_span();
+        Some(Expr::NewArrayLit(juxc_ast::NewArrayLitExpr {
+            element_type: annotation_list_element_type(&elements),
+            elements,
+            fixed: false,
+            span: start.join(end),
+        }))
     }
 
     /// Parse a top-level constant declaration per grammar §A.2.2:
@@ -928,6 +953,115 @@ impl<'a> Parser<'a> {
             fields,
             span: start.join(end),
         })
+    }
+
+
+    /// Parse `annotation Name { T p() default v; … }` (§A.2).
+    ///
+    /// Parameters are written method-style, which is the spec's shape and
+    /// Java's: a type, a name, empty parens, and optionally a default. The
+    /// parens carry no meaning of their own -- they are what tells a reader
+    /// this is a parameter rather than a field -- so they are required.
+    ///
+    /// The meta-annotations that configure the type (`@Target`,
+    /// `@Retention`) arrive in `annotations` like any others; the parser
+    /// stays ignorant of which annotations are meta, and tycheck reads them.
+    pub(crate) fn parse_annotation_decl(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Option<AnnotationDecl> {
+        let start = self.peek_span();
+        self.expect_kw(Keyword::Annotation, "expected `annotation` keyword");
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::LBrace, "'{' to start annotation body");
+
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // A stray `;` between parameters is harmless.
+            if self.eat(&TokenKind::Semicolon) {
+                continue;
+            }
+            match self.parse_annotation_param() {
+                Some(p) => params.push(p),
+                None => {
+                    // Recover to the next parameter boundary so one malformed
+                    // line reports once instead of cascading.
+                    while !self.at_eof()
+                        && !self.at(&TokenKind::Semicolon)
+                        && !self.at(&TokenKind::RBrace)
+                    {
+                        self.advance();
+                    }
+                }
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' to close annotation body");
+        let end = self.last_consumed_span();
+        Some(AnnotationDecl {
+            annotations,
+            visibility,
+            name,
+            params,
+            span: start.join(end),
+        })
+    }
+
+    /// One `T name() default <value>;` parameter of an annotation type.
+    fn parse_annotation_param(&mut self) -> Option<AnnotationParam> {
+        let start = self.peek_span();
+        let ty = self.parse_type_ref()?;
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::LParen, "'(' after an annotation parameter name");
+        self.expect(&TokenKind::RParen, "')' -- an annotation parameter takes none");
+
+        // `default <value>` makes the parameter optional at every use site;
+        // without one it must be given a value every time.
+        let default = if self.eat_kw(Keyword::Default) {
+            Some(self.parse_annotation_value(&ty)?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Semicolon, "';' to end the annotation parameter");
+        let end = self.last_consumed_span();
+        Some(AnnotationParam { ty, name, default, span: start.join(end) })
+    }
+
+    /// A value in annotation position: an ordinary constant expression, or a
+    /// brace list for an array parameter (`{}`, `{"user", "profile"}`).
+    ///
+    /// `element_of` supplies the element type the list is built at, which the
+    /// array-literal node needs and which the parameter's declared type
+    /// already knows.
+    pub(crate) fn parse_annotation_value(
+        &mut self,
+        element_of: &juxc_ast::TypeRef,
+    ) -> Option<Expr> {
+        if !self.at(&TokenKind::LBrace) {
+            return self.parse_expr();
+        }
+        let start = self.peek_span();
+        self.advance(); // `{`
+        let mut elements = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            elements.push(self.parse_expr()?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' to close the value list");
+        let end = self.last_consumed_span();
+
+        // The element type is the parameter's type with its array shape
+        // dropped: `String[] tags()` holds `String` elements.
+        let mut element_type = element_of.clone();
+        element_type.array_shape = None;
+        Some(Expr::NewArrayLit(juxc_ast::NewArrayLitExpr {
+            element_type,
+            elements,
+            fixed: false,
+            span: start.join(end),
+        }))
     }
 
     /// Parse a single field declaration: `[static] [final|const] Type name [= expr] ;`.
@@ -2676,5 +2810,36 @@ impl<'a> Parser<'a> {
             is_weak,
             span: start.join(end),
         })
+    }
+}
+/// A placeholder element type for an annotation value list.
+///
+/// Inferred from the first element, `String` when the list is empty. It
+/// decides nothing: an annotation type emits no code of its own, and each
+/// element is checked against the parameter's DECLARED type, which is the
+/// only type with meaning here. The array-literal node simply has the field.
+fn annotation_list_element_type(elements: &[Expr]) -> TypeRef {
+    let name = match elements.first() {
+        Some(Expr::Literal(juxc_ast::Literal::String(_))) => "String",
+        Some(Expr::Literal(juxc_ast::Literal::Int(_))) => "int",
+        Some(Expr::Literal(juxc_ast::Literal::Float(_))) => "double",
+        Some(Expr::Literal(juxc_ast::Literal::Bool(_))) => "bool",
+        _ => "String",
+    };
+    let span = elements
+        .first()
+        .map(crate::exprs::expr_span)
+        .unwrap_or(juxc_source::Span::DUMMY);
+    TypeRef {
+        name: juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident { text: name.to_string(), span }],
+            span,
+        },
+        generic_args: Vec::new(),
+        nullable: false,
+        array_shape: None,
+        fn_shape: None,
+        ptr_depth: 0,
+        span,
     }
 }

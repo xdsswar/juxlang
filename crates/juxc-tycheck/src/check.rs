@@ -565,6 +565,7 @@ impl<'a> Checker<'a> {
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
+                TopLevelDecl::Annotation(decl) => self.check_annotation_decl(decl),
                 TopLevelDecl::Class(class) => self.check_class(class),
                 TopLevelDecl::Record(record) => self.check_record(record),
                 TopLevelDecl::Enum(enum_decl) => self.check_enum(enum_decl),
@@ -2784,6 +2785,50 @@ impl<'a> Checker<'a> {
         self.check_block(body);
         self.current_return = saved;
         self.env.pop_scope();
+    }
+
+    /// Validate an `annotation Name { … }` declaration (§A.2, §A.5).
+    ///
+    /// The parameter types are restricted to the CONSTANT kinds, because an
+    /// annotation's values are baked in at compile time: a primitive, a
+    /// `String`, an enum, or an array of one of those. Anything else has no
+    /// meaning at the point the value is recorded.
+    fn check_annotation_decl(&mut self, decl: &juxc_ast::AnnotationDecl) {
+        for param in &decl.params {
+            if !self.annotation_param_type_is_constant(&param.ty) {
+                self.diagnostics.push(
+                    juxc_diagnostics::Diagnostic::error(
+                        juxc_diagnostics::code::Code::E0417_UnknownType,
+                        format!(
+                            "`{}` is not a valid annotation parameter type. An annotation's values are compile-time constants, so a parameter must be a primitive, a `String`, an enum, or an array of one of those",
+                            type_ref_display(&param.ty),
+                        ),
+                    )
+                    .with_span(param.ty.span),
+                );
+            }
+        }
+    }
+
+    /// Whether `t` is one of the constant kinds an annotation parameter may
+    /// have (§A.5). An ARRAY of a constant kind qualifies; an array of
+    /// anything else does not.
+    fn annotation_param_type_is_constant(&self, t: &juxc_ast::TypeRef) -> bool {
+        if t.ptr_depth > 0 || t.nullable {
+            return false;
+        }
+        let Some(last) = t.name.segments.last() else { return false };
+        let name = last.text.as_str();
+        // A primitive, or `String` (which has its own Ty variant and so is
+        // not in the primitive table).
+        if crate::ty::primitive_from_name(name).is_some() || name == "String" || name == "string" {
+            return true;
+        }
+        // An enum is a constant kind; a class or interface is not.
+        self.symbols
+            .enums
+            .keys()
+            .any(|k| k == name || k.rsplit('.').next() == Some(name))
     }
 
     /// Walk an interface's default-method bodies.

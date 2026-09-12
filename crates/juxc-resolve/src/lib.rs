@@ -142,6 +142,7 @@ impl PackageExports {
             for item in &unit.items {
                 match item {
                     TopLevelDecl::Function(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Annotation(d) => names.insert(d.name.text.clone()),
                     TopLevelDecl::Class(d) => names.insert(d.name.text.clone()),
                     TopLevelDecl::Enum(d) => names.insert(d.name.text.clone()),
                     TopLevelDecl::Record(d) => names.insert(d.name.text.clone()),
@@ -455,6 +456,9 @@ impl Resolver {
     fn check_top_level_keyword(&mut self, item: &TopLevelDecl) {
         match item {
             TopLevelDecl::Function(d) => self.check_fn_item_name(d),
+            // An annotation's name becomes a Rust item in the registry, so it
+            // is subject to the same keyword reservation as any other.
+            TopLevelDecl::Annotation(d) => self.reject_rust_keyword(&d.name.text, d.name.span),
             TopLevelDecl::Const(d) => self.reject_rust_keyword(&d.name.text, d.name.span),
             TopLevelDecl::TypeAlias(d) => self.reject_rust_keyword(&d.name.text, d.name.span),
             TopLevelDecl::Class(d) => self.check_class_item_names(d),
@@ -583,6 +587,9 @@ impl Resolver {
                 TopLevelDecl::Function(fn_decl) => {
                     self.user_names.insert(fn_decl.name.text.clone());
                 }
+                TopLevelDecl::Annotation(decl) => {
+                    self.user_names.insert(decl.name.text.clone());
+                }
                 TopLevelDecl::Class(class_decl) => {
                     // Register the class name so `new Foo(…)` resolves
                     // against the known set. Methods and fields aren't
@@ -684,6 +691,9 @@ impl Resolver {
     fn visit_top_level_decl(&mut self, item: &TopLevelDecl) {
         match item {
             TopLevelDecl::Function(fn_decl) => self.visit_fn_decl(fn_decl),
+            // An annotation declares only parameter names and constant
+            // defaults; there is no body to walk for references.
+            TopLevelDecl::Annotation(_) => {}
             TopLevelDecl::Class(class_decl) => self.visit_class_decl(class_decl),
             // Enum declarations may carry operator-override bodies in
             // their body (§O.3.4 customization on the auto-derives).

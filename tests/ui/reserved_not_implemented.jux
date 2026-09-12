@@ -1,11 +1,10 @@
-// Four keywords the language reserves and the spec documents, none of which
-// Phase 1 implements. Each must produce ONE error that names the construct and
+// Keywords the language reserves and the spec documents, which Phase 1 does
+// not implement. Each must produce ONE error that names the construct and
 // says where it is written down -- not a cascade about whatever the parser
 // tripped over next.
-
-public annotation Cacheable {
-    int ttl = 60;
-}
+//
+// `annotation` used to be here. It is implemented now (§A.2), so it moved to
+// `examples/annotations_user.jux`, where it is exercised rather than refused.
 
 public class Reg {
     public volatile int status;

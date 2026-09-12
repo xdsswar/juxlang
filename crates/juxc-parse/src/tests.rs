@@ -3301,3 +3301,66 @@ fn bare_block_is_a_statement() {
     let juxc_ast::Stmt::Block(inner) = &body.statements[1] else { panic!("block stmt") };
     assert_eq!(inner.statements.len(), 1);
 }
+
+/// `annotation Name { … }` parses as its own top-level declaration (§A.2).
+///
+/// Before this it was reported as a reserved-but-unimplemented keyword, and
+/// every use site cascaded into "expected expression" on the `{` of an array
+/// default.
+#[test]
+fn annotation_decl_parses_with_params_and_defaults() {
+    let unit = parse_clean(
+        r#"
+        @Target(METHOD)
+        @Retention(RUNTIME)
+        public annotation Cacheable {
+            String key();
+            int ttlSeconds() default 60;
+            String[] tags() default {};
+        }
+        "#,
+    );
+    let juxc_ast::TopLevelDecl::Annotation(decl) = &unit.items[0] else {
+        panic!("expected an annotation declaration, got {:?}", unit.items[0]);
+    };
+    assert_eq!(decl.name.text, "Cacheable");
+    assert_eq!(decl.params.len(), 3);
+
+    // A parameter without `default` is required; the other two are not.
+    assert_eq!(decl.params[0].name.text, "key");
+    assert!(decl.params[0].default.is_none(), "`key` has no default");
+    assert!(decl.params[1].default.is_some(), "`ttlSeconds` defaults to 60");
+    assert!(decl.params[2].default.is_some(), "`tags` defaults to an empty list");
+
+    // The meta-annotations are ordinary annotations on the declaration; only
+    // their meaning is special, and that is tycheck's business.
+    assert_eq!(decl.annotations.len(), 2);
+}
+
+/// An array value is written with braces at the APPLICATION site too. `{`
+/// opens a block everywhere else in the grammar, so annotation value position
+/// needs its own handling on both sides.
+#[test]
+fn annotation_application_accepts_a_value_list() {
+    let unit = parse_clean(
+        r#"
+        public class S {
+            @Cacheable(key = "user", tags = {"a", "b"})
+            public void m() { }
+        }
+        "#,
+    );
+    let juxc_ast::TopLevelDecl::Class(class) = &unit.items[0] else {
+        panic!("expected a class");
+    };
+    let ann = &class.methods[0].annotations[0];
+    assert_eq!(ann.args.len(), 2);
+    let juxc_ast::AnnotationArg::Named { name, value } = &ann.args[1] else {
+        panic!("expected a named argument");
+    };
+    assert_eq!(name.text, "tags");
+    let juxc_ast::Expr::NewArrayLit(lit) = value else {
+        panic!("expected the value list to parse as an array literal");
+    };
+    assert_eq!(lit.elements.len(), 2);
+}

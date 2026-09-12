@@ -386,28 +386,6 @@ impl<'a> Parser<'a> {
         );
     }
 
-    /// Skip a `{ .. }` body, brace-balanced, from wherever the cursor is up to
-    /// and including the matching close. Pairs with a construct reported as
-    /// unimplemented, so nothing inside it raises anything.
-    pub(crate) fn skip_braced_body(&mut self) {
-        while !self.at_eof() && !self.at(&TokenKind::LBrace) {
-            self.advance();
-        }
-        let mut depth = 0usize;
-        while !self.at_eof() {
-            if self.at(&TokenKind::LBrace) {
-                depth += 1;
-            } else if self.at(&TokenKind::RBrace) {
-                depth -= 1;
-                if depth == 0 {
-                    self.advance();
-                    return;
-                }
-            }
-            self.advance();
-        }
-    }
-
     pub(crate) fn expect(&mut self, kind: &TokenKind, expected: &str) -> bool {
         if self.eat(kind) {
             true

@@ -14,6 +14,26 @@ fn annotations() {
     );
 }
 
+/// User-DEFINED annotation types (§A.2): declaring one, applying it with
+/// named arguments, letting defaults fill the rest, and the bare form for an
+/// annotation with no parameters.
+///
+/// The program's output is ordinary: an annotation type emits no code of its
+/// own, so what this proves is that the whole surface compiles and changes
+/// nothing about what the annotated members do.
+#[test]
+fn annotations_user() {
+    common::expect_output(
+        "annotations_user",
+        "annotations-user",
+        &[
+            "user 7",
+            "count=3",
+            "saved ada",
+        ],
+    );
+}
+
 #[test]
 fn bounded_generic() {
     common::expect_output(

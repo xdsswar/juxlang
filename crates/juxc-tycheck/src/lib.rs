@@ -361,6 +361,9 @@ impl TypeChecker {
 
         for item in &unit.items {
             match item {
+                // An annotation type declares no callable, so it can never be
+                // an entry point.
+                TopLevelDecl::Annotation(_) => {}
                 TopLevelDecl::Function(fn_decl) => {
                     if fn_decl.name.text == "main" {
                         if is_entry_shaped(fn_decl) {

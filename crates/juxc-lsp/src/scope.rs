@@ -175,6 +175,9 @@ impl<'a> Walker<'a> {
         for item in items {
             match item {
                 TopLevelDecl::Function(f) => self.visit_fn(f),
+                // An annotation type declares parameters, not code: there is
+                // no body for the cursor to be inside.
+                TopLevelDecl::Annotation(_) => {}
                 TopLevelDecl::Class(c) => self.visit_class(c),
                 TopLevelDecl::Enum(e) => {
                     if self.contains(e.span) {

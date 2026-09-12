@@ -405,20 +405,11 @@ impl<'a> Parser<'a> {
                 .map(TopLevelDecl::ExternBlock);
         }
 
-        // `annotation Name { … }` -- a user-defined annotation type
-        // (JUX-ANNOTATIONS-ADDENDUM). Specified in full, not implemented, and
-        // without this arm the declaration fell through to `parse_fn_decl`,
-        // which reported a missing return type.
+        // `annotation Name { … }` -- a user-defined annotation type (§A.2).
         if self.at_kw(Keyword::Annotation) {
-            let span = self.peek_span();
-            self.reserved_not_implemented(
-                span,
-                "a user-defined annotation (`annotation Name { .. }`)",
-                "specified in JUX-ANNOTATIONS-ADDENDUM",
-            );
-            self.advance(); // `annotation`
-            self.skip_braced_body();
-            return None;
+            return self
+                .parse_annotation_decl(annotations, visibility)
+                .map(TopLevelDecl::Annotation);
         }
         // `const NAME …;` is unambiguously a top-level constant —
         // `const` is never a class modifier in Jux.

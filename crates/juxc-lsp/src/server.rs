@@ -1001,6 +1001,19 @@ fn top_level_document_symbol(item: &juxc_ast::TopLevelDecl, rope: &Rope) -> Opti
         }
     };
     match item {
+        // An annotation type shows in the outline with its parameters, the
+        // way an interface shows its methods -- they are what a reader looks
+        // up when writing `@Name(...)`.
+        T::Annotation(a) => {
+            let kids = a
+                .params
+                .iter()
+                .map(|p| {
+                    sym(&p.name.text, SymbolKind::FIELD, p.span, p.name.span, Vec::new())
+                })
+                .collect();
+            Some(sym(&a.name.text, SymbolKind::INTERFACE, a.span, a.name.span, kids))
+        }
         T::Class(c) => {
             let mut kids = Vec::new();
             for f in &c.fields {

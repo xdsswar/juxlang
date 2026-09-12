@@ -35,6 +35,11 @@ pub enum TopLevelDecl {
     Record(RecordDecl),
     /// A top-level interface declaration. See [`InterfaceDecl`].
     Interface(InterfaceDecl),
+    /// A top-level user-defined annotation type — `annotation Name { … }`
+    /// (§A.2). Declares a name that may then be written `@Name(...)` on a
+    /// declaration, and (at `RUNTIME` retention) is recorded in the
+    /// compile-time registry so a framework can find what carries it.
+    Annotation(AnnotationDecl),
     /// A top-level type alias — `type Name<...>? = TypeRef;`. Per
     /// grammar §A.2.4. Resolved transparently by tycheck (name
     /// looks like an alias on use, expands to its target type) and
@@ -139,6 +144,46 @@ pub enum AnnotationArg {
     Positional(Expr),
     /// `name = expr` — named argument.
     Named { name: Ident, value: Expr },
+}
+
+
+/// A user-defined annotation type: `annotation Name { params }` (§A.2).
+///
+/// The meta-annotations that configure it (`@Target`, `@Retention`) arrive in
+/// [`Self::annotations`] like any others and are interpreted by tycheck, so
+/// the parser stays ignorant of which annotations are meta.
+#[derive(Debug, Clone)]
+pub struct AnnotationDecl {
+    /// Annotations written above the declaration, including `@Target` and
+    /// `@Retention`.
+    pub annotations: Vec<Annotation>,
+    /// Declared visibility.
+    pub visibility: Visibility,
+    /// The annotation's name, as written after the `annotation` keyword.
+    pub name: Ident,
+    /// Its parameters, in declaration order.
+    pub params: Vec<AnnotationParam>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// One parameter of an annotation type: `int ttlSeconds() default 60;`.
+///
+/// The empty parens are Java's method-style spelling and carry no meaning of
+/// their own; they are what distinguishes a parameter from a field to a
+/// reader, and the spec writes them, so they are required.
+#[derive(Debug, Clone)]
+pub struct AnnotationParam {
+    /// The parameter's declared type (§A.5 restricts this to the constant
+    /// kinds: primitives, `String`, an enum, a `Class`, or an array of one).
+    pub ty: TypeRef,
+    /// The parameter's name, used as the keyword at every application site.
+    pub name: Ident,
+    /// `default <expr>`, when written. A parameter WITHOUT a default must be
+    /// given a value every time the annotation is applied.
+    pub default: Option<Expr>,
+    /// Span of the whole parameter declaration.
+    pub span: Span,
 }
 
 /// `type-alias` per grammar §A.2.4:

@@ -5889,6 +5889,7 @@ impl RustEmitter {
         // location for the offending decl.
         let span = match item {
             TopLevelDecl::Function(d) => d.span,
+            TopLevelDecl::Annotation(d) => d.span,
             TopLevelDecl::Class(d) => d.span,
             TopLevelDecl::Enum(d) => d.span,
             TopLevelDecl::Record(d) => d.span,
@@ -5898,11 +5899,14 @@ impl RustEmitter {
             TopLevelDecl::ExternBlock(d) => d.span,
         };
         self.emit_source_marker(span);
-        // Pre-decl Rust attribute emission for built-in
-        // annotations (`@Deprecated`, `@Cfg`). User-defined
-        // annotations are still Phase-2 work.
+        // Pre-decl Rust attribute emission for the BUILT-IN annotations
+        // (`@Deprecated`, `@Cfg`), which map onto Rust attributes. A
+        // user-defined annotation maps onto nothing here: it is data about
+        // the declaration, recorded in the registry rather than emitted as an
+        // attribute on it.
         let anns: &[juxc_ast::Annotation] = match item {
             TopLevelDecl::Function(d) => &d.annotations,
+            TopLevelDecl::Annotation(d) => &d.annotations,
             TopLevelDecl::Class(d) => &d.annotations,
             TopLevelDecl::Enum(d) => &d.annotations,
             TopLevelDecl::Record(d) => &d.annotations,
@@ -5915,6 +5919,10 @@ impl RustEmitter {
         self.emit_annotation_attrs(&anns_owned);
         match item {
             TopLevelDecl::Function(fn_decl) => self.emit_fn_decl(fn_decl),
+            // An annotation TYPE has no runtime representation of its own:
+            // what it means lives at the sites that carry it, which the
+            // registry records. Nothing to emit for the declaration.
+            TopLevelDecl::Annotation(_) => {}
             TopLevelDecl::Class(class_decl) => self.emit_class_decl(class_decl),
             TopLevelDecl::Enum(enum_decl) => self.emit_enum_decl(enum_decl),
             TopLevelDecl::Record(record_decl) => self.emit_record_decl(record_decl),

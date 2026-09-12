@@ -75,6 +75,9 @@ pub struct SymbolTable {
     pub method_selections: HashMap<juxc_source::Span, usize>,
     /// Top-level interfaces indexed by FQN. Same shape as `classes`.
     pub interfaces: HashMap<String, InterfaceSig>,
+    /// User-defined annotation types (§A.2), keyed by FQN. An application
+    /// site (`@Name(...)`) is checked against the entry here.
+    pub annotations: HashMap<String, AnnotationSig>,
     /// Top-level functions (outside any class) indexed by FQN. When a name
     /// is OVERLOADED this holds member 0; the whole group is in
     /// [`Self::function_overloads`].
@@ -1202,6 +1205,126 @@ pub struct VariantSig {
     pub span: Span,
 }
 
+
+/// Signature of a user-defined annotation type (§A.2).
+#[derive(Debug, Clone)]
+pub struct AnnotationSig {
+    /// Declared visibility.
+    pub visibility: Visibility,
+    /// Parameters in declaration order, so diagnostics can list them the way
+    /// the author wrote them.
+    pub params: Vec<AnnotationParamSig>,
+    /// The declaration kinds this annotation may appear on, from `@Target`.
+    /// Empty means "no `@Target` was written", which §A.3 defines as any.
+    pub targets: Vec<String>,
+    /// The retention from `@Retention`; `BINARY` when unwritten (§A.4).
+    /// Only `RUNTIME` annotations reach the compile-time registry.
+    pub retention: String,
+    /// Span of the declaration, for "declared here" notes.
+    pub span: Span,
+}
+
+/// One parameter of an annotation type.
+#[derive(Debug, Clone)]
+pub struct AnnotationParamSig {
+    /// Parameter name -- the keyword used at every application site.
+    pub name: String,
+    /// Declared type.
+    pub ty: TypeRef,
+    /// Whether a `default` was written. A parameter without one must be
+    /// given a value every time the annotation is applied.
+    pub has_default: bool,
+    /// Span of the parameter, for "declared here" notes.
+    pub span: Span,
+}
+
+/// Register an `annotation Name { … }` declaration.
+///
+/// `@Target` and `@Retention` are read here rather than in the parser: they
+/// are ordinary annotations syntactically, and only their MEANING is special.
+fn insert_annotation(
+    table: &mut SymbolTable,
+    decl: &juxc_ast::AnnotationDecl,
+    package: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let fqn = make_fqn(package, &decl.name.text);
+    if table.annotations.contains_key(&fqn) {
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0400_DuplicateDeclaration,
+                format!("annotation `{}` is declared more than once", decl.name.text),
+            )
+            .with_span(decl.name.span),
+        );
+        return;
+    }
+
+    let mut params = Vec::with_capacity(decl.params.len());
+    for p in &decl.params {
+        if params.iter().any(|q: &AnnotationParamSig| q.name == p.name.text) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0400_DuplicateDeclaration,
+                    format!(
+                        "annotation `{}` declares `{}` more than once",
+                        decl.name.text, p.name.text
+                    ),
+                )
+                .with_span(p.name.span),
+            );
+            continue;
+        }
+        params.push(AnnotationParamSig {
+            name: p.name.text.clone(),
+            ty: p.ty.clone(),
+            has_default: p.default.is_some(),
+            span: p.span,
+        });
+    }
+
+    table.annotations.insert(
+        fqn,
+        AnnotationSig {
+            visibility: decl.visibility,
+            params,
+            targets: meta_annotation_values(&decl.annotations, "Target"),
+            retention: meta_annotation_values(&decl.annotations, "Retention")
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| "BINARY".to_string()),
+            span: decl.span,
+        },
+    );
+}
+
+/// The bare identifiers given to a meta-annotation: `@Target(METHOD, TYPE)`
+/// yields `["METHOD", "TYPE"]`.
+///
+/// The values are written as bare names rather than strings, so they arrive
+/// as path expressions and are read back as their text.
+fn meta_annotation_values(annotations: &[juxc_ast::Annotation], want: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in annotations {
+        let Some(last) = a.name.segments.last() else { continue };
+        if last.text != want {
+            continue;
+        }
+        for arg in &a.args {
+            let expr = match arg {
+                juxc_ast::AnnotationArg::Positional(e) => e,
+                juxc_ast::AnnotationArg::Named { value, .. } => value,
+            };
+            if let juxc_ast::Expr::Path(qn) = expr {
+                if let Some(seg) = qn.segments.last() {
+                    out.push(seg.text.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Signature of a top-level interface declaration.
 #[derive(Debug, Clone)]
 pub struct InterfaceSig {
@@ -2075,6 +2198,7 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
 fn top_level_name(item: &TopLevelDecl) -> Option<&str> {
     match item {
         TopLevelDecl::Class(d) => Some(&d.name.text),
+        TopLevelDecl::Annotation(d) => Some(&d.name.text),
         TopLevelDecl::Record(d) => Some(&d.name.text),
         TopLevelDecl::Enum(d) => Some(&d.name.text),
         TopLevelDecl::Interface(d) => Some(&d.name.text),
@@ -2125,6 +2249,9 @@ fn insert_top_level(
         }
         TopLevelDecl::TypeAlias(alias) => {
             insert_type_alias(table, alias, package, unit_idx, diagnostics);
+        }
+        TopLevelDecl::Annotation(decl) => {
+            insert_annotation(table, decl, package, diagnostics);
         }
         TopLevelDecl::Const(c) => {
             insert_const(table, c, package, diagnostics);

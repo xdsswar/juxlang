@@ -1,0 +1,59 @@
+// User-defined annotation types (JUX-ANNOTATIONS-ADDENDUM §A.2).
+//
+// An annotation is a named bundle of compile-time constants attached to a
+// declaration. Declaring one costs nothing at runtime: the type itself emits
+// no code, and what it means lives at the sites that carry it.
+//
+// This file is the language surface -- declaring, applying, defaulting.
+// Reading them back (the registry a framework iterates at startup) is the
+// next piece; see §A.8.
+
+/// Which declaration kinds may carry it, and how long it survives.
+@Target(METHOD)
+@Retention(RUNTIME)
+public annotation Cacheable {
+    // A parameter WITHOUT a default must be given a value every time.
+    String key();
+    // One WITH a default may be omitted.
+    int ttlSeconds() default 60;
+    String[] tags() default {};
+}
+
+@Target(TYPE)
+@Retention(RUNTIME)
+public annotation Service {
+    String name() default "";
+}
+
+/// An annotation with no parameters at all needs no parens when applied.
+@Retention(RUNTIME)
+public annotation Transactional { }
+
+@Service(name = "users")
+public class UserService {
+
+    // Every parameter supplied, including the array.
+    @Cacheable(key = "user", ttlSeconds = 300, tags = {"user", "profile"})
+    public String loadUser(int id) {
+        return "user " + id;
+    }
+
+    // Only the required one: the rest fall back to their defaults.
+    @Cacheable(key = "count")
+    public int countUsers() {
+        return 3;
+    }
+
+    // No parameters, so no parens.
+    @Transactional
+    public String save(String who) {
+        return "saved " + who;
+    }
+}
+
+public void main() {
+    var svc = new UserService();
+    print(svc.loadUser(7));
+    print("count=" + svc.countUsers());
+    print(svc.save("ada"));
+}
