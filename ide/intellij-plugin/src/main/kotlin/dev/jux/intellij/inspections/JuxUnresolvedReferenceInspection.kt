@@ -76,7 +76,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         // constructs at once — see class doc) plus every declared symbol name in
         // the project. A name in either set is never "unknown".
         val definedNames = collectDefinedNames(file)
-        val projectNames = projectDeclaredNames(file.project)
+        val isProjectDeclared = JuxTypeIndex.projectNamePredicate(file.project)
 
         val problems = ArrayList<ProblemDescriptor>()
         PsiTreeUtil.processElements(file) { e ->
@@ -88,8 +88,11 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
                     val name = ref.value
                     val target = e.findElementAt(ref.rangeInElement.startOffset)
                     val flag =
-                        if (isType) shouldFlagType(e, name, definedNames, importedNames, projectNames)
-                        else shouldFlagValue(e, name, definedNames, importedNames, projectNames)
+                        if (isType) {
+                            shouldFlagType(e, name, definedNames, importedNames, isProjectDeclared)
+                        } else {
+                            shouldFlagValue(e, name, definedNames, importedNames, isProjectDeclared)
+                        }
                     if (target != null && flag) {
                         val noun = if (isType) "type" else "symbol"
                         problems.add(
@@ -119,7 +122,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         name: String,
         definedNames: Set<String>,
         importedNames: Set<String>,
-        projectNames: Set<String>,
+        isProjectDeclared: (String) -> Boolean,
     ): Boolean {
         if (name.isEmpty() || name == "_") return false
         if (!name[0].isLowerCase()) return false
@@ -133,7 +136,8 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         if (name == JuxObservableProps.SETTER_VALUE &&
             JuxObservableProps.isInSetterBody(element)
         ) return false
-        if (name in definedNames || name in importedNames || name in projectNames) return false
+        if (name in definedNames || name in importedNames) return false
+        if (isProjectDeclared(name)) return false
         return !isBlind(element)
     }
 
@@ -153,14 +157,15 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         name: String,
         definedNames: Set<String>,
         importedNames: Set<String>,
-        projectNames: Set<String>,
+        isProjectDeclared: (String) -> Boolean,
     ): Boolean {
         if (name.isEmpty() || name == "_") return false
         if (element.text.substringBefore('<').contains('.')) return false // qualified → LSP
         if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
             name == "observer" || name in BUILTIN_NAMES
         ) return false
-        if (name in definedNames || name in importedNames || name in projectNames) return false
+        if (name in definedNames || name in importedNames) return false
+        if (isProjectDeclared(name)) return false
         return !isBlind(element)
     }
 
@@ -261,21 +266,6 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
             .minByOrNull { it.second }
             ?.first
     }
-
-    /**
-     * Project-wide declared symbol names (types/methods/fields/enum
-     * constants).
-     *
-     * The union is rebuilt whenever anything in the project changes, which is
-     * every keystroke -- but each FILE's contribution is cached against that
-     * file, so rebuilding costs one map lookup per file rather than one full
-     * PSI walk per file. It used to cost the walk, on every character typed.
-     */
-    private fun projectDeclaredNames(project: Project): Set<String> =
-        CachedValuesManager.getManager(project).getCachedValue(project) {
-            val names = JuxTypeIndex.declaredNames(project, GlobalSearchScope.allScope(project))
-            CachedValueProvider.Result.create(names, PsiModificationTracker.MODIFICATION_COUNT)
-        }
 
     /** Classic edit distance, capped implicitly by the ≤ 2 filter at the call site. */
     private fun levenshtein(a: String, b: String): Int {

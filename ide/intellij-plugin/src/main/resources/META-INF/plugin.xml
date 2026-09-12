@@ -152,6 +152,13 @@
   <depends optional="true" config-file="spellchecker.xml">com.intellij.modules.spellchecker</depends>
 
   <extensions defaultExtensionNs="com.intellij">
+
+    <!-- A persistent, incremental map of every name a .jux file declares.
+         The unresolved-reference inspection asks "is this name declared
+         anywhere" for each identifier on every daemon pass; answering from
+         the index keeps PSI off that path entirely, and the platform
+         re-indexes only the files that actually changed. -->
+    <fileBasedIndex implementation="dev.jux.intellij.resolve.JuxDeclarationIndex"/>
     <!-- `extensions="jux"` matches user sources; `patterns="*.jux.d"` matches
          generated foreign declaration stubs (`.jux-stubs/**/<crate>.jux.d`),
          whose last extension is `d`. Indexing the stubs as Jux files lets
