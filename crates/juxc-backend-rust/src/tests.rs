@@ -5629,3 +5629,37 @@ fn indexed_assign_keeps_the_interface_upcast_through_a_hoist() {
         "the upcast must survive: {rust}",
     );
 }
+
+/// The primitive method names tycheck accepts are exactly the ones this
+/// backend can lower.
+///
+/// The two used to be one table, in the backend, and tycheck checked nothing:
+/// `x.totallyNotAMethod()` type-checked and failed in rustc. Moving the names
+/// to `juxc_tycheck` gave them one home; this keeps it that way. A name the
+/// checker accepts and the backend cannot lower is a rustc leak; a name the
+/// backend lowers and the checker rejects is a valid program refused.
+#[test]
+fn primitive_method_tables_agree() {
+    let src = include_str!("exprs/call.rs");
+    let start = src
+        .find("let is_float = matches!(prim, P::Float")
+        .expect("the primitive-intrinsic dispatch is still here");
+    let end = src[start..]
+        .find("
+    fn ")
+        .map(|i| start + i)
+        .expect("its enclosing function ends");
+    let body = &src[start..end];
+
+    for name in juxc_tycheck::check::BUILTIN_CHAR_METHODS
+        .iter()
+        .chain(juxc_tycheck::check::BUILTIN_FLOAT_METHODS)
+        .chain(juxc_tycheck::check::BUILTIN_INT_METHODS)
+        .chain(juxc_tycheck::check::BUILTIN_SIGNED_INT_METHODS)
+    {
+        assert!(
+            body.contains(&format!("\"{name}\"")),
+            "tycheck accepts `{name}` on a primitive, but the backend has no              lowering for it -- the call would reach rustc",
+        );
+    }
+}

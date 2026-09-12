@@ -145,6 +145,92 @@ pub const BUILTINS: &[&str] = &[
 /// | `.insert(i,x)`| `.insert(i, x)`                       |
 /// | `.join(sep)`  | `.join(sep)`                          |
 /// | `.map(f)` / `.filter(f)` / `.forEach(f)` | `iter().map/...` |
+/// Methods Jux gives a `char` receiver (JUX-LANG-V1 5.2). The backend lowers
+/// each to a Rust `char` call; `juxc_backend_rust`'s
+/// `primitive_method_tables_agree` test pins the two together.
+pub const BUILTIN_CHAR_METHODS: &[&str] = &[
+    "codePoint",
+    "isAlphabetic",
+    "isDigit",
+    "isLowercase",
+    "isUppercase",
+    "isWhitespace",
+    "toLowercase",
+    "toUppercase",
+];
+
+/// Methods Jux gives a floating-point receiver.
+pub const BUILTIN_FLOAT_METHODS: &[&str] = &[
+    "abs",
+    "bits",
+    "bitsEqual",
+    "ceil",
+    "floor",
+    "isFinite",
+    "isInfinite",
+    "isNaN",
+    "round",
+    "sqrt",
+    "toFixed",
+    "totalOrder",
+];
+
+/// Methods Jux gives an integer receiver, signed or unsigned.
+pub const BUILTIN_INT_METHODS: &[&str] = &[
+    "checkedAdd",
+    "checkedDiv",
+    "checkedMul",
+    "checkedSub",
+    "countOnes",
+    "leadingZeros",
+    "rotateLeft",
+    "rotateRight",
+    "saturatingToInt",
+    "saturatingAdd",
+    "saturatingMul",
+    "saturatingSub",
+    "toBinary",
+    "toHex",
+    "toOctal",
+    "trailingZeros",
+    "toInt",
+    "wrappingAdd",
+    "wrappingMul",
+    "wrappingSub",
+];
+
+/// Methods an integer receiver has only when it is SIGNED. Rust has no `abs`
+/// on an unsigned integer, and neither does Jux: there is nothing for it to do.
+pub const BUILTIN_SIGNED_INT_METHODS: &[&str] = &["abs", "saturatingAbs"];
+
+/// Every method name legal on `prim`, or `None` when the primitive carries no
+/// method surface at all (`bool`, `void`).
+pub fn builtin_primitive_methods(prim: Primitive) -> Option<Vec<&'static str>> {
+    use Primitive as P;
+    match prim {
+        P::Char => Some(BUILTIN_CHAR_METHODS.to_vec()),
+        P::Float | P::Double | P::F32 | P::F64 => Some(BUILTIN_FLOAT_METHODS.to_vec()),
+        P::Bool => None,
+        other => {
+            let mut names = BUILTIN_INT_METHODS.to_vec();
+            if is_signed_primitive(other) {
+                names.extend_from_slice(BUILTIN_SIGNED_INT_METHODS);
+            }
+            Some(names)
+        }
+    }
+}
+
+/// Is this integer primitive signed? Mirrors the backend's own test, which
+/// reads the leading `u` off the lowered Rust type name.
+pub fn is_signed_primitive(prim: Primitive) -> bool {
+    use Primitive as P;
+    !matches!(
+        prim,
+        P::Uint | P::Ubyte | P::Ushort | P::Ulong | P::U8 | P::U16 | P::U32 | P::U64
+    )
+}
+
 const BUILTIN_ARRAY_METHODS: &[&str] = &[
     "push", "pop", "clone", "len", "length", // List<T> spec methods.
     "add", "get", "set", "contains", "indexOf", "isEmpty", "size", "first", "last", "reverse",
@@ -6377,6 +6463,31 @@ impl<'a> Checker<'a> {
                     Ty::Nullable(inner) => *inner,
                     other => other,
                 };
+                // **A PRIMITIVE receiver.** `int`, `double` and `char` each
+                // carry a method surface, and nothing checked a name against
+                // it: `x.totallyNotAMethod()` type-checked and then failed in
+                // rustc. The names come from the same table the backend lowers
+                // from, so the two cannot disagree about what exists.
+                if let Ty::Primitive(prim) = &receiver_ty {
+                    if let Some(names) = builtin_primitive_methods(*prim) {
+                        if !names.contains(&method_name) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    format!(
+                                        "no method `{method_name}` on `{}`",
+                                        receiver_ty
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                        }
+                    }
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
+                    return;
+                }
                 // Built-in receivers: short-circuit.
                 if let Ty::Array { .. } = &receiver_ty {
                     if BUILTIN_ARRAY_METHODS.contains(&method_name) {
