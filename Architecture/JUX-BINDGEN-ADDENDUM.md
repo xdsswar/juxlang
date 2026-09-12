@@ -579,6 +579,10 @@ So the definition path is used only when every module along it is public, and ot
 
 Which traits is decided DURING emission, from each call's receiver type, and spliced into the `use` block afterwards. Deciding it beforehand means guessing from the source text, and a guess is not free here: `use std::slice::Join as _;` is `E0658` on stable, so a program that merely wrote `.join(",")` -- reaching the stable inherent method -- stopped compiling.
 
+**A bare name in a stub means that stub's package.** A member signature is read in the DECLARING unit's context, exactly as one written by hand would be: the `File` in `rust.std.File.open`'s return type is `rust.std.File`. Resolving it without that context fell through to a scan for any type whose last segment matches, which picked `jux.std.io.File` -- so `var f = File.open(p)` type-checked as the wrong `File`, every method call on it failed, and the `Result` it returns went unopened because the method was no longer a foreign one.
+
+The same rule applies at the CALL site: which class `File.open(...)` names is decided by the unit's imports and package, never by the spelling. An explicit `import` wins, and an alias (`import jux.std.io.File as Files;`) names the same class it aliases -- including for the compiler's own intrinsics, which used to match the written word.
+
 ### G.9.3. No Borrow-Check of Foreign Bodies
 
 Because stubs have no bodies, the borrow checker never analyzes foreign code — it trusts the signature. The `&` / `&mut` disposition that `bindgen` dropped (§G.3.4) is re-attached at the **call site** in the user's code: a call to a `&mut self` method requires exclusive access to the receiver (§6.3), inferred normally. The foreign implementation is assumed to honor its Rust-checked contract. This is sound because the foreign code is itself borrow-checked by `rustc` at the Phase-1 boundary (§C.9.1).

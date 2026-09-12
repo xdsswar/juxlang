@@ -199,6 +199,122 @@ pub(crate) fn synth_iface_type_ref(bare: &str, span: Span) -> TypeRef {
 /// nested blocks — `if`/`else`/`while` bodies — but stops at function
 /// boundaries (a nested function decl would have its own pass, and we
 /// don't have nested functions yet anyway).
+/// Call every [`CallExpr`] in `block`, recursively.
+///
+/// Structural only: it knows where calls can appear, not what they mean. A
+/// caller that needs to resolve a callee does that in its own closure, which
+/// is what keeps the symbol table out of the syntactic analyses below.
+pub(crate) fn for_each_call(block: &Block, f: &mut dyn FnMut(&juxc_ast::CallExpr)) {
+    fn expr(e: &Expr, f: &mut dyn FnMut(&juxc_ast::CallExpr)) {
+        match e {
+            Expr::Call(c) => {
+                f(c);
+                expr(&c.callee, f);
+                for a in &c.args {
+                    expr(a, f);
+                }
+            }
+            Expr::Field(fe) => expr(&fe.object, f),
+            Expr::Index(i) => {
+                expr(&i.array, f);
+                expr(&i.index, f);
+            }
+            Expr::Binary(b) => {
+                expr(&b.left, f);
+                expr(&b.right, f);
+            }
+            Expr::Unary(u) => expr(&u.operand, f),
+            Expr::Cast(c) => expr(&c.value, f),
+            Expr::Ternary(t) => {
+                expr(&t.condition, f);
+                expr(&t.then_branch, f);
+                expr(&t.else_branch, f);
+            }
+            Expr::Elvis(el) => {
+                expr(&el.value, f);
+                expr(&el.fallback, f);
+            }
+            Expr::Await(inner, _) => expr(inner, f),
+            Expr::InterpString(sx) => {
+                for seg in &sx.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        expr(inner, f);
+                    }
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    expr(a, f);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    expr(el, f);
+                }
+            }
+            Expr::Lambda(l) => {
+                if let juxc_ast::LambdaBody::Expr(inner) = &l.body {
+                    expr(inner, f);
+                }
+                if let juxc_ast::LambdaBody::Block(b) = &l.body {
+                    for_each_call(b, f);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn stmt(st: &Stmt, f: &mut dyn FnMut(&juxc_ast::CallExpr)) {
+        match st {
+            Stmt::Expr(e) | Stmt::Throw(e, _) => expr(e, f),
+            Stmt::Return(Some(e), _) => expr(e, f),
+            Stmt::Assign(a) => {
+                expr(&a.target, f);
+                expr(&a.value, f);
+            }
+            Stmt::VarDecl(v) => {
+                if let Some(init) = &v.init {
+                    expr(init, f);
+                }
+            }
+            Stmt::If(i) => {
+                expr(&i.condition, f);
+                for_each_call(&i.then_block, f);
+                match i.else_branch.as_deref() {
+                    Some(ElseBranch::Block(b)) => for_each_call(b, f),
+                    Some(ElseBranch::If(inner)) => stmt(&Stmt::If(inner.clone()), f),
+                    None => {}
+                }
+            }
+            Stmt::While(w) => {
+                expr(&w.condition, f);
+                for_each_call(&w.body, f);
+            }
+            Stmt::DoWhile(d) => {
+                for_each_call(&d.body, f);
+                expr(&d.condition, f);
+            }
+            Stmt::ForEach(fe) => {
+                expr(&fe.iter, f);
+                for_each_call(&fe.body, f);
+            }
+            Stmt::Block(b) | Stmt::Unsafe(b) => for_each_call(b, f),
+            Stmt::Try(t) => {
+                for_each_call(&t.body, f);
+                for c in &t.catches {
+                    for_each_call(&c.body, f);
+                }
+                if let Some(fin) = &t.finally {
+                    for_each_call(fin, f);
+                }
+            }
+            _ => {}
+        }
+    }
+    for st in &block.statements {
+        stmt(st, f);
+    }
+}
+
 pub(crate) fn collect_mutated_names(
     block: &Block,
     out: &mut HashSet<String>,
@@ -2520,6 +2636,60 @@ impl crate::RustEmitter {
         arg_idx: usize,
     ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
         self.foreign_callee_method(callee)?.params.get(arg_idx)
+    }
+
+    /// Does this path name a top-level `String` CONSTANT?
+    ///
+    /// Such a constant lowers to a `&'static str`, because a Rust `const`
+    /// cannot allocate, so every use has to own it.
+    pub(crate) fn path_is_string_const(&self, qn: &juxc_ast::QualifiedName) -> bool {
+        let Some(last) = qn.segments.last() else {
+            return false;
+        };
+        let sig = self
+            .symbols
+            .consts
+            .get(&qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .or_else(|| {
+                self.symbols
+                    .consts
+                    .iter()
+                    .find(|(k, _)| k.rsplit('.').next() == Some(last.text.as_str()))
+                    .map(|(_, v)| v)
+            });
+        sig.is_some_and(|c| {
+            c.ty.array_shape.is_none()
+                && c.ty.generic_args.is_empty()
+                && c.ty.name.segments.last().is_some_and(|s| s.text == "String")
+        })
+    }
+
+    /// Locals in `block` that are handed to a `&mut` parameter slot, and so
+    /// have to be declared `let mut`.
+    ///
+    /// `collect_mutated_names` cannot answer this: it is a syntactic walk, and
+    /// whether an argument slot borrows exclusively is a fact about the
+    /// CALLEE's signature. `reader.read_line(line)` lowers to
+    /// `read_line(&mut line)` and looks like an ordinary read from where that
+    /// analysis stands.
+    pub(crate) fn collect_mut_slot_locals(
+        &self,
+        block: &juxc_ast::Block,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        crate::analysis::for_each_call(block, &mut |call| {
+            for (i, arg) in call.args.iter().enumerate() {
+                let juxc_ast::Expr::Path(qn) = arg else {
+                    continue;
+                };
+                if qn.segments.len() != 1 {
+                    continue;
+                }
+                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut " {
+                    out.insert(qn.segments[0].text.clone());
+                }
+            }
+        });
     }
 
     /// The fully-qualified name of the FOREIGN class a method call's receiver

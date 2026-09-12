@@ -1,0 +1,63 @@
+// Counting words in a file, the ordinary way.
+//
+// Nothing here is a compiler intrinsic. `File`, `BufReader` and `HashMap` are
+// Rust's own, reached through `rust.std`, and `read_line` is a `std::io::BufRead`
+// method -- a TRAIT method, which is exactly what the binder had to learn to
+// surface (JUX-BINDGEN-ADDENDUM G.6.4). The buffer it fills is a `&mut String`
+// parameter, so the call site lends the local rather than a copy of it.
+//
+// The program writes its own input first, so it runs anywhere with no setup.
+
+import rust.std.File;
+import rust.std.BufReader;
+import rust.std.HashMap;
+
+// The Jux stdlib's `File` is a different type from Rust's, and this file
+// imported Rust's. Its two convenience statics are named in full rather than
+// shadowing that import.
+import jux.std.io.File as Files;
+
+/** Where the sample text goes. */
+public const String PATH = "word_count_sample.txt";
+
+/** The text to count. Written out, then read back through the file. */
+public const String SAMPLE =
+    "the quick brown fox\n"
+  + "jumps over the lazy dog\n"
+  + "the dog barks\n";
+
+/** Count every whitespace-separated word in the file at `path`. */
+public HashMap<String, int> countWords(String path) {
+    var counts = new HashMap<String, int>();
+    var reader = new BufReader(File.open(path));
+
+    // `read_line` APPENDS, and returns the byte count -- zero at end of file.
+    var line = "";
+    while (reader.read_line(line) > 0) {
+        for (var word : line.split(" ")) {
+            var w = word.trim();
+            if (w.len() > 0) {
+                // `get` hands back `int?`; `??` supplies the first-sighting 0.
+                counts.insert(w, (counts.get(w) ?? 0) + 1);
+            }
+        }
+        line = "";
+    }
+    return counts;
+}
+
+public void main() {
+    Files.writeText(PATH, SAMPLE);
+
+    var counts = countWords(PATH);
+    print("distinct words: " + counts.len());
+
+    // Report a few by name, in a fixed order: a HashMap has none of its own,
+    // and an example that prints in hash order is an example that fails at
+    // random.
+    for (var word : new String[]{"the", "dog", "fox", "cat"}) {
+        print(word + " = " + (counts.get(word) ?? 0));
+    }
+
+    Files.delete(PATH);
+}

@@ -4776,6 +4776,7 @@ impl RustEmitter {
         let mut muts = std::collections::HashSet::new();
         for block in &class_decl.static_init_blocks {
             collect_mutated_names(block, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(block, &mut muts);
         }
         self.mutated_in_fn = muts;
         for block in &class_decl.static_init_blocks {
@@ -5007,6 +5008,7 @@ impl RustEmitter {
         let mut muts = std::collections::HashSet::new();
         for block in &class_decl.drop_blocks {
             collect_mutated_names(block, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(block, &mut muts);
         }
         let prev_muts = std::mem::replace(&mut self.mutated_in_fn, muts);
         for block in &class_decl.drop_blocks {
@@ -5150,6 +5152,7 @@ impl RustEmitter {
         if let Some(body) = &method.body {
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(body, &mut muts);
             self.mutated_in_fn = muts;
             self.nullable_locals.clear();
             for p in &method.params {
@@ -5318,6 +5321,7 @@ impl RustEmitter {
         let mut param_muts = HashSet::new();
         if let Some(b) = &method.body {
             collect_mutated_names(b, &mut param_muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(b, &mut param_muts);
         }
         // C6: foreign-collection params the body mutates lower to `&mut T`.
         // Keyed by the enclosing (bare) class — the SAME key every call
@@ -5404,6 +5408,7 @@ impl RustEmitter {
             }
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(body, &mut muts);
             self.mutated_in_fn = muts;
             // Seed nullable-locals from this method's params so
             // value-consuming sites in the body know which paths

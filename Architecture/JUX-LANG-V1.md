@@ -564,6 +564,8 @@ public <int N> byte[N] copy(byte[N] src) {
 
 A `new T[n]` expression whose value is not going into a slot declared `T[N]` produces the runtime-sized form. It is what Java's array expression means, and it is the only reading that makes the sentence above true: a value that is only ever a fixed array cannot be handed to a `T[]` parameter without copying it, and copying it would break the reference semantics of 6.5.2. The stack form is what an explicit `T[N]` slot asks for, and it stays exactly that.
 
+A `String` constant is a constant STRING, usable anywhere a `String` is: the declaration lowers to a string slice, because allocation is not a constant operation, and each use owns its own copy the way a string literal already does.
+
 **Multi-dimensional arrays.** An array type may stack any number of dimension suffixes. Following Java, the type reads left-to-right as nesting from the outside in: `int[][]` is "an array of (arrays of `int`)", and the leftmost `[…]` is the OUTERMOST dimension. Dimensions may be dynamic (`[]`), fixed (`[N]`), or a mix:
 
 ```java

@@ -6366,6 +6366,17 @@ impl<'a> Checker<'a> {
                 // Walk the receiver sub-expression first.
                 self.check_expr(&field.object);
                 let receiver_ty = infer_expr(&field.object, &self.env, self.symbols);
+                // A NULLABLE receiver is checked against the type it wraps.
+                // `?.` and `!!` both reach the same members, so the member
+                // question is the same question. Without this the arms below
+                // all miss and the call falls through unchecked: every method
+                // name passed on a `T?`, and `m.get(k).orElse(0)` type-checked
+                // and then failed in rustc, naming a Rust method the
+                // programmer never wrote.
+                let receiver_ty = match receiver_ty {
+                    Ty::Nullable(inner) => *inner,
+                    other => other,
+                };
                 // Built-in receivers: short-circuit.
                 if let Ty::Array { .. } = &receiver_ty {
                     if BUILTIN_ARRAY_METHODS.contains(&method_name) {

@@ -668,6 +668,16 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
     // `HttpServer`, lifted to `HttpServer__Config`) resolves through
     // the §M.9 enclosing-class fallback.
     env.current_class = Some(declaring_class.to_string());
+    // ...and so is the declaring class's PACKAGE. A bare name written in a
+    // member signature means that package's type, exactly as it would inside
+    // any other declaration: the `File` in `rust.std.File.open`'s return type
+    // is `rust.std.File`. Without it the lookup fell through to the
+    // match-any-last-segment scan and could pick another package's same-named
+    // type -- `jux.std.io.File`, so `var f = File.open(p)` type-checked as the
+    // wrong `File` and every method call on it failed.
+    if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
+        env.current_package = pkg.split('.').map(str::to_string).collect();
+    }
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);
@@ -699,6 +709,12 @@ pub fn lower_member_type_in_method(
     symbols: &SymbolTable,
 ) -> Ty {
     let mut env = TypeEnv::new();
+    // The declaring class's package, for the same reason as
+    // [`lower_member_type`]: a bare name in a member signature means that
+    // package's type.
+    if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
+        env.current_package = pkg.split('.').map(str::to_string).collect();
+    }
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);

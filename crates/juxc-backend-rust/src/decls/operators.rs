@@ -97,6 +97,7 @@ impl RustEmitter {
             self.this_alias = Some("self".to_string());
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(body, &mut muts);
             self.mutated_in_fn = muts;
             // Operators have declared return types (`bool` for `==`,
             // `String` for `string`, etc.). Tracking it here lets a

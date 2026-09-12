@@ -501,10 +501,12 @@ impl RustEmitter {
         self.this_alias = Some("__self".to_string());
         let mut muts = HashSet::new();
         collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
+        self.collect_mut_slot_locals(&ctor.body, &mut muts);
         // Init blocks (§M.1) run in the same `fn new` scope, so their local
         // reassignments must be in the `let mut` set too.
         for init in &class_decl.init_blocks {
             collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(init, &mut muts);
         }
         self.mutated_in_fn = muts;
         // Seed nullable-locals from this constructor's params so
@@ -1214,6 +1216,7 @@ impl RustEmitter {
             span: class_decl.span,
         };
         collect_mutated_names(&scratch, &mut muts, &self.user_mut_methods);
+        self.collect_mut_slot_locals(&scratch, &mut muts);
         let prev_muts = std::mem::replace(&mut self.mutated_in_fn, muts);
         for stmt in rest {
             self.emit_source_marker(stmt_span(stmt));
@@ -1422,8 +1425,10 @@ impl RustEmitter {
             self.this_alias = Some("__self".to_string());
             let mut muts = HashSet::new();
             collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(&ctor.body, &mut muts);
             for init in &class_decl.init_blocks {
                 collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+                self.collect_mut_slot_locals(init, &mut muts);
             }
             self.mutated_in_fn = muts;
             self.nullable_locals.clear();
@@ -1741,6 +1746,7 @@ impl RustEmitter {
             let mut muts = HashSet::new();
             for init in &class_decl.init_blocks {
                 collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+                self.collect_mut_slot_locals(init, &mut muts);
             }
             self.mutated_in_fn = muts;
             for init in &class_decl.init_blocks {
@@ -1862,6 +1868,7 @@ impl RustEmitter {
             let mut muts = HashSet::new();
             for init in &class_decl.init_blocks {
                 collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+                self.collect_mut_slot_locals(init, &mut muts);
             }
             self.mutated_in_fn = muts;
             for init in &class_decl.init_blocks {

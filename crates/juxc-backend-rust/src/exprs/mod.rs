@@ -1160,6 +1160,24 @@ impl RustEmitter {
                         }
                     }
                 }
+                // **A `String` CONSTANT is a `&'static str`.** A Rust `const`
+                // cannot hold a `String` (allocation is not const), so the
+                // declaration lowers to a string slice and the USE owns it --
+                // exactly what a string literal already does. Without this a
+                // `const String` could not be passed to a `String` parameter or
+                // stored in a `String` local, which is most of what a constant
+                // is for.
+                if !self.emitting_const_context && self.path_is_string_const(qn) {
+                    self.w.push_str(
+                        &qn.segments
+                            .iter()
+                            .map(|i| to_rust_ident(&i.text))
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    );
+                    self.w.push_str(".to_string()");
+                    return;
+                }
                 // Dot-separated Jux paths become `::`-separated Rust paths.
                 // Module mapping is a TODO — for milestone 1 we emit
                 // identical structure on faith.

@@ -390,6 +390,16 @@ impl RustEmitter {
             //    type to its class, then look up the method.
             Expr::Field(f) => {
                 let method = f.field.text.as_str();
+                // The receiver resolved the way every other foreign lookup
+                // resolves it: through the unit's imports and package, not a
+                // match-any-last-segment scan. `import rust.std.File;` has to
+                // beat `jux.std.io.File`, or `File.open(p)` hands back a
+                // `Result` nobody opens.
+                if let Some(fqn) = self.foreign_receiver_class_fqn(&call.callee) {
+                    if let Some(m) = self.external_type_method(&fqn, method) {
+                        return m.is_foreign_result;
+                    }
+                }
                 // Static: receiver is a bare/qualified class name.
                 if let Expr::Path(qn) = &*f.object {
                     if let Some(last) = qn.segments.last() {
@@ -1298,7 +1308,12 @@ impl RustEmitter {
         // wiring yet).
         if let Expr::Field(f) = &*call.callee {
             if let Expr::Path(qn) = &*f.object {
-                if qn.segments.len() == 1 && qn.segments[0].text == "File" {
+                // Resolved, not spelled: `import jux.std.io.File as Files;`
+                // names the same class, and `import rust.std.File;` names a
+                // DIFFERENT one. Matching the written word got both wrong.
+                if self.path_resolves_to_class_in_emit(qn).as_deref()
+                    == Some("jux.std.io.File")
+                {
                     let method = f.field.text.as_str();
                     match method {
                         "readText" => {
@@ -2410,6 +2425,21 @@ impl RustEmitter {
     /// emitted here — it stays at the call slot (a hoisted temp is
     /// borrowed at the call, `x.m(&__jux_arg0)`).
     fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        // **A `&mut` slot takes the PLACE, never a copy.** The value-position
+        // auto-clone exists so an argument is not moved out of its binding;
+        // here it defeats the whole call. `reader.read_line(line)` lowered to
+        // `read_line(&mut line.clone())`, which read the line correctly into a
+        // temporary and dropped it -- the count came back right and the string
+        // came back empty. Emitting as a method RECEIVER is how the rest of
+        // this function already suppresses that clone.
+        if self.callee_param_borrow_prefix(&call.callee, i) == "&mut "
+            && self.foreign_arg_handle_lend(&call.callee, i, arg).is_none()
+        {
+            self.emitting_method_receiver = true;
+            self.emit_expr(arg);
+            self.emitting_method_receiver = false;
+            return;
+        }
         // `out <place>` argument (§M.4): pass `&mut <place>` — no value
         // coercion / share-clone. `emit_expr` handles the `Expr::Out` shape.
         if matches!(arg, Expr::Out(..)) {

@@ -407,6 +407,7 @@ impl RustEmitter {
         let mut param_muts = HashSet::new();
         if let Some(body) = &fn_decl.body {
             collect_mutated_names(body, &mut param_muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(body, &mut param_muts);
         }
         // C6: foreign-collection params that the body mutates lower to
         // `&mut T` (Java container-passing). Read the index set from the
@@ -555,6 +556,7 @@ impl RustEmitter {
             // `let` vs `let mut` choice in emit_var_decl.
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+            self.collect_mut_slot_locals(body, &mut muts);
             self.mutated_in_fn = muts;
             // Reset and re-seed the nullable-locals set for this fn:
             // any param whose declared type is `T?` (post-spec
