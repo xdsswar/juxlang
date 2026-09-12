@@ -4,6 +4,7 @@ import com.intellij.psi.PsiErrorElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.ParsingTestCase
 import dev.jux.intellij.psi.JuxParserDefinition
+import dev.jux.intellij.JuxCorpus
 import java.io.File
 
 /**
@@ -34,13 +35,14 @@ class JuxSyntaxSweepTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         val failures = StringBuilder()
         var count = 0
         for (root in roots) {
-            val files = root.listFiles { _, name -> name.endsWith(".jux") } ?: continue
-            for (file in files.sortedBy { it.name }) {
+            val files = JuxCorpus.entries(root)
+            if (files.isEmpty()) continue
+            for ((name, file) in files) {
                 count++
-                val psi = createPsiFile(file.name, file.readText())
+                val psi = createPsiFile(name, file.readText())
                 val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
                 if (errors.isNotEmpty()) {
-                    failures.appendLine("• ${root.name}/${file.name}:")
+                    failures.appendLine("• ${root.name}/${file.relativeTo(root)}:")
                     errors.take(5).forEach {
                         failures.appendLine("    ${it.errorDescription} @ ${it.textOffset}")
                     }

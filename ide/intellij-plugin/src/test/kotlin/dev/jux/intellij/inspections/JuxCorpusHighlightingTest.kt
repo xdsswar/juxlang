@@ -2,10 +2,12 @@ package dev.jux.intellij.inspections
 
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import dev.jux.intellij.JuxCorpus
 import java.io.File
 
 /**
- * Every `.jux` file in the repository's `examples/` corpus, run through the
+ * Every `.jux` file in the repository's `examples/` tree -- the 272 flat
+ * examples AND the 67 files inside the multi-file projects -- run through the
  * annotator and every inspection the plugin ships, asserting **no
  * error-severity highlight**.
  *
@@ -60,16 +62,29 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
 
         val failures = StringBuilder()
         var count = 0
-        val files = examples.listFiles { _, name -> name.endsWith(".jux") }!!.sortedBy { it.name }
-        for (file in files) {
+        val files = JuxCorpus.entries(examples)
+
+        // PHASE 1 -- every file into the project first.
+        //
+        // `configureByText` adds AND opens, so checking in one pass measures
+        // each file against a project holding only the files before it. A
+        // sibling in the same package that sorts later would not exist yet,
+        // and the IDE would be blamed for a type that is declared right next
+        // door. A real project has all of its files from the start.
+        val added = files.map { myFixture.addFileToProject(it.name, it.file.readText()) }
+
+        // PHASE 2 -- open each in turn and collect what the daemon paints.
+        for (i in files.indices) {
             count++
-            myFixture.configureByText(file.name, file.readText())
+            val name = files[i].name
+            val file = files[i].file
+            myFixture.configureFromExistingVirtualFile(added[i].virtualFile)
             val errors = myFixture.doHighlighting()
                 .filter { it.severity === HighlightSeverity.ERROR }
                 .mapNotNull { it.description }
                 .distinct()
             if (errors.isNotEmpty()) {
-                failures.appendLine("- ${file.name}:")
+                failures.appendLine("- ${file.relativeTo(examples)} (as $name):")
                 errors.take(4).forEach { failures.appendLine("    $it") }
             }
         }

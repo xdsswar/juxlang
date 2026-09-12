@@ -16,6 +16,7 @@ import dev.jux.intellij.psi.JuxParserDefinition
 import dev.jux.intellij.psi.JuxPropertyDeclaration
 import dev.jux.intellij.psi.JuxTypeDeclaration
 import dev.jux.intellij.resolve.JuxReference
+import dev.jux.intellij.JuxCorpus
 import java.io.File
 
 /**
@@ -35,12 +36,12 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
 
         val failures = StringBuilder()
         var count = 0
-        examples.listFiles { _, name -> name.endsWith(".jux") }!!.sortedBy { it.name }.forEach { file ->
+        JuxCorpus.entries(examples).forEach { (name, file) ->
             count++
-            val psi = createPsiFile(file.name, file.readText())
+            val psi = createPsiFile(name, file.readText())
             val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
             if (errors.isNotEmpty()) {
-                failures.appendLine("• ${file.name}:")
+                failures.appendLine("• ${file.relativeTo(examples)}:")
                 errors.take(5).forEach { failures.appendLine("    ${it.errorDescription} @ ${it.textOffset}") }
             }
         }

@@ -3,6 +3,7 @@ package dev.jux.intellij.format
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.psi.codeStyle.CodeStyleManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import dev.jux.intellij.JuxCorpus
 import java.io.File
 
 /**
@@ -244,11 +245,11 @@ class JuxFormatterTest : BasePlatformTestCase() {
         val examples = File("../../examples").absoluteFile
         assertTrue("examples dir not found at $examples", examples.isDirectory)
         var count = 0
-        for (file in examples.listFiles { _, n -> n.endsWith(".jux") }!!.sortedBy { it.name }) {
+        for (file in JuxCorpus.files(examples)) {
             count++
             val once = reformat(file.readText())
             val twice = reformat(once)
-            assertEquals("reformat not idempotent for ${file.name}", once, twice)
+            assertEquals("reformat not idempotent for ${file.relativeTo(examples)}", once, twice)
         }
         assertTrue(count > 0)
     }

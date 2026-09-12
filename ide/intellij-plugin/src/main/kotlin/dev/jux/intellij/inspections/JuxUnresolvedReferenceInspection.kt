@@ -262,13 +262,18 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
             ?.first
     }
 
-    /** Project-wide declared symbol names (types/methods/fields/enum constants), cached. */
+    /**
+     * Project-wide declared symbol names (types/methods/fields/enum
+     * constants).
+     *
+     * The union is rebuilt whenever anything in the project changes, which is
+     * every keystroke -- but each FILE's contribution is cached against that
+     * file, so rebuilding costs one map lookup per file rather than one full
+     * PSI walk per file. It used to cost the walk, on every character typed.
+     */
     private fun projectDeclaredNames(project: Project): Set<String> =
         CachedValuesManager.getManager(project).getCachedValue(project) {
-            val names = HashSet<String>()
-            JuxTypeIndex.forEachSymbol(project, GlobalSearchScope.allScope(project)) { d ->
-                d.name?.let(names::add)
-            }
+            val names = JuxTypeIndex.declaredNames(project, GlobalSearchScope.allScope(project))
             CachedValueProvider.Result.create(names, PsiModificationTracker.MODIFICATION_COUNT)
         }
 

@@ -1,6 +1,7 @@
 package dev.jux.intellij.completion
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import dev.jux.intellij.JuxCorpus
 import java.io.File
 
 /**
@@ -29,18 +30,18 @@ class JuxCorpusCompletionTest : BasePlatformTestCase() {
 
         val failures = StringBuilder()
         var positions = 0
-        val files = examples.listFiles { _, name -> name.endsWith(".jux") }!!.sortedBy { it.name }
-        for (file in files) {
+        val files = JuxCorpus.entries(examples)
+        for ((name, file) in files) {
             val text = file.readText()
             for (offset in probePositions(text)) {
                 positions++
                 try {
-                    myFixture.configureByText(file.name, text)
+                    myFixture.configureByText(name, text)
                     myFixture.editor.caretModel.moveToOffset(offset)
                     myFixture.completeBasic()
                 } catch (e: Throwable) {
                     val line = text.take(offset).count { it == '\n' } + 1
-                    failures.appendLine("- ${file.name}:$line — ${e::class.simpleName}: ${e.message}")
+                    failures.appendLine("- ${file.relativeTo(examples)}:$line — ${e::class.simpleName}: ${e.message}")
                     // One report per file is enough to act on.
                     break
                 }
