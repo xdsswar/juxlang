@@ -14,6 +14,25 @@ use juxc_lex::{Keyword, TokenKind};
 
 use crate::Parser;
 
+/// Can this token stand as a member's declared NAME?
+///
+/// A plain identifier, a keyword (`move`, `type`, `match`, … -- rejected later
+/// by the resolver with `E0305` where Rust would choke, accepted where it would
+/// not), or one of the three literal constants (`null`, `true`, `false`), which
+/// lex as their own token kinds per §A.2.9 but cannot appear in a name position
+/// as anything else. Rust has a `std::process::Stdio::null`, and classifying
+/// that line as a FIELD is what took the whole generated `rust.std` stub down.
+///
+/// Kept beside [`Parser::parse_member_name`], which must accept exactly this
+/// set: the lookahead decides which parser runs, and disagreeing with it turns
+/// a valid declaration into a cascade of errors about the next one.
+fn kind_can_be_member_name(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Ident(_) | TokenKind::Kw(_) | TokenKind::Null | TokenKind::Bool(_)
+    )
+}
+
 impl<'a> Parser<'a> {
     // ------------------------------------------------------------------
     // Class declarations (Turn 1 — §A.2.4 class-decl subset)
@@ -350,10 +369,11 @@ impl<'a> Parser<'a> {
                     // method named after a reserved word is classified as a
                     // method (and the resolver later reports a Rust-reserved name
                     // via E0305) instead of mis-routing to the field path.
-                    if matches!(
-                        self.tokens.get(i).map(|t| &t.kind),
-                        Some(TokenKind::Ident(_)) | Some(TokenKind::Kw(_))
-                    ) {
+                    if self
+                        .tokens
+                        .get(i)
+                        .is_some_and(|t| kind_can_be_member_name(&t.kind))
+                    {
                         i += 1;
                         // Optional method-level generic params `<T, …>` between
                         // the name and the parameter list (§A.2.4

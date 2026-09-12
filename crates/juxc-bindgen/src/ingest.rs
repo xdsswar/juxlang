@@ -178,7 +178,7 @@ fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
             if !has_self_receiver(f) {
                 continue;
             }
-            let mut sf = map_function(mname, f);
+            let mut sf = map_function(krate, mname, f);
             sf.is_static = false;
             slot.push(sf);
         }
@@ -205,6 +205,13 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
 
+    // Both whole-crate scans, done once here and handed to every item that
+    // needs a Rust path. They are deliberately NOT memoized across calls: a
+    // crate is a short-lived local in `generate_merged_with_pool`, so any
+    // cache keyed by its identity would hand the next crate this one's
+    // answers.
+    let public = PublicPaths::of(krate);
+
     let mut collected: Vec<(u32, String, StubItem)> = Vec::new();
 
     for item in krate.index.values() {
@@ -218,21 +225,28 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                 collected.push((
                     item.id.0,
                     name.clone(),
-                    StubItem::Type(build_struct(krate, name, s, item, pool)),
+                    StubItem::Type(build_struct(krate, name, s, item, pool, &public)),
                 ));
             }
             ItemEnum::Enum(e) if is_public(&item.visibility) => {
                 collected.push((
                     item.id.0,
                     name.clone(),
-                    StubItem::Type(build_enum(krate, name, e, item)),
+                    StubItem::Type(build_enum(krate, name, e, item, &public)),
                 ));
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
                 collected.push((
                     item.id.0,
                     name.clone(),
-                    StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item)),
+                    StubItem::Type(build_trait(
+                        krate,
+                        name,
+                        &t.generics,
+                        &t.items,
+                        item,
+                        &public,
+                    )),
                 ));
             }
             ItemEnum::Function(f)
@@ -241,9 +255,9 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                 // Free function (§G.5.5). Record its real Rust path so the
                 // backend can `use` the fully-qualified Rust path under the
                 // (verbatim, snake_case) Jux stub name on import.
-                let mut sf = map_function(name, f);
+                let mut sf = map_function(krate, name, f);
                 sf.is_static = false;
-                sf.rust_path = real_rust_path(krate, item);
+                sf.rust_path = real_rust_path(krate, item, &public);
                 collected.push((item.id.0, name.clone(), StubItem::Function(sf)));
             }
             ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
@@ -335,6 +349,7 @@ fn build_struct(
     s: &Struct,
     item: &Item,
     pool: &InherentPool,
+    public: &PublicPaths,
 ) -> StubType {
     let mut fields = Vec::new();
     let mut all_public = true;
@@ -397,17 +412,24 @@ fn build_struct(
     st.constructors = ctors;
     st.methods = methods;
     st.doc = first_doc_line(item);
-    st.rust_path = real_rust_path(krate, item);
+    st.rust_path = real_rust_path(krate, item, public);
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
+    st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
     st
 }
 
-fn build_enum(krate: &Crate, name: &str, e: &Enum, item: &Item) -> StubType {
+fn build_enum(
+    krate: &Crate,
+    name: &str,
+    e: &Enum,
+    item: &Item,
+    public: &PublicPaths,
+) -> StubType {
     let mut st = StubType::new(TypeKind::Enum, name);
     st.generics = generic_param_names(&e.generics);
     st.doc = first_doc_line(item);
-    st.rust_path = real_rust_path(krate, item);
+    st.rust_path = real_rust_path(krate, item, public);
 
     for vid in &e.variants {
         let Some(vitem) = krate.index.get(vid) else {
@@ -453,13 +475,14 @@ fn build_trait(
     generics: &Generics,
     item_ids: &[rustdoc_types::Id],
     item: &Item,
+    public: &PublicPaths,
 ) -> StubType {
     // A Rust trait becomes a Jux interface; provided methods (with a body)
     // become `default` methods (§G.6.4).
     let mut st = StubType::new(TypeKind::Interface, name);
     st.generics = generic_param_names(generics);
     st.doc = first_doc_line(item);
-    st.rust_path = real_rust_path(krate, item);
+    st.rust_path = real_rust_path(krate, item, public);
 
     for mid in item_ids {
         let Some(mitem) = krate.index.get(mid) else {
@@ -467,7 +490,7 @@ fn build_trait(
         };
         let Some(mname) = &mitem.name else { continue };
         if let ItemEnum::Function(f) = &mitem.inner {
-            let mut sf = map_function(mname, f);
+            let mut sf = map_function(krate, mname, f);
             sf.is_static = !has_self_receiver(f);
             sf.is_default = f.has_body;
             st.methods.push(sf);
@@ -529,7 +552,7 @@ fn collect_inherent_members(
             if mname == "new" && !has_self {
                 // A `new() -> Result<Self, E>` surfaces as a `throws E` ctor so
                 // the call site unwraps the `Result` (§G.5.4).
-                let (_ret, throws) = map_return(&f.sig.output);
+                let (_ret, throws) = map_return(krate, &f.sig.output);
                 ctors.push(StubCtor {
                     visibility: Vis::Public,
                     name: type_name.to_string(),
@@ -537,7 +560,7 @@ fn collect_inherent_members(
                     throws,
                 });
             } else {
-                let mut sf = map_function(mname, f);
+                let mut sf = map_function(krate, mname, f);
                 sf.is_static = !has_self;
                 methods.push(sf);
             }
@@ -600,8 +623,8 @@ fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
 // Function / parameter mapping (§G.5)
 // ============================================================================
 
-fn map_function(name: &str, f: &Function) -> StubFn {
-    let (ret, throws) = map_return(&f.sig.output);
+fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
+    let (ret, throws) = map_return(krate, &f.sig.output);
     StubFn {
         visibility: Vis::Public,
         is_static: false,
@@ -708,10 +731,10 @@ fn is_borrow_param(ty: &Type) -> bool {
 
 /// `Result<T, E>` in return position becomes `T throws E` (§G.5.4); `Option<T>`
 /// and everything else map through [`map_type`].
-fn map_return(output: &Option<Type>) -> (JuxType, Option<JuxType>) {
+fn map_return(krate: &Crate, output: &Option<Type>) -> (JuxType, Option<JuxType>) {
     match output {
         None => (JuxType::Void, None),
-        Some(Type::ResolvedPath(p)) if last_segment(&p.path) == "Result" => {
+        Some(Type::ResolvedPath(p)) if resolved_name(krate, p) == "Result" => {
             let args = collect_type_args(&p.args);
             let ok = args.first().cloned().unwrap_or(JuxType::Void);
             // A 2-arg `Result<T, E>` carries the real error type. A 1-arg crate
@@ -719,14 +742,39 @@ fn map_return(output: &Option<Type>) -> (JuxType, Option<JuxType>) {
             // hides it but is still fallible, so record an opaque `Error` — the
             // call site unwraps either way (the backend ignores the error type;
             // only its presence drives the `throws` / unwrap, §G.5.4).
+            // `Result<T, ()>` is the third shape: fallible, with an error that
+            // carries nothing. Its argument maps to `Void`, and `throws void`
+            // is not a type -- it does not parse, and a stub that does not
+            // parse takes its whole crate surface down with it. The opaque
+            // `Error` says the same thing the unit error says.
             let err = args
                 .get(1)
+                .filter(|t| !matches!(t, JuxType::Void))
                 .cloned()
                 .or_else(|| Some(JuxType::user("Error")));
             (ok, err)
         }
         Some(t) => (map_type(t), None),
     }
+}
+
+/// What a written path RESOLVES to, by its final segment.
+///
+/// rustdoc records a path as the author spelled it, so an import alias
+/// (`use std::io::Result as IoResult;`) or a re-export hides what the type
+/// actually is. The `paths` summary carries the resolved item, and that is the
+/// name any "which type is this?" test wants: `IoResult<Request>` is a
+/// `Result`, and a method returning one is fallible.
+///
+/// Falls back to the written spelling when the id is not in the summary --
+/// a generic parameter, or an item from a crate rustdoc did not index.
+fn resolved_name(krate: &Crate, p: &rustdoc_types::Path) -> String {
+    krate
+        .paths
+        .get(&p.id)
+        .and_then(|summary| summary.path.last())
+        .cloned()
+        .unwrap_or_else(|| last_segment(&p.path).to_string())
 }
 
 fn param_name(n: &str) -> String {
@@ -779,6 +827,59 @@ fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
 ///
 /// Synthetic impls are excluded: rustdoc emits those for auto traits
 /// (`Send`/`Sync`), which are not what any caller here is asking about.
+/// Is this type a COLLECTION -- something you can build from elements and add
+/// more to?
+///
+/// `Extend` and `FromIterator` are Rust's own answer, and every std collection
+/// implements both. The impl must be written for the type in its OWN generic
+/// form, though: `impl<T> FromIterator<T> for Box<[T]>` is an impl on a boxed
+/// SLICE, and counting it made `Box`, `Rc` and `Arc` collections. So a type
+/// argument that is anything but a bare type parameter disqualifies the impl.
+fn implements_collection_trait(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) -> bool {
+    impls.iter().any(|id| {
+        let Some(item) = krate.index.get(id) else {
+            return false;
+        };
+        let ItemEnum::Impl(im) = &item.inner else {
+            return false;
+        };
+        if im.is_synthetic || im.is_negative {
+            return false;
+        }
+        let named = im
+            .trait_
+            .as_ref()
+            .is_some_and(|tr| matches!(last_segment(&tr.path), "Extend" | "FromIterator"));
+        named && impl_target_is_the_plain_type(own, &im.for_)
+    })
+}
+
+/// True when `ty` is `own` applied to nothing but bare type parameters --
+/// `Vec<T>`, `HashMap<K, V, S>`, `String` -- rather than a specialization such
+/// as `Box<[T]>`, and not some other type entirely.
+///
+/// A type's `impls` list is not confined to impls written for it: `Box`'s holds
+/// `impl FromIterator<..> for String`, and taking that at face value made
+/// `Box` a collection.
+fn impl_target_is_the_plain_type(own: Id, ty: &Type) -> bool {
+    let Type::ResolvedPath(p) = ty else {
+        return false;
+    };
+    if p.id != own {
+        return false;
+    }
+    match p.args.as_deref() {
+        None => true,
+        Some(GenericArgs::AngleBracketed { args, .. }) => args.iter().all(|a| match a {
+            GenericArg::Type(Type::Generic(_)) => true,
+            // Lifetimes and const arguments say nothing about the shape.
+            GenericArg::Lifetime(_) | GenericArg::Const(_) => true,
+            _ => false,
+        }),
+        Some(_) => false,
+    }
+}
+
 fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str) -> bool {
     impls.iter().any(|id| {
         let Some(item) = krate.index.get(id) else {
@@ -1030,23 +1131,50 @@ fn is_public(v: &Visibility) -> bool {
     matches!(v, Visibility::Public | Visibility::Default)
 }
 
+/// The two whole-crate tables that turn a rustdoc DEFINITION path into one a
+/// user can actually write in a `use`.
+///
+/// Built once per ingested crate and passed down. An earlier version memoized
+/// them behind the crate's address, which is wrong for the way they are
+/// consumed: [`generate_merged_with_pool`] parses each crate into a local and
+/// drops it before parsing the next, so every crate in an ingest sits at the
+/// same address and the second one was answered with the first one's tables.
+/// The symptom was silent -- every path fell through to the definition path,
+/// and `std::net::tcp::TcpListener` (a private `tcp` module) reached the stub.
+pub(crate) struct PublicPaths {
+    /// Every public module of the crate, by public path.
+    modules: HashSet<String>,
+    /// Item id -> the shortest publicly importable path for it.
+    reexports: HashMap<Id, String>,
+}
+
+impl PublicPaths {
+    /// Scan `krate` once for both tables.
+    fn of(krate: &Crate) -> Self {
+        Self {
+            modules: build_public_module_paths(krate),
+            reexports: build_reexport_paths(krate),
+        }
+    }
+}
+
 /// The real, fully-qualified Rust path of `item` (`std::collections::HashSet`),
 /// from the rustdoc `paths` summary. Used to populate `StubType::rust_path` so
 /// the backend can lower a reference to this external type to its true Rust path
 /// (§G.9.2) rather than the flat Jux `rust.std.X` spelling.
-fn real_rust_path(krate: &Crate, item: &Item) -> Option<String> {
+fn real_rust_path(krate: &Crate, item: &Item, public: &PublicPaths) -> Option<String> {
     let summary = krate.paths.get(&item.id);
-    // The definition path is preferred WHENEVER it is importable — it is the
+    // The definition path is preferred WHENEVER it is importable -- it is the
     // canonical one, and it distinguishes items that share a simple name across
     // sibling modules (`std::os::unix::process::ChildExt` vs the `linux` one).
     // Only when it threads a private module is it unusable, and then the
     // re-export path is the answer.
     if let Some(summary) = summary {
-        if !summary.path.is_empty() && definition_path_is_public(krate, &summary.path) {
+        if !summary.path.is_empty() && definition_path_is_public(public, &summary.path) {
             return Some(public_rust_path(&summary.path));
         }
     }
-    if let Some(p) = reexport_paths(krate).get(&item.id).cloned() {
+    if let Some(p) = public.reexports.get(&item.id).cloned() {
         return Some(p);
     }
     let summary = summary?;
@@ -1062,26 +1190,16 @@ fn real_rust_path(krate: &Crate, item: &Item) -> Option<String> {
 /// `std::io::copy::copy` fails here: `std::io` has a private `mod copy` that
 /// exists only to be re-exported, so the definition path names something the
 /// user cannot import.
-fn definition_path_is_public(krate: &Crate, path: &[String]) -> bool {
+fn definition_path_is_public(public: &PublicPaths, path: &[String]) -> bool {
     if path.len() <= 2 {
-        // `crate::Item` — the crate root is always importable.
+        // `crate::Item` -- the crate root is always importable.
         return true;
     }
-    let modules = public_module_paths(krate);
-    (1..path.len()).all(|end| modules.contains(&public_module_path(&path[..end])))
+    (1..path.len()).all(|end| public.modules.contains(&public_module_path(&path[..end])))
 }
 
-/// Every public module of the crate, by public path. Memoized alongside the
-/// re-export table — both are whole-crate scans over an index with tens of
-/// thousands of entries.
-fn public_module_paths(krate: &Crate) -> &HashSet<String> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, &'static HashSet<String>>>> =
-        std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-    let key = std::ptr::from_ref(krate) as usize;
-    if let Some(hit) = cache.lock().expect("module cache").get(&key) {
-        return hit;
-    }
+/// Every public module of the crate, by public path.
+fn build_public_module_paths(krate: &Crate) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::new();
     for item in krate.index.values() {
         if !matches!(item.inner, ItemEnum::Module(_)) || !is_public(&item.visibility) {
@@ -1093,9 +1211,7 @@ fn public_module_paths(krate: &Crate) -> &HashSet<String> {
             }
         }
     }
-    let built: &'static HashSet<String> = Box::leak(Box::new(out));
-    cache.lock().expect("module cache").insert(key, built);
-    built
+    out
 }
 
 /// Normalise a MODULE path. Only the crate-root remap applies: the
@@ -1110,7 +1226,7 @@ fn public_module_path(path: &[String]) -> String {
     segs.join("::")
 }
 
-/// Item id → the shortest **publicly importable** path, read off the crate's
+/// Item id -> the shortest **publicly importable** path, read off the crate's
 /// re-export (`pub use`) statements.
 ///
 /// rustdoc's `paths` summary reports where an item is DEFINED, and std defines
@@ -1120,28 +1236,9 @@ fn public_module_path(path: &[String]) -> String {
 /// a private module and does not compile in a `use`. The re-export says the
 /// public name is `std::io::copy`.
 ///
-/// Built once per crate and memoized — std has tens of thousands of items and
-/// this runs for each of them.
-///
 /// Not every path is recoverable this way: a glob (`pub use self::x::*;`) names
 /// no individual item, so those fall back to the definition path plus the
 /// [`public_rust_path`] normalisations.
-fn reexport_paths(krate: &Crate) -> &HashMap<Id, String> {
-    // Keyed by crate identity: `generate_merged` ingests several crates in one
-    // process, and each has its own re-export graph.
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<usize, &'static HashMap<Id, String>>>,
-    > = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-    let key = std::ptr::from_ref(krate) as usize;
-    if let Some(hit) = cache.lock().expect("reexport cache").get(&key) {
-        return hit;
-    }
-    let built: &'static HashMap<Id, String> = Box::leak(Box::new(build_reexport_paths(krate)));
-    cache.lock().expect("reexport cache").insert(key, built);
-    built
-}
-
 fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
     let mut out: HashMap<Id, String> = HashMap::new();
     for module_item in krate.index.values() {
@@ -1163,44 +1260,78 @@ fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
             let Some(child_item) = krate.index.get(child) else {
                 continue;
             };
-            // Two shapes reach the same conclusion. An explicit `pub use` names
-            // its target; a re-export of a PRIVATE item is instead INLINED by
-            // rustdoc — `std::io`'s private `mod copy` contributes its `pub fn
-            // copy` straight into `std::io`'s item list — and then membership in
-            // a public module IS the public path.
-            let (target, name) = match &child_item.inner {
-                ItemEnum::Use(u) if !u.is_glob => match u.id {
-                    Some(id) => (id, u.name.clone()),
-                    None => continue,
-                },
-                ItemEnum::Struct(_)
-                | ItemEnum::Enum(_)
-                | ItemEnum::Trait(_)
-                | ItemEnum::Function(_)
-                | ItemEnum::TypeAlias(_) => match &child_item.name {
-                    Some(n) if is_public(&child_item.visibility) => (child_item.id, n.clone()),
-                    _ => continue,
-                },
-                _ => continue,
-            };
-            let candidate = format!("{module_path}::{name}");
-            // Shortest wins: `std::io::copy` beats a deeper alias of the same
-            // function, and the result is stable across runs.
-            // Shortest wins, then lexicographic — `std::io::copy` beats a
-            // deeper alias, and the choice between two equally short aliases is
-            // the same on every run (a HashMap-order tie-break would churn the
-            // generated stub).
-            match out.get(&target) {
-                Some(existing)
-                    if (existing.len(), existing.as_str())
-                        <= (candidate.len(), candidate.as_str()) => {}
-                _ => {
-                    out.insert(target, candidate);
+            for (target, name) in published_names(krate, child_item) {
+                let candidate = format!("{module_path}::{name}");
+                // Shortest wins, then lexicographic — `std::io::copy` beats a
+                // deeper alias, and the choice between two equally short
+                // aliases is the same on every run (a HashMap-order tie-break
+                // would churn the generated stub).
+                match out.get(&target) {
+                    Some(existing)
+                        if (existing.len(), existing.as_str())
+                            <= (candidate.len(), candidate.as_str()) => {}
+                    _ => {
+                        out.insert(target, candidate);
+                    }
                 }
             }
         }
     }
     out
+}
+
+/// The names `child` publishes into its parent module, as `(id, name)` pairs.
+///
+/// Three shapes reach the same conclusion:
+///
+/// * an explicit `pub use` names its target, one name;
+/// * a re-export of a PRIVATE item is instead INLINED by rustdoc — `std::io`'s
+///   private `mod copy` contributes its `pub fn copy` straight into `std::io`'s
+///   item list — and then membership in a public module IS the public path;
+/// * a GLOB (`pub use owned::*;`) names nothing, so it is expanded against the
+///   target module's own public items. `std::os::fd` is built entirely this
+///   way, and without the expansion `AsFd` keeps the private
+///   `std::os::fd::owned::AsFd`.
+///
+/// A glob is expanded one level only. Nesting them is rare, and a second level
+/// would need cycle detection for what it buys.
+fn published_names(krate: &Crate, child: &Item) -> Vec<(Id, String)> {
+    match &child.inner {
+        ItemEnum::Use(u) if u.is_glob => {
+            let Some(id) = u.id else { return Vec::new() };
+            let Some(target_mod) = krate.index.get(&id) else {
+                return Vec::new();
+            };
+            let ItemEnum::Module(m) = &target_mod.inner else {
+                return Vec::new();
+            };
+            m.items
+                .iter()
+                .filter_map(|inner_id| krate.index.get(inner_id))
+                .filter_map(|inner| match &inner.inner {
+                    ItemEnum::Use(u) if !u.is_glob => u.id.map(|id| (id, u.name.clone())),
+                    _ => named_item(inner),
+                })
+                .collect()
+        }
+        ItemEnum::Use(u) => u.id.map(|id| (id, u.name.clone())).into_iter().collect(),
+        _ => named_item(child).into_iter().collect(),
+    }
+}
+
+/// `(id, name)` for a public, named item that can be referred to by path.
+fn named_item(item: &Item) -> Option<(Id, String)> {
+    match &item.inner {
+        ItemEnum::Struct(_)
+        | ItemEnum::Enum(_)
+        | ItemEnum::Trait(_)
+        | ItemEnum::Function(_)
+        | ItemEnum::TypeAlias(_) => match &item.name {
+            Some(n) if is_public(&item.visibility) => Some((item.id, n.clone())),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Normalise a rustdoc **definition** path to a **publicly-importable** Rust
@@ -1391,13 +1522,27 @@ mod tests {
         assert_eq!(map_type(&slice_ref).to_string(), "ubyte[]");
     }
 
+    /// An empty crate, for the mapping tests that need one only to look a
+    /// path up in (and find nothing, falling back to the written spelling).
+    fn empty_crate() -> Crate {
+        serde_json::from_str(
+            r#"{"root": 0, "crate_version": null, "includes_private": false,
+                "index": {}, "paths": {}, "external_crates": {},
+                "target": {"triple": "x86_64-unknown-linux-gnu",
+                           "target_features": []},
+                "format_version": 58}"#,
+        )
+        .expect("minimal rustdoc crate parses")
+    }
+
     #[test]
     fn result_return_becomes_throws() {
+        let krate = empty_crate();
         let result_ty = resolved(
             "Result",
             vec![resolved("Config", vec![]), resolved("ConfigError", vec![])],
         );
-        let (ret, throws) = map_return(&Some(result_ty));
+        let (ret, throws) = map_return(&krate, &Some(result_ty));
         assert_eq!(ret.to_string(), "Config");
         assert_eq!(
             throws.map(|e| e.to_string()),
@@ -1405,7 +1550,7 @@ mod tests {
         );
 
         // Plain return, no throws.
-        let (ret, throws) = map_return(&Some(Type::Primitive("bool".into())));
+        let (ret, throws) = map_return(&krate, &Some(Type::Primitive("bool".into())));
         assert_eq!(ret, JuxType::Prim("bool"));
         assert!(throws.is_none());
     }

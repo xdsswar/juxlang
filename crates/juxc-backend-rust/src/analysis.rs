@@ -2432,8 +2432,25 @@ impl crate::RustEmitter {
             return None;
         }
         let p = self.foreign_callee_param(callee, arg_idx)?;
-        if !(p.is_ref || p.ty.array_shape.is_some()) {
-            return None;
+        // A BY-VALUE slot declared as a NAMED foreign type wants the interior
+        // too, and wants to own it: the crate takes the value, while the Jux
+        // side keeps its handle and every other name for it. That is a copy,
+        // which is what the same line means in Java.
+        // `request.respond(response)` was the case that showed it -- the slot
+        // is a `tiny_http::Response`, and the handle arrived where the plain
+        // struct was wanted.
+        //
+        // A GENERIC slot (`Vec<T>::push(T)`) is the opposite: what flows into
+        // it is whatever Jux represents the element as, handle included, and
+        // unwrapping there is how `rows.push(row)` on a `Vec<Vec<int>>` lost
+        // its nesting. So the test is whether the parameter names a foreign
+        // type at all -- a bare type parameter names none.
+        let by_value = !(p.is_ref || p.ty.array_shape.is_some());
+        if by_value {
+            let names_a_foreign_type = self
+                .lookup_class_by_bare_or_fqn(p.ty.name.segments.last()?.text.as_str())
+                .is_some_and(|c| c.is_external);
+            return names_a_foreign_type.then_some(".borrow().clone()");
         }
         let aliases_receiver = matches!(callee, juxc_ast::Expr::Field(f)
             if Self::receiver_place_key(&f.object).is_some()
@@ -2479,6 +2496,19 @@ impl crate::RustEmitter {
         callee: &juxc_ast::Expr,
         arg_idx: usize,
     ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
+        self.foreign_callee_method(callee)?.params.get(arg_idx)
+    }
+
+    /// The FOREIGN method `callee` names, or `None` when the receiver is not a
+    /// foreign type (or the method is not one the stub declares).
+    ///
+    /// Everything the call site needs to know about the real Rust signature --
+    /// which parameters borrow, whether the return borrows -- comes from here,
+    /// so the receiver-resolution rules live in one place.
+    fn foreign_callee_method(
+        &self,
+        callee: &juxc_ast::Expr,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
         let juxc_ast::Expr::Field(f) = callee else { return None };
         // A `String` receiver is its own `Ty`, not a `Ty::User`, so it never
         // matched the value branch below -- and `String`'s scanned methods take
@@ -2488,8 +2518,7 @@ impl crate::RustEmitter {
             return self
                 .lookup_class_by_bare_or_fqn("String")
                 .filter(|c| c.is_external)
-                .and_then(|c| c.methods.get(f.field.text.as_str()))
-                .and_then(|m| m.params.get(arg_idx));
+                .and_then(|c| c.methods.get(f.field.text.as_str()));
         }
         // Static call `ClassName.method(...)`: the receiver is a class NAME, not
         // a value, so it never appears in `expr_types`. Resolve the class
@@ -2501,7 +2530,7 @@ impl crate::RustEmitter {
                     if c.is_external {
                         if let Some(m) = c.methods.get(f.field.text.as_str()) {
                             if m.is_static {
-                                return m.params.get(arg_idx);
+                                return Some(m);
                             }
                         }
                     }
@@ -2544,9 +2573,33 @@ impl crate::RustEmitter {
         if !sig.is_external {
             return None;
         }
-        sig.methods
-            .get(f.field.text.as_str())
-            .and_then(|m| m.params.get(arg_idx))
+        sig.methods.get(f.field.text.as_str())
+    }
+
+    /// Does this call return a BORROWED string -- a foreign method whose real
+    /// Rust signature is `-> &str` (or `-> &String`)?
+    ///
+    /// bindgen drops the borrow from the stub's return type (G.3.4) and records
+    /// it as `@RustRefOut` instead, so the declared type reads `String` either
+    /// way and only the marker tells them apart. Jux has no borrowed string, so
+    /// the call site owns the value with `to_string`.
+    pub(crate) fn foreign_call_returns_borrowed_string(&self, callee: &juxc_ast::Expr) -> bool {
+        let Some(m) = self.foreign_callee_method(callee) else {
+            return false;
+        };
+        if !m
+            .annotations
+            .iter()
+            .any(crate::exprs::field::annotation_is_rust_ref_out)
+        {
+            return false;
+        }
+        let juxc_ast::ReturnType::Type(ty) = &m.return_type else {
+            return false;
+        };
+        ty.array_shape.is_none()
+            && ty.generic_args.is_empty()
+            && ty.name.segments.last().is_some_and(|s| s.text == "String")
     }
 
     // ============================================================

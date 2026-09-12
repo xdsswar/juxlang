@@ -89,6 +89,12 @@ pub struct StubType {
     /// class annotation. The backend needs it to decide whether a field read
     /// can share by cloning rather than moving out.
     pub is_clone: bool,
+    /// Whether the Rust type is a COLLECTION -- it implements `Extend` or
+    /// `FromIterator` (discovered from its real trait impls, never from a name
+    /// list). Rendered as the `@RustCollection` class annotation, which is what
+    /// the backend reads to decide whether a value of this type takes the
+    /// 6.5.1 shared handle.
+    pub is_collection: bool,
 }
 
 impl StubType {
@@ -106,6 +112,7 @@ impl StubType {
             rust_path: None,
             index_ref: false,
             is_clone: false,
+            is_collection: false,
         }
     }
 }

@@ -440,6 +440,26 @@ impl<'a> Parser<'a> {
             self.advance();
             return Some(Ident { text, span });
         }
+        // The three literal constants (§A.2.9) lex as their own token kinds, so
+        // they are not covered by the keyword arm above -- but a name position
+        // cannot hold a literal either, so the same reasoning applies. Rust has
+        // methods called `null` (`std::process::Stdio::null`), and without this
+        // the generated `rust.std` stub failed to parse at that one line and
+        // took EVERY declaration after it down with it.
+        let literal_name = match self.peek() {
+            TokenKind::Null => Some("null"),
+            TokenKind::Bool(true) => Some("true"),
+            TokenKind::Bool(false) => Some("false"),
+            _ => None,
+        };
+        if let Some(text) = literal_name {
+            let span = self.peek_span();
+            self.advance();
+            return Some(Ident {
+                text: text.to_string(),
+                span,
+            });
+        }
         self.parse_ident()
     }
 

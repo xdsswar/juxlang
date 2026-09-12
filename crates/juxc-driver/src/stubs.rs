@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 17;
+const STD_STUB_CACHE_VERSION: u32 = 20;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -97,7 +97,7 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// each generated `.jux-stubs/rust/<crate>.jux.d` and checked on load so a stale
 /// stub (e.g. a pre-snake_case cache) is regenerated rather than trusted. Started
 /// at 1 alongside the snake_case-verbatim naming switch.
-const CRATE_STUB_CACHE_VERSION: u32 = 2;
+const CRATE_STUB_CACHE_VERSION: u32 = 3;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -167,11 +167,33 @@ pub fn mark_external_units(units: &mut [CompilationUnit], sources: &[SourceFile]
 /// `.jux.d` stub. Untagged diagnostics (`file == None`) and diagnostics against
 /// ordinary `.jux` sources (including the hand-written `jux.std/` tree) are
 /// always kept.
+///
+/// **One exception: a lex or syntax error survives.** The "95% still
+/// contributes" argument only holds for complaints about a declaration the
+/// parser managed to READ. A malformed token sequence stops the parse, so the
+/// stub contributes NOTHING -- and with its diagnostic dropped too, the only
+/// thing the user sees is `E0301 unresolved import` against a crate that is
+/// right there in `.jux-stubs/`. That is a bindgen bug reported as a user
+/// mistake. `Result<T, ()>` rendering as `throws void` was exactly this: one
+/// unparsable method took down a whole crate's API, silently.
 pub fn drop_external_diagnostics(diagnostics: &mut Vec<Diagnostic>, sources: &[SourceFile]) {
     diagnostics.retain(|d| match d.file {
-        Some(idx) => !sources.get(idx).is_some_and(|s| is_stub_path(s.path())),
+        Some(idx) => {
+            !sources.get(idx).is_some_and(|s| is_stub_path(s.path()))
+                || stub_error_is_fatal_to_the_unit(d)
+        }
         None => true,
     });
+}
+
+/// Does this stub diagnostic mean the whole stub failed to load?
+///
+/// Lexical (`E01xx`) and syntax (`E02xx`) errors do; everything later in the
+/// pipeline is about a declaration that parsed, and is the noise
+/// [`drop_external_diagnostics`] exists to suppress.
+fn stub_error_is_fatal_to_the_unit(d: &Diagnostic) -> bool {
+    d.severity == juxc_diagnostics::Severity::Error
+        && matches!(&d.code.as_str()[..3], "E01" | "E02")
 }
 
 // ============================================================================

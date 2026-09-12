@@ -1246,6 +1246,9 @@ struct RustEmitter {
     /// call's RESULT to a `let` drops the guard at that `let`'s semicolon.
     /// The flag stops the wrapper from wrapping itself.
     pub(crate) wrapping_handle_call: bool,
+    /// True while re-entering a call whose foreign method returns a
+    /// BORROWED string, so the `to_string()` wrapper does not wrap itself.
+    pub(crate) owning_borrowed_string: bool,
     /// Receiver places (written as text: `d`, `this.items`) whose collection
     /// calls in the CURRENT statement conflict over one `RefCell` and so need
     /// the statement-scoping wrapper (§6.5.1).
@@ -4595,6 +4598,7 @@ impl RustEmitter {
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
             wrapping_handle_call: false,
+            owning_borrowed_string: false,
             handle_conflict_receivers: std::collections::HashSet::new(),
             emitting_method_receiver: false,
             in_lambda_body: false,

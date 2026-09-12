@@ -2224,6 +2224,13 @@ pub(crate) fn annotation_is_rust_clone(a: &juxc_ast::Annotation) -> bool {
     a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustclone")
 }
 
+/// True when an annotation names the bindgen `@RustCollection` marker -- the
+/// type implements `Extend` or `FromIterator`, so a value of it is a §6.5.1
+/// collection and takes the shared handle.
+pub(crate) fn annotation_is_rust_collection(a: &juxc_ast::Annotation) -> bool {
+    a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustcollection")
+}
+
 /// True when an annotation names the bindgen `@MutSelf` marker
 /// (annotations are case-insensitive per the Jux rules).
 pub(crate) fn annotation_is_rust_ref_out(a: &juxc_ast::Annotation) -> bool {

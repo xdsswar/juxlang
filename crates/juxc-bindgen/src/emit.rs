@@ -69,6 +69,12 @@ fn render_type(out: &mut String, t: &StubType) {
         let _ = writeln!(out, "@RustClone");
     }
 
+    // Collection marker (`Extend` / `FromIterator` impls) -- drives the 6.5.1
+    // shared-handle lowering.
+    if t.is_collection {
+        let _ = writeln!(out, "@RustCollection");
+    }
+
     let keyword = match t.kind {
         TypeKind::Class => "class",
         TypeKind::Interface => "interface",

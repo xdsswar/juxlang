@@ -195,6 +195,8 @@ Because names are kept verbatim, distinct Rust names stay distinct (the identity
 
 ### G.4.2. Keyword-Named Members
 
+The three literal constants (`null`, `true`, `false`, §A.2.9) are accepted the same way and for the same reason: a member-name position cannot hold a literal, so the spelling is unambiguous there. Rust has a `std::process::Stdio::null`, and a parser that stopped at it did not merely lose that one method: it lost every declaration after it in the file, since a stub that fails to parse contributes nothing (§G.12).
+
 A Rust member whose name is a Jux reserved keyword (`default`, `match`, `type`, …) is surfaced **as-is**: the parser accepts a keyword spelling both in foreign stub declarations and at the call site (`opts.default()`), and the backend re-escapes any Rust keyword with `r#` when it lowers. A Jux *user* declaration, by contrast, may not be named after a Rust keyword — that is `E0305` (the lowered Rust would collide). The two rules are complementary: foreign members keep their real name, user code stays clear of Rust's reserved words.
 
 ---
@@ -255,6 +257,11 @@ public Config parse(String s) throws ConfigError;
 ```
 
 In exception-disabled profiles the compiler lowers `throws E` back to `Result<T, E>` (§7.11, §16.7) — so the stub is profile-agnostic, matching the source-portability promise.
+
+**A return type written through an alias is still a `Result`.** rustdoc records a path as the author spelled it, and Rust code routinely spells this one indirectly: `std::io::Result<T>` is an alias for `Result<T, io::Error>`, and a crate that writes `use std::io::Result as IoResult;` records `IoResult<Request>`. The test is on what the path RESOLVES to, not on how it reads, so every one of those methods is fallible in Jux. Reading the spelling instead made them return a raw `Result` object that Jux has no syntax to open.
+
+**`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
+
 
 ### G.5.5. Free Functions
 
@@ -371,6 +378,26 @@ These are surfacing choices, not language changes: the real crate provides every
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**
 
 ---
+
+### G.6.6. Which Foreign Types Are Collections
+
+§6.5.1 makes a collection a REFERENCE type: a value of one is a shared handle, so `var a = obj.getItems(); a.push(v)` reaches the object's collection rather than a copy. Applying that to a foreign type needs an answer to "is this a collection?", and the answer is **discovered from the type's own trait impls**, like every other binder question.
+
+A type is a collection when it implements **`Extend` or `FromIterator`**, Rust's own way of saying "you can build one of these from elements, and add more". `Vec`, `String`, `VecDeque`, `HashMap`/`HashSet`, `BTreeMap`/`BTreeSet`, `BinaryHeap`, `LinkedList`, `OsString` and `PathBuf` all do; a response object, a cursor and a set of file permissions do not. The marker is rendered on the stub as `@RustCollection`.
+
+Two restrictions make the reading exact:
+
+- **The impl must be written for the type in its own generic form.** `impl<T> FromIterator<T> for Box<[T]>` is an impl on a boxed SLICE; counting it made `Box`, `Rc` and `Arc` collections.
+- **The impl must be written for the type at all.** A type's rustdoc impl list is not confined to impls of that type, so the impl's target is checked against the item itself.
+
+The rule this replaced, "is `Clone` and has some `&mut self` method", is a proxy, and it named `Cursor`, `OnceLock`, `OpenOptions`, `Path` and `Permissions` along with the real collections. In a bound crate it named `tiny_http::Response`, which then reached a by-value parameter wrapped in a handle the callee could not open.
+
+**`String` is excluded, because it is a language type.** §5 gives Jux a built-in `String` that the type system models as its own type and the backend lowers to a plain Rust `String`. It appears in the `rust.std` stub only so its methods are visible. It does implement `Extend`, so without the carve-out it would answer "collection" here while every other pass answered "value".
+
+**A by-value foreign parameter takes the interior.** Where a slot is declared as a named foreign type and takes it by value, the crate takes ownership while Jux keeps its handle and every other name for it, so the handle lends a copy. A GENERIC slot (`Vec<T>::push(T)`) is the opposite: what flows in is whatever Jux represents the element as, handle included, which is what keeps a `Vec<Vec<int>>` nested.
+
+---
+
 
 ## §G.7 — C Header Bindings
 
@@ -523,6 +550,11 @@ When user code calls an `external` declaration, codegen (§C.9) does not emit a 
 
 The mapping from Jux stub name to real symbol is recorded in a sidecar emitted alongside the `.jux.d` (the shim's symbol table for C/C++, or the rustdoc item path for Rust). Codegen consults it.
 
+**The recorded path must be one a `use` accepts.** rustdoc reports where an item is DEFINED, and Rust libraries routinely define an item in a private module and publish it from a public one: `std::net` holds a private `mod tcp`, so `TcpListener` is defined at `std::net::tcp::TcpListener` and published at `std::net::TcpListener`. Emitting the definition path produces `error[E0603]: module ... is private`, a rustc error about a module the Jux programmer never wrote, for a type the stub said was there.
+
+So the definition path is used only when every module along it is public, and otherwise the path is read off the crate's re-exports. Both `pub use` forms count: a named one (`pub use self::copy::copy;`) names its target, and a GLOB (`pub use owned::*;`, which is how all of `std::os::fd` is published) is expanded against the target module's own public items. Where several public paths reach one item the shortest wins, ties broken lexicographically, so a regenerated stub is identical to the last one.
+
+
 ### G.9.3. No Borrow-Check of Foreign Bodies
 
 Because stubs have no bodies, the borrow checker never analyzes foreign code — it trusts the signature. The `&` / `&mut` disposition that `bindgen` dropped (§G.3.4) is re-attached at the **call site** in the user's code: a call to a `&mut self` method requires exclusive access to the receiver (§6.3), inferred normally. The foreign implementation is assumed to honor its Rust-checked contract. This is sound because the foreign code is itself borrow-checked by `rustc` at the Phase-1 boundary (§C.9.1).
@@ -625,6 +657,13 @@ The two places `bindgen` cannot infer a decision — C-pointer ownership (§G.7.
 `E0907` is the one stub-specific structural check: a `.jux.d` file whose function has a `{ ... }` body rather than `;` is rejected — bodies belong in the foreign implementation, not the stub.
 
 ---
+
+**Stub diagnostics are suppressed, except the ones that mean the stub did not load.** A stub is a trusted, signature-only view of an API the real crate already compiles, so a resolution or type-check complaint about the stub itself is noise: an unknown referenced type the scan did not pull in, a `uint?` Jux's value rules reject. Suppressing those is what lets a stub that is 95% well-formed contribute its 95%.
+
+That argument does not extend to a **lex or syntax error**, because there is no 95%: a malformed token sequence stops the parse and the whole unit contributes nothing. Suppressed as well, the only thing the user sees is `E0301 unresolved import` against a crate sitting right there in `.jux-stubs/`: a binder bug reported as a user's typo. Lexical and syntax errors from a stub are therefore REPORTED.
+
+---
+
 
 ## §G.13 — Open Questions
 

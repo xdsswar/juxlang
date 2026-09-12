@@ -177,22 +177,40 @@ impl RustEmitter {
         if self.bare_name_is_user_type(bare) || self.enclosing_nested_type(bare).is_some() {
             return false;
         }
+        // `String` is a LANGUAGE type, not a library one: §5 gives Jux a
+        // built-in `String` that every other pass models as `Ty::String` and
+        // lowers to a plain Rust `String`. It appears in the `rust.std` stub
+        // only so its methods are visible, and it does implement `Extend` --
+        // so without this it answers "collection" here while the type system
+        // says "value", and a foreign method returning one had its result
+        // wrapped in a handle the declared slot could not hold.
+        if bare == "String" {
+            return false;
+        }
         let Some(sig) = self.lookup_class_by_bare_or_fqn(bare) else {
             return false;
         };
         if !sig.is_external {
             return false;
         }
+        // The marker bindgen discovers from the type's real `Extend` /
+        // `FromIterator` impls. It replaced the proxy "is `Clone` and has some
+        // `&mut self` method", which named the std collections but also named
+        // `Cursor`, `OnceLock`, `OpenOptions`, `Permissions` and `Path` -- and,
+        // in a bound crate, `tiny_http::Response`, which then reached a
+        // by-value foreign slot wrapped in a handle the callee could not open.
+        //
+        // Sharing still needs `Clone`: the handle lends its interior by cloning
+        // out of the cell wherever a value has to leave the guard.
         let cloneable = sig
             .annotations
             .iter()
             .any(crate::exprs::field::annotation_is_rust_clone);
-        let mutable = sig.methods.values().any(|m| {
-            m.annotations
-                .iter()
-                .any(crate::exprs::field::annotation_is_mut_self)
-        });
-        cloneable && mutable
+        let collection = sig
+            .annotations
+            .iter()
+            .any(crate::exprs::field::annotation_is_rust_collection);
+        cloneable && collection
     }
 
     /// Whether the VALUE of `e` is a collection handle, by its checked type.

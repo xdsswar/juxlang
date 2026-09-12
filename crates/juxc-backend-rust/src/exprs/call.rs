@@ -514,6 +514,19 @@ impl RustEmitter {
             self.wrapping_handle_call = false;
             return;
         }
+        // **A foreign method that returns a BORROWED string.** bindgen records
+        // `-> &str` as a `String` return marked `@RustRefOut`, because §G.3.4
+        // drops the borrow from the stub's type. Jux has no borrowed string, so
+        // the value is owned here. `.clone()` would not do it: cloning a `&str`
+        // gives another `&str`.
+        if !self.owning_borrowed_string && self.foreign_call_returns_borrowed_string(&call.callee) {
+            self.owning_borrowed_string = true;
+            self.emit_call(call);
+            self.owning_borrowed_string = false;
+            self.w.push_str(".to_string()");
+            return;
+        }
+        self.owning_borrowed_string = false;
         // Nested calls inside this one are separate statements' worth of
         // borrows again, so release the guard immediately.
         self.wrapping_handle_call = false;
