@@ -206,6 +206,8 @@ public static <T> Task<Vec<Result<T, Exception>>>       Task.allSettled(Vec<Task
 
 `Task.all(tasks)` resolves when every task resolves; rejects on the first failure. `Task.race` resolves with the first to settle. `Task.any` resolves with the first success and rejects only if all fail. Same semantics as the matching `Promise.*` calls in JavaScript.
 
+Two points the JavaScript names leave open are fixed here. When every task given to `Task.any` fails, it re-throws the failure of the **last** task to settle, unchanged, so a `catch` sees an ordinary exception rather than an aggregate. `Task.allSettled` never fails on account of its tasks: each settles to `Result.Ok(value)` or to `Result.Err(exception)` holding what that task threw, in the order the tasks were given. Only an exception is a settlement; a panic that is not one propagates as it would anywhere else.
+
 A common pattern — fan out, await all — gets a built-in shorthand:
 
 ```jux

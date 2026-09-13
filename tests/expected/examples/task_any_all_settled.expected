@@ -1,0 +1,5 @@
+any: 42
+any failed: b, the last to settle
+ok 1
+failed: boom
+ok 3

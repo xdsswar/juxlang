@@ -1,0 +1,55 @@
+// `Task.any` and `Task.allSettled` (JUX-ASYNC v2 18.1.4).
+//
+// `Task.all` rejects on the first failure and `Task.race` settles with the
+// first task to finish either way. The other two are about FAILURE:
+//
+//   * `any` settles with the first SUCCESS, and fails only when every task has,
+//     re-throwing the failure of the last one to settle;
+//   * `allSettled` never fails: it waits for every task and reports each as a
+//     `Result`, `Ok` with its value or `Err` with the exception it threw.
+
+import jux.std.exceptions.Exception;
+import jux.std.exceptions.IllegalStateException;
+import jux.std.result.Result;
+
+public int failWith(String msg) throws Exception {
+    throw new IllegalStateException(msg);
+}
+
+public String describe(Result<int, Exception> r) {
+    return switch (r) {
+        case Result.Ok(var v) -> "ok " + v;
+        case Result.Err(var e) -> "failed: " + e.getMessage();
+    };
+}
+
+public void main() {
+    // The failing task finishes first; `any` holds its failure and waits.
+    var bad = spawn(() -> failWith("first to finish"));
+    var good = spawn(async () -> {
+        await Task.delay(200);
+        42;
+    });
+    print("any: " + Task.any(bad, good).blockingGet());
+
+    // Every task fails, so `any` does too.
+    try {
+        var a = spawn(() -> failWith("a"));
+        var b = spawn(async () -> {
+            await Task.delay(200);
+            failWith("b, the last to settle");
+        });
+        Task.any(a, b).blockingGet();
+        print("unreachable");
+    } catch (Exception e) {
+        print("any failed: " + e.getMessage());
+    }
+
+    // `allSettled` reports each, in the order the tasks were given.
+    var one = spawn(() -> 1);
+    var boom = spawn(() -> failWith("boom"));
+    var three = spawn(() -> 3);
+    for (var r : Task.allSettled(one, boom, three).blockingGet()) {
+        print(describe(r));
+    }
+}

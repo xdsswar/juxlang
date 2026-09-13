@@ -492,8 +492,8 @@ public final class Task<T> {
     // call site reads best: `Task.all(a, b, c)`.
     public static Task<T[]> all<T>(Task<T>... tasks);
     public static Task<T> race<T>(Task<T>... tasks);
-    public static Task<T> any<T>(Task<T>... tasks);                  -- not implemented
-    public static Task<Result<T, Exception>[]> allSettled<T>(Task<T>... tasks);  -- not implemented
+    public static Task<T> any<T>(Task<T>... tasks);
+    public static Task<Result<T, Exception>[]> allSettled<T>(Task<T>... tasks);
 }
 
 public interface Stream<T> {

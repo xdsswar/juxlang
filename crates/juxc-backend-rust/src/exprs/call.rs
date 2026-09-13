@@ -523,6 +523,34 @@ impl RustEmitter {
     /// Emit a call expression. Special-cases the built-in `print` to
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
+    /// `let __jux_exception_of = |payload| -> Exception { ... };` -- turn a
+    /// task's panic payload back into the `Exception` it was thrown as.
+    ///
+    /// `Any::downcast` is exact-type, so a thrown SUBCLASS has to be tried by
+    /// name and sliced down to its `Exception` part -- the same thing a
+    /// `catch (Exception e)` clause does, driven by the same subclass list. A
+    /// payload that is no exception at all is re-raised.
+    fn emit_exception_of_payload_closure(&mut self) {
+        const BASE: &str = "jux.std.exceptions.Exception";
+        self.w.push_str(
+            "let __jux_exception_of = |__jux_p: Box<dyn std::any::Any + Send>| -> crate::jux::std::exceptions::Exception { ",
+        );
+        self.w.push_str(
+            "let __jux_p = match __jux_p.downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
+        );
+        for sub in self.subclass_fqns_of(BASE) {
+            let depth = self.extends_chain_distance(&sub, BASE).unwrap_or(0);
+            self.w.push_str("let __jux_p = match __jux_p.downcast::<");
+            self.emit_fqn_path_in_rust(&sub, sub.contains('.'));
+            self.w.push_str(">() { Ok(__jux_e) => return (*__jux_e)");
+            for _ in 0..depth {
+                self.w.push_str(".__parent");
+            }
+            self.w.push_str(", Err(__jux_p) => __jux_p }; ");
+        }
+        self.w.push_str("std::panic::resume_unwind(__jux_p) }; ");
+    }
+
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
         // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
         // field chain. Re-shape the receiver into the class path it names, so
@@ -974,6 +1002,56 @@ impl RustEmitter {
                                 self.emit_expr(arg);
                             }
                             self.w.push_str("]).await.0 })");
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                        // `any` settles with the first SUCCESS, and rejects only
+                        // when every task has failed -- re-throwing the failure
+                        // of the last one to settle. A failed task is a panic
+                        // carrying its exception, so each is awaited through
+                        // `catch_unwind` and a failure is held, not propagated.
+                        "any" => {
+                            self.w.push_str(
+                                "crate::__jux_spawn(async move { let mut __jux_pending: futures::stream::FuturesUnordered<_> = vec![",
+                            );
+                            for (i, arg) in call.args.iter().enumerate() {
+                                if i > 0 {
+                                    self.w.push_str(", ");
+                                }
+                                self.emit_expr(arg);
+                            }
+                            self.w.push_str(
+                                "].into_iter().map(|__jux_t| futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(__jux_t))).collect(); \
+                                 let mut __jux_last = None; \
+                                 while let Some(__jux_r) = futures::StreamExt::next(&mut __jux_pending).await { \
+                                 match __jux_r { Ok(__jux_v) => return __jux_v, Err(__jux_p) => __jux_last = Some(__jux_p) } } \
+                                 std::panic::resume_unwind(__jux_last.expect(\"Task.any needs at least one task\")) })",
+                            );
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                        // `allSettled` waits for EVERY task and reports each as a
+                        // `Result<T, Exception>`: `Ok(value)`, or `Err` holding the
+                        // exception it threw. Only an exception is a settlement --
+                        // a panic that is not one is re-raised, as an uncatchable
+                        // panic is everywhere else.
+                        "allSettled" => {
+                            self.w.push_str("crate::__jux_spawn(async move { ");
+                            self.emit_exception_of_payload_closure();
+                            self.w.push_str("futures::future::join_all(vec![");
+                            for (i, arg) in call.args.iter().enumerate() {
+                                if i > 0 {
+                                    self.w.push_str(", ");
+                                }
+                                self.emit_expr(arg);
+                            }
+                            self.w.push_str(
+                                "].into_iter().map(|__jux_t| futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(__jux_t)))).await \
+                                 .into_iter().map(|__jux_r| match __jux_r { \
+                                 Ok(__jux_v) => crate::jux::std::result::Result::Ok(__jux_v), \
+                                 Err(__jux_p) => crate::jux::std::result::Result::Err(__jux_exception_of(__jux_p)) }) \
+                                 .collect::<Vec<_>>() })",
+                            );
                             self.emitting_format_arg = prev;
                             return;
                         }

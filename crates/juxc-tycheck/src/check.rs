@@ -6292,7 +6292,7 @@ impl<'a> Checker<'a> {
                 if let Expr::Path(qn) = field.object.as_ref() {
                     if qn.segments.len() == 1
                         && qn.segments[0].text == "Task"
-                        && matches!(method_name, "all" | "race" | "delay")
+                        && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay")
                     {
                         let prev_slot = self.in_future_slot;
                         self.in_future_slot = true;

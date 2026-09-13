@@ -1103,7 +1103,7 @@ impl RustEmitter {
 
     /// Number of `extends` steps from `from` up to `to` (0 when they
     /// are the same class); `None` when `to` isn't an ancestor.
-    fn extends_chain_distance(&self, from: &str, to: &str) -> Option<usize> {
+    pub(crate) fn extends_chain_distance(&self, from: &str, to: &str) -> Option<usize> {
         let mut cur = from.to_string();
         let mut depth = 0usize;
         loop {
@@ -1182,6 +1182,16 @@ impl RustEmitter {
                 }
             }
         };
+        self.subclass_fqns_of(&base_fqn)
+    }
+
+    /// Every known transitive subclass of the class `base_fqn`, sorted. The
+    /// by-name form of [`Self::catch_subclass_fqns`], for code that has an FQN
+    /// rather than a written type -- turning a task's panic payload back into
+    /// an `Exception`, which has to try every concrete descendant exactly as a
+    /// `catch (Exception e)` clause does.
+    pub(crate) fn subclass_fqns_of(&self, base_fqn: &str) -> Vec<String> {
+        let base_fqn = base_fqn.to_string();
         let mut out: Vec<String> = self
             .symbols
             .classes
