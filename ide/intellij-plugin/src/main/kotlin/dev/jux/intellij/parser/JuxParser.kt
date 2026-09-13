@@ -354,6 +354,12 @@ class JuxParser : PsiParser {
             parseParameterList(b)
             parseThrows(b)
             parseWhereClause(b)
+            // An annotation parameter's default (§A.2): `String method() default "GET";`,
+            // `String[] tags() default {};` (an array initializer, skipped whole).
+            if (b.at(T.DEFAULT_KW)) {
+                b.advanceLexer()
+                if (b.at(T.LBRACE)) b.skipMatched(T.LBRACE, T.RBRACE) else b.parseExpression()
+            }
             parseBodyOrSemicolon(b)
             decl.done(E.METHOD_DECLARATION)
         } else {

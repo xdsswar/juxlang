@@ -335,6 +335,8 @@ private fun PsiBuilder.parsePattern() {
             if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // record/enum sub-patterns
             else if (at(T.IDENTIFIER)) advanceLexer()         // type-pattern binding
         }
+        // tuple pattern `(p, q)`
+        at(T.LPAREN) -> skipMatched(T.LPAREN, T.RPAREN)
         else -> if (!at(T.ARROW) && !at(T.FAT_ARROW) && !at(T.WHEN_KW)) advanceLexer()
     }
     m.done(E.PATTERN)
