@@ -482,12 +482,17 @@ fn collect_anon_bound_locals(block: &Block, out: &mut HashSet<String>) {
 /// The triple intersection makes this safe: a mutated-but-not-captured local
 /// (a loop counter) or a captured-but-not-mutated local (a read-only capture)
 /// is excluded and keeps its current lowering.
-pub(crate) fn collect_captured_mutated_locals(block: &Block) -> HashSet<String> {
+pub(crate) fn collect_captured_mutated_locals(
+    block: &Block,
+    params: &HashSet<String>,
+) -> HashSet<String> {
     let captured = crate::exprs::collect_lambda_referenced_names(block);
     if captured.is_empty() {
         return HashSet::new();
     }
-    let mut declared = HashSet::new();
+    // A parameter is a local of the body as much as a `var` is: a closure
+    // that reassigns one needs the same shared cell.
+    let mut declared: HashSet<String> = params.clone();
     collect_local_decl_names(block, &mut declared);
     let mut mutated = HashSet::new();
     collect_whole_name_reassigned(block, &mut mutated);
@@ -555,6 +560,17 @@ fn collect_whole_name_reassigned(block: &Block, out: &mut HashSet<String>) {
         // Only need to descend into lambda bodies (where a captured local is
         // mutated) and through expr children that can hold a lambda.
         match e {
+            // A VALUE-form `n++` / `--n` reassigns its name just as
+            // `n = n + 1;` does, and it is the natural body of an expression
+            // lambda (`() -> n++`).
+            Expr::IncDec(i) => {
+                if let Expr::Path(qn) = &*i.target {
+                    if qn.segments.len() == 1 {
+                        out.insert(qn.segments[0].text.clone());
+                    }
+                }
+                ex(&i.target, out);
+            }
             Expr::Lambda(l) => match &l.body {
                 juxc_ast::LambdaBody::Expr(inner) => ex(inner, out),
                 juxc_ast::LambdaBody::Block(b) => blk(b, out),

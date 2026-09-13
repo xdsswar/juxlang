@@ -2933,6 +2933,9 @@ fn collect_bare_names_expr(e: &Expr, sink: &mut dyn FnMut(&str)) {
             collect_bare_names_expr(&t.else_branch, sink);
         }
         Expr::Await(inner, _) => collect_bare_names_expr(inner, sink),
+        // `n++` names `n` -- and in a lambda body it is the reason `n` has to be
+        // a shared cell at all.
+        Expr::IncDec(i) => collect_bare_names_expr(&i.target, sink),
         Expr::Lambda(inner) => collect_bare_names_in_lambda(inner, sink),
         _ => {}
     }

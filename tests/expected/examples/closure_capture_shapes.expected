@@ -1,0 +1,8 @@
+statement increment: 2
+compound assignment: 10
+value-form sum: 1
+n afterwards: 2
+seen 0
+seen 1
+m afterwards: 2
+parameter: 21

@@ -678,7 +678,14 @@ impl RustEmitter {
                     .map(|(_, p)| p.name.text.clone())
                     .collect(),
             );
+            // Parameter names, as every method/constructor body already records:
+            // the captured-mutation analysis needs them to count as locals.
+            let prev_params = std::mem::replace(
+                &mut self.current_fn_params,
+                fn_decl.params.iter().map(|p| p.name.text.clone()).collect(),
+            );
             self.emit_fn_body(body, &fn_decl.return_type);
+            self.current_fn_params = prev_params;
             self.local_types.pop();
             self.byref_param_names = prev_byref;
             self.out_params = prev_out;
@@ -946,6 +953,15 @@ impl RustEmitter {
             if !found && reads_owned_wrapper(sub) {
                 found = true;
             }
+            // A shared-cell local (a `ref` binding, or a local a closure
+            // captures and reassigns) is READ through `.borrow()`, and that
+            // guard is the same block-tail temporary: `start.borrow().clone()`
+            // as the tail outlives `start` itself (E0597).
+            if let juxc_ast::Expr::Path(qn) = sub {
+                if qn.segments.len() == 1 && self.ref_locals.contains(&qn.segments[0].text) {
+                    found = true;
+                }
+            }
         });
         found
     }
@@ -984,7 +1000,23 @@ impl RustEmitter {
         // later reader, and so must copy rather than move (see `crate::lastuse`).
         let prev_non_final =
             std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
-        let cell_locals = crate::analysis::collect_captured_mutated_locals(body);
+        let cell_locals =
+            crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
+        // A captured-and-reassigned PARAMETER has no declaration to wrap, so it
+        // is rebound as a cell before the first statement. The shadowing `let`
+        // is what a person would write, and every later use goes through the
+        // same `ref_locals` lowering a `var` cell does.
+        let mut cell_params: Vec<&String> = cell_locals
+            .iter()
+            .filter(|n| self.current_fn_params.contains(*n))
+            .collect();
+        cell_params.sort();
+        for p in cell_params {
+            let ident = to_rust_ident(p);
+            self.w.line(&format!(
+                "let {ident} = std::rc::Rc::new(std::cell::RefCell::new({ident}));"
+            ));
+        }
         for n in &cell_locals {
             self.ref_locals.insert(n.clone());
         }

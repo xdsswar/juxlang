@@ -1,0 +1,46 @@
+// A closure that changes what it captured, in every shape it can be written.
+//
+// A local captured by a closure and reassigned is ONE variable shared between
+// the closure and the scope around it, as in Java -- the compiler lowers it to a
+// shared cell. Three shapes never reached that lowering and failed in rustc:
+//
+//   * a value-form increment, where the increment IS the lambda's value
+//     (`() -> n++`), or sits inside an expression (`print(m++)`);
+//   * a captured PARAMETER, which has no `var` declaration to wrap;
+//   * returning such a cell-backed local as the function's last statement.
+
+public void runTwice(() -> void f) {
+    f();
+    f();
+}
+
+public int sumTwice(() -> int f) {
+    return f() + f();
+}
+
+/** A parameter, captured and reassigned, then returned. */
+public int countFrom(int start) {
+    runTwice(() -> { start = start + 10; });
+    return start;
+}
+
+public void main() {
+    int count = 0;
+    runTwice(() -> { count++; });
+    print("statement increment: " + count);
+
+    int total = 0;
+    runTwice(() -> { total += 5; });
+    print("compound assignment: " + total);
+
+    // Postfix yields the OLD value: 0 then 1.
+    int n = 0;
+    print("value-form sum: " + sumTwice(() -> n++));
+    print("n afterwards: " + n);
+
+    int m = 0;
+    runTwice(() -> { print("seen " + m++); });
+    print("m afterwards: " + m);
+
+    print("parameter: " + countFrom(1));
+}
