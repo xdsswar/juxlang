@@ -40,6 +40,11 @@ class JuxParser : PsiParser {
         while (!b.eof()) {
             when {
                 b.at(T.IMPORT_KW) -> parseImport(b)
+                // `@cfg(...) import …;` — a conditional import (grammar A.2.1).
+                atCfgImport(b) -> {
+                    parseAnnotations(b)
+                    parseImport(b)
+                }
                 isDeclarationStart(b) -> parseDeclaration(b)
                 else -> {
                     // Script mode (§E): a file may carry top-level statements
@@ -59,6 +64,21 @@ class JuxParser : PsiParser {
                 }
             }
         }
+    }
+
+    /** `@cfg ( … ) import` at the cursor. Always rolls back. */
+    private fun atCfgImport(b: PsiBuilder): Boolean {
+        if (!b.at(T.AT) || b.lookAhead(1) !== T.IDENTIFIER) return false
+        val probe = b.mark()
+        b.advanceLexer() // `@`
+        val isCfg = b.tokenText == "cfg"
+        b.advanceLexer()
+        val ok = isCfg && b.at(T.LPAREN) && run {
+            b.skipMatched(T.LPAREN, T.RPAREN)
+            b.at(T.IMPORT_KW)
+        }
+        probe.rollbackTo()
+        return ok
     }
 
     private fun parsePackage(b: PsiBuilder) {

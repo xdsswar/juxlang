@@ -195,9 +195,24 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         var p: PsiElement? = element.parent
         while (p != null && p !is JuxFile) {
             if (p.elementType in BLIND_ANCESTORS) return true
+            if (isConditionallyCompiled(p)) return true
             p = p.parent
         }
         return false
+    }
+
+    /**
+     * True for code a build may leave out (JUX-LANG-V1 §11): an `if cfg(...)`
+     * statement, or a declaration carrying `@cfg(...)`. The compiler decides
+     * those per target and never resolves the branches it drops, so names that
+     * exist only on another platform are legitimate there; the editor cannot
+     * know which target is meant.
+     */
+    private fun isConditionallyCompiled(p: PsiElement): Boolean {
+        if (p.elementType == E.IF_STATEMENT) return IF_CFG.containsMatchIn(p.text.take(16))
+        return p.node.getChildren(null).any {
+            it.elementType == E.ANNOTATION && CFG_ANNOTATION.containsMatchIn(it.text)
+        }
     }
 
     /**
@@ -326,6 +341,12 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
 
         /** Ancestor node kinds whose identifier leaves the resolver can't see into. */
         val BLIND_ANCESTORS = setOf(E.PATTERN, E.ANNOTATION, E.WHERE_CLAUSE)
+
+        /** The head of a compile-time `if cfg(...)`. */
+        val IF_CFG = Regex("""^if\s+cfg\s*\(""")
+
+        /** A `@cfg(...)` annotation; built-in annotation names ignore case. */
+        val CFG_ANNOTATION = Regex("""^@\s*cfg\s*\(""", RegexOption.IGNORE_CASE)
     }
 
     /** Rewrites the dangling name leaf to a close, in-scope declaration name. */

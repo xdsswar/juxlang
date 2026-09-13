@@ -74,8 +74,12 @@ private fun PsiBuilder.parseBreakContinue(type: com.intellij.psi.tree.IElementTy
 private fun PsiBuilder.parseIfStatement() {
     val m = mark()
     advanceLexer() // `if`
-    if (atContextualKw("cfg")) advanceLexer() // compile-time `if cfg(...)`
-    if (expect(T.LPAREN)) {
+    if (atContextualKw("cfg")) {
+        // Compile-time `if cfg(pred)`: the predicate nests `key = "value"`
+        // leaves (`any(os = "linux")`), which are not expressions.
+        advanceLexer()
+        if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) else error("'(' expected")
+    } else if (expect(T.LPAREN)) {
         parseExpression()
         expectOrError(T.RPAREN, "')' expected")
     }
