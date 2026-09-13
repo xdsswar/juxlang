@@ -145,6 +145,22 @@ impl RustEmitter {
 
     /// [`Self::collection_is_handle`] keyed by a bare or dotted type NAME,
     /// for the paths that have a checked `Ty` rather than a written path.
+    /// The fully-qualified name of the class being emitted: its bare name in
+    /// the current unit's package.
+    pub(crate) fn enclosing_class_fqn(&self) -> Option<String> {
+        let bare = self.enclosing_class.as_deref()?;
+        let pkg = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .map(|u| u.package.join("."))
+            .unwrap_or_default();
+        Some(if pkg.is_empty() {
+            bare.to_string()
+        } else {
+            format!("{pkg}.{bare}")
+        })
+    }
+
     pub(crate) fn collection_name_is_handle(&self, name: &str) -> bool {
         let bare = name.rsplit('.').next().unwrap_or(name);
         // **Worker-shared class (JUX-ASYNC-ADDENDUM §18.2).** Its instances
@@ -159,10 +175,13 @@ impl RustEmitter {
         // §6.5.1 does not reach. Making it reach there needs a second,
         // atomic handle shape and a type that says which one a value carries;
         // that is a language-level decision, not a codegen one.
+        //
+        // Compared by FQN. By bare name, a program's own worker-shared
+        // `Registry` made `jux.meta.Registry` count as worker-shared too, so the
+        // generated registry returned plain `Vec`s to callers expecting handles.
         if self
-            .enclosing_class
-            .as_deref()
-            .is_some_and(|c| self.sync_classes.contains(c))
+            .enclosing_class_fqn()
+            .is_some_and(|c| self.sync_class_fqns.contains(&c))
         {
             return false;
         }

@@ -1,0 +1,55 @@
+// A program's own `Registry`, beside the compiler's.
+//
+// Every program gets a generated `jux.meta.Registry` holding its RUNTIME
+// annotations. This one also declares a class called `Registry`, and hands it
+// to a worker, which makes it worker-shared. Two bugs lived in that overlap,
+// both from comparing classes by bare name:
+//
+//   * inside `jux.meta`, `Registry.all()` resolved to THIS class (a no-package
+//     class's symbol key is just `Registry`), found no static `all`, and was
+//     emitted as a call on the struct constructor;
+//   * this class being worker-shared made `jux.meta.Registry` look worker-shared
+//     too, so the generated methods returned plain `Vec`s while every caller
+//     expected the shared collection handle.
+//
+// Both are compared by fully-qualified name now.
+
+import rust.std.*;
+
+@Retention(RUNTIME)
+public annotation Tag {
+    String value();
+}
+
+/** The program's own registry: nothing to do with annotations. */
+public class Registry {
+    private Vec<String> log;
+    public Registry() { this.log = new Vec<String>(); }
+    public void handle(String req) { this.log.push(req); }
+    public int count() { return this.log.len(); }
+}
+
+@Tag(value = "hello")
+public class Marked { }
+
+@Tag(value = "world")
+public class AlsoMarked { }
+
+public int hammer(Registry r, int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        r.handle("request");
+    }
+    return n;
+}
+
+public void main() {
+    var r = new Registry();
+    var worker = Worker.spawn(() -> hammer(r, 3));
+    worker.join();
+    print("handled: " + r.count());
+
+    for (var t : jux.meta.Registry.annotated("Tag")) {
+        print("tag on " + t.target() + ": " + t.get("value")!!);
+    }
+    print("recorded: " + jux.meta.Registry.all().len());
+}

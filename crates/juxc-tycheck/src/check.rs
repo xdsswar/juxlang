@@ -4444,7 +4444,11 @@ impl<'a> Checker<'a> {
     /// Resolve a (possibly bare) class name to its FQN key in the
     /// symbol table. Direct hit first, then a last-segment scan.
     fn resolve_class_fqn(&self, name: &str) -> Option<String> {
-        if self.symbols.classes.contains_key(name) {
+        // Qualified names are their own answer; a BARE name is resolved in this
+        // unit's context before it can match a no-package class of the same
+        // name (see the backend's `resolve_bare_class_fqn` for the bug the
+        // other order caused).
+        if name.contains('.') && self.symbols.classes.contains_key(name) {
             return Some(name.to_string());
         }
         // Package-aware resolution: a bare name can match several FQNs (two
@@ -4463,6 +4467,9 @@ impl<'a> Checker<'a> {
             if self.symbols.classes.contains_key(&cand) {
                 return Some(cand);
             }
+        }
+        if self.symbols.classes.contains_key(name) {
+            return Some(name.to_string());
         }
         // Fallback (unqualified cross-package reference): prefer a non-`external`
         // (user) class so user code shadows a stub, then break ties by FQN so

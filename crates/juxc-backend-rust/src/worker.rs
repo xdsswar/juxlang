@@ -133,6 +133,120 @@ fn worker_capture_class_names(
     out
 }
 
+/// The fully-qualified names of the classes that cross a worker boundary.
+///
+/// The same closure as [`compute_worker_shared_classes`] -- capture seeds, then
+/// every class a shared class's fields reach -- with each class named by FQN
+/// rather than bare name. The bare set drives the class-representation system,
+/// which is keyed by bare name throughout; this one is for the questions where
+/// two same-named classes in different packages must not be confused, the
+/// first being "is the class I am emitting worker-shared?".
+///
+/// `units[i]` and `symbols.units[i]` describe the same compilation unit (the
+/// driver builds both from one list), which is how a field type's bare head is
+/// resolved in the package and imports of the unit that wrote it.
+pub(crate) fn compute_worker_shared_class_fqns(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+    symbols: &juxc_tycheck::SymbolTable,
+) -> HashSet<String> {
+    // Seeds: a capture's checked type is already a full name.
+    let mut out: HashSet<String> = HashSet::new();
+    walk_unit_exprs(units, &mut |e| {
+        let Expr::Call(c) = e else { return };
+        if !is_worker_spawn_callee(&c.callee) {
+            return;
+        }
+        let Some(Expr::Lambda(l)) = c.args.first() else { return };
+        let params: HashSet<&str> = l.params.iter().map(|p| p.name.text.as_str()).collect();
+        let mut visit = |inner: &Expr| {
+            let Expr::Path(qn) = inner else { return };
+            if qn.segments.len() != 1 || params.contains(qn.segments[0].text.as_str()) {
+                return;
+            }
+            if let Some(Ty::User { name, .. }) = peel(expr_types.get(&qn.span)) {
+                out.insert(name.clone());
+            }
+        };
+        match &l.body {
+            LambdaBody::Expr(b) => walk_expr(b, &mut visit),
+            LambdaBody::Block(b) => walk_block(b, &mut visit),
+        }
+    });
+    out.retain(|fqn| symbols.worker_share_blocker(fqn.rsplit('.').next().unwrap_or(fqn)).is_none());
+    if out.is_empty() {
+        return out;
+    }
+
+    // Edges: each class's FQN to the FQNs its fields name, resolved in the
+    // declaring unit's own context.
+    let resolve = |idx: usize, head: &str| -> Option<String> {
+        let ctx = symbols.units.get(idx);
+        if let Some(fqn) = ctx.and_then(|c| c.unqualified.get(head)) {
+            if symbols.classes.contains_key(fqn) {
+                return Some(fqn.clone());
+            }
+        }
+        if let Some(ctx) = ctx {
+            if !ctx.package.is_empty() {
+                let cand = format!("{}.{}", ctx.package.join("."), head);
+                if symbols.classes.contains_key(&cand) {
+                    return Some(cand);
+                }
+            }
+        }
+        symbols.classes.contains_key(head).then(|| head.to_string())
+    };
+    let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
+    for (idx, unit) in units.iter().enumerate() {
+        let pkg = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        for item in &unit.items {
+            let juxc_ast::TopLevelDecl::Class(cd) = item else { continue };
+            let owner = if pkg.is_empty() {
+                cd.name.text.clone()
+            } else {
+                format!("{pkg}.{}", cd.name.text)
+            };
+            let entry = edges.entry(owner).or_default();
+            for f in &cd.fields {
+                let Some(ty) = &f.ty else { continue };
+                let mut heads: Vec<&str> =
+                    ty.name.segments.last().map(|s| s.text.as_str()).into_iter().collect();
+                for a in &ty.generic_args {
+                    if let Some(t) = a.as_type() {
+                        heads.extend(t.name.segments.last().map(|s| s.text.as_str()));
+                    }
+                }
+                for h in heads {
+                    if let Some(fqn) = resolve(idx, h) {
+                        entry.insert(fqn);
+                    }
+                }
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (owner, referenced) in &edges {
+            if !out.contains(owner) {
+                continue;
+            }
+            for r in referenced {
+                let bare = r.rsplit('.').next().unwrap_or(r);
+                if symbols.worker_share_blocker(bare).is_none() && out.insert(r.clone()) {
+                    changed = true;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `Worker.spawn` — the one call form that starts another OS thread (§18.2).
 pub(crate) fn is_worker_spawn_callee(callee: &Expr) -> bool {
     let Expr::Field(f) = callee else { return false };

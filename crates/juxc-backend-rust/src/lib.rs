@@ -265,6 +265,10 @@ pub fn lower_workspace_with_entry(
         .intersection(&e.wrapper_classes)
         .cloned()
         .collect();
+    e.sync_class_fqns = worker::compute_worker_shared_class_fqns(units, expr_types, symbols)
+        .into_iter()
+        .filter(|fqn| e.wrapper_classes.contains(fqn.rsplit('.').next().unwrap_or(fqn)))
+        .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -444,6 +448,10 @@ pub fn lower_workspace_test(
     e.sync_classes = worker::compute_worker_shared_classes(units, expr_types, symbols)
         .intersection(&e.wrapper_classes)
         .cloned()
+        .collect();
+    e.sync_class_fqns = worker::compute_worker_shared_class_fqns(units, expr_types, symbols)
+        .into_iter()
+        .filter(|fqn| e.wrapper_classes.contains(fqn.rsplit('.').next().unwrap_or(fqn)))
         .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
@@ -1055,6 +1063,9 @@ struct RustEmitter {
     /// `.borrow_mut()`, so only the type spelling, the constructor, and the two
     /// identity operations (`ptr_eq`, `as_ptr`) consult this set.
     pub(crate) sync_classes: std::collections::HashSet<String>,
+    /// [`Self::sync_classes`] by fully-qualified name, for the checks that
+    /// must not confuse two same-named classes in different packages.
+    pub(crate) sync_class_fqns: std::collections::HashSet<String>,
     /// Type-parameter names of the declaration currently being emitted that are
     /// used as a **hash-keyed** container's key (`HashMap<K, V>`, `HashSet<K>`)
     /// and therefore need `Eq + Hash`, and as a **B-tree** key
@@ -4581,6 +4592,7 @@ impl RustEmitter {
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
             sync_classes: std::collections::HashSet::new(),
+            sync_class_fqns: std::collections::HashSet::new(),
             hash_key_params: std::collections::HashSet::new(),
             ord_key_params: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),

@@ -209,7 +209,9 @@ impl crate::RustEmitter {
             .map(|s| s.text.as_str())
             .collect::<Vec<_>>()
             .join(".");
-        if self.symbols.classes.contains_key(&joined) {
+        // A single segment goes through the unit's context first; see
+        // `resolve_bare_class_fqn` for why an exact key match cannot win.
+        if qn.segments.len() > 1 && self.symbols.classes.contains_key(&joined) {
             return Some(joined);
         }
         if qn.segments.len() == 1 {
@@ -239,9 +241,17 @@ impl crate::RustEmitter {
     ///    **deterministic** (a raw `HashMap` scan is iteration-order dependent,
     ///    which would make emission non-reproducible).
     pub(crate) fn resolve_bare_class_fqn(&self, name: &str) -> Option<String> {
-        if self.symbols.classes.contains_key(name) {
+        // An already-qualified name is its own answer.
+        if name.contains('.') && self.symbols.classes.contains_key(name) {
             return Some(name.to_string());
         }
+        // A BARE name is resolved in the unit's own context first -- its
+        // package's types and its imports -- and only then as a no-package
+        // class of that exact name. The reverse order let a program's
+        // no-package `Registry` (whose symbol-table key is just `Registry`)
+        // win inside `jux.meta`, where `Registry` means `jux.meta.Registry`:
+        // `Registry.all()` there resolved to the user's class, found no static
+        // `all`, and lowered as a call on the tuple-struct constructor.
         if let Some(idx) = self.current_unit_idx {
             if let Some(ctx) = self.symbols.units.get(idx) {
                 if let Some(fqn) = ctx.unqualified.get(name) {
@@ -256,6 +266,9 @@ impl crate::RustEmitter {
                     }
                 }
             }
+        }
+        if self.symbols.classes.contains_key(name) {
+            return Some(name.to_string());
         }
         self.symbols
             .classes

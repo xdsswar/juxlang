@@ -288,18 +288,26 @@ fn render(entries: &[Entry]) -> String {
     }
     out.push_str("        return out;\n    }\n\n");
 
-    // The same rows again, each guarded by the requested name. Building them
-    // here rather than filtering `all()` keeps every construct in this file
-    // local to one function -- see the module note on why that matters.
+    // `annotated` filters `all` rather than repeating its rows. It used to
+    // repeat them, because a class calling its own static method from inside
+    // this generated unit lowered to the newtype CONSTRUCTOR whenever the
+    // program declared a worker-shared class of the same bare name: the
+    // backend's class sets were keyed by bare name, so a user's `Registry`
+    // decided how `jux.meta.Registry` lowered.
     out.push_str(
-        "    /// The applications of one annotation, by its bare name.\n\
-         \x20   public static Vec<AnnotatedItem> annotated(String name) {\n\
-         \x20       var out = new Vec<AnnotatedItem>();\n",
+        "    /// The applications of one annotation, by its bare name.
+             public static Vec<AnnotatedItem> annotated(String name) {
+                 var out = new Vec<AnnotatedItem>();
+                 for (var item : Registry.all()) {
+                     if (item.name() == name) {
+                         out.push(item);
+                     }
+                 }
+                 return out;
+             }
+         }
+",
     );
-    for (i, e) in entries.iter().enumerate() {
-        out.push_str(&rows_for(i, e, Some(&e.annotation)));
-    }
-    out.push_str("        return out;\n    }\n}\n");
     out
 }
 
