@@ -1,0 +1,28 @@
+// Classes that share a name across packages.
+//
+// How a class is represented in the generated code (a shared handle, or a
+// plain value for exceptions) used to be decided per bare name. One exception
+// called `Failure` anywhere in the program turned every `Failure` into a plain
+// value, and `new Failure(...)` could even construct the wrong package's class.
+// Each class is now decided, and each name resolved, on its own.
+
+import app.model.{Failure, IOException};
+
+public void main() {
+    var f = new Failure("disk");
+    var alias = f;
+    alias.bump();
+    alias.bump();
+    print($"${f.reason} failed ${f.count} times");
+
+    try {
+        throw new app.errors.Failure("boom", 7);
+    } catch (app.errors.Failure e) {
+        print($"caught ${e.getMessage()} with code ${e.code}");
+    }
+
+    var io = new IOException("/tmp");
+    var same = io;
+    same.path = "/var";
+    print($"the path is now ${io.path}");
+}

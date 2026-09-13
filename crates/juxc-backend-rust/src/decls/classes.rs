@@ -50,7 +50,7 @@ impl RustEmitter {
             || class_decl.name.text == "Path"
             || class_decl.name.text == "Console"
         {
-            let pkg = self.symbols.package.join(".");
+            let pkg = self.current_package_path();
             if pkg == "jux.std.io" {
                 return;
             }
@@ -60,13 +60,13 @@ impl RustEmitter {
             || class_decl.name.text == "AtomicInt"
             || class_decl.name.text == "AtomicLong"
         {
-            let pkg = self.symbols.package.join(".");
+            let pkg = self.current_package_path();
             if pkg == "jux.std.concurrent" {
                 return;
             }
         }
         if class_decl.name.text == "Clock" || class_decl.name.text == "Instant" {
-            let pkg = self.symbols.package.join(".");
+            let pkg = self.current_package_path();
             if pkg == "jux.std.time" {
                 return;
             }
@@ -156,7 +156,7 @@ impl RustEmitter {
         // is the only gate needed here. Both leaf simple classes AND
         // hierarchy members (incl. abstract parents) flow into
         // `emit_wrapper_class_decl`, which branches on `extends`.
-        if self.wrapper_classes.contains(&class_decl.name.text) {
+        if self.is_wrapper_class(&class_decl.name.text) {
             self.emit_wrapper_class_decl(class_decl);
             self.enclosing_class = prev_enclosing;
             self.emitting_class_has_static_init = prev_has_static_init;
@@ -340,7 +340,7 @@ impl RustEmitter {
                     // `Parent`-typed slot is now `Rc<dyn ParentKind>`, and the
                     // upcast wraps (`Rc::new(child) as Rc<dyn ParentKind>`,
                     // identity-preserving) instead of extracting `__parent`.
-                    if !self.poly_base_classes.contains(parent_bare) {
+                    if !self.is_poly_base_class(parent_bare) {
                         self.w.emit_indent();
                         // Generic classes need `impl<T: Clone + Debug>` before
                         // `From<Child<T>>` — otherwise `T` is out of scope (E0412).
@@ -762,7 +762,7 @@ impl RustEmitter {
     fn type_is_nonstd_foreign(&self, ty: &juxc_ast::TypeRef) -> bool {
         let qn = &ty.name;
         let fqn = if qn.segments.len() == 1 {
-            self.symbols.find_fqn_by_bare(&qn.segments[0].text)
+            self.resolve_bare_type_fqn(&qn.segments[0].text)
         } else {
             Some(
                 qn.segments
@@ -1009,8 +1009,8 @@ impl RustEmitter {
         // Handle shape by rep (§CR.3.3 / §CR.4.1): `RcRefCell` wraps the inner in
         // `Rc<RefCell<..>>`; bare `Rc` (read-only share) drops the cell; `Box`
         // (escapes-but-unaliased, unique owner) is `Box<..>`.
-        let is_box = self.box_classes.contains(&class_decl.name.text);
-        let refcell = self.refcell_classes.contains(&class_decl.name.text);
+        let is_box = self.is_box_class(&class_decl.name.text);
+        let refcell = self.is_refcell_class(&class_decl.name.text);
         // A class whose instances cross a worker boundary carries the ATOMIC
         // handle instead (§18.2) — the same surface, `Send + Sync`.
         let sync = self.sync_classes.contains(&class_decl.name.text);
@@ -1206,8 +1206,8 @@ impl RustEmitter {
                 // A polymorphic base uses `Rc<dyn ParentKind>` dispatch — the
                 // identity-preserving wrap coercion replaces this slicing
                 // `From`, so don't emit it (it would be dead, confusing code).
-                if self.wrapper_classes.contains(parent_bare)
-                    && !self.poly_base_classes.contains(parent_bare)
+                if self.is_wrapper_class(parent_bare)
+                    && !self.is_poly_base_class(parent_bare)
                 {
                     // `impl[<T: Clone>] From<Child<T>> for Parent<pargs> { … }`.
                     // The child's own generic params (with the Clone bound)
@@ -1352,11 +1352,10 @@ impl RustEmitter {
     /// parent's inner struct, a parent's `Kind` trait, a subclass named in the
     /// base package's upcast impl -- has to say where it lives.
     pub(crate) fn cross_package_prefix(&self, bare: &str) -> String {
-        self.symbols
-            .find_fqn_by_bare(bare)
+        self.resolve_bare_type_fqn(bare)
             .and_then(|fqn| {
                 let (pkg, _) = fqn.rsplit_once('.')?;
-                (pkg != self.symbols.package.join(".")).then(|| {
+                (pkg != self.current_package_path()).then(|| {
                     let joined = juxc_lex::to_rust_path(pkg);
                     format!("crate::{joined}::")
                 })
@@ -1365,9 +1364,9 @@ impl RustEmitter {
     }
 
     fn emit_parent_inner_path(&mut self, bare: &str) {
-        let qualified = self.symbols.find_fqn_by_bare(bare).and_then(|fqn| {
+        let qualified = self.resolve_bare_type_fqn(bare).and_then(|fqn| {
             let (pkg, _) = fqn.rsplit_once('.')?;
-            (pkg != self.symbols.package.join(".")).then(|| {
+            (pkg != self.current_package_path()).then(|| {
                 let joined = juxc_lex::to_rust_path(pkg);
                 format!("crate::{joined}::")
             })
@@ -2772,7 +2771,7 @@ impl RustEmitter {
     /// class needs a **populated** `<Name>Kind` trait + delegating impls so
     /// virtual dispatch works; every other class keeps the empty marker.
     pub(crate) fn is_dispatch_relevant_class(&self, class_bare: &str) -> bool {
-        if self.poly_base_classes.contains(class_bare) {
+        if self.is_poly_base_class(class_bare) {
             return true;
         }
         let mut cursor = self.direct_parent_bare(class_bare);
@@ -2781,7 +2780,7 @@ impl RustEmitter {
             if depth > 64 {
                 return false;
             }
-            if self.poly_base_classes.contains(&name) {
+            if self.is_poly_base_class(&name) {
                 return true;
             }
             cursor = self.direct_parent_bare(&name);
@@ -3020,7 +3019,7 @@ impl RustEmitter {
         // supertrait chain.
         let parent_base = self
             .direct_parent_bare(b)
-            .filter(|p| self.poly_base_classes.contains(p));
+            .filter(|p| self.is_poly_base_class(p));
         let mut out: Vec<String> = self
             .downcast_targets
             .iter()
@@ -3055,7 +3054,7 @@ impl RustEmitter {
             self.w.push_str("std::rc::Rc<dyn ");
             self.w.push_str(t);
             self.w.push('>');
-        } else if self.poly_base_classes.contains(t) {
+        } else if self.is_poly_base_class(t) {
             self.w.push_str("std::rc::Rc<dyn ");
             self.w.push_str(t);
             self.w.push_str("Kind");
@@ -3170,7 +3169,7 @@ impl RustEmitter {
         self.emit_hook_target_type(t, base);
         self.w.push_str("> { Some(");
         let is_dyn =
-            self.lookup_interface_by_bare_or_fqn(t).is_some() || self.poly_base_classes.contains(t);
+            self.lookup_interface_by_bare_or_fqn(t).is_some() || self.is_poly_base_class(t);
         if is_dyn {
             self.w.push_str("std::rc::Rc::new(self.clone()) as ");
             self.emit_hook_target_type(t, base);
@@ -3349,7 +3348,7 @@ impl RustEmitter {
         // as a trait object.
         let class_bare = class_decl.name.text.clone();
         let relevant = self.is_dispatch_relevant_class(&class_bare);
-        let c_is_poly = self.poly_base_classes.contains(&class_bare);
+        let c_is_poly = self.is_poly_base_class(&class_bare);
 
         // --- `trait <Name>Kind: <supertrait> { <method sigs?> }` ---
         self.w.emit_indent();
@@ -3373,7 +3372,7 @@ impl RustEmitter {
         // either way, so `dyn …Kind` containers still derive `Debug`).
         let parent_super: Option<String> = if relevant {
             self.direct_parent_bare(&class_bare)
-                .filter(|p| self.poly_base_classes.contains(p))
+                .filter(|p| self.is_poly_base_class(p))
         } else {
             None
         };
@@ -3600,14 +3599,14 @@ impl RustEmitter {
                 self.w.push_str(" for ");
                 self.w.push_str(&class_bare);
                 self.emit_generic_params_as_args(&class_decl.generic_params);
-                let anc_methods = if self.poly_base_classes.contains(&ancestor_bare) {
+                let anc_methods = if self.is_poly_base_class(&ancestor_bare) {
                     self.class_introduced_virtual_methods(&ancestor_bare)
                 } else {
                     Vec::new()
                 };
                 // Hook overrides this class provides for the ANCESTOR's Kind
                 // trait: ancestor's hook targets that `class_bare` IS-A.
-                let anc_hook_targets = if self.poly_base_classes.contains(&ancestor_bare) {
+                let anc_hook_targets = if self.is_poly_base_class(&ancestor_bare) {
                     self.hook_targets_for_base(&ancestor_bare)
                 } else {
                     Vec::new()
@@ -3617,12 +3616,12 @@ impl RustEmitter {
                     .filter(|t| self.class_is_a(&class_bare, t))
                     .cloned()
                     .collect();
-                let anc_accessor_fields = if self.poly_base_classes.contains(&ancestor_bare) {
+                let anc_accessor_fields = if self.is_poly_base_class(&ancestor_bare) {
                     self.class_accessor_fields(&ancestor_bare)
                 } else {
                     Vec::new()
                 };
-                let anc_observer_sigs = self.poly_base_classes.contains(&ancestor_bare)
+                let anc_observer_sigs = self.is_poly_base_class(&ancestor_bare)
                     && self.class_has_kind_observer_props(&ancestor_bare);
                 if anc_methods.is_empty()
                     && anc_hooks.is_empty()
@@ -4337,7 +4336,7 @@ impl RustEmitter {
                         // `Deref` to bridge that (E0308). The legacy path
                         // keeps the ancestor-FQN form (Deref coercion
                         // carries `&mut Child` → `&Ancestor`).
-                        if self.wrapper_classes.contains(&class_decl.name.text) {
+                        if self.is_wrapper_class(&class_decl.name.text) {
                             method_targets.insert(name.clone(), Some(String::new()));
                         } else {
                             method_targets.insert(name.clone(), Some(fqn));
@@ -4873,8 +4872,8 @@ impl RustEmitter {
         }
         if let Some(seg) = ty.name.segments.last() {
             let bare = seg.text.as_str();
-            if self.wrapper_classes.contains(bare)
-                || self.poly_base_classes.contains(bare)
+            if self.is_wrapper_class(bare)
+                || self.is_poly_base_class(bare)
                 || self.lookup_interface_by_bare_or_fqn(bare).is_some()
             {
                 return true;
@@ -5003,7 +5002,8 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("fn drop(&mut self) {");
         self.w.indent_inc();
-        let removed = self.wrapper_classes.remove(&class_decl.name.text);
+        let key = self.resolve_bare_class_fqn(&class_decl.name.text);
+        let removed = key.as_ref().is_some_and(|k| self.wrapper_classes.remove(k));
         let prev_this = self.this_alias.replace("self".to_string());
         let mut muts = std::collections::HashSet::new();
         for block in &class_decl.drop_blocks {
@@ -5020,8 +5020,8 @@ impl RustEmitter {
         }
         self.mutated_in_fn = prev_muts;
         self.this_alias = prev_this;
-        if removed {
-            self.wrapper_classes.insert(class_decl.name.text.clone());
+        if let (true, Some(k)) = (removed, key) {
+            self.wrapper_classes.insert(k);
         }
         self.w.indent_dec();
         self.w.line("}");

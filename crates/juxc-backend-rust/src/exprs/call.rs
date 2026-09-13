@@ -265,7 +265,7 @@ impl RustEmitter {
                 let by_name = if let Expr::Path(qn) = &*f.object {
                     qn.segments
                         .last()
-                        .and_then(|l| self.symbols.find_fqn_by_bare(&l.text))
+                        .and_then(|l| self.resolve_bare_type_fqn(&l.text))
                 } else {
                     None
                 };
@@ -336,7 +336,7 @@ impl RustEmitter {
                     Expr::Path(qn) => qn
                         .segments
                         .last()
-                        .and_then(|l| self.symbols.find_fqn_by_bare(&l.text)),
+                        .and_then(|l| self.resolve_bare_type_fqn(&l.text)),
                     _ => None,
                 }
                 .or_else(|| match self.receiver_ty_of(&f.object) {
@@ -403,7 +403,7 @@ impl RustEmitter {
                 // Static: receiver is a bare/qualified class name.
                 if let Expr::Path(qn) = &*f.object {
                     if let Some(last) = qn.segments.last() {
-                        if let Some(fqn) = self.symbols.find_fqn_by_bare(&last.text) {
+                        if let Some(fqn) = self.resolve_bare_type_fqn(&last.text) {
                             if let Some(m) = self.external_type_method(&fqn, method) {
                                 return m.is_foreign_result;
                             }
@@ -2840,7 +2840,7 @@ impl RustEmitter {
                 // A wrapper-class instance dispatches through `&self` —
                 // no E0499 risk (the RefCell arg-guard hazard was
                 // already handled by the top-of-fn check).
-                if self.wrapper_classes.contains(&c) {
+                if self.is_wrapper_class(&c) {
                     return false;
                 }
             }
@@ -2848,7 +2848,7 @@ impl RustEmitter {
             if let Some(enclosing) = &self.enclosing_class {
                 // Inside a wrapper class's own method,
                 // `this.m(this.bump())` dispatches through `&self` too.
-                if self.wrapper_classes.contains(enclosing) {
+                if self.is_wrapper_class(enclosing) {
                     return false;
                 }
             }
@@ -2856,7 +2856,7 @@ impl RustEmitter {
             // Field-path receiver (`h.item.set(…)`): exempt when the
             // FIELD's class is wrapper-shape (its methods take `&self`).
             if let Some(c) = self.receiver_class_bare(&f.object) {
-                if self.wrapper_classes.contains(&c) {
+                if self.is_wrapper_class(&c) {
                     return false;
                 }
             }
@@ -2884,13 +2884,13 @@ impl RustEmitter {
             }
             Expr::Field(f) => {
                 if let Some(c) = self.receiver_class_bare(&f.object) {
-                    if self.wrapper_classes.contains(&c) {
+                    if self.is_wrapper_class(&c) {
                         return true;
                     }
                 }
                 if matches!(&*f.object, Expr::This(_)) {
                     if let Some(en) = &self.enclosing_class {
-                        if self.wrapper_classes.contains(en) {
+                        if self.is_wrapper_class(en) {
                             return true;
                         }
                     }

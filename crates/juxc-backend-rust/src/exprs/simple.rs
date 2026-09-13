@@ -71,7 +71,7 @@ impl RustEmitter {
     /// (a polymorphic base or an interface) — i.e. it carries the
     /// `__jux_as_<T>` runtime-type hooks. Concrete classes don't.
     pub(crate) fn source_is_dyn(&self, bare: &str) -> bool {
-        self.poly_base_classes.contains(bare)
+        self.is_poly_base_class(bare)
             || self.lookup_interface_by_bare_or_fqn(bare).is_some()
     }
 

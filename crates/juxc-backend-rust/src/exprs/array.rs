@@ -107,7 +107,7 @@ impl RustEmitter {
                         let bare = name.rsplit('.').next().unwrap_or(name);
                         // Wrapper classes share-clone at use sites; tuple
                         // sentinel and unknown names stay un-cloned.
-                        !self.wrapper_classes.contains(bare)
+                        !self.is_wrapper_class(bare)
                             && (self.symbols.classes.contains_key(name.as_str())
                                 || self
                                     .symbols

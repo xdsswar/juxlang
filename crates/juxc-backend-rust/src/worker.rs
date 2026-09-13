@@ -19,7 +19,7 @@ use juxc_ast::{Block, ElseBranch, Expr, InterpSegment, LambdaBody, Stmt};
 use juxc_source::Span;
 use juxc_tycheck::Ty;
 
-use crate::{rollup_class_reps, ClassRep};
+use crate::{bare_extends_adjacency, rollup_class_reps, ClassRep};
 
 /// Bare names of the classes whose instances cross a worker boundary — captured
 /// by a `Worker.spawn` closure, plus every class reachable from one through a
@@ -72,7 +72,7 @@ pub(crate) fn compute_worker_shared_classes(
             }
         }
     }
-    rollup_class_reps(&mut reps, units);
+    rollup_class_reps(&mut reps, &bare_extends_adjacency(units));
     reps.into_iter()
         .filter(|(n, r)| *r == ClassRep::ArcMutex && !blocked.contains_key(n))
         .map(|(n, _)| n)

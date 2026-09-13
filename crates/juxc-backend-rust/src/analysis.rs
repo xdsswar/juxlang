@@ -2394,8 +2394,7 @@ impl crate::RustEmitter {
             // resolution in `callee_param_flag`.
             if let Some(bare) = self.receiver_class_bare(&f.object) {
                 let sig = self.symbols.classes.get(&bare).or_else(|| {
-                    self.symbols
-                        .find_fqn_by_bare(&bare)
+                    self.resolve_bare_type_fqn(&bare)
                         .and_then(|fqn| self.symbols.classes.get(&fqn))
                 });
                 if let Some(c) = sig {
@@ -2499,8 +2498,7 @@ impl crate::RustEmitter {
             // Instance method: resolve the receiver's class.
             if let Some(bare) = self.receiver_class_bare(&f.object) {
                 let sig = self.symbols.classes.get(&bare).or_else(|| {
-                    self.symbols
-                        .find_fqn_by_bare(&bare)
+                    self.resolve_bare_type_fqn(&bare)
                         .and_then(|fqn| self.symbols.classes.get(&fqn))
                 });
                 if let Some(c) = sig {
@@ -3463,7 +3461,7 @@ impl crate::RustEmitter {
         // A polymorphic base never takes the slicing `.into()` upcast — its
         // value slots are `Rc<dyn …Kind>` and the wrap coercion
         // (`iface_coercion_to`) handles the upcast, pre-empting this path.
-        if self.poly_base_classes.contains(target_bare) {
+        if self.is_poly_base_class(target_bare) {
             return false;
         }
         let Some(parent_class) = self.lookup_class_by_bare_or_fqn(target_bare) else {
@@ -3628,7 +3626,7 @@ impl crate::RustEmitter {
         // interface (`Rc<dyn Iface>`) or a **polymorphic base class**
         // (`Rc<dyn <Name>Kind>`, Stage-2). Anything else stays concrete.
         let target_is_iface = self.lookup_interface_by_bare_or_fqn(target_bare).is_some();
-        let target_is_polybase = self.poly_base_classes.contains(target_bare);
+        let target_is_polybase = self.is_poly_base_class(target_bare);
         if !target_is_iface && !target_is_polybase {
             return IfaceCoercion::None;
         }
@@ -3699,7 +3697,7 @@ impl crate::RustEmitter {
             // handle — it wraps like any other class (the same distinction the
             // same-name branch above draws).
             if target_is_iface
-                && self.poly_base_classes.contains(src_bare)
+                && self.is_poly_base_class(src_bare)
                 && !matches!(expr, Expr::NewObject(_))
             {
                 return IfaceCoercion::UpcastDyn {
@@ -3744,7 +3742,7 @@ impl crate::RustEmitter {
         };
         // Interfaces / polymorphic bases use the dyn-coercion path, not `From`.
         if self.lookup_interface_by_bare_or_fqn(target_bare).is_some()
-            || self.poly_base_classes.contains(target_bare)
+            || self.is_poly_base_class(target_bare)
         {
             return false;
         }
@@ -3923,8 +3921,7 @@ impl crate::RustEmitter {
             // resolution in `callee_param_is_nullable`).
             if let Some(bare) = self.receiver_class_bare(&f.object) {
                 let sig = self.symbols.classes.get(&bare).or_else(|| {
-                    self.symbols
-                        .find_fqn_by_bare(&bare)
+                    self.resolve_bare_type_fqn(&bare)
                         .and_then(|fqn| self.symbols.classes.get(&fqn))
                 });
                 if let Some(c) = sig {

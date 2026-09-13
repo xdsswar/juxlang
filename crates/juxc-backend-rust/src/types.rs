@@ -557,9 +557,9 @@ impl RustEmitter {
             // so the mangled bare name resolves directly.
             let mut resolved_path: Option<String> = self.enclosing_nested_type(bare);
             if resolved_path.is_none() {
-                if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+                if let Some(fqn) = self.resolve_bare_type_fqn(bare) {
                     if fqn.contains('.') {
-                        let cur_pkg = self.symbols.package.join(".");
+                        let cur_pkg = self.current_package_path();
                         let fqn_pkg = fqn
                             .rsplit_once('.')
                             .map(|(p, _)| p.to_string())
@@ -618,7 +618,7 @@ impl RustEmitter {
                         .rsplit_once('.')
                         .map(|(p, _)| p.to_string())
                         .unwrap_or_default();
-                    if fqn_pkg == self.symbols.package.join(".") {
+                    if fqn_pkg == self.current_package_path() {
                         ty.name
                             .segments
                             .last()
@@ -657,7 +657,7 @@ impl RustEmitter {
         let value_polybase = self.in_value_type_position
             && !value_iface
             && last_seg
-                .map(|s| self.poly_base_classes.contains(s))
+                .map(|s| self.is_poly_base_class(s))
                 .unwrap_or(false);
         if value_polybase {
             self.w.push_str("std::rc::Rc<dyn ");
@@ -766,7 +766,7 @@ impl RustEmitter {
             .last()
             .map(|s| {
                 self.lookup_interface_by_bare_or_fqn(&s.text).is_some()
-                    || self.poly_base_classes.contains(&s.text)
+                    || self.is_poly_base_class(&s.text)
             })
             .unwrap_or(false);
         if is_dyn_elem {

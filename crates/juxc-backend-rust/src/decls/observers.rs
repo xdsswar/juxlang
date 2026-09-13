@@ -1117,7 +1117,7 @@ impl RustEmitter {
     fn class_rust_path(&mut self, bare: &str) -> String {
         let local = self.symbols.classes.contains_key(bare);
         if !local {
-            if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+            if let Some(fqn) = self.resolve_bare_type_fqn(bare) {
                 if fqn.contains('.') {
                     return format!(
                         "crate::{}",
@@ -1462,7 +1462,7 @@ impl RustEmitter {
     /// observer-helper signatures? (Wrapper class with own observable
     /// or computed props.)
     pub(crate) fn class_has_kind_observer_props(&self, class_bare: &str) -> bool {
-        self.wrapper_classes.contains(class_bare)
+        self.is_wrapper_class(class_bare)
             && self
                 .class_ast_by_bare(class_bare)
                 .map(|cd| {
@@ -1479,7 +1479,7 @@ impl RustEmitter {
     /// Inherited props ride the supertrait chain, so only own props
     /// appear here. Empty for non-wrapper classes (no helper targets).
     fn kind_trait_observer_props(&mut self, class_bare: &str) -> Vec<(String, String)> {
-        if !self.wrapper_classes.contains(class_bare) {
+        if !self.is_wrapper_class(class_bare) {
             return Vec::new();
         }
         let raw: Vec<(String, juxc_ast::TypeRef)> = match self.class_ast_by_bare(class_bare) {

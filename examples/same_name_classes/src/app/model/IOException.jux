@@ -1,0 +1,10 @@
+package app.model;
+
+/** Named like the standard library's exception, and not one. */
+public class IOException {
+    public String path;
+
+    public IOException(String path) {
+        this.path = path;
+    }
+}

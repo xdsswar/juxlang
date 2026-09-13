@@ -136,7 +136,7 @@ impl RustEmitter {
         // direct field access — writes go through `__set_f` in `emit_assign`.
         if !is_call_callee && !self.emitting_lvalue && !matches!(&*f.object, Expr::This(_)) {
             if let Some(bare) = self.receiver_class_bare(&f.object) {
-                if self.poly_base_classes.contains(&bare) {
+                if self.is_poly_base_class(&bare) {
                     let accessor_ok = self
                         .symbols
                         .lookup_field(&bare, &f.field.text)
@@ -274,7 +274,7 @@ impl RustEmitter {
                 let class_key = if self.symbols.classes.contains_key(bare) {
                     Some(bare.to_string())
                 } else {
-                    self.symbols.find_fqn_by_bare(bare)
+                    self.resolve_bare_type_fqn(bare)
                 };
                 let is_property = class_key
                     .and_then(|k| {
@@ -448,7 +448,7 @@ impl RustEmitter {
                     // A bare `Option::Some` / `Result::Ok` would
                     // otherwise resolve to Rust's PRELUDE types in
                     // the emitted module — silently the wrong enum.
-                    let cur_pkg = self.symbols.package.join(".");
+                    let cur_pkg = self.current_package_path();
                     let fqn_pkg = enum_fqn
                         .rsplit_once('.')
                         .map(|(p, _)| p.to_string())
@@ -1014,11 +1014,11 @@ impl RustEmitter {
                 && self
                     .enclosing_class
                     .as_deref()
-                    .map(|c| self.wrapper_classes.contains(c))
+                    .map(|c| self.is_wrapper_class(c))
                     .unwrap_or(false);
         }
         self.receiver_class_bare(recv)
-            .map(|bare| self.wrapper_classes.contains(&bare))
+            .map(|bare| self.is_wrapper_class(&bare))
             .unwrap_or(false)
     }
 
@@ -1033,11 +1033,11 @@ impl RustEmitter {
                 && self
                     .enclosing_class
                     .as_deref()
-                    .map(|c| self.refcell_classes.contains(c))
+                    .map(|c| self.is_refcell_class(c))
                     .unwrap_or(false);
         }
         self.receiver_class_bare(recv)
-            .map(|bare| self.refcell_classes.contains(&bare))
+            .map(|bare| self.is_refcell_class(&bare))
             .unwrap_or(false)
     }
 
@@ -1104,11 +1104,11 @@ impl RustEmitter {
                 && self
                     .enclosing_class
                     .as_deref()
-                    .map(|c| self.box_classes.contains(c))
+                    .map(|c| self.is_box_class(c))
                     .unwrap_or(false);
         }
         self.receiver_class_bare(recv)
-            .map(|bare| self.box_classes.contains(&bare))
+            .map(|bare| self.is_box_class(&bare))
             .unwrap_or(false)
     }
 
@@ -1372,8 +1372,7 @@ impl RustEmitter {
             return self.symbols.records.contains_key(name)
                 || self.symbols.records.contains_key(bare)
                 || self
-                    .symbols
-                    .find_fqn_by_bare(bare)
+                    .resolve_bare_type_fqn(bare)
                     .is_some_and(|fqn| self.symbols.records.contains_key(&fqn));
         }
         false
@@ -1479,7 +1478,7 @@ impl RustEmitter {
                         ) {
                             return true;
                         }
-                        return self.wrapper_classes.contains(bare);
+                        return self.is_wrapper_class(bare);
                     }
                 }
                 // Span-collision fallback: a bare `Path` local that the
@@ -1487,7 +1486,7 @@ impl RustEmitter {
                 // still resolves through the name-keyed `local_types`
                 // that `receiver_class_bare` consults first.
                 if let Some(bare) = self.receiver_class_bare(expr) {
-                    return self.wrapper_classes.contains(&bare);
+                    return self.is_wrapper_class(&bare);
                 }
                 // Generic-param local that the span-keyed `expr_types` lacks
                 // (e.g. an argument inside a generic-receiver method call,
@@ -1525,7 +1524,7 @@ impl RustEmitter {
         match indexed_element_ty(container) {
             Some(juxc_tycheck::Ty::User { name, .. }) => {
                 let bare = name.rsplit('.').next().unwrap_or(&name);
-                self.wrapper_classes.contains(bare)
+                self.is_wrapper_class(bare)
             }
             _ => false,
         }
@@ -1645,11 +1644,11 @@ impl RustEmitter {
         let bare = self.safe_nav_member_class_bare(&f.object);
         let is_newtype = bare
             .as_deref()
-            .map(|b| self.wrapper_classes.contains(b))
+            .map(|b| self.is_wrapper_class(b))
             .unwrap_or(false);
         let is_refcell = bare
             .as_deref()
-            .map(|b| self.refcell_classes.contains(b))
+            .map(|b| self.is_refcell_class(b))
             .unwrap_or(false);
         if is_refcell {
             self.w.push_str("__t.0.borrow().");

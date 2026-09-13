@@ -939,7 +939,7 @@ impl RustEmitter {
                 return false;
             };
             let bare = tn.rsplit('.').next().unwrap_or(tn);
-            self.wrapper_classes.contains(bare)
+            self.is_wrapper_class(bare)
         };
 
         // The read can sit ANYWHERE in the returned expression, not just at its

@@ -1,0 +1,11 @@
+package app.errors;
+
+/** An exception. Thrown values stay plain structs (they cross `panic_any`). */
+public class Failure extends RuntimeException {
+    public int code;
+
+    public Failure(String message, int code) {
+        super(message);
+        this.code = code;
+    }
+}

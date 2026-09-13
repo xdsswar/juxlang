@@ -241,7 +241,7 @@ pub fn lower_workspace_with_entry(
     // Phase B (§CR.3.3): only wrap classes that are BOTH wrap-eligible
     // AND provably aliased — non-aliased eligible classes demote to the
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
-    e.class_reps = compute_class_reps(units, &e.expr_types);
+    e.class_reps = compute_class_reps(units, &e.expr_types, symbols, 0);
     // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
     // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
     // that the `.0.borrow()` / `RefCell::new` sites gate on.
@@ -261,20 +261,24 @@ pub fn lower_workspace_with_entry(
     // Classes that cross a worker boundary get the atomic handle (§18.2).
     // Restricted to wrapper classes: the non-wrapper paths have no `.0` handle
     // to make atomic in the first place.
+    // The two analyses below are still keyed by bare name, so they meet the
+    // FQN-keyed wrapper set through its bare names.
+    let wrapper_bare: HashSet<String> =
+        e.wrapper_classes.iter().map(|f| backend_fqn::fqn_bare(f).to_string()).collect();
     e.sync_classes = worker::compute_worker_shared_classes(units, expr_types, symbols)
-        .intersection(&e.wrapper_classes)
+        .intersection(&wrapper_bare)
         .cloned()
         .collect();
     e.sync_class_fqns = worker::compute_worker_shared_class_fqns(units, expr_types, symbols)
         .into_iter()
-        .filter(|fqn| e.wrapper_classes.contains(fqn.rsplit('.').next().unwrap_or(fqn)))
+        .filter(|fqn| e.wrapper_classes.contains(fqn))
         .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
     // Non-wrapper poly bases (e.g. exception classes, excluded from wrapping
     // because `Rc<RefCell>` is `!Send`) stay on their legacy value path.
-    e.poly_base_classes = compute_polymorphic_base_classes(units)
+    e.poly_base_classes = compute_polymorphic_base_class_fqns(units, symbols, 0)
         .intersection(&e.wrapper_classes)
         .cloned()
         .collect();
@@ -425,7 +429,7 @@ pub fn lower_workspace_test(
     e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
-    e.class_reps = compute_class_reps(units, &e.expr_types);
+    e.class_reps = compute_class_reps(units, &e.expr_types, symbols, 0);
     // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
     // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
     // that the `.0.borrow()` / `RefCell::new` sites gate on.
@@ -445,20 +449,24 @@ pub fn lower_workspace_test(
     // Classes that cross a worker boundary get the atomic handle (§18.2).
     // Restricted to wrapper classes: the non-wrapper paths have no `.0` handle
     // to make atomic in the first place.
+    // The two analyses below are still keyed by bare name, so they meet the
+    // FQN-keyed wrapper set through its bare names.
+    let wrapper_bare: HashSet<String> =
+        e.wrapper_classes.iter().map(|f| backend_fqn::fqn_bare(f).to_string()).collect();
     e.sync_classes = worker::compute_worker_shared_classes(units, expr_types, symbols)
-        .intersection(&e.wrapper_classes)
+        .intersection(&wrapper_bare)
         .cloned()
         .collect();
     e.sync_class_fqns = worker::compute_worker_shared_class_fqns(units, expr_types, symbols)
         .into_iter()
-        .filter(|fqn| e.wrapper_classes.contains(fqn.rsplit('.').next().unwrap_or(fqn)))
+        .filter(|fqn| e.wrapper_classes.contains(fqn))
         .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
     // Non-wrapper poly bases (e.g. exception classes, excluded from wrapping
     // because `Rc<RefCell>` is `!Send`) stay on their legacy value path.
-    e.poly_base_classes = compute_polymorphic_base_classes(units)
+    e.poly_base_classes = compute_polymorphic_base_class_fqns(units, symbols, 0)
         .intersection(&e.wrapper_classes)
         .cloned()
         .collect();
@@ -1407,233 +1415,183 @@ pub(crate) fn is_layout_c_struct(cd: &juxc_ast::ClassDecl) -> bool {
 /// When any class in a component fails a check, the *entire* component
 /// stays on the legacy path — a wrapper parent with a plain-struct
 /// child (or vice-versa) would break `__parent` embedding and upcasts.
+///
+/// Returns FQNs (the symbol table's class keys). `units[i]` is described by
+/// `symbols.units[unit_offset + i]`, which is where each written name is
+/// resolved.
 pub(crate) fn compute_wrapper_classes(
     units: &[juxc_ast::CompilationUnit],
+    symbols: &SymbolTable,
+    unit_offset: usize,
 ) -> std::collections::HashSet<String> {
     use std::collections::{HashMap, HashSet};
 
-    // Bare-name → (ClassDecl, package) for every class across the
-    // workspace (including stdlib units). Bare names are the join key
-    // because `extends` clauses in source carry only the bare name.
-    //
-    // **Bare-name multimap.** The emit-time wrapper gate keys on the
-    // class's bare name (`wrapper_classes.contains(name)`), and a
-    // program can legally declare the same bare name in two packages
-    // (e.g. a user `IOException` in the default package alongside the
-    // stdlib `jux.std.exceptions.IOException`). We therefore decide
-    // wrappability **per bare name**, conservatively: a bare name is
-    // wrappable only if *every* declaration sharing it is wrappable.
-    // This also makes a user class that collides with an exception name
-    // fall back to legacy — the safe choice, since the user's class may
-    // itself be thrown (`!Send` `Rc<RefCell>` would break `panic_any`).
-    let mut by_name: HashMap<String, Vec<(&juxc_ast::ClassDecl, String)>> = HashMap::new();
-    for unit in units {
+    /// One class declaration: where it lives and the FQN its `extends` names.
+    struct Decl<'a> {
+        cd: &'a juxc_ast::ClassDecl,
+        pkg: String,
+        /// `None` for a root class; `Some(None)` when the parent could not be
+        /// resolved (an `extends` target we cannot see, which is unsafe).
+        parent: Option<Option<String>>,
+    }
+
+    // **Keyed by FQN.** Two packages may each declare `Failure`, one of them
+    // an exception; deciding per BARE name made both plain structs, and the
+    // ordinary one lost its reference semantics. Every name a declaration
+    // writes (`extends`, `throw`, `catch`) is resolved in its own unit's
+    // context, exactly as the checker resolves it.
+    let mut decls: HashMap<String, Decl> = HashMap::new();
+    let mut thrown: HashSet<String> = HashSet::new();
+    for (i, unit) in units.iter().enumerate() {
         // External (`rust.std` / crate) stub classes are plain Rust values with
         // their own representation (`Vec` → `std::vec::Vec`, never an
-        // `Rc<RefCell>` handle) — the backend never lowers their bodies. They
-        // must NEVER be classified as wrapper classes: doing so poisoned the
-        // wrapper-field clone decision (a `Vec`-typed auto-property backing
-        // field read out of `.0.borrow()` skipped its `.clone()` because the
-        // type was treated as a shared `Rc`), and would mis-shape any other
-        // wrapper-keyed lowering. Skip the whole external unit.
+        // `Rc<RefCell>` handle) — the backend never lowers their bodies, and
+        // treating one as a wrapper mis-shapes every wrapper-keyed lowering.
         if unit.is_external {
             continue;
         }
-        let pkg: Vec<String> = unit
+        let pkg: String = unit
             .package
             .as_ref()
-            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
             .unwrap_or_default();
-        let pkg_str = pkg.join(".");
-        for item in &unit.items {
-            if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                // An intrinsic with no instances is not a declaration for
-                // wrap-eligibility purposes. `jux.std.io.Console` -- one
-                // static method, no constructor, no field -- is in every
-                // program via the prelude, and vetoing on it made the bare
-                // name `Console` unwrappable for the USER's class of that
-                // name, which then lost reference semantics. A value of the
-                // intrinsic type cannot exist, so it can never reach the
-                // bare-name gate this veto protects.
-                if is_valueless_intrinsic(&pkg_str, cd) {
-                    continue;
-                }
-                by_name
-                    .entry(cd.name.text.clone())
-                    .or_default()
-                    .push((cd, pkg_str.clone()));
+        let ctx = symbols.units.get(unit_offset + i);
+        let resolve = |written: &str| backend_fqn::resolve_class_name(symbols, ctx, &pkg, written);
+        // A class that is `throw`n (or named in a `catch`) is panicked through
+        // `std::panic::panic_any`, which requires the payload to be `Send`;
+        // `Rc<RefCell<_>>` is `!Send`, so it stays on the plain-struct path
+        // even when it does not extend `Throwable`.
+        for written in collect_thrown_class_names(std::slice::from_ref(unit)) {
+            if let Some(fqn) = resolve(&written) {
+                thrown.insert(fqn);
             }
+        }
+        for item in &unit.items {
+            let juxc_ast::TopLevelDecl::Class(cd) = item else { continue };
+            // An intrinsic with no instances contributes no values, so no
+            // decision about it can mis-lower anything.
+            if is_valueless_intrinsic(&pkg, cd) {
+                continue;
+            }
+            let fqn = if pkg.is_empty() { cd.name.text.clone() } else { format!("{pkg}.{}", cd.name.text) };
+            let parent = cd.extends.as_ref().map(|t| {
+                let written =
+                    t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                resolve(&written)
+            });
+            decls.insert(fqn, Decl { cd, pkg: pkg.clone(), parent });
         }
     }
 
-    // The set of bare names extended by *some* declaration of `name`.
-    let parents_of = |name: &str| -> Vec<String> {
-        by_name
-            .get(name)
-            .map(|decls| {
-                decls
-                    .iter()
-                    .filter_map(|(cd, _)| {
-                        cd.extends
-                            .as_ref()
-                            .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    let parent_of = |fqn: &str| -> Option<String> { decls.get(fqn)?.parent.clone()? };
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    for (fqn, d) in &decls {
+        if let Some(Some(p)) = &d.parent {
+            children_of.entry(p.clone()).or_default().push(fqn.clone());
+        }
+    }
 
-    // **Thrown/caught class names.** A class that is `throw`n (or named
-    // in a `catch`) is panicked through `std::panic::panic_any`, which
-    // requires the payload to be `Send`. `Rc<RefCell<_>>` (the wrapper
-    // rep) is `!Send`, so any thrown class — even one that does NOT
-    // extend `Throwable` — must stay on the legacy plain-struct path.
-    // We scan every function/method/constructor body for `throw new
-    // X(...)` targets and `catch (X e)` types. This is the safe
-    // fallback the phasing notes call out (correctness over
-    // completeness): a thrown wrapper would fail to compile.
-    let thrown = collect_thrown_class_names(units);
-
-    // Exception detection: a bare name is exception-tainted iff *any*
-    // declaration sharing it transitively extends `Throwable` (or is
-    // `Throwable` itself), OR the name is thrown/caught anywhere. Walks
-    // the union of every declaration's parents so a collision with the
-    // stdlib exception chain taints the name.
+    // Exception-tainted: the `extends` chain reaches `Throwable`, or the class
+    // itself is thrown or caught somewhere.
     let is_exception = |start: &str| -> bool {
-        let mut stack = vec![start.to_string()];
-        let mut seen: HashSet<String> = HashSet::new();
-        while let Some(name) = stack.pop() {
-            if name == "Throwable" || thrown.contains(&name) {
+        let mut cur = Some(start.to_string());
+        let mut depth = 0;
+        while let Some(fqn) = cur {
+            if backend_fqn::fqn_bare(&fqn) == "Throwable" || thrown.contains(&fqn) {
                 return true;
             }
-            if !seen.insert(name.clone()) {
-                continue;
+            depth += 1;
+            if depth > 64 {
+                return false;
             }
-            for p in parents_of(&name) {
-                stack.push(p);
-            }
+            cur = parent_of(&fqn);
         }
         false
     };
 
-    // True when *every* declaration sharing the bare `name` is
-    // wrappable in isolation: non-sealed, non-generic, non-intrinsic,
-    // and not a subclass-of-sealed. A name with no visible declaration
-    // (an `extends` target we can't see) is NOT ok — the chain falls
-    // back to legacy.
-    let name_ok = |name: &str| -> bool {
-        let Some(decls) = by_name.get(name) else {
+    // Wrappable in isolation: declared where we can see it, not a sealed class
+    // that becomes an enum, not a C-layout value struct, not intrinsic, and
+    // not a variant of a sealed parent.
+    let decl_ok = |fqn: &str| -> bool {
+        let Some(d) = decls.get(fqn) else { return false };
+        // Only a sealed class that actually becomes an ENUM is unwrappable —
+        // the variant IS the representation. A sealed class with state keeps
+        // the ordinary wrapper and needs it for dispatch.
+        if crate::decls::classes::sealed_decl_lowers_to_enum(d.cd) {
             return false;
-        };
-        decls.iter().all(|(cd, pkg)| {
-            // Only a sealed class that actually becomes an ENUM is unwrappable
-            // — the variant IS the representation. A sealed class with state
-            // keeps the ordinary wrapper, and needs it: excluding it here sent
-            // it down the legacy value-class path, where an abstract method
-            // stayed an `unimplemented!()` stub and calling it through a
-            // parent-typed reference panicked instead of dispatching.
-            if crate::decls::classes::sealed_decl_lowers_to_enum(cd) {
-                return false;
-            }
-            // A `@layout(c) struct` is a C-compatible VALUE type (§L.1.2): it
-            // lowers to a flat `#[repr(C)]` struct, never the `Rc<RefCell>`
-            // handle. Keep it off the wrapper path (it then flows through the
-            // plain-struct emission with by-value construction + direct fields).
-            if is_layout_c_struct(cd) {
-                return false;
-            }
-            // Generic classes ARE wrappable now (Phase A GENERICS pass):
-            // the generic params + their `T: Clone` bound thread onto the
-            // `C_Inner<T>` struct, the `C<T>` newtype, and every `impl<T:
-            // Clone>` block (see `emit_wrapper_class_decl`). We no longer
-            // exclude on a non-empty `generic_params` list — only sealed,
-            // intrinsic, subclass-of-sealed, and exception/Throwable-chain
-            // classes stay on the legacy path.
-            if is_intrinsic_class(pkg, &cd.name.text) {
-                return false;
-            }
-            // Subclass-of-sealed: parent is a sealed class → enum
-            // variant, not an embedded struct.
-            if let Some(parent) = cd
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
-            {
-                let parent_sealed = by_name
-                    .get(&parent)
-                    .map(|ds| {
-                        ds.iter()
-                            .any(|(pcd, _)| crate::decls::classes::sealed_decl_lowers_to_enum(pcd))
-                    })
-                    .unwrap_or(true); // unseen parent → treat as unsafe
-                if parent_sealed {
-                    return false;
-                }
-            }
-            true
-        })
+        }
+        // A `@layout(c) struct` is a C-compatible VALUE type (§L.1.2).
+        if is_layout_c_struct(d.cd) {
+            return false;
+        }
+        if is_intrinsic_class(&d.pkg, &d.cd.name.text) {
+            return false;
+        }
+        match &d.parent {
+            None => true,
+            // An `extends` target we cannot see is treated as unsafe.
+            Some(None) => false,
+            Some(Some(p)) => decls
+                .get(p)
+                .is_some_and(|pd| !crate::decls::classes::sealed_decl_lowers_to_enum(pd.cd)),
+        }
     };
 
-    // A bare name is a wrapper iff it AND its whole transitive `extends`
-    // closure (ancestors) are wrappable and exception-free. We don't
-    // need to walk *descendants*: a child whose parent is excluded gets
-    // excluded on its own ancestor walk, and a parent stays wrappable
-    // independently (the parent's own struct shape doesn't depend on
-    // its children — only the child embeds the parent's inner). This is
-    // a slight relaxation of the strict whole-component roll-up, but is
-    // sound here because excluded children simply fall back to legacy
-    // plain-struct + `From`/`Deref`, which still upcast into a wrapper
-    // parent through the parent's own `From`. To stay fully consistent
-    // with §CR.3.5 we additionally require every *descendant* to be
-    // wrappable too, so a mixed hierarchy never arises.
-    //
-    // Build child→parents adjacency for the descendant check.
-    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
-    for (name, decls) in &by_name {
-        for (cd, _) in decls {
-            if let Some(parent) = cd
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
-            {
-                children_of.entry(parent).or_default().push(name.clone());
-            }
-        }
-    }
-
-    // Collect the full connected component (ancestors + descendants)
-    // reachable from `start` through the extends graph (both
-    // directions), then require every member to be `name_ok` and
-    // exception-free.
+    // A class wraps only if its whole connected `extends` component does
+    // (§CR.3.5): a wrapper parent with a plain-struct child, or the reverse,
+    // would break `__parent` embedding and upcasts.
     let component_wrappable = |start: &str| -> bool {
         let mut stack = vec![start.to_string()];
         let mut seen: HashSet<String> = HashSet::new();
-        while let Some(name) = stack.pop() {
-            if !seen.insert(name.clone()) {
+        while let Some(fqn) = stack.pop() {
+            if !seen.insert(fqn.clone()) {
                 continue;
             }
-            if !name_ok(&name) || is_exception(&name) {
+            if !decl_ok(&fqn) || is_exception(&fqn) {
                 return false;
             }
-            for p in parents_of(&name) {
+            if let Some(p) = parent_of(&fqn) {
                 stack.push(p);
             }
-            if let Some(kids) = children_of.get(&name) {
-                for k in kids {
-                    stack.push(k.clone());
-                }
+            if let Some(kids) = children_of.get(&fqn) {
+                stack.extend(kids.iter().cloned());
             }
         }
         true
     };
 
-    let mut wrapper: HashSet<String> = HashSet::new();
-    for name in by_name.keys() {
-        if component_wrappable(name) {
-            wrapper.insert(name.clone());
+    decls.keys().filter(|fqn| component_wrappable(fqn)).cloned().collect()
+}
+
+/// Parent ↔ child adjacency over class FQNs, each `extends` resolved in its
+/// declaring unit's context. The FQN twin of [`bare_extends_adjacency`], for
+/// the FQN-keyed representation map.
+pub(crate) fn fqn_extends_adjacency(
+    units: &[juxc_ast::CompilationUnit],
+    symbols: &SymbolTable,
+    unit_offset: usize,
+) -> HashMap<String, Vec<String>> {
+    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+    for (i, unit) in units.iter().enumerate() {
+        let pkg: String = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        let ctx = symbols.units.get(unit_offset + i);
+        for item in &unit.items {
+            let juxc_ast::TopLevelDecl::Class(cd) = item else { continue };
+            let Some(t) = &cd.extends else { continue };
+            let written = t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            let Some(parent) = backend_fqn::resolve_class_name(symbols, ctx, &pkg, &written) else {
+                continue;
+            };
+            let child = if pkg.is_empty() { cd.name.text.clone() } else { format!("{pkg}.{}", cd.name.text) };
+            adj.entry(child.clone()).or_default().push(parent.clone());
+            adj.entry(parent).or_default().push(child);
         }
     }
-    wrapper
+    adj
 }
 
 /// Phase B — the **escape-analysis "fast tier"** selector
@@ -2326,7 +2284,7 @@ pub(crate) fn compute_wrapped_set(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
 ) -> HashSet<String> {
-    let eligible = compute_wrapper_classes(units);
+    let eligible = compute_wrapper_classes(units, &SymbolTable::default(), 0);
     let aliased = compute_aliased_classes(units, expr_types);
     let iface_forced = compute_interface_forced_classes(units);
     let poly_forced = compute_polymorphic_forced_classes(units);
@@ -2502,11 +2460,13 @@ pub(crate) fn compute_escaping_classes(
 pub(crate) fn compute_class_reps(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
+    symbols: &SymbolTable,
+    unit_offset: usize,
 ) -> HashMap<String, ClassRep> {
     // Wrap-eligibility gate: classes excluded here (sealed / generic-excluded /
     // intrinsic / exception …) stay on their legacy plain-struct path and never
-    // appear in the rep map.
-    let eligible = compute_wrapper_classes(units);
+    // appear in the rep map. Keyed by FQN, like the map this returns.
+    let eligible = compute_wrapper_classes(units, symbols, unit_offset);
     // `aliased` (rules 1-3 + lambda capture, NO return — §CR.3.3) and `escapes`
     // (return — the `Box` signal) are now distinct.
     let aliased = compute_aliased_classes(units, expr_types);
@@ -2573,16 +2533,13 @@ pub(crate) fn compute_class_reps(
     // (which would break an upcast). The wrapped set already rolled `aliased`
     // through the chain, but `mutated` is per-class — a mutated parent must pull
     // an immutable child up to `RcRefCell` (and vice-versa via the max).
-    rollup_class_reps(&mut reps, units);
+    rollup_class_reps(&mut reps, &fqn_extends_adjacency(units, symbols, unit_offset));
     reps
 }
 
-/// Raise every class in a connected `extends` component to the MAX-rank
-/// [`ClassRep`] in that component (§CR.3.5). Fixpoint over the bidirectional
-/// extends graph. Only classes already present in `reps` (wrapped) participate;
-/// an Inline class never gains a rep here.
-fn rollup_class_reps(reps: &mut HashMap<String, ClassRep>, units: &[juxc_ast::CompilationUnit]) {
-    // Bidirectional parent↔child adjacency (bare names).
+/// Parent ↔ child adjacency over BARE class names, for the analyses that are
+/// still keyed that way (the worker-shared set).
+pub(crate) fn bare_extends_adjacency(units: &[juxc_ast::CompilationUnit]) -> HashMap<String, Vec<String>> {
     let mut adj: HashMap<String, Vec<String>> = HashMap::new();
     for unit in units {
         for item in &unit.items {
@@ -2599,6 +2556,14 @@ fn rollup_class_reps(reps: &mut HashMap<String, ClassRep>, units: &[juxc_ast::Co
             }
         }
     }
+    adj
+}
+
+/// Raise every class in a connected `extends` component to the MAX-rank
+/// [`ClassRep`] in that component (§CR.3.5). Fixpoint over the bidirectional
+/// extends graph. Only classes already present in `reps` (wrapped) participate;
+/// an Inline class never gains a rep here.
+pub(crate) fn rollup_class_reps(reps: &mut HashMap<String, ClassRep>, adj: &HashMap<String, Vec<String>>) {
     // Fixpoint: keep lifting neighbours until no rep changes.
     let mut changed = true;
     while changed {
@@ -3362,6 +3327,59 @@ pub(crate) fn compute_polymorphic_base_classes(
     candidate.intersection(&extended).cloned().collect()
 }
 
+/// [`compute_polymorphic_base_classes`] keyed by FQN: every class some other
+/// class extends that can be a base, each `extends` resolved in its own unit.
+///
+/// The emitter's `poly_base_classes` set uses this. Keyed by bare name, a
+/// user's `IOException` made the stdlib `IOException` (a base of
+/// `FileNotFoundException`) look like the user's class, and the stdlib
+/// hierarchy was lowered with a `Kind` trait its children did not implement.
+pub(crate) fn compute_polymorphic_base_class_fqns(
+    units: &[juxc_ast::CompilationUnit],
+    symbols: &SymbolTable,
+    unit_offset: usize,
+) -> HashSet<String> {
+    let mut candidate: HashSet<String> = HashSet::new();
+    for unit in units {
+        let pkg: String = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                // Same candidacy rule as the bare-name form.
+                if !crate::decls::classes::sealed_decl_lowers_to_enum(cd) && !cd.is_final {
+                    candidate.insert(if pkg.is_empty() {
+                        cd.name.text.clone()
+                    } else {
+                        format!("{pkg}.{}", cd.name.text)
+                    });
+                }
+            }
+        }
+    }
+    // Every class some declaration extends, resolved where it is written.
+    let mut extended: HashSet<String> = HashSet::new();
+    for (i, unit) in units.iter().enumerate() {
+        let pkg: String = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        let ctx = symbols.units.get(unit_offset + i);
+        for item in &unit.items {
+            let juxc_ast::TopLevelDecl::Class(cd) = item else { continue };
+            let Some(t) = &cd.extends else { continue };
+            let written = t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            if let Some(parent) = backend_fqn::resolve_class_name(symbols, ctx, &pkg, &written) {
+                extended.insert(parent);
+            }
+        }
+    }
+    candidate.intersection(&extended).cloned().collect()
+}
+
 /// Force-wrap closure for polymorphic-base hierarchies: every class in the
 /// connected `extends` component reachable from a polymorphic base
 /// ([`compute_polymorphic_base_classes`]), flooded in both directions.
@@ -3687,11 +3705,15 @@ fn collect_thrown_class_names(
     use juxc_ast::{Stmt, TopLevelDecl};
     let mut out = std::collections::HashSet::new();
 
+    // The name as WRITTEN (`app.errors.Failure`, or just `Failure`): the
+    // caller resolves it in the unit's context, so a qualified throw of one
+    // package's class cannot taint a same-named class of another.
     fn bare_of(qn: &juxc_ast::QualifiedName) -> Option<String> {
-        qn.segments.last().map(|s| s.text.clone())
+        (!qn.segments.is_empty())
+            .then(|| qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
     }
     fn ty_bare(t: &juxc_ast::TypeRef) -> Option<String> {
-        t.name.segments.last().map(|s| s.text.clone())
+        bare_of(&t.name)
     }
 
     fn walk_block(block: &juxc_ast::Block, out: &mut std::collections::HashSet<String>) {
@@ -4726,7 +4748,13 @@ impl RustEmitter {
             // several units one at a time). Phase B (§CR.3.3): only the
             // wrap-eligible AND aliased classes wrap — non-aliased
             // eligible classes demote to the legacy Inline shape.
-            for (n, rep) in compute_class_reps(std::slice::from_ref(unit), &self.expr_types) {
+            let reps = compute_class_reps(
+                std::slice::from_ref(unit),
+                &self.expr_types,
+                &self.symbols,
+                self.current_unit_idx.unwrap_or(0),
+            );
+            for (n, rep) in reps {
                 self.wrapper_classes.insert(n.clone());
                 if rep == ClassRep::RcRefCell {
                     self.refcell_classes.insert(n.clone());
@@ -4736,7 +4764,12 @@ impl RustEmitter {
                 }
                 self.class_reps.insert(n, rep);
             }
-            for b in compute_polymorphic_base_classes(std::slice::from_ref(unit)) {
+            let bases = compute_polymorphic_base_class_fqns(
+                std::slice::from_ref(unit),
+                &self.symbols,
+                self.current_unit_idx.unwrap_or(0),
+            );
+            for b in bases {
                 // Only wrapper poly bases support `Rc<dyn …Kind>` dispatch.
                 if self.wrapper_classes.contains(&b) {
                     self.poly_base_classes.insert(b);
@@ -6197,7 +6230,7 @@ impl RustEmitter {
                 if !sig.generic_params.is_empty() {
                     return false;
                 }
-                if self.wrapper_classes.contains(backend_fqn::fqn_bare(fqn)) {
+                if self.is_wrapper_class(fqn.as_str()) {
                     return false;
                 }
                 if **fqn == root {

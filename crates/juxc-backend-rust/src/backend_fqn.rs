@@ -184,11 +184,7 @@ impl crate::RustEmitter {
     pub(crate) fn rust_path_for_type_fqn(&self, fqn: &str) -> String {
         match fqn.rsplit_once('.') {
             Some((pkg, bare)) => {
-                let here = self
-                    .current_unit_idx
-                    .and_then(|i| self.symbols.units.get(i))
-                    .map(|u| u.package.join("."))
-                    .unwrap_or_else(|| self.symbols.package.join("."));
+                let here = self.current_package_path();
                 if pkg == here {
                     juxc_lex::to_rust_ident(bare)
                 } else {
@@ -228,6 +224,47 @@ impl crate::RustEmitter {
         None
     }
 
+    /// The dotted package of the unit being emitted -- the package a bare name
+    /// in it is resolved against. Falls back to the workspace's root package
+    /// outside a unit.
+    ///
+    /// `symbols.package` is the ROOT package only; comparing a type's package
+    /// with it made every type of a non-root unit look foreign (or, worse, a
+    /// root-package type look local to a unit in another package).
+    pub(crate) fn current_package_path(&self) -> String {
+        self.current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .map(|u| u.package.join("."))
+            .unwrap_or_else(|| self.symbols.package.join("."))
+    }
+
+    /// The FQN a bare TYPE name -- class, record, enum, interface or alias --
+    /// means in the unit being emitted: an import or alias of it, then the
+    /// unit's own package, then the table's package-preferring scan.
+    ///
+    /// The context-free `SymbolTable::find_fqn_by_bare` answered with the
+    /// same type in every unit. With `import app.model.Failure;` beside an
+    /// `app.errors.Failure`, `new Failure("disk")` then built the exception.
+    pub(crate) fn resolve_bare_type_fqn(&self, name: &str) -> Option<String> {
+        let is_type = |fqn: &str| {
+            self.symbols.classes.contains_key(fqn)
+                || self.symbols.records.contains_key(fqn)
+                || self.symbols.enums.contains_key(fqn)
+                || self.symbols.interfaces.contains_key(fqn)
+                || self.symbols.aliases.contains_key(fqn)
+        };
+        if name.contains('.') {
+            return is_type(name).then(|| name.to_string());
+        }
+        let pkg = self.current_package_path();
+        if let Some(ctx) = self.current_unit_idx.and_then(|i| self.symbols.units.get(i)) {
+            if let Some(fqn) = ctx.unqualified.get(name).filter(|f| is_type(f)) {
+                return Some(fqn.clone());
+            }
+        }
+        self.symbols.find_fqn_by_bare_in(name, &pkg)
+    }
+
     /// Resolve a bare (or already-FQN) class name to its FQN key in
     /// `symbols.classes`, using the **current unit's package context** so that
     /// same-named classes in different packages stay distinct and a user class
@@ -244,45 +281,35 @@ impl crate::RustEmitter {
     ///    **deterministic** (a raw `HashMap` scan is iteration-order dependent,
     ///    which would make emission non-reproducible).
     pub(crate) fn resolve_bare_class_fqn(&self, name: &str) -> Option<String> {
-        // An already-qualified name is its own answer.
-        if name.contains('.') && self.symbols.classes.contains_key(name) {
-            return Some(name.to_string());
-        }
-        // A BARE name is resolved in the unit's own context first -- its
-        // package's types and its imports -- and only then as a no-package
-        // class of that exact name. The reverse order let a program's
-        // no-package `Registry` (whose symbol-table key is just `Registry`)
-        // win inside `jux.meta`, where `Registry` means `jux.meta.Registry`:
-        // `Registry.all()` there resolved to the user's class, found no static
-        // `all`, and lowered as a call on the tuple-struct constructor.
-        if let Some(idx) = self.current_unit_idx {
-            if let Some(ctx) = self.symbols.units.get(idx) {
-                if let Some(fqn) = ctx.unqualified.get(name) {
-                    if self.symbols.classes.contains_key(fqn) {
-                        return Some(fqn.clone());
-                    }
-                }
-                if !ctx.package.is_empty() {
-                    let cand = format!("{}.{}", ctx.package.join("."), name);
-                    if self.symbols.classes.contains_key(&cand) {
-                        return Some(cand);
-                    }
-                }
-            }
-        }
-        if self.symbols.classes.contains_key(name) {
-            return Some(name.to_string());
-        }
-        self.symbols
-            .classes
-            .iter()
-            .filter(|(k, _)| fqn_bare(k) == name)
-            .min_by(|a, b| {
-                a.1.is_external
-                    .cmp(&b.1.is_external)
-                    .then_with(|| a.0.cmp(b.0))
-            })
-            .map(|(k, _)| k.clone())
+        let ctx = self.current_unit_idx.and_then(|i| self.symbols.units.get(i));
+        let pkg = ctx.map(|c| c.package.join(".")).unwrap_or_default();
+        resolve_class_name(&self.symbols, ctx, &pkg, name)
+    }
+
+    /// Whether the class `name` (bare, as written, or an FQN) lowers to a
+    /// newtype handle. The representation sets are keyed by FQN, so the name
+    /// is resolved in the unit being emitted first -- two packages' classes of
+    /// one name can take different representations.
+    pub(crate) fn is_wrapper_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name).is_some_and(|fqn| self.wrapper_classes.contains(&fqn))
+    }
+
+    /// Whether the class `name` is a polymorphic base, reached through
+    /// `Rc<dyn …Kind>`. Keyed by FQN; see [`Self::is_wrapper_class`].
+    pub(crate) fn is_poly_base_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name).is_some_and(|fqn| self.poly_base_classes.contains(&fqn))
+    }
+
+    /// Whether the class `name` uses the interior-mutable `Rc<RefCell>` handle.
+    /// See [`Self::is_wrapper_class`].
+    pub(crate) fn is_refcell_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name).is_some_and(|fqn| self.refcell_classes.contains(&fqn))
+    }
+
+    /// Whether the class `name` uses the unique `Box` handle. See
+    /// [`Self::is_wrapper_class`].
+    pub(crate) fn is_box_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name).is_some_and(|fqn| self.box_classes.contains(&fqn))
     }
 
     /// Resolve a bare or FQN class name to its [`ClassSig`], package-aware via
@@ -401,4 +428,44 @@ impl crate::RustEmitter {
         }
         self.w.push_str(fqn_bare(fqn));
     }
+}
+
+/// The FQN a class name means in a unit with context `ctx` and package `pkg`:
+/// an already-qualified key; then, for a BARE name, the unit's imports and
+/// same-package types; then a no-package class of exactly that name; then a
+/// deterministic scan that prefers user classes over external stubs.
+///
+/// The unit's own context comes first. The reverse order let a program's
+/// no-package `Registry` (keyed just `Registry`) win inside `jux.meta`, where
+/// `Registry` means `jux.meta.Registry`. Free of the emitter so the whole-program
+/// analyses that run before emission resolve names the same way.
+pub(crate) fn resolve_class_name(
+    symbols: &juxc_tycheck::SymbolTable,
+    ctx: Option<&juxc_tycheck::symbol_table::UnitContext>,
+    pkg: &str,
+    name: &str,
+) -> Option<String> {
+    if name.contains('.') && symbols.classes.contains_key(name) {
+        return Some(name.to_string());
+    }
+    if let Some(ctx) = ctx {
+        if let Some(fqn) = ctx.unqualified.get(name).filter(|f| symbols.classes.contains_key(*f)) {
+            return Some(fqn.clone());
+        }
+    }
+    if !pkg.is_empty() {
+        let cand = format!("{pkg}.{name}");
+        if symbols.classes.contains_key(&cand) {
+            return Some(cand);
+        }
+    }
+    if symbols.classes.contains_key(name) {
+        return Some(name.to_string());
+    }
+    symbols
+        .classes
+        .iter()
+        .filter(|(k, _)| fqn_bare(k) == name)
+        .min_by(|a, b| a.1.is_external.cmp(&b.1.is_external).then_with(|| a.0.cmp(b.0)))
+        .map(|(k, _)| k.clone())
 }

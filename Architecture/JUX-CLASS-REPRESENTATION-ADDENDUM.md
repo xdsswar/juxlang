@@ -207,6 +207,13 @@ chain rolls up to `Arc`: `C` becomes `Arc<C>` and `D` becomes
 `Arc<D>`. The user sees the same `class D extends C` syntax in both
 cases.
 
+The selector decides each class by its fully-qualified name. Two classes that
+share a simple name in different packages are separate classes and are
+decided separately: an exception `app.errors.Failure` staying a plain value
+says nothing about an ordinary `app.model.Failure`. Every name a declaration
+writes (its `extends`, a `throw`, a `catch`) is resolved in that declaration's
+own file, the way the type checker resolves it.
+
 ### §CR.3.6. Stability Across Recompilation
 
 The selector is **deterministic** given the same compilation unit. A

@@ -1111,7 +1111,7 @@ impl RustEmitter {
         if self.symbols.classes.contains_key(&bare) {
             return Some(bare);
         }
-        self.symbols.find_fqn_by_bare(&bare)
+        self.resolve_bare_type_fqn(&bare)
     }
 
     /// Number of `extends` steps from `from` up to `to` (0 when they
@@ -1189,7 +1189,7 @@ impl RustEmitter {
             if self.symbols.classes.contains_key(&bare) {
                 bare
             } else {
-                match self.symbols.find_fqn_by_bare(&bare) {
+                match self.resolve_bare_type_fqn(&bare) {
                     Some(fqn) => fqn,
                     None => return Vec::new(),
                 }
@@ -1500,7 +1500,7 @@ impl RustEmitter {
                         // mutexes, atomics) share exactly like wrapper
                         // classes — without the rebind the async block
                         // steals the only handle.
-                        self.wrapper_classes.contains(&c)
+                        self.is_wrapper_class(&c)
                             || matches!(
                                 c.as_str(),
                                 "Stream" | "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong",
@@ -3373,7 +3373,7 @@ impl RustEmitter {
         if let Expr::Field(tf) = &a.target {
             if !tf.safe && !matches!(&*tf.object, Expr::This(_)) {
                 if let Some(bare) = self.receiver_class_bare(&tf.object) {
-                    if self.poly_base_classes.contains(&bare) {
+                    if self.is_poly_base_class(&bare) {
                         let field_info =
                             self.symbols
                                 .lookup_field(&bare, &tf.field.text)

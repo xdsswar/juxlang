@@ -80,7 +80,7 @@ impl RustEmitter {
             // branch entirely, and with it the §6.5.1 collection handle - so a
             // `SortedMap` slot held a bare `BTreeMap` while its `new` built the
             // handle, and the two disagreed.
-            match self.symbols.find_fqn_by_bare(bare) {
+            match self.resolve_bare_type_fqn(bare) {
                 Some(fqn) => fqn,
                 None => self
                     .current_unit_idx
@@ -497,9 +497,9 @@ impl RustEmitter {
             (real, false)
         } else if n.class_name.segments.len() == 1 {
             let bare = n.class_name.segments[0].text.as_str();
-            if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+            if let Some(fqn) = self.resolve_bare_type_fqn(bare) {
                 if fqn.contains('.') {
-                    let cur_pkg = self.symbols.package.join(".");
+                    let cur_pkg = self.current_package_path();
                     let fqn_pkg = fqn
                         .rsplit_once('.')
                         .map(|(p, _)| p.to_string())
@@ -538,10 +538,10 @@ impl RustEmitter {
             let mangled_fqn = if is_lifted(&mangled) {
                 Some(mangled.clone())
             } else {
-                self.symbols.find_fqn_by_bare(&mangled).filter(is_lifted)
+                self.resolve_bare_type_fqn(&mangled).filter(is_lifted)
             };
             if let Some(fqn) = mangled_fqn {
-                let cur_pkg = self.symbols.package.join(".");
+                let cur_pkg = self.current_package_path();
                 let fqn_pkg = fqn
                     .rsplit_once('.')
                     .map(|(p, _)| p.to_string())
@@ -1543,8 +1543,7 @@ impl RustEmitter {
                 .classes
                 .get(receiver_name)
                 .or_else(|| {
-                    self.symbols
-                        .find_fqn_by_bare(receiver_name)
+                    self.resolve_bare_type_fqn(receiver_name)
                         .and_then(|fqn| self.symbols.classes.get(&fqn))
                 })
                 .and_then(|c| c.constructors.first())
@@ -1585,7 +1584,7 @@ impl RustEmitter {
             // Crate-root cross-package receivers, same as `new` sites.
             let bare_is_local = self.symbols.classes.contains_key(receiver_name);
             if let Some(fqn) = (!bare_is_local)
-                .then(|| self.symbols.find_fqn_by_bare(receiver_name))
+                .then(|| self.resolve_bare_type_fqn(receiver_name))
                 .flatten()
             {
                 self.w.push_str("crate::");
@@ -1621,8 +1620,7 @@ impl RustEmitter {
             .classes
             .get(receiver_name)
             .or_else(|| {
-                self.symbols
-                    .find_fqn_by_bare(receiver_name)
+                self.resolve_bare_type_fqn(receiver_name)
                     .and_then(|fqn| self.symbols.classes.get(&fqn))
             })
             .and_then(|c| c.methods.get(m.member.text.as_str()));
@@ -1637,8 +1635,7 @@ impl RustEmitter {
             .interfaces
             .get(receiver_name)
             .or_else(|| {
-                self.symbols
-                    .find_fqn_by_bare(receiver_name)
+                self.resolve_bare_type_fqn(receiver_name)
                     .and_then(|fqn| self.symbols.interfaces.get(&fqn))
             })
             .and_then(|i| i.methods.get(m.member.text.as_str()));
@@ -2041,7 +2038,7 @@ impl RustEmitter {
                     _ => None,
                 });
             class
-                .map(|c| self.wrapper_classes.contains(&c))
+                .map(|c| self.is_wrapper_class(&c))
                 .unwrap_or(false)
         });
         // Also clone-capture any `ref_locals` name the lambda references — a

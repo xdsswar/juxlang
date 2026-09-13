@@ -185,8 +185,7 @@ impl RustEmitter {
             .classes
             .get(class_name)
             .or_else(|| {
-                self.symbols
-                    .find_fqn_by_bare(class_name)
+                self.resolve_bare_type_fqn(class_name)
                     .and_then(|fqn| self.symbols.classes.get(&fqn))
             });
         let Some(class) = class else { return String::new() };
@@ -231,9 +230,9 @@ impl RustEmitter {
         }
         let Some(seg) = parent_ty.name.segments.first() else { return };
         let bare = seg.text.as_str();
-        if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+        if let Some(fqn) = self.resolve_bare_type_fqn(bare) {
             if fqn.contains('.') {
-                let cur_pkg = self.symbols.package.join(".");
+                let cur_pkg = self.current_package_path();
                 let fqn_pkg = fqn
                     .rsplit_once('.')
                     .map(|(p, _)| p.to_string())
@@ -1078,9 +1077,9 @@ impl RustEmitter {
         let (wrap_open, wrap_close): (&str, &str) =
             if self.sync_classes.contains(&class_decl.name.text) {
                 ("crate::JuxSync::new(", ")")
-            } else if self.box_classes.contains(&class_decl.name.text) {
+            } else if self.is_box_class(&class_decl.name.text) {
                 ("std::boxed::Box::new(", ")")
-            } else if self.refcell_classes.contains(&class_decl.name.text) {
+            } else if self.is_refcell_class(&class_decl.name.text) {
                 ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
             } else {
                 ("std::rc::Rc::new(", ")")
@@ -1775,9 +1774,9 @@ impl RustEmitter {
         self.emit_static_init_trigger();
         if self.sync_classes.contains(&class_decl.name.text) {
             self.w.line("Self(crate::JuxSync::new(Self::new_inner()))");
-        } else if self.box_classes.contains(&class_decl.name.text) {
+        } else if self.is_box_class(&class_decl.name.text) {
             self.w.line("Self(std::boxed::Box::new(Self::new_inner()))");
-        } else if self.refcell_classes.contains(&class_decl.name.text) {
+        } else if self.is_refcell_class(&class_decl.name.text) {
             self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
         } else {
             self.w.line("Self(std::rc::Rc::new(Self::new_inner()))");
