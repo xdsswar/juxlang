@@ -87,6 +87,33 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_stmt_inner(&mut self) -> Option<Stmt> {
+        // **A type declared inside a function body** (E0993, M.9.2). Reported
+        // once, with the alternatives, and the whole declaration is skipped so
+        // the rest of the body still parses. Left to the expression parser it
+        // became a cascade that ended by splitting the function in two.
+        if let Some(kind) = self.local_type_declaration_ahead() {
+            let start = self.peek_span();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0993_LocalTypeDeclaration,
+                    format!(
+                        "a {kind} cannot be declared inside a function body -- declare it as a \
+                         nested type of the enclosing class, or at the top level, or use a \
+                         lambda if all it holds is behaviour (M.9.2)"
+                    ),
+                )
+                .with_span(start),
+            );
+            while !self.at(&TokenKind::LBrace) && !self.at(&TokenKind::Semicolon) && !self.at_eof() {
+                self.advance();
+            }
+            self.skip_balanced_braces();
+            self.eat(&TokenKind::Semicolon);
+            return Some(Stmt::Block(juxc_ast::Block {
+                statements: Vec::new(),
+                span: start.join(self.last_consumed_span()),
+            }));
+        }
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }
@@ -997,6 +1024,36 @@ impl<'a> Parser<'a> {
             j = self.skip_one_type(j + 1)?;
         }
         Some(j)
+    }
+
+    /// If the statement at the cursor declares a TYPE, the kind of type:
+    /// `class`, `interface`, `enum`, `record` or `struct`, after any modifiers.
+    fn local_type_declaration_ahead(&self) -> Option<&'static str> {
+        let mut i = self.pos;
+        while matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::Kw(
+                Keyword::Public
+                    | Keyword::Private
+                    | Keyword::Protected
+                    | Keyword::Static
+                    | Keyword::Final
+                    | Keyword::Abstract
+                    | Keyword::Sealed
+            ))
+        ) {
+            i += 1;
+        }
+        let kind = match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Kw(Keyword::Class)) => "class",
+            Some(TokenKind::Kw(Keyword::Interface)) => "interface",
+            Some(TokenKind::Kw(Keyword::Enum)) => "enum",
+            Some(TokenKind::Kw(Keyword::Record)) => "record",
+            Some(TokenKind::Kw(Keyword::Struct)) => "struct",
+            _ => return None,
+        };
+        // Followed by a name: `class Foo`, not some other use of the keyword.
+        matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))).then_some(kind)
     }
 
     /// Lookahead heuristic for typed local declarations.

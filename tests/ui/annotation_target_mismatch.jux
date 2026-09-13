@@ -1,0 +1,10 @@
+@Target(METHOD)
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+}
+
+@Route(path = "/")
+public class Api { }
+
+public void main() { }

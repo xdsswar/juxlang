@@ -1,0 +1,1 @@
+local_type_declaration.jux:2:5: [E0993] error: a class cannot be declared inside a function body -- declare it as a nested type of the enclosing class, or at the top level, or use a lambda if all it holds is behaviour (M.9.2)

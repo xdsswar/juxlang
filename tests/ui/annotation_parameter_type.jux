@@ -1,0 +1,9 @@
+public annotation Retry {
+    int maxAttempts() default 3;
+    String[] tags() default {};
+}
+
+@Retry(maxAttempts = "five", tags = {"net", 7})
+public void call() { }
+
+public void main() { }

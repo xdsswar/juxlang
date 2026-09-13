@@ -1,0 +1,6 @@
+public void main() {
+    class Local {
+        int x = 1;
+    }
+    print("still parsed");
+}

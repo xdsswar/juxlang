@@ -1,0 +1,1 @@
+annotation_not_repeatable.jux:6:1: [E0473] error: `@Tag` appears more than once here, and is not `@Repeatable` -- mark its declaration `@Repeatable` to allow that (§A.7)

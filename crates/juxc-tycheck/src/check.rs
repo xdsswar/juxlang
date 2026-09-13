@@ -658,6 +658,7 @@ impl<'a> Checker<'a> {
             .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
             .unwrap_or_default();
         self.env.current_package = pkg;
+        self.check_annotation_applications(unit);
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
@@ -2881,6 +2882,242 @@ impl<'a> Checker<'a> {
         self.check_block(body);
         self.current_return = saved;
         self.env.pop_scope();
+    }
+
+    /// Check every application of a user-defined annotation in `unit` against
+    /// its declaration (§A.12): the target kind (E0470), required parameters
+    /// (E0472), repetition (E0473) and argument types (E0474).
+    ///
+    /// Built-in annotations (`@Override`, `@Deprecated`, `@Cfg`, the meta
+    /// annotations) are not declared with `annotation`, so they are not in the
+    /// table and are left to their own checks.
+    fn check_annotation_applications(&mut self, unit: &CompilationUnit) {
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Function(f) => self.check_applied_annotations(&f.annotations, "METHOD"),
+                TopLevelDecl::Annotation(a) => {
+                    self.check_applied_annotations(&a.annotations, "ANNOTATION")
+                }
+                TopLevelDecl::Class(c) => {
+                    self.check_applied_annotations(&c.annotations, "TYPE");
+                    for m in &c.methods {
+                        self.check_applied_annotations(&m.annotations, "METHOD");
+                    }
+                    for f in &c.fields {
+                        self.check_applied_annotations(&f.annotations, "FIELD");
+                    }
+                    for p in &c.properties {
+                        self.check_applied_annotations(&p.annotations, "FIELD");
+                    }
+                    for k in &c.constructors {
+                        self.check_applied_annotations(&k.annotations, "CONSTRUCTOR");
+                    }
+                }
+                TopLevelDecl::Record(r) => {
+                    self.check_applied_annotations(&r.annotations, "TYPE");
+                    for m in &r.methods {
+                        self.check_applied_annotations(&m.annotations, "METHOD");
+                    }
+                }
+                TopLevelDecl::Enum(e) => {
+                    self.check_applied_annotations(&e.annotations, "TYPE");
+                    for m in &e.methods {
+                        self.check_applied_annotations(&m.annotations, "METHOD");
+                    }
+                }
+                TopLevelDecl::Interface(i) => {
+                    self.check_applied_annotations(&i.annotations, "TYPE");
+                    for m in &i.methods {
+                        self.check_applied_annotations(&m.annotations, "METHOD");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The declaration of a user annotation, by the name an application
+    /// writes. Annotation names are case-insensitive (JUX-LANG-V1 3.6), and a
+    /// same-package or imported declaration is preferred over one elsewhere.
+    fn applied_annotation_sig(
+        &self,
+        written: &juxc_ast::QualifiedName,
+    ) -> Option<crate::symbol_table::AnnotationSig> {
+        let last = written.segments.last()?.text.as_str();
+        let dotted = written
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        if let Some(sig) = self.symbols.annotations.get(&dotted) {
+            return Some(sig.clone());
+        }
+        let pkg = self.env.current_package.join(".");
+        let mut candidates: Vec<(&String, &crate::symbol_table::AnnotationSig)> = self
+            .symbols
+            .annotations
+            .iter()
+            .filter(|(k, _)| k.rsplit('.').next().is_some_and(|b| b.eq_ignore_ascii_case(last)))
+            .collect();
+        candidates.sort_by_key(|(k, _)| {
+            let imported = self.env.unqualified.values().any(|v| v == *k);
+            let same_pkg = k.rsplit_once('.').map(|(p, _)| p).unwrap_or("") == pkg;
+            (!(imported || same_pkg), (*k).clone())
+        });
+        candidates.first().map(|(_, sig)| (*sig).clone())
+    }
+
+    /// Check one declaration's annotation list, where the declaration is of
+    /// the §A.3 target `kind`.
+    fn check_applied_annotations(&mut self, annotations: &[juxc_ast::Annotation], kind: &str) {
+        let mut seen: Vec<(String, bool)> = Vec::new();
+        for a in annotations {
+            let Some(sig) = self.applied_annotation_sig(&a.name) else { continue };
+            let name = a.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+
+            // E0473: once per declaration unless `@Repeatable`.
+            let key = name.to_ascii_lowercase();
+            if seen.iter().any(|(k, _)| *k == key) && !sig.repeatable {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0473_AnnotationNotRepeatable,
+                        format!(
+                            "`@{name}` appears more than once here, and is not `@Repeatable` -- \
+                             mark its declaration `@Repeatable` to allow that (§A.7)"
+                        ),
+                    )
+                    .with_span(a.span),
+                );
+            }
+            seen.push((key, sig.repeatable));
+
+            // E0470: the declaration kind must be one `@Target` names.
+            if !sig.targets.is_empty() && !sig.targets.iter().any(|t| t == kind) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0470_AnnotationTargetMismatch,
+                        format!(
+                            "`@{name}` cannot be applied to a {} -- its `@Target` allows {} (§A.3)",
+                            target_kind_noun(kind),
+                            sig.targets.join(", "),
+                        ),
+                    )
+                    .with_span(a.span),
+                );
+            }
+
+            // Bind each argument to its parameter: by name, else by position.
+            // Each bound value keeps a span to report at. A literal carries no
+            // span of its own, so a named argument reports at its NAME and a
+            // positional one at the annotation.
+            let mut given: Vec<Option<(&Expr, juxc_source::Span)>> = vec![None; sig.params.len()];
+            let mut position = 0usize;
+            let mut misnamed = false;
+            for arg in &a.args {
+                match arg {
+                    juxc_ast::AnnotationArg::Named { name: n, value } => {
+                        match sig.params.iter().position(|p| p.name == n.text) {
+                            Some(i) => given[i] = Some((value, n.span)),
+                            None => {
+                                misnamed = true;
+                                let known = sig
+                                    .params
+                                    .iter()
+                                    .map(|p| format!("`{}`", p.name))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0448_BadNamedArgument,
+                                        format!(
+                                            "`@{name}` has no parameter `{}`; it declares {}",
+                                            n.text,
+                                            if known.is_empty() { "none".to_string() } else { known },
+                                        ),
+                                    )
+                                    .with_span(n.span),
+                                );
+                            }
+                        }
+                    }
+                    juxc_ast::AnnotationArg::Positional(value) => {
+                        if position < given.len() {
+                            given[position] = Some((value, a.span));
+                        }
+                        position += 1;
+                    }
+                }
+            }
+
+            for (param, value) in sig.params.iter().zip(given.iter()) {
+                match value {
+                    // E0472: a parameter without a default needs a value. Not
+                    // reported alongside a misspelled parameter name, which is
+                    // almost always the same mistake stated twice.
+                    None if !param.has_default && !misnamed => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0472_MissingAnnotationParameter,
+                                format!(
+                                    "`@{name}` needs a value for `{}`, which has no default (§A.6)",
+                                    param.name,
+                                ),
+                            )
+                            .with_span(a.span),
+                        );
+                    }
+                    Some((v, at)) => self.check_annotation_argument_type(&name, param, v, *at),
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// E0474: an argument whose type does not fit its parameter.
+    ///
+    /// Only a value whose type is actually known is compared. An enum constant
+    /// is written bare (`method = GET`) and does not type as a local, so it is
+    /// left alone rather than guessed at; an ARRAY parameter accepts a brace
+    /// list of fitting elements, or a single fitting element.
+    fn check_annotation_argument_type(
+        &mut self,
+        annotation: &str,
+        param: &crate::symbol_table::AnnotationParamSig,
+        value: &Expr,
+        fallback: juxc_source::Span,
+    ) {
+        let expected = ty_from_ref(&param.ty, &self.env, self.symbols);
+        let element = match &expected {
+            Ty::Array { element, .. } => Some((**element).clone()),
+            _ => None,
+        };
+        let values: Vec<&Expr> = match value {
+            Expr::NewArrayLit(lit) if element.is_some() => lit.elements.iter().collect(),
+            other => vec![other],
+        };
+        let want = element.unwrap_or(expected);
+        for v in values {
+            let found = infer_expr(v, &self.env, self.symbols);
+            if matches!(found, Ty::Unknown) || compatible(&want, &found, self.symbols) {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0474_AnnotationParameterType,
+                    format!(
+                        "`@{annotation}` parameter `{}` is `{}`, but this is `{}`",
+                        param.name,
+                        type_ref_display(&param.ty),
+                        found,
+                    ),
+                )
+                .with_span(match expr_span(v) {
+                    s if s == juxc_source::Span::DUMMY => fallback,
+                    s => s,
+                }),
+            );
+        }
     }
 
     /// Validate an `annotation Name { … }` declaration (§A.2, §A.5).
@@ -8590,6 +8827,21 @@ fn collect_async_try_writes_stmt(
         Stmt::Unsafe(b) => collect_async_try_writes(b, assigned, declared),
         Stmt::Labeled { stmt, .. } => collect_async_try_writes_stmt(stmt, assigned, declared),
         _ => {}
+    }
+}
+
+/// The declaration a §A.3 target name refers to, for messages.
+fn target_kind_noun(kind: &str) -> &'static str {
+    match kind {
+        "TYPE" => "type",
+        "METHOD" => "method or function",
+        "FIELD" => "field or property",
+        "PARAMETER" => "parameter",
+        "CONSTRUCTOR" => "constructor",
+        "LOCAL_VARIABLE" => "local variable",
+        "MODULE" => "module",
+        "ANNOTATION" => "annotation",
+        _ => "declaration",
     }
 }
 

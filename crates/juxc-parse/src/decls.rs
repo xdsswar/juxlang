@@ -2329,7 +2329,7 @@ impl<'a> Parser<'a> {
 
     /// Consume a brace-balanced `{ … }` block at the cursor (used for error
     /// recovery). No-op if the cursor isn't on `{`.
-    fn skip_balanced_braces(&mut self) {
+    pub(crate) fn skip_balanced_braces(&mut self) {
         if !self.at(&TokenKind::LBrace) {
             return;
         }

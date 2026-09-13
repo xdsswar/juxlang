@@ -1,0 +1,8 @@
+public annotation Route {
+    String path();
+}
+
+@Route(pth = "/users")
+public void users() { }
+
+public void main() { }

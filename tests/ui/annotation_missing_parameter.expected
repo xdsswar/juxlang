@@ -1,0 +1,1 @@
+annotation_missing_parameter.jux:8:5: [E0472] error: `@Route` needs a value for `path`, which has no default (§A.6)

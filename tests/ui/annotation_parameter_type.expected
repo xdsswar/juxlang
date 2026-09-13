@@ -1,0 +1,2 @@
+annotation_parameter_type.jux:6:8: [E0474] error: `@Retry` parameter `maxAttempts` is `int`, but this is `String`
+annotation_parameter_type.jux:6:30: [E0474] error: `@Retry` parameter `tags` is `String[]`, but this is `int`

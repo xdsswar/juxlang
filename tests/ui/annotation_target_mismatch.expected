@@ -1,0 +1,1 @@
+annotation_target_mismatch.jux:7:1: [E0470] error: `@Route` cannot be applied to a type -- its `@Target` allows METHOD (§A.3)

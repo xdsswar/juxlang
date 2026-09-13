@@ -897,10 +897,11 @@ The nested type is namespaced under the enclosing type. Outer-class private memb
 ### M.9.2. What Is NOT Supported
 
 - **Inner classes** with implicit outer reference (Java's `class Inner` inside `class Outer`). Lifetime entanglement breaks the borrow inference; users wanting this should pass an explicit reference.
-- **Anonymous classes** (Java's `new Runnable() { ... }`). Lambdas and functional interfaces (any single-method interface) cover the use case.
-- **Local classes** (declared inside a method body). Rare and replaceable by lambdas or by lifting to nested.
+- **Local classes** (declared inside a method body). Rare and replaceable by lambdas or by lifting to nested. Rejected with `E0993`, which names the alternatives.
 
-Each of these is rejected with a clear message (`E0991`–`E0993`) suggesting the recommended alternative.
+An inner class is not a distinct form in Jux: every nested type is the static kind (M.9.1), and `E0991` stays reserved for the day a non-static form is proposed.
+
+**Anonymous classes are supported**, contrary to an earlier version of this section: `new Initializable() { ... }` compiles and runs, with local captures (`examples/stress_anonymous_minimal.jux` gates it). `E0992` is retired in all but number.
 
 ### M.9.3. Visibility
 

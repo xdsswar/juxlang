@@ -419,11 +419,11 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |
 | `E0466`  | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default) | §M.14.5 |
 | `E0467`  | A defaulted parameter precedes a non-defaulted parameter | §M.14.4 |
-| `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
+| `E0470`  | Annotation applied outside its `@Target` set | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
-| `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
-| `E0473`  | Annotation is not `@Repeatable` but appears more than once *(reserved)* | Annotations §A.13 |
-| `E0474`  | Wrong type for annotation parameter *(reserved)*     | Annotations §A.13              |
+| `E0472`  | Missing required annotation parameter   | Annotations §A.13              |
+| `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13 |
+| `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
@@ -546,7 +546,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0980`  | Method reference is ambiguous *(reserved)*                  | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |
-| `E0993`  | Local classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
+| `E0993`  | Local classes not supported                                 | Missing-defs §M.9.2            |
 
 > **These three do not describe the compiler as it stands (checked 2026-09-09).**
 >
@@ -556,12 +556,11 @@ code, and all of `E0506`–`E0510` are emitted today.
 > restriction the code names no longer exists, so nothing will ever raise it.
 > It keeps its number because §D.5.1 forbids reuse.
 >
-> `E0993` describes something true, but the compiler does not say it. A `class`
-> declared inside a method body is not rejected with one clear diagnostic; it
-> falls out of the parser as a cascade, `E0200 expected expression` followed by
-> four more errors about names the failed parse then could not find. The
-> restriction is real and intended; the diagnostic is the missing part, and this
-> is the code to raise when it is written.
+> `E0993` is raised (since 2026-09-13) for a `class`, `interface`, `enum`,
+> `record` or `struct` declared inside a function body, once, with the
+> alternatives; the declaration is skipped so the rest of the body still
+> parses. Before that the parser produced a cascade that ended by reporting
+> `E0320 multiple entry points` for the one function it had split in two.
 >
 > `E0991` is genuinely reserved. Static nested types work (§M.9.1,
 > `examples/nested_types.jux`); a non-static inner class holding an implicit

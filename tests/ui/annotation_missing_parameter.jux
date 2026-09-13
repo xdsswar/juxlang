@@ -1,0 +1,12 @@
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+    String method() default "GET";
+}
+
+public class Api {
+    @Route(method = "POST")
+    public void create() { }
+}
+
+public void main() { }

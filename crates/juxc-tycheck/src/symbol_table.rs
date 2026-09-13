@@ -1223,6 +1223,9 @@ pub struct AnnotationSig {
     /// The retention from `@Retention`; `BINARY` when unwritten (§A.4).
     /// Only `RUNTIME` annotations reach the compile-time registry.
     pub retention: String,
+    /// Whether `@Repeatable` was written (§A.7). Without it, applying the
+    /// annotation twice to one declaration is `E0473`.
+    pub repeatable: bool,
     /// Span of the declaration, for "declared here" notes.
     pub span: Span,
 }
@@ -1296,6 +1299,12 @@ fn insert_annotation(
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| "BINARY".to_string()),
+            repeatable: decl.annotations.iter().any(|a| {
+                a.name
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.text.eq_ignore_ascii_case("Repeatable"))
+            }),
             span: decl.span,
         },
     );

@@ -1,0 +1,9 @@
+public annotation Tag {
+    String value();
+}
+
+@Tag("user")
+@Tag("profile")
+public void profile() { }
+
+public void main() { }

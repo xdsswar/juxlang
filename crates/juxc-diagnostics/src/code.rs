@@ -41,8 +41,8 @@ pub enum Code {
     E0202_NumericLiteralOutOfRange,
     /// E0210 — `super(...)` or `this(...)` not first statement.
     /// A keyword the language reserves, and the spec documents, that Phase 1
-    /// does not implement: `annotation` declarations, the `move` call-site
-    /// operator, the `volatile` field modifier, `yield`.
+    /// does not implement: the `move` call-site operator, the `volatile` field
+    /// modifier, `yield`.
     ///
     /// Reserving a word without recognizing it is the worst of both: the
     /// program cannot use the name as an identifier AND the error blames
@@ -447,6 +447,24 @@ pub enum Code {
     /// §T.3.2: positional args fill parameter slots left-to-right,
     /// named args fill their named slot, every slot at most once.
     E0448_BadNamedArgument,
+    /// E0470 -- An annotation applied to a kind of declaration its `@Target`
+    /// set does not name (§A.3). An annotation with no `@Target` may go
+    /// anywhere.
+    E0470_AnnotationTargetMismatch,
+    /// E0472 -- An annotation parameter with no `default` was not given a
+    /// value, by name or by position (§A.6).
+    E0472_MissingAnnotationParameter,
+    /// E0473 -- An annotation that is not `@Repeatable` appears more than once
+    /// on the same declaration (§A.7).
+    E0473_AnnotationNotRepeatable,
+    /// E0474 -- An annotation argument whose type does not fit the parameter
+    /// it is given to (§A.12).
+    E0474_AnnotationParameterType,
+    /// E0993 -- A class, interface, enum, record or struct declared INSIDE a
+    /// function body (JUX-MISSING-DEFS M.9.2). Local types are not part of the
+    /// language: a lambda, or a nested type declared on the enclosing class,
+    /// covers the same ground.
+    E0993_LocalTypeDeclaration,
     /// E0449 — A **default-value expression references another
     /// parameter** (`int[] buf = new int[n]`). §S.1.3 allows
     /// defaults to read EARLIER parameters, but Phase 1 lowers a
@@ -822,6 +840,11 @@ impl Code {
             Code::E0460_MissingReturn            => "E0460",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
+            Code::E0470_AnnotationTargetMismatch => "E0470",
+            Code::E0472_MissingAnnotationParameter => "E0472",
+            Code::E0473_AnnotationNotRepeatable  => "E0473",
+            Code::E0474_AnnotationParameterType  => "E0474",
+            Code::E0993_LocalTypeDeclaration    => "E0993",
             Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0446_GenericBoundNotSatisfied => "E0446",
