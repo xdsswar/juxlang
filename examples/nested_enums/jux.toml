@@ -1,0 +1,3 @@
+[package]
+name = "demo.nested_enums"
+version = "0.1.0"

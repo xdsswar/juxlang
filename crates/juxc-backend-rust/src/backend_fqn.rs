@@ -192,8 +192,60 @@ impl crate::RustEmitter {
         juxc_tycheck::infer::field_chain_class_path(
             e,
             &|n| self.local_types.iter().any(|scope| scope.contains_key(n)),
+            &|n| self.resolve_bare_class_fqn(n),
             &self.symbols,
         )
+    }
+
+    /// The FQN of a nested type written through its owner -- `Order.Status`
+    /// or `shop.orders.Order.Status` -- as the lifted `shop.orders.Order__Status`
+    /// the declaration lowered to, or `None` when `segments` names no nested
+    /// type.
+    ///
+    /// Every split is tried, longest owner first, exactly as the checker's
+    /// `juxc_tycheck::infer::field_chain_class_path` does: an owner written in
+    /// full, or a single bare name resolved in this unit's context.
+    pub(crate) fn lifted_nested_type_fqn(&self, segments: &[&str]) -> Option<String> {
+        if segments.len() < 2 {
+            return None;
+        }
+        let is_type = |name: &str| {
+            let hit = |k: &String| k == name;
+            self.symbols.classes.keys().any(hit)
+                || self.symbols.enums.keys().any(hit)
+                || self.symbols.records.keys().any(hit)
+                || self.symbols.interfaces.keys().any(hit)
+        };
+        (1..segments.len()).rev().find_map(|split| {
+            let owner = if split == 1 {
+                self.resolve_bare_class_fqn(segments[0])?
+            } else {
+                let prefix = segments[..split].join(".");
+                is_type(&prefix).then_some(prefix)?
+            };
+            let candidate = format!("{owner}__{}", segments[split..].join("__"));
+            is_type(&candidate).then_some(candidate)
+        })
+    }
+
+    /// How to spell the type `fqn` from the unit being emitted: its bare name
+    /// when it lives in this package, a `crate::`-rooted path otherwise.
+    pub(crate) fn rust_path_for_type_fqn(&self, fqn: &str) -> String {
+        match fqn.rsplit_once('.') {
+            Some((pkg, bare)) => {
+                let here = self
+                    .current_unit_idx
+                    .and_then(|i| self.symbols.units.get(i))
+                    .map(|u| u.package.join("."))
+                    .unwrap_or_else(|| self.symbols.package.join("."));
+                if pkg == here {
+                    juxc_lex::to_rust_ident(bare)
+                } else {
+                    format!("crate::{}", juxc_lex::to_rust_path(fqn))
+                }
+            }
+            None => juxc_lex::to_rust_ident(fqn),
+        }
     }
 
     pub(crate) fn path_resolves_to_class_in_emit(

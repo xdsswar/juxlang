@@ -1,0 +1,25 @@
+// An enum declared inside the class it belongs to.
+//
+// Inside `Order`, the enum is just `Status`. Outside, it is `Order.Status`,
+// and its variants are `Order.Status.Shipped` -- in a type, in an expression,
+// and in a `case`.
+
+package shop.orders;
+
+public class Order {
+    public enum Status { Pending, Shipped, Delivered }
+
+    private Status status = Status.Pending;
+
+    public void ship() {
+        this.status = Status.Shipped;
+    }
+
+    public void deliver() {
+        this.status = Status.Delivered;
+    }
+
+    public Status current() {
+        return this.status;
+    }
+}

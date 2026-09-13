@@ -185,6 +185,7 @@ fn best_overload_by_args(
 pub fn field_chain_class_path(
     e: &Expr,
     is_local: &dyn Fn(&str) -> bool,
+    owner_fqn: &dyn Fn(&str) -> Option<String>,
     symbols: &SymbolTable,
 ) -> Option<juxc_ast::QualifiedName> {
     let mut segments: Vec<juxc_ast::Ident> = Vec::new();
@@ -214,11 +215,52 @@ pub fn field_chain_class_path(
         .map(|s| s.text.as_str())
         .collect::<Vec<_>>()
         .join(".");
-    if !symbols.is_type_name(&joined) {
-        return None;
-    }
     let span = segments[0].span.join(segments[segments.len() - 1].span);
+    if symbols.is_type_name(&joined) {
+        return Some(juxc_ast::QualifiedName { segments, span });
+    }
+    // A NESTED type named through its owner (`Order.Status`, M.9): the first
+    // segment is the owner, resolved in the caller's context, and the rest
+    // is the lifted `Owner__Nested` name -- the same rule type positions
+    // use, so `Order.Status.Shipped` reaches the variant a bare `Status`
+    // reaches from inside `Order`.
+    //
+    // The owner may itself be written in full (`shop.orders.Order.Status`),
+    // so every split is tried, longest owner first: a prefix that is a type,
+    // or a single bare name resolved in the caller's context, followed by a
+    // nested remainder.
+    let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
+    let lifted = (1..texts.len()).rev().find_map(|split| {
+        let owner = if split == 1 {
+            owner_fqn(texts[0])?
+        } else {
+            let prefix = texts[..split].join(".");
+            symbols.is_type_name(&prefix).then_some(prefix)?
+        };
+        let candidate = format!("{owner}__{}", texts[split..].join("__"));
+        symbols.is_type_name(&candidate).then_some(candidate)
+    })?;
+    let segments = lifted
+        .split('.')
+        .map(|text| juxc_ast::Ident {
+            text: text.to_string(),
+            span,
+        })
+        .collect();
     Some(juxc_ast::QualifiedName { segments, span })
+}
+
+/// The fully-qualified name a bare TYPE name means in `env`: an import or
+/// same-package sibling, the name itself, or a same-package-preferring scan.
+/// The owner-resolution step of nested-type access, shared with
+/// [`ty_from_ref`]'s own type-position rule.
+pub fn owner_type_fqn(name: &str, env: &TypeEnv, symbols: &SymbolTable) -> Option<String> {
+    env.unqualified
+        .get(name)
+        .cloned()
+        .filter(|f| symbols.is_type_name(f))
+        .or_else(|| symbols.is_type_name(name).then(|| name.to_string()))
+        .or_else(|| symbols.find_fqn_by_bare_in(name, &env.current_package.join(".")))
 }
 
 /// `expr` with a fully-qualified class receiver re-shaped into a path (see
@@ -229,6 +271,7 @@ pub fn field_chain_class_path(
 pub fn reshape_qualified_class_receiver(
     expr: &Expr,
     is_local: &dyn Fn(&str) -> bool,
+    owner_fqn: &dyn Fn(&str) -> Option<String>,
     symbols: &SymbolTable,
 ) -> Option<Expr> {
     match expr {
@@ -237,7 +280,7 @@ pub fn reshape_qualified_class_receiver(
             if matches!(&*f.object, Expr::Path(_)) {
                 return None;
             }
-            let qn = field_chain_class_path(&f.object, is_local, symbols)?;
+            let qn = field_chain_class_path(&f.object, is_local, owner_fqn, symbols)?;
             let mut callee = f.clone();
             callee.object = Box::new(Expr::Path(qn));
             Some(Expr::Call(juxc_ast::CallExpr {
@@ -249,7 +292,7 @@ pub fn reshape_qualified_class_receiver(
             if matches!(&*f.object, Expr::Path(_)) {
                 return None;
             }
-            let qn = field_chain_class_path(&f.object, is_local, symbols)?;
+            let qn = field_chain_class_path(&f.object, is_local, owner_fqn, symbols)?;
             let mut out = f.clone();
             out.object = Box::new(Expr::Path(qn));
             Some(Expr::Field(out))
@@ -262,7 +305,12 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // A fully-qualified class receiver reads as a chain of fields; type it as
     // the class path it is.
     if let Some(reshaped) =
-        reshape_qualified_class_receiver(expr, &|n| env.lookup(n).is_some(), symbols)
+        reshape_qualified_class_receiver(
+            expr,
+            &|n| env.lookup(n).is_some(),
+            &|n| owner_type_fqn(n, env, symbols),
+            symbols,
+        )
     {
         return infer_expr(&reshaped, env, symbols);
     }

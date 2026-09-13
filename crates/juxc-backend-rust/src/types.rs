@@ -579,17 +579,13 @@ impl RustEmitter {
             // first segment as a class and try the mangled form;
             // package-qualified module paths fall through to the
             // plain `::` join.
-            let first = ty.name.segments[0].text.as_str();
-            let rest = ty.name.segments[1..]
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<Vec<_>>()
-                .join("__");
-            let mangled = format!("{first}__{rest}");
-            if self.lookup_class_by_bare_or_fqn(&mangled).is_some()
-                || self.symbols.records.contains_key(&mangled)
-            {
-                mangled
+            let segs: Vec<&str> = ty.name.segments.iter().map(|s| s.text.as_str()).collect();
+            // Every nested KIND lifts the same way, and the owner resolves in
+            // this unit's context -- so `Order.Status` names
+            // `shop.orders.Order__Status` wherever `Order` was imported from,
+            // and is spelled from the current package.
+            if let Some(lifted) = self.lifted_nested_type_fqn(&segs) {
+                self.rust_path_for_type_fqn(&lifted)
             } else {
                 // A package-qualified name of a type the PROGRAM declares is
                 // a module path in the emitted crate, and a module path from

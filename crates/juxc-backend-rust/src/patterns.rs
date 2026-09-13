@@ -482,7 +482,21 @@ impl RustEmitter {
                 }
                 let segs: Vec<&str> =
                     path.segments.iter().map(|s| s.text.as_str()).collect();
-                self.w.push_str(&juxc_lex::join_rust_path(&segs));
+                // `case Order.Status.Pending`: a nested enum named through its
+                // owner is the lifted type the declaration lowered to (M.9),
+                // spelled from the current package.
+                let lifted = (segs.len() >= 3)
+                    .then(|| self.lifted_nested_type_fqn(&segs[..segs.len() - 1]))
+                    .flatten();
+                match lifted {
+                    Some(fqn) => {
+                        let path = self.rust_path_for_type_fqn(&fqn);
+                        self.w.push_str(&path);
+                        self.w.push_str("::");
+                        self.w.push_str(&juxc_lex::to_rust_ident(segs[segs.len() - 1]));
+                    }
+                    None => self.w.push_str(&juxc_lex::join_rust_path(&segs)),
+                }
                 if !args.is_empty() || pattern_has_parens(pattern) {
                     self.w.push('(');
                     for (i, sub) in args.iter().enumerate() {

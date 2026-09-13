@@ -1,0 +1,25 @@
+// A nested enum reached from ANOTHER package, three ways: through the imported
+// owner (`Order.Status`), in full (`shop.orders.Order.Status`), and as the type
+// of a local and a parameter.
+
+import shop.orders.Order;
+
+public String label(Order.Status s) {
+    return switch (s) {
+        case Order.Status.Pending -> "pending";
+        case Order.Status.Shipped -> "shipped";
+        case Order.Status.Delivered -> "delivered";
+    };
+}
+
+public void main() {
+    var order = new Order();
+    Order.Status before = order.current();
+
+    order.ship();
+    print(label(before) + " -> " + label(order.current()));
+    print("shipped? " + (order.current() == Order.Status.Shipped));
+
+    order.deliver();
+    print("delivered? " + (order.current() == shop.orders.Order.Status.Delivered));
+}

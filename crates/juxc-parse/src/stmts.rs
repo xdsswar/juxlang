@@ -1009,9 +1009,12 @@ impl<'a> Parser<'a> {
     /// - `int[10] xs;`             — IDENT [ 10 ] IDENT ;
     /// - `String name = "Alice";`  — IDENT IDENT =
     ///
-    /// Multi-segment dotted types (`com.example.Foo x = …;`) and generic
-    /// types (`List<int> nums = …;`) don't trip the heuristic — those
-    /// users can fall back to `var`.
+    /// Generic types (`List<int> nums = …;`), dotted types
+    /// (`com.example.Foo x = …;`) and nested ones (`Order.Status s = …;`) are
+    /// all recognised: a dotted name followed by another identifier is never a
+    /// valid expression statement, so the shape is unambiguous. (An earlier
+    /// version skipped dotted types and told users to write `var`, which is not
+    /// what the grammar says.)
     pub(crate) fn looks_like_typed_local(&self) -> bool {
         // A FUNCTION-typed local — `(int) -> int f = (n) -> n + 1;`. Grammar
         // §A.2.7 makes `function-type` a `simple-type`, so it is legal wherever
@@ -1043,6 +1046,13 @@ impl<'a> Parser<'a> {
             return false;
         }
         let mut i = self.pos + 1;
+        // Further dotted segments of a qualified type name: `demo.pkg.Crate`,
+        // `Order.Status`.
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot))
+            && matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+        {
+            i += 2;
+        }
         // Optional generic args after the type name — `Box<int>`,
         // `Map<String, int>`. We balance angle brackets to skip over
         // the whole `< … >`. Comparison expressions don't reach this

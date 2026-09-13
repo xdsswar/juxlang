@@ -917,7 +917,9 @@ public class Outer {
 
 Nested types are **lifted** to the top level under an owner-qualified internal name (`Config` inside `HttpServer` becomes `HttpServer__Config`, recursively for deeper nesting), which is also the emitted Rust struct name. Both access forms resolve onto the lifted type: qualified `HttpServer.Config` (type positions and `new` expressions) and bare `Config` from inside the owner or a sibling nested type (innermost enclosing scope wins). Two classes may freely nest same-named types.
 
-Deferred to a later phase: the M.9.3 visibility *combination* rule (Phase-1 uses each type's own declared visibility) and the cross-nesting private-member relaxation; qualified access to a nested **enum's variants** (`Outer.Status.Active`) — declare the enum top-level when variants are consumed outside the owner.
+A nested **enum's variants** are reached the same way, in every position: `Outer.Status` as a type, `Outer.Status.Active` as a value, and `case Outer.Status.Active ->` as a pattern. The owner may itself be written in full (`com.shop.Outer.Status.Active`), and it resolves through the referring unit's imports and package like any other type name. Inside the owner, the bare `Status.Active` still works.
+
+Deferred to a later phase: the M.9.3 visibility *combination* rule (Phase-1 uses each type's own declared visibility) and the cross-nesting private-member relaxation.
 
 ---
 

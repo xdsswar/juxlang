@@ -3730,6 +3730,7 @@ impl<'a> Checker<'a> {
         if let Some(reshaped) = crate::infer::reshape_qualified_class_receiver(
             expr,
             &|n| self.env.lookup(n).is_some(),
+            &|n| crate::infer::owner_type_fqn(n, &self.env, self.symbols),
             self.symbols,
         ) {
             return self.check_expr(&reshaped);
@@ -8391,6 +8392,19 @@ fn collect_variants_covered(
             // diagnostics.
             1 => {
                 out.insert(path.segments[0].text.clone());
+            }
+            // `case Order.Status.Pending` -- a NESTED enum named through its
+            // owner (M.9). Its prefix, lifted the way the type is
+            // (`Order__Status`), is the enum.
+            n if n >= 3 => {
+                let prefix = path.segments[..n - 1]
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("__");
+                if prefix == bare || prefix == enum_name {
+                    out.insert(path.segments[n - 1].text.clone());
+                }
             }
             _ => {}
         }

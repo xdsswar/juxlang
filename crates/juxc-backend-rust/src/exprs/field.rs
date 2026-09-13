@@ -11,6 +11,16 @@ use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // A nested type or a class named in full (`Order.Status.Shipped`,
+        // `demo.pkg.Crate.LIMIT`) arrives as a chain of field reads. Re-shape
+        // the receiver into the path it names, as `emit_call` does for calls.
+        if !f.safe && !matches!(&*f.object, Expr::Path(_)) {
+            if let Some(qn) = self.field_chain_class_path(&f.object) {
+                let mut reshaped = f.clone();
+                *reshaped.object = Expr::Path(qn);
+                return self.emit_field(&reshaped);
+            }
+        }
         // Take-and-clear the method-call-callee marker on entry so
         // ONLY this (outermost) field of a `recv.method(args)` callee
         // sees it. Cleared before any nested `emit_expr(&f.object)`, so
@@ -317,9 +327,48 @@ impl RustEmitter {
         // Rust's path syntax `Color::Red`. Tuple-payload variant
         // construction (`Color.Red(args)`) reuses this path through
         // the enclosing `emit_call`, which appends the arg list.
+        // A variant reached through a QUALIFIED enum path -- what a fully
+        // qualified or nested enum (`shop.orders.Order.Status.Shipped`) is once
+        // its chain has been re-shaped. Spelled from the current package.
+        if let Expr::Path(qn) = &*f.object {
+            if qn.segments.len() > 1 {
+                let fqn = qn
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if self.symbols.enums.contains_key(&fqn) {
+                    let path = self.rust_path_for_type_fqn(&fqn);
+                    self.w.push_str(&path);
+                    self.w.push_str("::");
+                    self.w.push_str(&to_rust_ident(&f.field.text));
+                    if let Some(sfx) = &method_suffix {
+                        self.w.push_str(sfx);
+                    }
+                    return;
+                }
+            }
+        }
         if let Expr::Path(qn) = &*f.object {
             if qn.segments.len() == 1 {
                 let bare = &qn.segments[0].text;
+                // A NESTED enum named bare from inside its owner (`Status.Pending`
+                // within `Order`) is the lifted `Order__Status` (M.9). The
+                // enclosing scope shadows a top-level enum of the same name, as
+                // it does for a nested class.
+                if let Some(lifted) = self
+                    .enclosing_nested_type(bare)
+                    .filter(|l| self.symbols.enums.keys().any(|k| k == l || k.rsplit('.').next() == Some(l.as_str())))
+                {
+                    self.w.push_str(&lifted);
+                    self.w.push_str("::");
+                    self.w.push_str(&to_rust_ident(&f.field.text));
+                    if let Some(sfx) = &method_suffix {
+                        self.w.push_str(sfx);
+                    }
+                    return;
+                }
                 // Direct FQN match (single-package programs and
                 // explicitly-FQN'd uses).
                 if self.symbols.enums.contains_key(bare) {
@@ -857,8 +906,8 @@ impl RustEmitter {
             let candidate = format!("{s}__{bare}");
             if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
                 || self.symbols.records.contains_key(&candidate)
-                || self.symbols.enums.contains_key(&candidate)
-                || self.symbols.interfaces.contains_key(&candidate)
+                || self.symbols.enums.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
+                || self.symbols.interfaces.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
             {
                 return Some(candidate);
             }
