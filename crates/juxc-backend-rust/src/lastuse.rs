@@ -35,8 +35,7 @@ use juxc_source::Span;
 /// is about to emit. A name read once, outside any loop or lambda, has no entry
 /// — that read owns the value and may move it.
 pub(crate) fn non_final_local_uses(body: &Block) -> HashSet<Span> {
-    let mut w = Walker::default();
-    w.block(body);
+    let w = walk(body);
     // The walk visits in source order, so a name's final read is the last one
     // recorded for it.
     let mut final_use: HashMap<&str, Span> = HashMap::new();
@@ -52,6 +51,74 @@ pub(crate) fn non_final_local_uses(body: &Block) -> HashSet<Span> {
         })
         .map(|u| u.span)
         .collect()
+}
+
+/// For each lambda in one function body (keyed by the lambda's span), the
+/// outer bindings it captures that are **read again** after the capture, each
+/// with the span of one read inside the lambda, so the caller can look its
+/// type up.
+///
+/// Every Jux lambda lowers to a `move` closure, so a capture is a by-value use
+/// of the binding. It is the final one only when all three hold:
+///
+/// - nothing reads the binding after the lambda, in source order;
+/// - no loop around the lambda also encloses the binding's declaration (the
+///   next iteration builds the closure again);
+/// - the lambda is not inside another lambda (the outer closure may run many
+///   times, and a `Fn` closure cannot give its own capture away).
+///
+/// A captured binding is an enclosing-body declaration or one of `params`;
+/// names the lambda declares itself, its parameters included, are not
+/// captures. Fields and functions read by bare name are neither, and are left
+/// out.
+pub(crate) fn captures_read_again(
+    body: &Block,
+    params: &HashSet<String>,
+) -> HashMap<Span, Vec<(String, Span)>> {
+    let w = walk(body);
+    let mut out = HashMap::new();
+    for site in &w.lambdas {
+        let mut shared: Vec<(String, Span)> = Vec::new();
+        for u in &w.uses[site.first..site.end] {
+            let name = u.name.as_str();
+            let binding = w.decl_depth.contains_key(name) || params.contains(name);
+            if !binding
+                || site.declares.contains(name)
+                || shared.iter().any(|(n, _)| n == name)
+            {
+                continue;
+            }
+            let in_loop = site.depth > w.decl_depth.get(name).copied().unwrap_or(0);
+            let read_later = w.uses[site.end..].iter().any(|later| later.name == name);
+            if site.nested || in_loop || read_later {
+                shared.push((u.name.clone(), u.span));
+            }
+        }
+        if !shared.is_empty() {
+            out.insert(site.span, shared);
+        }
+    }
+    out
+}
+
+fn walk(body: &Block) -> Walker {
+    let mut w = Walker::default();
+    w.block(body);
+    w
+}
+
+/// One lambda the walk passed through.
+struct LambdaSite {
+    span: Span,
+    /// Loop nesting where the lambda is written.
+    depth: u32,
+    /// Written inside another lambda's body.
+    nested: bool,
+    /// The lambda's reads are `uses[first..end]`.
+    first: usize,
+    end: usize,
+    /// Every name the lambda declares, its parameters included.
+    declares: HashSet<String>,
 }
 
 /// One recorded read of a single-segment name.
@@ -72,11 +139,19 @@ struct Walker {
     decl_depth: HashMap<String, u32>,
     depth: u32,
     in_lambda: bool,
+    lambdas: Vec<LambdaSite>,
+    /// The names declared by each lambda being walked, innermost last.
+    lambda_declares: Vec<HashSet<String>>,
 }
 
 impl Walker {
     fn declare(&mut self, name: &str) {
         self.decl_depth.insert(name.to_string(), self.depth);
+        // A name declared in a nested lambda is declared inside every lambda
+        // around it too.
+        for frame in &mut self.lambda_declares {
+            frame.insert(name.to_string());
+        }
     }
 
     fn block(&mut self, b: &Block) {
@@ -247,7 +322,10 @@ impl Walker {
                 }
             }
             Expr::Lambda(l) => {
+                let nested = self.in_lambda;
+                let first = self.uses.len();
                 let prev = std::mem::replace(&mut self.in_lambda, true);
+                self.lambda_declares.push(HashSet::new());
                 for p in &l.params {
                     self.declare(&p.name.text);
                 }
@@ -256,6 +334,15 @@ impl Walker {
                     LambdaBody::Block(blk) => self.block(blk),
                 }
                 self.in_lambda = prev;
+                let declares = self.lambda_declares.pop().unwrap_or_default();
+                self.lambdas.push(LambdaSite {
+                    span: l.span,
+                    depth: self.depth,
+                    nested,
+                    first,
+                    end: self.uses.len(),
+                    declares,
+                });
             }
             _ => {}
         }

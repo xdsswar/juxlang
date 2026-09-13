@@ -410,7 +410,21 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
             .iter()
             .map(|p| ty_from_ref(p, env, symbols))
             .collect();
-        let return_type = Box::new(ty_from_ref(&fn_shape.return_type, env, symbols));
+        // `void` is not a type NAME anywhere else, so the ordinary lowering
+        // answered `Unknown` for it, and every `() -> void` read as a function
+        // returning who-knows-what. The one place it can be written is here.
+        let r = &fn_shape.return_type;
+        let return_type = if r.fn_shape.is_none()
+            && r.array_shape.is_none()
+            && r.generic_args.is_empty()
+            && !r.nullable
+            && r.name.segments.len() == 1
+            && r.name.segments[0].text == "void"
+        {
+            Box::new(Ty::Void)
+        } else {
+            Box::new(ty_from_ref(r, env, symbols))
+        };
         return Ty::Fn {
             params,
             return_type,

@@ -1000,6 +1000,10 @@ impl RustEmitter {
         // later reader, and so must copy rather than move (see `crate::lastuse`).
         let prev_non_final =
             std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
+        let prev_captures = std::mem::replace(
+            &mut self.captures_read_again,
+            crate::lastuse::captures_read_again(body, &self.current_fn_params),
+        );
         let cell_locals =
             crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
         // A captured-and-reassigned PARAMETER has no declaration to wrap, so it
@@ -1091,6 +1095,7 @@ impl RustEmitter {
         }
         self.forced_cell_locals = prev_forced;
         self.non_final_uses = prev_non_final;
+        self.captures_read_again = prev_captures;
         self.local_types.pop();
         self.in_lambda_body = prev_lam;
     }
@@ -1124,6 +1129,11 @@ impl RustEmitter {
                 //    wrap.
                 let wrap_some = self.return_wants_some_wrap(expr);
                 let wrap_upcast = self.return_needs_sealed_upcast(expr);
+                // A `() -> void` return slot discards an expression lambda's
+                // value, as the non-tail `return` does.
+                if let Some(ReturnType::Type(t)) = self.current_return_type.clone() {
+                    self.arm_void_lambda_slot(Some(&t), expr);
+                }
                 let is_switch = self.return_type_is_nullable()
                     && matches!(expr, juxc_ast::Expr::Switch(_) | juxc_ast::Expr::Ternary(_));
                 // Interface return slot — same coercion the non-tail `return`

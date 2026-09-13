@@ -1,0 +1,101 @@
+// A closure that READS a value the enclosing code keeps using.
+//
+// Every lambda may outlive the frame that builds it, so it takes what it
+// captures with it. For a `String`, an array, a collection or a record that
+// used to leave nothing behind: the next read of the variable outside the
+// lambda failed to compile. Java lets both sides keep the value, and so does
+// Jux -- the lambda gets its own copy (a shared handle, for the reference
+// types) exactly when the variable is read again, and takes the original when
+// the capture is its last use.
+//
+// The same file covers two neighbours: a lambda that reaches a field without
+// writing `this`, and an expression lambda stored in a `() -> void` variable,
+// assigned to one, or returned as one.
+
+record Tag(String label, int weight) {}
+
+class Greeter {
+    String greeting = "hello";
+
+    /** `greeting` here is `this.greeting`, captured through the object. */
+    public () -> String greeterFor(String who) {
+        var f = () -> $"${greeting}, ${who}";
+        print("built a greeter for " + who);
+        return f;
+    }
+}
+
+public int bump(int n) {
+    print($"bump ${n}");
+    return n + 1;
+}
+
+/** The capture is the parameter's last use: it moves in, nothing is copied. */
+public () -> void announce(String message) {
+    return () -> print(message);
+}
+
+/** A `() -> void` return slot drops the value `bump` hands back. */
+public () -> void bumpLater(int n) {
+    return () -> bump(n);
+}
+
+public void main() {
+    // Read again after the lambda: String, collection, array, record.
+    var name = "jux";
+    var names = new Vec<String>();
+    names.push("a");
+    names.push("b");
+    int[] sizes = {1, 2, 3};
+    var tag = new Tag("hot", 3);
+    () -> void show = () -> {
+        print(name);
+        print(names.len());
+        print(sizes.length);
+        print(tag.label);
+    };
+    show();
+    print(name + " is still here");
+    print(names.len());
+    print(sizes.length);
+    print(tag.weight);
+
+    // Built in a loop: each iteration's lambda needs its own copy.
+    var prefix = "item";
+    Vec<() -> void> actions = new Vec<() -> void>();
+    for (int i = 0; i < 2; i++) {
+        actions.push(() -> print($"${prefix} ${i}"));
+    }
+    for (var action : actions) {
+        action();
+    }
+    print(prefix);
+
+    // A lambda inside a lambda that runs twice.
+    var outer = "outer";
+    () -> void twice = () -> {
+        () -> void inner = () -> print(outer);
+        inner();
+    };
+    twice();
+    twice();
+
+    // A lambda parameter with the name of a local shadows it.
+    var shadow = "kept";
+    (String) -> void echo = (shadow) -> print(shadow);
+    echo("the parameter");
+    print(shadow);
+
+    announce("moved in")();
+    var greeter = new Greeter();
+    print(greeter.greeterFor("world")());
+
+    // Expression lambdas in `() -> void` slots.
+    () -> void step = () -> bump(1);
+    step();
+    step = () -> bump(2);
+    step();
+    bumpLater(3)();
+    (int) -> void each = (x) -> bump(x);
+    each(4);
+}

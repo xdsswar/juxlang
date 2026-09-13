@@ -1822,7 +1822,7 @@ impl RustEmitter {
     /// primitive — returning by value would otherwise move out of
     /// `&self`), and class references (classes always derive
     /// `Clone`, never `Copy`).
-    fn ty_needs_clone_on_field_read(&self, ty: &Ty) -> bool {
+    pub(crate) fn ty_needs_clone_on_field_read(&self, ty: &Ty) -> bool {
         match ty {
             Ty::String | Ty::Param(_) => true,
             // Collection / array fields are non-Copy `Vec`s etc. — a

@@ -1958,7 +1958,7 @@ impl RustEmitter {
             });
             found
         }
-        match &l.body {
+        let explicit = match &l.body {
             juxc_ast::LambdaBody::Expr(e) => in_expr(e),
             juxc_ast::LambdaBody::Block(b) => b.statements.iter().any(|s| {
                 let mut found = false;
@@ -1969,7 +1969,48 @@ impl RustEmitter {
                 });
                 found
             }),
+        };
+        explicit || self.lambda_uses_implicit_this(l)
+    }
+
+    /// Whether the lambda reaches `this` WITHOUT writing it: a bare instance
+    /// field, property or method of the enclosing class (Java's `greeting` for
+    /// `this.greeting`, `greet()` for `this.greet()`).
+    ///
+    /// Those lower to `self.…` exactly as the explicit form does, so they need
+    /// the same shared handle. Missing them left the closure borrowing `&self`,
+    /// and returning it from the method failed rustc's "returning this value
+    /// requires that `'1` must outlive `'static`". A name the lambda or the
+    /// enclosing body declares shadows the member and is not counted.
+    fn lambda_uses_implicit_this(&self, l: &juxc_ast::LambdaExpr) -> bool {
+        let Some(class) = self.enclosing_class.clone() else { return false };
+        if self.this_alias.is_none() {
+            return false;
         }
+        let params: std::collections::HashSet<&str> =
+            l.params.iter().map(|p| p.name.text.as_str()).collect();
+        let mut found = false;
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if found
+                || params.contains(name)
+                || self.current_fn_params.contains(name)
+                || self.local_types.iter().any(|scope| scope.contains_key(name))
+            {
+                return;
+            }
+            let instance_field = self
+                .lookup_class_field_owner_in_chain(&class, name)
+                .is_some_and(|(_, is_static, _)| !is_static);
+            let instance_method = self
+                .symbols
+                .merged_method_overloads(&class, name)
+                .iter()
+                .any(|m| !m.is_static);
+            found = instance_field
+                || instance_method
+                || self.bare_name_is_property_in_chain(&class, name);
+        });
+        found
     }
 
     fn collect_wrapper_captures(&self, l: &juxc_ast::LambdaExpr) -> Vec<String> {
@@ -2018,7 +2059,62 @@ impl RustEmitter {
                 names.push(name.to_string());
             }
         });
+        // A captured VALUE the body reads again after the capture: a `String`,
+        // an array, a collection handle, a record. The `move` closure would
+        // take the binding and leave the later read a rustc E0382, so the
+        // closure gets a copy (a handle clone for the reference types, the
+        // same sharing a class capture gets). A capture that is the binding's
+        // last use keeps the plain move.
+        if let Some(read_again) = self.captures_read_again.get(&l.span) {
+            for (name, read) in read_again {
+                if params.contains(name.as_str())
+                    || names.contains(name)
+                    || !self.captured_value_is_clone(name, *read)
+                {
+                    continue;
+                }
+                names.push(name.clone());
+            }
+        }
         names
+    }
+
+    /// Whether the captured binding `name` (read at `read` inside the lambda)
+    /// holds a value whose Rust lowering is `Clone` and not `Copy`, the kind a
+    /// `move` closure would take away from the enclosing body.
+    fn captured_value_is_clone(&self, name: &str, read: juxc_source::Span) -> bool {
+        let ty = self
+            .local_types
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .filter(|ty| !matches!(ty, juxc_tycheck::Ty::Unknown))
+            .or_else(|| self.expr_types.get(&read));
+        let mut ty = match ty {
+            Some(ty) => ty,
+            None => return false,
+        };
+        // An `Option` is as `Clone` as what it holds.
+        while let juxc_tycheck::Ty::Nullable(inner) = ty {
+            ty = inner;
+        }
+        match ty {
+            juxc_tycheck::Ty::String
+            | juxc_tycheck::Ty::Array { .. }
+            | juxc_tycheck::Ty::Fn { .. }
+            | juxc_tycheck::Ty::Param(_) => true,
+            // A foreign type is `Clone` only when bindgen found the impl; a
+            // Jux type answers by its own lowering (a record of primitives is
+            // `Copy` and needs nothing).
+            juxc_tycheck::Ty::User { name, .. } => {
+                if self.is_external_user_ty(ty) {
+                    self.class_is_rust_clone(name)
+                } else {
+                    self.ty_needs_clone_on_field_read(ty)
+                }
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
@@ -2873,6 +2969,23 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
 /// filtered by the caller, `RustEmitter::collect_wrapper_captures`).
 /// Field accesses (`x.f`) report the root `x`; multi-segment paths
 /// (`pkg.Class`) are type names, not captures, and are skipped.
+/// Whether `t` is a function type returning `void` (`() -> void`,
+/// `(String) -> void`): the slot an expression-bodied lambda must discard its
+/// value in.
+pub(crate) fn type_ref_is_void_fn(t: &juxc_ast::TypeRef) -> bool {
+    t.fn_shape.as_ref().is_some_and(|fs| {
+        fs.return_type.name.segments.last().is_some_and(|s| s.text == "void")
+            && fs.return_type.fn_shape.is_none()
+            && fs.return_type.array_shape.is_none()
+    })
+}
+
+/// Whether `e` is a lambda whose body is a single EXPRESSION, the one lambda
+/// shape whose value a `void` slot has to throw away.
+pub(crate) fn is_expression_lambda(e: &Expr) -> bool {
+    matches!(e, Expr::Lambda(l) if matches!(l.body, juxc_ast::LambdaBody::Expr(_)))
+}
+
 pub(crate) fn collect_bare_names_in_lambda(l: &juxc_ast::LambdaExpr, sink: &mut dyn FnMut(&str)) {
     match &l.body {
         juxc_ast::LambdaBody::Expr(e) => collect_bare_names_expr(e, sink),

@@ -1055,6 +1055,11 @@ struct RustEmitter {
     /// read and clones only at the reads listed here — the same choice a Rust
     /// programmer makes by hand.
     pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
+    /// Per lambda span, the captured bindings the body reads again after the
+    /// capture, with one read's span each (`crate::lastuse::captures_read_again`).
+    /// The lambda clones those before its `move` closure takes them.
+    pub(crate) captures_read_again:
+        std::collections::HashMap<juxc_source::Span, Vec<(String, juxc_source::Span)>>,
     /// Bare names of classes whose handle is **atomic** — `Arc<Mutex<C_Inner>>`
     /// instead of `Rc<RefCell<C_Inner>>` — because their instances cross a
     /// worker boundary (JUX-ASYNC-ADDENDUM §18.2, see [`crate::worker`]).
@@ -4591,6 +4596,7 @@ impl RustEmitter {
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
+            captures_read_again: std::collections::HashMap::new(),
             sync_classes: std::collections::HashSet::new(),
             sync_class_fqns: std::collections::HashSet::new(),
             hash_key_params: std::collections::HashSet::new(),

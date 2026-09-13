@@ -2560,6 +2560,10 @@ users.forEach(User::greet);
 
 Closures infer their capture mode (shared borrow, exclusive borrow, or move) from the body and from how they are used. The user does not annotate capture mode.
 
+A captured variable stays usable after the lambda that captures it, as in Java. A closure may outlive the scope that built it, so it holds its own copy of what it reads: a value (`String`, a record) is copied, and a reference (an object, an array, a collection) is shared, so both sides see the same object. The copy is made only when the enclosing code reads the variable again, or when the lambda is built repeatedly (inside a loop around the variable's declaration, or inside another lambda). A capture that is the variable's last use takes the value as it is. A lambda that reads a field without writing `this` captures the object, the same as `this.field`.
+
+A lambda whose body is a single expression may fill a function type returning `void` (`() -> void`, `(T) -> void`) whatever the expression's type: the value is computed and discarded. This holds wherever the slot appears: an argument, a local declaration, an assignment, or a `return`.
+
 ### 7.10. Nullable Types
 
 ```java

@@ -668,6 +668,14 @@ impl RustEmitter {
                     if channel_wrap {
                         self.w.push_str("Some(");
                     }
+                    // `return () -> parse(s);` from a `() -> void` function.
+                    // Inside a lambda body the return type in hand is the
+                    // enclosing function's, not this return's, so leave it.
+                    if !self.in_lambda_body {
+                        if let Some(juxc_ast::ReturnType::Type(t)) = self.current_return_type.clone() {
+                            self.arm_void_lambda_slot(Some(&t), e);
+                        }
+                    }
                     // Nullable-return coercion: when the enclosing
                     // fn returns `T?` (lowered as `Option<T>`) and
                     // the value being returned isn't already a
@@ -2251,6 +2259,7 @@ impl RustEmitter {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 if let Some(init) = &var.init {
                     let prev = std::mem::take(&mut self.emitting_format_arg);
+                    self.arm_void_lambda_slot(var.ty.as_ref(), init);
                     self.emit_expr(init);
                     self.emitting_format_arg = prev;
                 }
@@ -2429,6 +2438,7 @@ impl RustEmitter {
                 if arm_wrap {
                     self.emitting_nullable_target = true;
                 }
+                self.arm_void_lambda_slot(var.ty.as_ref(), init);
                 self.emit_expr(init);
                 self.emitting_nullable_target = prev_nullable_target;
                 self.restore_array_target(saved_array_target);
@@ -2705,7 +2715,39 @@ impl RustEmitter {
         fsig.ty.array_shape.clone()
     }
 
+    /// Arm the void-target marker when `value`, an expression-bodied lambda,
+    /// is written into a slot of the function type `slot` that returns `void`:
+    /// the lambda then emits `{ expr; }`, so the closure's type is `Fn() -> ()`
+    /// like the slot's. Consumed by the lambda emitter.
+    pub(crate) fn arm_void_lambda_slot(&mut self, slot: Option<&juxc_ast::TypeRef>, value: &Expr) {
+        if crate::exprs::is_expression_lambda(value)
+            && slot.is_some_and(crate::exprs::type_ref_is_void_fn)
+        {
+            self.lambda_void_target = true;
+        }
+    }
+
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // `action = () -> parse(s);` into a `() -> void` slot discards the
+        // body's value, as the declaration of that slot does.
+        if crate::exprs::is_expression_lambda(&a.value) {
+            let target_ty = match &a.target {
+                Expr::Path(qn) if qn.segments.len() == 1 => self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
+                    .filter(|ty| !matches!(ty, juxc_tycheck::Ty::Unknown))
+                    .cloned(),
+                _ => None,
+            }
+            .or_else(|| self.expr_types.get(&expr_span_of(&a.target)).cloned());
+            if let Some(juxc_tycheck::Ty::Fn { return_type, .. }) = &target_ty {
+                if matches!(**return_type, juxc_tycheck::Ty::Void) {
+                    self.lambda_void_target = true;
+                }
+            }
+        }
         // §5.6: `target = new T[…]` into a DYNAMIC array slot (`T[] field`)
         // must heap the allocation (`vec![…]`) to match the slot's `Vec<T>`
         // lowering — even for a const size (otherwise a fixed `[T; N]` value

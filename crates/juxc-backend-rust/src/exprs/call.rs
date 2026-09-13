@@ -2692,23 +2692,12 @@ impl RustEmitter {
         // per §TS.3. The flag is take-and-cleared by the lambda
         // emitters.
         if let Expr::Lambda(l) = arg {
-            if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
-                if let Some(pt) = self.callee_param_type(&call.callee, i) {
-                    if let Some(fs) = &pt.fn_shape {
-                        let ret_is_void = fs
-                            .return_type
-                            .name
-                            .segments
-                            .last()
-                            .map(|s| s.text == "void")
-                            .unwrap_or(false)
-                            && fs.return_type.fn_shape.is_none()
-                            && fs.return_type.array_shape.is_none();
-                        if ret_is_void {
-                            self.lambda_void_target = true;
-                        }
-                    }
-                }
+            if matches!(l.body, juxc_ast::LambdaBody::Expr(_))
+                && self
+                    .callee_param_type(&call.callee, i)
+                    .is_some_and(|pt| crate::exprs::type_ref_is_void_fn(&pt))
+            {
+                self.lambda_void_target = true;
             }
             // A lambda into a FOREIGN `impl Fn(..)` param lowers to a BARE Rust
             // closure (`move |..| ..`), not the default `Rc<dyn Fn>` — that's
