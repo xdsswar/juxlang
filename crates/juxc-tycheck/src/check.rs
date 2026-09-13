@@ -3724,6 +3724,16 @@ impl<'a> Checker<'a> {
     /// consumption by the Rust backend.
     #[allow(clippy::only_used_in_recursion)]
     fn check_expr(&mut self, expr: &Expr) {
+        // A fully-qualified class receiver (`demo.pkg.Crate.make()`) reads as a
+        // chain of fields. Checked as a chain it typed as an unknown local and
+        // nothing about the call was checked at all.
+        if let Some(reshaped) = crate::infer::reshape_qualified_class_receiver(
+            expr,
+            &|n| self.env.lookup(n).is_some(),
+            self.symbols,
+        ) {
+            return self.check_expr(&reshaped);
+        }
         // **E0456 (§M.14.3)** — a bare read of a `weak` parameter. Its strong
         // view is reached only through `.get()` (→ `T?`); the legitimate
         // `.get()` receiver is intercepted in `check_call` and never reaches

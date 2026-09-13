@@ -1,0 +1,19 @@
+// A package segment and a file name that are both Rust keywords.
+//
+// `box` is a keyword Rust lets you escape (`r#box`); `crate` is one it does
+// not. Neither means anything special in Jux, so both have to work, and the
+// generated Rust has to spell them in the one way each allows.
+
+package demo.box;
+
+public class Crate {
+    public int size;
+
+    public Crate(int size) {
+        this.size = size;
+    }
+
+    public static Crate of(int size) {
+        return new Crate(size);
+    }
+}

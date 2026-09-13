@@ -1,0 +1,19 @@
+// Packages named `demo.box` and `demo.match`, and a file named `Crate.jux`.
+//
+// Every one of those words is reserved in Rust and ordinary in Jux, which is
+// exactly why they are worth an example: the compiler turns dotted names into
+// Rust paths in dozens of places, and a single one that forgot to escape was
+// enough to break the build.
+
+import demo.box.Crate;
+import demo.match.Rule;
+
+public void main() {
+    var small = Crate.of(3);
+    var large = new Crate(40);
+
+    print("small fits: " + Rule.fits(small, 10));
+    print("large fits: " + Rule.fits(large, 10));
+    print("imported: " + Crate.of(7).size);
+    print("fully qualified: " + demo.box.Crate.of(7).size);
+}

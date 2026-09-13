@@ -116,7 +116,7 @@ impl RustEmitter {
                 // so `std::collections::HashSet` is the only valid form).
                 let segs: Vec<&str> = fqn.split('.').collect();
                 if segs.first() == Some(&"rust") && segs.len() >= 3 && segs[1] != "std" {
-                    return Some(segs[1..].join("::"));
+                    return Some(juxc_lex::join_rust_path(&segs[1..]));
                 }
                 return sig.rust_path.clone();
             }
@@ -486,7 +486,7 @@ impl RustEmitter {
                         .map(|(p, _)| p.to_string())
                         .unwrap_or_default();
                     if fqn_pkg != cur_pkg {
-                        let joined = fqn.split('.').collect::<Vec<_>>().join("::");
+                        let joined = juxc_lex::to_rust_path(&fqn);
                         (joined, true)
                     } else {
                         (bare.to_string(), false)
@@ -528,7 +528,7 @@ impl RustEmitter {
                     .map(|(p, _)| p.to_string())
                     .unwrap_or_default();
                 if fqn.contains('.') && fqn_pkg != cur_pkg {
-                    (fqn.split('.').collect::<Vec<_>>().join("::"), true)
+                    (juxc_lex::to_rust_path(&fqn), true)
                 } else {
                     (mangled, false)
                 }
@@ -537,7 +537,7 @@ impl RustEmitter {
                     .class_name
                     .segments
                     .iter()
-                    .map(|s| s.text.as_str())
+                    .map(|s| juxc_lex::to_rust_ident(&s.text))
                     .collect::<Vec<_>>()
                     .join("::");
                 (joined, true)
@@ -1571,7 +1571,7 @@ impl RustEmitter {
             {
                 self.w.push_str("crate::");
                 self.w
-                    .push_str(&fqn.split('.').collect::<Vec<_>>().join("::"));
+                    .push_str(&juxc_lex::to_rust_path(&fqn));
             } else {
                 for (i, seg) in m.receiver.segments.iter().enumerate() {
                     if i > 0 {
@@ -2223,7 +2223,7 @@ impl RustEmitter {
             .iter()
             .map(|s| s.text.as_str())
             .collect();
-        let path: String = path_segs.join("::");
+        let path: String = juxc_lex::join_rust_path(&path_segs);
         // Resolve the target's kind. Interface → emit `impl Trait for
         // __JuxAnonN`; class (abstract or concrete) → embed the parent
         // and route method calls through Rust's Deref. The bare name

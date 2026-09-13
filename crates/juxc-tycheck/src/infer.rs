@@ -169,7 +169,103 @@ fn best_overload_by_args(
 /// Returns [`Ty::Unknown`] for any expression the walker can't yet
 /// figure out — never panics, never emits diagnostics. See the module
 /// doc for the full coverage table.
+/// A FIELD CHAIN that spells a class's fully-qualified name
+/// (`demo.pkg.Crate`), as the multi-segment path it really is.
+///
+/// The parser cannot tell `demo.pkg.Crate.make()` from a chain of field reads
+/// -- whether `demo` is a local or a package is a resolution fact -- so it
+/// produces `((demo).pkg).Crate`. Read as fields, `demo` types as an unknown
+/// local and the whole call slips through unchecked; emitted as fields, rustc
+/// reads `demo` as a value. Re-shaped, it is exactly the `Path` an imported
+/// `Crate.make()` is.
+///
+/// `is_local` answers whether the chain's first name is a variable in scope. A
+/// local wins over a package of the same name, as it does in Java, so such a
+/// chain is left alone.
+pub fn field_chain_class_path(
+    e: &Expr,
+    is_local: &dyn Fn(&str) -> bool,
+    symbols: &SymbolTable,
+) -> Option<juxc_ast::QualifiedName> {
+    let mut segments: Vec<juxc_ast::Ident> = Vec::new();
+    let mut cursor = e;
+    loop {
+        match cursor {
+            Expr::Field(f) if !f.safe => {
+                segments.push(f.field.clone());
+                cursor = &f.object;
+            }
+            Expr::Path(qn) => {
+                for seg in qn.segments.iter().rev() {
+                    segments.push(seg.clone());
+                }
+                break;
+            }
+            _ => return None,
+        }
+    }
+    segments.reverse();
+    // `package.Class` at the least; one segment is an ordinary path already.
+    if segments.len() < 2 || is_local(&segments[0].text) {
+        return None;
+    }
+    let joined = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if !symbols.is_type_name(&joined) {
+        return None;
+    }
+    let span = segments[0].span.join(segments[segments.len() - 1].span);
+    Some(juxc_ast::QualifiedName { segments, span })
+}
+
+/// `expr` with a fully-qualified class receiver re-shaped into a path (see
+/// [`field_chain_class_path`]), or `None` when there is nothing to re-shape.
+///
+/// Covers the two positions a class can be the receiver in: a static call
+/// (`demo.pkg.Crate.make()`) and a static field read (`demo.pkg.Crate.LIMIT`).
+pub fn reshape_qualified_class_receiver(
+    expr: &Expr,
+    is_local: &dyn Fn(&str) -> bool,
+    symbols: &SymbolTable,
+) -> Option<Expr> {
+    match expr {
+        Expr::Call(c) => {
+            let Expr::Field(f) = &*c.callee else { return None };
+            if matches!(&*f.object, Expr::Path(_)) {
+                return None;
+            }
+            let qn = field_chain_class_path(&f.object, is_local, symbols)?;
+            let mut callee = f.clone();
+            callee.object = Box::new(Expr::Path(qn));
+            Some(Expr::Call(juxc_ast::CallExpr {
+                callee: Box::new(Expr::Field(callee)),
+                ..c.clone()
+            }))
+        }
+        Expr::Field(f) => {
+            if matches!(&*f.object, Expr::Path(_)) {
+                return None;
+            }
+            let qn = field_chain_class_path(&f.object, is_local, symbols)?;
+            let mut out = f.clone();
+            out.object = Box::new(Expr::Path(qn));
+            Some(Expr::Field(out))
+        }
+        _ => None,
+    }
+}
+
 pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // A fully-qualified class receiver reads as a chain of fields; type it as
+    // the class path it is.
+    if let Some(reshaped) =
+        reshape_qualified_class_receiver(expr, &|n| env.lookup(n).is_some(), symbols)
+    {
+        return infer_expr(&reshaped, env, symbols);
+    }
     match expr {
         Expr::Literal(lit) => infer_literal(lit),
         // `typeof(expr)` (§5.9.10) — a compile-time String of the

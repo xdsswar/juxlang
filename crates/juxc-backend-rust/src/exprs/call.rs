@@ -524,6 +524,22 @@ impl RustEmitter {
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
+        // field chain. Re-shape the receiver into the class path it names, so
+        // every static-call path below sees what it sees for `Crate.make()`.
+        if let Expr::Field(f) = &*call.callee {
+            if !matches!(&*f.object, Expr::Path(_)) {
+                if let Some(qn) = self.field_chain_class_path(&f.object) {
+                    let mut callee = f.clone();
+                    callee.object = Box::new(Expr::Path(qn));
+                    let reshaped = CallExpr {
+                        callee: Box::new(Expr::Field(callee)),
+                        ..call.clone()
+                    };
+                    return self.emit_call(&reshaped);
+                }
+            }
+        }
         // **Statement-scoped handle guard (§6.5.1).** A call on a collection
         // handle reaches through a `RefCell`, and the guard it creates is an
         // expression temporary: it lives to the end of the enclosing STATEMENT,

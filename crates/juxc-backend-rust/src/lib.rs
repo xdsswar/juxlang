@@ -2969,11 +2969,15 @@ fn module_base_name(path: &str) -> String {
     if out.is_empty() {
         out.push_str("unit");
     }
-    let ident = crate::backend_fqn::to_rust_ident(&out);
-    match ident.strip_prefix("r#") {
-        Some(stripped) => format!("{stripped}_"),
-        None => ident,
+    // A module name that is a Rust keyword gets a trailing `_` rather than an
+    // `r#` escape. The module is internal (its parent re-exports it flat), and
+    // the escape is not always available: `Crate.jux` becomes `crate`, and
+    // `crate`, `self`, `super` and `Self` are keywords Rust will not escape,
+    // so `mod r#crate;` is no better than `mod crate;`.
+    if juxc_lex::is_rust_keyword(&out) {
+        out.push('_');
     }
+    out
 }
 
 fn compute_weak_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
@@ -4815,7 +4819,7 @@ impl RustEmitter {
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
-            let path = package.join("::");
+            let path = juxc_lex::join_rust_path(&package);
             if async_main {
                 self.w.push_str("futures::executor::block_on(");
                 self.w.push_str(&path);
@@ -4966,7 +4970,7 @@ impl RustEmitter {
         }
         // Declare sub-packages, then recurse to emit their files.
         for name in node.children.keys() {
-            mod_rs.push_str(&format!("pub mod {name};\n"));
+            mod_rs.push_str(&format!("pub mod {};\n", to_rust_ident(name)));
         }
         if let Some(files) = &mut self.split_files {
             files.push((format!("src/{dir}/mod.rs"), mod_rs));
@@ -5148,7 +5152,7 @@ impl RustEmitter {
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
-            let path = pkg.join("::");
+            let path = juxc_lex::join_rust_path(&pkg);
             if is_async_main {
                 // Reach into the user's package and drive their async
                 // main via the futures executor. The user's main was
@@ -5225,7 +5229,7 @@ impl RustEmitter {
             .as_ref()
             .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
             .unwrap_or_default();
-        let mut path = pkg.join("::");
+        let mut path = juxc_lex::join_rust_path(&pkg);
         if !path.is_empty() {
             path.push_str("::");
         }
@@ -5360,7 +5364,7 @@ impl RustEmitter {
             let path = match backend_fqn::fqn_package(&fqn) {
                 Some(pkg) => format!(
                     "crate::{}::{}",
-                    pkg.split('.').collect::<Vec<_>>().join("::"),
+                    juxc_lex::to_rust_path(pkg),
                     backend_fqn::fqn_bare(&fqn),
                 ),
                 None => backend_fqn::fqn_bare(&fqn).to_string(),
@@ -5625,7 +5629,7 @@ impl RustEmitter {
         // wrong (`rust.std.spawn` is really `std::thread::spawn`), and std types
         // are already covered by the `@rust`-annotated branch above.
         if matches!(segs.first(), Some(&"rust")) && segs.len() >= 3 && segs[1] != "std" {
-            let real = segs[1..].join("::");
+            let real = juxc_lex::join_rust_path(&segs[1..]);
             return Some(match alias {
                 Some(a) => format!("use {real} as {};", a.text),
                 None => format!("use {real};"),
@@ -6244,7 +6248,7 @@ impl RustEmitter {
                     let path = match backend_fqn::fqn_package(fqn) {
                         Some(pkg) => format!(
                             "crate::{}::{}",
-                            pkg.split('.').collect::<Vec<_>>().join("::"),
+                            juxc_lex::to_rust_path(pkg),
                             backend_fqn::fqn_bare(fqn),
                         ),
                         // No-package classes sit at the crate root;
@@ -6389,7 +6393,7 @@ fn render_qualified(name: &QualifiedName) -> Option<String> {
     Some(
         name.segments
             .iter()
-            .map(|s| s.text.as_str())
+            .map(|s| juxc_lex::to_rust_ident(&s.text))
             .collect::<Vec<_>>()
             .join("::"),
     )

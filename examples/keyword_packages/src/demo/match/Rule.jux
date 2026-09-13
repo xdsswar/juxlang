@@ -1,0 +1,11 @@
+// A second keyword package, reached from the first by import.
+
+package demo.match;
+
+import demo.box.Crate;
+
+public class Rule {
+    public static bool fits(Crate c, int limit) {
+        return c.size <= limit;
+    }
+}

@@ -565,7 +565,7 @@ impl RustEmitter {
                             .map(|(p, _)| p.to_string())
                             .unwrap_or_default();
                         if fqn_pkg != cur_pkg {
-                            let joined = fqn.split('.').collect::<Vec<_>>().join("::");
+                            let joined = juxc_lex::to_rust_path(&fqn);
                             resolved_path = Some(format!("crate::{joined}"));
                         }
                     }
@@ -612,7 +612,7 @@ impl RustEmitter {
                     .name
                     .segments
                     .iter()
-                    .map(|s| s.text.as_str())
+                    .map(|s| juxc_lex::to_rust_ident(&s.text))
                     .collect::<Vec<_>>()
                     .join("::");
                 if !declared_here {

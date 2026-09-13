@@ -380,7 +380,7 @@ impl RustEmitter {
                                 && segs.len() >= 3
                                 && segs[1] != "std"
                             {
-                                Some(segs[1..].join("::"))
+                                Some(juxc_lex::join_rust_path(&segs[1..]))
                             } else {
                                 sig.rust_path.clone()
                             };
@@ -407,7 +407,7 @@ impl RustEmitter {
                     if enum_fqn.contains('.') && fqn_pkg != cur_pkg {
                         self.w.push_str("crate::");
                         self.w
-                            .push_str(&enum_fqn.split('.').collect::<Vec<_>>().join("::"));
+                            .push_str(&juxc_lex::to_rust_path(&enum_fqn));
                     } else {
                         self.w.push_str(bare);
                     }

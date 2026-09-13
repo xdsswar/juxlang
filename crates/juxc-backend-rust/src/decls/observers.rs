@@ -1121,7 +1121,7 @@ impl RustEmitter {
                 if fqn.contains('.') {
                     return format!(
                         "crate::{}",
-                        fqn.split('.').collect::<Vec<_>>().join("::")
+                        juxc_lex::to_rust_path(&fqn)
                     );
                 }
             }

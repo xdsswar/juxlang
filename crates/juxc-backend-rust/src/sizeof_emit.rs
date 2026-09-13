@@ -47,7 +47,7 @@ impl RustEmitter {
         if let Some(segs) = try_flatten_dotted_path(&s.operand) {
             if !self.dotted_sizeof_is_value(&segs, &s.operand) {
                 self.w.push_str("std::mem::size_of::<");
-                self.w.push_str(&segs.join("::"));
+                self.w.push_str(&juxc_lex::join_rust_path(&segs));
                 self.w.push_str(">()");
                 return;
             }
@@ -130,7 +130,7 @@ impl RustEmitter {
         let path = qn
             .segments
             .iter()
-            .map(|s| s.text.as_str())
+            .map(|s| juxc_lex::to_rust_ident(&s.text))
             .collect::<Vec<_>>()
             .join("::");
         self.w.push_str("std::mem::size_of::<");

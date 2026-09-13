@@ -1357,7 +1357,7 @@ impl RustEmitter {
             .and_then(|fqn| {
                 let (pkg, _) = fqn.rsplit_once('.')?;
                 (pkg != self.symbols.package.join(".")).then(|| {
-                    let joined = pkg.split('.').collect::<Vec<_>>().join("::");
+                    let joined = juxc_lex::to_rust_path(pkg);
                     format!("crate::{joined}::")
                 })
             })
@@ -1368,7 +1368,7 @@ impl RustEmitter {
         let qualified = self.symbols.find_fqn_by_bare(bare).and_then(|fqn| {
             let (pkg, _) = fqn.rsplit_once('.')?;
             (pkg != self.symbols.package.join(".")).then(|| {
-                let joined = pkg.split('.').collect::<Vec<_>>().join("::");
+                let joined = juxc_lex::to_rust_path(pkg);
                 format!("crate::{joined}::")
             })
         });
@@ -4498,7 +4498,7 @@ impl RustEmitter {
                             self.w.push_str("crate::");
                         }
                         let parent_path: String =
-                            fqn.split('.').collect::<Vec<_>>().join("::");
+                            juxc_lex::to_rust_path(fqn);
                         self.w.push_str(&parent_path);
                         self.w.push_str("::");
                         self.w.push_str(&to_rust_ident(method_name));

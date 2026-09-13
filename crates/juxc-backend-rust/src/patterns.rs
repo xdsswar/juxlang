@@ -482,7 +482,7 @@ impl RustEmitter {
                 }
                 let segs: Vec<&str> =
                     path.segments.iter().map(|s| s.text.as_str()).collect();
-                self.w.push_str(&segs.join("::"));
+                self.w.push_str(&juxc_lex::join_rust_path(&segs));
                 if !args.is_empty() || pattern_has_parens(pattern) {
                     self.w.push('(');
                     for (i, sub) in args.iter().enumerate() {

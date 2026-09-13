@@ -319,6 +319,10 @@ package com.example.app;
 
 The directory structure mirrors the package path. A file at `src/com/example/app/Main.jux` must declare `package com.example.app`.
 
+A package segment is any identifier, including one another language reserves: `package demo.box;` and `package demo.match;` are ordinary Jux, and so is a file named `Crate.jux`. The compiler owns the mapping to the target, so a name that is reserved there is escaped there, never rejected here.
+
+A class can also be named by its fully-qualified name wherever a class name is expected, including as the receiver of a static call or static field read: `com.example.app.Config.load()`. A local variable of the same name as the first segment shadows the package, as in Java.
+
 ### 4.2. Imports
 
 Imports use `.` as the separator, never `::`. Java syntax exactly:

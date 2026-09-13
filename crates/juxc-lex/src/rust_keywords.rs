@@ -72,6 +72,28 @@ pub fn to_rust_ident(name: &str) -> String {
     name.to_string()
 }
 
+/// A dotted Jux name (`demo.box.Crate`) as a Rust path (`demo::r#box::Crate`),
+/// every segment escaped through [`to_rust_ident`].
+///
+/// A package segment is a name the programmer chose, and nothing stops it being
+/// a Rust keyword: `package demo.box;` is ordinary Jux. Turning the dots into
+/// `::` by hand is how `use demo::box::Crate;` reached rustc. Every place that
+/// makes a path out of a Jux name goes through here, so there is one spelling of
+/// the rule.
+pub fn to_rust_path(dotted: &str) -> String {
+    join_rust_path(&dotted.split('.').collect::<Vec<_>>())
+}
+
+/// Already-split segments as a Rust path, every segment escaped. The
+/// split-first counterpart of [`to_rust_path`].
+pub fn join_rust_path<S: AsRef<str>>(segments: &[S]) -> String {
+    segments
+        .iter()
+        .map(|seg| to_rust_ident(seg.as_ref()))
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

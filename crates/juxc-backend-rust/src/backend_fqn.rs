@@ -166,7 +166,7 @@ fn path_text(expr: &juxc_ast::Expr) -> Option<String> {
         return Some(
             qn.segments
                 .iter()
-                .map(|s| s.text.as_str())
+                .map(|s| juxc_lex::to_rust_ident(&s.text))
                 .collect::<Vec<_>>()
                 .join("::"),
         );
@@ -180,6 +180,22 @@ impl crate::RustEmitter {
     /// of tycheck's `path_resolves_to_class`. Used by the static-
     /// member emission paths to detect `ClassName.X` /
     /// `ClassName.method()` shapes.
+    /// A FIELD CHAIN that spells a class's fully-qualified name, as the
+    /// multi-segment path it really is. The rule lives in
+    /// [`juxc_tycheck::infer::field_chain_class_path`] so the checker and the
+    /// backend cannot disagree about it; this supplies the backend's view of
+    /// which names are locals in scope.
+    pub(crate) fn field_chain_class_path(
+        &self,
+        e: &juxc_ast::Expr,
+    ) -> Option<juxc_ast::QualifiedName> {
+        juxc_tycheck::infer::field_chain_class_path(
+            e,
+            &|n| self.local_types.iter().any(|scope| scope.contains_key(n)),
+            &self.symbols,
+        )
+    }
+
     pub(crate) fn path_resolves_to_class_in_emit(
         &self,
         qn: &juxc_ast::QualifiedName,
@@ -356,7 +372,8 @@ impl crate::RustEmitter {
         if let Some(pkg) = fqn_package(fqn) {
             self.w.push_str("crate::");
             for seg in pkg.split('.') {
-                self.w.push_str(seg);
+                // A package segment may be a Rust keyword (`demo.box`).
+                self.w.push_str(&juxc_lex::to_rust_ident(seg));
                 self.w.push_str("::");
             }
         } else if self.split_files.is_some() {

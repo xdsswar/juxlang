@@ -36,7 +36,8 @@ pub mod grammar_spec;
 pub mod rust_keywords;
 pub mod token;
 pub use rust_keywords::{
-    is_non_escapable_rust_keyword, is_rust_keyword, to_rust_ident, NON_ESCAPABLE_RUST_KEYWORDS,
+    is_non_escapable_rust_keyword, is_rust_keyword, join_rust_path, to_rust_ident, to_rust_path,
+    NON_ESCAPABLE_RUST_KEYWORDS,
     RUST_KEYWORDS,
 };
 pub use token::{Keyword, Token, TokenKind};

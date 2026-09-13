@@ -222,7 +222,7 @@ impl RustEmitter {
                 .name
                 .segments
                 .iter()
-                .map(|s| s.text.as_str())
+                .map(|s| juxc_lex::to_rust_ident(&s.text))
                 .collect::<Vec<_>>()
                 .join("::");
             self.w.push_str("crate::");
@@ -241,7 +241,7 @@ impl RustEmitter {
                 if fqn_pkg != cur_pkg {
                     self.w.push_str("crate::");
                     self.w
-                        .push_str(&fqn.split('.').collect::<Vec<_>>().join("::"));
+                        .push_str(&juxc_lex::to_rust_path(&fqn));
                     return;
                 }
             }
