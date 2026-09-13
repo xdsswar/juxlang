@@ -1493,6 +1493,24 @@ pub fn walk_extends_reaches(
     // no-package one. The arguments may arrive bare or qualified (call sites
     // pass the inferred type's last segment vs. a written `extends` name), and
     // `symbols.classes` is keyed by FQN, so a raw `get(bare)` would miss.
+    // Two real class keys: follow the resolved chain and compare whole names.
+    // `app.Base` and `lib.Base` are different classes, and a bare comparison
+    // let a `lib.Car` pass as an `app.Base`.
+    if symbols.classes.contains_key(child) && symbols.classes.contains_key(ancestor) {
+        let mut current = Some(child.to_string());
+        for _ in 0..=64 {
+            let Some(name) = current else { return false };
+            if name == ancestor {
+                return true;
+            }
+            let Some(class) = symbols.classes.get(&name) else { return false };
+            current = class.extends_fqn.clone().or_else(|| {
+                let written = class.extends.as_ref()?.name.segments.last()?.text.clone();
+                symbols.classes.contains_key(&written).then_some(written)
+            });
+        }
+        return false;
+    }
     let ancestor_bare = bare_type_name(ancestor);
     if bare_type_name(child) == ancestor_bare {
         return true;

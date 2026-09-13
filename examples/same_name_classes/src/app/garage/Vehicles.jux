@@ -1,0 +1,38 @@
+package app.garage;
+
+public class Base {
+    public int wheels;
+
+    public Base(int wheels) {
+        this.wheels = wheels;
+    }
+
+    public String describe() {
+        return wheels + " wheels";
+    }
+}
+
+public class Car extends Base {
+    public String plate;
+
+    public Car(String plate) {
+        super(4);
+        this.plate = plate;
+    }
+
+    public String describe() {
+        return "car " + plate + " on " + wheels + " wheels";
+    }
+}
+
+public class Pen {
+    public class Gate {
+        public int width;
+
+        public Gate() {
+            this.width = 3;
+        }
+    }
+
+    public Gate gate = new Gate();
+}

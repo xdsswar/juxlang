@@ -2217,10 +2217,11 @@ impl crate::RustEmitter {
                         if let Some(field) = class.fields.get(name) {
                             return field.ty.nullable;
                         }
-                        cursor = class
-                            .extends
-                            .as_ref()
-                            .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                        // The resolved parent first: the written name is looked up again in
+                        // the unit being emitted, where it can mean a different class.
+                        cursor = class.extends_fqn.clone().or_else(|| {
+                            class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                        });
                         hops += 1;
                     }
                     let rec = self.symbols.records.get(&cls).or_else(|| {
@@ -3432,10 +3433,11 @@ impl crate::RustEmitter {
                         }
                         return pty;
                     }
-                    cursor = class
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                    // The resolved parent first: the written name is looked up again in
+                    // the unit being emitted, where it can mean a different class.
+                    cursor = class.extends_fqn.clone().or_else(|| {
+                        class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                    });
                     depth += 1;
                 }
             }

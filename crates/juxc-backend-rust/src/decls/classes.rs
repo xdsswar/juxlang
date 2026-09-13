@@ -2836,7 +2836,11 @@ impl RustEmitter {
         let Some(sig) = self.lookup_class_by_bare_or_fqn(class_bare) else {
             return Vec::new();
         };
-        let parent = self.direct_parent_bare(class_bare);
+        // The symbol table's own lookup of a BARE name gives up when two
+        // packages share it, which left a same-named base's trait without its
+        // methods. Ask with the FQNs this unit resolves to.
+        let class_key = self.resolve_bare_class_fqn(class_bare).unwrap_or_else(|| class_bare.to_string());
+        let parent = sig.extends_fqn.clone().or_else(|| self.direct_parent_bare(class_bare));
         // Every method NAME this class declares. Overloaded names appear in
         // `method_overloads`; the rest only in `methods`.
         let mut names: Vec<&String> = sig
@@ -2853,7 +2857,7 @@ impl RustEmitter {
             // are the ones this class introduces, and they belong on its trait.
             // Anything below that index is an override of an inherited member,
             // which already has a slot on the ancestor's trait.
-            let merged = self.symbols.merged_method_overloads(class_bare, name);
+            let merged = self.symbols.merged_method_overloads(&class_key, name);
             let inherited = parent
                 .as_deref()
                 .map(|p| self.symbols.merged_method_overloads(p, name).len())
@@ -2987,9 +2991,20 @@ impl RustEmitter {
     /// subclass, or an implementer of interface `t`. The relation that decides
     /// whether a `__jux_as_<t>` downcast hook on a base can return `Some`.
     pub(crate) fn class_is_a(&self, c: &str, t: &str) -> bool {
-        c == t
-            || juxc_tycheck::ty::walk_extends_reaches(c, t, &self.symbols)
-            || juxc_tycheck::ty::class_implements_interface(c, t, &self.symbols)
+        if c == t {
+            return true;
+        }
+        // Both sides as class FQNs where they name classes, so the walk
+        // compares whole names: another package's class of the same simple
+        // name is not an ancestor.
+        let cf = self.resolve_bare_class_fqn(c);
+        let tf = self.resolve_bare_class_fqn(t);
+        if let (Some(cf), Some(tf)) = (&cf, &tf) {
+            return juxc_tycheck::ty::walk_extends_reaches(cf, tf, &self.symbols);
+        }
+        let child = cf.as_deref().unwrap_or(c);
+        juxc_tycheck::ty::walk_extends_reaches(child, t, &self.symbols)
+            || juxc_tycheck::ty::class_implements_interface(child, t, &self.symbols)
     }
 
     /// The cast / type-test targets (from `downcast_targets`) reachable as a
@@ -3001,10 +3016,10 @@ impl RustEmitter {
     /// i.e. a value statically typed `b` could, at run time, be a `t`. The
     /// condition under which a `__jux_as_<t>` hook on `b`'s trait is meaningful.
     pub(crate) fn target_reachable_from_base(&self, b: &str, t: &str) -> bool {
-        self.symbols.classes.keys().any(|fqn| {
-            let c = fqn.rsplit('.').next().unwrap_or(fqn);
-            self.class_is_a(c, b) && self.class_is_a(c, t)
-        })
+        self.symbols
+            .classes
+            .keys()
+            .any(|fqn| self.class_is_a(fqn, b) && self.class_is_a(fqn, t))
     }
 
     fn hook_targets_for_base(&self, b: &str) -> Vec<String> {
@@ -3185,13 +3200,7 @@ impl RustEmitter {
     /// object can't expose struct fields directly). Private and static fields
     /// are excluded. Returns `(field_name, field_type)` pairs, sorted.
     fn class_accessor_fields(&self, owner_bare: &str) -> Vec<(String, juxc_ast::TypeRef)> {
-        let cd = self.class_asts.get(owner_bare).or_else(|| {
-            self.class_asts
-                .iter()
-                .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == owner_bare)
-                .map(|(_, v)| v)
-        });
-        let Some(cd) = cd else {
+        let Some(cd) = self.lookup_class_ast_by_bare_or_fqn(owner_bare) else {
             return Vec::new();
         };
         let mut out: Vec<(String, juxc_ast::TypeRef)> = cd
@@ -3681,26 +3690,31 @@ impl RustEmitter {
         {
             return;
         }
+        // Subclasses by FQN: a same-named class in another package is not one.
         let mut subs: Vec<String> = self
             .symbols
             .classes
-            .keys()
-            .map(|fqn| fqn.rsplit('.').next().unwrap_or(fqn).to_string())
-            .filter(|c| {
-                self.class_is_a(c, base_bare)
-                    && self
-                        .lookup_class_by_bare_or_fqn(c)
-                        .is_some_and(|s| s.generic_params.is_empty() && !s.is_abstract)
+            .iter()
+            .filter(|(fqn, sig)| {
+                sig.generic_params.is_empty()
+                    && !sig.is_abstract
+                    && self.class_is_a(fqn, base_bare)
             })
+            .map(|(fqn, _)| fqn.clone())
             .collect();
         subs.sort();
-        subs.dedup();
-        for sub in subs {
+        for sub_fqn in subs {
+            let sub = crate::backend_fqn::fqn_bare(&sub_fqn).to_string();
             self.w.emit_indent();
             self.w.push_str("impl From<");
             // The subclass is often in another package than the base whose
             // upcast impl this is.
-            let sub_prefix = self.cross_package_prefix(&sub);
+            let sub_prefix = match crate::backend_fqn::fqn_package(&sub_fqn) {
+                Some(pkg) if pkg != self.current_package_path() => {
+                    format!("crate::{}::", juxc_lex::to_rust_path(pkg))
+                }
+                _ => String::new(),
+            };
             self.w.push_str(&sub_prefix);
             self.w.push_str(&to_rust_ident(&sub));
             self.w.push_str("> for std::rc::Rc<dyn ");
@@ -4015,6 +4029,11 @@ impl RustEmitter {
     /// during some isolated unit tests that bypass the symbol-
     /// table build.
     fn classsig_lookup_fqn(&self, bare: &str) -> Option<String> {
+        // The unit's own meaning of the name first; the scan below is only for
+        // a name the unit cannot see.
+        if let Some(fqn) = self.resolve_bare_class_fqn(bare) {
+            return Some(fqn);
+        }
         // Pick the lexicographically smallest matching FQN. `classes` is a
         // `HashMap`, so iterating it directly and returning "the first match"
         // is non-deterministic across runs when two packages share a bare

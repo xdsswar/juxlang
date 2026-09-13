@@ -382,6 +382,9 @@ impl RustEmitter {
     /// Look up a class AST by bare name (exact key, or unique
     /// `…\.<bare>` FQN suffix) — `class_asts` is keyed by FQN.
     pub(crate) fn class_ast_by_bare(&self, bare: &str) -> Option<&ClassDecl> {
+        if let Some(cd) = self.resolve_bare_class_fqn(bare).and_then(|fqn| self.class_asts.get(&fqn)) {
+            return Some(cd);
+        }
         if let Some(cd) = self.class_asts.get(bare) {
             return Some(cd);
         }

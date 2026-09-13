@@ -861,10 +861,11 @@ impl RustEmitter {
             if let Some(m) = class.methods.get(field_name) {
                 return !m.is_static;
             }
-            cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         false
@@ -1017,7 +1018,7 @@ impl RustEmitter {
                     .map(|c| self.is_wrapper_class(c))
                     .unwrap_or(false);
         }
-        self.receiver_class_bare(recv)
+        self.receiver_class_key(recv)
             .map(|bare| self.is_wrapper_class(&bare))
             .unwrap_or(false)
     }
@@ -1036,7 +1037,7 @@ impl RustEmitter {
                     .map(|c| self.is_refcell_class(c))
                     .unwrap_or(false);
         }
-        self.receiver_class_bare(recv)
+        self.receiver_class_key(recv)
             .map(|bare| self.is_refcell_class(&bare))
             .unwrap_or(false)
     }
@@ -1107,7 +1108,7 @@ impl RustEmitter {
                     .map(|c| self.is_box_class(c))
                     .unwrap_or(false);
         }
-        self.receiver_class_bare(recv)
+        self.receiver_class_key(recv)
             .map(|bare| self.is_box_class(&bare))
             .unwrap_or(false)
     }
@@ -1123,6 +1124,42 @@ impl RustEmitter {
     /// alias one key). Only when the name isn't a tracked local do we
     /// fall back to the span-keyed `expr_types`. This mirrors the same
     /// precedence the stdlib-method dispatcher uses (`try_emit_stdlib_method`).
+    /// [`Self::receiver_class_bare`], keeping the class FQN when the receiver's
+    /// type names one. For the representation questions (`is_wrapper_class`
+    /// and friends), which resolve a bare name in the unit being emitted: a
+    /// qualified type cut down to its simple name found the unit's own class of
+    /// that name, so `other.gate` on a `garage.Pen` was read as a `zoo.Pen`
+    /// because the file imports that one. The bare form stays for callers that
+    /// write the name into Rust.
+    pub(crate) fn receiver_class_key(&self, recv: &Expr) -> Option<String> {
+        let qualified = |ty: &juxc_tycheck::Ty| match ty {
+            juxc_tycheck::Ty::User { name, .. }
+                if name.contains('.') && self.symbols.classes.contains_key(name) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        };
+        if let Expr::Path(qn) = recv {
+            if qn.segments.len() == 1 {
+                if let Some(ty) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
+                {
+                    if let Some(fqn) = qualified(ty) {
+                        return Some(fqn);
+                    }
+                }
+            }
+        }
+        if let Some(fqn) = self.expr_types.get(&expr_span_of(recv)).and_then(qualified) {
+            return Some(fqn);
+        }
+        self.receiver_class_bare(recv)
+    }
+
     pub(crate) fn receiver_class_bare(&self, recv: &Expr) -> Option<String> {
         // Local-variable fast path (collision-immune).
         if let Expr::Path(qn) = recv {
@@ -1186,8 +1223,9 @@ impl RustEmitter {
             self.enclosing_class.clone()
         } else {
             // Use the collision-immune resolver so interpolated-string
-            // receivers (`${i.field}`) still walk the chain correctly.
-            self.receiver_class_bare(recv)
+            // receivers (`${i.field}`) still walk the chain correctly. Keyed,
+            // so another package's class of the same name is not walked.
+            self.receiver_class_key(recv)
         };
         let mut cursor: Option<String> = class_bare;
         let mut depth = 0usize;
@@ -1205,10 +1243,11 @@ impl RustEmitter {
                 return None;
             }
             // Climb to the parent's bare name and try again.
-            cursor = sig
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = sig.extends_fqn.clone().or_else(|| {
+                sig.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         None
@@ -1231,7 +1270,7 @@ impl RustEmitter {
         let class_bare: Option<String> = if matches!(recv, Expr::This(_)) {
             self.enclosing_class.clone()
         } else {
-            self.receiver_class_bare(recv)
+            self.receiver_class_key(recv)
         };
         let mut cursor: Option<String> = class_bare;
         let mut depth = 0usize;
@@ -1246,10 +1285,11 @@ impl RustEmitter {
                 }
                 return None;
             }
-            cursor = sig
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = sig.extends_fqn.clone().or_else(|| {
+                sig.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         None
@@ -1270,7 +1310,7 @@ impl RustEmitter {
         let class_bare: Option<String> = if matches!(recv, Expr::This(_)) {
             self.enclosing_class.clone()
         } else {
-            self.receiver_class_bare(recv)
+            self.receiver_class_key(recv)
         };
         let Some(start) = class_bare else {
             return false;
@@ -1319,10 +1359,11 @@ impl RustEmitter {
                 }
                 return self.ty_needs_clone_on_field_read(&ty);
             }
-            cursor = sig
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = sig.extends_fqn.clone().or_else(|| {
+                sig.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         false
@@ -1550,6 +1591,11 @@ impl RustEmitter {
         &self,
         name: &str,
     ) -> Option<&juxc_ast::ClassDecl> {
+        // The name as this unit means it first: a scan by bare name picks
+        // whichever same-named class the map yields first.
+        if let Some(c) = self.resolve_bare_class_fqn(name).and_then(|fqn| self.class_asts.get(&fqn)) {
+            return Some(c);
+        }
         if let Some(c) = self.class_asts.get(name) {
             return Some(c);
         }
@@ -1987,10 +2033,11 @@ impl RustEmitter {
                 }
                 return Some(ty);
             }
-            cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         None
@@ -2021,12 +2068,15 @@ impl RustEmitter {
                 break;
             };
             if let Some(field) = class.fields.get(field_name) {
-                return Some((name, field.is_static, field.is_final));
+                // Callers write the owner into Rust as a type name, so it goes
+                // back to its simple form; the walk itself followed FQNs.
+                return Some((crate::backend_fqn::fqn_bare(&name).to_string(), field.is_static, field.is_final));
             }
-            cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         None
@@ -2053,10 +2103,11 @@ impl RustEmitter {
             if let Some(field) = class.fields.get(field_name) {
                 return field.ty.nullable;
             }
-            cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent first: the written name is looked up again in
+            // the unit being emitted, where it can mean a different class.
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
             depth += 1;
         }
         false
@@ -2081,10 +2132,13 @@ impl RustEmitter {
             if cd.properties.iter().any(|p| p.name.text == name) {
                 return true;
             }
-            cursor = cd
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            // The resolved parent (from the class's signature) first: the
+            // written name is looked up again in the unit being emitted, where
+            // it can mean a different class.
+            cursor = self
+                .lookup_class_by_bare_or_fqn(&cn)
+                .and_then(|sig| sig.extends_fqn.clone())
+                .or_else(|| cd.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone())));
             depth += 1;
         }
         false

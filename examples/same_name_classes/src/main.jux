@@ -7,6 +7,8 @@
 // Each class is now decided, and each name resolved, on its own.
 
 import app.model.{Failure, IOException};
+import app.zoo.{Cat, Pen};
+import app.garage.Car;
 
 public void main() {
     var f = new Failure("disk");
@@ -25,4 +27,20 @@ public void main() {
     var same = io;
     same.path = "/var";
     print($"the path is now ${io.path}");
+
+    // Two hierarchies rooted at a class called `Base`, dispatched through
+    // their own base types.
+    var cat = new Cat("tom");
+    cat.loseLife();
+    app.zoo.Base animal = cat;
+    print(animal.describe());
+    app.garage.Base vehicle = new Car("JUX-1");
+    print(vehicle.describe());
+
+    // Two nested classes called `Pen.Gate`.
+    var pen = new Pen();
+    pen.gate.open = true;
+    print($"zoo gate open: ${pen.gate.open}");
+    var garagePen = new app.garage.Pen();
+    print($"garage gate width: ${garagePen.gate.width}");
 }

@@ -9689,6 +9689,21 @@ mod tests {
         crate::typecheck_workspace(&units).diagnostics
     }
 
+    /// Two packages each declare `Base`. A class extending one of them is not a
+    /// subtype of the other: the extends walk compares whole names, where it used
+    /// to compare simple names and accept the upcast.
+    #[test]
+    fn same_named_base_in_another_package_is_not_an_ancestor() {
+        let d = run_two(
+            "package zoo; public class Base { } public class Cat extends Base { }",
+            "package garage; import zoo.*; public class Base { } public class Car extends Base { } \
+             public class U { public void go() { Base mine = new Car(); zoo.Base theirs = new Car(); } }",
+        );
+        let mismatches: Vec<_> = d.iter().filter(|x| x.code == code::Code::E0410_TypeMismatch).collect();
+        assert_eq!(mismatches.len(), 1, "{d:?}");
+        assert!(mismatches[0].message.contains("zoo.Base"), "{d:?}");
+    }
+
     /// A type declared without `public` is visible only inside its own package
     /// (§4.4), exactly as in Java. Member visibility was already enforced; the
     /// TYPE was not, so the modifier on the declaration meant nothing.
