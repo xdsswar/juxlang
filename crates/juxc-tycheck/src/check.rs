@@ -145,6 +145,16 @@ pub const BUILTINS: &[&str] = &[
 /// | `.insert(i,x)`| `.insert(i, x)`                       |
 /// | `.join(sep)`  | `.join(sep)`                          |
 /// | `.map(f)` / `.filter(f)` / `.forEach(f)` | `iter().map/...` |
+/// Methods every observable property carries (JUX-OBSERVABLE-PROPERTIES §P.4):
+/// `target.Prop.bind(source.Prop)`, `bindBidirectional`, and `unbind()`.
+///
+/// They are called on a PROPERTY, whose value type is whatever the property
+/// holds, so the receiver of `celsius.bind(...)` infers as a plain `double`.
+/// Every member check that looks at the receiver's TYPE has to let these
+/// through when the receiver is a property access. The backend's binding
+/// dispatch reads this same list.
+pub const PROPERTY_BINDING_METHODS: &[&str] = &["bind", "bindBidirectional", "unbind"];
+
 /// Methods Jux gives a `char` receiver (JUX-LANG-V1 5.2). The backend lowers
 /// each to a Rust `char` call; `juxc_backend_rust`'s
 /// `primitive_method_tables_agree` test pins the two together.
@@ -5775,7 +5785,14 @@ impl<'a> Checker<'a> {
     /// ordinary method checks).
     fn property_access_ty(&mut self, e: &Expr) -> Option<(Ty, String)> {
         let Expr::Field(f) = e else { return None };
-        let prop_name = f.field.text.as_str();
+        // A property may already have been rewritten to its backing slot:
+        // inside a constructor `this.Shown` reads `this.__prop_Shown` (see
+        // `juxc_ast::desugar`), and it is still that property.
+        let prop_name = f
+            .field
+            .text
+            .strip_prefix("__prop_")
+            .unwrap_or(f.field.text.as_str());
         // Same class-resolution ladder as the E0970/E0972 write checks:
         // a static `Class.Prop` path, else the receiver's inferred type.
         let class_fqn: Option<String> = if let Expr::Path(qn) = f.object.as_ref() {
@@ -5792,12 +5809,14 @@ impl<'a> Checker<'a> {
             }
         };
         let class_fqn = class_fqn?;
+        // Up the `extends` chain, not just the class itself: an INHERITED
+        // property is bound and observed exactly like a declared one, and
+        // reading only `properties` missed it -- so the E0974 same-type check
+        // silently skipped every binding of an inherited property.
         let prop = self
             .symbols
-            .classes
-            .get(&class_fqn)
-            .and_then(|c| c.properties.get(prop_name))
-            .cloned()?;
+            .lookup_property(&class_fqn, prop_name)
+            .map(|(p, _)| p.clone())?;
         let ty = ty_from_ref(&prop.ty, &self.env, self.symbols);
         let bare = class_fqn.rsplit('.').next().unwrap_or(&class_fqn);
         Some((ty, format!("{bare}.{prop_name}")))
@@ -6468,6 +6487,18 @@ impl<'a> Checker<'a> {
                 // it: `x.totallyNotAMethod()` type-checked and then failed in
                 // rustc. The names come from the same table the backend lowers
                 // from, so the two cannot disagree about what exists.
+                // **A property's binding methods.** `celsius.bind(other.celsius)`
+                // has a PROPERTY as its receiver, and a property's value type is
+                // whatever it holds -- often a primitive, which has no `bind`.
+                // The binding itself is checked above (E0974).
+                if PROPERTY_BINDING_METHODS.contains(&method_name)
+                    && self.property_access_ty(&field.object).is_some()
+                {
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
+                    return;
+                }
                 if let Ty::Primitive(prim) = &receiver_ty {
                     if let Some(names) = builtin_primitive_methods(*prim) {
                         if !names.contains(&method_name) {

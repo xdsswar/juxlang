@@ -750,7 +750,7 @@ impl RustEmitter {
         // non-property receiver falls through to normal dispatch.
         if let Expr::Field(opf) = &*call.callee {
             let opname = opf.field.text.as_str();
-            if matches!(opname, "bind" | "bindBidirectional" | "unbind") {
+            if juxc_tycheck::check::PROPERTY_BINDING_METHODS.contains(&opname) {
                 if let Some((t_recv, t_prop, t_class)) = self.resolve_observable_prop(&opf.object) {
                     if opname == "unbind" && call.args.is_empty() {
                         let t_prop = t_prop.clone();
