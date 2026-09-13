@@ -1,0 +1,5 @@
+finally for 3
+value 3
+finally for -1
+value 7
+outer caught: from the closure

@@ -1,0 +1,53 @@
+// A closure written inside a `catch` body.
+//
+// A `return` or `throw` in a catch arm has to run the try's `finally` first, so
+// the compiler routes it through the arm's exit. A closure written INSIDE the
+// arm is a separate function, though: its `return` leaves the closure, and its
+// `throw` leaves the closure's caller. Treating them as the arm's own exits
+// produced a jump to a label the closure cannot see.
+
+import jux.std.exceptions.Exception;
+
+public int apply(() -> int f) {
+    return f();
+}
+
+public int risky(int x) throws Exception {
+    if (x < 0) {
+        throw new Exception("negative");
+    }
+    return x;
+}
+
+/** A `return` inside a closure inside a catch arm. */
+public int withFallback(int x) {
+    try {
+        return risky(x);
+    } catch (Exception e) {
+        int fallback = apply(() -> { return 7; });
+        return fallback;
+    } finally {
+        print("finally for " + x);
+    }
+}
+
+/** A `throw` inside a closure inside a catch arm, caught further out. */
+public String rethrowThroughClosure() {
+    try {
+        try {
+            risky(-5);
+            return "unreachable";
+        } catch (Exception inner) {
+            apply(() -> { throw new Exception("from the closure"); });
+            return "also unreachable";
+        }
+    } catch (Exception outer) {
+        return "outer caught: " + outer.getMessage();
+    }
+}
+
+public void main() {
+    print("value " + withFallback(3));
+    print("value " + withFallback(-1));
+    print(rethrowThroughClosure());
+}

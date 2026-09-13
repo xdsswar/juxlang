@@ -2040,6 +2040,11 @@ impl RustEmitter {
         // A `return` inside the lambda belongs to the LAMBDA, not any
         // enclosing try-closure — clear the threading flag for the body.
         let prev_try = std::mem::take(&mut self.in_try_closure);
+        // A closure is its own function body: a `return` or `throw` inside it
+        // leaves the CLOSURE, not the catch arm it happens to be written in.
+        // Leaving the flag set emitted `break '__jux_catch` inside the closure,
+        // a label rustc cannot reach from there (E0767).
+        let prev_catch_arm = std::mem::take(&mut self.in_catch_arm);
         // BARE-closure target (§G.3): a lambda flowing into a foreign
         // `impl Fn(..)` param emits `move |..| ..` directly, with no
         // `Rc<dyn Fn>` wrapper. Take-and-clear here so a nested lambda in the
@@ -2154,6 +2159,7 @@ impl RustEmitter {
             self.w.push_str(" }");
         }
         self.in_try_closure = prev_try;
+        self.in_catch_arm = prev_catch_arm;
     }
 
     /// Emit `e` inside a parent context with the given precedence,
@@ -2532,6 +2538,8 @@ impl RustEmitter {
         // enclosing try-closure (anonymous classes can be instantiated
         // inside a `try` body).
         let __prev_try = std::mem::take(&mut self.in_try_closure);
+        // Same as `emit_lambda`: the method body is its own function.
+        let __prev_catch_arm = std::mem::take(&mut self.in_catch_arm);
         // `async T` on a method in an anonymous-class body lowers to
         // `async fn` on the synthetic struct's impl — same shape as
         // the named-class method emitter (`decls/classes.rs`).
@@ -2601,6 +2609,7 @@ impl RustEmitter {
         }
         self.w.push('}');
         self.in_try_closure = __prev_try;
+        self.in_catch_arm = __prev_catch_arm;
     }
 }
 
