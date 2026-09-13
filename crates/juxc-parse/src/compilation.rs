@@ -168,14 +168,54 @@ impl<'a> Parser<'a> {
     /// import-decl  = 'import' import-spec ';'
     /// ```
     ///
-    /// The `@cfg(...)` prefix form is parsed by the annotation pass once
-    /// it lands; we only handle the bare `import` form here.
+    /// A `@cfg(...)` directly before an `import` belongs to that import
+    /// (grammar A.2.1), and is kept on it for the driver's cfg pass.
     fn parse_imports(&mut self) -> Vec<ImportDecl> {
         let mut imports = Vec::new();
-        while self.at_kw(Keyword::Import) {
-            imports.push(self.parse_import_decl());
+        loop {
+            if self.at_kw(Keyword::Import) {
+                imports.push(self.parse_import_decl());
+            } else if self.at_cfg_import() {
+                let cfg = self.parse_annotations().into_iter().next();
+                let mut import = self.parse_import_decl();
+                import.cfg = cfg;
+                imports.push(import);
+            } else {
+                break;
+            }
         }
         imports
+    }
+
+    /// `@cfg ( … ) import` at the cursor.
+    fn at_cfg_import(&self) -> bool {
+        let kind = |i: usize| self.tokens.get(i).map(|t| &t.kind);
+        if !matches!(kind(self.pos), Some(TokenKind::At)) {
+            return false;
+        }
+        if !matches!(kind(self.pos + 1), Some(TokenKind::Ident(n)) if n.eq_ignore_ascii_case("cfg")) {
+            return false;
+        }
+        if !matches!(kind(self.pos + 2), Some(TokenKind::LParen)) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut i = self.pos + 2;
+        while let Some(k) = kind(i) {
+            match k {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(kind(i + 1), Some(TokenKind::Kw(Keyword::Import)));
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Parse one `import …;` declaration. Always advances past the `;`
@@ -194,7 +234,7 @@ impl<'a> Parser<'a> {
         let spec = self.parse_import_spec();
         self.expect(&TokenKind::Semicolon, "';' after import declaration");
         let end = self.last_consumed_span();
-        ImportDecl { spec, span: start.join(end) }
+        ImportDecl { cfg: None, spec, span: start.join(end) }
     }
 
     /// Parse one `import-spec`. Returns an [`ImportSpec`] either way —

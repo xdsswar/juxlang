@@ -200,6 +200,14 @@ impl<'a> Parser<'a> {
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
         if self.at_kw(Keyword::If) {
+            // `if cfg(...)` -- no parentheses around the condition, which is
+            // what tells it apart from an ordinary `if (cfg(x))`.
+            if matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(n)) if n == "cfg"
+            ) {
+                return Some(Stmt::IfCfg(self.parse_if_cfg_stmt()));
+            }
             return Some(Stmt::If(self.parse_if_stmt()?));
         }
         if self.at_kw(Keyword::While) {
@@ -1261,6 +1269,36 @@ impl<'a> Parser<'a> {
             fixed,
             span: start.join(end),
         }))
+    }
+
+    /// `'if' 'cfg' '(' cfg-pred ')' block ( 'else' block )?` (grammar A.2.8).
+    ///
+    /// Both branches are blocks, as the grammar has them; an `else` may also be
+    /// followed by another `if` of either kind, kept as a one-statement block,
+    /// so a chain reads the way an ordinary `else if` chain does.
+    pub(crate) fn parse_if_cfg_stmt(&mut self) -> juxc_ast::IfCfgStmt {
+        let start = self.peek_span();
+        self.advance(); // 'if'
+        self.advance(); // 'cfg'
+        let predicate = self.parse_cfg_predicate_list();
+        let then_block = self.parse_block();
+        let else_block = if self.eat_kw(Keyword::Else) {
+            if self.at_kw(Keyword::If) {
+                let chain_start = self.peek_span();
+                let statements = self.parse_stmt_inner().into_iter().collect();
+                Some(juxc_ast::Block { statements, span: chain_start.join(self.last_consumed_span()) })
+            } else {
+                Some(self.parse_block())
+            }
+        } else {
+            None
+        };
+        juxc_ast::IfCfgStmt {
+            predicate,
+            then_block,
+            else_block,
+            span: start.join(self.last_consumed_span()),
+        }
     }
 
     /// `if-stmt = 'if' '(' expression ')' statement-block ('else' (if-stmt | block))?`

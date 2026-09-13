@@ -288,6 +288,14 @@ impl<'a> Walker<'a> {
                     }
                 }
             }
+            // Both branches of a compile-time `if cfg`: the cursor may be in
+            // either, whichever one the build keeps.
+            Stmt::IfCfg(c) => {
+                self.walk_block(&c.then_block);
+                if let Some(b) = &c.else_block {
+                    self.walk_block(b);
+                }
+            }
             Stmt::While(w) => self.walk_block(&w.body),
             Stmt::DoWhile(d) => self.walk_block(&d.body),
             Stmt::ForEach(f) => {

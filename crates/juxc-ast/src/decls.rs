@@ -119,8 +119,8 @@ pub struct ConstDecl {
 /// resolved interpretation lives elsewhere:
 /// - `@Override` is verified at tycheck time.
 /// - `@Deprecated` lowers to Rust `#[deprecated]`.
-/// - `@Cfg(...)` lowers to Rust `#[cfg(...)]` for conditional
-///   compilation.
+/// - `@cfg(...)` is decided by the driver right after parsing (JUX-LANG-V1
+///   11): a declaration whose predicate fails is removed from the tree.
 /// - User-defined annotations (`annotation Foo { … }` declarations)
 ///   are not yet wired — they parse but produce no semantic effect.
 #[derive(Debug, Clone)]
@@ -136,7 +136,7 @@ pub struct Annotation {
 }
 
 /// One entry in an annotation's argument list. Either a positional
-/// expression (`@Cfg(linux)`) or a named binding
+/// expression (`@cfg(debug)`) or a named binding
 /// (`@Extern(lib = "m")`).
 #[derive(Debug, Clone)]
 pub enum AnnotationArg {

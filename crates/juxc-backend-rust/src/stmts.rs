@@ -53,6 +53,8 @@ fn body_moves_path(block: &Block, name: &str) -> bool {
 
 fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
     match stmt {
+        // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+        Stmt::IfCfg(_) => false,
         Stmt::Labeled { stmt, .. } => stmt_moves_path(stmt, name),
         Stmt::Expr(e) => expr_moves_path_at_top(e, name),
         Stmt::VarDecl(v) => v
@@ -616,6 +618,9 @@ impl RustEmitter {
 
     fn emit_stmt_inner(&mut self, stmt: &Stmt) {
         match stmt {
+            Stmt::IfCfg(_) => unreachable!(
+                "`if cfg` reached the backend: the driver's cfg pass replaces every one"
+            ),
             Stmt::Expr(e) => {
                 self.emit_expr(e);
                 self.w.push_str(";\n");
@@ -4456,6 +4461,7 @@ pub(crate) fn escaped_label(l: &str) -> String {
 
 pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
     match stmt {
+        Stmt::IfCfg(c) => c.span,
         Stmt::Expr(e) => expr_span_of(e),
         Stmt::Return(Some(e), _) => expr_span_of(e),
         Stmt::Return(None, _) => Span::DUMMY,

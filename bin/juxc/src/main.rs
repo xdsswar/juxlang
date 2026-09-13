@@ -139,13 +139,19 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     let project_root = files[0].parent().and_then(find_project_root);
     let manifest = project_root.as_deref().and_then(juxc_driver::Manifest::load);
     let profile = manifest.as_ref().map(|m| m.profile).unwrap_or_default();
+    // The build `@cfg` is decided against: this target and optimization, and
+    // the project's features when there is a project.
+    let facts = match &manifest {
+        Some(m) => juxc_driver::project::cfg_facts_for(m, cli.release),
+        None => juxc_driver::CfgFacts::new(cli.release, profile),
+    };
 
     // Check-only mode (editor tooling / CI lint): run the front end, report
     // diagnostics, and stop — no crate is emitted and `cargo` is never
     // invoked, so this is safe to run on every keystroke. Diagnostics go to
     // stdout in JSON mode (the consumer reads stdout) and stderr otherwise.
     if cli.check {
-        let result = juxc_driver::check_workspace_with(sources, profile);
+        let result = juxc_driver::check_workspace_cfg(sources, &facts);
         match cli.diagnostic_format {
             DiagnosticFormat::Human => print_diagnostics(&result.diagnostics, &result.sources),
             DiagnosticFormat::Json => print_diagnostics_json(&result.diagnostics, &result.sources),
@@ -157,7 +163,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         return Ok(if any_error { Some(ExitCode::from(1)) } else { None });
     }
 
-    let result = juxc_driver::compile_workspace_with(sources, profile)?;
+    let result = juxc_driver::compile_workspace_cfg(sources, &facts)?;
 
     // Surface diagnostics. Human form goes to stderr so stdout stays clean
     // (important when --run forwards the user program's output); JSON goes to

@@ -8,8 +8,8 @@
 //   - @Deprecated — backend emits Rust `#[deprecated]` (with
 //                   optional `message = "…"` passed through as
 //                   `#[deprecated(note = "…")]`).
-//   - @Cfg(name)  — backend emits `#[cfg(name)]` for conditional
-//                   compilation.
+//   - @Cfg(pred)  — the declaration exists only in builds the
+//                   predicate holds for (conditional compilation).
 
 public class Animal {
     public String name;
@@ -32,8 +32,9 @@ public void legacyHelper() {
     print("don't call me");
 }
 
-// @Cfg gates a function on a Rust `#[cfg(...)]` predicate.
-@Cfg(target_os = "linux")
+// `@Cfg` keeps a declaration only in the builds its predicate holds for
+// (JUX-LANG-V1 11); like every built-in annotation its name ignores case.
+@Cfg(os = "linux")
 public void onlyLinux() {
     print("hello from linux");
 }

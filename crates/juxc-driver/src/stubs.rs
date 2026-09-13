@@ -745,6 +745,8 @@ mod tests {
             version: Some("1.0".to_string()),
             git: None,
             git_ref: None,
+            features: Vec::new(),
+            default_features: true,
         };
         assert_eq!(crate_source_of(&registry), CrateSource::Registry);
 
@@ -754,6 +756,8 @@ mod tests {
             version: None,
             git: Some("https://example.com/mine".to_string()),
             git_ref: Some(crate::manifest::GitRef::Tag("v1".to_string())),
+            features: Vec::new(),
+            default_features: true,
         };
         assert_eq!(
             crate_source_of(&git),
@@ -770,6 +774,8 @@ mod tests {
             version: None,
             git: Some("https://example.com/mine".to_string()),
             git_ref: None,
+            features: Vec::new(),
+            default_features: true,
         };
         assert!(matches!(crate_source_of(&both), CrateSource::Path(_)));
     }

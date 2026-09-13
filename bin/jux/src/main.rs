@@ -69,6 +69,13 @@ enum CliCommand {
         /// The toolchain must be installed: `rustup target add <triple>`.
         #[arg(long)]
         target: Option<String>,
+        /// Enable these features of the package, comma-separated, on top of
+        /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+        /// Leave the package's `default` features off.
+        #[arg(long)]
+        no_default_features: bool,
     },
     /// Build the project (or a single file). (§B.15 — `jux build`.)
     Build {
@@ -98,6 +105,13 @@ enum CliCommand {
         /// be installed: `rustup target add <triple>`.
         #[arg(long)]
         target: Option<String>,
+        /// Enable these features of the package, comma-separated, on top of
+        /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+        /// Leave the package's `default` features off.
+        #[arg(long)]
+        no_default_features: bool,
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
@@ -130,6 +144,13 @@ enum CliCommand {
         /// toolchain must be installed: `rustup target add <triple>`.
         #[arg(long)]
         target: Option<String>,
+        /// Enable these features of the package, comma-separated, on top of
+        /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+        /// Leave the package's `default` features off.
+        #[arg(long)]
+        no_default_features: bool,
     },
     /// Run tests (JUX-TESTING-ADDENDUM §TS.2/§TS.8).
     Test {
@@ -144,6 +165,13 @@ enum CliCommand {
         /// builtin stays checked under `jux test` either way.
         #[arg(long)]
         release: bool,
+        /// Enable these features of the package, comma-separated, on top of
+        /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+        /// Leave the package's `default` features off.
+        #[arg(long)]
+        no_default_features: bool,
     },
     /// Re-fetch the project's git dependencies (§B.2.2). Branch-pinned
     /// deps pick up new commits; tag/rev pins re-validate. Without
@@ -235,7 +263,8 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
     let root = resolve_project_root(cli.manifest_path.as_deref());
     match cli.command {
         CliCommand::New { name } => cmd_new(&name),
-        CliCommand::Test { pattern, package, release } => {
+        CliCommand::Test { pattern, package, release, features, no_default_features } => {
+            set_features(features, no_default_features);
             cmd_test(root, package.as_deref(), pattern, release)
         }
         CliCommand::Update       => cmd_update(root),
@@ -246,18 +275,21 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         CliCommand::Target { cmd } => match cmd {
             TargetCmd::List { installed } => cmd_target_list(installed),
         },
-        CliCommand::Check { file, package, target } => {
+        CliCommand::Check { file, package, target, features, no_default_features } => {
             set_cross_target(target);
+            set_features(features, no_default_features);
             let sel = Selection { package, ..Selection::default() };
             run_single_or_project(root, file, Action::Check, None, false, sel)
         }
-        CliCommand::Build { file, emit_dir, release, package, bin, lib, target } => {
+        CliCommand::Build { file, emit_dir, release, package, bin, lib, target, features, no_default_features } => {
             set_cross_target(target);
+            set_features(features, no_default_features);
             let sel = Selection { package, bin, lib };
             run_single_or_project(root, file, Action::Build, emit_dir, release, sel)
         }
-        CliCommand::Run { file, emit_dir, release, package, bin, args, target } => {
+        CliCommand::Run { file, emit_dir, release, package, bin, args, target, features, no_default_features } => {
             set_cross_target(target);
+            set_features(features, no_default_features);
             set_program_args(args);
             let sel = Selection { package, bin, lib: false };
             run_single_or_project(root, file, Action::Run, emit_dir, release, sel)
@@ -301,6 +333,18 @@ fn set_program_args(args: Vec<String>) {
 
 fn program_args() -> &'static [String] {
     PROGRAM_ARGS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+/// Apply `--features` / `--no-default-features` the way `--target` is applied:
+/// through the environment the driver reads when it computes a package's
+/// enabled features (`juxc_driver::project::cfg_facts_for`).
+fn set_features(features: Vec<String>, no_default_features: bool) {
+    if !features.is_empty() {
+        std::env::set_var("JUX_FEATURES", features.join(","));
+    }
+    if no_default_features {
+        std::env::set_var("JUX_NO_DEFAULT_FEATURES", "1");
+    }
 }
 
 fn set_cross_target(triple: Option<String>) {
@@ -811,6 +855,7 @@ fn build_and_act(
         emit_root,
         release,
         target_sel,
+        &juxc_driver::project::cfg_facts_for(manifest, release),
     )?;
     print_diagnostics(&build.diagnostics, &build.sources);
     if build.has_errors() {
@@ -1046,7 +1091,8 @@ fn cmd_test(
         );
         return Ok(ExitCode::from(1));
     }
-    let result = juxc_driver::compile_workspace_test(sources)?;
+    let facts = juxc_driver::project::cfg_facts_for(&manifest, release);
+    let result = juxc_driver::compile_workspace_test_cfg(sources, &facts)?;
     print_diagnostics(&result.diagnostics, &result.sources);
     let any_error = result
         .diagnostics
@@ -1133,7 +1179,8 @@ fn run_source_set(
             .with_context(|| format!("reading {}", f.display()))?;
         sources.push(juxc_source::SourceFile::new(f.clone(), contents));
     }
-    let result = juxc_driver::compile_workspace(sources)?;
+    let facts = juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full);
+    let result = juxc_driver::compile_workspace_cfg(sources, &facts)?;
     finish_compile(result, dir, action, emit_dir_override, release)
 }
 
@@ -1167,7 +1214,8 @@ fn run_single_file(
     let contents = std::fs::read_to_string(input)
         .with_context(|| format!("reading {}", input.display()))?;
     let source = juxc_source::SourceFile::new(input.to_path_buf(), contents);
-    let result = juxc_driver::compile(source)?;
+    let facts = juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full);
+    let result = juxc_driver::compile_workspace_cfg(vec![source], &facts)?;
     finish_compile(result, input, action, emit_dir_override, release)
 }
 

@@ -153,6 +153,10 @@ pub struct Manifest {
     /// generated `build.rs` link directives. Empty when the project declares no
     /// `[ffi.*]` tables.
     pub ffi: Vec<FfiBinding>,
+    /// `[features]` (§B.8.1): each feature name and the entries it enables --
+    /// other features, or `dep:<name>` optional dependencies. `default` is the
+    /// set a build gets when nobody says otherwise.
+    pub features: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// One resolved `[ffi.<name>]` binding (§B.14). Search paths are resolved to
@@ -228,6 +232,12 @@ pub struct Dependency {
     /// Which ref the git source is pinned to. `None` = the remote's
     /// default branch.
     pub git_ref: Option<GitRef>,
+    /// `features = [...]` -- features this package asks the dependency to
+    /// enable (§B.8.2).
+    pub features: Vec<String>,
+    /// `default-features = false` turns this `false`: the dependency's
+    /// `default` set is not requested by this package (§B.8.2).
+    pub default_features: bool,
 }
 
 /// The ref a `git` dependency pins to — `branch` (moves), `tag`
@@ -349,6 +359,10 @@ enum RawDependency {
 /// §B.2.2); `features`/`registry`/etc. are tolerated and ignored.
 #[derive(Debug, Default, Deserialize)]
 struct RawDependencyTable {
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(rename = "default-features")]
+    default_features: Option<bool>,
     path: Option<String>,
     version: Option<String>,
     git: Option<String>,
@@ -369,6 +383,9 @@ struct RawManifest {
     bin: Vec<RawBin>,
     #[serde(default)]
     dependencies: std::collections::BTreeMap<String, RawDependency>,
+    /// `[features]` (§B.8.1): each feature and what it enables.
+    #[serde(default)]
+    features: std::collections::BTreeMap<String, Vec<String>>,
     workspace: Option<RawWorkspace>,
     build: Option<RawBuild>,
     #[serde(default)]
@@ -430,6 +447,7 @@ impl Manifest {
                 return None;
             }
         };
+        let features = raw.features.clone();
         let raw_pkg = raw.package.unwrap_or_default();
 
         // Resolve a relative icon path against the project root. An
@@ -540,6 +558,8 @@ impl Manifest {
                         version: None,
                         git: Some(v),
                         git_ref: None,
+                        features: Vec::new(),
+                        default_features: true,
                     }
                 }
                 RawDependency::Version(v) => Dependency {
@@ -548,6 +568,8 @@ impl Manifest {
                     version: Some(v),
                     git: None,
                     git_ref: None,
+                    features: Vec::new(),
+                    default_features: true,
                 },
                 RawDependency::Detailed(t) => {
                     // Ref keys are mutually exclusive per §B.2.2; the
@@ -571,6 +593,8 @@ impl Manifest {
                         version: t.version,
                         git: t.git,
                         git_ref,
+                        features: t.features,
+                        default_features: t.default_features.unwrap_or(true),
                     }
                 }
             })
@@ -676,7 +700,43 @@ impl Manifest {
             build_target,
             profiles,
             ffi,
+            features,
         })
+    }
+
+    /// The features a build of this package has, given the ones `requested`
+    /// for it and whether its `default` set is included (§B.8): each enabled
+    /// feature enables what it lists, transitively. `dep:` entries name
+    /// optional dependencies, which are not features and are skipped.
+    ///
+    /// A requested name the manifest does not declare is reported on stderr
+    /// and left out, so a typo cannot silently turn nothing on.
+    pub fn enabled_features(
+        &self,
+        requested: &std::collections::BTreeSet<String>,
+        with_defaults: bool,
+    ) -> std::collections::BTreeSet<String> {
+        let mut pending: Vec<String> = requested.iter().cloned().collect();
+        if with_defaults {
+            pending.extend(self.features.get("default").into_iter().flatten().cloned());
+        }
+        let mut enabled = std::collections::BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if name.starts_with("dep:") || name == "default" || enabled.contains(&name) {
+                continue;
+            }
+            let Some(implies) = self.features.get(&name) else {
+                eprintln!(
+                    "jux: warning: package `{}` has no feature `{name}`; its features are: {}",
+                    self.package.name,
+                    self.features.keys().filter(|k| *k != "default").cloned().collect::<Vec<_>>().join(", "),
+                );
+                continue;
+            };
+            pending.extend(implies.iter().cloned());
+            enabled.insert(name);
+        }
+        enabled
     }
 
     /// Resolve the effective build type (`true` = release / optimized).

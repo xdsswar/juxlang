@@ -148,12 +148,14 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
         sources.push(SourceFile::new(path, rope.to_string()));
     }
 
-    // The language profile from the project's `jux.toml [build] profile` drives
-    // profile rules in the editor (e.g. `jux-core` rejects `async`, E0701).
-    let profile = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root))
-        .map(|m| m.profile)
+    // The project's `jux.toml` decides what the editor analyses: its
+    // `[build] profile` (e.g. `jux-core` rejects `async`, E0701) and its
+    // features, so code behind a default feature is checked and code behind
+    // an off one is left out, as the build does.
+    let facts = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root))
+        .map(|m| juxc_driver::project::cfg_facts_for(&m, false))
         .unwrap_or_default();
-    analyze_sources(uri, rope, sources, profile)
+    analyze_sources(uri, rope, sources, &facts)
 }
 
 /// Single-file fallback used when there's no workspace root (untitled buffers,
@@ -166,7 +168,7 @@ pub fn analyze_single(uri: &Url, rope: &Rope) -> Analysis {
         .unwrap_or_else(|_| uri.to_string());
     let source = SourceFile::new(path, rope.to_string());
     // No project → default `full` profile (no profile-specific restrictions).
-    analyze_sources(uri, rope, vec![source], juxc_driver::Profile::Full)
+    analyze_sources(uri, rope, vec![source], &juxc_driver::CfgFacts::default())
 }
 
 /// Shared core: feed `sources` (the user units; stdlib is auto-prepended) to
@@ -176,9 +178,9 @@ fn analyze_sources(
     open_uri: &Url,
     open_rope: &Rope,
     sources: Vec<SourceFile>,
-    profile: juxc_driver::Profile,
+    facts: &juxc_driver::CfgFacts,
 ) -> Analysis {
-    let result = juxc_driver::check_workspace_with(sources, profile);
+    let result = juxc_driver::check_workspace_cfg(sources, facts);
 
     // Pre-seed every analysed *user* file's URI with an empty vec so a file
     // that went from "had errors" to "clean" gets its diagnostics cleared

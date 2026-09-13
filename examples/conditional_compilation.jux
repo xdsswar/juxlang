@@ -1,0 +1,72 @@
+// Conditional compilation: `@cfg(...)` on declarations, `if cfg(...)` in
+// bodies (JUX-LANG-V1 §11).
+//
+// The predicates are decided against the build before any name is resolved.
+// What a build leaves out is parsed and then gone: it may call functions that
+// do not exist, and two declarations of one name can coexist as long as at
+// most one survives.
+//
+// Every predicate below comes out the same on any desktop build, so the output
+// does not depend on where the example runs. `jux run --target <triple>`
+// decides them for that target instead.
+
+/** One of these two exists in any build: they cover every `os`. */
+@cfg(any(os = "windows", os = "linux", os = "macos", os = "freebsd"))
+public String kind() {
+    return "a desktop operating system";
+}
+
+@cfg(not(any(os = "windows", os = "linux", os = "macos", os = "freebsd")))
+public String kind() {
+    return "something else";
+}
+
+/** Never built on a desktop: the call inside is never resolved. */
+@cfg(os = "none")
+public void bareMetalOnly() {
+    writeRegister(0x4000_0000, 1);
+}
+
+public class Limits {
+    @cfg(pointer_width = "64")
+    public static const int WORD_BITS = 64;
+
+    @cfg(pointer_width = "32")
+    public static const int WORD_BITS = 32;
+
+    @cfg(pointer_width = "16")
+    public static const int WORD_BITS = 16;
+
+    /** A member can be conditional too. */
+    @cfg(endian = "big")
+    public static String byteOrder() {
+        return "big-endian";
+    }
+
+    @cfg(not(endian = "big"))
+    public static String byteOrder() {
+        return "little-endian";
+    }
+}
+
+public void main() {
+    print($"running on ${kind()}");
+    print($"word size known: ${Limits.WORD_BITS >= 16}");
+    print($"byte order named: ${Limits.byteOrder().endsWith("-endian")}");
+
+    // A statement form: the branch that holds replaces the whole `if`.
+    if cfg(all(profile = "full", not(os = "none"))) {
+        var scope = "branch-local";
+        print($"full profile, ${scope} names stay in their branch");
+    } else {
+        unreachableOnDesktop();
+    }
+
+    // `else if cfg` chains read like ordinary ones; nothing left over is fine.
+    if cfg(os = "none") {
+        print("bare metal");
+    } else if cfg(feature = "not-declared-anywhere") {
+        print("a feature this build does not have");
+    }
+    print("done");
+}

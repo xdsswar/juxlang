@@ -3279,6 +3279,9 @@ impl<'a> Checker<'a> {
     /// (see `match_null_test` below for the null-test shapes)
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            // `if cfg` is resolved to its branch before this phase runs (the driver's
+            // cfg pass); a unit that skipped that pass has nothing to say here.
+            Stmt::IfCfg(_) => {}
             Stmt::VarDecl(v) => {
                 // A declared interface-typed local lowers to `Rc<dyn Trait>`
                 // — reject the non-dispatchable forms before the backend

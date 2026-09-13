@@ -3067,6 +3067,8 @@ pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut
     use juxc_ast::Stmt;
     for s in &b.statements {
         match s {
+            // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+            Stmt::IfCfg(_) => {}
             Stmt::Expr(e) => collect_bare_names_expr(e, sink),
             Stmt::Return(Some(e), _) => collect_bare_names_expr(e, sink),
             Stmt::Return(None, _) => {}

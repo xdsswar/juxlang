@@ -1921,6 +1921,8 @@ pub(crate) fn compute_aliased_classes(
         mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
     ) {
         match s {
+            // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+            Stmt::IfCfg(_) => {}
             Stmt::Expr(e) => walk_expr(e, aliased, mark),
             Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
@@ -2103,6 +2105,8 @@ pub(crate) fn compute_aliased_classes(
     ) {
         for s in &b.statements {
             match s {
+                // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+                Stmt::IfCfg(_) => {}
                 Stmt::Expr(e) => mark_lambda_captures(e, aliased, mark),
                 Stmt::Return(Some(e), _) => mark_lambda_captures(e, aliased, mark),
                 Stmt::Return(None, _) => {}
@@ -2792,6 +2796,8 @@ pub(crate) fn compute_mutated_classes(
         out: &mut HashSet<String>,
     ) {
         match s {
+            // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+            Stmt::IfCfg(_) => {}
             Stmt::Expr(e) => walk_expr(e, et, um, out),
             Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
@@ -3469,6 +3475,8 @@ fn cast_targets_block(b: &juxc_ast::Block, out: &mut HashSet<String>) {
 fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
     use juxc_ast::Stmt;
     match s {
+        // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+        Stmt::IfCfg(_) => {}
         Stmt::Expr(e) => cast_targets_expr(e, out),
         Stmt::Return(Some(e), _) => cast_targets_expr(e, out),
         Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
@@ -6060,7 +6068,7 @@ impl RustEmitter {
         };
         self.emit_source_marker(span);
         // Pre-decl Rust attribute emission for the BUILT-IN annotations
-        // (`@Deprecated`, `@Cfg`), which map onto Rust attributes. A
+        // (`@Deprecated`), which map onto Rust attributes. A
         // user-defined annotation maps onto nothing here: it is data about
         // the declaration, recorded in the registry rather than emitted as an
         // attribute on it.

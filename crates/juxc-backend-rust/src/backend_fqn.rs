@@ -52,10 +52,8 @@ impl crate::RustEmitter {
     /// - `@Deprecated` → `#[deprecated]`. An optional `message =
     ///   "…"` named arg passes through as
     ///   `#[deprecated(note = "…")]`.
-    /// - `@Cfg(name)` / `@Cfg(target = "linux")` →
-    ///   `#[cfg(name)]` / `#[cfg(target = "linux")]`. Phase 1
-    ///   only passes through identifiers and string literals;
-    ///   compound predicates need the proper cfg-expr lowering.
+    /// - `@cfg(...)` emits nothing: the driver already removed what it
+    ///   excludes.
     ///
     /// `@Override` is a tycheck-only marker — no Rust attribute.
     /// Unknown user-defined annotations are silently dropped
@@ -98,39 +96,11 @@ impl crate::RustEmitter {
                     }
                 }
                 "cfg" => {
-                    // `@Cfg(linux)` → `#[cfg(linux)]`. `@Cfg(target = "linux")`
-                    // → `#[cfg(target = "linux")]`. Multi-arg /
-                    // nested predicates are deferred.
-                    self.w.emit_indent();
-                    self.w.push_str("#[cfg(");
-                    for (i, arg) in ann.args.iter().enumerate() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        match arg {
-                            juxc_ast::AnnotationArg::Positional(expr) => {
-                                if let Some(text) = path_text(expr) {
-                                    self.w.push_str(&text);
-                                } else if let Some(text) = string_literal_text(expr) {
-                                    self.w.push('"');
-                                    self.w.push_str(&text.replace('"', "\\\""));
-                                    self.w.push('"');
-                                }
-                            }
-                            juxc_ast::AnnotationArg::Named { name, value } => {
-                                self.w.push_str(&to_rust_ident(&name.text));
-                                self.w.push_str(" = ");
-                                if let Some(text) = string_literal_text(value) {
-                                    self.w.push('"');
-                                    self.w.push_str(&text.replace('"', "\\\""));
-                                    self.w.push('"');
-                                } else if let Some(text) = path_text(value) {
-                                    self.w.push_str(&text);
-                                }
-                            }
-                        }
-                    }
-                    self.w.push_str(")]\n");
+                    // Decided before names were resolved (JUX-LANG-V1 11, the
+                    // driver's cfg pass): a declaration that reaches the backend
+                    // is part of this build, so there is nothing left to say.
+                    // Handing the predicate to rustc as `#[cfg]` would be wrong
+                    // anyway, since `os = "linux"` is not a Rust cfg key.
                 }
                 "override" => {
                     // Compile-time-only — tycheck verifies the
@@ -151,25 +121,6 @@ impl crate::RustEmitter {
 fn string_literal_text(expr: &juxc_ast::Expr) -> Option<String> {
     if let juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) = expr {
         return Some(s.clone());
-    }
-    None
-}
-
-/// Extract a dotted-path expression's text (`linux`, `target_os`,
-/// `unix`), or `None` for anything more elaborate. Used by `@Cfg`
-/// to forward bare-identifier predicates into the Rust `#[cfg]`.
-fn path_text(expr: &juxc_ast::Expr) -> Option<String> {
-    if let juxc_ast::Expr::Path(qn) = expr {
-        if qn.segments.is_empty() {
-            return None;
-        }
-        return Some(
-            qn.segments
-                .iter()
-                .map(|s| juxc_lex::to_rust_ident(&s.text))
-                .collect::<Vec<_>>()
-                .join("::"),
-        );
     }
     None
 }

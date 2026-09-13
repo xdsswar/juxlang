@@ -1,0 +1,4 @@
+cfg_invalid_predicate.jux:1:6: [E0150] error: `platform` is not a cfg key; the keys are `os`, `arch`, `endian`, `pointer_width`, `target`, `profile`, `feature` and the flags are `debug`, `release`
+cfg_invalid_predicate.jux:4:6: [E0150] error: `not(...)` takes exactly one predicate, and this one has 2
+cfg_invalid_predicate.jux:7:11: [E0150] error: the value of `os` in a cfg predicate must be a literal, such as `"linux"`
+cfg_invalid_predicate.jux:11:12: [E0150] error: `either(...)` is not a cfg combinator; the combinators are `all`, `any` and `not`

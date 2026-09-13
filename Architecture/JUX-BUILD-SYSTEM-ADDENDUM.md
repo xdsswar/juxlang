@@ -613,6 +613,13 @@ When the same dependency appears with different feature sets in different parts 
 
 To avoid surprises, libraries should keep their feature sets small and orthogonal. Features should rarely need to be mutually exclusive; if they do, refactor into separate packages.
 
+Phase 1 decides a build's features once, before compiling any of it:
+
+- The packages being built (a single package, or every member of a workspace) get their `default` set, unless `--no-default-features` is given, plus each `--features` name they declare. A `--features` name no package being built declares is a warning.
+- Every Jux package reached through `[dependencies]` gets the union of the `features` its dependents request, plus its own `default` set unless every dependent writes `default-features = false`.
+- Each enabled feature enables what it lists, transitively. A requested name the package does not declare is a warning and enables nothing.
+- A workspace member's crate is built once with this plan, and every member compiled against it sees the same features.
+
 ### B.8.5. Optional Dependencies
 
 A dependency listed with `optional = true` is included only when a feature names it via `dep:<name>`:
@@ -626,6 +633,8 @@ fast = ["dep:com.mylang.fast-json"]
 ```
 
 Without the feature flag, the dependency is not fetched and its symbols are not available.
+
+*(Phase 1: `optional` and `dep:` entries are not implemented. A `dep:` entry in a feature's list is skipped, and every declared dependency is part of the build.)*
 
 ---
 

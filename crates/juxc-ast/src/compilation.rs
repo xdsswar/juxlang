@@ -50,6 +50,10 @@ pub struct PackageDecl {
 /// A single `import …;` statement.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
+    /// A `@cfg(...)` written before the `import` (grammar A.2.1): the import
+    /// exists only in builds where it holds. Applied, and then cleared, by the
+    /// driver's cfg pass before names are resolved.
+    pub cfg: Option<crate::Annotation>,
     /// What's being imported and (optionally) under what alias.
     pub spec: ImportSpec,
     /// Span of the entire declaration including the trailing `;`.

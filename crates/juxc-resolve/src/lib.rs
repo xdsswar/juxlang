@@ -1010,6 +1010,9 @@ impl Resolver {
 
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            // `if cfg` is resolved to its branch before this phase runs (the driver's
+            // cfg pass); a unit that skipped that pass has nothing to say here.
+            Stmt::IfCfg(_) => {}
             Stmt::Expr(e) => self.visit_expr(e),
             Stmt::Return(Some(e), _) => self.visit_expr(e),
             Stmt::Return(None, _) => {}

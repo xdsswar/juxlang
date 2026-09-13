@@ -1,0 +1,14 @@
+@cfg(platform = "linux")
+public void misspelledKey() { }
+
+@cfg(not(debug, release))
+public void twoInsideNot() { }
+
+@cfg(os = linux)
+public void unquotedValue() { }
+
+public void main() {
+    if cfg(either(os = "linux", os = "macos")) {
+        print("unix");
+    }
+}

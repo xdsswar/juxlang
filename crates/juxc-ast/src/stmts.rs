@@ -92,6 +92,11 @@ pub enum Stmt {
     /// functions and the raw-pointer operators (`*p`, `&x`) are permitted;
     /// the body lowers verbatim to a Rust `unsafe { … }` block.
     Unsafe(Block),
+    /// `if cfg(pred) { … } else { … }` -- a compile-time conditional (JUX-LANG-V1
+    /// 11.5, grammar A.2.8). The predicate is evaluated against the build's
+    /// facts before name resolution, and the statement is replaced by the
+    /// branch it selects, so no later phase sees this node.
+    IfCfg(IfCfgStmt),
     /// A bare `{ … }` in statement position (grammar A.2.8 `statement = block`).
     ///
     /// It introduces a scope and nothing else. Java programs use one to bound
@@ -198,6 +203,27 @@ pub struct VarDecl {
     /// Span covering `[modifier] (type | 'var') name [= init] ;`.
     pub span: Span,
 }
+
+/// `if cfg(pred) { then } else { otherwise }` (JUX-LANG-V1 11.5).
+///
+/// `predicate` holds the arguments exactly as `@cfg(...)` holds them, so the
+/// statement form and the annotation form are evaluated by one function: each
+/// entry is `key = "value"`, a bare flag (`debug`), or an `all(...)` /
+/// `any(...)` / `not(...)` call whose named arguments are leaves. Several
+/// entries must all hold.
+#[derive(Debug, Clone)]
+pub struct IfCfgStmt {
+    /// The predicate, as annotation arguments.
+    pub predicate: Vec<crate::AnnotationArg>,
+    /// Kept when the predicate holds.
+    pub then_block: Block,
+    /// Kept when it does not: a block, or another `if` (either kind) as a
+    /// one-statement block. `None` means nothing is left.
+    pub else_block: Option<Block>,
+    /// Span of the whole statement.
+    pub span: Span,
+}
+
 
 /// `if (cond) block (else (if-stmt | block))?` per §A.2.8.
 ///

@@ -103,6 +103,7 @@ pub(crate) fn cross_target() -> Option<String> {
 
 pub mod annotations;
 pub mod big_stack;
+pub mod cfg;
 pub mod diagnostic_order;
 pub mod git_deps;
 pub mod grammar_export;
@@ -115,6 +116,7 @@ mod stdlib;
 mod stdlib_embedded;
 pub mod stubs;
 
+pub use cfg::CfgFacts;
 pub use juxc_tycheck::Profile;
 pub use manifest::Manifest;
 pub use project::{ensure_project_stubs, StubSyncReport};
@@ -162,6 +164,7 @@ pub struct CompileResult {
 fn lex_parse_resolve(
     sources: &[SourceFile],
     diagnostics: &mut Vec<Diagnostic>,
+    cfg: &cfg::CfgFacts,
 ) -> Vec<juxc_ast::CompilationUnit> {
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
     // A `.jux.d` declaration stub is parsed and resolved in "foreign" mode: it
@@ -183,6 +186,10 @@ fn lex_parse_resolve(
         }
         units.push(parsed.ast);
     }
+    // Conditional compilation (§C.2.5): what this build leaves out is gone
+    // before any name is resolved, so it is never checked against APIs the
+    // target does not have.
+    cfg::apply(&mut units, sources, cfg, diagnostics);
     let exports = juxc_resolve::PackageExports::collect(&units);
     for (idx, unit) in units.iter().enumerate() {
         let before = diagnostics.len();
@@ -231,6 +238,31 @@ where
         &[SourceFile],
     ) -> RustCrate,
 {
+    compile_workspace_as_cfg(sources, lower, &cfg::CfgFacts::new(false, profile))
+}
+
+/// [`compile_workspace`] for the build described by `cfg`: its target, its
+/// optimization, its profile and its enabled features decide every
+/// `@cfg(...)` and `if cfg(...)` (JUX-LANG-V1 §11).
+pub fn compile_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Result<CompileResult> {
+    compile_workspace_as_cfg(sources, juxc_backend_rust::lower_workspace, cfg)
+}
+
+/// [`compile_workspace_as`] for the build described by `cfg`.
+pub fn compile_workspace_as_cfg<F>(
+    sources: Vec<SourceFile>,
+    lower: F,
+    cfg: &cfg::CfgFacts,
+) -> Result<CompileResult>
+where
+    F: FnOnce(
+        &[juxc_ast::CompilationUnit],
+        &juxc_tycheck::SymbolTable,
+        &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+        &[SourceFile],
+    ) -> RustCrate,
+{
+    let profile = cfg.profile();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     if sources.is_empty() {
         return Ok(CompileResult { crate_: None, diagnostics, sources: Vec::new() });
@@ -258,7 +290,7 @@ where
     // user's sources stay last in the list. The CLI and the LSP rely on that
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
-    all_sources.push(crate::annotations::synthesize_registry(&sources));
+    all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -275,7 +307,7 @@ where
 
     // Phase 1+2 per source, then phase 3 against the workspace's wildcard
     // export table — see [`lex_parse_resolve`].
-    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     // Flag `.jux.d` units external (§G.9.1) so the lowering step skips them.
     stubs::mark_external_units(&mut units, &sources);
 
@@ -331,6 +363,11 @@ where
 /// fails. Same lex/parse/resolve/tycheck pipeline as
 /// [`compile_workspace`]; only the backend emit differs.
 pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult> {
+    compile_workspace_test_cfg(sources, &cfg::CfgFacts::default())
+}
+
+/// [`compile_workspace_test`] for the build described by `cfg`.
+pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Result<CompileResult> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     if sources.is_empty() {
         return Ok(CompileResult { crate_: None, diagnostics, sources: Vec::new() });
@@ -350,7 +387,7 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     // user's sources stay last in the list. The CLI and the LSP rely on that
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
-    all_sources.push(crate::annotations::synthesize_registry(&sources));
+    all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -364,7 +401,7 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
             src
         })
         .collect();
-    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
@@ -454,6 +491,13 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
 /// `jux-core` async rejection, E0701) live, in the same pass that produces the
 /// other diagnostics.
 pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Profile) -> CheckResult {
+    check_workspace_cfg(sources, &cfg::CfgFacts::new(false, profile))
+}
+
+/// [`check_workspace`] for the build described by `cfg` -- the editor's view
+/// of a project, with the project's own features.
+pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> CheckResult {
+    let profile = cfg.profile();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Same stdlib auto-prepend as the compile path: stdlib units go
@@ -474,7 +518,7 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     // user's sources stay last in the list. The CLI and the LSP rely on that
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
-    all_sources.push(crate::annotations::synthesize_registry(&sources));
+    all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -492,7 +536,7 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     // Lex + parse each unit, then resolve against the workspace export
     // table — see [`lex_parse_resolve`]. Each source's diagnostics are
     // tagged with its index so the LSP publishes against the right Url.
-    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     stubs::mark_external_units(&mut units, &sources);
 
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise

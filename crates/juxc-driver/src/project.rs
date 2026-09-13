@@ -117,6 +117,7 @@ pub fn build_package(
         emit_root,
         release,
         &TargetSelection::default(),
+        &cfg_facts_for(manifest, release),
     )
 }
 
@@ -132,6 +133,7 @@ pub fn build_package_selected(
     emit_root: &Path,
     release: bool,
     selection: &TargetSelection,
+    cfg: &crate::cfg::CfgFacts,
 ) -> Result<PackageBuild> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut all_sources: Vec<SourceFile> = Vec::new();
@@ -152,10 +154,10 @@ pub fn build_package_selected(
         let mut sources = dep_sources.to_vec();
         sources.extend(stub_sources.clone());
         sources.extend(load_lib_sources(manifest)?);
-        let result = crate::compile_workspace_as(
+        let result = crate::compile_workspace_as_cfg(
             sources,
             juxc_backend_rust::lower_workspace_lib,
-            manifest.profile,
+            cfg,
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {
@@ -206,12 +208,12 @@ pub fn build_package_selected(
         sources.extend(load_bin_sources(manifest, &bin.path)?);
         // Prefer the manifest-named entry package for the `fn main` shim.
         let entry_pkg = bin.entry_package();
-        let result = crate::compile_workspace_as(
+        let result = crate::compile_workspace_as_cfg(
             sources,
             move |u, s, e, src| {
                 juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, entry_pkg)
             },
-            manifest.profile,
+            cfg,
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {
@@ -276,13 +278,27 @@ pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild>
     // Emitted crates live under <workspace-root>/target/.rust-build/.
     let emit_root = root.project_root.join("target").join(".rust-build");
 
+    // One feature plan for the whole workspace (§B.8.4): a member's crate is
+    // built once, so every member compiled against it must see the same
+    // features it was built with.
+    let roots: Vec<&Manifest> = members.values().collect();
+    let facts = cfg_facts_for_packages(&roots, release, root.profile);
+
     let mut built: Vec<(String, PackageBuild)> = Vec::new();
     for name in &order {
         let m = &members[name];
         // Gather dependency sources + path-dep links for intra-workspace
         // path deps that are themselves workspace members.
         let (dep_sources, path_deps) = resolve_member_deps(m, &members, &emit_root)?;
-        let build = build_package(m, &dep_sources, &path_deps, &emit_root, release)?;
+        let build = build_package_selected(
+            m,
+            &dep_sources,
+            &path_deps,
+            &emit_root,
+            release,
+            &TargetSelection::default(),
+            &facts.clone().with_profile(m.profile),
+        )?;
         built.push((name.clone(), build));
         // If a member failed, stop — dependents would cascade-fail.
         if built.last().is_some_and(|(_, b)| b.has_errors()) {
@@ -305,6 +321,85 @@ fn resolve_member_deps(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     collect_dep_closure(m, members, emit_root, &mut dep_sources, &mut path_deps, &mut seen)?;
     Ok((dep_sources, path_deps))
+}
+
+/// The `@cfg` facts for a build of `manifest` alone (JUX-LANG-V1 §11). See
+/// [`cfg_facts_for_packages`].
+pub fn cfg_facts_for(manifest: &Manifest, release: bool) -> crate::cfg::CfgFacts {
+    cfg_facts_for_packages(&[manifest], release, manifest.profile)
+}
+
+/// The `@cfg` facts for one build of the packages `roots` together -- a
+/// workspace, or a single package -- with `release` and `profile`: the build's
+/// target and optimization, and the enabled features of every root and of
+/// every Jux package they depend on.
+///
+/// A root gets its `default` features (unless `--no-default-features`, carried
+/// in `JUX_NO_DEFAULT_FEATURES`) and those `--features` names it declares
+/// (`JUX_FEATURES`). A dependency gets the union of what every package
+/// depending on it requests, with its own `default` set unless every one of
+/// them says `default-features = false` -- Cargo's feature unification
+/// (§B.8.4). Computing this once for the whole build is what keeps a
+/// workspace member's crate and the members compiled against it in agreement.
+pub fn cfg_facts_for_packages(
+    roots: &[&Manifest],
+    release: bool,
+    profile: juxc_tycheck::Profile,
+) -> crate::cfg::CfgFacts {
+    let cli: BTreeSet<String> = std::env::var("JUX_FEATURES")
+        .unwrap_or_default()
+        .split(',')
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect();
+    for feature in &cli {
+        if !roots.iter().any(|m| m.features.contains_key(feature)) {
+            eprintln!("jux: warning: no package being built declares the feature `{feature}`");
+        }
+    }
+    let root_defaults = std::env::var_os("JUX_NO_DEFAULT_FEATURES").is_none();
+    // name -> (manifest, requested features, default set included)
+    let mut packages: BTreeMap<String, (Manifest, BTreeSet<String>, bool)> = BTreeMap::new();
+    let mut work = Vec::new();
+    for m in roots {
+        let requested = cli.iter().filter(|f| m.features.contains_key(*f)).cloned().collect();
+        packages.insert(m.package.name.clone(), ((*m).clone(), requested, root_defaults));
+        work.push(m.package.name.clone());
+    }
+    while let Some(name) = work.pop() {
+        let Some((m, _, _)) = packages.get(&name) else { continue };
+        let m = m.clone();
+        for dep in &m.dependencies {
+            if crate::stubs::foreign_dep_kind(&dep.name).is_some() {
+                continue;
+            }
+            // The build resolves (and, for git, fetches) these itself; one
+            // that cannot be found here has no sources to decide anything in.
+            let dir = match (&dep.path, &dep.git) {
+                (Some(p), _) => p.clone(),
+                (None, Some(_)) => match crate::git_deps::fetch_git_dep(dep, false) {
+                    Ok(dir) => dir,
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+            let Some(dep_manifest) = Manifest::load(&dir) else { continue };
+            let key = dep_manifest.package.name.clone();
+            let fresh = !packages.contains_key(&key);
+            let entry = packages
+                .entry(key.clone())
+                .or_insert_with(|| (dep_manifest, BTreeSet::new(), false));
+            let before = (entry.1.len(), entry.2);
+            entry.1.extend(dep.features.iter().cloned());
+            entry.2 |= dep.default_features;
+            if fresh || (entry.1.len(), entry.2) != before {
+                work.push(key);
+            }
+        }
+    }
+    packages.values().fold(crate::cfg::CfgFacts::new(release, profile), |facts, (m, requested, defaults)| {
+        facts.with_package_features(m.project_root.clone(), m.enabled_features(requested, *defaults))
+    })
 }
 
 /// Resolve a STANDALONE package's `[dependencies]` (path + git, §B.2.2)

@@ -61,10 +61,16 @@ struct AnnotationType {
 ///
 /// `sources` is the user's own files; the stdlib and stubs are not scanned
 /// because annotations are applied in user code.
-pub fn synthesize_registry(sources: &[SourceFile]) -> SourceFile {
+pub fn synthesize_registry(sources: &[SourceFile], cfg: &crate::cfg::CfgFacts) -> SourceFile {
+    // A declaration this build leaves out has no annotations to record, and
+    // a registry row naming it would not compile.
     let units: Vec<juxc_ast::CompilationUnit> = sources
         .iter()
-        .map(|s| juxc_parse::parse(&juxc_lex::lex(s).tokens).ast)
+        .map(|s| {
+            let mut unit = juxc_parse::parse(&juxc_lex::lex(s).tokens).ast;
+            crate::cfg::apply_quiet(&mut unit, cfg, s.path());
+            unit
+        })
         .collect();
 
     let types = collect_annotation_types(&units);

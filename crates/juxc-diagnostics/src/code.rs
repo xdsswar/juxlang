@@ -17,6 +17,10 @@ pub enum Code {
     E0101_UnterminatedString,
     /// E0102 — Invalid digit separator placement.
     E0102_BadDigitSeparator,
+    /// E0150 -- A malformed `@cfg(...)` / `if cfg(...)` predicate: an unknown
+    /// key or flag, a value that is not a literal, or `all` / `any` / `not`
+    /// used with the wrong shape (JUX-LANG-V1 11.2, grammar A.2.10).
+    E0150_InvalidCfgPredicate,
 
     // ---- Syntax (E0200–E0299) ----
     /// E0200 — Unexpected token.
@@ -777,6 +781,7 @@ impl Code {
             Code::E0100_InvalidCharacter         => "E0100",
             Code::E0101_UnterminatedString       => "E0101",
             Code::E0102_BadDigitSeparator        => "E0102",
+            Code::E0150_InvalidCfgPredicate      => "E0150",
             Code::E0200_UnexpectedToken          => "E0200",
             Code::E0201_NestingTooDeep           => "E0201",
             Code::E0202_NumericLiteralOutOfRange => "E0202",

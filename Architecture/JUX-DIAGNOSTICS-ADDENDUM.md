@@ -323,7 +323,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0103`  | Invalid Unicode escape (surrogate code point) *(reserved)*| Grammar §A.1.5                 |
 | `E0104`  | Block comment never terminated *(reserved)*          | Grammar §A.1.2                 |
 | `E0105`  | Numeric literal out of range for its declared type *(reserved)*| Grammar §A.1.4                 |
-| `E0150`  | Invalid `@cfg(...)` predicate syntax *(reserved)*    | Pipeline §C.2.5                |
+| `E0150`  | Invalid `@cfg(...)` / `if cfg(...)` predicate: unknown key or flag, non-literal value, malformed `all`/`any`/`not` | Pipeline §C.2.5 |
 
 ### Syntax (`E0200–E0299`)
 

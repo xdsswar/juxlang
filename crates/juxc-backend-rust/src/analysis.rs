@@ -1004,6 +1004,8 @@ pub(crate) fn block_contains_await(block: &Block) -> bool {
 
 fn stmt_contains_await(stmt: &Stmt) -> bool {
     match stmt {
+        // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+        Stmt::IfCfg(_) => false,
         Stmt::Expr(e) | Stmt::Throw(e, _) => expr_contains_await(e),
         Stmt::Return(Some(e), _) => expr_contains_await(e),
         Stmt::Return(None, _) => false,
@@ -1712,6 +1714,8 @@ pub(crate) fn body_calls_mut_method_on_this(
 
 fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> bool {
     match stmt {
+        // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
+        Stmt::IfCfg(_) => false,
         Stmt::Expr(e) | Stmt::Return(Some(e), _) => expr_calls_mut_method_on_this(e, mut_methods),
         Stmt::Return(None, _) => false,
         Stmt::VarDecl(v) => v

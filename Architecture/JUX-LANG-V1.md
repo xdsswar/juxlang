@@ -4297,6 +4297,17 @@ Consumers enable features in their own `jux.toml`:
 
 The compiler includes only the code for enabled features; everything else is stripped.
 
+A build enables features on the command line too: `jux build --features json,yaml` adds them to the package's `default` set, and `--no-default-features` leaves that set off (`jux run`, `jux test` and `jux check` take the same flags). How a dependency's features are decided is JUX-BUILD-SYSTEM-ADDENDUM §B.8.
+
+### 11.6.1. How Predicates Are Decided
+
+- **Target facts.** `os`, `arch`, `endian`, `pointer_width` and `target` describe the target being built: the triple given by `--target` or `[build] target`, and otherwise the machine running the compiler. From a triple, `arch` is the architecture family the table in §11.2 uses (`thumbv7em-none-eabihf` is `armv7`, `i686-...` is `x86`, `riscv32imac-...` is `riscv32`), and `os` is `windows`, `linux`, `android`, `macos`, `ios`, `freebsd`, `netbsd`, `openbsd`, `wasi`, or `none` for bare metal. Values compare without regard to case.
+- **Build facts.** `debug` and `release` follow the build's optimization (`--release`, or `[build] optimization`); `profile` is `[build] profile`. A flag may also be written `debug = "true"`.
+- **Combining.** The arguments of one `@cfg(...)` must all hold, and so must every `@cfg` on one declaration. `not(...)` takes exactly one predicate.
+- **Errors.** An unknown key or flag, a value that is not a literal, or a malformed `all` / `any` / `not` is `E0150`. The declaration or branch it guards is then kept, so the rest of it is still checked.
+- **What may carry `@cfg`.** Top-level declarations of every kind, imports, and the members of a type: fields, methods, constructors, properties, enum and record members, nested types, and methods of an anonymous class.
+- **`if cfg`.** Only the statement form exists. The selected branch replaces the whole statement as a block, so declarations inside it stay local to it; with no branch selected, nothing is left. After `else`, another `if` of either kind may follow, as in an ordinary chain.
+
 ### 11.7. Cross-Platform Example
 
 ```java

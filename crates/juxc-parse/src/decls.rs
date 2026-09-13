@@ -545,6 +545,16 @@ impl<'a> Parser<'a> {
         if name.segments.is_empty() {
             return None;
         }
+        // `@cfg` takes a predicate, not ordinary arguments: `any(os = "linux")`
+        // nests the `key = value` form, which no expression can spell.
+        if name.segments.len() == 1
+            && name.segments[0].text.eq_ignore_ascii_case("cfg")
+            && self.at(&TokenKind::LParen)
+        {
+            let args = self.parse_cfg_predicate_list();
+            let end = self.last_consumed_span();
+            return Some(juxc_ast::Annotation { name, args, span: start.join(end) });
+        }
         let mut args = Vec::new();
         if self.eat(&TokenKind::LParen) {
             if !self.at(&TokenKind::RParen) {
@@ -562,10 +572,108 @@ impl<'a> Parser<'a> {
         Some(juxc_ast::Annotation { name, args, span: start.join(end) })
     }
 
+    /// `( cfg-pred , … )` (grammar A.2.10), from the `(` through the `)`.
+    ///
+    /// Each predicate comes back in annotation-argument form, which is what
+    /// `@cfg(...)` and `if cfg(...)` both hold: `key = "value"` is a named
+    /// argument, a bare flag is a path, and `all(...)` / `any(...)` / `not(...)`
+    /// is a call whose named arguments are its `key = "value"` leaves.
+    pub(crate) fn parse_cfg_predicate_list(&mut self) -> Vec<juxc_ast::AnnotationArg> {
+        let mut out = Vec::new();
+        self.expect(&TokenKind::LParen, "'(' to open the cfg predicate");
+        while !self.at(&TokenKind::RParen) && !self.at_eof() {
+            match self.parse_cfg_predicate() {
+                Some(p) => out.push(p),
+                None => {
+                    // Skip to the next separator so one bad leaf is one error,
+                    // and leave `null` in its place: the evaluator takes it as
+                    // an already-reported predicate rather than an empty list.
+                    out.push(juxc_ast::AnnotationArg::Positional(Expr::Literal(juxc_ast::Literal::Null)));
+                    while !matches!(self.peek(), TokenKind::Comma | TokenKind::RParen) && !self.at_eof() {
+                        self.advance();
+                    }
+                }
+            }
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RParen, "')' to close the cfg predicate");
+        out
+    }
+
+    /// One `cfg-pred`: `key = literal`, a flag, or `all` / `any` / `not` with a
+    /// nested list. Which keys and flags exist is the evaluator's business; the
+    /// parser only fixes the shape.
+    fn parse_cfg_predicate(&mut self) -> Option<juxc_ast::AnnotationArg> {
+        let start = self.peek_span();
+        if !matches!(self.peek(), TokenKind::Ident(_)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0150_InvalidCfgPredicate,
+                    "expected a cfg predicate: `key = \"value\"`, a flag such as `debug`, \
+                     or `all(...)`, `any(...)`, `not(...)`",
+                )
+                .with_span(start),
+            );
+            return None;
+        }
+        let name = self.parse_ident()?;
+        if self.eat(&TokenKind::Eq) {
+            let value = match self.peek().clone() {
+                TokenKind::Str(text) => juxc_ast::Literal::String(text),
+                TokenKind::Int(text) => juxc_ast::Literal::Int(crate::literals::parse_int_literal_text(&text)),
+                TokenKind::Bool(b) => juxc_ast::Literal::Bool(b),
+                _ => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0150_InvalidCfgPredicate,
+                            format!(
+                                "the value of `{}` in a cfg predicate must be a literal, \
+                                 such as `\"linux\"`",
+                                name.text
+                            ),
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                    return None;
+                }
+            };
+            self.advance();
+            return Some(juxc_ast::AnnotationArg::Named { name, value: Expr::Literal(value) });
+        }
+        if self.at(&TokenKind::LParen) {
+            let (args, arg_names): (Vec<Expr>, Vec<Option<juxc_ast::Ident>>) = self
+                .parse_cfg_predicate_list()
+                .into_iter()
+                .map(|p| match p {
+                    juxc_ast::AnnotationArg::Named { name, value } => (value, Some(name)),
+                    juxc_ast::AnnotationArg::Positional(e) => (e, None),
+                })
+                .unzip();
+            let span = start.join(self.last_consumed_span());
+            return Some(juxc_ast::AnnotationArg::Positional(Expr::Call(juxc_ast::CallExpr {
+                callee: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    span: name.span,
+                    segments: vec![name],
+                })),
+                explicit_generic_args: Vec::new(),
+                args,
+                arg_names,
+                eval_order: Vec::new(),
+                span,
+            })));
+        }
+        Some(juxc_ast::AnnotationArg::Positional(Expr::Path(juxc_ast::QualifiedName {
+            span: name.span,
+            segments: vec![name],
+        })))
+    }
+
     fn parse_single_annotation_arg(&mut self) -> Option<juxc_ast::AnnotationArg> {
         // Named arg shape — `identifier '=' expression`. Detected by
         // peeking two tokens ahead so the bare-identifier expression
-        // case still works for `@Cfg(linux)` etc.
+        // case still works for `@Name(CONSTANT)` etc.
         let is_named = matches!(
             (
                 self.tokens.get(self.pos).map(|t| &t.kind),

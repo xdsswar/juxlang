@@ -193,8 +193,9 @@ Module-level resolution happens once per compilation; nested-scope resolution is
 `@cfg(...)` annotations are evaluated **early** — before type checking, so that excluded code is not subjected to type checking against APIs the current target lacks.
 
 - For each declaration with `@cfg(...)`: evaluate the predicate against the build target's facts. If false, drop the declaration entirely.
-- For `if cfg(...)` at expression/statement position: evaluate the predicate. If false, replace the entire `if cfg(...)` block with a no-op (statement form) or a placeholder of the result type (expression form). The dead branch is **not parsed for type errors**, but it **is parsed** — syntax must remain valid.
+- For `if cfg(...)` in statement position: evaluate the predicate and replace the statement with the branch it selects, or with nothing. The dead branch is **not checked for type errors**, but it **is parsed**, so its syntax must be valid. (The grammar has no expression form of `if cfg`.)
 - Two declarations sharing a name with mutually-exclusive `@cfg` are not a duplicate-name error: at most one survives.
+- Phase 1 runs this pass right after parsing, before name resolution, over every unit of the build except declaration stubs. The facts it decides against (target, optimization, profile, enabled features per package) are listed in JUX-LANG-V1 §11.6.1; an invalid predicate is `E0150`. The compile-time annotation registry (JUX-ANNOTATIONS-ADDENDUM §A.8) is generated from the same pruned tree, so it never names a declaration the build left out.
 
 ### C.2.6. Build Profile Application
 

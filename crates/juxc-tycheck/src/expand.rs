@@ -209,6 +209,8 @@ fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
             expand_block(&mut f.body, plans);
         }
         Stmt::Break(..) | Stmt::Continue(..) => {}
+        // Resolved to its branch by the driver's cfg pass before this runs.
+        Stmt::IfCfg(_) => {}
     }
 }
 

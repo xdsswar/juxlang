@@ -2149,6 +2149,8 @@ pub fn infer_block(block: &Block, env: &mut TypeEnv, symbols: &SymbolTable) {
 /// loop-vars and pattern-bindings don't leak.
 fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
     match stmt {
+        // Resolved to its branch by the driver's cfg pass before this runs.
+        Stmt::IfCfg(_) => {}
         Stmt::VarDecl(v) => {
             // Prefer the declared type when present; otherwise infer
             // from the initializer.

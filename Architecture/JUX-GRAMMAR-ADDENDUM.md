@@ -479,7 +479,7 @@ expression-stmt   = expression ';'
 if-stmt           = 'if' '(' expression ')' statement
                     ( 'else' statement )?
                   | 'if' 'cfg' '(' cfg-pred ')' block
-                    ( 'else' block )?                              -- compile-time
+                    ( 'else' ( block | if-stmt ) )?                -- compile-time
 
 switch-stmt       = 'switch' '(' expression ')' '{' switch-case+ '}'
 switch-case       = 'case' pattern guard? '->' switch-body

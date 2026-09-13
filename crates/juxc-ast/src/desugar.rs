@@ -500,6 +500,14 @@ fn rewrite_block_implicit_this(
             Stmt::Block(b) | Stmt::Unsafe(b) => {
                 rewrite_block_implicit_this(b, members, &mut locals.clone());
             }
+            // Both branches of a compile-time `if cfg`: which one survives is
+            // decided later, and whichever it is has to be desugared.
+            Stmt::IfCfg(c) => {
+                rewrite_block_implicit_this(&mut c.then_block, members, &mut locals.clone());
+                if let Some(b) = &mut c.else_block {
+                    rewrite_block_implicit_this(b, members, &mut locals.clone());
+                }
+            }
             Stmt::ForC(f) => {
                 // The whole loop opens a fresh scope (init declarations are
                 // loop-local). Rewrite init/cond/update/body against it.
@@ -720,6 +728,12 @@ fn rewrite_stmt_property_writes(
             }
         }
         Stmt::Block(b) | Stmt::Unsafe(b) => rewrite_block_property_writes(b, auto_props),
+        Stmt::IfCfg(c) => {
+            rewrite_block_property_writes(&mut c.then_block, auto_props);
+            if let Some(b) = &mut c.else_block {
+                rewrite_block_property_writes(b, auto_props);
+            }
+        }
         Stmt::ForC(f) => {
             if let Some(init) = f.init.as_deref_mut() {
                 rewrite_stmt_property_writes(init, auto_props);
