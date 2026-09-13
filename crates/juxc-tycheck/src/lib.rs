@@ -289,6 +289,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_ctor_selections = std::collections::HashMap::new();
     let mut all_method_selections = std::collections::HashMap::new();
     let mut all_function_selections = std::collections::HashMap::new();
+    let mut all_typed_assert_throws = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
@@ -306,12 +307,14 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             ctor_selections,
             method_selections,
             function_selections,
+            typed_assert_throws,
         ) = checker.into_maps();
         all_expr_types.extend(expr_types);
         all_call_expansions.extend(call_expansions);
         all_ctor_selections.extend(ctor_selections);
         all_method_selections.extend(method_selections);
         all_function_selections.extend(function_selections);
+        all_typed_assert_throws.extend(typed_assert_throws);
         for d in &mut tc.diagnostics[before..] {
             d.file = Some(idx);
         }
@@ -323,6 +326,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     symbols.ctor_selections = all_ctor_selections;
     symbols.method_selections = all_method_selections;
     symbols.function_selections = all_function_selections;
+    symbols.typed_assert_throws = all_typed_assert_throws;
     TypeCheckResult {
         diagnostics: tc.diagnostics,
         symbols,

@@ -93,6 +93,11 @@ pub struct SymbolTable {
     /// -> index into [`Self::function_overloads`]. The mirror of
     /// [`Self::method_selections`], read by the backend at call emission.
     pub function_selections: HashMap<juxc_source::Span, usize>,
+    /// Typed `assertThrows<E>(f)` calls (JUX-TESTING-ADDENDUM §TS.3) found by
+    /// the checker -- call span -> the FQN of the exception class `E`. The
+    /// backend lowers each one at the call site to the type dispatch a
+    /// `catch (E e)` clause uses; a generic library function could not.
+    pub typed_assert_throws: HashMap<juxc_source::Span, String>,
     /// Type aliases (`type Name<...>? = TypeRef;`) indexed by FQN.
     /// Tycheck expands a reference to an alias into its target
     /// before further inference — `Ty::User` never holds an alias

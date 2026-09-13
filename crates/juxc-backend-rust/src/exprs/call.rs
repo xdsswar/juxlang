@@ -551,6 +551,72 @@ impl RustEmitter {
         self.w.push_str("std::panic::resume_unwind(__jux_p) }; ");
     }
 
+    /// Lower the typed `assertThrows<E>(f)` (JUX-TESTING-ADDENDUM §TS.3).
+    ///
+    /// ```text
+    /// match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (f)())) {
+    ///     Ok(_) => panic!("assertThrows: expected `E`, but no exception was thrown"),
+    ///     Err(__jux_p) => '__jux_thrown: {
+    ///         let __jux_p = match __jux_p.downcast::<E>() { Ok(__jux_e) => break '__jux_thrown *__jux_e, Err(__jux_p) => __jux_p };
+    ///         let __jux_p = match __jux_p.downcast::<Sub>() { Ok(__jux_e) => break '__jux_thrown (*__jux_e).__parent, Err(__jux_p) => __jux_p };
+    ///         std::panic::resume_unwind(__jux_p)
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The same dispatch a `catch (E e)` clause gets: `Any::downcast` is
+    /// exact-type, so every known subclass is tried by name and sliced down to
+    /// its `E` part. Anything else, another exception or an assertion failure
+    /// inside `f`, is re-raised untouched and fails the test on its own terms.
+    fn emit_typed_assert_throws(&mut self, call: &CallExpr, exception_fqn: &str) {
+        let bare = exception_fqn.rsplit('.').next().unwrap_or(exception_fqn);
+        // The argument goes through the ordinary argument path, against the
+        // library function's `() -> void` parameter. A lambda written in place
+        // IS the closure `catch_unwind` runs, emitted bare (no `Rc` to build
+        // and call at once); any other function value is called inside one.
+        self.w
+            .push_str("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(");
+        if matches!(call.args.first(), Some(Expr::Lambda(_))) {
+            self.lambda_bare_target = true;
+            self.emit_call_args(call);
+        } else {
+            self.w.push_str("|| (");
+            self.emit_call_args(call);
+            self.w.push_str(")()");
+        }
+        self.w.push_str(")) {\n");
+        self.w.indent_inc();
+        self.w.line(&format!(
+            "Ok(_) => panic!(\"assertThrows: expected `{bare}`, but no exception was thrown\"),"
+        ));
+        self.w.line("Err(__jux_p) => '__jux_thrown: {");
+        self.w.indent_inc();
+        let mut candidates = vec![exception_fqn.to_string()];
+        candidates.extend(self.subclass_fqns_of(exception_fqn));
+        for class in candidates {
+            let depth = self.extends_chain_distance(&class, exception_fqn).unwrap_or(0);
+            self.w.emit_indent();
+            self.w.push_str("let __jux_p = match __jux_p.downcast::<");
+            self.emit_fqn_path_in_rust(&class, class.contains('.'));
+            self.w.push_str(">() { Ok(__jux_e) => break '__jux_thrown ");
+            if depth == 0 {
+                self.w.push_str("*__jux_e");
+            } else {
+                self.w.push_str("(*__jux_e)");
+                for _ in 0..depth {
+                    self.w.push_str(".__parent");
+                }
+            }
+            self.w.push_str(", Err(__jux_p) => __jux_p };\n");
+        }
+        self.w.line("std::panic::resume_unwind(__jux_p)");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push('}');
+    }
+
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
         // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
         // field chain. Re-shape the receiver into the class path it names, so
@@ -567,6 +633,12 @@ impl RustEmitter {
                     return self.emit_call(&reshaped);
                 }
             }
+        }
+        // `assertThrows<E>(f)` (§TS.3): the checker resolved the call and
+        // recorded `E`; the dispatch it needs is written out here.
+        if let Some(exception) = self.symbols.typed_assert_throws.get(&call.span).cloned() {
+            self.emit_typed_assert_throws(call, &exception);
+            return;
         }
         // **Statement-scoped handle guard (§6.5.1).** A call on a collection
         // handle reaches through a `RefCell`, and the guard it creates is an

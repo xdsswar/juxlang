@@ -69,8 +69,8 @@ impl NamedToken {
 pub const BUILTIN_ANNOTATIONS: &[&str] = &[
     // §7.4 — verified against the supertype chain.
     "Override",
-    // §TS.1 — the testing framework's case and lifecycle hooks.
-    "Test", "BeforeAll", "BeforeEach", "AfterEach", "AfterAll",
+    // §TS.1 — the testing framework's case, lifecycle hooks, and skip marker.
+    "Test", "BeforeAll", "BeforeEach", "AfterEach", "AfterAll", "Ignore",
     // FFI and layout (§8.1, §8.4, §L.1.3).
     "extern", "export", "layout",
 ];
@@ -296,8 +296,8 @@ mod tests {
         assert_eq!(
             sorted,
             [
-                "AfterAll", "AfterEach", "BeforeAll", "BeforeEach", "Override",
-                "Test", "export", "extern", "layout",
+                "AfterAll", "AfterEach", "BeforeAll", "BeforeEach", "Ignore",
+                "Override", "Test", "export", "extern", "layout",
             ],
             "the honored-annotation set changed -- update the editor's list too",
         );

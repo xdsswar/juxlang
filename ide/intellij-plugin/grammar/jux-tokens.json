@@ -240,6 +240,7 @@
     "BeforeEach",
     "AfterEach",
     "AfterAll",
+    "Ignore",
     "extern",
     "export",
     "layout"

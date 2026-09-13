@@ -250,6 +250,15 @@ pub fn field_chain_class_path(
     Some(juxc_ast::QualifiedName { segments, span })
 }
 
+/// The library function a call with ONE explicit type argument turns into the
+/// typed `assertThrows<E>(f)` (JUX-TESTING-ADDENDUM §TS.3). Resolved, not
+/// spelled: an alias of this function is the typed form too, and a user
+/// function that happens to share the name is not.
+pub const TYPED_ASSERT_THROWS_FQN: &str = "jux.std.testing.assertThrows";
+
+/// The root of the throwable hierarchy `assertThrows<E>` accepts.
+pub const EXCEPTION_FQN: &str = "jux.std.exceptions.Exception";
+
 /// The fully-qualified name a bare TYPE name means in `env`: an import or
 /// same-package sibling, the name itself, or a same-package-preferring scan.
 /// The owner-resolution step of nested-type access, shared with
@@ -897,6 +906,11 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     .unwrap_or(Ty::Unknown);
             }
             if let Some((fqn, only)) = symbols.lookup_function(name) {
+                // `assertThrows<E>(f)` returns what it caught, typed as `E`
+                // (§TS.3). The library function itself is not generic.
+                if fqn == TYPED_ASSERT_THROWS_FQN && c.explicit_generic_args.len() == 1 {
+                    return ty_from_ref(&c.explicit_generic_args[0], env, symbols);
+                }
                 // An overloaded name (§T.3.1) resolves to one member, and
                 // members may differ in their return type -- `show(int)` and
                 // `show(String)` need not both return `String`.

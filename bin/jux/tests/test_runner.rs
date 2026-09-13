@@ -165,3 +165,159 @@ public void floatsNear() {
         "filtered-out test must not run:\n{out}",
     );
 }
+
+/// `@Ignore` and the typed `assertThrows<E>` (§TS.1, §TS.3, §TS.7).
+///
+/// 1. an ignored test is reported, counted, and never run, with or without a
+///    reason, and its hooks do not run for it;
+/// 2. `assertThrows<E>` passes for `E` and for a subclass of `E`, returning
+///    the exception typed as `E` (so `e.column` needs no type test);
+/// 3. it fails when nothing is thrown, and lets an exception of another type
+///    escape with that exception's own report line;
+/// 4. a filter that selects only ignored tests still reports them, and the
+///    run exits 0.
+#[test]
+fn jux_test_ignore_and_typed_assert_throws() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .join("target")
+        .join("it-jux-test-ignore");
+    let _ = std::fs::remove_dir_all(&root);
+
+    write(
+        &root.join("jux.toml"),
+        "[package]\nname = \"com.test.parse\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        &root.join("src/com/test/parse/parse.jux"),
+        r#"package com.test.parse;
+
+public class ParseError extends RuntimeException {
+    public int column;
+
+    public ParseError(String message, int column) {
+        super(message);
+        this.column = column;
+    }
+}
+
+public class TrailingOperator extends ParseError {
+    public TrailingOperator(int column) {
+        super("trailing operator", column);
+    }
+}
+
+public int parse(String text) {
+    if (text.endsWith("+")) {
+        throw new TrailingOperator(text.length());
+    }
+    if (text.isEmpty()) {
+        throw new ParseError("empty input", 0);
+    }
+    if (text == "boom") {
+        throw new IllegalStateException("not a parse error");
+    }
+    return 1;
+}
+"#,
+    );
+    write(
+        &root.join("src/main.jux"),
+        "import com.test.parse.{parse};\n\npublic void main() {\n    print(parse(\"1\"));\n}\n",
+    );
+    write(
+        &root.join("test/parse_test.jux"),
+        r#"import com.test.parse.{parse, ParseError, TrailingOperator};
+import jux.std.testing.{assertEqual, assertThrows as expectThrown};
+
+@BeforeEach
+public void setUp() {
+    print("[hook beforeEach]");
+}
+
+@Test
+public void subclassIsCaughtAsBase() {
+    var e = expectThrown<ParseError>(() -> parse("1 +"));
+    assertEqual(3, e.column);
+    assertEqual("trailing operator", e.getMessage());
+}
+
+@Test
+public void exactClassFromABlockLambda() {
+    var e = expectThrown<TrailingOperator>(() -> {
+        var total = parse("1");
+        parse("2+");
+    });
+    assertEqual(2, e.column);
+}
+
+@Test
+public void theRootException() {
+    var e = expectThrown<Exception>(() -> parse(""));
+    assertEqual("empty input", e.getMessage());
+}
+
+@Test
+public void nothingThrown() {
+    expectThrown<ParseError>(() -> parse("1"));
+}
+
+@Test
+public void anotherTypeEscapes() {
+    expectThrown<ParseError>(() -> parse("boom"));
+}
+
+@Test
+@Ignore("needs the network")
+public void slowWithReason() {
+    assertEqual(1, 2);
+}
+
+@Ignore
+@Test
+public void slowWithoutReason() {
+    assertEqual(1, 2);
+}
+"#,
+    );
+
+    // 1-3. Full run: two failures, two ignored tests, exact output.
+    let (ok, out) = jux_test(&root, &[]);
+    assert!(!ok, "run with failing tests must exit non-zero:\n{out}");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("jux:"))
+        .collect();
+    assert_eq!(
+        lines.as_slice(),
+        [
+            "running 7 tests",
+            "[hook beforeEach]",
+            "PASS subclassIsCaughtAsBase",
+            "[hook beforeEach]",
+            "PASS exactClassFromABlockLambda",
+            "[hook beforeEach]",
+            "PASS theRootException",
+            "[hook beforeEach]",
+            "FAIL nothingThrown: assertThrows: expected `ParseError`, but no exception was thrown",
+            "[hook beforeEach]",
+            "FAIL anotherTypeEscapes: jux.std.exceptions.IllegalStateException: not a parse error",
+            "IGNORED slowWithReason: needs the network",
+            "IGNORED slowWithoutReason",
+            "test result: FAILED. 3 passed; 2 failed; 2 ignored",
+        ],
+        "unexpected jux test output:\n{out}",
+    );
+
+    // 4. Only ignored tests selected: reported, exit 0, filtered count last.
+    let (ok, out) = jux_test(&root, &["slow"]);
+    assert!(ok, "a run of ignored tests must pass:\n{out}");
+    assert!(
+        out.contains("test result: ok. 0 passed; 0 failed; 2 ignored; 5 filtered out"),
+        "ignored + filtered summary:\n{out}",
+    );
+    assert!(!out.contains("[hook beforeEach]"), "no hooks for ignored tests:\n{out}");
+}

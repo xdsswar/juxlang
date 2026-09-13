@@ -1,0 +1,14 @@
+import jux.std.testing.{assertThrows};
+
+public int parse(String text) {
+    if (text.isEmpty()) {
+        throw new IllegalArgumentException("empty input");
+    }
+    return 1;
+}
+
+public void main() {
+    var ok = assertThrows<IllegalArgumentException>(() -> parse(""));
+    var notAnException = assertThrows<String>(() -> parse(""));
+    var twoArguments = assertThrows<IllegalArgumentException, String>(() -> parse(""));
+}

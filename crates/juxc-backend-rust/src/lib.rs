@@ -5303,12 +5303,39 @@ impl RustEmitter {
         // (§TS.5). `call` is the Rust path (`pkg::fn`), `display` the
         // package-qualified Jux name (`pkg.fn`).
         struct UnitPlan {
-            tests: Vec<(String, String, bool)>, // (call, display, is_async)
+            tests: Vec<PlannedTest>,
             before_each: Vec<(String, bool)>,
             after_each: Vec<(String, bool)>,
             before_all: Vec<(String, bool)>,
             after_all: Vec<(String, bool)>,
         }
+        /// One `@Test`: the Rust path it is called by, the package-qualified
+        /// Jux name it is reported under, and whether it is driven through the
+        /// executor. `ignored` is `Some(reason)` for an `@Ignore`d test, the
+        /// reason being empty when the annotation gave none (§TS.1).
+        struct PlannedTest {
+            call: String,
+            display: String,
+            is_async: bool,
+            ignored: Option<String>,
+        }
+        // `@Ignore("reason")`: the reason is the first positional string
+        // literal. Any other argument shape reports the test without one.
+        let ignore_reason = |f: &juxc_ast::FnDecl| -> Option<String> {
+            let ann = f.annotations.iter().find(|a| {
+                a.name
+                    .segments
+                    .last()
+                    .is_some_and(|seg| seg.text.eq_ignore_ascii_case("Ignore"))
+            })?;
+            let reason = ann.args.iter().find_map(|arg| match arg {
+                juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Literal(juxc_ast::Literal::String(s))) => {
+                    Some(s.clone())
+                }
+                _ => None,
+            });
+            Some(reason.unwrap_or_default())
+        };
         let mut plans: Vec<UnitPlan> = Vec::new();
         for unit in units {
             let pkg: Vec<&str> = unit
@@ -5332,8 +5359,12 @@ impl RustEmitter {
                 let is_async = matches!(fn_decl.return_type, juxc_ast::ReturnType::AsyncType(_),);
                 let call = format!("{rust_prefix}{}", fn_decl.name.text);
                 if has_ann(fn_decl, "Test") {
-                    let display = format!("{jux_prefix}{}", fn_decl.name.text);
-                    plan.tests.push((call, display, is_async));
+                    plan.tests.push(PlannedTest {
+                        call,
+                        display: format!("{jux_prefix}{}", fn_decl.name.text),
+                        is_async,
+                        ignored: ignore_reason(fn_decl),
+                    });
                 } else if has_ann(fn_decl, "BeforeEach") {
                     plan.before_each.push((call, is_async));
                 } else if has_ann(fn_decl, "AfterEach") {
@@ -5408,12 +5439,12 @@ impl RustEmitter {
         self.w.push_str("let __jux_names: [&str; ");
         self.w.push_str(&total.to_string());
         self.w.push_str("] = [");
-        for (i, (_, display, _)) in plans.iter().flat_map(|p| p.tests.iter()).enumerate() {
+        for (i, test) in plans.iter().flat_map(|p| p.tests.iter()).enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
             }
             self.w.push('"');
-            self.w.push_str(display);
+            self.w.push_str(&test.display);
             self.w.push('"');
         }
         self.w.push_str("];\n");
@@ -5422,6 +5453,14 @@ impl RustEmitter {
         self.w.line("println!(\"running {} tests\", __jux_total);");
         self.w.line("let mut __jux_passed: i64 = 0;");
         self.w.line("let mut __jux_failed: i64 = 0;");
+        // `mut` only when something can bump it, so a run with no `@Ignore`
+        // reads (and compiles) exactly as it did before the counter existed.
+        let any_ignored = plans.iter().flat_map(|p| p.tests.iter()).any(|t| t.ignored.is_some());
+        self.w.line(if any_ignored {
+            "let mut __jux_ignored: i64 = 0;"
+        } else {
+            "let __jux_ignored: i64 = 0;"
+        });
 
         for (ui, plan) in plans.iter().enumerate() {
             // Lazy once-per-file BeforeAll (§TS.5) — runs inside the
@@ -5429,7 +5468,23 @@ impl RustEmitter {
             // fails that test.
             self.w
                 .line(&format!("let mut __jux_unit{ui}_started = false;"));
-            for (call, display, is_async) in &plan.tests {
+            for PlannedTest { call, display, is_async, ignored } in &plan.tests {
+                // An ignored test is reported and counted, and nothing else:
+                // no hooks, and it does not start the file's `BeforeAll`.
+                if let Some(reason) = ignored {
+                    let line = if reason.is_empty() {
+                        format!("  IGNORED {display}")
+                    } else {
+                        format!("  IGNORED {display}: {reason}")
+                    };
+                    // `{:?}` spells the text as a Rust string literal, so a
+                    // quote or a brace in the reason cannot break the emitted
+                    // `println!`.
+                    self.w.line(&format!(
+                        "if __jux_match(\"{display}\") {{ println!(\"{{}}\", {line:?}); __jux_ignored += 1; }}"
+                    ));
+                    continue;
+                }
                 self.w.line(&format!("if __jux_match(\"{display}\") {{"));
                 self.w.indent_inc();
                 self.w.emit_indent();
@@ -5503,14 +5558,21 @@ impl RustEmitter {
                 self.w.line("}");
             }
         }
-        // Summary + exit code (§TS.7); `; N filtered out` when a
-        // filter was active.
+        // Summary + exit code (§TS.7): `; N ignored` when a test was
+        // ignored, then `; N filtered out` when a filter was active.
         self.w.line("println!();");
         self.w
             .line("let __jux_filtered = __jux_names.len() - __jux_total;");
         self.w.line(
-            "if __jux_filtered > 0 { println!(\"test result: {}. {} passed; {} failed; {} filtered out\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed, __jux_filtered); } else { println!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed); }",
+            "let mut __jux_summary = format!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed);",
         );
+        self.w.line(
+            "if __jux_ignored > 0 { __jux_summary.push_str(&format!(\"; {} ignored\", __jux_ignored)); }",
+        );
+        self.w.line(
+            "if __jux_filtered > 0 { __jux_summary.push_str(&format!(\"; {} filtered out\", __jux_filtered)); }",
+        );
+        self.w.line("println!(\"{}\", __jux_summary);");
         self.w
             .line("if __jux_failed > 0 { std::process::exit(1); }");
         self.w.indent_dec();

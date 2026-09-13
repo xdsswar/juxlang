@@ -383,6 +383,9 @@ pub(crate) struct Checker<'a> {
     /// absorbed into `SymbolTable::function_selections`. The same
     /// mechanism as `method_selections`, for the other kind of callee.
     pub(crate) function_selections: HashMap<Span, usize>,
+    /// Typed `assertThrows<E>(f)` calls (§TS.3): call span -> the FQN of `E`,
+    /// absorbed into `SymbolTable::typed_assert_throws`.
+    pub(crate) typed_assert_throws: HashMap<Span, String>,
     /// Names the block being checked assigns to, anywhere inside it. Read by
     /// [`Self::narrowable`]: an assignment can put a null back, so a binding
     /// the block writes to is never narrowed by a null test (§7.10).
@@ -481,6 +484,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, usize>,
     HashMap<Span, usize>,
     HashMap<Span, usize>,
+    HashMap<Span, String>,
 );
 
 impl<'a> Checker<'a> {
@@ -497,6 +501,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
+            typed_assert_throws: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
             current_ctor: None,
             in_init_block: false,
@@ -612,6 +617,7 @@ impl<'a> Checker<'a> {
             self.ctor_selections,
             self.method_selections,
             self.function_selections,
+            self.typed_assert_throws,
         )
     }
 
@@ -5793,6 +5799,75 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The typed `assertThrows<E>(f)` (JUX-TESTING-ADDENDUM §TS.3): a call that
+    /// resolved to the library `assertThrows` with ONE explicit type argument.
+    ///
+    /// `E` must be `Exception` or a subclass (E0446, the bound the form
+    /// declares in prose); a valid call is recorded for the backend, which
+    /// lowers it to a `catch (E e)`-style dispatch. Returns whether the call
+    /// is the typed form at all, valid or not, so the caller does not also
+    /// report the type argument as one a non-generic function cannot take.
+    fn check_typed_assert_throws(&mut self, fqn: &str, c: &CallExpr) -> bool {
+        if fqn != crate::infer::TYPED_ASSERT_THROWS_FQN || c.explicit_generic_args.is_empty() {
+            return false;
+        }
+        // "not generic, remove the `<…>`" would be wrong advice here: one type
+        // argument is exactly what the typed form takes.
+        if c.explicit_generic_args.len() > 1 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0443_ExplicitTypeArgs,
+                    format!(
+                        "`assertThrows` takes one type argument, the exception it expects, \
+                         but {} were supplied (§TS.3)",
+                        c.explicit_generic_args.len()
+                    ),
+                )
+                .with_span(c.span),
+            );
+            return true;
+        }
+        let written = ty_from_ref(&c.explicit_generic_args[0], &self.env, self.symbols);
+        let exception = match &written {
+            Ty::User { name, generic_args } if generic_args.is_empty() => self
+                .resolve_class_fqn(name)
+                .filter(|class| self.extends_chain_reaches(class, crate::infer::EXCEPTION_FQN)),
+            _ => None,
+        };
+        match exception {
+            Some(class) => {
+                self.typed_assert_throws.insert(c.span, class);
+            }
+            None => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0446_GenericBoundNotSatisfied,
+                    format!(
+                        "`assertThrows<{written}>` needs an exception type, and `{written}` is not \
+                         `Exception` or a subclass of it (§TS.3)"
+                    ),
+                )
+                .with_span(c.span),
+            ),
+        }
+        true
+    }
+
+    /// Does the class `fqn`'s `extends` chain reach `ancestor` (itself
+    /// included)? Bounded, so a malformed cyclic chain cannot hang the check.
+    fn extends_chain_reaches(&self, fqn: &str, ancestor: &str) -> bool {
+        let mut cur = Some(fqn.to_string());
+        for _ in 0..=64 {
+            match cur {
+                Some(name) if name == ancestor => return true,
+                Some(name) => {
+                    cur = self.symbols.classes.get(&name).and_then(|c| c.extends_fqn.clone());
+                }
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// Validate an **explicit call-site type-argument list** against the
     /// callee's declared generic params (spec turbofish `id<int>(5)`).
     /// Emits **E0443** when the callee isn't generic (no params to bind)
@@ -6368,9 +6443,12 @@ impl<'a> Checker<'a> {
                     // §18.1.2: an async call must be awaited (E0705).
                     self.flag_unawaited_async_call(name, callee_async, c.span);
                     // Validate any explicit `<…>` turbofish against the
-                    // callee's declared type params (E0443).
+                    // callee's declared type params (E0443). The typed
+                    // `assertThrows<E>` form checks its own type argument, and
+                    // is otherwise the plain library call.
+                    let typed_assert_throws = self.check_typed_assert_throws(&fqn, c);
                     self.check_explicit_type_args(
-                        &c.explicit_generic_args,
+                        if typed_assert_throws { &[] } else { &c.explicit_generic_args },
                         &generic_params,
                         &format!("function `{name}`"),
                         c.span,

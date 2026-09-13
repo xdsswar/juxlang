@@ -1,0 +1,2 @@
+assert_throws_type_argument.jux:12:26: [E0446] error: `assertThrows<String>` needs an exception type, and `String` is not `Exception` or a subclass of it (§TS.3)
+assert_throws_type_argument.jux:13:24: [E0443] error: `assertThrows` takes one type argument, the exception it expects, but 2 were supplied (§TS.3)

@@ -21,6 +21,7 @@ classes, no inheritance from a framework type. An annotation marks them,
 | `@AfterEach`  | same                               | Runs after every `@Test` in the same file — **including failed ones**. |
 | `@BeforeAll`  | same                               | Runs once per file, before its first executed test. |
 | `@AfterAll`   | same                               | Runs once per file, after its last executed test. |
+| `@Ignore`     | a `@Test`, optionally `@Ignore("reason")` | The test is compiled but not run, and is reported as ignored (§TS.7). |
 
 - Annotation names are **case-insensitive** (`@test` ≡ `@Test`), like
   every built-in annotation.
@@ -31,6 +32,12 @@ classes, no inheritance from a framework type. An annotation marks them,
 - An annotated function with parameters, a non-`void` return, or a
   non-free position (method) is a compile error.
 - Hooks are synchronous in Phase 1; tests may be `async`.
+- `@Ignore` keeps a test in the build, so it still has to type-check, and
+  skips it at run time. Its hooks do not run for it: an ignored test is not
+  an executed one, so a file whose every selected test is ignored runs no
+  `BeforeAll`/`AfterAll` either. The optional string argument is the reason,
+  printed on the report line. On a function that is not a `@Test` it has no
+  effect.
 
 ## §TS.2 — Discovery and Execution
 
@@ -65,6 +72,7 @@ void assertNull<T>(T? value);
 void assertNotNull<T>(T? value);
 void assertNear(double expected, double actual, double epsilon = 1e-9);
 Exception assertThrows(() -> void f);
+E assertThrows<E>(() -> void f);        // E is Exception or a subclass
 ```
 
 - `assertEqual`/`assertNotEqual` require the value's `operator==` and
@@ -83,8 +91,32 @@ Exception assertThrows(() -> void f);
   assertTrue(e.getMessage().contains("zero"));
   ```
 
-  A typed `assertThrows<E>(() -> void f)` is reserved for a later
-  phase.
+- **Typed `assertThrows<E>`.** Naming the expected type narrows both
+  what counts as a pass and what comes back:
+
+  ```jux
+  var e = assertThrows<ParseError>(() -> parse("1 +"));
+  assertEqual(7, e.column);   // `e` is a ParseError, no type test needed
+  ```
+
+  - `f` throwing an `E`, or any subclass of `E`, passes, and the call
+    returns the exception typed as `E` (the same value a
+    `catch (E e)` binder would hold).
+  - `f` completing normally fails with
+    ``assertThrows: expected `E`, but no exception was thrown``.
+  - An exception of any other type is **not caught**. It escapes, and the
+    test fails with that exception's own `<exception-class>: <message>`
+    line (§TS.7), exactly as it would escape a `catch (E e)`.
+  - `E` must be `Exception` or a subclass of it; anything else is
+    `E0446`. Exactly one type argument is accepted.
+
+  Jux has no class literals and a `catch` cannot name a type parameter,
+  so this form is not an ordinary library function: the compiler
+  recognizes a call that resolves to `jux.std.testing.assertThrows` with
+  one explicit type argument, and lowers it at the call site to the same
+  type dispatch a `catch (E e)` clause uses. Any import or alias of
+  `assertThrows` works; a user function of the same name does not get
+  the typed form.
 - The §S.7.2 builtin `assert(condition, message)` remains available
   everywhere. Under `jux test` it is **always checked** (it lowers to a
   release-elided debug assertion in ordinary builds).
@@ -127,9 +159,16 @@ A test declared `async void` is driven to completion by the runner
 running N tests
   PASS pkg.testName
   FAIL pkg.other: assertEqual: expected `5`, got `4`
+  IGNORED pkg.slow: needs the network
 
-test result: FAILED. M passed; K failed
+test result: FAILED. M passed; K failed; I ignored
 ```
+
+`N` counts every selected test, ignored ones included. An ignored test
+prints `IGNORED <name>`, followed by `: <reason>` when `@Ignore` gave one.
+The `; I ignored` segment appears only when `I` is not zero, and comes
+before `; N filtered out` (§TS.8). Ignored tests never affect the exit
+code.
 
 Exit code `0` when every executed test passed; `1` on any failure or
 compile error. The FAIL message is the thrown `AssertionError`'s
@@ -146,5 +185,5 @@ runner with optimizations.
 ## §TS.9 — Deferred (post-v0.1)
 
 Parallel execution (the documented default end-state), JUnit-XML
-reporting, `@Property` generative tests, `@Ignore`, per-assertion
-source locations in failure messages, typed `assertThrows<E>`.
+reporting, `@Property` generative tests, per-assertion source locations
+in failure messages, and a flag that runs ignored tests anyway.
