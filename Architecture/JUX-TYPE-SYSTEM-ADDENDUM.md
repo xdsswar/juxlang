@@ -509,6 +509,19 @@ A guard (`when` clause) reduces the case's coverage. The compiler does **not** p
 
 This is the same rule as Java 21+ pattern-matching switches.
 
+### T.5.7. Tuple and Record Scrutinees
+
+A `switch` over a tuple or a record value is checked by the product rule of
+§T.5.2, with the component value sets of that table: `bool` and a nested enum
+are finite, `T?` adds `null`, a nested tuple or record is a product again, and
+every other component type (integers included, for now) is covered only by a
+pattern that matches all of it (`_`, `var x`). The witness in the `E0440`
+message is a pattern, with `_` for a part that does not matter:
+
+```
+Error E0440: non-exhaustive `switch` on `(bool, int)`: no arm matches `(false, _)`
+```
+
 ---
 
 ## §T.6 — Smart-Cast Flow Analysis

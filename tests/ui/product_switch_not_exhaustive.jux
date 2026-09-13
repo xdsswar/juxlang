@@ -1,0 +1,19 @@
+enum Light { Red, Amber, Green }
+record Point(int x, int y) {}
+
+public String action(bool on, Light light) {
+    return switch ((on, light)) {
+        case (true, _) -> "on";
+        case (false, Light.Red) -> "red";
+        case (false, Light.Green) -> "green";
+    };
+}
+
+public String where(Point p) {
+    return switch (p) {
+        case Point(0, var y) -> "on the axis";
+        case Point(var x, var y) when x > 0 -> "to the right";
+    };
+}
+
+public void main() { }

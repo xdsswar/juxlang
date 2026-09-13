@@ -397,6 +397,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
 | `E0438`  | Generic virtual method on a polymorphic base class  | Polymorphism, stage 2          |
+| `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
 | `E0442`  | Reference cast / type-test between unrelated types  | Polymorphism                   |

@@ -1,0 +1,2 @@
+product_switch_not_exhaustive.jux:5:12: [E0440] error: non-exhaustive `switch` on `(bool, Light)`: no arm matches `(false, Light.Amber)`; add a `case` for it, or a `default ->` arm (§T.5.7)
+product_switch_not_exhaustive.jux:13:12: [E0440] error: non-exhaustive `switch` on `Point`: no arm matches `Point(_, _)`; add a `case` for it, or a `default ->` arm (§T.5.7)

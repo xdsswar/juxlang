@@ -1,0 +1,115 @@
+// Taking values apart in a `switch`: tuple patterns and record patterns
+// (grammar §A.3).
+//
+// A record pattern names the record and gives one sub-pattern per component,
+// in header order; a tuple pattern gives one per element. Sub-patterns are
+// patterns again, so they nest: literals, `_`, `var` bindings, enum variants,
+// other records. Bindings carry the component's type into the guard and the
+// arm body.
+//
+// A switch over a tuple or record value must cover every value. `(bool,
+// Light)` below needs no `default` because its four arms cover all six pairs;
+// drop one and the compiler names the pair nobody handles (E0440).
+
+enum Light { Red, Amber, Green }
+
+enum Shape { Dot, Circle(int), Rect(int, int) }
+
+record Person(String name, int age) {}
+
+record Pair<A, B>(A first, B second) {}
+
+record Line(Person from, Person to) {}
+
+record Named(String label, Shape shape) {}
+
+class Door {
+    Person owner = new Person("ann", 30);
+
+    /** A record pattern over a field: the object keeps its owner. */
+    public String describe() {
+        return switch (owner) {
+            case Person("ann", var age) -> $"ann, ${age}";
+            case Person(var name, _) -> name;
+        };
+    }
+}
+
+/** Literals, `_`, bindings and a guard in record patterns. */
+public String greet(Person p) {
+    return switch (p) {
+        case Person("root", _) -> "hello, administrator";
+        case Person(var name, var age) when age < 18 -> $"hi ${name}";
+        case Person(var name, _) -> $"good day, ${name}";
+    };
+}
+
+/** A tuple of a bool and an enum, covered without a `default`. */
+public String action(bool pedestrian, Light light) {
+    return switch ((pedestrian, light)) {
+        case (true, Light.Green) -> "walk";
+        case (true, _) -> "wait";
+        case (false, Light.Red) | (false, Light.Amber) -> "stop";
+        case (false, Light.Green) -> "drive";
+    };
+}
+
+/** A generic record; `null` matches the nullable component. */
+public String entry(Pair<String, int?> pair) {
+    return switch (pair) {
+        case Pair(var key, null) -> $"${key} has no value";
+        case Pair(var key, var value) -> $"${key} = ${value}";
+    };
+}
+
+/** Records inside a record. One arm covers every `Line`. */
+public int span(Line line) {
+    return switch (line) {
+        case Line(Person(_, var a), Person(_, var b)) -> b - a;
+    };
+}
+
+/** Enum variants with payloads inside a record pattern. */
+public String show(Named n) {
+    return switch (n) {
+        case Named("origin", Shape.Dot) -> "the origin";
+        case Named(var label, Shape.Circle(var r)) -> $"${label}: circle of radius ${r}";
+        case Named(var label, Shape.Rect(var w, var h)) when w == h -> $"${label}: square of side ${w}";
+        case Named(var label, _) -> label;
+    };
+}
+
+public void main() {
+    var bob = new Person("bob", 12);
+    print(greet(bob));
+    print(greet(new Person("root", 99)));
+    print(greet(new Person("cy", 40)));
+    // `bob` is still whole after the switches took it apart.
+    switch (bob) {
+        case Person(var name, var age) -> print($"${name} is ${age}");
+    }
+    print(bob.name);
+
+    print(action(true, Light.Green));
+    print(action(true, Light.Red));
+    print(action(false, Light.Amber));
+    print(action(false, Light.Green));
+
+    print(entry(new Pair<String, int?>("a", null)));
+    print(entry(new Pair<String, int?>("b", 2)));
+    print(span(new Line(new Person("x", 10), new Person("y", 25))));
+    print(new Door().describe());
+
+    print(show(new Named("origin", Shape.Dot)));
+    print(show(new Named("wheel", Shape.Circle(4))));
+    print(show(new Named("tile", Shape.Rect(2, 2))));
+    print(show(new Named("door", Shape.Rect(2, 3))));
+
+    var tagged = ("k", 3);
+    var label = switch (tagged) {
+        case ("k", var n) -> $"k number ${n}";
+        case (var s, _) -> s;
+    };
+    print(label);
+    print(tagged.0);
+}

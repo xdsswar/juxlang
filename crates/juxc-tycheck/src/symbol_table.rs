@@ -98,6 +98,11 @@ pub struct SymbolTable {
     /// backend lowers each one at the call site to the type dispatch a
     /// `catch (E e)` clause uses; a generic library function could not.
     pub typed_assert_throws: HashMap<juxc_source::Span, String>,
+    /// Record patterns in `switch` arms (grammar §A.3) -- the pattern's span
+    /// -> the FQN of the record it names. A `Name(...)` pattern is a record or
+    /// an enum variant depending on what `Name` resolves to, and the checker
+    /// is where that resolution happens.
+    pub record_patterns: HashMap<juxc_source::Span, String>,
     /// Type aliases (`type Name<...>? = TypeRef;`) indexed by FQN.
     /// Tycheck expands a reference to an alias into its target
     /// before further inference — `Ty::User` never holds an alias

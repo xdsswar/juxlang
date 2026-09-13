@@ -41,8 +41,11 @@ impl RustEmitter {
         self.emit_expr(&s.scrutinee);
         // Enum `&self` method dispatch: clone the receiver so payload
         // binders own their values (`&T` wouldn't satisfy a generic
-        // `-> T` return). Enums always derive Clone.
-        if self.in_enum_method && matches!(&*s.scrutinee, juxc_ast::Expr::This(_)) {
+        // `-> T` return). Enums always derive Clone. A tuple or record
+        // pattern that would move a part out of a place matches a copy.
+        if (self.in_enum_method && matches!(&*s.scrutinee, juxc_ast::Expr::This(_)))
+            || self.switch_moves_out_of_place(s)
+        {
             self.w.push_str(".clone()");
         }
         if scrut_is_string {
@@ -59,12 +62,44 @@ impl RustEmitter {
             // represent the match arms' depth relative to the `match`
             // keyword itself, which was emitted naked above.
             self.w.push_str("    ");
+            let prev_guards = std::mem::take(&mut self.pattern_string_guards);
             self.emit_pattern(&arm.pattern);
+            // The arm's bindings shadow any outer name for its guard and body,
+            // and a binding typed `T?` is an `Option` the way a nullable local
+            // is (`null` when printed, not `None`).
+            let binders = self.typed_pattern_binders(&arm.pattern);
+            let shadowed_nullables: Vec<(String, bool)> = binders
+                .iter()
+                .map(|(name, nullable)| {
+                    let was = self.nullable_locals.contains(name);
+                    if *nullable {
+                        self.nullable_locals.insert(name.clone());
+                    } else {
+                        self.nullable_locals.remove(name);
+                    }
+                    (name.clone(), was)
+                })
+                .collect();
             // `when <cond>` guard (§A.2.8) → Rust match guard
             // `if <cond>`. Pattern bindings are in scope.
+            // A string literal nested in a tuple or record pattern came back
+            // as a binder; its comparison leads the guard.
+            let string_guards = std::mem::replace(&mut self.pattern_string_guards, prev_guards);
+            for (i, (binder, literal)) in string_guards.iter().enumerate() {
+                self.w.push_str(if i == 0 { " if " } else { " && " });
+                self.w.push_str(binder);
+                self.w.push_str(" == ");
+                self.emit_rust_string_literal(literal);
+            }
             if let Some(guard) = &arm.guard {
-                self.w.push_str(" if ");
-                self.emit_expr(guard);
+                if string_guards.is_empty() {
+                    self.w.push_str(" if ");
+                    self.emit_expr(guard);
+                } else {
+                    self.w.push_str(" && (");
+                    self.emit_expr(guard);
+                    self.w.push(')');
+                }
             }
             self.w.push_str(" => ");
             // Recursive-enum binders bound to a boxed slot need a one-time
@@ -125,6 +160,13 @@ impl RustEmitter {
                     self.w.push('}');
                 }
             }
+            for (name, was) in shadowed_nullables.into_iter().rev() {
+                if was {
+                    self.nullable_locals.insert(name);
+                } else {
+                    self.nullable_locals.remove(&name);
+                }
+            }
             self.w.push_str(",\n");
         }
         self.w.push('}');
@@ -135,6 +177,70 @@ impl RustEmitter {
     /// The bare enum name a switch scrutinee resolves to, or `None` when the
     /// scrutinee isn't an enum. Consults `expr_types` (span-keyed) first, then
     /// the name-keyed `local_types` (params/locals) for a bare path.
+    /// Whether matching `s` would move a non-`Copy` part out of a place the
+    /// program still owns: a tuple or record pattern binding a `String`,
+    /// record or object (or a nested string literal, which binds one to
+    /// compare), over a variable read again later or over a field.
+    ///
+    /// The match then runs on a copy. A variable whose last use is this
+    /// switch, and a temporary such as `(a, b)`, are matched as they are.
+    fn switch_moves_out_of_place(&self, s: &juxc_ast::SwitchExpr) -> bool {
+        let place = match &*s.scrutinee {
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                self.non_final_uses.contains(&qn.span)
+                    || self.ref_locals.contains(qn.segments[0].text.as_str())
+            }
+            juxc_ast::Expr::Field(_) | juxc_ast::Expr::This(_) | juxc_ast::Expr::Index(_) => true,
+            _ => false,
+        };
+        place && s.arms.iter().any(|arm| self.pattern_binds_owned_part(&arm.pattern, 0))
+    }
+
+    /// The names a tuple or record pattern binds that the checker typed, each
+    /// with whether its type is nullable. Only those patterns' bindings are
+    /// typed (grammar §A.3); the others come back empty and change nothing.
+    fn typed_pattern_binders(&self, p: &juxc_ast::Pattern) -> Vec<(String, bool)> {
+        let mut out = Vec::new();
+        self.collect_typed_binders(p, &mut out);
+        out
+    }
+
+    fn collect_typed_binders(&self, p: &juxc_ast::Pattern, out: &mut Vec<(String, bool)>) {
+        match p {
+            juxc_ast::Pattern::Bind(name) => {
+                if let Some(ty) = self.expr_types.get(&name.span) {
+                    out.push((name.text.clone(), matches!(ty, juxc_tycheck::Ty::Nullable(_))));
+                }
+            }
+            juxc_ast::Pattern::Tuple(parts, _) | juxc_ast::Pattern::EnumVariant { args: parts, .. } => {
+                for part in parts {
+                    self.collect_typed_binders(part, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn pattern_binds_owned_part(&self, p: &juxc_ast::Pattern, depth: usize) -> bool {
+        match p {
+            juxc_ast::Pattern::Bind(name) => {
+                depth > 0
+                    && self
+                        .expr_types
+                        .get(&name.span)
+                        .is_some_and(|ty| self.ty_needs_clone_on_field_read(ty))
+            }
+            juxc_ast::Pattern::Literal(Literal::String(_), _) => depth > 0,
+            juxc_ast::Pattern::Tuple(parts, _) | juxc_ast::Pattern::EnumVariant { args: parts, .. } => {
+                parts.iter().any(|sub| self.pattern_binds_owned_part(sub, depth + 1))
+            }
+            juxc_ast::Pattern::Or(alts, _) => {
+                alts.iter().any(|alt| self.pattern_binds_owned_part(alt, depth))
+            }
+            _ => false,
+        }
+    }
+
     fn scrutinee_enum_bare(&self, scrutinee: &juxc_ast::Expr) -> Option<String> {
         // Gather every type the scrutinee might carry — `expr_types` (which can
         // be `Unknown` for a param) AND the name-keyed `local_types` — and
@@ -292,7 +398,14 @@ impl RustEmitter {
                 // value-position uses. Pure `&str` literal goes into
                 // the pattern slot; the scrutinee side is unaffected.
                 if let Literal::String(s) = lit {
-                    self.emit_rust_string_literal(s);
+                    if self.pattern_depth > 0 {
+                        // On a `String` part: bind it, compare in the guard.
+                        let binder = format!("__jux_str{}", self.pattern_string_guards.len());
+                        self.w.push_str(&binder);
+                        self.pattern_string_guards.push((binder, s.clone()));
+                    } else {
+                        self.emit_rust_string_literal(s);
+                    }
                 } else {
                     self.emit_literal(lit);
                 }
@@ -350,6 +463,68 @@ impl RustEmitter {
                     self.w.push_str(&to_rust_ident(&binder.text));
                     self.w.push(')');
                 }
+            }
+            // `(p, q)` is Rust's own tuple pattern.
+            juxc_ast::Pattern::Tuple(elements, _) => {
+                self.pattern_depth += 1;
+                self.w.push('(');
+                for (i, element) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_pattern(element);
+                }
+                self.w.push(')');
+                self.pattern_depth -= 1;
+            }
+            // A record pattern (the checker resolved `Name` to a record):
+            // `Point(var x, 0)` is the struct pattern `Point { x, y: 0 }`.
+            juxc_ast::Pattern::EnumVariant { args, span, .. }
+                if self.symbols.record_patterns.contains_key(span) =>
+            {
+                let fqn = self.symbols.record_patterns[span].clone();
+                let components: Vec<String> = self
+                    .symbols
+                    .records
+                    .get(&fqn)
+                    .map(|r| r.components.iter().map(|c| c.name.clone()).collect())
+                    .unwrap_or_default();
+                let path = self.rust_path_for_type_fqn(&fqn);
+                self.w.push_str(&path);
+                self.pattern_depth += 1;
+                // A `_` part is left out for `..`, which reads the way the
+                // user meant it: that component does not matter.
+                let written: Vec<(&String, &juxc_ast::Pattern)> = components
+                    .iter()
+                    .zip(args.iter())
+                    .filter(|(_, p)| !matches!(p, juxc_ast::Pattern::Wildcard(_)))
+                    .collect();
+                if written.is_empty() {
+                    self.w.push_str(" { .. }");
+                } else {
+                    self.w.push_str(" { ");
+                    for (i, (component, sub)) in written.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        let field = to_rust_ident(component);
+                        match sub {
+                            juxc_ast::Pattern::Bind(name) if name.text == **component => {
+                                self.w.push_str(&field);
+                            }
+                            _ => {
+                                self.w.push_str(&field);
+                                self.w.push_str(": ");
+                                self.emit_pattern(sub);
+                            }
+                        }
+                    }
+                    if written.len() < components.len() {
+                        self.w.push_str(", ..");
+                    }
+                    self.w.push_str(" }");
+                }
+                self.pattern_depth -= 1;
             }
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
                 // Three shapes to handle:
@@ -454,7 +629,9 @@ impl RustEmitter {
                                 .unwrap_or_else(|| format!("__pos{i}"));
                             self.w.push_str(&fname);
                             self.w.push_str(": ");
+                            self.pattern_depth += 1;
                             self.emit_pattern(sub);
+                            self.pattern_depth -= 1;
                         }
                         // `..` rest pattern in case the subclass
                         // has more fields than the pattern listed
@@ -499,12 +676,14 @@ impl RustEmitter {
                 }
                 if !args.is_empty() || pattern_has_parens(pattern) {
                     self.w.push('(');
+                    self.pattern_depth += 1;
                     for (i, sub) in args.iter().enumerate() {
                         if i > 0 {
                             self.w.push_str(", ");
                         }
                         self.emit_pattern(sub);
                     }
+                    self.pattern_depth -= 1;
                     self.w.push(')');
                 }
             }

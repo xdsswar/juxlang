@@ -66,16 +66,16 @@ pub enum SwitchBody {
 
 /// One pattern shape per §A.3.
 ///
-/// **Turn-1 scope** — only the four shapes we actively lower:
 /// - [`Pattern::Wildcard`] — `_` or `default`.
 /// - [`Pattern::Literal`] — `42`, `"hi"`, `true`, `null`.
 /// - [`Pattern::Bind`] — `var name`. Binds the scrutinee.
-/// - [`Pattern::EnumVariant`] — `Color.Red`, `Token.Number(_)`,
-///   `Token.Word(var s)`. Path-qualified variant name with optional
-///   nested sub-patterns.
-///
-/// Spec also defines tuple/record/range/or/type patterns; those land
-/// when their use cases do.
+/// - [`Pattern::EnumVariant`] — every `Name(sub, …)` / `Name` shape: an enum
+///   variant (`Color.Red`, `Token.Word(var s)`), a record (`Point(var x, 0)`),
+///   or a sealed subclass. The grammar gives record and enum patterns one
+///   shape, so which it is follows from what the path resolves to, not from
+///   the syntax.
+/// - [`Pattern::Tuple`] — `(p, q, …)`.
+/// - [`Pattern::Range`], [`Pattern::Or`], [`Pattern::TypeBind`].
 #[derive(Debug, Clone)]
 pub enum Pattern {
     /// `_` — matches anything, binds nothing.
@@ -123,6 +123,9 @@ pub enum Pattern {
     /// hierarchies (the `ident` binds to the matched variant's
     /// underlying struct). Matches Java 21's record/type-pattern
     /// shape: `case Box b -> ...`.
+    /// Tuple pattern — `(p, q, …)` with at least two elements (§A.3
+    /// `tuple-pattern`). Matches a tuple value element by element.
+    Tuple(Vec<Pattern>, Span),
     /// Or-pattern — `case A | B | C ->` (§A.3). Matches when ANY
     /// alternative matches. Alternatives can't introduce bindings
     /// (each branch would need identical binders; deferred), so

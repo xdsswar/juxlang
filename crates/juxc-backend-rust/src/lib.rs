@@ -1314,6 +1314,15 @@ struct RustEmitter {
     /// closure types as `()`. Take-and-cleared by the lambda
     /// emitters.
     pub(crate) lambda_void_target: bool,
+    /// How many tuple / record / variant patterns enclose the pattern being
+    /// emitted. A string literal at depth 0 matches against the scrutinee's
+    /// `.as_str()`; deeper, it sits on a `String` part and cannot be a Rust
+    /// pattern at all, so it becomes a binder plus a guard comparison.
+    pub(crate) pattern_depth: usize,
+    /// The guard comparisons the current arm's pattern handed off: `(binder,
+    /// literal)` for each nested string literal. Taken by `emit_switch` when
+    /// it writes the arm's `if`.
+    pub(crate) pattern_string_guards: Vec<(String, String)>,
     /// Set just before emitting a lambda argument that flows into a FOREIGN
     /// (`rust.<crate>`) `impl Fn(..)`-typed parameter: the lambda lowers to a
     /// BARE Rust closure (`move |..| ..`) instead of the default
@@ -4630,6 +4639,8 @@ impl RustEmitter {
             emitting_method_receiver: false,
             in_lambda_body: false,
             lambda_void_target: false,
+            pattern_depth: 0,
+            pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
         }
     }

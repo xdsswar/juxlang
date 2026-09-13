@@ -306,6 +306,10 @@ pub enum Code {
     /// for sealed-shape scrutinees so missed cases are caught at
     /// compile time, not via a runtime panic.
     E0440_NotExhaustive,
+    /// E0439 -- A tuple or record pattern that cannot match the `switch`
+    /// value at all: a different number of elements or components than the
+    /// value has, or a record pattern naming another type (grammar §A.3).
+    E0439_PatternShapeMismatch,
     /// E0453 — Generic type inference has no solution. Per the type-system
     /// addendum §T.4.2, a bare `new X<>()` whose type argument can't be
     /// inferred from the construction site AND is never pinned by later use
@@ -821,6 +825,7 @@ impl Code {
             Code::E0442_UnrelatedCast            => "E0442",
             Code::E0441_TypeTestBinderMisplaced  => "E0441",
             Code::E0440_NotExhaustive            => "E0440",
+            Code::E0439_PatternShapeMismatch     => "E0439",
             Code::E0453_GenericInferenceNoSolution => "E0453",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",

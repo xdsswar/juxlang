@@ -386,6 +386,9 @@ pub(crate) struct Checker<'a> {
     /// Typed `assertThrows<E>(f)` calls (§TS.3): call span -> the FQN of `E`,
     /// absorbed into `SymbolTable::typed_assert_throws`.
     pub(crate) typed_assert_throws: HashMap<Span, String>,
+    /// Record patterns (§A.3): pattern span -> the record's FQN, absorbed into
+    /// `SymbolTable::record_patterns`.
+    pub(crate) record_patterns: HashMap<Span, String>,
     /// Names the block being checked assigns to, anywhere inside it. Read by
     /// [`Self::narrowable`]: an assignment can put a null back, so a binding
     /// the block writes to is never narrowed by a null test (§7.10).
@@ -485,6 +488,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, usize>,
     HashMap<Span, usize>,
     HashMap<Span, String>,
+    HashMap<Span, String>,
 );
 
 impl<'a> Checker<'a> {
@@ -502,6 +506,7 @@ impl<'a> Checker<'a> {
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
             typed_assert_throws: HashMap::new(),
+            record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
             current_ctor: None,
             in_init_block: false,
@@ -618,6 +623,7 @@ impl<'a> Checker<'a> {
             self.method_selections,
             self.function_selections,
             self.typed_assert_throws,
+            self.record_patterns,
         )
     }
 
@@ -4297,7 +4303,25 @@ impl<'a> Checker<'a> {
 
             Expr::Switch(s) => {
                 self.check_expr(&s.scrutinee);
+                // A tuple or record value is taken apart by tuple and record
+                // patterns (§A.3), which get their shape checked and their
+                // bindings typed; its exhaustiveness is the product rule.
+                let scrutinee_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
+                let product = self.is_product_ty(&scrutinee_ty);
                 for arm in &s.arms {
+                    let destructures = product
+                        || matches!(&arm.pattern, Pattern::Tuple(..))
+                        || matches!(&arm.pattern, Pattern::EnumVariant { path, .. }
+                            if self.pattern_record_fqn(path).is_some());
+                    let mut bindings = Vec::new();
+                    if destructures {
+                        self.check_pattern_shape(&arm.pattern, &scrutinee_ty, &mut bindings);
+                    }
+                    self.env.push_scope();
+                    for (name, ty) in bindings {
+                        self.expr_types.insert(name.span, ty.clone());
+                        self.env.declare(&name.text, ty);
+                    }
                     // Or-pattern alternatives must be binding-free
                     // (§A.3): an arm body can't reference a name that
                     // only exists when one alternative matched.
@@ -4336,6 +4360,11 @@ impl<'a> Checker<'a> {
                             self.env.pop_scope();
                         }
                     }
+                    self.env.pop_scope();
+                }
+                if product {
+                    self.check_product_switch_exhaustive(s, &scrutinee_ty);
+                    return;
                 }
                 // Exhaustiveness check (§T.5.5): when the
                 // scrutinee resolves to an enum, every variant
@@ -8652,7 +8681,9 @@ fn collect_returns_in_stmt(stmt: &Stmt, out: &mut Vec<Span>) {
 fn pattern_introduces_bindings(p: &Pattern) -> bool {
     match p {
         Pattern::Bind(_) | Pattern::TypeBind { .. } => true,
-        Pattern::EnumVariant { args, .. } => args.iter().any(pattern_introduces_bindings),
+        Pattern::EnumVariant { args, .. } | Pattern::Tuple(args, _) => {
+            args.iter().any(pattern_introduces_bindings)
+        }
         Pattern::Or(alts, _) => alts.iter().any(pattern_introduces_bindings),
         Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::Range { .. } => false,
     }

@@ -782,6 +782,48 @@ Resolution rules:
 - A pattern is **irrefutable** if it always matches its scrutinee. Local-variable destructuring (`var (x, y) = ...`) requires an irrefutable pattern (`E0271`); switch cases admit refutable patterns.
 - Exhaustiveness checking (sealed types, ranges of integer types) follows the rules of JUX-LANG-V1 §7.5 and §6.9.7.
 
+**Tuple and record patterns in `switch`.** A tuple pattern matches a tuple value
+element by element; a record pattern matches a record value component by
+component, in the order the record header declares them. Each sub-pattern is any
+pattern, so they nest (`case (Point(0, var y), _) ->`).
+
+```jux
+record Point(int x, int y) {}
+
+String where(Point p) {
+    return switch (p) {
+        case Point(0, 0) -> "origin";
+        case Point(var x, 0) -> $"on the x axis at ${x}";
+        case Point(_, var y) when y < 0 -> "below the axis";
+        case Point(var x, var y) -> $"at ${x}, ${y}";
+    };
+}
+
+String classify(int a, int b) {
+    return switch ((a, b)) {
+        case (0, 0) -> "both zero";
+        case (0, _) | (_, 0) -> "one zero";
+        case (var x, var y) when x == y -> "equal";
+        case _ -> "different";
+    };
+}
+```
+
+- `record-pattern` and `enum-pattern` share one shape, so which one a
+  `Name(...)` is follows from what `Name` resolves to: a record type makes it a
+  record pattern, an enum variant an enum pattern.
+- A tuple pattern needs as many sub-patterns as the tuple has elements, and a
+  record pattern one per component. A pattern that cannot match the value at
+  all, because it has the wrong number of parts or names a different type, is
+  `E0439`.
+- Bindings inside a tuple or record pattern take the element's or component's
+  type, and are visible in the guard and the arm body.
+- A string literal inside a tuple or record pattern compares by value, like a
+  string literal at the top of a `case`.
+- A `switch` over a tuple or record value is checked for exhaustiveness with the
+  §T.5.2 product rule; one that leaves a value uncovered is `E0440`, naming a
+  value no arm matches.
+
 ```
 destructuring-pattern = tuple-pattern
                       | record-pattern                          -- includes Point(x, y)

@@ -1,0 +1,4 @@
+pattern_shape_mismatch.jux:6:14: [E0439] error: `Point` has 2 components, and this pattern gives 1
+pattern_shape_mismatch.jux:7:14: [E0439] error: a `Size` pattern cannot match a value of type `Point`
+pattern_shape_mismatch.jux:8:14: [E0439] error: a tuple pattern cannot match a value of type `Point`
+pattern_shape_mismatch.jux:15:14: [E0439] error: this tuple pattern has 3 elements, but the value is `(int, int)`, which has 2

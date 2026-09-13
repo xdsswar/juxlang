@@ -187,6 +187,34 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(Pattern::Literal(Literal::Null, self.last_consumed_span()))
             }
+            // `(p, q, …)` — tuple pattern. The grammar asks for two or more
+            // elements: `(p)` would be a pattern in parentheses, which the
+            // language does not have, and `()` matches nothing that exists.
+            TokenKind::LParen => {
+                self.advance();
+                let mut elements = Vec::new();
+                if !self.at(&TokenKind::RParen) {
+                    loop {
+                        let Some(p) = self.parse_pattern() else { break };
+                        elements.push(p);
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&TokenKind::RParen, "')' to close the tuple pattern");
+                let span = start.join(self.last_consumed_span());
+                if elements.len() < 2 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "a tuple pattern needs at least two elements, `(p, q)`",
+                        )
+                        .with_span(span),
+                    );
+                }
+                Some(Pattern::Tuple(elements, span))
+            }
             // `Path[.Variant](sub, …)` — enum-variant pattern.
             //
             // Also handles the bare type-test pattern `Type ident`
@@ -250,7 +278,8 @@ impl<'a> Parser<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "expected a pattern (`_`, literal, `var name`, or enum variant)",
+                        "expected a pattern (`_`, a literal, `var name`, a tuple `(p, q)`, \
+                         or a record or enum variant)",
                     )
                     .with_span(here),
                 );

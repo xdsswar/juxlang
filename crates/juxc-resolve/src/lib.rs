@@ -402,7 +402,7 @@ impl Resolver {
                 }
             }
             juxc_ast::Pattern::Bind(name) => self.declare(&name.text),
-            juxc_ast::Pattern::EnumVariant { args, .. } => {
+            juxc_ast::Pattern::EnumVariant { args, .. } | juxc_ast::Pattern::Tuple(args, _) => {
                 for sub in args {
                     self.declare_pattern_bindings(sub);
                 }
