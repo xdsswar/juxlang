@@ -382,7 +382,7 @@ impl SymbolTable {
                     .unwrap_or("");
             let why = if f.is_weak {
                 "a weak reference"
-            } else if f.ty.fn_shape.is_some() {
+            } else if f.ty.closure_shape().is_some() {
                 "a function value"
             } else if self.interfaces.contains_key(head)
                 || self

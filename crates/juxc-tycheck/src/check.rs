@@ -802,6 +802,11 @@ impl<'a> Checker<'a> {
     /// `Copy` struct field (it is a non-`Copy` fat pointer with no C field
     /// representation).
     fn ffi_struct_field_ok(&self, t: &juxc_ast::TypeRef) -> bool {
+        // A function-pointer field is how a C function table is written
+        // (`JNIEnv`, a COM vtable): C-compatible when its signature is.
+        if t.fn_pointer_shape().is_some() {
+            return self.ffi_type_ok(t);
+        }
         if t.array_shape.is_some() || t.fn_shape.is_some() || !t.generic_args.is_empty() {
             return false;
         }
@@ -842,6 +847,11 @@ impl<'a> Checker<'a> {
     /// aggregate passable by value, §L.1.2). The structural cases are the free
     /// [`ffi_type_ok`]; the value-struct case needs the symbol table.
     fn ffi_type_ok(&self, t: &juxc_ast::TypeRef) -> bool {
+        // A function pointer is a C code address (§L.6.4); it crosses the
+        // boundary when its own signature does.
+        if let Some(shape) = t.fn_pointer_shape() {
+            return !t.nullable && self.fn_pointer_signature_offender(shape).is_none();
+        }
         if ffi_type_ok(t) {
             return true;
         }
@@ -1623,6 +1633,7 @@ impl<'a> Checker<'a> {
         for param in &fn_decl.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
+            self.check_fn_pointer_signatures(&param.ty);
             // J4: a free function's own `<T>` params aren't pushed into the
             // env, so pass them explicitly as the in-scope generics.
             self.validate_sig_type(&param.ty, &fn_decl.generic_params);
@@ -2011,6 +2022,7 @@ impl<'a> Checker<'a> {
                 self.check_iface_value_type(fty);
                 self.check_wildcard_storage_type(fty);
                 self.check_fixed_array_size_in_type(fty);
+                self.check_fn_pointer_signatures(fty);
                 // J4: reject an unresolved field type name.
                 self.validate_sig_type(fty, &[]);
             }
@@ -2371,6 +2383,7 @@ impl<'a> Checker<'a> {
         for param in &method.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
+            self.check_fn_pointer_signatures(&param.ty);
             // J4: reject an unresolved type name (e.g. the supertype's `T`
             // written in an override instead of the bound `Object`).
             self.validate_sig_type(&param.ty, &[]);
@@ -2831,6 +2844,7 @@ impl<'a> Checker<'a> {
                 self.check_iface_value_type(t);
                 self.check_wildcard_storage_type(t);
                 self.check_fixed_array_size_in_type(t);
+                self.check_fn_pointer_signatures(t);
             }
             ReturnType::Void => {}
         }
@@ -3303,6 +3317,7 @@ impl<'a> Checker<'a> {
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
                     self.check_fixed_array_size_in_type(t);
+                    self.check_fn_pointer_signatures(t);
                     self.check_type_visibility(t);
                 }
                 // If both a declared type and an initializer are
@@ -4198,6 +4213,13 @@ impl<'a> Checker<'a> {
             Expr::Cast(c) => {
                 self.check_expr(&c.value);
                 self.check_reference_cast(c);
+                // `p as fn(A) -> R` and `f as void*` reinterpret a code address
+                // (§L.6.4), which nothing can check.
+                let from_fn_pointer =
+                    matches!(infer_expr(&c.value, &self.env, self.symbols), Ty::FnPtr { .. });
+                if !self.in_unsafe && (c.ty.fn_pointer_shape().is_some() || from_fn_pointer) {
+                    self.unsafe_pointer_op("a cast to or from a function pointer", c.span);
+                }
             }
 
             Expr::TypeTest(t) => {
@@ -5974,6 +5996,302 @@ impl<'a> Checker<'a> {
         false
     }
 
+    /// A call through a function pointer: the callee and every argument are
+    /// checked as expressions, the call needs `unsafe` (E0506), and the
+    /// arguments must match the pointer's parameters in number (E0411) and type
+    /// (E0410), the conversions of a native call aside (§8.1.1).
+    fn check_fn_pointer_call(&mut self, c: &CallExpr, params: &[Ty]) {
+        if let Expr::Field(f) = c.callee.as_ref() {
+            self.check_expr(&f.object);
+        } else {
+            self.check_expr(&c.callee);
+        }
+        // The backend recognises the call by the callee's recorded type; a
+        // field callee is not visited as an expression of its own.
+        let callee_ty = infer_expr(&c.callee, &self.env, self.symbols);
+        let callee_span = expr_span(&c.callee);
+        if callee_span != Span::DUMMY {
+            self.expr_types.insert(callee_span, callee_ty);
+        }
+        for arg in &c.args {
+            self.check_expr(arg);
+        }
+        if !self.in_unsafe {
+            self.unsafe_pointer_op("calling through a function pointer", c.span);
+        }
+        if c.args.len() != params.len() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0411_WrongArgCount,
+                    format!(
+                        "this function pointer takes {} argument{}, but {} {} given",
+                        params.len(),
+                        if params.len() == 1 { "" } else { "s" },
+                        c.args.len(),
+                        if c.args.len() == 1 { "was" } else { "were" },
+                    ),
+                )
+                .with_span(c.span),
+            );
+            return;
+        }
+        for (arg, param) in c.args.iter().zip(params) {
+            let found = infer_expr(arg, &self.env, self.symbols);
+            if !compatible(param, &found, self.symbols) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!("this function pointer takes `{param}` here, but the argument is `{found}`"),
+                    )
+                    .with_span([expr_span(arg), c.span].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(c.span)),
+                );
+            }
+            self.check_literal_fits(param, arg, c.span);
+        }
+    }
+
+    /// The first type in a function-pointer signature that has no C form
+    /// (§L.6.4 allows what an `@export` signature allows), or `None`.
+    fn fn_pointer_signature_offender<'t>(
+        &self,
+        shape: &'t juxc_ast::FnTypeShape,
+    ) -> Option<&'t juxc_ast::TypeRef> {
+        let is_void = |t: &juxc_ast::TypeRef| {
+            t.fn_shape.is_none()
+                && t.ptr_depth == 0
+                && t.name.segments.len() == 1
+                && t.name.segments[0].text == "void"
+        };
+        shape
+            .params
+            .iter()
+            .find(|p| !self.ffi_type_ok(p))
+            .or_else(|| (!is_void(&shape.return_type) && !self.ffi_type_ok(&shape.return_type)).then_some(&shape.return_type))
+    }
+
+    /// **E0508** for a function-pointer type written anywhere in `tref` whose
+    /// signature is not C-compatible. Runs at every declared type: locals,
+    /// parameters, fields and results.
+    fn check_fn_pointer_signatures(&mut self, tref: &juxc_ast::TypeRef) {
+        let Some(shape) = tref.fn_shape.as_deref() else { return };
+        for inner in shape.params.iter().chain(std::iter::once(&shape.return_type)) {
+            self.check_fn_pointer_signatures(inner);
+        }
+        if !shape.is_pointer {
+            return;
+        }
+        if let Some(bad) = self.fn_pointer_signature_offender(shape) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!(
+                        "`{}` has no C form, so it cannot appear in the function-pointer type \
+                         `{}` -- use a primitive, `String`, a raw pointer, a `@layout(c)` type, \
+                         or another function pointer",
+                        type_ref_display(bad),
+                        type_ref_display(tref),
+                    ),
+                )
+                .with_span([bad.span, tref.span].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(tref.span)),
+            );
+        }
+    }
+
+    /// What may fill a function-pointer slot (§L.6.4): a free function whose
+    /// signature corresponds (E0513), or a lambda that captures nothing
+    /// (E0514). `null`, another function pointer and a cast are left to the
+    /// ordinary type rules.
+    fn check_fn_pointer_value(&mut self, slot: &Ty, value: &Expr, fallback: Span) {
+        let Ty::FnPtr { params, param_ptr_depths, return_type, return_ptr_depth } = slot else {
+            return;
+        };
+        let span = [expr_span(value), fallback].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(fallback);
+        match value {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if self.env.lookup(name).is_some() {
+                    return;
+                }
+                // The backend builds the C-ABI entry for a function or lambda
+                // from the slot's signature, which it finds under the value's
+                // own span.
+                self.expr_types.insert(qn.span, slot.clone());
+                let not_fitting = |why: String| {
+                    Diagnostic::error(
+                        code::Code::E0513_FunctionDoesNotFitPointer,
+                        format!("`{name}` cannot be used as `{slot}`: {why}"),
+                    )
+                    .with_span(span)
+                };
+                // A method of the class being checked, named without `this.`.
+                let is_method = self
+                    .env
+                    .current_class
+                    .as_deref()
+                    .is_some_and(|c| self.symbols.lookup_method(c, name).is_some());
+                let function = self
+                    .env
+                    .unqualified
+                    .get(name)
+                    .and_then(|fqn| self.symbols.functions.get(fqn).map(|f| (fqn.clone(), f)))
+                    .or_else(|| self.symbols.lookup_function(name).map(|(k, f)| (k.to_string(), f)));
+                let Some((fqn, function)) = function else {
+                    if is_method {
+                        self.diagnostics.push(not_fitting(
+                            "it is a method, and a method needs an object; only a free function has a \
+                             plain code address"
+                                .to_string(),
+                        ));
+                    }
+                    return;
+                };
+                let function = function.clone();
+                let group = self
+                    .symbols
+                    .function_overloads
+                    .get(&fqn)
+                    .or_else(|| self.symbols.function_overloads.get(name))
+                    .map(|g| g.len())
+                    .unwrap_or(1);
+                let why = if group > 1 {
+                    Some("it is overloaded, so the name does not pick one function".to_string())
+                } else if !function.generic_params.is_empty() {
+                    Some("it is generic, and a code address is one concrete function".to_string())
+                } else if !function.throws.is_empty() {
+                    Some("it declares `throws`, and an exception cannot cross a C frame".to_string())
+                } else if function.params.len() != params.len() {
+                    Some(format!(
+                        "it takes {} parameter{}, and the pointer takes {}",
+                        function.params.len(),
+                        if function.params.len() == 1 { "" } else { "s" },
+                        params.len(),
+                    ))
+                } else {
+                    let mismatch = function.params.iter().zip(params.iter().zip(param_ptr_depths)).find_map(
+                        |(p, (want, want_depth))| {
+                            let have = ty_from_ref(&p.ty, &self.env, self.symbols);
+                            (have != *want || p.ty.ptr_depth != *want_depth).then(|| {
+                                format!(
+                                    "parameter `{}` is `{}`, and the pointer passes `{}{}`",
+                                    p.name,
+                                    type_ref_display(&p.ty),
+                                    want,
+                                    "*".repeat(*want_depth as usize),
+                                )
+                            })
+                        },
+                    );
+                    mismatch.or_else(|| {
+                        let (have, have_depth) = match &function.return_type {
+                            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                                (ty_from_ref(t, &self.env, self.symbols), t.ptr_depth)
+                            }
+                            ReturnType::Void => (Ty::Void, 0),
+                        };
+                        (have != **return_type || have_depth != *return_ptr_depth).then(|| {
+                            format!(
+                                "it returns `{have}{}`, and the pointer returns `{return_type}{}`",
+                                "*".repeat(have_depth as usize),
+                                "*".repeat(*return_ptr_depth as usize),
+                            )
+                        })
+                    })
+                };
+                if let Some(why) = why {
+                    self.diagnostics.push(not_fitting(why));
+                }
+            }
+            Expr::Lambda(l) => {
+                self.expr_types.insert(l.span, slot.clone());
+                if l.params.len() != params.len() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0513_FunctionDoesNotFitPointer,
+                            format!(
+                                "this lambda takes {} parameter{}, and `{slot}` takes {}",
+                                l.params.len(),
+                                if l.params.len() == 1 { "" } else { "s" },
+                                params.len(),
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+                if let Some(captured) = self.lambda_capture(l) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0514_CapturingLambdaAsPointer,
+                            format!(
+                                "this lambda reads `{captured}` from the code around it, so it cannot \
+                                 be a function pointer: a code address has nowhere to keep it -- pass \
+                                 the value through a `void*` argument, or use a closure type \
+                                 `(…) -> …` instead of `fn(…) -> …`",
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The first thing `l` captures from the code around it -- a local, a
+    /// parameter, a field read without `this.`, or `this` itself -- or `None`
+    /// when the lambda is self-contained. Names the lambda declares for itself
+    /// (its parameters, its locals, loop and catch variables, the parameters of
+    /// lambdas inside it) are not captures even when they shadow an outer one.
+    fn lambda_capture(&self, l: &juxc_ast::LambdaExpr) -> Option<String> {
+        use juxc_ast::visit::Node;
+        let mut declared: std::collections::HashSet<String> =
+            l.params.iter().map(|p| p.name.text.clone()).collect();
+        let mut reads: Vec<String> = Vec::new();
+        let mut uses_this = false;
+        let mut visit = |n: Node<'_>| match n {
+            Node::Stmt(Stmt::VarDecl(v)) => {
+                declared.insert(v.name.text.clone());
+            }
+            Node::Stmt(Stmt::ForEach(fe)) => {
+                declared.insert(fe.var_name.text.clone());
+            }
+            Node::Stmt(Stmt::Try(t)) => {
+                declared.extend(t.catches.iter().map(|c| c.name.text.clone()));
+            }
+            Node::Expr(Expr::TryExpr(t)) => {
+                declared.extend(t.catches.iter().map(|c| c.name.text.clone()));
+            }
+            Node::Expr(Expr::Lambda(inner)) => {
+                declared.extend(inner.params.iter().map(|p| p.name.text.clone()));
+            }
+            Node::Expr(Expr::This(_) | Expr::Super(_)) => uses_this = true,
+            Node::Expr(Expr::Path(qn)) if qn.segments.len() == 1 => {
+                reads.push(qn.segments[0].text.clone());
+            }
+            _ => {}
+        };
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => juxc_ast::visit::for_each_node_in(e, &mut visit),
+            juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_node(b, &mut visit),
+        }
+        if uses_this {
+            return Some("this".to_string());
+        }
+        reads.into_iter().find(|name| {
+            if declared.contains(name) {
+                return false;
+            }
+            if self.env.lookup(name).is_some() {
+                return true;
+            }
+            // A field of the enclosing class, read without `this.`.
+            self.env
+                .current_class
+                .as_deref()
+                .and_then(|c| self.symbols.lookup_field(c, name))
+                .is_some_and(|(f, _)| !f.is_static)
+        })
+    }
+
     /// **E0202** when an untyped integer literal, possibly negated, flows into
     /// an integer slot it does not fit (§S.2.6: a literal adopts the slot's
     /// type "when the value fits").
@@ -5988,6 +6306,12 @@ impl<'a> Checker<'a> {
             Ty::Nullable(inner) => inner.as_ref(),
             other => other,
         };
+        // A function-pointer slot has its own rules for what may fill it: a
+        // fitting free function, or a lambda that captures nothing (§L.6.4).
+        if matches!(slot, Ty::FnPtr { .. }) && !matches!(value, Expr::Ternary(_)) {
+            self.check_fn_pointer_value(slot, value, fallback);
+            return;
+        }
         // Each arm of a conditional flows into the same slot, and each element
         // of an array literal into the element type.
         match (slot, value) {
@@ -6373,6 +6697,14 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // A call THROUGH a function pointer (§L.6.4): `f(x)` on a local or
+        // parameter, `table.name(x)` on a field. It is checked here in full,
+        // because the rest of this function would look for a function or a
+        // method with that name and find none.
+        if let Ty::FnPtr { params, .. } = infer_expr(&c.callee, &self.env, self.symbols) {
+            self.check_fn_pointer_call(c, &params);
+            return;
+        }
         // §P.4.2/§P.4.3 — `target.X.bind(source.Y)` /
         // `bindBidirectional`: both ends must be properties of the
         // SAME declared type (E0974). Checked here so the mismatch
@@ -8340,7 +8672,13 @@ impl<'a> Checker<'a> {
             // A foreign SLICE param (`T[]` = Rust `&[T]`) bridges a Jux array
             // or `rust.std` `Vec<T>` argument (both Deref-coerce to `&[T]`);
             // that's accepted here without touching the global `compatible()`.
-            if !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
+            // A raw-pointer parameter takes `null`, its only literal (§L.6.1),
+            // as a `T*` local does. The erased `Ty` drops `ptr_depth`, so
+            // `compatible` alone rejected `new Env(null, 7)` for a `Table*`.
+            let pointer_null = param.ty.ptr_depth > 0
+                && matches!(arg, Expr::Literal(juxc_ast::Literal::Null));
+            if !pointer_null
+                && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
                 && !compatible(&expected, &found, self.symbols)
             {
                 let mut diag = Diagnostic::error(
@@ -8353,7 +8691,8 @@ impl<'a> Checker<'a> {
                         found,
                     ),
                 )
-                .with_span(expr_span(arg));
+                // A literal argument has no span of its own; the call does.
+                .with_span([expr_span(arg), call_span].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(call_span));
                 // A nullable `T?` flowing into a non-nullable slot is the #1
                 // foreign-boundary mistake (e.g. a `WindowOptions?` field
                 // passed to `new Window(.., WindowOptions)`). Point the user at
@@ -8503,6 +8842,16 @@ fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
 /// Render a `TypeRef` for an FFI diagnostic (`TypeRef` has no `Display`):
 /// dotted name, then `?` for nullable, then one `*` per pointer level.
 fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
+    // A function type has no name; show the signature the user wrote.
+    if let Some(shape) = &t.fn_shape {
+        let params = shape.params.iter().map(type_ref_display).collect::<Vec<_>>().join(", ");
+        let lead = if shape.is_pointer { "fn" } else { "" };
+        let mut out = format!("{lead}({params}) -> {}", type_ref_display(&shape.return_type));
+        if t.nullable {
+            out = format!("({out})?");
+        }
+        return out;
+    }
     let mut s = t
         .name
         .segments
@@ -9153,6 +9502,13 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     }
     // Exact match.
     if expected == found {
+        return true;
+    }
+    // `null` into a function-pointer slot: the pointer's own default, the way
+    // a raw pointer takes it (§L.6.4).
+    if matches!(expected, Ty::FnPtr { .. })
+        && matches!(found, Ty::Nullable(inner) if matches!(inner.as_ref(), Ty::Unknown))
+    {
         return true;
     }
     // Nullable widening (one-way): a `T` fits into a `T?` slot,

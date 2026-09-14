@@ -76,6 +76,23 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_cast(&mut self, c: &CastExpr) {
+        // `p as fn(A) -> R` and `f as void*` (Layout-ABI §L.6.4) reinterpret a
+        // code address. `Option<unsafe extern "C" fn(..)>` has exactly the
+        // layout of a nullable pointer, so the reinterpretation is a
+        // `transmute` between two pointer-sized values, `null` to `None` and
+        // back. Tycheck has already required `unsafe`.
+        let from_fn_pointer = matches!(
+            self.expr_types.get(&crate::exprs::expr_span_of(&c.value)),
+            Some(juxc_tycheck::Ty::FnPtr { .. })
+        );
+        if c.ty.fn_pointer_shape().is_some() || from_fn_pointer {
+            self.w.push_str("std::mem::transmute::<_, ");
+            self.emit_type_as_rust(&c.ty);
+            self.w.push_str(">(");
+            self.emit_expr(&c.value);
+            self.w.push(')');
+            return;
+        }
         // **Reference cast between user types** (class / interface): an upcast
         // coerces into the target trait object, a downcast goes through the
         // runtime-type `__jux_as_<T>` hook (panicking `ClassCastException` on
@@ -311,18 +328,21 @@ impl RustEmitter {
                 return;
             }
             // `&xs[i]` into an array or collection handle: the address of the
-            // element inside the shared buffer, computed from the buffer's own
-            // pointer. The `borrow_mut()` guard is then an ordinary temporary
-            // of the statement. Through `addr_of_mut!(xs.borrow_mut()[i])` it
-            // was a place borrowed by a `let` initializer, which Rust extends
-            // to the end of the enclosing BLOCK: every later read of `xs` in the
-            // same `unsafe` block panicked with "already mutably borrowed".
+            // element inside the shared buffer, reached through the cell's own
+            // pointer (`RefCell::as_ptr`) and so without a borrow guard at all,
+            // the same way `&obj` reaches an object (§L.6.5). A guard was the
+            // bug twice over: `addr_of_mut!(xs.borrow_mut()[i])` in a `let`
+            // lived to the end of the BLOCK, and `xs.borrow_mut()...` in an
+            // argument lived to the end of the STATEMENT, so
+            // `qsort(&xs[0], xs.length, …)` panicked with "already mutably
+            // borrowed" while reading the length it was passing.
             if let Expr::Index(ix) = &*u.operand {
                 if self.expr_is_collection_handle(&ix.array) && !self.expr_is_raw_pointer(&ix.array) {
                     let prev_lvalue = std::mem::take(&mut self.emitting_lvalue);
+                    self.w.push_str("(*");
                     self.emit_pointer_receiver(&ix.array);
                     self.emitting_lvalue = prev_lvalue;
-                    self.w.push_str(".borrow_mut().as_mut_ptr().offset(");
+                    self.w.push_str(".as_ptr()).as_mut_ptr().offset(");
                     self.emit_pointer_step(&ix.index);
                     self.w.push(')');
                     return;

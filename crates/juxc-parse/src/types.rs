@@ -42,6 +42,32 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_type_ref_inner(&mut self) -> Option<TypeRef> {
+        // Function-pointer type `fn(A, B) -> R` (Layout-ABI §L.6.4). `fn` is
+        // contextual: only `fn` directly followed by `(` in a type position
+        // starts one, so a type or variable called `fn` keeps working.
+        if self.at_fn_pointer_type(self.pos) {
+            let start = self.peek_span();
+            self.advance(); // `fn`
+            let Some(mut t) = self.try_parse_function_type() else {
+                self.expect(&TokenKind::Arrow, "'->' and a result type in a function-pointer type");
+                return None;
+            };
+            let shape = t.fn_shape.as_mut().expect("a function type has a shape");
+            // A code address has no `async` or `throws` story: C has neither.
+            if shape.is_async || !shape.throws.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "a function pointer cannot be `async` or declare `throws` -- it is a C \
+                         code address, and C has neither",
+                    )
+                    .with_span(t.span),
+                );
+            }
+            shape.is_pointer = true;
+            t.span = start.join(t.span);
+            return Some(t);
+        }
         // Function-type shape `(A, B) async? throws? -> R` per
         // grammar §A.2.7. Detected by the `(` lead. We commit to
         // the function-type branch only after the closing `)` so
@@ -326,9 +352,17 @@ impl<'a> Parser<'a> {
                 return_type,
                 is_async,
                 throws,
+                is_pointer: false,
             })),
             span: start.join(end),
         })
+    }
+
+    /// Whether the tokens at `i` begin a function-pointer type: the contextual
+    /// word `fn` followed immediately by `(`.
+    pub(crate) fn at_fn_pointer_type(&self, i: usize) -> bool {
+        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(name)) if name == "fn")
+            && matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::LParen))
     }
 
     /// Per §A.2.1 `qualified-name = identifier ( '.' identifier )*`.

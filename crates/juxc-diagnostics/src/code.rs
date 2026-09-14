@@ -452,6 +452,15 @@ pub enum Code {
     /// in its elements before the program writes them. `new T[]{…}` lists
     /// them; a `Vec<T>` grows as they are made.
     E0458_ArrayElementHasNoDefault,
+    /// E0513 -- A function given where a **function pointer** is expected does
+    /// not fit it (Layout-ABI §L.6.4): it is a method rather than a free
+    /// function, it is generic or overloaded, it declares `throws`, or its
+    /// parameters or result do not correspond to the pointer's.
+    E0513_FunctionDoesNotFitPointer,
+    /// E0514 -- A lambda that reads a local, a parameter, a field or `this`
+    /// from the code around it is given where a **function pointer** is
+    /// expected (Layout-ABI §L.6.4). A code address has nowhere to keep them.
+    E0514_CapturingLambdaAsPointer,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -855,6 +864,8 @@ impl Code {
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0460_MissingReturn            => "E0460",
             Code::E0458_ArrayElementHasNoDefault => "E0458",
+            Code::E0513_FunctionDoesNotFitPointer => "E0513",
+            Code::E0514_CapturingLambdaAsPointer => "E0514",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

@@ -2332,6 +2332,11 @@ impl<'a> Parser<'a> {
     /// `void` is accepted as a (result-position) type. Shared by the member
     /// discriminator and `scan_fn_type_at`.
     fn scan_type_at(&self, mut i: usize) -> Option<usize> {
+        // `fn(A) -> R`: a function-pointer type is the function-type scan
+        // after its leading `fn`.
+        if self.at_fn_pointer_type(i) {
+            return self.scan_fn_type_at(i + 1);
+        }
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
             if let Some(j) = self.scan_fn_type_at(i) {
                 return Some(j);

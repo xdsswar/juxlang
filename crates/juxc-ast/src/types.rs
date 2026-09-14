@@ -65,6 +65,18 @@ impl TypeRef {
         self.ptr_depth > 0
     }
 
+    /// The shape of a closure type `(A) -> R`, or `None` for anything else,
+    /// a function pointer included.
+    pub fn closure_shape(&self) -> Option<&FnTypeShape> {
+        self.fn_shape.as_deref().filter(|s| !s.is_pointer)
+    }
+
+    /// The shape of a function-pointer type `fn(A) -> R` (Layout-ABI §L.6.4),
+    /// or `None` for anything else, a closure type included.
+    pub fn fn_pointer_shape(&self) -> Option<&FnTypeShape> {
+        self.fn_shape.as_deref().filter(|s| s.is_pointer)
+    }
+
     /// Recognize a **synthetic const-generic argument** — the parser
     /// carries the literal in `new RingBuffer<float, 256>()` /
     /// `StackString<32>` as a `TypeRef` whose single name segment is
@@ -109,6 +121,14 @@ pub struct FnTypeShape {
     /// Names listed in the `throws` clause, in source order.
     /// Empty when the user didn't write `throws`.
     pub throws: Vec<TypeRef>,
+    /// True for a **function-pointer** type, `fn(A) -> R` (Layout-ABI
+    /// §L.6.4): a C code address with no environment, whose signature follows
+    /// the C mapping of §8.1.1. False for a closure type `(A) -> R`. The two
+    /// share this shape because they share their syntax after the `fn`, and
+    /// nothing else: a consumer that means "closure" checks
+    /// [`TypeRef::closure_shape`], and one that means "function pointer"
+    /// checks [`TypeRef::fn_pointer_shape`].
+    pub is_pointer: bool,
 }
 
 /// One position inside a generic argument list — either a fully-named

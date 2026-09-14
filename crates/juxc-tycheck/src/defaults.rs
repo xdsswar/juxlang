@@ -11,7 +11,7 @@
 //! The rule, in the spec's words:
 //!
 //! - numbers, `bool`, `char` and `String` have one (zero, `false`, `'\0'`, `""`);
-//! - a nullable `T?` and a raw pointer `T*` default to `null`;
+//! - a nullable `T?`, a raw pointer `T*` and a function pointer default to `null`;
 //! - a runtime-sized array `T[]` defaults to an empty array, and a fixed one
 //!   `T[N]` to `N` defaults of `T`;
 //! - an enum defaults to its first variant that carries no payload;
@@ -52,7 +52,7 @@ fn member_has_default_in(
     symbols: &SymbolTable,
     visiting: &mut Vec<String>,
 ) -> bool {
-    if ty_ref.ptr_depth > 0 || ty_ref.nullable {
+    if ty_ref.ptr_depth > 0 || ty_ref.nullable || ty_ref.fn_pointer_shape().is_some() {
         return true;
     }
     if ty_ref.fn_shape.is_some() {
@@ -78,7 +78,12 @@ fn member_has_default_in(
 
 fn ty_has_default_in(ty: &Ty, symbols: &SymbolTable, visiting: &mut Vec<String>) -> bool {
     match ty {
-        Ty::Primitive(_) | Ty::String | Ty::Nullable(_) | Ty::Param(_) | Ty::Unknown => true,
+        Ty::Primitive(_)
+        | Ty::String
+        | Ty::Nullable(_)
+        | Ty::FnPtr { .. }
+        | Ty::Param(_)
+        | Ty::Unknown => true,
         Ty::Array { element, kind } => match kind {
             crate::ty::ArrayKind::Dynamic => true,
             crate::ty::ArrayKind::Fixed => ty_has_default_in(element, symbols, visiting),

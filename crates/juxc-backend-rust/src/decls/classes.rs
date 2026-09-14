@@ -172,7 +172,7 @@ impl RustEmitter {
         // name — satisfying the marker-trait `Debug` supertrait bound
         // without requiring Debug on the stored closure.
         let has_fn_field = class_decl.fields.iter().any(|f| {
-            f.ty.as_ref().map(|t| t.fn_shape.is_some()).unwrap_or(false)
+            f.ty.as_ref().map(|t| t.closure_shape().is_some()).unwrap_or(false)
                 // §P.2: `observer<T>` fields lower to `Rc<dyn Fn(…)>` —
                 // same no-Debug shape as fn-typed fields.
                 || f.ty
@@ -893,7 +893,7 @@ impl RustEmitter {
         let inner_has_fn_field = class_decl.fields.iter().any(|f| {
             f.ty.as_ref()
                 .map(|t| {
-                    t.fn_shape.is_some()
+                    t.closure_shape().is_some()
                         || (t.name.segments.len() == 1
                             && t.name.segments[0].text == "observer")
                 })
@@ -6142,6 +6142,7 @@ pub(crate) fn substitute_type_ref(
             return_type: substitute_type_ref(&fs.return_type, subst),
             is_async: fs.is_async,
             throws: fs.throws.clone(),
+            is_pointer: fs.is_pointer,
         })
     });
     juxc_ast::TypeRef {

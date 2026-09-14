@@ -112,7 +112,28 @@ refcount, does not keep `obj` alive, and steps around the normal borrow checks
 object *identity* without `unsafe`, reach for `===` (§2), not a numeric address. ✅
 
 Function pointers `fn(A) -> R` (distinct from closures `(A) -> R`) are the C
-callback mechanism (§L.6.4) 📐.
+callback mechanism (§L.6.4) ✅. The signature is a C signature wherever it is
+written, a free function or a lambda that captures nothing converts to one, and
+a call through one (`f(x)`, or `table.name(x)` for a pointer in a field) needs
+`unsafe`:
+
+```jux
+@layout(c)
+struct Ops {
+    public fn(int, int) -> int combine;
+}
+
+public int add(int a, int b) { return a + b; }
+
+public void main() {
+    var ops = new Ops(add);
+    fn(int) -> int twice = x -> x * 2;
+    unsafe {
+        print(ops.combine(2, 3));   // 5
+        print(twice(21));           // 42
+    }
+}
+```
 
 ---
 
@@ -400,7 +421,7 @@ these symbols as a `.dll` / `.so` / `.a`. See `examples/ffi_export.jux`.
 | `@export` Jux→C (incl. `String` marshalling)          | ✅ |
 | foreign `free`/`delete`, `malloc` via FFI             | ✅ |
 | header `bindgen`, C++ via `autocxx`                   | 📐 |
-| function pointers `fn(...)->R` as C callbacks          | 📐 |
+| function pointers `fn(...)->R` as C callbacks          | ✅ |
 | `transmute`, inline `asm`, `Volatile.atAddress`       | 📐 |
 
 The ✅ rows work today: declaring, linking, and calling C functions with full

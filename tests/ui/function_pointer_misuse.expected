@@ -1,0 +1,14 @@
+function_pointer_misuse.jux:14:34: [E0514] error: this lambda reads `this` from the code around it, so it cannot be a function pointer: a code address has nowhere to keep it -- pass the value through a `void*` argument, or use a closure type `(…) -> …` instead of `fn(…) -> …`
+function_pointer_misuse.jux:15:35: [E0514] error: this lambda reads `count` from the code around it, so it cannot be a function pointer: a code address has nowhere to keep it -- pass the value through a `void*` argument, or use a closure type `(…) -> …` instead of `fn(…) -> …`
+function_pointer_misuse.jux:16:33: [E0513] error: `bump` cannot be used as `fn(int) -> int`: it is a method, and a method needs an object; only a free function has a plain code address
+function_pointer_misuse.jux:30:28: [E0513] error: `add` cannot be used as `fn(int) -> int`: it takes 2 parameters, and the pointer takes 1
+function_pointer_misuse.jux:31:27: [E0513] error: `wide` cannot be used as `fn(int) -> int`: parameter `a` is `long`, and the pointer passes `int`
+function_pointer_misuse.jux:32:31: [E0513] error: `risky` cannot be used as `fn(int) -> int`: it declares `throws`, and an exception cannot cross a C frame
+function_pointer_misuse.jux:33:30: [E0513] error: `same` cannot be used as `fn(int) -> int`: it is generic, and a code address is one concrete function
+function_pointer_misuse.jux:34:33: [E0513] error: `over` cannot be used as `fn(int) -> int`: it is overloaded, so the name does not pick one function
+function_pointer_misuse.jux:35:31: [E0514] error: this lambda reads `base` from the code around it, so it cannot be a function pointer: a code address has nowhere to keep it -- pass the value through a `void*` argument, or use a closure type `(…) -> …` instead of `fn(…) -> …`
+function_pointer_misuse.jux:36:33: [E0513] error: this lambda takes 1 parameter, and `fn(int, int) -> int` takes 2
+function_pointer_misuse.jux:38:8: [E0508] error: `int[]` has no C form, so it cannot appear in the function-pointer type `fn(int[]) -> int` -- use a primitive, `String`, a raw pointer, a `@layout(c)` type, or another function pointer
+function_pointer_misuse.jux:40:13: [E0506] error: calling through a function pointer requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+function_pointer_misuse.jux:42:27: [E0506] error: a cast to or from a function pointer requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+function_pointer_misuse.jux:44:26: [E0411] error: this function pointer takes 1 argument, but 2 were given

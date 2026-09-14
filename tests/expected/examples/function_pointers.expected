@@ -1,0 +1,7 @@
+lambda 10, picked 13 and 42, strings hi!
+field call 20
+replaced 4
+table 42, then reset to 1
+sorted by C 9 7 3 1
+null true, same address true
+through void* 4

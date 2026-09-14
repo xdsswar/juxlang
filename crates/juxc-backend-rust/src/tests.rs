@@ -5219,6 +5219,78 @@ fn nullable_element_read_clones_out_of_the_collection() {
     assert!(rust.contains("(objs[0].clone()).unwrap_or_else"), "assert: {rust}");
 }
 
+/// A function-pointer type lowers to a nullable C code pointer with C widths
+/// (§8.1.1), the same in a native declaration and in a field; `null` is `None`.
+#[test]
+fn function_pointer_type_lowers_to_nullable_extern_c() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { void qsort(void* b, ulong n, ulong s, fn(void*, void*) -> int cmp); } \
+         @layout(c) struct Ops { public fn(int, int) -> int combine; } \
+         public void main() { fn(int) -> int none = null; }",
+    );
+    assert!(
+        rust.contains("cmp: Option<unsafe extern \"C\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::c_int>"),
+        "native: {rust}"
+    );
+    assert!(
+        rust.contains("pub combine: Option<unsafe extern \"C\" fn(core::ffi::c_int, core::ffi::c_int) -> core::ffi::c_int>"),
+        "field: {rust}"
+    );
+    assert!(rust.contains("combine: None,"), "struct default: {rust}");
+    assert!(rust.contains("= None;"), "null local: {rust}");
+}
+
+/// A free function and a lambda given as function pointers get an
+/// `extern "C"` entry point that converts widths each way; a call through a
+/// pointer checks for null and converts like a native call.
+#[test]
+fn function_values_get_c_entry_points_and_calls_check_null() {
+    let rust = emit(
+        "public int add(int a, int b) { return a + b; } \
+         public void main() { fn(int, int) -> int f = add; fn(int) -> int g = x -> x * 2; \
+         unsafe { int r = f(1, 2); int s = g(3); } }",
+    );
+    assert!(rust.contains("unsafe extern \"C\" fn __jux_fn("), "entry point: {rust}");
+    assert!(rust.contains("let a0 = a0 as isize;"), "inbound width: {rust}");
+    assert!(rust.contains("let __r = add(a0, a1);"), "calls the function: {rust}");
+    assert!(rust.contains("__r as core::ffi::c_int"), "outbound width: {rust}");
+    assert!(rust.contains("fn __jux_lambda(x: isize) -> isize"), "lambda body: {rust}");
+    assert!(rust.contains("__jux_fn as unsafe extern \"C\" fn("), "item cast to pointer: {rust}");
+    assert!(rust.contains("call through a null function pointer"), "null check: {rust}");
+    assert!(rust.contains("as core::ffi::c_int"), "argument width: {rust}");
+}
+
+/// Casting between `void*` and a function pointer is a `transmute` between
+/// two pointer-sized values, and a cast under `*` keeps its parentheses.
+#[test]
+fn function_pointer_casts_transmute_and_deref_of_cast_keeps_parens() {
+    let rust = emit(
+        "public void main() { fn(int) -> int g = x -> x; \
+         unsafe { void* raw = g as void*; fn(int) -> int back = raw as fn(int) -> int; \
+         int n = 5; int* p = &n; int m = *(p as int*); } }",
+    );
+    assert!(rust.contains("std::mem::transmute::<_, *mut core::ffi::c_void>(g)"), "to void*: {rust}");
+    assert!(
+        rust.contains("std::mem::transmute::<_, Option<unsafe extern \"C\" fn(core::ffi::c_int) -> core::ffi::c_int>>(raw)"),
+        "from void*: {rust}"
+    );
+    assert!(rust.contains("*(p as *mut isize)"), "deref of a cast: {rust}");
+}
+
+/// A lambda converted to a function pointer is emitted as a nested function;
+/// that must not reset the enclosing function's own `let mut` analysis, and a
+/// `null` given to a pointer field of a `@layout(c)` struct's implicit
+/// constructor is a null pointer, not `None`.
+#[test]
+fn nested_lambda_keeps_outer_mutability_and_ctor_null_is_a_pointer() {
+    let rust = emit(
+        "@layout(c) struct Env { public Env* next; public int factor; } \
+         public void main() { fn(int) -> int g = x -> x; Env env = new Env(null, 7); \
+         unsafe { env.factor = 2; Env* e = &env; } }",
+    );
+    assert!(rust.contains("let mut env: Env = Env::new(std::ptr::null_mut(), 7);"), "outer let mut: {rust}");
+}
+
 /// `&xs[i]` into an array handle takes the address from the buffer's own
 /// pointer. Through `addr_of_mut!(xs.borrow_mut()[i])` the `RefMut` guard
 /// lived to the end of the enclosing block, so reading `xs` again in the same
@@ -5229,7 +5301,7 @@ fn address_of_array_element_does_not_hold_the_borrow() {
         "public void main() { int[] xs = {1, 2, 3}; \
          unsafe { int* p = &xs[1]; int first = xs[0]; } }",
     );
-    assert!(rust.contains("xs.borrow_mut().as_mut_ptr().offset(1)"), "address: {rust}");
+    assert!(rust.contains("(*xs.as_ptr()).as_mut_ptr().offset(1)"), "address: {rust}");
     assert!(!rust.contains("addr_of_mut!(xs.borrow_mut()"), "guard held: {rust}");
 }
 

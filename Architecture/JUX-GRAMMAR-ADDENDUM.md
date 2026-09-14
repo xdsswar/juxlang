@@ -411,6 +411,7 @@ nullable-type     = simple-type '?'?
 simple-type       = qualified-name generic-args?              -- named
                   | tuple-type
                   | function-type
+                  | function-pointer-type                     -- C code address (Layout-ABI §L.6.4)
                   | array-type
                   | observer-type                             -- observable callback (§P.2)
                   | pointer-type                              -- unsafe contexts
@@ -423,6 +424,8 @@ tuple-type        = '(' ')'                                   -- unit; reserved
 
 function-type     = '(' type-list? ')' ( 'async' )? ( 'throws' type-list )?
                     '->' type
+
+function-pointer-type = 'fn' '(' type-list? ')' '->' type     -- `fn` is contextual, not reserved
 
 array-type        = type array-dim+
 array-dim         = '[' ']'                                   -- dynamic dimension (runtime size)

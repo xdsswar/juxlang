@@ -134,6 +134,12 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // A function pointer (Layout-ABI §L.6.4) is the same Rust type in every
+        // position: a nullable C code address.
+        if let Some(shape) = ty.fn_pointer_shape() {
+            self.emit_fn_pointer_type(shape);
+            return;
+        }
         // Rust's inference placeholder, put here by
         // [`crate::RustEmitter::cast_type_in_caller_scope`] for a generic
         // argument naming a type parameter the CALLEE owns. It is a type
@@ -1188,6 +1194,27 @@ impl RustEmitter {
         }
     }
 
+    /// `fn(A, B) -> R` as `Option<unsafe extern "C" fn(A', B') -> R'>`, where
+    /// each primed type is the C type of that name (§8.1.1), exactly as a
+    /// `native` declaration spells it. `Option` makes `null` a value of the
+    /// type at no cost: Rust lays it out as the one nullable code pointer C
+    /// expects. `unsafe` because nothing vouches for what the address runs.
+    pub(crate) fn emit_fn_pointer_type(&mut self, shape: &juxc_ast::FnTypeShape) {
+        self.w.push_str("Option<unsafe extern \"C\" fn(");
+        for (i, p) in shape.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_ffi_type(p);
+        }
+        self.w.push(')');
+        if !crate::exprs::type_ref_is_void_name(&shape.return_type) {
+            self.w.push_str(" -> ");
+            self.emit_ffi_type(&shape.return_type);
+        }
+        self.w.push('>');
+    }
+
     /// Like [`Self::emit_type_as_rust`] but for **class-field type
     /// position** — kept as a thin wrapper so a future divergence
     /// (e.g. lifetime threading for borrowed-field designs) has a
@@ -1256,7 +1283,8 @@ impl RustEmitter {
         // Shape modifiers come first — `int[]` is a Vec (its ELEMENT
         // primitive must not leak through as the default), and a
         // nullable slot's default is `None` regardless of the inner.
-        if ty.nullable {
+        // A nullable slot, and a function pointer, whose default is `null`.
+        if ty.nullable || ty.fn_pointer_shape().is_some() {
             self.w.push_str("None");
             return;
         }

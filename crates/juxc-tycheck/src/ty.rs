@@ -97,6 +97,22 @@ pub enum Ty {
         /// compatibility checks land with the runtime work.
         is_async: bool,
     },
+    /// A function pointer, `fn(A, B) -> R` (Layout-ABI §L.6.4): a C code
+    /// address, distinct from the closure type [`Ty::Fn`]. Neither converts to
+    /// the other. Its `null` is the pointer's own default, so the type is
+    /// nullable without a `?`, like a raw pointer.
+    FnPtr {
+        /// Parameter types, left to right, by their Jux names.
+        params: Vec<Ty>,
+        /// Raw-pointer depth of each parameter. `Ty` erases `*`, and without
+        /// it `fn(void*) -> int` and `fn(int*) -> int` would compare equal
+        /// whenever their pointees did.
+        param_ptr_depths: Vec<u8>,
+        /// Result type; `void` lands as `Ty::Void`.
+        return_type: Box<Ty>,
+        /// Raw-pointer depth of the result.
+        return_ptr_depth: u8,
+    },
     /// The unit/return-nothing type. Methods declared `void` return
     /// this. Expressions are never `Void` — that's reserved for
     /// statement-context constructs.
@@ -315,6 +331,23 @@ impl fmt::Display for Ty {
                 }
                 write!(f, " -> {return_type}")
             }
+            Ty::FnPtr { params, param_ptr_depths, return_type, return_ptr_depth } => {
+                f.write_str("fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{p}")?;
+                    for _ in 0..param_ptr_depths.get(i).copied().unwrap_or(0) {
+                        f.write_str("*")?;
+                    }
+                }
+                write!(f, ") -> {return_type}")?;
+                for _ in 0..*return_ptr_depth {
+                    f.write_str("*")?;
+                }
+                Ok(())
+            }
             Ty::Void => f.write_str("void"),
             Ty::Nullable(inner) => write!(f, "{inner}?"),
             Ty::Unknown => f.write_str("<unknown>"),
@@ -425,6 +458,14 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         } else {
             Box::new(ty_from_ref(r, env, symbols))
         };
+        if fn_shape.is_pointer {
+            return Ty::FnPtr {
+                params,
+                param_ptr_depths: fn_shape.params.iter().map(|p| p.ptr_depth).collect(),
+                return_type,
+                return_ptr_depth: fn_shape.return_type.ptr_depth,
+            };
+        }
         return Ty::Fn {
             params,
             return_type,
@@ -838,6 +879,12 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
                 .collect(),
             return_type: Box::new(substitute_inner(return_type, params, args)),
             is_async: *is_async,
+        },
+        Ty::FnPtr { params: ps, param_ptr_depths, return_type, return_ptr_depth } => Ty::FnPtr {
+            params: ps.iter().map(|p| substitute_inner(p, params, args)).collect(),
+            param_ptr_depths: param_ptr_depths.clone(),
+            return_type: Box::new(substitute_inner(return_type, params, args)),
+            return_ptr_depth: *return_ptr_depth,
         },
         Ty::Nullable(inner) => Ty::Nullable(Box::new(substitute_inner(inner, params, args))),
         Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Unknown => ty.clone(),

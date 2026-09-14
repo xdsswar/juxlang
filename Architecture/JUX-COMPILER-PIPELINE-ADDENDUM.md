@@ -630,7 +630,8 @@ JUX-LANG-V1 §13.1 specifies "Lowering to Rust source code." This section gives 
 | `T[]`                                       | `Box<[T]>`                                                 |
 | `T[N]` (const-size)                         | `[T; N]`                                                   |
 | `(A, B)`                                    | `(A, B)`                                                   |
-| `(A, B) -> R`                               | `Box<dyn Fn(A, B) -> R>` for closures; `fn(A, B) -> R` for function pointers |
+| `(A, B) -> R`                               | `Box<dyn Fn(A, B) -> R>` for closures                     |
+| `fn(A, B) -> R`                             | `Option<unsafe extern "C" fn(A', B') -> R'>`, with C widths (Layout-ABI §L.6.4) |
 | `() async -> R`                             | `Box<dyn Future<Output=R>>`                                |
 | Class `C { ... }`                           | `struct C { ... }` + `Arc`-wrapped instances + a vtable enum for virtual dispatch |
 | Interface `I { ... }`                       | `trait I { ... }` + `dyn I` for interface references       |

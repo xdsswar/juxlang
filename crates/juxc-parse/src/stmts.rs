@@ -971,6 +971,10 @@ impl<'a> Parser<'a> {
     /// pointer stars) and recurses for a nested function type, which is what a
     /// curried return type (`(int) -> (int) -> int`) needs.
     fn skip_one_type(&self, i: usize) -> Option<usize> {
+        // `fn(A) -> R`: the same scan as a closure type, one token later.
+        if self.at_fn_pointer_type(i) {
+            return self.skip_one_type(i + 1);
+        }
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
             let mut j = self.skip_balanced_parens(i)?;
             if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
@@ -1081,6 +1085,19 @@ impl<'a> Parser<'a> {
     /// version skipped dotted types and told users to write `var`, which is not
     /// what the grammar says.)
     pub(crate) fn looks_like_typed_local(&self) -> bool {
+        // A function-pointer local, `fn(int) -> int f = double;`. Without this
+        // `fn(int)` read as a call to something named `fn`.
+        if self.at_fn_pointer_type(self.pos) {
+            return self
+                .skip_one_type(self.pos)
+                .is_some_and(|after| {
+                    matches!(self.tokens.get(after).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+                        && matches!(
+                            self.tokens.get(after + 1).map(|t| &t.kind),
+                            Some(TokenKind::Eq) | Some(TokenKind::Semicolon),
+                        )
+                });
+        }
         // A FUNCTION-typed local — `(int) -> int f = (n) -> n + 1;`. Grammar
         // §A.2.7 makes `function-type` a `simple-type`, so it is legal wherever
         // a type is, `local-decl` included. It needs its own lookahead because

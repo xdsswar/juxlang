@@ -536,7 +536,7 @@ Outside `unsafe`, **none** of these operations compile: `&x`, `*p`, `p[i]`, `p +
 - **The C-style cast works for pointer types too**: `(int*) n`, `(void*) p`, `(int**) n`. A `*` directly before the closing parenthesis always makes it a cast.
 - **Nothing is checked.** As in C, stepping a pointer outside the allocation it points into, or reading through a dangling one, is undefined behaviour. The compiler neither tracks lengths nor inserts bounds checks; that is what makes it `unsafe`.
 
-*(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p) as i64`, and the compound forms reassign the offset pointer. `&xs[i]` on an array is `xs.borrow_mut().as_mut_ptr().offset(i)`: the address comes from the buffer's own pointer, so no borrow of the array outlives the statement and `xs` stays usable beside the pointer.)*
+*(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p) as i64`, and the compound forms reassign the offset pointer. `&xs[i]` on an array is `(*xs.as_ptr()).as_mut_ptr().offset(i)`: the address comes from the cell's own pointer with no borrow guard, so `xs` stays usable beside the pointer, in the same statement as well as after it.)*
 
 ### L.6.3. Pointer-Reference Conversion
 
@@ -569,27 +569,63 @@ The cast `data as byte*` (where `data: byte[]`) inside `unsafe` produces a point
 
 ### L.6.4. Function Pointers
 
-`fn(int) -> int` is a function-pointer type. It is **not** the same as `(int) -> int` (which is a closure type that may capture state). Function pointers are:
+`fn(int) -> int` is a function-pointer type: the address of a function that follows the C calling convention. It is **not** the same as `(int) -> int`, which is a closure type that may capture state. A function pointer is a plain code address with no environment, which is what C expects wherever it takes a callback, and what C hands back in function tables such as JNI's `JNIEnv` or a COM vtable.
 
-- Plain code addresses, no closure environment.
-- Convertible to `void*` and back inside `unsafe`.
-- The standard FFI mechanism for callbacks: a Jux function can be passed to C as a function pointer if it has no captured state and a C-compatible signature.
+**Syntax.**
+
+```
+function-pointer-type = 'fn' '(' type-list? ')' '->' type
+```
+
+`fn` is not a reserved word. It begins a type only in a type position and only when `(` follows it, so a function or variable named `fn` keeps working. The result type is `void` for a function that returns nothing. A function-pointer type can be written anywhere a type can: a local, a parameter, a return type, a field (a `@layout(c)` struct field included), and a parameter or result of a `native` declaration. It cannot be an array element: `fn(int) -> int[]` is a function returning `int[]`.
+
+**The signature is a C signature, wherever it is written.** The code at the address was compiled for C, by a C compiler or by Jux, so the parameter and result types of a function-pointer type follow the C mapping of JUX-LANG-V1 §8.1.1 in every position, not only inside a `native` block: `fn(int) -> int` takes and returns a C `int`. The types allowed are the ones an `@export` signature allows: primitives, `String` (a C `const char*`), raw pointers including `void*`, `@layout(c)` structs and enums, and other function pointers. A class, a collection, an array, a closure or a nullable type in the signature is `E0508`.
+
+**Values.** A function pointer holds one of:
+
+- `null`, its default value (§5.5), which is also what an unset C slot holds;
+- the name of a free function whose parameters and result correspond to the pointer's: the same number of parameters, each of the same type name, and the same result type name (`void` for none). Widths are converted at the boundary exactly as a native call converts them (§8.1.1), so `int compare(void* a, void* b)` fits `fn(void*, void*) -> int`. A function that is generic, overloaded, or declares `throws` does not fit, and neither does a name that does not correspond (`E0513`);
+- a lambda that captures nothing: `fn(int) -> int twice = x -> x * 2;`. Its parameters take the pointer's types. A lambda that reads a local, a parameter, a field or `this` of the code around it is `E0514`: a code address has nowhere to keep them. Pass that state through a `void*` argument instead, the `(callback, void* userdata)` convention C APIs already use;
+- another value of the same function-pointer type, which copies the address;
+- inside `unsafe`, a `void*` cast to the type (`p as fn(void*) -> int`), and back again (`f as void*`).
+
+**Calls.** `f(args)` calls through the pointer when `f` is a local or parameter of function-pointer type, and `obj.name(args)` calls through the pointer stored in the field `name`, so a C function table reads the way C writes it:
 
 ```jux
-public unsafe int compare(byte* a, byte* b, ulong len) { ... }
-
-@extern(lib = "c")
-unsafe native {
-    void qsort(void* base, ulong nmemb, ulong size,
-               fn(void*, void*) -> int compare);
-}
-
 unsafe {
-    qsort(arr as void*, arr.length, sizeof<MyStruct>(), compare);
+    var cls = (*(*env).functions).FindClass(env, "java/lang/String");
 }
 ```
 
-Closures with captured state cannot be converted to function pointers; the compiler rejects this at compile time (`E0830`). The recommended pattern for C callbacks that need user data is the `(callback, void* userdata)` C convention, marshalling via `unsafe`.
+A call through a function pointer requires `unsafe` (`E0506`): the address may have come from C, and nothing checks that it is a function of that signature. Arguments and the result are converted as for a native call. Calling a `null` function pointer throws `NullPointerException` instead of jumping to address zero.
+
+A `String` crosses a function pointer as a C string, by the rules of a native call and an `@export` function: the caller keeps its argument and the callee reads a copy, and a `String` result is handed over in a buffer that nothing frees. A callback that returns strings on a hot path leaks each one; return a pointer into memory the program manages instead.
+
+**Comparison.** `f == null` and `f == g` compare addresses, and need no `unsafe`, since neither reads through the pointer.
+
+**Exceptions.** A Jux function reached through a pointer may have C frames beneath it, and C frames cannot be unwound. An exception that escapes such a function ends the program with its message rather than unwinding into C. Catch it inside the function and return an error value, as an `@export` function does.
+
+```jux
+@extern(lib = "msvcrt")
+unsafe native {
+    void qsort(void* base, ulong count, ulong size, fn(void*, void*) -> int compare);
+}
+
+public unsafe int byValue(void* a, void* b) {
+    int x = *(a as i32*);
+    int y = *(b as i32*);
+    return x - y;
+}
+
+public void main() {
+    i32[] values = {3, 1, 2};
+    unsafe {
+        qsort(&values[0] as void*, values.length as ulong, sizeof(i32) as ulong, byValue);
+    }
+}
+```
+
+*(Phase 1 lowering: `fn(int) -> int` is `Option<unsafe extern "C" fn(c_int) -> c_int>`, so `null` is `None` and the representation is a single nullable C code pointer. A function name or a lambda becomes `Some` of a small `unsafe extern "C" fn` that converts widths and calls the Jux code. A call is `(f.unwrap_or_else(|| throw NullPointerException))(args)`, with the conversions of a native call around it.)*
 
 ### L.6.5. Address-of a Class Object (`&obj`)
 

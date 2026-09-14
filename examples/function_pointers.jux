@@ -1,0 +1,132 @@
+// Function pointers: C code addresses (Layout-ABI §L.6.4).
+//
+// `fn(A) -> R` is a plain code address with no environment, which is what C
+// takes as a callback and what C hands back in a function table. Its signature
+// is a C signature wherever it is written, so `fn(int) -> int` takes and
+// returns a C `int`, converted at the boundary like any native call.
+//
+// This example covers:
+//   - a free function and a lambda that captures nothing, both as pointers;
+//   - a pointer in a class field, called with and without `this.`;
+//   - a C-style function table reached through a pointer, the shape of JNI's
+//     `JNIEnv` or a COM vtable: `(*(*env).functions).scale(env, 6)`;
+//   - C calling back into Jux: `qsort` with a Jux comparator;
+//   - `null`, `==`, and a round trip through `void*`.
+//
+// `qsort` is linked from `msvcrt` on Windows; elsewhere link `c` instead
+// (`@extern(lib = "c")`).
+
+@extern(lib = "msvcrt")
+unsafe native {
+    void qsort(void* base, ulong count, ulong size, fn(void*, void*) -> int compare);
+}
+
+/** A table of functions, as a C library would publish one. */
+@layout(c)
+struct Table {
+    public fn(Env*, int) -> int scale;
+    public fn(Env*) -> void reset;
+}
+
+/** The object the table's functions receive, pointing back at its table. */
+@layout(c)
+struct Env {
+    public Table* functions;
+    public int factor;
+}
+
+/** Calls whatever function it was given, through a field. */
+class Handler {
+    public fn(int) -> int onEvent;
+    public int seen = 0;
+
+    public Handler(fn(int) -> int onEvent) {
+        this.onEvent = onEvent;
+    }
+
+    public int fire(int v) {
+        unsafe {
+            seen = onEvent(v) + this.onEvent(v);
+        }
+        return seen;
+    }
+}
+
+public int add(int a, int b) {
+    return a + b;
+}
+
+public String shout(String s) {
+    return s + "!";
+}
+
+public int envScale(Env* env, int n) {
+    unsafe {
+        return (*env).factor * n;
+    }
+}
+
+public void envReset(Env* env) {
+    unsafe {
+        (*env).factor = 1;
+    }
+}
+
+/** A `qsort` comparator: reads two `i32`s and orders them high to low. */
+public unsafe int descending(void* a, void* b) {
+    i32 x = *(a as i32*);
+    i32 y = *(b as i32*);
+    return (y - x) as int;
+}
+
+/** Returns one of two functions, chosen at run time. */
+public fn(int, int) -> int pick(bool sum) {
+    if (sum) {
+        return add;
+    }
+    return (a, b) -> a * b;
+}
+
+public void main() {
+    fn(int) -> int clamp = x -> {
+        if (x > 10) {
+            return 10;
+        }
+        return x;
+    };
+    fn(String) -> String loud = shout;
+    unsafe {
+        print($"lambda ${clamp(99)}, picked ${pick(true)(6, 7)} and ${pick(false)(6, 7)}, strings ${loud("hi")}");
+    }
+
+    var handler = new Handler(clamp);
+    print($"field call ${handler.fire(50)}");
+    handler.onEvent = x -> x + 1;
+    print($"replaced ${handler.fire(1)}");
+
+    Table table = new Table(envScale, envReset);
+    Env env = new Env(null, 7);
+    unsafe {
+        env.functions = &table;
+        Env* e = &env;
+        int scaled = (*(*e).functions).scale(e, 6);
+        (*(*e).functions).reset(e);
+        print($"table ${scaled}, then reset to ${env.factor}");
+    }
+
+    i32[] values = {3, 9, 1, 7};
+    fn(void*, void*) -> int order = descending;
+    unsafe {
+        qsort(&values[0] as void*, values.length as ulong, sizeof(i32) as ulong, order);
+    }
+    print($"sorted by C ${values[0]} ${values[1]} ${values[2]} ${values[3]}");
+
+    fn(int) -> int missing = null;
+    fn(int) -> int same = clamp;
+    print($"null ${missing == null}, same address ${same == clamp}");
+    unsafe {
+        void* raw = clamp as void*;
+        fn(int) -> int back = raw as fn(int) -> int;
+        print($"through void* ${back(4)}");
+    }
+}

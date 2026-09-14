@@ -166,6 +166,42 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         )
     }
 
+    /**
+     * Function-pointer types (Layout-ABI §L.6.4) parse in every position the
+     * compiler accepts them: a native parameter, a struct field, a local with a
+     * lambda, a parameter and a return type. `fn` stays an ordinary name
+     * everywhere else.
+     */
+    fun testFunctionPointerTypesParse() {
+        val psi = createPsiFile(
+            "fnptr.jux",
+            """
+            @extern(lib = "msvcrt")
+            unsafe native {
+                void qsort(void* base, ulong count, ulong size, fn(void*, void*) -> int compare);
+            }
+            @layout(c)
+            struct Ops {
+                public fn(int, int) -> int combine;
+                public fn(Ops*) -> void reset;
+            }
+            public fn(int) -> int pick(fn(int) -> int fallback) {
+                fn(int) -> int twice = x -> x * 2;
+                int fn = 3;
+                return twice;
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(
+            "function-pointer types should parse without errors",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+        val fields = PsiTreeUtil.collectElementsOfType(psi, JuxFieldDeclaration::class.java).map { it.name }
+        assertTrue("fields keep their names: $fields", fields.containsAll(listOf("combine", "reset")))
+        val methods = PsiTreeUtil.collectElementsOfType(psi, JuxMethodDeclaration::class.java).map { it.name }
+        assertTrue("functions keep their names: $methods", methods.containsAll(listOf("qsort", "pick")))
+    }
+
     /** A native block in a package-less file with header + in-block comments and
      *  blank lines still parses cleanly (the shape examples/ffi_strings.jux uses). */
     fun testNativeExternBlockReproNoPackageWithComments() {

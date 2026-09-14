@@ -609,6 +609,10 @@ pub(crate) struct PendingSetterObserver {
 /// compiled and then did not stop it.
 pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"NullPointerException: `!!` asserted on a null value\"))))";
 
+/// How a call through a `null` function pointer raises (Layout-ABI §L.6.4):
+/// a Jux `NullPointerException`, not a jump to address zero.
+pub(crate) const FN_POINTER_NULL_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"NullPointerException: call through a null function pointer\"))))";
+
 /// How a failing downcast raises, either side of the target type name.
 /// Same reasoning as [`NOT_NULL_ASSERT_RAISE`]: the value, not a string.
 pub(crate) const CLASS_CAST_RAISE_OPEN: &str = "().unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::ClassCastException::new(String::from(\"ClassCastException: value is not a ";

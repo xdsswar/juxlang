@@ -3165,6 +3165,38 @@ fn struct_decl_parses_with_fields_and_generics() {
     assert_eq!(c.fields.len(), 2);
 }
 
+/// `fn(A) -> R` is a function-pointer type (Layout-ABI §L.6.4) in a local, a
+/// field, a parameter and a result; the shape is the closure shape with
+/// `is_pointer` set. `fn` without a `(` after it is still an ordinary name.
+#[test]
+fn function_pointer_type_parses_and_fn_stays_a_name() {
+    let ast = parse_clean(
+        "class Ops {\n\
+            public fn(int, int) -> int combine;\n\
+         }\n\
+         public fn(void*) -> void pick(fn(int) -> int f) {\n\
+            fn(int) -> int twice = x -> x * 2;\n\
+            int fn = 3;\n\
+            return null;\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    let field = c.fields[0].ty.as_ref().expect("typed field");
+    let shape = field.fn_pointer_shape().expect("a function-pointer field");
+    assert_eq!(shape.params.len(), 2);
+    assert!(field.closure_shape().is_none());
+    let TopLevelDecl::Function(f) = &ast.items[1] else { panic!("function") };
+    assert!(f.params[0].ty.fn_pointer_shape().is_some(), "parameter");
+    let juxc_ast::ReturnType::Type(ret) = &f.return_type else { panic!("result type") };
+    let ret_shape = ret.fn_pointer_shape().expect("result");
+    assert_eq!(ret_shape.params[0].ptr_depth, 1, "`void*` keeps its star");
+    let body = f.body.as_ref().expect("body");
+    let Stmt::VarDecl(twice) = &body.statements[0] else { panic!("typed local") };
+    assert!(twice.ty.as_ref().and_then(|t| t.fn_pointer_shape()).is_some(), "local");
+    let Stmt::VarDecl(named_fn) = &body.statements[1] else { panic!("`int fn = 3;`") };
+    assert_eq!(named_fn.name.text, "fn");
+}
+
 /// A field takes the brace shorthand for an array initializer the way a local
 /// does (JUX-LANG-V1 §5.5): dynamic and fixed, instance and `static`, and one
 /// brace level per dimension. It used to reach the expression parser, whose

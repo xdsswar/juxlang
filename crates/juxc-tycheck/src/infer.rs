@@ -889,6 +889,11 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // same-named free function (locals shadow).
     {
         let callee_ty = infer_expr(&c.callee, env, symbols);
+        // A call through a function pointer (Layout-ABI §L.6.4) produces the
+        // pointer's result type.
+        if let Ty::FnPtr { return_type, .. } = callee_ty {
+            return *return_type;
+        }
         if matches!(callee_ty, Ty::User { .. }) {
             if let Some(ret) =
                 lookup_user_operator_return_type(&callee_ty, OperatorKind::Call, env, symbols)

@@ -618,6 +618,34 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // A call THROUGH a function pointer (Layout-ABI §L.6.4), recognised by
+        // the callee's recorded type: converted like a native call, and a
+        // null pointer throws instead of jumping to address zero.
+        if let Some(juxc_tycheck::Ty::FnPtr { params, param_ptr_depths, return_type, return_ptr_depth }) =
+            self.expr_types.get(&crate::exprs::expr_span_of(&call.callee)).cloned()
+        {
+            let param_refs: Vec<juxc_ast::TypeRef> = params
+                .iter()
+                .zip(param_ptr_depths.iter().chain(std::iter::repeat(&0)))
+                .map(|(p, d)| crate::exprs::fn_pointer_sig_type_ref(p, *d))
+                .collect();
+            let ret_ref = crate::exprs::fn_pointer_sig_type_ref(&return_type, return_ptr_depth);
+            let args: Vec<FfiArg> = param_refs.iter().map(ffi_arg_kind).collect();
+            let ret = if crate::exprs::type_ref_is_void_name(&ret_ref) {
+                FfiRet::Plain
+            } else if type_ref_is_string(&ret_ref) {
+                FfiRet::Str { nullable: false }
+            } else if type_ref_is_char(&ret_ref) {
+                FfiRet::Char
+            } else {
+                match jux_int_rust_type(&ret_ref) {
+                    Some(rust) => FfiRet::Int(rust),
+                    None => FfiRet::Plain,
+                }
+            };
+            self.emit_extern_c_call_through(call, &args, ret, true);
+            return;
+        }
         // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
         // field chain. Re-shape the receiver into the class path it names, so
         // every static-call path below sees what it sees for `Crate.make()`.
@@ -2001,7 +2029,7 @@ impl RustEmitter {
                     let class = self.lookup_class_by_bare_or_fqn(bare)?;
                     class.fields.get(f.field.text.as_str())
                 })
-                .map(|fsig| fsig.ty.fn_shape.is_some())
+                .map(|fsig| fsig.ty.closure_shape().is_some())
                 .unwrap_or(false);
             if is_fn_field {
                 // Emit as `(field_read)(args)` — parens prevent Rust from
@@ -2406,6 +2434,35 @@ impl RustEmitter {
     /// surrounding Jux `unsafe { }` provides the unsafe context for the foreign
     /// call and the `CStr::from_ptr` read.
     fn emit_extern_c_call(&mut self, call: &CallExpr, args: &[FfiArg], ret: FfiRet) {
+        self.emit_extern_c_call_through(call, args, ret, false);
+    }
+
+    /// [`Self::emit_extern_c_call`], with the callee either a named foreign
+    /// function or, when `through_pointer`, a function-pointer value that is
+    /// checked for null first (§L.6.4). A call with nothing to convert skips
+    /// the block and reads as the plain call it is.
+    fn emit_extern_c_call_through(
+        &mut self,
+        call: &CallExpr,
+        args: &[FfiArg],
+        ret: FfiRet,
+        through_pointer: bool,
+    ) {
+        let plain = matches!(ret, FfiRet::Plain) && args.iter().all(|a| matches!(a, FfiArg::Plain));
+        if through_pointer && plain {
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_fn_pointer_callee(&call.callee);
+            self.w.push('(');
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_expr(arg);
+            }
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return;
+        }
         self.w.push_str("{ ");
         let prev = std::mem::take(&mut self.emitting_format_arg);
         // 1. Marshal each `String` argument into a NUL-terminated `CString` temp
@@ -2431,7 +2488,11 @@ impl RustEmitter {
         if convert_ret {
             self.w.push_str("let __ret = ");
         }
-        self.emit_expr(&call.callee);
+        if through_pointer {
+            self.emit_fn_pointer_callee(&call.callee);
+        } else {
+            self.emit_expr(&call.callee);
+        }
         self.w.push('(');
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 {
@@ -2507,6 +2568,17 @@ impl RustEmitter {
             }
         }
         self.w.push_str(" }");
+    }
+
+    /// The callee of a call through a function pointer: the pointer value,
+    /// unwrapped with a `NullPointerException` for `null`, in parentheses so
+    /// the argument list applies to the function rather than to a field or
+    /// method of the same name.
+    fn emit_fn_pointer_callee(&mut self, callee: &Expr) {
+        self.w.push('(');
+        self.emit_expr(callee);
+        self.w.push_str(crate::FN_POINTER_NULL_RAISE);
+        self.w.push(')');
     }
 
     fn emit_call_with_byref_writeback(&mut self, call: &CallExpr) {

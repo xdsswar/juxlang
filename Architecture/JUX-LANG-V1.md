@@ -3367,7 +3367,10 @@ Inside a `native` block, and on the signature of an `@export` function, a type n
 | `String` | `const char*` | `*const c_char` |
 | `T*` | `T*` | `*mut T` |
 | `void*` | `void*` | `*mut c_void` |
+| `fn(A) -> R` | `R (*)(A)` | `Option<unsafe extern "C" fn(A') -> R'>`, each primed type by this table |
 | `out T` | `T*` (callee writes) | `*mut T` |
+
+A function-pointer type follows this table wherever it is written, not only inside a `native` block: its code was compiled for C (Layout-ABI §L.6.4).
 
 Three of these are **not** the mapping the same name has in ordinary Jux code, and those three are exactly where a quiet mismatch used to live:
 

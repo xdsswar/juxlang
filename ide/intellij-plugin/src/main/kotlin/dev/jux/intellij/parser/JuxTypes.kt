@@ -45,6 +45,14 @@ fun PsiBuilder.parseType() {
             if (at(T.ARROW)) { advanceLexer(); parseType() }
         }
         at(T.VOID_KW) -> advanceLexer()
+        // Function-pointer type `fn(A, B) -> R` (Layout-ABI §L.6.4). `fn` is
+        // contextual, exactly as in the compiler: only `fn` directly followed by
+        // `(` in a type position starts one.
+        at(T.IDENTIFIER) && tokenText == "fn" && lookAhead(1) === T.LPAREN -> {
+            advanceLexer() // `fn`
+            skipMatched(T.LPAREN, T.RPAREN)
+            if (at(T.ARROW)) { advanceLexer(); parseType() }
+        }
         at(T.IDENTIFIER) -> {
             advanceLexer()
             while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) {

@@ -27,6 +27,8 @@ pub(crate) mod array;
 pub(crate) mod binary;
 pub(crate) mod call;
 pub(crate) mod field;
+pub(crate) mod fn_pointer;
+pub(crate) use fn_pointer::{fn_pointer_sig_type_ref, type_ref_is_void_name};
 pub(crate) mod simple;
 
 /// Discriminator for `emit_interp_string`'s deferred-arg emission —
@@ -762,6 +764,18 @@ impl RustEmitter {
                             .or_else(|| c.constructors.first())
                     })
                     .map(|ctor| ctor.params.iter().map(|p| p.ty.clone()).collect())
+                    // A `@layout(c)` struct with no constructor takes its
+                    // fields positionally (§L.1.2), in declaration order.
+                    .or_else(|| {
+                        let decl = self.lookup_class_ast_by_bare_or_fqn(name)?;
+                        (decl.constructors.is_empty() && crate::is_layout_c_struct(decl)).then(|| {
+                            decl.fields
+                                .iter()
+                                .filter(|f| !f.is_static)
+                                .filter_map(|f| f.ty.clone())
+                                .collect()
+                        })
+                    })
                     .or_else(|| {
                         self.symbols
                             .records
@@ -856,6 +870,12 @@ impl RustEmitter {
         // and the lexical-hoist paths.
         let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
             if let Some(pty) = ctor_param_types.get(i) {
+                // `null` into a raw-pointer parameter is a null pointer, not
+                // `None` (§L.6.1).
+                if pty.ptr_depth > 0 && matches!(arg, juxc_ast::Expr::Literal(juxc_ast::Literal::Null)) {
+                    this.w.push_str("std::ptr::null_mut()");
+                    return;
+                }
                 if !matches!(
                     this.iface_coercion_to(pty, arg),
                     crate::analysis::IfaceCoercion::None,
@@ -931,6 +951,18 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // A free function or a lambda given where a function pointer is
+        // expected becomes a C-ABI entry point (Layout-ABI §L.6.4). Tycheck
+        // records the pointer type under the value's span when it accepts one.
+        if matches!(expr, Expr::Path(_) | Expr::Lambda(_)) {
+            if let Some(slot @ juxc_tycheck::Ty::FnPtr { .. }) =
+                self.expr_types.get(&expr_span_of(expr)).cloned()
+            {
+                if self.emit_fn_pointer_value(expr, &slot) {
+                    return;
+                }
+            }
+        }
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
             // `typeof(expr)` (§5.9.10) — replaced at compile time by a
@@ -2292,6 +2324,10 @@ impl RustEmitter {
             // binary parent. (Inside another unary, multiple prefix
             // operators chain naturally as `--x` without extra parens.)
             Expr::Unary(_) => false,
+            // `as` binds looser than a prefix operator, so a cast under one
+            // keeps its parentheses: `*(p as *mut i32)`, not `*p as *mut i32`,
+            // which Rust reads as a cast of `*p`.
+            Expr::Cast(_) => parent_prec >= UNARY_PREC,
             // Atomic and postfix expressions never need parens — they
             // bind tighter than any binary operator.
             _ => false,
@@ -2972,7 +3008,7 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
 /// `(String) -> void`): the slot an expression-bodied lambda must discard its
 /// value in.
 pub(crate) fn type_ref_is_void_fn(t: &juxc_ast::TypeRef) -> bool {
-    t.fn_shape.as_ref().is_some_and(|fs| {
+    t.closure_shape().is_some_and(|fs| {
         fs.return_type.name.segments.last().is_some_and(|s| s.text == "void")
             && fs.return_type.fn_shape.is_none()
             && fs.return_type.array_shape.is_none()

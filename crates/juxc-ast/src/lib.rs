@@ -41,6 +41,7 @@ mod literals;
 mod patterns;
 mod stmts;
 mod types;
+pub mod visit;
 
 pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};

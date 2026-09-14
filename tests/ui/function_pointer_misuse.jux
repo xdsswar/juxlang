@@ -1,0 +1,47 @@
+// What may and may not fill a function pointer (Layout-ABI §L.6.4): a free
+// function whose signature corresponds, or a lambda that captures nothing.
+// Methods, mismatched signatures, overloads, generics, `throws`, captures,
+// types with no C form, calls outside `unsafe` and a wrong argument count are
+// each reported. The `ok` lines are not.
+class Counter {
+    public int count = 0;
+
+    public int bump(int by) {
+        return by;
+    }
+
+    public void wire() {
+        fn(int) -> int viaThis = x -> x + this.count;
+        fn(int) -> int viaField = x -> x + count;
+        fn(int) -> int method = bump;
+    }
+}
+
+public int add(int a, int b) { return a + b; }
+public long wide(long a) { return a; }
+public int twoInts(int a, int b) { return a; }
+public int risky(int a) throws Exception { return a; }
+public <T> T same(T a) { return a; }
+public int over(int a) { return a; }
+public int over(int a, int b) { return a; }
+
+public void main() {
+    int base = 10;
+    fn(int) -> int arity = add;
+    fn(int) -> int kind = wide;
+    fn(int) -> int throwing = risky;
+    fn(int) -> int generic = same;
+    fn(int) -> int overloaded = over;
+    fn(int) -> int captures = x -> x + base;
+    fn(int, int) -> int shape = x -> x;
+    fn(int) -> int ok = x -> x * 2;
+    fn(int[]) -> int badSig = null;
+    fn(int) -> int noUnsafe = ok;
+    int r = noUnsafe(1);
+    void* raw = null;
+    fn(int) -> int cast = raw as fn(int) -> int;
+    unsafe {
+        int wrongCount = ok(1, 2);
+        int fine = ok(3);
+    }
+}
