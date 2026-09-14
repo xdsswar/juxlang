@@ -3197,6 +3197,26 @@ fn function_pointer_type_parses_and_fn_stays_a_name() {
     assert_eq!(named_fn.name.text, "fn");
 }
 
+/// A function type may return `void*`, the untyped pointer a C function table
+/// hands back (`FindClass` in JNI). The stars belong to the result; they used to
+/// be left behind, and the declaration after them failed to parse.
+#[test]
+fn function_type_result_can_be_a_void_pointer() {
+    let ast = parse_clean(
+        "class Table {
+            public fn(void*, String) -> void* find;
+            public (int) -> void** nested;
+            public int after;
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    assert_eq!(c.fields.len(), 3, "the field after the pointer result still parses");
+    let find = c.fields[0].ty.as_ref().and_then(|t| t.fn_pointer_shape()).expect("fn pointer");
+    assert_eq!(find.return_type.ptr_depth, 1);
+    let nested = c.fields[1].ty.as_ref().and_then(|t| t.closure_shape()).expect("closure");
+    assert_eq!(nested.return_type.ptr_depth, 2);
+}
+
 /// A field takes the brace shorthand for an array initializer the way a local
 /// does (JUX-LANG-V1 §5.5): dynamic and fixed, instance and `static`, and one
 /// brace level per dimension. It used to reach the expression parser, whose

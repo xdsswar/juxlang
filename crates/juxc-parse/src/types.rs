@@ -319,14 +319,22 @@ impl<'a> Parser<'a> {
         // keyword `parse_type_ref` won't accept — synthesize a `void` TypeRef
         // for that case (mirrors `parse_return_type`'s `async void` handling).
         let return_type = if self.eat_kw(Keyword::Void) {
-            let span = self.last_consumed_span();
+            let start = self.last_consumed_span();
+            // `void*` is a result too, the untyped C pointer a function table
+            // hands back (`fn(JNIEnv*, String) -> void*`). The stars belong to
+            // the result, not to whatever follows the type.
+            let mut ptr_depth: u8 = 0;
+            while self.eat(&TokenKind::Star) {
+                ptr_depth = ptr_depth.saturating_add(1);
+            }
+            let span = start.join(self.last_consumed_span());
             TypeRef {
-                name: QualifiedName { segments: vec![juxc_ast::Ident { text: "void".to_string(), span }], span },
+                name: QualifiedName { segments: vec![juxc_ast::Ident { text: "void".to_string(), span: start }], span: start },
                 generic_args: Vec::new(),
                 nullable: false,
                 array_shape: None,
                 fn_shape: None,
-                ptr_depth: 0,
+                ptr_depth,
                 span,
             }
         } else {

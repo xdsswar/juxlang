@@ -1,0 +1,335 @@
+// Start a Java virtual machine from Jux, and call Java, through JNI.
+//
+// JNI is a C interface: `jvm.dll` / `libjvm.so` exports `JNI_CreateJavaVM`, and
+// everything after that is a call through a table of function pointers,
+// `JNIEnv`, exactly as C writes `(*env)->FindClass(env, "java/lang/Math")`
+// (Layout-ABI §L.6.4). The two tables below mirror `struct JNINativeInterface_`
+// (236 slots) and `struct JNIInvokeInterface_` (8 slots) from the
+// JDK's `jni.h`, in order, so every slot sits at the offset C gives it. The
+// slots this program calls are typed as function pointers; the rest are opaque
+// `void*`.
+//
+// A function pointer's signature is a C signature: a `jint` is an `i32`, a
+// `jvalue` is 8 bytes (so an argument array is `i64*`), and a `jboolean` is a
+// `ubyte`.
+//
+// Building needs a JDK. The linker finds `jvm.lib` / `libjvm.so` through `LIB`
+// or `LIBRARY_PATH`, and the loader finds the library through `PATH` or
+// `LD_LIBRARY_PATH` (a JDK's `bin/server`). `bin/jux/tests/examples_ffi.rs`
+// sets both from `JAVA_HOME`.
+
+@extern(lib = "jvm")
+unsafe native {
+    i32 JNI_CreateJavaVM(JavaVM** vm, JNIEnv** env, InitArgs* args);
+}
+
+/** `JavaVMInitArgs`: no options, and a JNI version any recent JDK accepts (21). */
+@layout(c)
+struct InitArgs {
+    public i32 version;
+    public i32 nOptions;
+    public void* options;
+    public ubyte ignoreUnrecognized;
+}
+
+/** `JNIEnv` is a pointer to the function table. */
+@layout(c)
+struct JNIEnv {
+    public EnvTable* functions;
+}
+
+/** `JavaVM` is a pointer to the invocation table. */
+@layout(c)
+struct JavaVM {
+    public VmTable* functions;
+}
+
+/** `struct JNINativeInterface_`, generated from `jni.h`. */
+@layout(c)
+struct EnvTable {
+    public void* reserved0;
+    public void* reserved1;
+    public void* reserved2;
+    public void* reserved3;
+    public fn(JNIEnv*) -> i32 GetVersion;
+    public void* DefineClass;
+    public fn(JNIEnv*, String) -> void* FindClass;
+    public void* FromReflectedMethod;
+    public void* FromReflectedField;
+    public void* ToReflectedMethod;
+    public void* GetSuperclass;
+    public void* IsAssignableFrom;
+    public void* ToReflectedField;
+    public void* Throw;
+    public void* ThrowNew;
+    public void* ExceptionOccurred;
+    public void* ExceptionDescribe;
+    public fn(JNIEnv*) -> void ExceptionClear;
+    public void* FatalError;
+    public void* PushLocalFrame;
+    public void* PopLocalFrame;
+    public void* NewGlobalRef;
+    public void* DeleteGlobalRef;
+    public void* DeleteLocalRef;
+    public void* IsSameObject;
+    public void* NewLocalRef;
+    public void* EnsureLocalCapacity;
+    public void* AllocObject;
+    public void* NewObject;
+    public void* NewObjectV;
+    public void* NewObjectA;
+    public void* GetObjectClass;
+    public void* IsInstanceOf;
+    public void* GetMethodID;
+    public void* CallObjectMethod;
+    public void* CallObjectMethodV;
+    public void* CallObjectMethodA;
+    public void* CallBooleanMethod;
+    public void* CallBooleanMethodV;
+    public void* CallBooleanMethodA;
+    public void* CallByteMethod;
+    public void* CallByteMethodV;
+    public void* CallByteMethodA;
+    public void* CallCharMethod;
+    public void* CallCharMethodV;
+    public void* CallCharMethodA;
+    public void* CallShortMethod;
+    public void* CallShortMethodV;
+    public void* CallShortMethodA;
+    public void* CallIntMethod;
+    public void* CallIntMethodV;
+    public void* CallIntMethodA;
+    public void* CallLongMethod;
+    public void* CallLongMethodV;
+    public void* CallLongMethodA;
+    public void* CallFloatMethod;
+    public void* CallFloatMethodV;
+    public void* CallFloatMethodA;
+    public void* CallDoubleMethod;
+    public void* CallDoubleMethodV;
+    public void* CallDoubleMethodA;
+    public void* CallVoidMethod;
+    public void* CallVoidMethodV;
+    public void* CallVoidMethodA;
+    public void* CallNonvirtualObjectMethod;
+    public void* CallNonvirtualObjectMethodV;
+    public void* CallNonvirtualObjectMethodA;
+    public void* CallNonvirtualBooleanMethod;
+    public void* CallNonvirtualBooleanMethodV;
+    public void* CallNonvirtualBooleanMethodA;
+    public void* CallNonvirtualByteMethod;
+    public void* CallNonvirtualByteMethodV;
+    public void* CallNonvirtualByteMethodA;
+    public void* CallNonvirtualCharMethod;
+    public void* CallNonvirtualCharMethodV;
+    public void* CallNonvirtualCharMethodA;
+    public void* CallNonvirtualShortMethod;
+    public void* CallNonvirtualShortMethodV;
+    public void* CallNonvirtualShortMethodA;
+    public void* CallNonvirtualIntMethod;
+    public void* CallNonvirtualIntMethodV;
+    public void* CallNonvirtualIntMethodA;
+    public void* CallNonvirtualLongMethod;
+    public void* CallNonvirtualLongMethodV;
+    public void* CallNonvirtualLongMethodA;
+    public void* CallNonvirtualFloatMethod;
+    public void* CallNonvirtualFloatMethodV;
+    public void* CallNonvirtualFloatMethodA;
+    public void* CallNonvirtualDoubleMethod;
+    public void* CallNonvirtualDoubleMethodV;
+    public void* CallNonvirtualDoubleMethodA;
+    public void* CallNonvirtualVoidMethod;
+    public void* CallNonvirtualVoidMethodV;
+    public void* CallNonvirtualVoidMethodA;
+    public void* GetFieldID;
+    public void* GetObjectField;
+    public void* GetBooleanField;
+    public void* GetByteField;
+    public void* GetCharField;
+    public void* GetShortField;
+    public void* GetIntField;
+    public void* GetLongField;
+    public void* GetFloatField;
+    public void* GetDoubleField;
+    public void* SetObjectField;
+    public void* SetBooleanField;
+    public void* SetByteField;
+    public void* SetCharField;
+    public void* SetShortField;
+    public void* SetIntField;
+    public void* SetLongField;
+    public void* SetFloatField;
+    public void* SetDoubleField;
+    public fn(JNIEnv*, void*, String, String) -> void* GetStaticMethodID;
+    public void* CallStaticObjectMethod;
+    public void* CallStaticObjectMethodV;
+    public fn(JNIEnv*, void*, void*, i64*) -> void* CallStaticObjectMethodA;
+    public void* CallStaticBooleanMethod;
+    public void* CallStaticBooleanMethodV;
+    public void* CallStaticBooleanMethodA;
+    public void* CallStaticByteMethod;
+    public void* CallStaticByteMethodV;
+    public void* CallStaticByteMethodA;
+    public void* CallStaticCharMethod;
+    public void* CallStaticCharMethodV;
+    public void* CallStaticCharMethodA;
+    public void* CallStaticShortMethod;
+    public void* CallStaticShortMethodV;
+    public void* CallStaticShortMethodA;
+    public void* CallStaticIntMethod;
+    public void* CallStaticIntMethodV;
+    public fn(JNIEnv*, void*, void*, i64*) -> i32 CallStaticIntMethodA;
+    public void* CallStaticLongMethod;
+    public void* CallStaticLongMethodV;
+    public void* CallStaticLongMethodA;
+    public void* CallStaticFloatMethod;
+    public void* CallStaticFloatMethodV;
+    public void* CallStaticFloatMethodA;
+    public void* CallStaticDoubleMethod;
+    public void* CallStaticDoubleMethodV;
+    public void* CallStaticDoubleMethodA;
+    public void* CallStaticVoidMethod;
+    public void* CallStaticVoidMethodV;
+    public void* CallStaticVoidMethodA;
+    public void* GetStaticFieldID;
+    public void* GetStaticObjectField;
+    public void* GetStaticBooleanField;
+    public void* GetStaticByteField;
+    public void* GetStaticCharField;
+    public void* GetStaticShortField;
+    public void* GetStaticIntField;
+    public void* GetStaticLongField;
+    public void* GetStaticFloatField;
+    public void* GetStaticDoubleField;
+    public void* SetStaticObjectField;
+    public void* SetStaticBooleanField;
+    public void* SetStaticByteField;
+    public void* SetStaticCharField;
+    public void* SetStaticShortField;
+    public void* SetStaticIntField;
+    public void* SetStaticLongField;
+    public void* SetStaticFloatField;
+    public void* SetStaticDoubleField;
+    public void* NewString;
+    public void* GetStringLength;
+    public void* GetStringChars;
+    public void* ReleaseStringChars;
+    public void* NewStringUTF;
+    public void* GetStringUTFLength;
+    public fn(JNIEnv*, void*, ubyte*) -> String GetStringUTFChars;
+    public void* ReleaseStringUTFChars;
+    public void* GetArrayLength;
+    public void* NewObjectArray;
+    public void* GetObjectArrayElement;
+    public void* SetObjectArrayElement;
+    public void* NewBooleanArray;
+    public void* NewByteArray;
+    public void* NewCharArray;
+    public void* NewShortArray;
+    public void* NewIntArray;
+    public void* NewLongArray;
+    public void* NewFloatArray;
+    public void* NewDoubleArray;
+    public void* GetBooleanArrayElements;
+    public void* GetByteArrayElements;
+    public void* GetCharArrayElements;
+    public void* GetShortArrayElements;
+    public void* GetIntArrayElements;
+    public void* GetLongArrayElements;
+    public void* GetFloatArrayElements;
+    public void* GetDoubleArrayElements;
+    public void* ReleaseBooleanArrayElements;
+    public void* ReleaseByteArrayElements;
+    public void* ReleaseCharArrayElements;
+    public void* ReleaseShortArrayElements;
+    public void* ReleaseIntArrayElements;
+    public void* ReleaseLongArrayElements;
+    public void* ReleaseFloatArrayElements;
+    public void* ReleaseDoubleArrayElements;
+    public void* GetBooleanArrayRegion;
+    public void* GetByteArrayRegion;
+    public void* GetCharArrayRegion;
+    public void* GetShortArrayRegion;
+    public void* GetIntArrayRegion;
+    public void* GetLongArrayRegion;
+    public void* GetFloatArrayRegion;
+    public void* GetDoubleArrayRegion;
+    public void* SetBooleanArrayRegion;
+    public void* SetByteArrayRegion;
+    public void* SetCharArrayRegion;
+    public void* SetShortArrayRegion;
+    public void* SetIntArrayRegion;
+    public void* SetLongArrayRegion;
+    public void* SetFloatArrayRegion;
+    public void* SetDoubleArrayRegion;
+    public void* RegisterNatives;
+    public void* UnregisterNatives;
+    public void* MonitorEnter;
+    public void* MonitorExit;
+    public void* GetJavaVM;
+    public void* GetStringRegion;
+    public void* GetStringUTFRegion;
+    public void* GetPrimitiveArrayCritical;
+    public void* ReleasePrimitiveArrayCritical;
+    public void* GetStringCritical;
+    public void* ReleaseStringCritical;
+    public void* NewWeakGlobalRef;
+    public void* DeleteWeakGlobalRef;
+    public fn(JNIEnv*) -> ubyte ExceptionCheck;
+    public void* NewDirectByteBuffer;
+    public void* GetDirectBufferAddress;
+    public void* GetDirectBufferCapacity;
+    public void* GetObjectRefType;
+    public void* GetModule;
+    public void* IsVirtualThread;
+    public void* GetStringUTFLengthAsLong;
+}
+
+/** `struct JNIInvokeInterface_`, generated from `jni.h`. */
+@layout(c)
+struct VmTable {
+    public void* reserved0;
+    public void* reserved1;
+    public void* reserved2;
+    public fn(JavaVM*) -> i32 DestroyJavaVM;
+    public void* AttachCurrentThread;
+    public void* DetachCurrentThread;
+    public void* GetEnv;
+    public void* AttachCurrentThreadAsDaemon;
+}
+
+public void main() {
+    InitArgs args = new InitArgs(0x00150000, 0, null, 1);
+    JavaVM* vm = null;
+    JNIEnv* env = null;
+    unsafe {
+        i32 created = JNI_CreateJavaVM(&vm, &env, &args);
+        print($"JNI_CreateJavaVM -> ${created}");
+        EnvTable* t = (*env).functions;
+        i32 version = (*t).GetVersion(env);
+        print($"JNI version ${version >> 16}.${version & 0xFFFF}");
+
+        // A static int method: Math.abs(int), arguments as a jvalue array.
+        void* math = (*t).FindClass(env, "java/lang/Math");
+        void* abs = (*t).GetStaticMethodID(env, math, "abs", "(I)I");
+        i64[] absArgs = {-42};
+        print($"Math.abs(-42) = ${(*t).CallStaticIntMethodA(env, math, abs, &absArgs[0])}");
+
+        // A static method returning a Java String, read back as a Jux String.
+        void* integer = (*t).FindClass(env, "java/lang/Integer");
+        void* hex = (*t).GetStaticMethodID(env, integer, "toHexString", "(I)Ljava/lang/String;");
+        i64[] hexArgs = {48879};
+        void* javaString = (*t).CallStaticObjectMethodA(env, integer, hex, &hexArgs[0]);
+        String text = (*t).GetStringUTFChars(env, javaString, null);
+        print($"Integer.toHexString(48879) = ${text}");
+
+        // A failing lookup raises a Java exception, which JNI reports by flag.
+        void* missing = (*t).FindClass(env, "does/not/Exist");
+        if ((*t).ExceptionCheck(env) != 0) {
+            (*t).ExceptionClear(env);
+            print($"FindClass(\"does/not/Exist\") raised; the handle is null: ${missing == null}");
+        }
+
+        print($"DestroyJavaVM -> ${(*(*vm).functions).DestroyJavaVM(vm)}");
+    }
+}

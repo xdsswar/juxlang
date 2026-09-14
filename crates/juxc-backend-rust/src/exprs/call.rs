@@ -26,6 +26,15 @@ enum FfiArg {
     /// `c_int`, `c_long`, and the rest. Jux `int` is pointer-sized and C's is
     /// not, so without this the two are different types on a 64-bit target.
     Int(&'static str),
+    /// A raw pointer, passed verbatim -- except the `null` literal, which is a
+    /// null pointer here, not the `None` a nullable slot would take (§L.6.1).
+    Pointer,
+    /// An `out` integer parameter whose C type is not the place's Jux type
+    /// (`out int` is a C `int*`, the place a pointer-sized Jux `int`). The
+    /// place is copied into a temporary of the C width (`.0`), the callee
+    /// writes the temporary, and the result is written back at the Jux width
+    /// (`.1`), the conversion §8.1.1 makes for a value, made in both directions.
+    OutInt(&'static str, &'static str),
 }
 
 /// How a foreign-call RETURN crosses the C boundary (§L.7).
@@ -45,7 +54,9 @@ enum FfiRet {
 
 /// Classify a foreign parameter type into its [`FfiArg`] marshalling kind.
 fn ffi_arg_kind(t: &juxc_ast::TypeRef) -> FfiArg {
-    if type_ref_is_string(t) {
+    if t.ptr_depth > 0 {
+        FfiArg::Pointer
+    } else if type_ref_is_string(t) {
         FfiArg::Str
     } else if type_ref_is_char(t) {
         FfiArg::Char
@@ -735,7 +746,9 @@ impl RustEmitter {
         // is actually needed; a numeric/pointer-only foreign call flows through
         // the generic path unchanged (it already lowers to a bare `name(args)`).
         if let Some((args, ret)) = self.extern_c_call_shape(&call.callee) {
-            if !matches!(ret, FfiRet::Plain) || args.iter().any(|a| !matches!(a, FfiArg::Plain)) {
+            if !matches!(ret, FfiRet::Plain)
+                || args.iter().any(|a| !matches!(a, FfiArg::Plain | FfiArg::Pointer))
+            {
                 self.emit_extern_c_call(call, &args, ret);
                 return;
             }
@@ -2396,14 +2409,17 @@ impl RustEmitter {
             .iter()
             .map(|p| {
                 if p.is_out {
-                    FfiArg::Out
+                    match (ffi_int_c_type(&p.ty), jux_int_rust_type(&p.ty)) {
+                        (Some(c), Some(jux)) if c != jux => FfiArg::OutInt(c, jux),
+                        _ => FfiArg::Out,
+                    }
                 } else {
                     ffi_arg_kind(&p.ty)
                 }
             })
             .collect();
-        // An `out` parameter is a pointer to the place, and a pointer is not
-        // converted (§8.1.1) -- the place must already have the C width.
+        // An `out` integer parameter goes through a C-width temporary (see
+        // `FfiArg::OutInt`); any other `out` place is passed as it is.
         let ret = match &sig.return_type {
             juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => FfiRet::Str {
                 nullable: t.nullable,
@@ -2448,7 +2464,8 @@ impl RustEmitter {
         ret: FfiRet,
         through_pointer: bool,
     ) {
-        let plain = matches!(ret, FfiRet::Plain) && args.iter().all(|a| matches!(a, FfiArg::Plain));
+        let plain = matches!(ret, FfiRet::Plain)
+            && args.iter().all(|a| matches!(a, FfiArg::Plain | FfiArg::Pointer));
         if through_pointer && plain {
             let prev = std::mem::take(&mut self.emitting_format_arg);
             self.emit_fn_pointer_callee(&call.callee);
@@ -2457,7 +2474,13 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.emit_expr(arg);
+                if matches!(args.get(i), Some(FfiArg::Pointer))
+                    && matches!(arg, Expr::Literal(juxc_ast::Literal::Null))
+                {
+                    self.w.push_str("std::ptr::null_mut()");
+                } else {
+                    self.emit_expr(arg);
+                }
             }
             self.w.push(')');
             self.emitting_format_arg = prev;
@@ -2482,9 +2505,21 @@ impl RustEmitter {
                 self.w
                     .push_str(").expect(\"string passed to C contains an interior NUL byte\"); ");
             }
+            // An `out` integer: the place's current value, at the C width.
+            if let Some(FfiArg::OutInt(c_ty, _)) = args.get(i) {
+                let place = match arg {
+                    Expr::Out(inner, _) => inner.as_ref(),
+                    other => other,
+                };
+                self.w.push_str(&format!("let mut __o{i} = ("));
+                self.emit_expr(place);
+                self.w.push_str(&format!(") as {c_ty}; "));
+            }
         }
-        // 2. The call (bound to `__ret` only when we convert the return).
-        let convert_ret = !matches!(ret, FfiRet::Plain);
+        let writes_back = args.iter().any(|a| matches!(a, FfiArg::OutInt(..)));
+        // 2. The call (bound to `__ret` when the return converts, or when an
+        //    `out` temporary is written back after it).
+        let convert_ret = !matches!(ret, FfiRet::Plain) || writes_back;
         if convert_ret {
             self.w.push_str("let __ret = ");
         }
@@ -2528,6 +2563,14 @@ impl RustEmitter {
                     }
                     self.w.push(')');
                 }
+                // `out` integer: the C-width temporary's address.
+                Some(FfiArg::OutInt(..)) => {
+                    self.w.push_str(&format!("::core::ptr::addr_of_mut!(__o{i})"));
+                }
+                // A pointer parameter takes `null` as a null pointer.
+                Some(FfiArg::Pointer) if matches!(arg, Expr::Literal(juxc_ast::Literal::Null)) => {
+                    self.w.push_str("std::ptr::null_mut()");
+                }
                 // Trailing variadic string-literal arg: pass the kept-alive
                 // `CString`'s `const char*` (same as a fixed `String` param).
                 None if expr_is_string_literal(arg) => {
@@ -2538,9 +2581,24 @@ impl RustEmitter {
             }
         }
         self.w.push(')');
+        // 3. Each `out` integer back into its place, at the Jux width.
+        for (i, arg) in call.args.iter().enumerate() {
+            if let Some(FfiArg::OutInt(_, jux_ty)) = args.get(i) {
+                let place = match arg {
+                    Expr::Out(inner, _) => inner.as_ref(),
+                    other => other,
+                };
+                self.w.push_str("; ");
+                let prev_lvalue = std::mem::replace(&mut self.emitting_lvalue, true);
+                self.emit_expr(place);
+                self.emitting_lvalue = prev_lvalue;
+                self.w.push_str(&format!(" = __o{i} as {jux_ty}"));
+            }
+        }
         self.emitting_format_arg = prev;
-        // 3. Convert the return.
+        // 4. Convert the return.
         match ret {
+            FfiRet::Plain if writes_back => self.w.push_str("; __ret"),
             FfiRet::Plain => {}
             // Copy a `String` out of the C buffer (read-only, never freed).
             FfiRet::Str { nullable } => {
@@ -2750,6 +2808,12 @@ impl RustEmitter {
         // Trait>` / clone a dyn handle, before the sealed/nullable
         // paths (which never apply to an interface value slot).
         if let Some(pty) = self.callee_param_type(&call.callee, i) {
+            // `null` for a raw-pointer parameter is a null pointer (§L.6.1),
+            // not the `None` a nullable parameter takes.
+            if pty.ptr_depth > 0 && matches!(arg, Expr::Literal(juxc_ast::Literal::Null)) {
+                self.w.push_str("std::ptr::null_mut()");
+                return;
+            }
             if !matches!(
                 self.iface_coercion_to(&pty, arg),
                 crate::analysis::IfaceCoercion::None,
@@ -5261,6 +5325,15 @@ impl RustEmitter {
         // which does not implement `FnMut`.
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
+        }
+        // `null` for a raw-pointer parameter is a null pointer (§L.6.1), not the
+        // `None` a nullable parameter takes: `count(null, 3)` on `int* p`, and
+        // `memchr(null, …)` on a native `void*`.
+        if matches!(arg, Expr::Literal(juxc_ast::Literal::Null))
+            && self.callee_param_type(&call.callee, i).is_some_and(|t| t.ptr_depth > 0)
+        {
+            self.w.push_str("std::ptr::null_mut()");
+            return;
         }
         if self.collection_args_prehoisted {
             self.emit_expr(arg);

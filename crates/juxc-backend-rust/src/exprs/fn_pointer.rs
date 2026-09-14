@@ -172,10 +172,13 @@ impl RustEmitter {
                     span: l.span,
                 },
             };
+            // `unsafe`, because the lambda may be written inside an `unsafe`
+            // block and use what that block allows (`p -> *p + 1`); tycheck
+            // has already judged the body in its real context.
             let decl = juxc_ast::FnDecl {
                 annotations: Vec::new(),
                 visibility: juxc_ast::Visibility::Private,
-                modifiers: Vec::new(),
+                modifiers: vec![juxc_ast::FnModifier::Unsafe],
                 return_type: if returns {
                     juxc_ast::ReturnType::Type(ret_ref.clone())
                 } else {

@@ -461,6 +461,10 @@ pub enum Code {
     /// from the code around it is given where a **function pointer** is
     /// expected (Layout-ABI §L.6.4). A code address has nowhere to keep them.
     E0514_CapturingLambdaAsPointer,
+    /// E0515 -- A method called through a **class pointer**, `(*p).get()`
+    /// (Layout-ABI §L.6.5). The pointer addresses the object's payload, whose
+    /// fields it reaches; methods belong to the reference-counted handle.
+    E0515_MethodThroughClassPointer,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -866,6 +870,7 @@ impl Code {
             Code::E0458_ArrayElementHasNoDefault => "E0458",
             Code::E0513_FunctionDoesNotFitPointer => "E0513",
             Code::E0514_CapturingLambdaAsPointer => "E0514",
+            Code::E0515_MethodThroughClassPointer => "E0515",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

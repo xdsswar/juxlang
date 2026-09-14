@@ -5291,6 +5291,62 @@ fn nested_lambda_keeps_outer_mutability_and_ctor_null_is_a_pointer() {
     assert!(rust.contains("let mut env: Env = Env::new(std::ptr::null_mut(), 7);"), "outer let mut: {rust}");
 }
 
+/// An `out int` native parameter is a C `int*`, and the Jux place is
+/// pointer-sized: the place goes through a C-width temporary both ways
+/// (§L.7.1b). An `out i32` place already has the C width and passes directly.
+#[test]
+fn native_out_int_converts_through_a_temporary() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { double frexp(double x, out int e); int fixed(out i32 v); }          public void main() { int e = 0; i32 v = 0; unsafe { double m = frexp(8.0, out e); int r = fixed(out v); } }",
+    );
+    assert!(rust.contains("let mut __o1 = (e) as core::ffi::c_int;"), "copy in: {rust}");
+    assert!(rust.contains("::core::ptr::addr_of_mut!(__o1)"), "temporary passed: {rust}");
+    assert!(rust.contains("e = __o1 as isize"), "copy out: {rust}");
+    assert!(rust.contains("fixed(::core::ptr::addr_of_mut!(v))"), "same width passes the place: {rust}");
+}
+
+/// An `@export` function with an `out` or `char` parameter gets a C-ABI
+/// wrapper: `out` arrives as a nullable pointer written back after the call,
+/// and a C `char` byte becomes a Jux `char`.
+#[test]
+fn export_wrapper_handles_out_and_char() {
+    let rust = emit(
+        "@export public void fill(out int r) { r = 7; }          @export public int code(char c) { return c as int; }          public void main() {}",
+    );
+    assert!(rust.contains("fn __jux_cabi_fill(r: *mut core::ffi::c_int)"), "out as pointer: {rust}");
+    assert!(rust.contains("fill(&mut __jux_r);"), "local passed by &mut: {rust}");
+    assert!(rust.contains("if !r.is_null() { unsafe { *r = __jux_r as core::ffi::c_int; } }"), "write back: {rust}");
+    assert!(rust.contains("let c = (c as u8) as char;"), "char in: {rust}");
+}
+
+/// `void*` is a value, not `void`: a function returning one keeps its result
+/// type, and a `!= null` test on a raw pointer is a pointer comparison, not an
+/// `if let Some` narrowing.
+#[test]
+fn void_pointer_returns_and_pointer_null_tests_stay_pointers() {
+    let rust = emit(
+        "public void* echo(void* p) { return p; }          public int count(int* a) { if (a != null) { return 1; } return 0; }          public void main() {}",
+    );
+    assert!(rust.contains("-> *mut core::ffi::c_void"), "void* result: {rust}");
+    assert!(!rust.contains("if let Some(a)"), "no Option narrowing on a pointer: {rust}");
+}
+
+/// `null` given to a raw-pointer parameter is a null pointer, whichever kind of
+/// call it is: a Jux function, a native function (with or without other
+/// arguments that need converting), and a call through a function pointer. It
+/// was `None`, which does not compile against a `*mut T`.
+#[test]
+fn null_for_a_pointer_parameter_is_a_null_pointer() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { void* memchr(void* buf, int c, ulong n); ulong strlen(byte* s); }          public int count(int* p, int n) { return n; }          public void main() { fn(void*, int) -> int probe = null;          unsafe { void* a = memchr(null, 65, 0); ulong b = strlen(null); int c = count(null, 3);          int d = probe(null, 1); } }",
+    );
+    assert!(!rust.contains("(None"), "no None argument: {rust}");
+    assert!(rust.contains("memchr(std::ptr::null_mut(), "), "native with conversions: {rust}");
+    assert!(rust.contains("strlen(std::ptr::null_mut())"), "plain native: {rust}");
+    assert!(rust.contains("count(std::ptr::null_mut(), 3)"), "Jux function: {rust}");
+    assert!(rust.contains("))(std::ptr::null_mut(), "), "through a pointer: {rust}");
+}
+
 /// `&xs[i]` into an array handle takes the address from the buffer's own
 /// pointer. Through `addr_of_mut!(xs.borrow_mut()[i])` the `RefMut` guard
 /// lived to the end of the enclosing block, so reading `xs` again in the same
@@ -5524,8 +5580,9 @@ fn extern_char_arg_maps_to_c_char() {
 }
 
 /// An `out T` foreign parameter (§M.4) becomes `*mut <T>` in the extern
-/// signature, and the call passes `addr_of_mut!(place)` so the C callee writes
-/// through it.
+/// signature, and the call passes an address the C callee writes through. For
+/// `out long` that is a C-width temporary copied back into the Jux `long`,
+/// since the place is eight bytes and C's `long` may be four (§L.7.1b).
 #[test]
 fn extern_out_param_passes_addr_of_mut() {
     let rust = emit(
@@ -5539,8 +5596,8 @@ fn extern_out_param_passes_addr_of_mut() {
         "out param should be *mut c_long: {rust}"
     );
     assert!(
-        rust.contains("::core::ptr::addr_of_mut!(c)"),
-        "out arg should be addr_of_mut!: {rust}"
+        rust.contains("::core::ptr::addr_of_mut!(__o0)") && rust.contains("c = __o0 as i64"),
+        "out arg should go through a C-width temporary: {rust}"
     );
 }
 
@@ -5604,7 +5661,7 @@ fn c_enum_as_value_struct_field() {
 }
 
 /// The sqlite-style combination: a `String` argument AND an `out` argument in
-/// one call marshal together (CString temp + `addr_of_mut!`).
+/// one call marshal together (CString temp + an `out` temporary).
 #[test]
 fn extern_string_and_out_combine() {
     let rust = emit(
@@ -5619,7 +5676,7 @@ fn extern_string_and_out_combine() {
         "out param: {rust}"
     );
     assert!(rust.contains("::std::ffi::CString::new("), "String marshalling: {rust}");
-    assert!(rust.contains("::core::ptr::addr_of_mut!(h)"), "out arg: {rust}");
+    assert!(rust.contains("::core::ptr::addr_of_mut!(__o1)"), "out arg: {rust}");
 }
 
 /// `@export` gives a free function C linkage: `#[no_mangle] pub extern "C" fn`

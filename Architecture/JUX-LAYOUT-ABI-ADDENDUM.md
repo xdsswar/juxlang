@@ -673,6 +673,10 @@ obj.as_ptr()                  // RefCell::as_ptr through Rc's Deref -> *mut C
 
 Per §L.6.2, classes do not support field-level borrows, so `&obj.field` on a class field stays rejected. To reach a field, take `&obj` and work within `unsafe`, or expose a typed accessor that returns the field pointer (the `dataPtr()` pattern in §L.6.3).
 
+#### What a class pointer reaches
+
+`*p`, for `p` a `C*`, is the payload, so its **fields** are read and written directly: `(*p).n = 5;` changes the object `p` points at, and every handle to that object sees it. A **method** is not reachable through the pointer: methods belong to the object as Jux sees it, a reference-counted handle, and the payload has no handle to call them on. `(*p).get()` is `E0515`; call the method on a handle to the object instead.
+
 ---
 
 ## §L.7 — FFI Through `unsafe`
@@ -736,22 +740,38 @@ A C function that returns a value through a pointer parameter (`int sqlite3_open
 ```jux
 @extern(lib = "kernel32")
 unsafe native {
-    i32 QueryPerformanceCounter(out long count);   // C: BOOL QPC(LARGE_INTEGER*)
+    i32 QueryPerformanceCounter(out i64 count);    // C: BOOL QPC(LARGE_INTEGER*)
 }
 unsafe {
-    long ticks = 0;
+    i64 ticks = 0;
     i32 ok = QueryPerformanceCounter(out ticks);   // `ticks` is written by the call
 }
 ```
+
+(`LARGE_INTEGER` is 64 bits everywhere, so the parameter is `i64`, not `long`:
+in a native declaration `long` is C's `long`, which is 32 bits on Windows.)
 
 **Lowering.** An `out T` parameter crosses as `*mut <T>` (a pointer to the
 caller's place), and the call site passes `core::ptr::addr_of_mut!(place)`:
 
 ```text
-// Jux:  i32 QueryPerformanceCounter(out long count);
+// Jux:  i32 QueryPerformanceCounter(out i64 count);
 extern "C" { pub fn QueryPerformanceCounter(count: *mut i64) -> i32; }
 // call `QueryPerformanceCounter(out ticks)`:
 { QueryPerformanceCounter(::core::ptr::addr_of_mut!(ticks)) }
+```
+
+An `out` **integer** whose C type is not its Jux type (`out int`, `out uint`,
+`out long`, `out ulong`) is converted in both directions, the way §8.1.1
+converts an argument and a result: the place is copied into a temporary of the
+C width, the callee writes the temporary, and the value is written back into
+the place at the Jux width. So `int e; frexp(x, out e)` is correct although a
+Jux `int` is pointer-sized and C's `int*` points at four bytes:
+
+```text
+// Jux:  double frexp(double x, out int exp);   call: frexp(8.0, out e)
+{ let mut __o1 = (e) as core::ffi::c_int;
+  let __ret = frexp(8.0, ::core::ptr::addr_of_mut!(__o1)); e = __o1 as isize; __ret }
 ```
 
 `out RawHandle* db` (a pointer place) lowers the same way: the parameter becomes

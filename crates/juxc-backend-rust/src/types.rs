@@ -1242,11 +1242,13 @@ impl RustEmitter {
         // `parse_return_type` — emit Rust's unit `()` so the produced
         // signature is `async fn name(...) -> ()`. Without this
         // shortcut the type emitter would treat `void` as a user-
-        // defined class name and emit it literally.
+        // defined class name and emit it literally. `void*` is not `void`:
+        // it is a value, the untyped C pointer, and returned as one.
         if ty.array_shape.is_none()
             && !ty.nullable
             && ty.generic_args.is_empty()
             && ty.fn_shape.is_none()
+            && ty.ptr_depth == 0
         {
             if let Some(seg) = ty.name.segments.last() {
                 if seg.text == "void" {

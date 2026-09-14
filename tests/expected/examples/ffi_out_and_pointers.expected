@@ -1,0 +1,6 @@
+frexp(8.0) = 0.5 * 2^4
+memchr over nothing found null: true
+pointers set: 1, echoed null: true
+through the pointer 42 clicks, through the handle 42
+lambda reading through a pointer: 42
+split(42) = 4 and 2, code of 'Z' = 90

@@ -2362,8 +2362,13 @@ impl<'a> Parser<'a> {
             return Some(self.scan_type_suffixes_at(i));
         }
         match self.tokens.get(i).map(|t| &t.kind) {
+            // `void`, or `void*` / `void**` (an untyped C pointer).
             Some(TokenKind::Kw(Keyword::Void)) => {
-                return Some(i + 1);
+                let mut j = i + 1;
+                while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Star)) {
+                    j += 1;
+                }
+                return Some(j);
             }
             Some(TokenKind::Ident(_)) => {
                 i += 1;

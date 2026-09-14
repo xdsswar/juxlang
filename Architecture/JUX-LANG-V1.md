@@ -3382,6 +3382,8 @@ The Rust column names `core::ffi` types rather than fixed-width ones on purpose:
 
 **Conversion happens at the boundary.** An argument is converted to the declared parameter type, and a result to the Jux type of the slot it lands in, exactly as a C compiler converts against a prototype. So passing a Jux `int` to a `native` `int` parameter narrows to `c_int`, and that narrowing is the program's meaning, not an accident of layout. Where a value would not survive the trip, say so at the call: convert deliberately, or declare the parameter with the width you meant.
 
+An `out` integer is converted both ways: the place is copied into a temporary of the C width, the callee writes that, and the value comes back into the place at the Jux width (Layout-ABI §L.7.1b).
+
 A **pointer** is not converted. `int*` is a C `int*`, and `&xs[0]` on a Jux `int[]` does not produce one, because the element widths differ. Give the array the element type the C function expects.
 
 ### 8.2. Rust Library Interop

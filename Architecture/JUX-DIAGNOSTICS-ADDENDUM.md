@@ -479,6 +479,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0510`  | Explicit discriminant outside a C enum                       | Layout-ABI §L.2                |
 | `E0513`  | A function given where a function pointer is expected does not fit it: not a free function, generic, overloaded, declares `throws`, or its parameters or result do not correspond | Layout-ABI §L.6.4 |
 | `E0514`  | A lambda that captures a local, a parameter, a field or `this` is given where a function pointer is expected | Layout-ABI §L.6.4 |
+| `E0515`  | A method called through a class pointer (`(*p).get()`): the pointer reaches the object's fields, not its methods | Layout-ABI §L.6.5 |
 
 ### Lowering (`E0600–E0699`)
 

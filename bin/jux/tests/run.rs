@@ -70,6 +70,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     // output, so it stays with `tests/io_and_time.rs`, which does the
     // `create_dir_all` first. Blessed here it recorded a Rust panic instead.
     ("io_and_time", "needs a directory created first; covered by tests/io_and_time.rs"),
+    // Links `jvm.dll` / `libjvm.so`, which only a machine with a JDK has, and
+    // prints the JDK's JNI version. `tests/examples_ffi.rs` runs it against
+    // `JAVA_HOME` and skips without one.
+    ("jni_java_vm", "needs a JDK; covered by tests/examples_ffi.rs"),
 ];
 
 /// How many examples to compile at once.

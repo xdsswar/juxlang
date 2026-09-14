@@ -1,0 +1,86 @@
+// The C boundary in the details a real binding hits (Layout-ABI §L.6, §L.7).
+//
+//   - `out int`: a C `int*` the callee fills, from a pointer-sized Jux `int`.
+//     The place goes through a C-width temporary both ways (§L.7.1b).
+//   - `null` for a pointer parameter, native or Jux: a null pointer.
+//   - A function returning `void*`.
+//   - A class object's fields reached through `&obj` (§L.6.5).
+//   - A lambda written inside `unsafe` that dereferences its argument, used as
+//     a function pointer.
+//   - `@export` functions with `out` and `char` parameters, callable from C
+//     and from Jux alike.
+//
+// `frexp` and `memchr` come from `msvcrt` on Windows; elsewhere link `c`.
+
+@extern(lib = "msvcrt")
+unsafe native {
+    double frexp(double x, out int exponent);
+    void* memchr(void* buf, int c, ulong n);
+}
+
+class Counter {
+    public int hits = 0;
+    public String name = "clicks";
+}
+
+/** Counts non-null pointers. */
+public int countSet(int* a, int* b) {
+    int n = 0;
+    if (a != null) {
+        n++;
+    }
+    if (b != null) {
+        n++;
+    }
+    return n;
+}
+
+/** Hands back whatever address it was given. */
+public void* echo(void* p) {
+    return p;
+}
+
+@export
+public void split(int value, out int tens, out int ones) {
+    tens = value / 10;
+    ones = value % 10;
+}
+
+@export
+public int codeOf(char c) {
+    return c as int;
+}
+
+public void main() {
+    int exponent = 0;
+    unsafe {
+        double mantissa = frexp(8.0, out exponent);
+        print($"frexp(8.0) = ${mantissa} * 2^${exponent}");
+        void* nothing = memchr(null, 65, 0);
+        print($"memchr over nothing found null: ${nothing == null}");
+    }
+
+    int x = 1;
+    unsafe {
+        print($"pointers set: ${countSet(&x, null)}, echoed null: ${echo(null) == null}");
+    }
+
+    var counter = new Counter();
+    unsafe {
+        Counter* p = &counter;
+        (*p).hits = 41;
+        (*p).hits += 1;
+        print($"through the pointer ${(*p).hits} ${(*p).name}, through the handle ${counter.hits}");
+    }
+
+    i32 value = 41;
+    unsafe {
+        fn(i32*) -> i32 readPlusOne = p -> *p + 1;
+        print($"lambda reading through a pointer: ${readPlusOne(&value)}");
+    }
+
+    int tens = 0;
+    int ones = 0;
+    split(42, out tens, out ones);
+    print($"split(42) = ${tens} and ${ones}, code of 'Z' = ${codeOf('Z')}");
+}

@@ -6000,7 +6000,7 @@ impl<'a> Checker<'a> {
     /// checked as expressions, the call needs `unsafe` (E0506), and the
     /// arguments must match the pointer's parameters in number (E0411) and type
     /// (E0410), the conversions of a native call aside (§8.1.1).
-    fn check_fn_pointer_call(&mut self, c: &CallExpr, params: &[Ty]) {
+    fn check_fn_pointer_call(&mut self, c: &CallExpr, params: &[Ty], param_ptr_depths: &[u8]) {
         if let Expr::Field(f) = c.callee.as_ref() {
             self.check_expr(&f.object);
         } else {
@@ -6035,9 +6035,13 @@ impl<'a> Checker<'a> {
             );
             return;
         }
-        for (arg, param) in c.args.iter().zip(params) {
+        for (i, (arg, param)) in c.args.iter().zip(params).enumerate() {
+            // A pointer parameter takes `null`, which the erased `Ty` cannot
+            // tell from a mismatch (§L.6.1).
+            let pointer_null = param_ptr_depths.get(i).is_some_and(|d| *d > 0)
+                && matches!(arg, Expr::Literal(juxc_ast::Literal::Null));
             let found = infer_expr(arg, &self.env, self.symbols);
-            if !compatible(param, &found, self.symbols) {
+            if !pointer_null && !compatible(param, &found, self.symbols) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0410_TypeMismatch,
@@ -6167,7 +6171,37 @@ impl<'a> Checker<'a> {
                         params.len(),
                     ))
                 } else {
-                    let mismatch = function.params.iter().zip(params.iter().zip(param_ptr_depths)).find_map(
+                    // A pointer is not converted (§8.1.1): `int*` in the C
+                    // signature points at a C `int`, and the same spelling in a
+                    // Jux function points at a pointer-sized one. Only the
+                    // fixed-width names mean one thing on both sides.
+                    let width_differs = |t: &Ty, depth: u8| {
+                        depth > 0
+                            && matches!(
+                                t,
+                                Ty::Primitive(
+                                    Primitive::Int
+                                        | Primitive::Uint
+                                        | Primitive::Long
+                                        | Primitive::Ulong
+                                        | Primitive::Char
+                                )
+                            )
+                    };
+                    let width_note = function
+                        .params
+                        .iter()
+                        .zip(params.iter().zip(param_ptr_depths))
+                        .find(|(_, (want, depth))| width_differs(want, **depth))
+                        .map(|(p, (want, _))| {
+                            format!(
+                                "parameter `{}` is a pointer to `{want}`, which is a different width in \
+                                 Jux and in C, so no Jux function can take that C pointer -- spell the \
+                                 pointee with a fixed width (`i32*`, `i64*`, `byte*`) in both places",
+                                p.name,
+                            )
+                        });
+                    let mismatch = width_note.or_else(|| function.params.iter().zip(params.iter().zip(param_ptr_depths)).find_map(
                         |(p, (want, want_depth))| {
                             let have = ty_from_ref(&p.ty, &self.env, self.symbols);
                             (have != *want || p.ty.ptr_depth != *want_depth).then(|| {
@@ -6180,7 +6214,7 @@ impl<'a> Checker<'a> {
                                 )
                             })
                         },
-                    );
+                    ));
                     mismatch.or_else(|| {
                         let (have, have_depth) = match &function.return_type {
                             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
@@ -6701,8 +6735,41 @@ impl<'a> Checker<'a> {
         // parameter, `table.name(x)` on a field. It is checked here in full,
         // because the rest of this function would look for a function or a
         // method with that name and find none.
-        if let Ty::FnPtr { params, .. } = infer_expr(&c.callee, &self.env, self.symbols) {
-            self.check_fn_pointer_call(c, &params);
+        // `(*p).method()` on a class pointer (§L.6.5): the payload has fields,
+        // not methods.
+        if let Expr::Field(f) = c.callee.as_ref() {
+            if let Expr::Unary(u) = f.object.as_ref() {
+                if u.op == juxc_ast::UnaryOp::Deref {
+                    if let Ty::User { name, .. } = infer_expr(&f.object, &self.env, self.symbols) {
+                        let is_handle_class = self
+                            .symbols
+                            .classes
+                            .get(&name)
+                            .is_some_and(|class| !class.is_layout_c && !class.is_external);
+                        if is_handle_class && self.symbols.lookup_method(&name, &f.field.text).is_some() {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0515_MethodThroughClassPointer,
+                                    format!(
+                                        "`{}` is a method of `{name}`, and a class pointer reaches the \
+                                         object's fields, not its methods -- call it on a handle to the \
+                                         object instead",
+                                        f.field.text,
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if let Ty::FnPtr { params, param_ptr_depths, .. } = infer_expr(&c.callee, &self.env, self.symbols) {
+            self.check_fn_pointer_call(c, &params, &param_ptr_depths);
             return;
         }
         // §P.4.2/§P.4.3 — `target.X.bind(source.Y)` /

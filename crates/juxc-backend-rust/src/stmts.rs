@@ -4307,6 +4307,25 @@ impl RustEmitter {
             .all(crate::analysis::field_supports_copy)
     }
 
+    /// Whether the name in a `x != null` / `x == null` test can be an
+    /// `Option` the test unwraps. A raw pointer (`int* p`) and a function
+    /// pointer compare with `null` as themselves (§L.6.1, §L.6.4): narrowing
+    /// one to `if let Some(p) = p` does not compile. The checker's recorded
+    /// type decides; a name it could not type keeps the narrowing.
+    fn null_test_operand_may_be_option(&self, cond: &Expr) -> bool {
+        let Expr::Binary(b) = cond else { return false };
+        let operand = if matches!(*b.left, Expr::Literal(Literal::Null)) { &b.right } else { &b.left };
+        if let Expr::Path(qn) = operand.as_ref() {
+            if qn.segments.len() == 1 && self.pointer_locals.contains_key(&qn.segments[0].text) {
+                return false;
+            }
+        }
+        !matches!(
+            self.expr_types.get(&crate::exprs::expr_span_of(operand)),
+            Some(t) if !matches!(t, juxc_tycheck::Ty::Nullable(_) | juxc_tycheck::Ty::Unknown)
+        )
+    }
+
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
         // Smart-cast bookkeeping: when the condition is `name !=
         // null`, `name` inside the `then` block is the unwrapped
@@ -4315,8 +4334,9 @@ impl RustEmitter {
         // format-arg JuxOpt wrapping and elvis null-checks treat
         // it correctly. Restore on the way out so the rest of the
         // function still sees the original nullable shape.
-        let cast_name: Option<String> =
-            match_simple_not_null_check(&if_stmt.condition).map(|s| s.to_string());
+        let cast_name: Option<String> = match_simple_not_null_check(&if_stmt.condition)
+            .filter(|_| self.null_test_operand_may_be_option(&if_stmt.condition))
+            .map(|s| s.to_string());
         let was_nullable = cast_name
             .as_ref()
             .is_some_and(|n| self.nullable_locals.contains(n));

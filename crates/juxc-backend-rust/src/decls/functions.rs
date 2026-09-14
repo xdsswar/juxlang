@@ -65,6 +65,16 @@ fn type_ref_is_string(t: &juxc_ast::TypeRef) -> bool {
         && t.name.segments[0].text == "String"
 }
 
+/// A plain `char` value: the Jux Unicode scalar that is a byte in C.
+fn type_ref_is_char_value(t: &juxc_ast::TypeRef) -> bool {
+    t.ptr_depth == 0
+        && t.array_shape.is_none()
+        && t.fn_shape.is_none()
+        && !t.nullable
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "char"
+}
+
 /// True when an `@export`ed function has a `String` parameter or `String` return
 /// type. Such a function is emitted as an ordinary Rust fn (its Jux name, normal
 /// `String` types) PLUS a thin `extern "C"` marshalling wrapper (Layout-ABI
@@ -99,9 +109,11 @@ fn export_needs_string_wrapper(fn_decl: &FnDecl) -> bool {
         &fn_decl.return_type,
         ReturnType::Type(t) if type_ref_is_string(t) || export_type_differs_in_c(t)
     );
+    // An `out` parameter always goes through the wrapper: C passes a pointer
+    // that may be null, and the Jux function takes a `&mut`, which may not.
     ret_needs
         || fn_decl.params.iter().any(|p| {
-            type_ref_is_string(&p.ty) || export_type_differs_in_c(&p.ty)
+            p.is_out || type_ref_is_string(&p.ty) || export_type_differs_in_c(&p.ty)
         })
 }
 
@@ -804,6 +816,10 @@ impl RustEmitter {
             }
             self.w.push_str(&to_rust_ident(&p.name.text));
             self.w.push_str(": ");
+            // `out T` is a `T*` the caller hands in (§8.1.1).
+            if p.is_out {
+                self.w.push_str("*mut ");
+            }
             if type_ref_is_string(&p.ty) {
                 self.w.push_str("*const core::ffi::c_char");
             } else {
@@ -821,6 +837,24 @@ impl RustEmitter {
         self.w.indent_inc();
         // Inbound: each String param → owned Jux String (null → empty).
         for p in &fn_decl.params {
+            // `out T`: a Jux-typed local the function writes through its
+            // `&mut`, seeded from the caller's value (C `out` parameters are
+            // often in-out) unless the pointer is null. Written back below.
+            if p.is_out {
+                let n = to_rust_ident(&p.name.text);
+                let jux = jux_int_rust_type_for_export(&p.ty).map(|t| format!(" as {t}"));
+                self.w.emit_indent();
+                self.w.push_str(&format!("let mut __jux_{n} = if {n}.is_null() {{ Default::default() }} else {{ (unsafe {{ *{n} }}){} }};\n", jux.unwrap_or_default()));
+                continue;
+            }
+            // Inbound: a C `char` is a byte; the Jux `char` is that byte's
+            // code point.
+            if type_ref_is_char_value(&p.ty) {
+                let n = to_rust_ident(&p.name.text);
+                self.w.emit_indent();
+                self.w.push_str(&format!("let {n} = ({n} as u8) as char;\n"));
+                continue;
+            }
             if type_ref_is_string(&p.ty) {
                 let n = &p.name.text;
                 self.w.emit_indent();
@@ -851,9 +885,22 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&to_rust_ident(&p.name.text));
+            if p.is_out {
+                self.w.push_str(&format!("&mut __jux_{}", to_rust_ident(&p.name.text)));
+            } else {
+                self.w.push_str(&to_rust_ident(&p.name.text));
+            }
         }
         self.w.push_str(");\n");
+        // Outbound: each `out` value back through the caller's pointer.
+        for p in fn_decl.params.iter().filter(|p| p.is_out) {
+            let n = to_rust_ident(&p.name.text);
+            let c = c_abi_type_for_int(&p.ty).map(|t| format!(" as {t}"));
+            self.w.line(&format!(
+                "if !{n}.is_null() {{ unsafe {{ *{n} = __jux_{n}{}; }} }}",
+                c.unwrap_or_default()
+            ));
+        }
         // Outbound: a String return is kept by this wrapper and handed back as
         // a `*const c_char`; otherwise pass `__r`.
         if ret_is_string {
@@ -863,6 +910,7 @@ impl RustEmitter {
             // with.
             match c_abi_type_for_int(t) {
                 Some(c) => self.w.line(&format!("__r as {c}")),
+                None if type_ref_is_char_value(t) => self.w.line("__r as core::ffi::c_char"),
                 None => self.w.line("__r"),
             }
         }

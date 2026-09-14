@@ -1,0 +1,30 @@
+// A class pointer reaches the object's fields, not its methods (Layout-ABI
+// §L.6.5, E0515). And a pointer is not converted across a C signature
+// (§8.1.1): a function taking a Jux `int*` cannot be a `fn(int*) -> int`,
+// whose `int*` points at a C `int` (E0513). The fixed-width spelling works.
+class Box {
+    public int n = 1;
+
+    public int get() {
+        return n;
+    }
+}
+
+public unsafe int readWide(int* p) {
+    return *p;
+}
+
+public unsafe i32 readFixed(i32* p) {
+    return *p;
+}
+
+public void main() {
+    var b = new Box();
+    unsafe {
+        Box* p = &b;
+        (*p).n = 5;
+        int viaMethod = (*p).get();
+    }
+    fn(int*) -> int wide = readWide;
+    fn(i32*) -> i32 fixed = readFixed;
+}

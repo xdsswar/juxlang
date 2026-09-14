@@ -1165,6 +1165,12 @@ impl RustEmitter {
     /// because the file imports that one. The bare form stays for callers that
     /// write the name into Rust.
     pub(crate) fn receiver_class_key(&self, recv: &Expr) -> Option<String> {
+        // `(*p)` for a class pointer `p` is the object's PAYLOAD, the `C_Inner`
+        // struct `&obj` points at (§L.6.5), not a handle: its fields are plain
+        // struct fields with no `.0.borrow()` to reach through.
+        if matches!(recv, Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Deref) {
+            return None;
+        }
         let qualified = |ty: &juxc_tycheck::Ty| match ty {
             juxc_tycheck::Ty::User { name, .. }
                 if name.contains('.') && self.symbols.classes.contains_key(name) =>
