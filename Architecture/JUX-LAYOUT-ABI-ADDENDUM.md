@@ -319,16 +319,28 @@ pub extern "C" fn greet(name: *const c_char, times: isize) -> *const c_char {
     let name = if name.is_null() { String::new() }
                else { unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned() };
     let __r = greet_impl(name, times);                 // the real Jux fn
-    match CString::new(__r) { Ok(s) => s.into_raw() as *const c_char,
-                              Err(_) => core::ptr::null() }
+    thread_local! {
+        static __JUX_RETURNED: RefCell<Option<CString>> = const { RefCell::new(None) };
+    }
+    match CString::new(__r) {
+        Ok(s) => __JUX_RETURNED.with(|held| {
+            let ptr = s.as_ptr();
+            *held.borrow_mut() = Some(s);                // frees the previous one
+            ptr
+        }),
+        Err(_) => core::ptr::null(),
+    }
 }
 ```
 
 Inbound, each `String` parameter is copied out of the C `const char*` (a null
 pointer becomes the empty string). Outbound, a returned `String` is handed back
-via `CString::into_raw`, which **leaks** the buffer: the C caller owns it and it
-is never reclaimed on the Jux side (the mirror of the inbound "never freed" rule
-on the `@extern` side). An interior NUL in the result yields a null pointer.
+as a `const char*` that **the function keeps**: it stays valid until the same
+function returns its next string on the same thread, and is freed then. That is
+the contract of C's own `strerror` or `asctime`: a caller that needs the text
+longer copies it. Nothing is leaked, and the caller never frees the pointer,
+which it could not do correctly anyway: the buffer was not allocated by C's
+`malloc`. An interior NUL in the result yields a null pointer.
 Example: `examples/ffi_export.jux`.
 
 A non-`@export` function is **not** part of any stable ABI. Other Jux modules link to it through the mangled name; that link is rebuilt every compile.
@@ -599,7 +611,7 @@ unsafe {
 
 A call through a function pointer requires `unsafe` (`E0506`): the address may have come from C, and nothing checks that it is a function of that signature. Arguments and the result are converted as for a native call. Calling a `null` function pointer throws `NullPointerException` instead of jumping to address zero.
 
-A `String` crosses a function pointer as a C string, by the rules of a native call and an `@export` function: the caller keeps its argument and the callee reads a copy, and a `String` result is handed over in a buffer that nothing frees. A callback that returns strings on a hot path leaks each one; return a pointer into memory the program manages instead.
+A `String` crosses a function pointer as a C string, by the rules of a native call and an `@export` function: the caller keeps its argument and the callee reads a copy. A `String` result is kept by the function that returned it, valid until that function returns its next string on the same thread (§L.3.2); a Jux caller copies it at once, and a C caller that needs it longer copies it too. Nothing is leaked, however often the function is called.
 
 **Comparison.** `f == null` and `f == g` compare addresses, and need no `unsafe`, since neither reads through the pointer.
 
@@ -691,6 +703,7 @@ Jux has **no `CString` type**. A `String` is the everyday FFI string, and the co
 |-----------|-----------|----------------|
 | Jux → C (argument) | `String` | a `CString` temp is built and kept alive for the call; its `const char*` is passed |
 | C → Jux (return)   | `String` | the C `const char*` is scanned to its NUL, **copied** into an owned Jux `String`, and the C buffer is **never freed** |
+| Jux → C (return from an `@export` function or a function pointer) | `String` | the function keeps the C string until it returns its next one on the same thread, then frees it (§L.3.2) |
 | either direction   | `char`   | a Jux `char` (a 4-byte Unicode scalar) maps to a C `char` (`core::ffi::c_char`, 1 byte); the compiler converts at the call site (truncate out, widen in) |
 | manage it yourself | `byte*`  | a raw pointer you read and free explicitly inside `unsafe` (the escape hatch) |
 

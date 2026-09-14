@@ -773,10 +773,10 @@ impl RustEmitter {
     ///   copied into an owned Jux `String` (`CStr::from_ptr(...).to_string_lossy`;
     ///   a null pointer becomes the empty string). Non-`String` params pass
     ///   through unchanged.
-    /// - **Outbound** — a `String` return is handed back as `*const c_char` via
-    ///   `CString::into_raw`, which **leaks** the buffer: the C caller owns it and
-    ///   it is never reclaimed (mirroring the inbound "never freed" rule on the
-    ///   `@extern` side). An interior NUL makes the result a null pointer.
+    /// - **Outbound** — a `String` return is handed back as `*const c_char`,
+    ///   kept in a thread-local slot of this wrapper until its next call on the
+    ///   same thread frees it (see `emit_held_c_string_return`). An interior
+    ///   NUL makes the result a null pointer.
     fn emit_export_string_wrapper(&mut self, fn_decl: &FnDecl, sym: &str) {
         let ret_is_string = matches!(
             &fn_decl.return_type,
@@ -854,14 +854,10 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(&p.name.text));
         }
         self.w.push_str(");\n");
-        // Outbound: String return → leaked `*const c_char`; otherwise pass `__r`.
+        // Outbound: a String return is kept by this wrapper and handed back as
+        // a `*const c_char`; otherwise pass `__r`.
         if ret_is_string {
-            self.w.emit_indent();
-            self.w.push_str(
-                "match ::std::ffi::CString::new(__r) { \
-                 Ok(__s) => __s.into_raw() as *const core::ffi::c_char, \
-                 Err(_) => ::core::ptr::null() }\n",
-            );
+            self.emit_held_c_string_return();
         } else if let ReturnType::Type(t) = &fn_decl.return_type {
             // Outbound: the Jux result leaves at the C width it was declared
             // with.
@@ -873,6 +869,39 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+    }
+
+    /// The tail of a C-ABI function that returns the Jux `String` in `__r`
+    /// (Layout-ABI §L.3.2). The C string goes into a thread-local slot that
+    /// belongs to this one function, and its address goes to C. The slot keeps
+    /// it alive until this function returns its next string on the same
+    /// thread; storing that one drops, and so frees, the last. A `String` with
+    /// a NUL byte inside has no C spelling and comes back as null.
+    ///
+    /// `CString::into_raw` used to hand C a buffer nothing could free: the C
+    /// side cannot give Rust-allocated memory to its own `free`, and a Jux
+    /// caller copied the text and dropped the pointer, so every call leaked.
+    pub(crate) fn emit_held_c_string_return(&mut self) {
+        self.w.line("thread_local! {");
+        self.w.indent_inc();
+        self.w.line(
+            "static __JUX_RETURNED: std::cell::RefCell<Option<std::ffi::CString>> = \
+             const { std::cell::RefCell::new(None) };",
+        );
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.line("match std::ffi::CString::new(__r) {");
+        self.w.indent_inc();
+        self.w.line("Ok(__s) => __JUX_RETURNED.with(|held| {");
+        self.w.indent_inc();
+        self.w.line("let ptr = __s.as_ptr();");
+        self.w.line("*held.borrow_mut() = Some(__s);");
+        self.w.line("ptr");
+        self.w.indent_dec();
+        self.w.line("}),");
+        self.w.line("Err(_) => std::ptr::null(),");
+        self.w.indent_dec();
+        self.w.line("}");
     }
 
     /// Emit a function's body block with **trailing-return elision** —

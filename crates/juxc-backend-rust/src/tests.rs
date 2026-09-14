@@ -5724,8 +5724,9 @@ fn export_with_matching_widths_stays_inline() {
 /// An `@export` whose signature mentions `String` emits the real fn under its
 /// Jux name (normal `String` types) PLUS a `#[no_mangle] extern "C"` marshalling
 /// wrapper: each `String` param arrives as `*const c_char` (copied in via
-/// `CStr`), and a `String` return is handed back via `CString::into_raw`
-/// (§L.3.2). Non-String params pass through.
+/// `CStr`), and a `String` return is handed back as a `const char*` the wrapper
+/// keeps in its own thread-local slot until its next call frees it (§L.3.2).
+/// Non-String params pass through.
 #[test]
 fn export_string_emits_marshalling_wrapper() {
     let rust = emit(
@@ -5750,7 +5751,22 @@ fn export_string_emits_marshalling_wrapper() {
     );
     assert!(rust.contains("::std::ffi::CStr::from_ptr(name)"), "inbound CStr copy: {rust}");
     assert!(rust.contains("let __r = greet(name, n);"), "wrapper calls real fn: {rust}");
-    assert!(rust.contains(".into_raw() as *const core::ffi::c_char"), "outbound into_raw: {rust}");
+    assert!(rust.contains("static __JUX_RETURNED: std::cell::RefCell<Option<std::ffi::CString>>"), "own slot: {rust}");
+    assert!(rust.contains("*held.borrow_mut() = Some(__s);"), "held, not leaked: {rust}");
+    assert!(!rust.contains("into_raw"), "no buffer is given away: {rust}");
+}
+
+/// A function pointer's entry point returns a `String` the same way an
+/// `@export` wrapper does: kept until its next call, not leaked through
+/// `into_raw`.
+#[test]
+fn function_pointer_string_result_is_held_not_leaked() {
+    let rust = emit(
+        "public String shout(String s) { return s; }          public void main() { fn(String) -> String loud = shout; unsafe { String r = loud(\"hi\"); } }",
+    );
+    assert!(rust.contains("static __JUX_RETURNED: std::cell::RefCell<Option<std::ffi::CString>>"), "own slot: {rust}");
+    assert!(rust.contains("*held.borrow_mut() = Some(__s);"), "held: {rust}");
+    assert!(!rust.contains("into_raw"), "nothing leaked: {rust}");
 }
 
 /// A pure-primitive `@export` keeps the INLINE `#[no_mangle] extern "C"` form

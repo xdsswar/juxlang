@@ -19,9 +19,10 @@ public int square(int n) {
 
 // A `String` parameter / return is marshalled automatically (§L.3.2): C passes a
 // `const char*` (copied into a Jux String on the way in), and the returned String
-// is handed back as a `const char*` via `into_raw` - the C caller owns that
-// buffer (it is never freed on the Jux side). The compiler emits a thin C-ABI
-// wrapper for this; the function below is still an ordinary Jux function too.
+// is handed back as a `const char*` the function keeps until its next call on
+// the same thread, when it is freed - C copies it if it needs it longer, the way
+// it treats `strerror`. The compiler emits a thin C-ABI wrapper for this; the
+// function below is still an ordinary Jux function too.
 @export(name = "jux_greet")
 public String greet(String name, int times) {
     return $"Hello $name (x$times)";

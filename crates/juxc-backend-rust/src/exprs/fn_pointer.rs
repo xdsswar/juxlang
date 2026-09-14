@@ -20,7 +20,8 @@
 //!
 //! The conversions are the ones a native call makes, in the other direction:
 //! a C integer widens to the Jux type of the same name, a `const char*` is
-//! copied into a `String`, and the result goes back at its C width. A lambda
+//! copied into a `String`, and the result goes back at its C width; a `String`
+//! result is kept by the entry point until its next call (§L.3.2). A lambda
 //! is first written out as an ordinary function, `__jux_lambda`, and the entry
 //! point calls that; tycheck has already made sure it captures nothing, so it
 //! means exactly what it meant in place.
@@ -276,10 +277,8 @@ impl RustEmitter {
             let last = ret_ref.name.segments.last().map(|s| s.text.as_str());
             if ret_ref.ptr_depth == 0 && ret_ref.fn_shape.is_none() {
                 match last {
-                    Some("String") => self.w.line(
-                        "match ::std::ffi::CString::new(__r) { Ok(__s) => __s.into_raw() as *const \
-                         core::ffi::c_char, Err(_) => ::core::ptr::null() }",
-                    ),
+                    // Kept by this entry point until its next call, not leaked.
+                    Some("String") => self.emit_held_c_string_return(),
                     Some("char") => self.w.line("__r as core::ffi::c_char"),
                     Some(name) => match crate::decls::functions::c_abi_type(name) {
                         Some(c) if crate::types::jux_primitive_to_rust(&ret_ref) != Some(c) => {
