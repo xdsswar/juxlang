@@ -88,6 +88,8 @@ public void main() {
         int third = p[3];   // p[i] ≡ *(p + i)
         ulong a = p as ulong;   // pointer → integer
         int* p2 = a as int*;    // integer → pointer
+        int* p3 = (int*) a;     // the C-style cast works too
+        p += 2;                 // step forward two elements (also p++, p -= n)
         if (p == null) { }      // null compare (null is the only T* literal)
     }
 }

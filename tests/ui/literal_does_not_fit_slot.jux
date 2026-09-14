@@ -1,0 +1,15 @@
+public u32 processId() {
+    return -1;
+}
+
+public void attach(u32 pid) { }
+
+public void main() {
+    byte small = 300;
+    u32 everyone = -1;
+    attach(-1);
+    ubyte level = 0;
+    level = 256;
+    u32 spelled = -1 as u32;
+    attach(-1 as u32);
+}

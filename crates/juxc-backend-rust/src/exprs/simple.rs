@@ -168,9 +168,20 @@ impl RustEmitter {
         // as out of range, so `(short) 70000` -- a truncation Java performs
         // happily -- did not compile. Spelling the literal `70000isize` makes
         // it an `int` being narrowed, which is what the Jux source says.
+        // A NEGATED literal is the same case: `-1 as u32` (the spelled-out bit
+        // reinterpretation §S.2.4 describes, e.g. Win32's `(DWORD)-1`) was
+        // typed `u32` by Rust, which then refused to negate it.
         if !needs_paren {
-            if let Expr::Literal(juxc_ast::Literal::Int(lit)) = &*c.value {
-                if lit.kind.is_none() && self.cast_literal_needs_source_type(lit.value, &c.ty) {
+            let literal = match &*c.value {
+                Expr::Literal(juxc_ast::Literal::Int(lit)) => Some((lit, lit.value)),
+                Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Neg => match &*u.operand {
+                    Expr::Literal(juxc_ast::Literal::Int(lit)) => Some((lit, lit.value.wrapping_neg())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((lit, value)) = literal {
+                if lit.kind.is_none() && self.cast_literal_needs_source_type(value, &c.ty) {
                     self.w.push_str("isize");
                 }
             }

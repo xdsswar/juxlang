@@ -3364,3 +3364,23 @@ fn annotation_application_accepts_a_value_list() {
     };
     assert_eq!(lit.elements.len(), 2);
 }
+
+/// `(int*) n` and `(void*) p` are C-style casts (§A.5, §L.6.2): a `*` right
+/// before the closing parenthesis cannot be a multiplication. A parenthesized
+/// operand of a real multiplication stays an expression.
+#[test]
+fn c_style_pointer_cast_parses_as_a_cast() {
+    for src in [
+        "public void main() { unsafe { int* p = (int*) 0; } }",
+        "public void main() { unsafe { int* p = (int*) 0; void* v = (void*) p; } }",
+        "public void main() { unsafe { int** pp = (int**) 0; } }",
+    ] {
+        let tokens = juxc_lex::lex(&juxc_source::SourceFile::new("t.jux", src)).tokens;
+        let parsed = crate::parse(&tokens);
+        assert!(parsed.diagnostics.is_empty(), "{src}: {:?}", parsed.diagnostics);
+    }
+    let src = "public void main() { int n = 3; int m = (n) * 2; }";
+    let tokens = juxc_lex::lex(&juxc_source::SourceFile::new("t.jux", src)).tokens;
+    let parsed = crate::parse(&tokens);
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}

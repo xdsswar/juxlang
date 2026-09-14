@@ -295,7 +295,10 @@ impl RustEmitter {
                 }
             }
         }
-        if f.field.text == "length" {
+        // A user type's own `length` member is not an array length: `length`
+        // is an ordinary field name. Rewriting it made `box.length` (and a bare
+        // `length` read inside the class) a call to a `len()` it does not have.
+        if f.field.text == "length" && !self.receiver_declares_member(&f.object, "length") {
             // `xs.length` → `xs.len() as isize`. Wrap the receiver
             // in parens only when its shape might otherwise bind
             // looser than `.` (e.g. binary or range expression);
@@ -1111,6 +1114,28 @@ impl RustEmitter {
         self.receiver_class_key(recv)
             .map(|bare| self.is_box_class(&bare))
             .unwrap_or(false)
+    }
+
+    /// Whether `recv` is an object of a user class or record that declares a
+    /// field, property or component called `name` (inherited ones included).
+    pub(crate) fn receiver_declares_member(&self, recv: &Expr, name: &str) -> bool {
+        let class = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            self.receiver_class_key(recv)
+        };
+        let Some(class) = class else { return false };
+        if self.lookup_class_field_owner_in_chain(&class, name).is_some()
+            || self.bare_name_is_property_in_chain(&class, name)
+        {
+            return true;
+        }
+        let bare = crate::backend_fqn::fqn_bare(&class);
+        self.symbols
+            .records
+            .iter()
+            .filter(|(k, _)| k.as_str() == class || crate::backend_fqn::fqn_bare(k) == bare)
+            .any(|(_, r)| r.components.iter().any(|c| c.name == name))
     }
 
     /// Resolve the bare class name a non-`this` receiver evaluates to.

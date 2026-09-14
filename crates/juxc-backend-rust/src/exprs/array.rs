@@ -41,6 +41,18 @@ impl RustEmitter {
     /// A future pass with a real type table can drop the cast when the
     /// index expression's static type is already `usize` (Jux `uint`).
     pub(crate) fn emit_index(&mut self, i: &IndexExpr) {
+        // **`p[i]` on a raw pointer (§L.6.2)** is `*(p + i)`. Rust pointers
+        // cannot be indexed, so it lowers to a dereference of the offset
+        // pointer; as the target of an assignment the same place is written.
+        if self.expr_is_raw_pointer(&i.array) {
+            self.emitting_lvalue = false;
+            self.w.push_str("(*");
+            self.emit_pointer_receiver(&i.array);
+            self.w.push_str(".offset(");
+            self.emit_pointer_step(&i.index);
+            self.w.push_str("))");
+            return;
+        }
         // `operator[]` dispatch (§O.2.4): a user type declaring the
         // overload routes through its `__op_index` method. (Lvalue
         // writes never reach here — `emit_assign` intercepts the

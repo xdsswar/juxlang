@@ -1,0 +1,73 @@
+// Walking a buffer through a raw pointer (Layout-ABI §L.6.2).
+//
+// The shapes C interop needs: index a pointer (`p[i]`), step it (`p + n`,
+// `p += n`, `p++`), measure between two pointers (`q - p`), cast between
+// pointers and integers in either spelling (`n as T*`, `(T*) n`), and pass
+// a pointer into a function or store it in a field. All of it happens inside
+// `unsafe`, and steps by the size of the pointee exactly as C does.
+//
+// Also the Win32-style argument `(DWORD)-1`: a literal that does not fit an
+// unsigned parameter is rejected (E0202), and `-1 as u32` spells out the
+// reinterpretation (§S.2.4).
+
+/** A read-only view over bytes owned by someone else. */
+class Window {
+    public ubyte* start;
+    public int length;
+
+    public Window(ubyte* start, int length) {
+        this.start = start;
+        this.length = length;
+    }
+
+    public int sum() {
+        int total = 0;
+        unsafe {
+            for (int i = 0; i < length; i++) {
+                total = total + (start[i] as int);
+            }
+        }
+        return total;
+    }
+}
+
+/** Fill `n` bytes starting at `dst` with `first`, `first + 1`, ... */
+public unsafe void fill(ubyte* dst, int n, ubyte first) {
+    for (int i = 0; i < n; i++) {
+        dst[i] = first + (i as ubyte);
+    }
+}
+
+public u32 everyProcess() {
+    return -1 as u32;
+}
+
+public void main() {
+    ubyte[] bytes = new ubyte[8];
+    int[] ints = {10, 20, 30, 40};
+    unsafe {
+        ubyte* p = &bytes[0];
+        fill(p, 8, 1);
+        p[2] += 10;
+        print($"third byte: ${p[2]}");
+
+        ubyte* cursor = p;
+        cursor += 3;
+        print($"after += 3: ${*cursor}");
+        cursor++;
+        print($"after ++: ${cursor[0]}");
+        print($"distance: ${cursor - p}");
+        print($"last: ${*(p + 7)}");
+
+        int* q = &ints[0];
+        ulong address = q as ulong;
+        int* again = (int*) address;
+        void* opaque = (void*) again;
+        print($"through an integer and back: ${((int*) opaque)[3]}");
+
+        var view = new Window(p + 4, 4);
+        print($"sum of the last four: ${view.sum()}");
+    }
+    print($"the array saw the write: ${bytes[2]}");
+    print($"every process: ${everyProcess()}");
+}

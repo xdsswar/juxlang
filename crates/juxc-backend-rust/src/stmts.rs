@@ -2817,6 +2817,26 @@ impl RustEmitter {
                 }
             }
         }
+        // `p += n` / `p -= n` on a raw pointer (and `p++`, which arrives as
+        // `p += 1`) desugars to `p = p + n`, which lowers to an `offset`
+        // (§L.6.2): Rust has no compound assignment on pointers.
+        if matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
+            && self.expr_is_raw_pointer(&a.target)
+        {
+            let desugared = AssignStmt {
+                target: a.target.clone(),
+                op: None,
+                value: Expr::Binary(juxc_ast::BinaryExpr {
+                    op: a.op.unwrap(),
+                    left: Box::new(a.target.clone()),
+                    right: Box::new(a.value.clone()),
+                    span: a.span,
+                }),
+                span: a.span,
+            };
+            self.emit_assign(&desugared);
+            return;
+        }
         // Integer `/=` and `%=` desugar to `target = target / value` so
         // the compound forms get the same checked lowering as the binary
         // ops (`__jux_idiv`/`__jux_irem` — zero divisor throws a

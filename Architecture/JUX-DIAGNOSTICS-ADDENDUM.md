@@ -331,7 +331,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
-| `E0202`  | Numeric literal out of range for its storage         | Grammar §A.1.4                 |
+| `E0202`  | Numeric literal out of range for its storage: beyond 64 bits, or not fitting the integer slot it flows into (`byte b = 300;`, `u32 x = -1;`) | Grammar §A.1.4 / Semantics §S.2.6 |
 | `E0203`  | Reserved keyword that this phase does not implement (`annotation`, `move`, `volatile`, `yield`) | see below |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |

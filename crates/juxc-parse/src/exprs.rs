@@ -552,8 +552,11 @@ impl<'a> Parser<'a> {
         // Qualified name: Ident ('.' Ident)*. Track the first
         // segment's text so we can decide later whether it's a
         // recognized primitive.
+        // `void` is a type only as `void*` (§L.7), so it is let in here and
+        // held to having a pointer marker below.
         let first_ident = match self.tokens.get(i).map(|t| &t.kind) {
             Some(TokenKind::Ident(s)) => s.clone(),
+            Some(TokenKind::Kw(Keyword::Void)) => "void".to_string(),
             _ => return false,
         };
         i += 1;
@@ -592,6 +595,17 @@ impl<'a> Parser<'a> {
             }
             has_array = true;
             i += 1;
+        }
+        // Optional raw-pointer markers, the outermost modifier (`(int*) n`,
+        // `(void*) p`, §L.6.2). A `*` right before the `)` cannot be a
+        // multiplication, so it makes the cast reading unambiguous.
+        let mut has_pointer = false;
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Star)) {
+            has_pointer = true;
+            i += 1;
+        }
+        if first_ident == "void" && !has_pointer {
+            return false;
         }
         // Closing `)` of the cast.
         if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::RParen)) {
@@ -638,7 +652,7 @@ impl<'a> Parser<'a> {
         if is_known_primitive_type_name(&first_ident) {
             return true;
         }
-        if has_nullable || has_array || has_generic || multi_segment {
+        if has_nullable || has_array || has_generic || multi_segment || has_pointer {
             return true;
         }
         // Bare single-segment name (`(Dog) x`): a reference cast to a class /

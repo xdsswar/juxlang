@@ -132,6 +132,65 @@ fn receiver_needs_parens(e: &Expr) -> bool {
 }
 
 impl RustEmitter {
+    /// Lower `p + n`, `n + p`, `p - n` and `q - p` over raw pointers, returning
+    /// whether `b` was one of them.
+    ///
+    /// The integer operand is cast to `isize`, the offset type, so any integer
+    /// width works as an index. `offset` rather than `add` keeps a negative
+    /// step (`p - 1`, `p + delta`) meaningful, as it is in C.
+    fn emit_pointer_arithmetic(&mut self, b: &BinaryExpr) -> bool {
+        let left_ptr = self.expr_is_raw_pointer(&b.left);
+        let right_ptr = self.expr_is_raw_pointer(&b.right);
+        let (base, step, negate) = match (b.op, left_ptr, right_ptr) {
+            (BinaryOp::Add, true, false) => (&b.left, &b.right, false),
+            (BinaryOp::Add, false, true) => (&b.right, &b.left, false),
+            (BinaryOp::Sub, true, false) => (&b.left, &b.right, true),
+            (BinaryOp::Sub, true, true) => {
+                // Pointer difference: a count of pointee-sized steps.
+                self.emit_pointer_receiver(&b.left);
+                self.w.push_str(".offset_from(");
+                self.emit_expr(&b.right);
+                self.w.push(')');
+                return true;
+            }
+            _ => return false,
+        };
+        self.emit_pointer_receiver(base);
+        self.w.push_str(".offset(");
+        if negate {
+            self.w.push('-');
+        }
+        self.emit_pointer_step(step);
+        self.w.push(')');
+        true
+    }
+
+    /// A pointer in method-receiver position, parenthesized when composite.
+    pub(crate) fn emit_pointer_receiver(&mut self, e: &Expr) {
+        if receiver_needs_parens(e) {
+            self.w.push('(');
+            self.emit_expr(e);
+            self.w.push(')');
+        } else {
+            self.emit_expr(e);
+        }
+    }
+
+    /// An integer used as a pointer offset: `isize`, which is what `offset`
+    /// takes. A plain literal needs no cast; anything else is cast whatever
+    /// its width, so `p[i]` works for an `int`, a `uint` or a `byte` alike.
+    pub(crate) fn emit_pointer_step(&mut self, step: &Expr) {
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        if matches!(step, Expr::Literal(juxc_ast::Literal::Int(_))) {
+            self.emit_expr(step);
+        } else {
+            self.w.push('(');
+            self.emit_expr(step);
+            self.w.push_str(") as isize");
+        }
+        self.emitting_format_arg = prev;
+    }
+
     /// True iff `e` is recorded by tycheck as having type
     /// `Ty::String`. Used by `emit_binary` to recognize
     /// `a + b` as string concatenation even when neither operand
@@ -290,6 +349,13 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_binary(&mut self, b: &BinaryExpr) {
+        // **Pointer arithmetic (§L.6.2).** Rust has no `+` / `-` on raw
+        // pointers, so `p + n` was a rustc error. Offsets step by the pointee's
+        // size, exactly as in C: `p + n` is `p.offset(n)`, `p - n` is
+        // `p.offset(-n)`, and `q - p` counts the elements between them.
+        if matches!(b.op, BinaryOp::Add | BinaryOp::Sub) && self.emit_pointer_arithmetic(b) {
+            return;
+        }
         // String-concat trigger fires when either operand is
         // **typed** as `String` — covers literals (parser sets
         // their type to `Ty::String` upstream) AND identifier
@@ -1047,6 +1113,18 @@ impl RustEmitter {
         match e {
             // `&x` / `&obj` always produce a `*mut T`.
             juxc_ast::Expr::Unary(u) => matches!(u.op, juxc_ast::UnaryOp::AddrOf),
+            // `n as int*` / `(int*) n`.
+            juxc_ast::Expr::Cast(c) => c.ty.ptr_depth > 0,
+            // `p + n`, `n + p`, `p - n` are pointers; `q - p` is a count.
+            juxc_ast::Expr::Binary(b) => match b.op {
+                juxc_ast::BinaryOp::Add => {
+                    self.expr_is_raw_pointer(&b.left) != self.expr_is_raw_pointer(&b.right)
+                }
+                juxc_ast::BinaryOp::Sub => {
+                    self.expr_is_raw_pointer(&b.left) && !self.expr_is_raw_pointer(&b.right)
+                }
+                _ => false,
+            },
             // A bare name that is a raw pointer: either a local/param (tracked
             // in `pointer_locals`) or, failing that, an implicit-`this`
             // reference to a `T*` FIELD of the enclosing class (`ptr == null`

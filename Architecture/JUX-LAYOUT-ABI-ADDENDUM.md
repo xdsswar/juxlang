@@ -516,6 +516,16 @@ Outside `unsafe`, **none** of these operations compile. `&x`, `*p`, `p + 1`, `p[
 
 **`&` outside `unsafe`.** The compiler rejects any prefix `&` not inside an `unsafe` block (`E0807`). There is no implicit borrow-reference syntax in Jux — Jux uses inferred borrows (the borrow checker, per §6) rather than explicit `&` references. The `&` token is reserved exclusively for address-of inside `unsafe`.
 
+**Details the forms above leave open.**
+
+- **Any integer steps a pointer.** In `p[i]`, `p + n`, `n + p`, `p - n`, `p += n` and `p -= n` the integer may be of any integer type, signed or not; it counts elements of the pointee type, and a negative step moves backwards (`p[-1]`, `p - 1`). `p++` and `p--` step by one element.
+- **`q - p`** is the signed number of elements from `p` to `q`, a `long`. Both pointers must point into the same allocation.
+- **`p[i]` is a place.** It can be read, assigned (`p[i] = v`), and compound-assigned (`p[i] += v`), exactly like `*(p + i)`.
+- **The C-style cast works for pointer types too**: `(int*) n`, `(void*) p`, `(int**) n`. A `*` directly before the closing parenthesis always makes it a cast.
+- **Nothing is checked.** As in C, stepping a pointer outside the allocation it points into, or reading through a dangling one, is undefined behaviour. The compiler neither tracks lengths nor inserts bounds checks; that is what makes it `unsafe`.
+
+*(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p)`, and the compound forms reassign the offset pointer.)*
+
 ### L.6.3. Pointer-Reference Conversion
 
 To go from a Jux reference (e.g., a class instance) to a raw pointer, and back:

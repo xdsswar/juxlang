@@ -3316,6 +3316,9 @@ impl<'a> Checker<'a> {
                                 v.init.as_ref(),
                                 Some(Expr::Literal(juxc_ast::Literal::Null))
                             );
+                        if let Some(init) = v.init.as_ref() {
+                            self.check_literal_fits(d, init, v.span);
+                        }
                         if ptr_null_ok {
                             // Accepted as a null pointer; no mismatch to report.
                         } else if !compatible(d, i, self.symbols) {
@@ -3441,6 +3444,9 @@ impl<'a> Checker<'a> {
                 // the target's declared `TypeRef` to recognize the pointer slot.
                 let ptr_null_ok = matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
                     && self.assign_target_is_raw_pointer(&a.target);
+                if a.op.is_none() {
+                    self.check_literal_fits(&effective_target, &a.value, a.span);
+                }
                 if !ptr_null_ok && !compatible(&effective_target, &value_ty, self.symbols) {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -3480,6 +3486,7 @@ impl<'a> Checker<'a> {
                         self.check_expr(expr);
                         let found = infer_expr(expr, &self.env, self.symbols);
                         if let Some(exp) = &expected {
+                            self.check_literal_fits(exp, expr, *ret_span);
                             if !compatible(exp, &found, self.symbols) {
                                 self.diagnostics.push(
                                     Diagnostic::error(
@@ -5900,6 +5907,62 @@ impl<'a> Checker<'a> {
         false
     }
 
+    /// **E0202** when an untyped integer literal, possibly negated, flows into
+    /// an integer slot it does not fit (§S.2.6: a literal adopts the slot's
+    /// type "when the value fits").
+    ///
+    /// `u32 pid = -1;` or `AttachConsole(-1)` against a `u32` parameter used to
+    /// pass the checker and fail in rustc ("cannot apply unary operator `-` to
+    /// type `u32`"); `byte b = 300;` likewise. The help names the explicit
+    /// cast, which keeps the low bits (§S.2.4) and is what C's `(DWORD)-1`
+    /// means.
+    pub(crate) fn check_literal_fits(&mut self, slot: &Ty, value: &Expr, fallback: Span) {
+        let slot = match slot {
+            Ty::Nullable(inner) => inner.as_ref(),
+            other => other,
+        };
+        let Ty::Primitive(p) = slot else { return };
+        let (lit, v): (&juxc_ast::IntLit, i128) = match value {
+            Expr::Literal(juxc_ast::Literal::Int(lit)) => (lit, lit.value as i128),
+            Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Neg => match u.operand.as_ref() {
+                Expr::Literal(juxc_ast::Literal::Int(lit)) => (lit, -(lit.value as i128)),
+                _ => return,
+            },
+            _ => return,
+        };
+        if lit.kind.is_some() {
+            return;
+        }
+        let (lo, hi): (i128, i128) = match p {
+            Primitive::Byte | Primitive::I8 => (i8::MIN as i128, i8::MAX as i128),
+            Primitive::Ubyte | Primitive::U8 => (0, u8::MAX as i128),
+            Primitive::Short | Primitive::I16 => (i16::MIN as i128, i16::MAX as i128),
+            Primitive::Ushort | Primitive::U16 => (0, u16::MAX as i128),
+            Primitive::I32 => (i32::MIN as i128, i32::MAX as i128),
+            Primitive::U32 => (0, u32::MAX as i128),
+            Primitive::Int | Primitive::Long | Primitive::I64 => (i64::MIN as i128, i64::MAX as i128),
+            Primitive::Uint | Primitive::Ulong | Primitive::U64 => (0, u64::MAX as i128),
+            _ => return,
+        };
+        if v >= lo && v <= hi {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0202_NumericLiteralOutOfRange,
+                format!("the literal `{v}` does not fit in `{slot}`, whose range is {lo} to {hi}"),
+            )
+            // A bare literal carries no span of its own; point at the statement.
+            .with_span(match expr_span(value) {
+                s if s == Span::DUMMY => fallback,
+                s => s,
+            })
+            .with_help(format!(
+                "to keep the literal's low bits, cast it explicitly: `{v} as {slot}` (§S.2.4)"
+            )),
+        );
+    }
+
     /// Validate an **explicit call-site type-argument list** against the
     /// callee's declared generic params (spec turbofish `id<int>(5)`).
     /// Emits **E0443** when the callee isn't generic (no params to bind)
@@ -8168,6 +8231,7 @@ impl<'a> Checker<'a> {
             };
             let expected = substitute(&expected_raw, subst_params, subst_args);
             let found = infer_expr(arg, &self.env, self.symbols);
+            self.check_literal_fits(&expected, arg, call_span);
             // A foreign SLICE param (`T[]` = Rust `&[T]`) bridges a Jux array
             // or `rust.std` `Vec<T>` argument (both Deref-coerce to `&[T]`);
             // that's accepted here without touching the global `compatible()`.

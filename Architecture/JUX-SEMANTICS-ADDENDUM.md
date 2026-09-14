@@ -193,7 +193,7 @@ Jux does **not** silently promote operands to a common type. `int + long` is a c
 
 The exceptions (where promotion is automatic and well-defined):
 
-- Untyped integer literals are coerced to whichever numeric type the surrounding context demands, when the value fits. `long x = 1` works because `1` adapts to `long`.
+- Untyped integer literals are coerced to whichever numeric type the surrounding context demands, when the value fits. `long x = 1` works because `1` adapts to `long`. A literal that does **not** fit the slot it flows into (a local initializer, an assignment, a `return`, or a call argument) is `E0202`: `byte b = 300;`, `u32 pid = -1;`. Where the low bits are what is meant, as in the C idiom `(DWORD)-1`, the cast says so and follows §S.2.4: `-1 as u32` is `4294967295`.
 - Untyped float literals adapt to `float` or `double` similarly.
 - A typed literal (e.g., `1L`, `2.0f`) does not adapt; mixing it with another type requires an explicit `as`.
 

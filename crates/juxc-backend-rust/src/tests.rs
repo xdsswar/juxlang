@@ -5105,6 +5105,56 @@ fn addr_of_value_local_uses_addr_of_mut() {
     assert!(rust.contains("*mut isize"), "expected `*mut isize`, got: {rust}");
 }
 
+/// `p[i]` on a raw pointer (§L.6.2) is `*(p + i)`: Rust cannot index a
+/// pointer, so it lowers to a dereference of `offset`, read and write alike.
+/// A literal index needs no cast; any other integer is cast to `isize`.
+#[test]
+fn pointer_index_lowers_to_offset_deref() {
+    let rust = emit(
+        "public void main() { int[] xs = {1, 2, 3}; int i = 1; \
+         unsafe { int* p = &xs[0]; int a = p[2]; p[i] = 9; } }",
+    );
+    assert!(rust.contains("let a: isize = (*p.offset(2));"), "read: {rust}");
+    assert!(rust.contains("(*p.offset((i) as isize)) = 9;"), "write: {rust}");
+}
+
+/// `p + n`, `n + p` and `p - n` step by the pointee's size through `offset`,
+/// and `q - p` counts the elements between two pointers (`offset_from`).
+#[test]
+fn pointer_arithmetic_lowers_to_offset() {
+    let rust = emit(
+        "public void main() { int[] xs = {1, 2, 3}; int k = 1; \
+         unsafe { int* p = &xs[0]; int* q = p + 2; int* r = k + p; \
+         int* s = q - 1; long d = q - p; } }",
+    );
+    assert!(rust.contains("= p.offset(2);"), "p + n: {rust}");
+    assert!(rust.contains("= p.offset((k) as isize);"), "n + p: {rust}");
+    assert!(rust.contains("= q.offset(-1);"), "p - n: {rust}");
+    assert!(rust.contains("q.offset_from(p)"), "q - p: {rust}");
+}
+
+/// `p += n` and `p++` have no Rust compound form on pointers; they are
+/// reassignments of the offset pointer.
+#[test]
+fn pointer_compound_assignment_reassigns_the_offset() {
+    let rust = emit(
+        "public void main() { int[] xs = {1, 2, 3}; \
+         unsafe { int* p = &xs[0]; p += 2; p -= 1; p++; } }",
+    );
+    assert!(rust.contains("p = p.offset(2);"), "p += n: {rust}");
+    assert!(rust.contains("p = p.offset(-1);"), "p -= n: {rust}");
+    assert!(rust.contains("p = p.offset(1);"), "p++: {rust}");
+}
+
+/// A negated literal cast to a type it does not fit carries its source type
+/// (§S.2.4), so `-1 as u32` is a reinterpretation Rust accepts instead of a
+/// negation of an unsigned value.
+#[test]
+fn negated_literal_cast_names_its_source_type() {
+    let rust = emit("public void main() { u32 all = -1 as u32; }");
+    assert!(rust.contains("-1isize as u32"), "{rust}");
+}
+
 /// Raw-pointer null comparison lowers to `is_null()`, never the `Option`
 /// `is_some()`/`is_none()` (which a `*mut T` does not have). §L.6.
 #[test]
