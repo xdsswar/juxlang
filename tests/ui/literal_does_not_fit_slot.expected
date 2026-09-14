@@ -3,3 +3,8 @@ literal_does_not_fit_slot.jux:8:5: [E0202] error: the literal `300` does not fit
 literal_does_not_fit_slot.jux:9:20: [E0202] error: the literal `-1` does not fit in `u32`, whose range is 0 to 4294967295
 literal_does_not_fit_slot.jux:10:12: [E0202] error: the literal `-1` does not fit in `u32`, whose range is 0 to 4294967295
 literal_does_not_fit_slot.jux:12:5: [E0202] error: the literal `256` does not fit in `ubyte`, whose range is 0 to 255
+literal_does_not_fit_slot.jux:20:24: [E0202] error: the literal `-1` does not fit in `u32`, whose range is 0 to 4294967295
+literal_does_not_fit_slot.jux:21:12: [E0202] error: the literal `200` does not fit in `byte`, whose range is -128 to 127
+literal_does_not_fit_slot.jux:25:24: [E0202] error: the literal `300` does not fit in `u8`, whose range is 0 to 255
+literal_does_not_fit_slot.jux:28:23: [E0202] error: the literal `-1` does not fit in `u32`, whose range is 0 to 4294967295
+literal_does_not_fit_slot.jux:29:21: [E0202] error: the literal `-1` does not fit in `u32`, whose range is 0 to 4294967295

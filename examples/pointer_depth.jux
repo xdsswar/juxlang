@@ -1,0 +1,107 @@
+// Where a raw pointer comes from, and what `p[i]` means for each source
+// (Layout-ABI §L.6.2).
+//
+// A pointer is not only a local declared `T*`. It is also a field, a value a
+// function returns, a local inferred from `var q = p + 2`, or one level of a
+// `T**`. Each of these is indexed, stepped and measured the same way, so each
+// is exercised here:
+//
+//   - pointer fields read with and without `this.`, and stepped in place;
+//   - a function returning `T*`, indexed straight off the call;
+//   - `var q = p + 2`, which is a pointer because its initializer is one;
+//   - `T**`, where `(*pp)[i]` and `pp[0][i]` both reach the buffer;
+//   - `&xs[i]` into an array, after which `xs` stays usable in the same block.
+
+/** A write cursor over a buffer it does not own. */
+class Ring {
+    public long* buf;
+    public long* cursor;
+
+    public Ring(long* buf) {
+        this.buf = buf;
+        this.cursor = buf;
+    }
+
+    /** Stores `v` and moves the cursor to the next slot. */
+    public void push(long v) {
+        unsafe {
+            *cursor = v;
+            cursor++;
+        }
+    }
+
+    /** Moves the cursor `n` slots forward through the field itself. */
+    public void skip(int n) {
+        unsafe {
+            this.cursor += n;
+        }
+    }
+
+    /** Reads slot `i` twice, once through each spelling of the field. */
+    public long twice(int i) {
+        unsafe {
+            return buf[i] + this.buf[i];
+        }
+    }
+
+    /** How many slots the cursor has moved. */
+    public long used() {
+        unsafe {
+            return cursor - buf;
+        }
+    }
+}
+
+/** The slot halfway along `n` slots. */
+public unsafe long* middle(long* p, int n) {
+    return p + n / 2;
+}
+
+public void main() {
+    long[] longs = new long[6];
+    unsafe {
+        long* lp = &longs[0];
+
+        // Fields.
+        var ring = new Ring(lp);
+        ring.push(7);
+        ring.push(9);
+        ring.skip(2);
+        ring.push(11);
+        print($"ring slots ${ring.twice(0)} ${ring.twice(1)} ${longs[4]}, used ${ring.used()}");
+
+        // A returned pointer, indexed before and after its slot.
+        long* mid = middle(lp, 6);
+        mid[-1] = 42;
+        print($"through the middle ${longs[2]} ${middle(lp, 6)[-2]} ${(lp + 1)[0]}");
+
+        // Stepping and measuring.
+        long* end = lp + 5;
+        end--;
+        --end;
+        long* before = end++;
+        print($"steps ${before - lp} then ${end - lp}, equal ${(lp + 2) == (before - 1)}");
+
+        // A pointer to a pointer.
+        long** pp = &lp;
+        print($"double pointer ${(*pp)[1]} ${pp[0][4]}");
+    }
+
+    int[] xs = {1, 2, 3, 4};
+    int[][] grid = {{1, 2}, {3, 4}};
+    unsafe {
+        // `q` is a pointer because `p + 2` is.
+        int* p = &xs[1];
+        var q = p + 2;
+        print($"inferred ${*q} at distance ${q - p}");
+
+        // The array is still readable and writable while `p` points into it.
+        xs[0] = 100;
+        print($"array alongside the pointer ${xs[0]} ${p[-1]}");
+
+        // An element of an inner row.
+        int* cell = &grid[1][0];
+        cell[1] = 40;
+        print($"grid cell ${grid[1][1]}");
+    }
+}

@@ -1,0 +1,14 @@
+// `q - p` is the signed element count between two pointers, a `long` whatever
+// the pointee (§L.6.2). It widens into nothing narrower without a cast, and a
+// pointer minus an integer is still a pointer.
+public void main() {
+    int[] xs = {1, 2, 3, 4};
+    unsafe {
+        int* p = &xs[0];
+        int* q = p + 3;
+        long ok = q - p;
+        int narrowed = (int) (q - p);
+        int n = q - p;
+        int* back = q - 1;
+    }
+}

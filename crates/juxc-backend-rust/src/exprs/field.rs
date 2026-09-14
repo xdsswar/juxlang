@@ -1119,10 +1119,18 @@ impl RustEmitter {
     /// Whether `recv` is an object of a user class or record that declares a
     /// field, property or component called `name` (inherited ones included).
     pub(crate) fn receiver_declares_member(&self, recv: &Expr, name: &str) -> bool {
-        let class = if matches!(recv, Expr::This(_)) {
-            self.enclosing_class.clone()
-        } else {
-            self.receiver_class_key(recv)
+        let class = match recv {
+            Expr::This(_) => self.enclosing_class.clone(),
+            // `Registry.length`: the receiver is the class itself, and the
+            // member is one of its statics. A local of that name wins, the
+            // way it does for every other read of the name.
+            Expr::Path(qn)
+                if !(qn.segments.len() == 1
+                    && self.local_types.iter().any(|scope| scope.contains_key(qn.segments[0].text.as_str()))) =>
+            {
+                self.receiver_class_key(recv).or_else(|| self.path_resolves_to_class_in_emit(qn))
+            }
+            _ => self.receiver_class_key(recv),
         };
         let Some(class) = class else { return false };
         if self.lookup_class_field_owner_in_chain(&class, name).is_some()

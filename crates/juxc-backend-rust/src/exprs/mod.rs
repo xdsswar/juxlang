@@ -2277,7 +2277,9 @@ impl RustEmitter {
         let needs_paren = match e {
             Expr::Binary(b) => {
                 let p = binary_prec(b.op);
-                if is_comparison(p) && is_comparison(parent_prec) {
+                if self.is_lowered_pointer_arithmetic(b) {
+                    false
+                } else if is_comparison(p) && is_comparison(parent_prec) {
                     true
                 } else if right_of_left_assoc {
                     p <= parent_prec

@@ -310,6 +310,24 @@ impl RustEmitter {
                 self.w.push_str(".0.as_ptr()");
                 return;
             }
+            // `&xs[i]` into an array or collection handle: the address of the
+            // element inside the shared buffer, computed from the buffer's own
+            // pointer. The `borrow_mut()` guard is then an ordinary temporary
+            // of the statement. Through `addr_of_mut!(xs.borrow_mut()[i])` it
+            // was a place borrowed by a `let` initializer, which Rust extends
+            // to the end of the enclosing BLOCK: every later read of `xs` in the
+            // same `unsafe` block panicked with "already mutably borrowed".
+            if let Expr::Index(ix) = &*u.operand {
+                if self.expr_is_collection_handle(&ix.array) && !self.expr_is_raw_pointer(&ix.array) {
+                    let prev_lvalue = std::mem::take(&mut self.emitting_lvalue);
+                    self.emit_pointer_receiver(&ix.array);
+                    self.emitting_lvalue = prev_lvalue;
+                    self.w.push_str(".borrow_mut().as_mut_ptr().offset(");
+                    self.emit_pointer_step(&ix.index);
+                    self.w.push(')');
+                    return;
+                }
+            }
             // `&x` (address-of) on a value place lowers to a raw-pointer
             // macro, not a prefix token: `core::ptr::addr_of_mut!(x)` yields
             // a `*mut T` (a Rust reference `&x` is a different type). The

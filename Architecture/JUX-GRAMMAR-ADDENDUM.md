@@ -313,7 +313,7 @@ class-member      = annotation* ( field-decl
                                  )
 
 field-decl        = field-modifier* type identifier
-                    ( '=' expression )? ';'
+                    ( '=' variable-init )? ';'
 field-modifier    = visibility | 'static' | binding-immut
                   | 'volatile' | 'weak'
 
@@ -470,9 +470,15 @@ statement         = block
                   | annotation+ statement                          -- @cfg etc.
 
 local-decl        = ( 'var' | binding-immut 'var' | type | binding-immut type ) identifier
-                    ( '=' expression )? ';'
+                    ( '=' variable-init )? ';'
                   | 'var' destructuring-pattern '=' expression ';'
                   | binding-immut 'var' destructuring-pattern '=' expression ';'
+
+variable-init     = expression
+                  | array-initializer                  -- only when the declared type is an array
+array-initializer = '{' ( array-init-item ( ',' array-init-item )* ','? )? '}'
+array-init-item   = expression
+                  | array-initializer                  -- the next dimension of a multi-dimensional array
 
 expression-stmt   = expression ';'
 

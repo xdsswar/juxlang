@@ -512,19 +512,20 @@ The unary operators inside `unsafe`:
 - **`&array[i]`** — address-of an array element, equivalent to `(array as T*) + i`.
 - **`&someStruct.field`** — address of a field within a struct, when the struct supports field-level borrows (per JUX-LANG-V1 §6.9.1; classes do not, structs do).
 
-Outside `unsafe`, **none** of these operations compile. `&x`, `*p`, `p + 1`, `p[i]`, `p == null` — all gated behind `unsafe`. Pointers exist as a type even outside `unsafe` (you can pass them around, store them, return them), but they are *opaque values* until you enter an `unsafe` block.
+Outside `unsafe`, **none** of these operations compile: `&x`, `*p`, `p[i]`, `p + n`, `n + p`, `p - n`, `q - p`, `p += n`, `p -= n`, `p++` and `p--` are each `E0506`. Pointers exist as a type even outside `unsafe`: you can store them, pass them, return them and compare them (`p == null`, `p == q`), since none of that reads through the pointer. They are *opaque values* until you enter an `unsafe` block.
 
-**`&` outside `unsafe`.** The compiler rejects any prefix `&` not inside an `unsafe` block (`E0807`). There is no implicit borrow-reference syntax in Jux — Jux uses inferred borrows (the borrow checker, per §6) rather than explicit `&` references. The `&` token is reserved exclusively for address-of inside `unsafe`.
+**`&` outside `unsafe`.** The compiler rejects any prefix `&` not inside an `unsafe` block (`E0506`). There is no implicit borrow-reference syntax in Jux — Jux uses inferred borrows (the borrow checker, per §6) rather than explicit `&` references. The `&` token is reserved exclusively for address-of inside `unsafe`.
 
 **Details the forms above leave open.**
 
 - **Any integer steps a pointer.** In `p[i]`, `p + n`, `n + p`, `p - n`, `p += n` and `p -= n` the integer may be of any integer type, signed or not; it counts elements of the pointee type, and a negative step moves backwards (`p[-1]`, `p - 1`). `p++` and `p--` step by one element.
-- **`q - p`** is the signed number of elements from `p` to `q`, a `long`. Both pointers must point into the same allocation.
+- **`q - p`** is the signed number of elements from `p` to `q`, a `long` whatever the pointee, so `int n = q - p;` needs a cast like any other `long`. Both pointers must point into the same allocation.
+- **A pointer is anything of pointer type**, not only a local declared `T*`: a parameter, a field (read with or without `this.`), the result of a function or method declared to return `T*`, a `var` whose initializer is a pointer expression (`var q = p + 1;`), and one level of a `T**` (`*pp`, `pp[i]`). Each is indexed, stepped and measured the same way.
 - **`p[i]` is a place.** It can be read, assigned (`p[i] = v`), and compound-assigned (`p[i] += v`), exactly like `*(p + i)`.
 - **The C-style cast works for pointer types too**: `(int*) n`, `(void*) p`, `(int**) n`. A `*` directly before the closing parenthesis always makes it a cast.
 - **Nothing is checked.** As in C, stepping a pointer outside the allocation it points into, or reading through a dangling one, is undefined behaviour. The compiler neither tracks lengths nor inserts bounds checks; that is what makes it `unsafe`.
 
-*(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p)`, and the compound forms reassign the offset pointer.)*
+*(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p) as i64`, and the compound forms reassign the offset pointer. `&xs[i]` on an array is `xs.borrow_mut().as_mut_ptr().offset(i)`: the address comes from the buffer's own pointer, so no borrow of the array outlives the statement and `xs` stays usable beside the pointer.)*
 
 ### L.6.3. Pointer-Reference Conversion
 

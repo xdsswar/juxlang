@@ -13,3 +13,19 @@ public void main() {
     u32 spelled = -1 as u32;
     attach(-1 as u32);
 }
+
+// The other slots a literal flows into: a field initializer, a parameter
+// default, each arm of a conditional, and each element of an array literal.
+class Config {
+    public u32 flags = -1;
+    public byte level = 200;
+    public u32 fine = 7;
+}
+
+public void setMode(u8 mode = 300) { }
+
+public void slots(bool pick) {
+    u32 cond = pick ? -1 : 2;
+    u32[] arr = {1, -1};
+    ubyte zero = -0;
+}

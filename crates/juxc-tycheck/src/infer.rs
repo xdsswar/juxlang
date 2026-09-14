@@ -382,6 +382,21 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             }
                         }
                     }
+                    // An instance field, declared here or inherited, read
+                    // without `this.`: the same type `this.name` has, generic
+                    // substitution through `extends Base<T>` included. It was
+                    // Unknown, so the backend could not see that a bare
+                    // `items` was an array and `items.length` lowered to a
+                    // `len()` on the handle instead of on the buffer inside.
+                    if symbols.lookup_field(class_fqn, name).is_some_and(|(f, _)| !f.is_static) {
+                        let this_field = juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(qn.span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        };
+                        return infer_field(&this_field, env, symbols);
+                    }
                 }
             }
             Ty::Unknown
@@ -1905,6 +1920,87 @@ fn unary_op_to_kind(op: UnaryOp) -> Option<OperatorKind> {
 ///
 /// The arithmetic rule is intentionally simple; a proper common-type
 /// rule (promoting `int + long` to `long`, etc.) lands in Phase D.
+/// How many raw-pointer levels `e` has (`int*` is 1), or 0 for a value that is
+/// not a pointer.
+///
+/// `Ty` erases `ptr_depth` (an `int*` is typed as its pointee), so the depth is
+/// recovered from declarations -- locals and parameters, fields, casts,
+/// function and method returns -- and carried through the operators: `&x` adds
+/// a level, `*p` and `p[i]` remove one, `p ± n` keeps it, and `q - p` is a
+/// count, not a pointer. The `unsafe` gate on pointer operations and the type
+/// of a pointer difference both ask this question (§L.6.2).
+pub(crate) fn pointer_depth(e: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> u8 {
+    let depth_of = |rt: &ReturnType| match rt {
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => t.ptr_depth,
+        ReturnType::Void => 0,
+    };
+    let class_of = |object: &Expr| match infer_expr(object, env, symbols) {
+        Ty::User { name, .. } => Some(name),
+        _ => None,
+    };
+    match e {
+        Expr::Unary(u) => match u.op {
+            UnaryOp::AddrOf => pointer_depth(&u.operand, env, symbols).saturating_add(1),
+            UnaryOp::Deref => pointer_depth(&u.operand, env, symbols).saturating_sub(1),
+            _ => 0,
+        },
+        Expr::Index(i) => pointer_depth(&i.array, env, symbols).saturating_sub(1),
+        Expr::Cast(c) => c.ty.ptr_depth,
+        Expr::Binary(b) => {
+            let (l, r) = (pointer_depth(&b.left, env, symbols), pointer_depth(&b.right, env, symbols));
+            match b.op {
+                BinaryOp::Add if (l > 0) != (r > 0) => l.max(r),
+                BinaryOp::Sub if l > 0 && r == 0 => l,
+                _ => 0,
+            }
+        }
+        Expr::Ternary(t) => {
+            pointer_depth(&t.then_branch, env, symbols).max(pointer_depth(&t.else_branch, env, symbols))
+        }
+        Expr::Path(qn) if qn.segments.len() == 1 => {
+            let name = qn.segments[0].text.as_str();
+            if env.lookup(name).is_some() {
+                return env.pointer_depth(name);
+            }
+            // An implicit-`this` pointer field.
+            env.current_class
+                .as_deref()
+                .and_then(|c| symbols.lookup_field(c, name))
+                .map(|(f, _)| f.ty.ptr_depth)
+                .unwrap_or(0)
+        }
+        Expr::Field(f) => class_of(&f.object)
+            .and_then(|c| symbols.lookup_field(&c, &f.field.text))
+            .map(|(fs, _)| fs.ty.ptr_depth)
+            .unwrap_or(0),
+        Expr::Call(c) => match c.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if env.lookup(name).is_some() {
+                    return 0;
+                }
+                env.unqualified
+                    .get(name)
+                    .and_then(|fqn| symbols.functions.get(fqn))
+                    .or_else(|| symbols.lookup_function(name).map(|(_, f)| f))
+                    .map(|f| depth_of(&f.return_type))
+                    .unwrap_or(0)
+            }
+            Expr::Field(f) => {
+                let class = match f.object.as_ref() {
+                    Expr::Path(qn) => path_resolves_to_class(qn, env, symbols).or_else(|| class_of(&f.object)),
+                    other => class_of(other),
+                };
+                class
+                    .and_then(|c| symbols.lookup_method(&c, &f.field.text).map(|(m, _)| depth_of(&m.return_type)))
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
 fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // Operator-dispatch first — if the LHS is a user type whose
     // matching operator is defined, the operator's declared return
@@ -1917,6 +2013,16 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         if let Some(ret) = lookup_user_operator_return_type(&left_ty, kind, env, symbols) {
             return ret;
         }
+    }
+    // `q - p` over two pointers is the signed element count between them, a
+    // `long` whatever the pointee (§L.6.2). The erased pointer types would
+    // otherwise promote to the pointee: `int` for two `int*`, `Pt` for two
+    // `Pt*`.
+    if matches!(b.op, BinaryOp::Sub)
+        && pointer_depth(&b.left, env, symbols) > 0
+        && pointer_depth(&b.right, env, symbols) > 0
+    {
+        return Ty::Primitive(Primitive::Long);
     }
     // String concatenation is symmetric (`"v" + n` AND `n + "v"` are
     // both String, like Java) — the left-type rule below would call

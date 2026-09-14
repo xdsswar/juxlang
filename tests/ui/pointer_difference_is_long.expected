@@ -1,0 +1,1 @@
+pointer_difference_is_long.jux:11:9: [E0410] error: type mismatch in declaration of `n`: expected int, found long

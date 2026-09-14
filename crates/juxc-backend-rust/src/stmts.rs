@@ -2225,7 +2225,7 @@ impl RustEmitter {
         self.pointer_locals.clear();
         for p in params {
             if p.ty.ptr_depth > 0 {
-                self.pointer_locals.insert(p.name.text.clone());
+                self.pointer_locals.insert(p.name.text.clone(), p.ty.ptr_depth);
             }
         }
     }
@@ -2294,9 +2294,16 @@ impl RustEmitter {
             // rather than `Option::is_none()` (the lowered `Ty` drops
             // `ptr_depth`, so this set is the only signal left). §L.6.
             if ty_ref.ptr_depth > 0 {
-                self.pointer_locals.insert(var.name.text.clone());
+                self.pointer_locals.insert(var.name.text.clone(), ty_ref.ptr_depth);
             }
         } else if let Some(init) = &var.init {
+            // `var q = p + 1;` over a raw pointer is a pointer too; without
+            // the record, `q - p` or `q[i]` further down lowered as integer
+            // arithmetic on `*mut T`.
+            let depth = self.pointer_depth(init);
+            if depth > 0 {
+                self.pointer_locals.insert(var.name.text.clone(), depth);
+            }
             // `var x = init;` carries no written type — recover one from
             // the initializer's inferred type so name-keyed receiver
             // resolution (`local_types`) still works for inferred locals.

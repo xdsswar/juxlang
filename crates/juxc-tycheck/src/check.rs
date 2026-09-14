@@ -1062,6 +1062,7 @@ impl<'a> Checker<'a> {
             for param in &method.params {
                 let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
                 self.env.declare(&param.name.text, ty);
+                self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             }
             let saved = self.current_return.take();
             self.current_return = Some(return_type_to_ty(
@@ -1554,6 +1555,9 @@ impl<'a> Checker<'a> {
             let Some(default) = &param.default else {
                 continue;
             };
+            // The default flows into the parameter's slot like an argument.
+            let slot = ty_from_ref(&param.ty, &self.env, self.symbols);
+            self.check_literal_fits(&slot, default, param.name.span);
             for other in params {
                 let mut hit_span: Option<Span> = None;
                 collect_bare_name_reads(default, &mut |qn| {
@@ -1624,6 +1628,7 @@ impl<'a> Checker<'a> {
             self.validate_sig_type(&param.ty, &fn_decl.generic_params);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             // `weak` parameter (§M.14.3): validate its class type (E0455) and
             // register it so reads route through `.get()` (E0456).
             if param.is_weak {
@@ -2023,6 +2028,11 @@ impl<'a> Checker<'a> {
             // non-`Option` field (invalid Rust, the "juxc bug" path). `weak`
             // fields (default null, initializer already barred above) and raw
             // pointers (`null` is a valid pointer value) are exempt.
+            // A field initializer flows into the field like an assignment.
+            if let (Some(default), Some(fty)) = (&field.default, &field.ty) {
+                let slot = ty_from_ref(fty, &self.env, self.symbols);
+                self.check_literal_fits(&slot, default, field.span);
+            }
             if !field.is_weak {
                 if let (Some(default), Some(fty)) = (&field.default, &field.ty) {
                     if matches!(default, Expr::Literal(juxc_ast::Literal::Null))
@@ -2296,6 +2306,7 @@ impl<'a> Checker<'a> {
             self.validate_sig_type(&param.ty, &[]);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
         }
         let saved = self.current_return.take();
         self.current_return = None; // constructors don't return values
@@ -2365,6 +2376,7 @@ impl<'a> Checker<'a> {
             self.validate_sig_type(&param.ty, &[]);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             // `weak` parameter (§M.14.3): validate class type (E0455) and
             // register so reads route through `.get()` (E0456).
             if param.is_weak {
@@ -2888,6 +2900,7 @@ impl<'a> Checker<'a> {
         for param in &op.params {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
         }
         let saved = self.current_return.take();
         self.current_return = Some(return_type_to_ty(&op.return_type, &self.env, self.symbols));
@@ -3355,10 +3368,26 @@ impl<'a> Checker<'a> {
                 {
                     self.uninferable_news.push((v.name.text.clone(), v.span));
                 }
+                // Pointer depth: the declared type's, or for `var q = p + 1`
+                // the initializer's (computed before `v.name` is bound, so a
+                // shadowing `var p = p + 1` reads the outer `p`).
+                let ptr_depth = match (&v.ty, &v.init) {
+                    (Some(t), _) => t.ptr_depth,
+                    (None, Some(init)) => self.expr_ptr_depth(init),
+                    (None, None) => 0,
+                };
                 self.env.declare(&v.name.text, final_ty);
+                self.env.declare_pointer(&v.name.text, ptr_depth);
             }
 
             Stmt::Assign(a) => {
+                // `p += n` / `p -= n` (and `p++` as a statement) step a pointer.
+                if !self.in_unsafe
+                    && matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
+                    && self.expr_ptr_depth(&a.target) > 0
+                {
+                    self.unsafe_pointer_op("pointer arithmetic", a.span);
+                }
                 // A `weak` field WRITE (§6.5): `this.parent = p` / `= null`.
                 // The target is a write place, not a read, so the bare-read
                 // guard (E0456) must NOT fire — check only the receiver. And a
@@ -4108,6 +4137,9 @@ impl<'a> Checker<'a> {
             Expr::Index(i) => {
                 self.check_expr(&i.array);
                 self.check_expr(&i.index);
+                if !self.in_unsafe && self.expr_ptr_depth(&i.array) > 0 {
+                    self.unsafe_pointer_op("indexing a raw pointer `p[i]`", i.span);
+                }
             }
 
             Expr::Call(c) => self.check_call(c),
@@ -4221,6 +4253,19 @@ impl<'a> Checker<'a> {
             Expr::Binary(b) => {
                 self.check_expr(&b.left);
                 self.check_expr(&b.right);
+                if !self.in_unsafe
+                    && matches!(b.op, juxc_ast::BinaryOp::Add | juxc_ast::BinaryOp::Sub)
+                    && (self.expr_ptr_depth(&b.left) > 0 || self.expr_ptr_depth(&b.right) > 0)
+                {
+                    // Point at an operand: a binary with a literal on one side
+                    // joins that literal's empty span and stretches back to
+                    // the start of the file.
+                    let span = [expr_span(&b.left), expr_span(&b.right), b.span]
+                        .into_iter()
+                        .find(|sp| *sp != Span::DUMMY)
+                        .unwrap_or(b.span);
+                    self.unsafe_pointer_op("pointer arithmetic", span);
+                }
                 // §S.2.1 — the wrapping family (`+%` `-%` `*%` `<<%`
                 // `>>%`) is INTEGER-only: wrap-modulo-2^N has no
                 // meaning for floats (IEEE saturates to ±Inf), bools,
@@ -4520,6 +4565,9 @@ impl<'a> Checker<'a> {
             //      inference gap must never manufacture a type error).
             Expr::IncDec(i) => {
                 self.check_expr(&i.target);
+                if !self.in_unsafe && self.expr_ptr_depth(&i.target) > 0 {
+                    self.unsafe_pointer_op("stepping a raw pointer with `++` / `--`", i.span);
+                }
                 if !Self::is_assignable_place(&i.target) {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -5921,6 +5969,23 @@ impl<'a> Checker<'a> {
             Ty::Nullable(inner) => inner.as_ref(),
             other => other,
         };
+        // Each arm of a conditional flows into the same slot, and each element
+        // of an array literal into the element type.
+        match (slot, value) {
+            (_, Expr::Ternary(t)) => {
+                self.check_literal_fits(slot, &t.then_branch, fallback);
+                self.check_literal_fits(slot, &t.else_branch, fallback);
+                return;
+            }
+            (Ty::Array { element, .. }, Expr::NewArrayLit(lit)) => {
+                let element = element.as_ref().clone();
+                for item in &lit.elements {
+                    self.check_literal_fits(&element, item, lit.span);
+                }
+                return;
+            }
+            _ => {}
+        }
         let Ty::Primitive(p) = slot else { return };
         let (lit, v): (&juxc_ast::IntLit, i128) = match value {
             Expr::Literal(juxc_ast::Literal::Int(lit)) => (lit, lit.value as i128),
@@ -5961,6 +6026,27 @@ impl<'a> Checker<'a> {
                 "to keep the literal's low bits, cast it explicitly: `{v} as {slot}` (§S.2.4)"
             )),
         );
+    }
+
+    /// E0506 for a raw-pointer operation outside `unsafe` (§L.6.2): the same
+    /// rule, and the same wording, as `*p` and `&x`.
+    fn unsafe_pointer_op(&mut self, what: &str, span: Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0506_UnsafeOpOutsideUnsafe,
+                format!(
+                    "{what} requires an `unsafe` block; wrap it in `unsafe {{ … }}` \
+                     or mark the enclosing function `unsafe`",
+                ),
+            )
+            .with_span(span),
+        );
+    }
+
+    /// How many raw-pointer levels `e` has (`int*` is 1), or 0 for a value
+    /// that is not a pointer. See [`crate::infer::pointer_depth`].
+    pub(crate) fn expr_ptr_depth(&self, e: &Expr) -> u8 {
+        crate::infer::pointer_depth(e, &self.env, self.symbols)
     }
 
     /// Validate an **explicit call-site type-argument list** against the

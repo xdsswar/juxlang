@@ -564,6 +564,19 @@ public <int N> byte[N] copy(byte[N] src) {
 }
 ```
 
+A declaration with an explicit array type may drop the `new T[]` and give the elements in braces, as in Java. The braces take their element type and their fixed or dynamic shape from the declared type, so they are accepted wherever a declared array type sits to their left: a local, a `final` local, and a field (instance or `static`). A nested brace list fills the next dimension of a multi-dimensional type. The shorthand is not an expression; anywhere else, write `new T[]{…}`.
+
+```java
+int[] primes = {2, 3, 5, 7};              // same as new int[]{2, 3, 5, 7}
+int[3] rgb = {255, 128, 0};               // fixed: the slot says int[3]
+int[][] m = {{1, 2}, {3, 4}};             // one brace level per dimension
+
+class Palette {
+    public String[] names = {"red", "green"};
+    public static int[] sizes = {8, 16, 32};
+}
+```
+
 `T[]` and `T[N]` are interchangeable when passing a fixed-size array to a function expecting a runtime-sized one — the size information is simply not preserved. Going the other way requires a check.
 
 A `new T[n]` expression whose value is not going into a slot declared `T[N]` produces the runtime-sized form. It is what Java's array expression means, and it is the only reading that makes the sentence above true: a value that is only ever a fixed array cannot be handed to a `T[]` parameter without copying it, and copying it would break the reference semantics of 6.5.2. The stack form is what an explicit `T[N]` slot asks for, and it stays exactly that.

@@ -1274,6 +1274,12 @@ impl<'a> Parser<'a> {
                 );
                 self.skip_balanced_braces();
                 None
+            } else if let Some(array_ty) = ty.as_ref().filter(|t| t.array_shape.is_some() && self.at(&TokenKind::LBrace)) {
+                // `int[] items = {1, 2, 3};`: the brace shorthand a local
+                // already accepts (JUX-LANG-V1 section 5.5). Without this the
+                // `{` reached `parse_expr`, and the recovery threw the rest of
+                // the class out of the class body.
+                self.parse_bare_array_initializer(array_ty)
             } else {
                 self.parse_expr()
             }

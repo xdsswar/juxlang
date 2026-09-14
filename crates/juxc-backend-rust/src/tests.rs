@@ -5130,7 +5130,56 @@ fn pointer_arithmetic_lowers_to_offset() {
     assert!(rust.contains("= p.offset(2);"), "p + n: {rust}");
     assert!(rust.contains("= p.offset((k) as isize);"), "n + p: {rust}");
     assert!(rust.contains("= q.offset(-1);"), "p - n: {rust}");
-    assert!(rust.contains("q.offset_from(p)"), "q - p: {rust}");
+    assert!(rust.contains("let d: i64 = (q.offset_from(p) as i64);"), "q - p: {rust}");
+}
+
+/// `q - p` is a `long` (§L.6.2) whatever the pointee, so it meets a `long`
+/// operand or a `long` return with no further cast, and `offset_from`'s
+/// `isize` never reaches an `i64` slot.
+#[test]
+fn pointer_difference_is_a_long() {
+    let rust = emit(
+        "public unsafe long span(int* a, int* b) { return b - a; } \
+         public void main() { int[] xs = {1, 2, 3}; \
+         unsafe { int* p = &xs[0]; int* q = p + 2; long twice = (q - p) * 2L; } }",
+    );
+    assert!(rust.contains("(b.offset_from(a) as i64)"), "return: {rust}");
+    assert!(rust.contains("let twice: i64 = (q.offset_from(p) as i64) * 2i64;"), "operand: {rust}");
+}
+
+/// A pointer is recognised wherever it comes from, not only from a local
+/// declared `T*`: a field (bare or through `this`), a call's return value, an
+/// inferred `var`, and each level of a `T**`.
+#[test]
+fn pointer_sources_all_index_through_offset() {
+    let rust = emit(
+        "class Ring { public long* cursor; \
+           public void step() { unsafe { cursor++; this.cursor += 2; long v = cursor[1]; } } } \
+         public unsafe long* mid(long* p) { return p + 1; } \
+         public void main() { long[] xs = new long[4]; \
+           unsafe { long* p = &xs[0]; var q = p + 1; long a = q[1]; long b = mid(p)[-1]; \
+           long** pp = &p; long c = pp[0][2]; long d = (*pp)[1]; } }",
+    );
+    assert!(rust.contains("let a: i64 = (*q.offset(1));"), "inferred var: {rust}");
+    assert!(rust.contains("(*mid(p).offset(-1))"), "call result: {rust}");
+    assert!(rust.contains(".offset(2)"), "field compound: {rust}");
+    assert!(!rust.contains("cursor[1]"), "field index: {rust}");
+    assert!(!rust.contains("pp[0]"), "double pointer: {rust}");
+    assert!(rust.contains("(*pp).offset(1)"), "deref then index: {rust}");
+}
+
+/// `&xs[i]` into an array handle takes the address from the buffer's own
+/// pointer. Through `addr_of_mut!(xs.borrow_mut()[i])` the `RefMut` guard
+/// lived to the end of the enclosing block, so reading `xs` again in the same
+/// `unsafe` block panicked with "already mutably borrowed".
+#[test]
+fn address_of_array_element_does_not_hold_the_borrow() {
+    let rust = emit(
+        "public void main() { int[] xs = {1, 2, 3}; \
+         unsafe { int* p = &xs[1]; int first = xs[0]; } }",
+    );
+    assert!(rust.contains("xs.borrow_mut().as_mut_ptr().offset(1)"), "address: {rust}");
+    assert!(!rust.contains("addr_of_mut!(xs.borrow_mut()"), "guard held: {rust}");
 }
 
 /// `p += n` and `p++` have no Rust compound form on pointers; they are

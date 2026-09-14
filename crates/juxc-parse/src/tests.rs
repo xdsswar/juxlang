@@ -3165,6 +3165,38 @@ fn struct_decl_parses_with_fields_and_generics() {
     assert_eq!(c.fields.len(), 2);
 }
 
+/// A field takes the brace shorthand for an array initializer the way a local
+/// does (JUX-LANG-V1 §5.5): dynamic and fixed, instance and `static`, and one
+/// brace level per dimension. It used to reach the expression parser, whose
+/// recovery ended the class body early and reported the NEXT class as
+/// "declared inside a function body".
+#[test]
+fn field_brace_array_initializer_parses() {
+    let ast = parse_clean(
+        "class Palette {\n\
+            public int[] sizes = {8, 16, 32};\n\
+            public int[3] rgb = {255, 128, 0};\n\
+            public static int[][] grid = {{1}, {2, 3}};\n\
+         }\n\
+         class After { }",
+    );
+    assert_eq!(ast.items.len(), 2, "the class after the fields is still top level");
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    let lit = |i: usize| match c.fields[i].default.as_ref() {
+        Some(Expr::NewArrayLit(n)) => n,
+        other => panic!("field {i}: expected NewArrayLit, got {other:?}"),
+    };
+    assert_eq!(lit(0).elements.len(), 3);
+    assert!(!lit(0).fixed, "int[] is dynamic");
+    assert!(lit(1).fixed, "int[3] is fixed");
+    assert!(c.fields[2].is_static);
+    assert!(
+        matches!(&lit(2).elements[1], Expr::NewArrayLit(row) if row.elements.len() == 2),
+        "nested row: {:?}",
+        lit(2).elements
+    );
+}
+
 /// Generic enums carry their type parameters (`enum Cow<B>`,
 /// `enum Entry<K, V, A>`), and variant payloads may reference them.
 #[test]

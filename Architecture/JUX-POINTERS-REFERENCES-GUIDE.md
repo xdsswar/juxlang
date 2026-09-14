@@ -72,19 +72,20 @@ when you mean "the very same instance".
 ## 3. Raw pointers (`unsafe`-only) — §L.6 ✅
 
 Raw pointers are the C/C++ interop tool. They are gated behind `unsafe`: a
-prefix `&`, a `*p` dereference, pointer arithmetic, or `p[i]` **outside**
-`unsafe` is a compile error (**E0807**). Pointer *values* can be stored and
-passed around in safe code; they're just opaque until you enter `unsafe`.
+prefix `&`, a `*p` dereference, pointer arithmetic (`p + n`, `q - p`, `p += n`,
+`p++`), or `p[i]` **outside** `unsafe` is a compile error (**E0506**). Pointer
+*values* can be stored, passed around and compared with `null` in safe code;
+they're just opaque until you enter `unsafe`.
 
 ```jux
 public void main() {
     int n = 42;
     unsafe {
-        int* p = &n;        // address-of  → *mut int   (E0807 outside unsafe)
+        int* p = &n;        // address-of  → *mut int   (E0506 outside unsafe)
         int v = *p;         // dereference (read)        → 42
         *p = 100;           // dereference (write)       → n == 100
         int* q = p + 1;     // pointer arithmetic (steps of sizeof(int))
-        long d = q - p;     // pointer difference
+        long d = q - p;     // pointer difference, always a long
         int third = p[3];   // p[i] ≡ *(p + i)
         ulong a = p as ulong;   // pointer → integer
         int* p2 = a as int*;    // integer → pointer

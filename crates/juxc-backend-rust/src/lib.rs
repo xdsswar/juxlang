@@ -815,7 +815,7 @@ struct RustEmitter {
     /// raw-pointer `is_null()` test instead of the `Option::is_none()` form
     /// (a `*mut T` has no `is_none`). Reset per function alongside
     /// `nullable_locals`.
-    pub(crate) pointer_locals: HashSet<String>,
+    pub(crate) pointer_locals: HashMap<String, u8>,
     /// Enclosing locals CAPTURED by the anonymous class currently being emitted.
     /// Anonymous-class methods lower to `fn` items (which can't close over the
     /// environment), so each captured local is stored as a field on the
@@ -4603,7 +4603,7 @@ impl RustEmitter {
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
             forced_cell_locals: HashSet::new(),
-            pointer_locals: HashSet::new(),
+            pointer_locals: HashMap::new(),
             captured_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,

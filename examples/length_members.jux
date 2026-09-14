@@ -1,0 +1,70 @@
+// `length` as an array length, and `length` as an ordinary member name.
+//
+// `xs.length` on an array is its element count (§5.5). A class, record or
+// property may also call a member `length`, and then `obj.length` is that
+// member and nothing else. Both meanings meet here, in every place the name
+// can be written: inherited fields, a bare field read inside a method, a
+// parameter that shadows the field, a property, a static, a record
+// component, a nullable receiver, and an array of objects whose elements have
+// their own `length`.
+//
+// The fields also use the brace shorthand for an array initializer,
+// `int[] items = {1, 2, 3};`, which a field accepts the way a local does.
+
+class Base {
+    public int length;
+
+    public Base(int length) {
+        this.length = length;
+    }
+}
+
+class Derived extends Base {
+    public int[] items = {1, 2, 3};
+    public static int[][] table = {{1}, {2, 3}};
+
+    public Derived() {
+        super(10);
+    }
+
+    /** The inherited field plus the array's length, read both ways. */
+    public int both() {
+        return length + items.length + this.items.length;
+    }
+
+    /** A parameter named `length` hides the field. */
+    public int shadow(int length) {
+        return length;
+    }
+}
+
+// A property named `length`. The W0974 hint in the output is expected: the
+// convention prefers `Length`, but the lower-case name is the case under test.
+class Measured {
+    public int length { get; set; }
+}
+
+class Registry {
+    public static int length = 99;
+}
+
+record Span(int start, int length) {}
+
+public void main() {
+    var d = new Derived();
+    print($"field ${d.length}, method ${d.both()}, shadowed ${d.shadow(7)}");
+
+    Base asBase = d;
+    print($"through the base type ${asBase.length}");
+
+    var m = new Measured();
+    m.length = 5;
+    print($"property ${m.length}, static ${Registry.length}");
+
+    Span? maybe = new Span(1, 4);
+    print($"record component ${maybe?.length}");
+
+    Derived[] all = {d};
+    print($"array of objects ${all.length}, element ${all[0].length}");
+    print($"static table ${Derived.table.length} rows, last row ${Derived.table[1].length}");
+}

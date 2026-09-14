@@ -1,0 +1,20 @@
+// Indexing, stepping and pointer arithmetic are raw-pointer operations, so
+// like `*p` they need `unsafe` (§L.6.2). The same operations inside `unsafe`,
+// and array indexing anywhere, are fine.
+public void main() {
+    int[] xs = {1, 2};
+    int* p = null;
+    unsafe { p = &xs[0]; }
+    int v = p[1];
+    int* q = p + 1;
+    p += 1;
+    p++;
+    var r = 2 + p;
+    long d = q - p;
+    int ok = xs[1] + 1;
+    unsafe {
+        int w = p[0];
+        p++;
+        var s = p - 1;
+    }
+}

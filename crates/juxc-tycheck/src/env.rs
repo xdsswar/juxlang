@@ -32,6 +32,11 @@ pub struct TypeEnv {
     /// Stack of nested scopes. Innermost on top. The root entry is the
     /// function/method's parameter scope.
     scopes: Vec<HashMap<String, Ty>>,
+    /// Raw-pointer depth of the names in the matching scope of [`Self::scopes`]
+    /// (`int*` is 1, `int**` is 2). `Ty` erases `ptr_depth`, and the `unsafe`
+    /// gate on `p[i]` / `p + n` (§L.6.2) needs to know which names are
+    /// pointers. A name absent here is not one.
+    ptr_depths: Vec<HashMap<String, u8>>,
     /// Name of the class whose method body we're currently inside —
     /// `None` at top level, `Some("Foo")` while walking `class Foo`'s
     /// method bodies. Drives `Expr::This` inference. Stored as the
@@ -67,6 +72,7 @@ impl TypeEnv {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            ptr_depths: vec![HashMap::new()],
             current_class: None,
             generic_params: HashSet::new(),
             current_package: Vec::new(),
@@ -80,6 +86,7 @@ impl TypeEnv {
     /// the body of a loop, a switch arm.
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.ptr_depths.push(HashMap::new());
     }
 
     /// Pop the innermost scope. Silently does nothing when only the
@@ -88,6 +95,7 @@ impl TypeEnv {
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+            self.ptr_depths.pop();
         }
     }
 
@@ -99,6 +107,33 @@ impl TypeEnv {
         if let Some(top) = self.scopes.last_mut() {
             top.insert(name.to_string(), ty);
         }
+        // A new declaration is not a pointer until `declare_pointer` says so,
+        // so a non-pointer that shadows a pointer is not mistaken for one.
+        if let Some(top) = self.ptr_depths.last_mut() {
+            top.remove(name);
+        }
+    }
+
+    /// Record that `name`, just declared in the innermost scope, is a raw
+    /// pointer of `depth` levels. A depth of 0 records nothing.
+    pub fn declare_pointer(&mut self, name: &str, depth: u8) {
+        if depth == 0 {
+            return;
+        }
+        if let Some(top) = self.ptr_depths.last_mut() {
+            top.insert(name.to_string(), depth);
+        }
+    }
+
+    /// The raw-pointer depth of the binding `name` resolves to, or 0 when it
+    /// is not a pointer (or not bound).
+    pub fn pointer_depth(&self, name: &str) -> u8 {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return self.ptr_depths.get(i).and_then(|d| d.get(name)).copied().unwrap_or(0);
+            }
+        }
+        0
     }
 
     /// Look up `name` from innermost scope outward. Returns `None` when

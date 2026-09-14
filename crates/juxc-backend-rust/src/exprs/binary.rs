@@ -132,6 +132,17 @@ fn receiver_needs_parens(e: &Expr) -> bool {
 }
 
 impl RustEmitter {
+    /// Whether `b` is one of the shapes [`Self::emit_pointer_arithmetic`]
+    /// lowers. Each lowers to a method call (or a parenthesized cast), which
+    /// binds tighter than any operator, so it never needs parens of its own.
+    pub(crate) fn is_lowered_pointer_arithmetic(&self, b: &BinaryExpr) -> bool {
+        match b.op {
+            BinaryOp::Add => self.expr_is_raw_pointer(&b.left) != self.expr_is_raw_pointer(&b.right),
+            BinaryOp::Sub => self.expr_is_raw_pointer(&b.left),
+            _ => false,
+        }
+    }
+
     /// Lower `p + n`, `n + p`, `p - n` and `q - p` over raw pointers, returning
     /// whether `b` was one of them.
     ///
@@ -146,11 +157,15 @@ impl RustEmitter {
             (BinaryOp::Add, false, true) => (&b.right, &b.left, false),
             (BinaryOp::Sub, true, false) => (&b.left, &b.right, true),
             (BinaryOp::Sub, true, true) => {
-                // Pointer difference: a count of pointee-sized steps.
+                // Pointer difference: a count of pointee-sized steps, typed
+                // `long` by §L.6.2. `offset_from` returns `isize`, so the cast
+                // makes the Rust value the `i64` every slot expects. The parens
+                // keep `as i64` from reading as a generic when a `<` follows.
+                self.w.push('(');
                 self.emit_pointer_receiver(&b.left);
                 self.w.push_str(".offset_from(");
                 self.emit_expr(&b.right);
-                self.w.push(')');
+                self.w.push_str(") as i64)");
                 return true;
             }
             _ => return false,
@@ -181,7 +196,13 @@ impl RustEmitter {
     /// its width, so `p[i]` works for an `int`, a `uint` or a `byte` alike.
     pub(crate) fn emit_pointer_step(&mut self, step: &Expr) {
         let prev = std::mem::take(&mut self.emitting_format_arg);
-        if matches!(step, Expr::Literal(juxc_ast::Literal::Int(_))) {
+        // An integer literal, negated or not, already takes `isize` from the
+        // parameter: `p.offset(-1)`, not `p.offset((-1) as isize)`.
+        let literal = match step {
+            Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Neg => u.operand.as_ref(),
+            other => other,
+        };
+        if matches!(literal, Expr::Literal(juxc_ast::Literal::Int(_))) {
             self.emit_expr(step);
         } else {
             self.w.push('(');
@@ -301,6 +322,15 @@ impl RustEmitter {
         // Rust to subtract a `char` from a `char`.
         if let Expr::Literal(juxc_ast::Literal::Char(_)) = e {
             return Some(juxc_tycheck::Primitive::Char);
+        }
+        // A pointer difference is a `long` (§L.6.2), and its lowering already
+        // carries the `as i64`. A parenthesized `(q - p)` has no recorded type
+        // under its own span, so without this it read as untyped and took a
+        // second, redundant cast.
+        if let Expr::Binary(b) = e {
+            if b.op == BinaryOp::Sub && self.expr_is_raw_pointer(&b.left) && self.expr_is_raw_pointer(&b.right) {
+                return Some(juxc_tycheck::Primitive::Long);
+            }
         }
         if let Expr::Path(qn) = e {
             if qn.segments.len() == 1 {
@@ -749,8 +779,12 @@ impl RustEmitter {
             None
         };
         let target_name = promote.map(crate::exprs::rust_primitive_name);
-        let cast_left = target_name.is_some() && self.operand_primitive(&b.left) != promote;
-        let cast_right = target_name.is_some() && self.operand_primitive(&b.right) != promote;
+        // Compared by the Rust spelling, as `numeric_widen_to` does: `long` and
+        // `i64` are distinct Jux primitives but one Rust type, and a cast
+        // between them (`(x as i64) * 2i64`) is noise.
+        let rust_name_of = |e: &Expr| self.operand_primitive(e).map(crate::exprs::rust_primitive_name);
+        let cast_left = target_name.is_some() && rust_name_of(&b.left) != target_name;
+        let cast_right = target_name.is_some() && rust_name_of(&b.right) != target_name;
         // Inside an enum method `self` is `&Self`; comparing it to a variant
         // value (`this == Op.Add`) is `&Op == Op`, which the derived `PartialEq`
         // does not cover (rustc E0277). Deref the `this`/`super` operand so both
@@ -1110,59 +1144,128 @@ impl RustEmitter {
     /// chain of raw-pointer derefs/indexes off a pointer. Drives the
     /// `p == null` peephole to pick the `is_null()` lowering.
     pub(crate) fn expr_is_raw_pointer(&self, e: &juxc_ast::Expr) -> bool {
+        self.pointer_depth(e) > 0
+    }
+
+    /// How many raw-pointer levels `e` has: 1 for a `T*`, 2 for a `T**`, 0 for
+    /// anything that is not a pointer. The lowered `Ty` erases `ptr_depth`, so
+    /// it is recovered from declared `TypeRef`s -- locals and parameters
+    /// (`pointer_locals`), fields, casts, and function and method returns --
+    /// and carried through the pointer operators: `&x` adds a level, `*p` and
+    /// `p[i]` remove one, and `p ± n` keeps it.
+    pub(crate) fn pointer_depth(&self, e: &juxc_ast::Expr) -> u8 {
+        use juxc_ast::{BinaryOp, Expr, UnaryOp};
         match e {
-            // `&x` / `&obj` always produce a `*mut T`.
-            juxc_ast::Expr::Unary(u) => matches!(u.op, juxc_ast::UnaryOp::AddrOf),
-            // `n as int*` / `(int*) n`.
-            juxc_ast::Expr::Cast(c) => c.ty.ptr_depth > 0,
-            // `p + n`, `n + p`, `p - n` are pointers; `q - p` is a count.
-            juxc_ast::Expr::Binary(b) => match b.op {
-                juxc_ast::BinaryOp::Add => {
-                    self.expr_is_raw_pointer(&b.left) != self.expr_is_raw_pointer(&b.right)
-                }
-                juxc_ast::BinaryOp::Sub => {
-                    self.expr_is_raw_pointer(&b.left) && !self.expr_is_raw_pointer(&b.right)
-                }
-                _ => false,
+            Expr::Unary(u) => match u.op {
+                UnaryOp::AddrOf => self.pointer_depth(&u.operand).saturating_add(1),
+                UnaryOp::Deref => self.pointer_depth(&u.operand).saturating_sub(1),
+                _ => 0,
             },
-            // A bare name that is a raw pointer: either a local/param (tracked
-            // in `pointer_locals`) or, failing that, an implicit-`this`
-            // reference to a `T*` FIELD of the enclosing class (`ptr == null`
-            // inside a method). A local/param of the same name shadows the field.
-            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+            Expr::Index(i) => self.pointer_depth(&i.array).saturating_sub(1),
+            Expr::Cast(c) => c.ty.ptr_depth,
+            Expr::Binary(b) => {
+                let (l, r) = (self.pointer_depth(&b.left), self.pointer_depth(&b.right));
+                match b.op {
+                    // `p + n` / `n + p`: the pointer's depth; `p + q` is not a
+                    // pointer operation at all.
+                    BinaryOp::Add if (l > 0) != (r > 0) => l.max(r),
+                    // `p - n` keeps the depth; `q - p` is a count.
+                    BinaryOp::Sub if l > 0 && r == 0 => l,
+                    _ => 0,
+                }
+            }
+            Expr::Ternary(t) => self.pointer_depth(&t.then_branch).max(self.pointer_depth(&t.else_branch)),
+            // A bare name: a pointer local or parameter, or -- when nothing of
+            // that name is in scope -- an implicit-`this` pointer field.
+            Expr::Path(qn) if qn.segments.len() == 1 => {
                 let name = qn.segments[0].text.as_str();
-                if self.pointer_locals.contains(name) {
-                    return true;
+                if let Some(depth) = self.pointer_locals.get(name) {
+                    return *depth;
                 }
                 let shadowed = self.local_types.iter().any(|s| s.contains_key(name))
                     || self.current_fn_params.contains(name);
-                if !shadowed {
-                    if let Some(cls) = self.enclosing_class.as_ref() {
-                        if let Some(class) = self.symbols.classes.get(cls) {
-                            if let Some(field) = class.fields.get(name) {
-                                return field.ty.ptr_depth > 0;
-                            }
-                        }
-                    }
+                if shadowed {
+                    return 0;
                 }
-                false
+                self.enclosing_class
+                    .clone()
+                    .map(|c| self.class_field_ptr_depth(&c, name))
+                    .unwrap_or(0)
             }
-            // A field declared `T*` (`this.ptr`, `obj.ptr`) — resolve the
-            // receiver's class and read the field's declared `ptr_depth` (the
-            // erased `Ty` drops it). Lets `ptr == null` lower to `is_null()`.
+            // `this.ptr` / `obj.ptr`: the field's declared depth, inherited
+            // fields included.
+            Expr::Field(f) => {
+                let class = if matches!(&*f.object, Expr::This(_)) {
+                    self.enclosing_class.clone()
+                } else {
+                    self.receiver_class_key(&f.object)
+                };
+                class.map(|c| self.class_field_ptr_depth(&c, &f.field.text)).unwrap_or(0)
+            }
+            Expr::Call(c) => self.call_return_ptr_depth(&c.callee),
+            _ => 0,
+        }
+    }
+
+    /// The declared pointer depth of field `field` on class `class`, walking
+    /// the resolved `extends` chain.
+    fn class_field_ptr_depth(&self, class: &str, field: &str) -> u8 {
+        let mut cursor = Some(class.to_string());
+        for _ in 0..64 {
+            let Some(name) = cursor else { return 0 };
+            let Some(sig) = self.lookup_class_by_bare_or_fqn(&name) else { return 0 };
+            if let Some(f) = sig.fields.get(field) {
+                return f.ty.ptr_depth;
+            }
+            cursor = sig.extends_fqn.clone();
+        }
+        0
+    }
+
+    /// The pointer depth a call returns: a free or native function's declared
+    /// return type, a static method's, or an instance method's on the
+    /// receiver's class (inherited ones included).
+    fn call_return_ptr_depth(&self, callee: &juxc_ast::Expr) -> u8 {
+        let depth_of = |rt: &juxc_ast::ReturnType| match rt {
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t.ptr_depth,
+            juxc_ast::ReturnType::Void => 0,
+        };
+        match callee {
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if self.pointer_locals.contains_key(name) || self.current_fn_params.contains(name) {
+                    return 0;
+                }
+                let via_unit = self
+                    .current_unit_idx
+                    .and_then(|i| self.symbols.units.get(i))
+                    .and_then(|ctx| ctx.unqualified.get(name))
+                    .and_then(|fqn| self.symbols.functions.get(fqn));
+                via_unit
+                    .or_else(|| self.symbols.lookup_function(name).map(|(_, f)| f))
+                    .map(|f| depth_of(&f.return_type))
+                    .unwrap_or(0)
+            }
             juxc_ast::Expr::Field(f) => {
-                if let Some(juxc_tycheck::Ty::User { name, .. }) =
-                    self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
-                {
-                    if let Some(class) = self.symbols.classes.get(name) {
-                        if let Some(field) = class.fields.get(&f.field.text) {
-                            return field.ty.ptr_depth > 0;
-                        }
+                let class = match &*f.object {
+                    juxc_ast::Expr::This(_) => self.enclosing_class.clone(),
+                    juxc_ast::Expr::Path(qn) if self.path_resolves_to_class_in_emit(qn).is_some() => {
+                        self.path_resolves_to_class_in_emit(qn)
                     }
+                    other => self.receiver_class_key(other),
+                };
+                let mut cursor = class;
+                for _ in 0..64 {
+                    let Some(name) = cursor else { return 0 };
+                    let Some(sig) = self.lookup_class_by_bare_or_fqn(&name) else { return 0 };
+                    if let Some(m) = sig.methods.get(f.field.text.as_str()) {
+                        return depth_of(&m.return_type);
+                    }
+                    cursor = sig.extends_fqn.clone();
                 }
-                false
+                0
             }
-            _ => false,
+            _ => 0,
         }
     }
 

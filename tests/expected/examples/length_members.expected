@@ -1,0 +1,7 @@
+field 10, method 16, shadowed 7
+through the base type 10
+property 5, static 99
+record component 4
+array of objects 1, element 10
+static table 2 rows, last row 2
+examples/length_members.jux:44:16: [W0974] warning: property `length` should be PascalCase (`Length`) -- the preferred visual signal that a member is a property, not a plain field (§P.1.1)
