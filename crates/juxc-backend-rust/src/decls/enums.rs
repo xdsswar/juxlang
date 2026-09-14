@@ -615,12 +615,13 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
+                    // A float payload keeps its decimal point, as in a record.
+                    let spec = if crate::analysis::type_ref_is_float(&slot.ty) { "{:?}" } else { "{}" };
                     if let Some(name) = &slot.name {
                         self.w.push_str(&to_rust_ident(&name.text));
-                        self.w.push_str(": {}");
-                    } else {
-                        self.w.push_str("{}");
+                        self.w.push_str(": ");
                     }
+                    self.w.push_str(spec);
                 }
                 self.w.push_str(")\"");
                 for i in 0..n {

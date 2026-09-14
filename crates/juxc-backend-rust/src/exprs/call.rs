@@ -2931,6 +2931,31 @@ impl RustEmitter {
     /// borrows only cover shared argument borrows). Wrapper-class
     /// receivers are exempt: their methods take `&self` and mutate
     /// through the interior `RefCell`, so no conflict exists.
+    /// Names of array or collection handles that `e` reads THROUGH their cell:
+    /// the array of an index, the receiver of `.length` or of a method call.
+    /// Each such read is a `borrow()` guard in the emitted Rust.
+    fn handle_roots_read_in(&self, e: &Expr) -> Vec<String> {
+        let mut roots = Vec::new();
+        let mut visit = |sub: &Expr| {
+            let through = match sub {
+                Expr::Index(i) => Some(i.array.as_ref()),
+                Expr::Field(f) => Some(f.object.as_ref()),
+                Expr::Call(c) => match c.callee.as_ref() {
+                    Expr::Field(f) => Some(f.object.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(Expr::Path(qn)) = through {
+                if qn.segments.len() == 1 && self.expr_is_collection_handle(through.expect("matched")) {
+                    roots.push(qn.segments[0].text.clone());
+                }
+            }
+        };
+        juxc_ast::visit::for_each_expr_in(e, &mut visit);
+        roots
+    }
+
     fn call_needs_borrow_hoist(&self, call: &CallExpr) -> bool {
         // An argument that reads a wrapper FIELD (`n.bump(n.value)`,
         // `f(n, n.value)`) emits a `.0.borrow()` whose `Ref` guard is a
@@ -2943,6 +2968,24 @@ impl RustEmitter {
         // matches Java's args-before-call evaluation order.
         if call.args.iter().any(|a| self.expr_reads_wrapper_field(a)) {
             return true;
+        }
+        // The same hazard with an array or collection HANDLE (§6.5.2): one
+        // argument reads through its cell (`xs.length`, `xs[0]`, `v.len()`)
+        // while another passes the handle itself, which the callee may write
+        // through. `fill(xs, xs.length)` panicked "already borrowed": the
+        // length's `borrow()` outlived the call that took `borrow_mut()`.
+        if call.args.len() > 1 {
+            let read_roots: Vec<String> =
+                call.args.iter().flat_map(|a| self.handle_roots_read_in(a)).collect();
+            if !read_roots.is_empty()
+                && call.args.iter().any(|a| {
+                    matches!(a, Expr::Path(qn) if qn.segments.len() == 1
+                        && read_roots.contains(&qn.segments[0].text)
+                        && self.expr_is_collection_handle(a))
+                })
+            {
+                return true;
+            }
         }
         let Expr::Field(f) = call.callee.as_ref() else {
             return false;

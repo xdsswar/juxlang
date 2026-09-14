@@ -5305,11 +5305,23 @@ impl RustEmitter {
                 found
             })
             .unwrap_or(false);
+        // A field written without `this.` (`n += 1;`) needs the mutable
+        // receiver as much as `this.n += 1;` does.
+        let instance_fields: HashSet<String> = self
+            .enclosing_class
+            .as_deref()
+            .and_then(|c| self.lookup_class_ast_by_bare_or_fqn(c))
+            .map(|decl| {
+                decl.fields.iter().filter(|f| !f.is_static).map(|f| f.name.text.clone()).collect()
+            })
+            .unwrap_or_default();
+        let param_names: HashSet<String> = method.params.iter().map(|p| p.name.text.clone()).collect();
         let needs_mut_self = !self.emitting_wrapper_class
             && (has_self_aliasing_byref
                 || body
                     .map(|b| {
                         body_writes_to_this(b)
+                            || crate::analysis::body_writes_bare_field(b, &instance_fields, &param_names)
                             || crate::analysis::body_calls_mut_method_on_this(
                                 b,
                                 &self.user_mut_methods,

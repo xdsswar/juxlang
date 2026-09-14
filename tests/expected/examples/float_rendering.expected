@@ -1,0 +1,7 @@
+Circle(radius: 2.0)
+Point(x: 1.0, y: 2.5)
+warn(50.0)
+4.0
+each 1.0
+each 0.5
+int 3 double 3.0 float 2.0 fraction 0.30000000000000004

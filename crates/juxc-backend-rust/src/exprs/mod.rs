@@ -2237,6 +2237,23 @@ impl RustEmitter {
         for n in &shadowed_refs {
             self.ref_locals.remove(n);
         }
+        // The parameters' types are in scope for the body: declared, or taken
+        // from the slot the lambda is written into (recorded by the checker at
+        // the parameter's name). String interpolation reads a bare name's type
+        // from `local_types`, and a `double` parameter printed without it lost
+        // its decimal point.
+        let param_types: std::collections::HashMap<String, juxc_tycheck::Ty> = l
+            .params
+            .iter()
+            .filter_map(|p| {
+                let ty = match &p.ty {
+                    Some(t) => juxc_tycheck::ty_from_ref_in_env(t, &self.symbols),
+                    None => self.expr_types.get(&p.name.span)?.clone(),
+                };
+                Some((p.name.text.clone(), ty))
+            })
+            .collect();
+        self.local_types.push(param_types);
         // Take-and-clear the void-target marker (§TS.3): an expression
         // body under a `() -> void` slot discards its value.
         let void_target = std::mem::take(&mut self.lambda_void_target);
@@ -2270,6 +2287,7 @@ impl RustEmitter {
                 self.in_lambda_body = prev_lam;
             }
         }
+        self.local_types.pop();
         for n in &shadowed_refs {
             self.ref_locals.insert(n.clone());
         }

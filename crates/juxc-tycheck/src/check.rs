@@ -419,6 +419,11 @@ pub(crate) struct Checker<'a> {
     /// enclosing function (Phase 1 doesn't type lambda throws), so
     /// recording is suppressed when > 0.
     pub(crate) lambda_depth: usize,
+    /// The parameter types of the function-type slot the next lambda is
+    /// written into (`(double) -> String show = v -> ...`), taken by that
+    /// lambda. A parameter declared without a type has the slot's type, both
+    /// for checking the body and in `expr_types` at the parameter's name.
+    pub(crate) lambda_slot_params: Option<Vec<Ty>>,
     /// True while checking a for-each header's iterable expression —
     /// the one position a `step` range is legal in Phase 1.
     pub(crate) in_foreach_iter: bool,
@@ -513,6 +518,7 @@ impl<'a> Checker<'a> {
             checked_escapes: Vec::new(),
             catch_absorb_stack: Vec::new(),
             lambda_depth: 0,
+            lambda_slot_params: None,
             in_foreach_iter: false,
             in_static: false,
             in_async: false,
@@ -3326,6 +3332,9 @@ impl<'a> Checker<'a> {
                 let declared =
                     v.ty.as_ref()
                         .map(|t| ty_from_ref(t, &self.env, self.symbols));
+                if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_))) = (&declared, &v.init) {
+                    self.lambda_slot_params = Some(params.clone());
+                }
                 let inferred = v.init.as_ref().map(|e| {
                     // Walk the initializer for nested checks (e.g. a
                     // call inside the RHS) before reading its type.
@@ -4401,14 +4410,18 @@ impl<'a> Checker<'a> {
                 self.check_expr(&s.scrutinee);
                 // A tuple or record value is taken apart by tuple and record
                 // patterns (§A.3), which get their shape checked and their
-                // bindings typed; its exhaustiveness is the product rule.
+                // bindings typed; its exhaustiveness is the product rule. An
+                // enum variant with a payload binds its parts the same way
+                // (`case Level.Warn(var v)`), so `v` has the payload's type in
+                // the guard and body instead of none.
                 let scrutinee_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
                 let product = self.is_product_ty(&scrutinee_ty);
                 for arm in &s.arms {
                     let destructures = product
                         || matches!(&arm.pattern, Pattern::Tuple(..))
                         || matches!(&arm.pattern, Pattern::EnumVariant { path, .. }
-                            if self.pattern_record_fqn(path).is_some());
+                            if self.pattern_record_fqn(path).is_some())
+                        || matches!(&arm.pattern, Pattern::EnumVariant { args, .. } if !args.is_empty());
                     let mut bindings = Vec::new();
                     if destructures {
                         self.check_pattern_shape(&arm.pattern, &scrutinee_ty, &mut bindings);
@@ -4488,10 +4501,17 @@ impl<'a> Checker<'a> {
                 // declaring function (Phase 1).
                 self.lambda_depth += 1;
                 self.env.push_scope();
-                for p in &l.params {
+                let slot_params = self.lambda_slot_params.take();
+                for (i, p) in l.params.iter().enumerate() {
                     let ty = match &p.ty {
                         Some(t) => ty_from_ref(t, &self.env, self.symbols),
-                        None => Ty::Unknown,
+                        None => match slot_params.as_ref().and_then(|ps| ps.get(i)) {
+                            Some(slot) => {
+                                self.expr_types.insert(p.name.span, slot.clone());
+                                slot.clone()
+                            }
+                            None => Ty::Unknown,
+                        },
                     };
                     self.env.declare(&p.name.text, ty);
                 }

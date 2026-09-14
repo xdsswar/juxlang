@@ -3500,7 +3500,9 @@ fn one_float_payload_disqualifies_enum_eq_hash() {
 // ============================================================================
 
 /// A primitive-only record gets an `impl std::fmt::Display` block whose
-/// format matches the spec example: `"Point(x: 1.5, y: 2.7)"`.
+/// format matches the spec example: `"Point(x: 1.5, y: 2.7)"`. A `double`
+/// component renders through `{:?}`, which keeps the decimal point on a whole
+/// number (`Point(x: 1.0, ...)`, LANG-V1 3.4) where `{}` would print `1`.
 #[test]
 fn primitive_record_emits_display_impl() {
     let rust = emit(
@@ -3514,7 +3516,7 @@ fn primitive_record_emits_display_impl() {
         "missing Display impl: {rust}",
     );
     assert!(
-        rust.contains(r#"write!(f, "Point(x: {}, y: {})", self.x, self.y)"#),
+        rust.contains(r#"write!(f, "Point(x: {:?}, y: {:?})", self.x, self.y)"#),
         "format mismatch: {rust}",
     );
 }
@@ -5958,4 +5960,83 @@ fn primitive_method_tables_agree() {
             "tycheck accepts `{name}` on a primitive, but the backend has no              lowering for it -- the call would reach rustc",
         );
     }
+}
+
+/// A `switch` on a field read through the object's guard reads it into a `let`
+/// before matching, so the guard drops before an arm writes the same object.
+/// `match self.0.borrow().mode.clone() { .. }` kept the read guard for the
+/// whole match and panicked "already borrowed" on `mode = Mode.Off;`.
+#[test]
+fn switch_on_own_field_drops_the_guard_before_the_arms() {
+    let rust = emit(
+        r#"
+        enum Mode { On, Off }
+        class Lamp {
+            private Mode mode = Mode.Off;
+            public void toggle() {
+                switch (mode) {
+                    case Mode.On -> { mode = Mode.Off; }
+                    case Mode.Off -> { mode = Mode.On; }
+                }
+            }
+        }
+        public void main() { new Lamp().toggle(); }
+        "#,
+    );
+    assert!(
+        rust.contains("let __jux_scrutinee = self.0.borrow().mode"),
+        "scrutinee not hoisted: {rust}",
+    );
+    assert!(rust.contains("match __jux_scrutinee {"), "match not on the hoisted value: {rust}");
+}
+
+/// A for-each variable over `T?` elements is nullable: `x ?? 0` keeps its
+/// fallback. It lowered to `x` alone, a type error for `int?` and a missing
+/// fallback for a type that happened to compile.
+#[test]
+fn for_each_over_nullable_elements_keeps_the_fallback() {
+    let rust = emit(
+        r#"
+        public void main() {
+            Vec<int?> xs = new Vec<int?>();
+            int total = 0;
+            for (var x : xs) {
+                total += x ?? 100;
+            }
+            print(total);
+        }
+        "#,
+    );
+    assert!(rust.contains("unwrap_or"), "the `??` fallback was dropped: {rust}");
+}
+
+/// An untyped lambda parameter takes its type from the function-type slot,
+/// and an enum payload binder from the variant: a `double` then prints with
+/// its decimal point through interpolation (`jux_float`) instead of `{}`.
+#[test]
+fn slot_typed_lambda_params_and_payload_binders_print_as_floats() {
+    let rust = emit(
+        r#"
+        enum Level { Warn(double threshold), Ok }
+        public String describe(Level level) {
+            return switch (level) {
+                case Level.Warn(var v) -> $"warn(${v})";
+                case Level.Ok -> "ok";
+            };
+        }
+        public void main() {
+            (double) -> String show = v -> $"${v}";
+            print(show(4.0));
+            print(describe(Level.Warn(50.0)));
+        }
+        "#,
+    );
+    assert!(
+        rust.contains(r#"format!("warn({})", crate::jux_float(v))"#),
+        "payload binder not rendered as a float: {rust}",
+    );
+    assert!(
+        rust.contains(r#"format!("{}", crate::jux_float(v))"#),
+        "lambda parameter not rendered as a float: {rust}",
+    );
 }

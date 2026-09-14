@@ -55,6 +55,11 @@ impl Writer {
         self.buf.len()
     }
 
+    /// The text written since `mark` (see [`Self::mark`]).
+    pub(crate) fn text_from(&self, mark: usize) -> &str {
+        &self.buf[mark..]
+    }
+
     /// Splice `text` in at a position taken from [`Writer::mark`].
     pub(crate) fn insert_at(&mut self, at: usize, text: &str) {
         self.buf.insert_str(at, text);

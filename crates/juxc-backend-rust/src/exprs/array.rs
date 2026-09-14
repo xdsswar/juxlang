@@ -41,6 +41,17 @@ impl RustEmitter {
     /// A future pass with a real type table can drop the cast when the
     /// index expression's static type is already `usize` (Jux `uint`).
     pub(crate) fn emit_index(&mut self, i: &IndexExpr) {
+        // The element is emitted with the lvalue flag taken (see below), and
+        // the flag is put back afterwards: `t[0].color = c` writes a FIELD of
+        // the element, and the field access around this index still has to
+        // know it is a place. Left cleared, it read `.color` as a value and
+        // appended the `.clone()` of a read, which cannot be assigned to.
+        let was_lvalue = self.emitting_lvalue;
+        self.emit_index_place(i);
+        self.emitting_lvalue = was_lvalue;
+    }
+
+    fn emit_index_place(&mut self, i: &IndexExpr) {
         // **`p[i]` on a raw pointer (§L.6.2)** is `*(p + i)`. Rust pointers
         // cannot be indexed, so it lowers to a dereference of the offset
         // pointer; as the target of an assignment the same place is written.
@@ -84,8 +95,14 @@ impl RustEmitter {
         // `xs`. Mark it like a method receiver so a collection-typed
         // field read (`this.items[0]`) doesn't take the value-position
         // auto-`.clone()` of the whole Vec (S15).
+        let raw_place = std::mem::take(&mut self.emitting_raw_place);
+        let array_mark = self.w.mark();
         self.emitting_method_receiver = true;
+        // The array of an addressed place is part of that place too
+        // (`&grid[1][0].n`), so the flag goes down into it.
+        self.emitting_raw_place = raw_place;
         self.emit_expr(&i.array);
+        self.emitting_raw_place = false;
         self.emitting_method_receiver = false;
         // A collection is a reference type (§6.5.1): the `Index` impl is on
         // the sequence inside the cell, not on the handle. An `xs[i] = v` write
@@ -93,11 +110,18 @@ impl RustEmitter {
         // exclusive borrow - `Ref` derefs to `&Vec<T>`, which cannot be written
         // through (rustc E0596).
         if self.expr_is_collection_handle(&i.array) {
-            self.w.push_str(if emitting_lvalue {
-                ".borrow_mut()"
+            if raw_place {
+                // Under `&`: the element's address, with no guard to outlive
+                // the statement (see `emitting_raw_place`).
+                self.w.insert_at(array_mark, "(&mut *");
+                self.w.push_str(".as_ptr())");
             } else {
-                ".borrow()"
-            });
+                self.w.push_str(if emitting_lvalue {
+                    ".borrow_mut()"
+                } else {
+                    ".borrow()"
+                });
+            }
         }
         self.emit_index_key(map_index, &i.index);
         // Rvalue index reads of non-Copy elements (String, value

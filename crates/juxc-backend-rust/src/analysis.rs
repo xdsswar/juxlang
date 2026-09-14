@@ -1235,6 +1235,46 @@ pub(crate) fn body_writes_to_this(block: &Block) -> bool {
     false
 }
 
+/// Whether `block` writes an instance field by its bare name -- `n += 1;`,
+/// `n = 0;`, `n++` -- in a method of a class declaring `fields`. A name
+/// declared as a parameter or a local anywhere in the body is not counted:
+/// it may be the local being written. `this.n` writes are
+/// [`body_writes_to_this`]'s.
+pub(crate) fn body_writes_bare_field(
+    block: &Block,
+    fields: &HashSet<String>,
+    params: &HashSet<String>,
+) -> bool {
+    use juxc_ast::visit::Node;
+    let mut locals: HashSet<String> = HashSet::new();
+    let mut written: Vec<String> = Vec::new();
+    let root_name = |e: &Expr| -> Option<String> {
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Field(f) => cur = &f.object,
+                Expr::Index(i) => cur = &i.array,
+                Expr::Path(qn) if qn.segments.len() == 1 => return Some(qn.segments[0].text.clone()),
+                _ => return None,
+            }
+        }
+    };
+    juxc_ast::visit::for_each_node(block, &mut |n| match n {
+        Node::Stmt(Stmt::VarDecl(v)) => {
+            locals.insert(v.name.text.clone());
+        }
+        Node::Stmt(Stmt::ForEach(fe)) => {
+            locals.insert(fe.var_name.text.clone());
+        }
+        Node::Stmt(Stmt::Assign(a)) => written.extend(root_name(&a.target)),
+        Node::Expr(Expr::IncDec(i)) => written.extend(root_name(&i.target)),
+        _ => {}
+    });
+    written
+        .iter()
+        .any(|name| fields.contains(name) && !params.contains(name) && !locals.contains(name))
+}
+
 /// True when the lvalue's deepest non-Field/Index expression is `Expr::This`.
 pub(crate) fn lvalue_root_is_this(e: &Expr) -> bool {
     match e {
@@ -1695,9 +1735,17 @@ pub(crate) fn collect_user_mut_methods_seeded(
     for item in &unit.items {
         match item {
             TopLevelDecl::Class(class) => {
+                let fields: HashSet<String> = class
+                    .fields
+                    .iter()
+                    .filter(|f| !f.is_static)
+                    .map(|f| f.name.text.clone())
+                    .collect();
                 for method in &class.methods {
                     if let Some(body) = &method.body {
-                        if body_writes_to_this(body) {
+                        let params: HashSet<String> =
+                            method.params.iter().map(|p| p.name.text.clone()).collect();
+                        if body_writes_to_this(body) || body_writes_bare_field(body, &fields, &params) {
                             out.insert(method.name.text.clone());
                         }
                     }
@@ -1956,6 +2004,18 @@ fn is_copy_eq_primitive(name: &str) -> bool {
 
 /// True iff `name` is a Jux float primitive — `Copy` but **not** `Eq`
 /// or `Hash` in Rust.
+/// A plain `float` / `double` / `f32` / `f64` value type: no array, pointer,
+/// nullable or generic shape.
+pub(crate) fn type_ref_is_float(t: &TypeRef) -> bool {
+    t.array_shape.is_none()
+        && t.fn_shape.is_none()
+        && t.ptr_depth == 0
+        && !t.nullable
+        && t.generic_args.is_empty()
+        && t.name.segments.len() == 1
+        && is_float_primitive(&t.name.segments[0].text)
+}
+
 fn is_float_primitive(name: &str) -> bool {
     matches!(name, "float" | "double" | "f32" | "f64")
 }

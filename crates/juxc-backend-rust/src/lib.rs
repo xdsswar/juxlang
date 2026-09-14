@@ -731,6 +731,11 @@ struct RustEmitter {
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
     emitting_lvalue: bool,
+    /// Set while the operand of `&` is emitted (§L.6.2): an index into a
+    /// collection handle anywhere in that place goes through the cell's own
+    /// pointer, `(&mut *xs.as_ptr())[i]`, rather than a `borrow_mut()` guard that
+    /// would outlive the statement taking the address.
+    pub(crate) emitting_raw_place: bool,
     /// True while we're emitting the place behind an `out` argument
     /// (§M.4) — `setIt(out b.field)`. The place is passed by exclusive
     /// reference (`&mut`), so a wrapper-class field must take the
@@ -4598,6 +4603,7 @@ impl RustEmitter {
             byref_params: std::collections::HashMap::new(),
             byref_param_names: HashSet::new(),
             emitting_lvalue: false,
+            emitting_raw_place: false,
             emitting_out_place: false,
             collection_args_prehoisted: false,
             emitting_const_context: false,

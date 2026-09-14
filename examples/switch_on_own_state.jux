@@ -1,0 +1,88 @@
+// A `switch` on an object's own field whose arms change that object, and
+// for-each over nullable elements (JUX-LANG-V1 §7.6, §7.10).
+//
+//   - The scrutinee is read once, before any arm runs, so an arm may assign
+//     the field it switched on, or call a method that does.
+//   - A loop variable over `Vec<T?>` is nullable: `x ?? fallback` takes the
+//     fallback for a null element, and printing a null element prints `null`.
+//   - `a.length < w` and `a.length << 1` parse as comparisons and shifts, not
+//     as the start of a generic argument list.
+
+enum Mode { On, Off, Dim(int level) }
+
+class Lamp {
+    private Mode mode = Mode.Off;
+    private String name = "a";
+    private int flips = 0;
+
+    public void toggle() {
+        switch (mode) {
+            case Mode.On -> { mode = Mode.Off; }
+            case Mode.Off -> { mode = Mode.On; flips++; }
+            case Mode.Dim(int level) -> { mode = Mode.On; flips += level; }
+        }
+        if (mode == Mode.On) {
+            flips += 10;
+        }
+    }
+
+    public void dim() {
+        switch (mode) {
+            case Mode.On -> { this.setMode(Mode.Dim(5)); }
+            default -> { }
+        }
+    }
+
+    public void rename() {
+        switch (name) {
+            case "a" -> { name = "b"; }
+            default -> { name = "a"; }
+        }
+    }
+
+    private void setMode(Mode m) {
+        mode = m;
+    }
+
+    public String report() {
+        return $"${name} flips=${flips}";
+    }
+}
+
+public void main() {
+    var lamp = new Lamp();
+    lamp.toggle();
+    lamp.dim();
+    lamp.toggle();
+    lamp.rename();
+    print(lamp.report());
+
+    Vec<int?> counts = new Vec<int?>();
+    counts.push(3);
+    counts.push(null);
+    counts.push(4);
+    int total = 0;
+    for (int? c : counts) {
+        total += c ?? 100;
+    }
+    print($"total ${total}");
+
+    Vec<String?> names = new Vec<String?>();
+    names.push("x");
+    names.push(null);
+    for (var name : names) {
+        print(name);
+        print(name ?? "none");
+    }
+
+    int[] a = {1, 2};
+    String s = "abc";
+    int w = 3;
+    if (a.length < w) {
+        print("short array");
+    }
+    bool doubled = a.length << 1 > w;
+    print(a.length < w && s.length() <= 3);
+    print((long) a.length < 5L);
+    print(doubled);
+}

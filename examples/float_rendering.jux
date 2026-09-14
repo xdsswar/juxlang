@@ -1,0 +1,39 @@
+// A `double` or `float` prints with its decimal point wherever it is printed
+// (JUX-LANG-V1 §3.4): `2.0`, never `2`.
+//
+// Printing a bare local always did. These are the places that printed a whole
+// number like an `int`: a record's and an enum payload's generated text, a
+// value bound by a pattern, an untyped lambda parameter, and a for-each
+// variable, all read through string interpolation.
+
+enum Shape { Circle(double radius), Dot }
+
+enum Level { Warn(double threshold), Ok }
+
+record Point(double x, double y) {}
+
+public String describe(Level level) {
+    return switch (level) {
+        case Level.Warn(var v) -> $"warn(${v})";
+        case Level.Ok -> "ok";
+    };
+}
+
+public void main() {
+    print(Shape.Circle(2.0));
+    print(new Point(1.0, 2.5));
+    print(describe(Level.Warn(50.0)));
+
+    (double) -> String show = v -> $"${v}";
+    print(show(4.0));
+
+    var halves = new Vec<double>();
+    halves.push(1.0);
+    halves.push(0.5);
+    for (var h : halves) {
+        print($"each ${h}");
+    }
+
+    int n = 3;
+    print($"int ${n} double ${n * 1.0} float ${2.0f} fraction ${0.1 + 0.2}");
+}

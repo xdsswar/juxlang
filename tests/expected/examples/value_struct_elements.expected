@@ -1,0 +1,5 @@
+tokens Red Green
+counter after bump and bumpBare 11
+single 11
+through pointers 8 7 9
+self-referencing writes 3 2 6

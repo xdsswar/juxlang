@@ -131,6 +131,15 @@ fn receiver_needs_parens(e: &Expr) -> bool {
     )
 }
 
+/// Whether emitted Rust ends in an `as <Type>` cast at its top level, the one
+/// shape `<` or `<<` cannot follow without parentheses.
+fn ends_with_cast(text: &str) -> bool {
+    let text = text.trim_end();
+    let Some(at) = text.rfind(" as ") else { return false };
+    let ty = &text[at + 4..];
+    !ty.is_empty() && ty.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+}
+
 impl RustEmitter {
     /// Whether `b` is one of the shapes [`Self::emit_pointer_arithmetic`]
     /// lowers. Each lowers to a method call (or a parenthesized cast), which
@@ -811,8 +820,22 @@ impl RustEmitter {
         if deref_left {
             self.w.push_str("(*");
         }
+        let left_mark = self.w.mark();
         self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
         if deref_left {
+            self.w.push(')');
+        }
+        // **Any left operand that ENDS in a cast needs parentheses before `<`
+        // or `<<`**, not only a written one: `xs.length` emits
+        // `xs.borrow().len() as isize` and `s.length()` emits a `count() as
+        // isize`, and Rust reads `… as isize < w` as the start of `isize<…>`.
+        // `if (xs.length < w)` is ordinary code, and it did not compile.
+        if !cast_left
+            && !cast_operand_needs_parens
+            && matches!(b.op, BinaryOp::Lt | BinaryOp::Shl)
+            && ends_with_cast(self.w.text_from(left_mark))
+        {
+            self.w.insert_at(left_mark, "(");
             self.w.push(')');
         }
         if cast_left {

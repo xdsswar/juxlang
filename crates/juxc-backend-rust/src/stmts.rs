@@ -2119,9 +2119,25 @@ impl RustEmitter {
                 scope.insert(f.var_name.text.clone(), ty.clone());
             }
         }
+        // A loop variable over `T?` elements is an `Option` the way a nullable
+        // local is. Unregistered, `x ?? 0` took `x` for a plain value and
+        // lowered to `x` alone, dropping the fallback. It shadows an outer
+        // name of either kind for the body only.
+        let var_nullable = f.var_type.as_ref().is_some_and(|t| t.nullable)
+            || matches!(elem_ty, Some(Ty::Nullable(_)));
+        let outer_var_nullable = if var_nullable {
+            !self.nullable_locals.insert(f.var_name.text.clone())
+        } else {
+            self.nullable_locals.remove(&f.var_name.text)
+        };
         self.loop_emit_depth += 1;
         self.emit_block_contents(&f.body);
         self.loop_emit_depth -= 1;
+        if outer_var_nullable {
+            self.nullable_locals.insert(f.var_name.text.clone());
+        } else {
+            self.nullable_locals.remove(&f.var_name.text);
+        }
         self.local_types.pop();
         self.w.indent_dec();
         self.w.emit_indent();
@@ -3615,6 +3631,9 @@ impl RustEmitter {
         if self.emit_handle_index_assign(a) {
             return;
         }
+        if self.emit_element_field_assign(a) {
+            return;
+        }
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.
         self.emitting_lvalue = true;
@@ -3726,6 +3745,55 @@ impl RustEmitter {
     /// survives into the store.
     ///
     /// Returns true when it emitted the statement.
+    /// A write to a FIELD of an element held in a collection handle
+    /// (`cs[0].n = cs[1].m + 1;`, a `@layout(c)` struct array). The store
+    /// takes `borrow_mut()` on the cell, and a value that reads the same cell
+    /// would hold its `borrow()` alive into the store -- Rust evaluates the
+    /// right side first, but its temporaries live to the end of the statement.
+    /// The value goes into a temporary of its own statement first, the same
+    /// shape `emit_handle_index_assign` gives a whole-element write.
+    ///
+    /// Returns true when it emitted the statement.
+    fn emit_element_field_assign(&mut self, a: &AssignStmt) -> bool {
+        let Expr::Field(tf) = &a.target else { return false };
+        if tf.safe || self.receiver_is_wrapper_class(&tf.object) {
+            return false;
+        }
+        let mut cursor = tf.object.as_ref();
+        let mut through_handle = false;
+        loop {
+            match cursor {
+                Expr::Field(f) => cursor = &f.object,
+                Expr::Index(ix) => {
+                    through_handle |= self.expr_is_collection_handle(&ix.array);
+                    cursor = &ix.array;
+                }
+                _ => break,
+            }
+        }
+        if !through_handle || self.expr_takes_no_borrow(&a.value) {
+            return false;
+        }
+        self.w.emit_indent();
+        self.w.push_str("{ let __jux_v = ");
+        self.emit_assign_rhs(&a.value);
+        self.w.push_str("; ");
+        self.emitting_lvalue = true;
+        self.emit_expr(&a.target);
+        self.emitting_lvalue = false;
+        match a.op {
+            Some(op) => {
+                self.w.push(' ');
+                self.w.push_str(op.as_rust_str());
+                self.w.push_str("= __jux_v; }
+");
+            }
+            None => self.w.push_str(" = __jux_v; }
+"),
+        }
+        true
+    }
+
     fn emit_handle_index_assign(&mut self, a: &AssignStmt) -> bool {
         let Expr::Index(ix) = &a.target else { return false };
         // A fixed `[T; N]` local or a const context has no cell to borrow.

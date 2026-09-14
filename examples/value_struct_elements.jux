@@ -1,0 +1,67 @@
+// `@layout(c)` value structs stored in arrays, and arrays read and written in
+// the same statement (Layout-ABI §L.3, §L.6.2; JUX-LANG-V1 §6.5.2).
+//
+//   - Writing a field of an array element, and calling a mutating method on
+//     one: both change the element in place, not a copy.
+//   - A method that writes a bare field (`n += 1`, no `this.`) mutates too.
+//   - `&cs[1].m` and `&grid[1][0].n` take the address of the element's field,
+//     and a write through the pointer is visible through the array.
+//   - An array element read on the right of an assignment to the same array,
+//     and an array passed to a call alongside a read of its own length.
+
+@layout(c)
+enum Color { Red, Green }
+
+@layout(c)
+struct Token {
+    public Color color;
+}
+
+@layout(c)
+struct Counter {
+    public int n;
+    public int m;
+
+    public void bump() {
+        this.n += 1;
+    }
+
+    public void bumpBare() {
+        n += 10;
+    }
+}
+
+public void fill(int[] a, int n) {
+    a[0] = n;
+}
+
+public void main() {
+    Token[] tokens = new Token[2];
+    tokens[1].color = Color.Green;
+    print($"tokens ${tokens[0].color} ${tokens[1].color}");
+
+    Counter[] counters = new Counter[2];
+    counters[0].bump();
+    counters[0].bumpBare();
+    print($"counter after bump and bumpBare ${counters[0].n}");
+
+    Counter single = new Counter(1, 0);
+    single.bumpBare();
+    print($"single ${single.n}");
+
+    Counter[][] grid = new Counter[2][2];
+    unsafe {
+        int* p = &counters[1].m;
+        int* q = &grid[1][0].n;
+        *p = 7;
+        *q = 9;
+        counters[0].n = counters[1].m + 1;
+    }
+    print($"through pointers ${counters[0].n} ${counters[1].m} ${grid[1][0].n}");
+
+    int[] xs = {1, 2, 3};
+    xs[0] = xs[1] + 1;
+    xs[2] += xs[0];
+    fill(xs, xs.length);
+    print($"self-referencing writes ${xs[0]} ${xs[1]} ${xs[2]}");
+}

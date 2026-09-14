@@ -367,7 +367,9 @@ impl RustEmitter {
             // pointer in.
             let prev_lvalue = self.emitting_lvalue;
             self.emitting_lvalue = true;
+            let prev_raw = std::mem::replace(&mut self.emitting_raw_place, true);
             self.emit_expr(&u.operand);
+            self.emitting_raw_place = prev_raw;
             self.emitting_lvalue = prev_lvalue;
             self.w.push(')');
             return;

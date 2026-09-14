@@ -705,7 +705,25 @@ impl RustEmitter {
         if recv_parens {
             self.w.push('(');
         }
+        // A mutating method on an ELEMENT that is a value (`cs[0].inc()` on a
+        // `@layout(c)` struct array) runs on the element in place: the index
+        // is a place, borrowed mutably, not a copy read out of the array. As a
+        // read it became `cs.borrow()[0].clone().inc()`, and the increment
+        // went to a copy that was dropped. A class element is a handle whose
+        // clone is the same object, so it keeps the read.
+        let element_in_place = is_call_callee
+            && matches!(&*f.object, Expr::Index(_))
+            && self.user_mut_methods.contains(&f.field.text)
+            && !self.receiver_is_wrapper_class(&f.object);
+        let prev_lvalue = if element_in_place {
+            Some(std::mem::replace(&mut self.emitting_lvalue, true))
+        } else {
+            None
+        };
         self.emit_expr(&f.object);
+        if let Some(prev) = prev_lvalue {
+            self.emitting_lvalue = prev;
+        }
         if recv_parens {
             self.w.push(')');
         }

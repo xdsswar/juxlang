@@ -37,7 +37,7 @@ impl RustEmitter {
         // "a" => … }` — rather than the owned `String` (which Rust won't
         // compare against `&str` patterns).
         let scrut_is_string = self.scrutinee_is_string(&s.scrutinee);
-        self.w.push_str("match ");
+        let scrutinee_mark = self.w.len();
         self.emit_expr(&s.scrutinee);
         // Enum `&self` method dispatch: clone the receiver so payload
         // binders own their values (`&T` wouldn't satisfy a generic
@@ -47,6 +47,28 @@ impl RustEmitter {
             || self.switch_moves_out_of_place(s)
         {
             self.w.push_str(".clone()");
+        }
+        // A scrutinee read through a guard (`self.0.borrow().mode.clone()`)
+        // is a temporary of the whole `match`, and Rust keeps it alive until
+        // the match ends, so an arm that writes the same object (`mode =
+        // Mode.On;`, or a call to a method that does) panicked "already
+        // borrowed". Reading it into a `let` first drops the guard before any
+        // arm runs, which is also when Java evaluates the scrutinee.
+        let scrutinee = self.w.split_off_from(scrutinee_mark);
+        let hoist_scrutinee = scrutinee.contains(".borrow()") || scrutinee.contains(".borrow_mut()");
+        if hoist_scrutinee {
+            self.w.push_str("{ let __jux_scrutinee = ");
+            self.w.push_str(&scrutinee);
+            // A field read through the guard is a place: the `let` moves it,
+            // which a `String` or payload enum cannot do out of a borrow, so
+            // it takes a copy. A call result is already owned.
+            if !scrutinee.ends_with(')') && !self.scrutinee_is_copy(&s.scrutinee) {
+                self.w.push_str(".clone()");
+            }
+            self.w.push_str("; match __jux_scrutinee");
+        } else {
+            self.w.push_str("match ");
+            self.w.push_str(&scrutinee);
         }
         if scrut_is_string {
             self.w.push_str(".as_str()");
@@ -68,11 +90,22 @@ impl RustEmitter {
             // and a binding typed `T?` is an `Option` the way a nullable local
             // is (`null` when printed, not `None`).
             let binders = self.typed_pattern_binders(&arm.pattern);
+            // Their types go in scope for the guard and body as well, so a
+            // `double` binder printed through interpolation keeps its decimal
+            // point (`warn(50.0)`): string interpolation reads a bare name's
+            // type from `local_types`.
+            self.local_types.push(
+                binders
+                    .iter()
+                    .filter(|(_, ty)| !matches!(ty, juxc_tycheck::Ty::Unknown))
+                    .map(|(name, ty)| (name.clone(), ty.clone()))
+                    .collect(),
+            );
             let shadowed_nullables: Vec<(String, bool)> = binders
                 .iter()
-                .map(|(name, nullable)| {
+                .map(|(name, ty)| {
                     let was = self.nullable_locals.contains(name);
-                    if *nullable {
+                    if matches!(ty, juxc_tycheck::Ty::Nullable(_)) {
                         self.nullable_locals.insert(name.clone());
                     } else {
                         self.nullable_locals.remove(name);
@@ -167,9 +200,13 @@ impl RustEmitter {
                     self.nullable_locals.remove(&name);
                 }
             }
+            self.local_types.pop();
             self.w.push_str(",\n");
         }
         self.w.push('}');
+        if hoist_scrutinee {
+            self.w.push_str(" }");
+        }
         self.emitting_nullable_target = prev_nullable_target;
         self.current_switch_enum = prev_switch_enum;
     }
@@ -197,19 +234,19 @@ impl RustEmitter {
     }
 
     /// The names a tuple or record pattern binds that the checker typed, each
-    /// with whether its type is nullable. Only those patterns' bindings are
-    /// typed (grammar §A.3); the others come back empty and change nothing.
-    fn typed_pattern_binders(&self, p: &juxc_ast::Pattern) -> Vec<(String, bool)> {
+    /// with its type. Only those patterns' bindings are typed (grammar §A.3);
+    /// the others come back empty and change nothing.
+    fn typed_pattern_binders(&self, p: &juxc_ast::Pattern) -> Vec<(String, juxc_tycheck::Ty)> {
         let mut out = Vec::new();
         self.collect_typed_binders(p, &mut out);
         out
     }
 
-    fn collect_typed_binders(&self, p: &juxc_ast::Pattern, out: &mut Vec<(String, bool)>) {
+    fn collect_typed_binders(&self, p: &juxc_ast::Pattern, out: &mut Vec<(String, juxc_tycheck::Ty)>) {
         match p {
             juxc_ast::Pattern::Bind(name) => {
                 if let Some(ty) = self.expr_types.get(&name.span) {
-                    out.push((name.text.clone(), matches!(ty, juxc_tycheck::Ty::Nullable(_))));
+                    out.push((name.text.clone(), ty.clone()));
                 }
             }
             juxc_ast::Pattern::Tuple(parts, _) | juxc_ast::Pattern::EnumVariant { args: parts, .. } => {
@@ -277,6 +314,18 @@ impl RustEmitter {
             }
         }
         None
+    }
+
+    /// Whether a `switch` scrutinee's type is `Copy` (a primitive, or an enum
+    /// whose derive adds `Copy`), so a hoisted read of it needs no `.clone()`.
+    fn scrutinee_is_copy(&self, scrutinee: &juxc_ast::Expr) -> bool {
+        match self.expr_types.get(&crate::exprs::expr_span_of(scrutinee)) {
+            Some(juxc_tycheck::Ty::Primitive(_)) => true,
+            Some(juxc_tycheck::Ty::User { name, generic_args }) => {
+                generic_args.is_empty() && self.enum_is_copy(name)
+            }
+            _ => false,
+        }
     }
 
     /// True when the switch scrutinee is `String`-typed (so the `match` should
