@@ -11,6 +11,18 @@ use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // `this.field` inside a constructor's `__self` builder, for a field an
+        // ancestor declares: the builder holds the class's `_Inner` struct,
+        // and an inherited field lives in its `__parent` slot (one level per
+        // `extends`). `__self.code` named a field `Kid_Inner` does not have.
+        if matches!(&*f.object, Expr::This(_)) && self.this_alias.as_deref() == Some("__self") {
+            if let Some(hops) = self.inherited_field_hops(&f.field.text) {
+                let prev = self.this_alias.replace(format!("__self{}", ".__parent".repeat(hops)));
+                self.emit_field(f);
+                self.this_alias = prev;
+                return;
+            }
+        }
         // A nested type or a class named in full (`Order.Status.Shipped`,
         // `demo.pkg.Crate.LIMIT`) arrives as a chain of field reads. Re-shape
         // the receiver into the path it names, as `emit_call` does for calls.
@@ -2092,6 +2104,28 @@ impl RustEmitter {
     /// the field emitter then routes through the `__parent` hops. The declaring
     /// class flows back so a bare reference to an inherited STATIC names the
     /// class that actually holds the storage, not the using subclass.
+    /// How many `extends` levels above the class being emitted an instance
+    /// field `name` is declared, when that is at least one; `None` for a field
+    /// of the class itself, a static, or a name no ancestor declares.
+    fn inherited_field_hops(&self, name: &str) -> Option<usize> {
+        let mut cursor = self.enclosing_class.clone();
+        let mut hops = 0usize;
+        while let Some(class_name) = cursor {
+            if hops > 64 {
+                return None;
+            }
+            let class = self.lookup_class_by_bare_or_fqn(&class_name)?;
+            if let Some(field) = class.fields.get(name) {
+                return (hops > 0 && !field.is_static).then_some(hops);
+            }
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
+            hops += 1;
+        }
+        None
+    }
+
     pub(crate) fn lookup_class_field_owner_in_chain(
         &self,
         class_name: &str,

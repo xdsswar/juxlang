@@ -1585,6 +1585,18 @@ pub(crate) fn extract_simple_ctor_inits(
                         if expr_reads_instance_state(&a.value, &instance_names) {
                             return None;
                         }
+                        // Only this class's own fields have a slot in the
+                        // struct literal. A write to an INHERITED field
+                        // (`this.code = c;` where a base declares `code`)
+                        // lifted here had nowhere to go and was dropped, so
+                        // the object kept the base's initial value.
+                        let own = class_decl
+                            .fields
+                            .iter()
+                            .any(|fd| !fd.is_static && fd.name.text == f.field.text);
+                        if !own {
+                            return None;
+                        }
                         inits.push((f.field.text.clone(), a.value.clone()));
                         continue;
                     }

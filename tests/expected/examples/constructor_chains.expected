@@ -1,0 +1,12 @@
+order code ORD-7
+invoice INV-2 with 3 lines
+invoice code INV-2
+Widget(String) sees widget anonymous
+Widget() finished with anonymous
+widget id anonymous
+Widget(String) sees button anonymous
+Widget() finished with anonymous
+Button() sees button anonymous
+button id anonymous
+Shape sees four-sided square
+square name square

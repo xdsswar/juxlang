@@ -1,0 +1,101 @@
+// Constructor chains that write inherited state and dispatch while building
+// (JUX-LANG-V1 §7.3, Semantics §S.4.4).
+//
+//   - A subclass constructor assigning a field its base declares, alone or
+//     beside its own fields.
+//   - `this(...)` delegation to a constructor that calls an overridable method:
+//     the delegated body runs, once, and sees the subclass's override.
+//   - Three levels, where only the root constructor dispatches, and the middle
+//     level just passes its argument up.
+
+class Tagged {
+    public String code = "";
+}
+
+class Order extends Tagged {
+    public Order(String code) {
+        this.code = code;
+    }
+}
+
+class Invoice extends Tagged {
+    public int lines = 0;
+
+    public Invoice(String code, int lines) {
+        this.code = code;
+        this.lines = lines;
+        print($"invoice ${this.code} with ${this.lines} lines");
+    }
+}
+
+class Widget {
+    public String id = "";
+
+    public Widget() {
+        this("anonymous");
+        print($"Widget() finished with ${this.id}");
+    }
+
+    public Widget(String id) {
+        this.id = id;
+        print($"Widget(String) sees ${this.describe()}");
+    }
+
+    public String describe() {
+        return "widget " + this.id;
+    }
+}
+
+class Button extends Widget {
+    public Button() {
+        super();
+        print($"Button() sees ${this.describe()}");
+    }
+
+    public String describe() {
+        return "button " + this.id;
+    }
+}
+
+class Shape {
+    public String name = "";
+
+    public Shape(String name) {
+        this.name = name;
+        print($"Shape sees ${this.kind()}");
+    }
+
+    public String kind() {
+        return "shape " + this.name;
+    }
+}
+
+class Polygon extends Shape {
+    public Polygon(String name) {
+        super(name);
+    }
+}
+
+class Square extends Polygon {
+    public Square() {
+        super("square");
+    }
+
+    public String kind() {
+        return "four-sided " + this.name;
+    }
+}
+
+public void main() {
+    print($"order code ${new Order("ORD-7").code}");
+    var invoice = new Invoice("INV-2", 3);
+    print($"invoice code ${invoice.code}");
+
+    var plain = new Widget();
+    print($"widget id ${plain.id}");
+    var button = new Button();
+    print($"button id ${button.id}");
+
+    var square = new Square();
+    print($"square name ${square.name}");
+}

@@ -947,50 +947,137 @@ impl RustEmitter {
             .find(|c| c.params.len() == super_args.len())
             .or_else(|| parent.constructors.first())
             .cloned();
-        let defers = ctor
-            .as_ref()
-            .is_some_and(|c| Self::ctor_calls_method_on_this(&parent, c));
+        let defers = ctor.as_ref().is_some_and(|c| Self::ctor_defers(&parent, c));
         let grandparent_args = ctor
             .as_ref()
             .and_then(extract_super_args)
             .unwrap_or_default();
-        // Nothing at this level, but a level above it may still defer.
+        // Nothing at this level, but a level above it may still defer. Its
+        // arguments are written in terms of THIS level's parameters
+        // (`B(String id) { super(id); }`), which have to be bound to the
+        // values passed here first; unbound, `id` read the field of that name.
         if !defers {
-            self.emit_ancestor_ctor_tails(&parent, &grandparent_args);
+            match &ctor {
+                Some(ctor) if !ctor.params.is_empty() && self.ancestor_chain_defers(&parent) => {
+                    self.w.emit_indent();
+                    self.w.push_str("{\n");
+                    self.w.indent_inc();
+                    for (i, p) in ctor.params.iter().enumerate() {
+                        self.w.emit_indent();
+                        self.w.push_str("let ");
+                        self.w.push_str(&to_rust_ident(&p.name.text));
+                        self.w.push_str(" = ");
+                        match super_args.get(i) {
+                            Some(a) => self.emit_expr(a),
+                            None => self.emit_default_value_for(&p.ty),
+                        }
+                        self.w.push_str(";\n");
+                    }
+                    let prev_params = std::mem::replace(
+                        &mut self.current_fn_params,
+                        ctor.params.iter().map(|p| p.name.text.clone()).collect(),
+                    );
+                    self.emit_ancestor_ctor_tails(&parent, &grandparent_args);
+                    self.current_fn_params = prev_params;
+                    self.w.indent_dec();
+                    self.w.line("}");
+                }
+                _ => self.emit_ancestor_ctor_tails(&parent, &grandparent_args),
+            }
             return;
         }
         let ctor = ctor.expect("defers implies a constructor");
-        self.w.emit_indent();
-        self.w.push_str("{
-");
-        self.w.indent_inc();
-        for (i, p) in ctor.params.iter().enumerate() {
-            self.w.emit_indent();
-            self.w.push_str("let ");
-            self.w.push_str(&to_rust_ident(&p.name.text));
-            self.w.push_str(" = ");
-            match super_args.get(i) {
-                Some(a) => self.emit_expr(a),
-                None => self.emit_default_value_for(&p.ty),
+        self.emit_ctor_replay(&parent, &ctor, Some(super_args));
+    }
+
+    /// Whether `ctor`'s body has to run against the handle: it calls a method
+    /// on `this` itself, or it delegates with `this(...)` to a constructor that
+    /// does. A delegating constructor that ran its target's body in the inner
+    /// builder skipped exactly the part that could not run there.
+    fn ctor_defers(
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+    ) -> bool {
+        let mut current = ctor;
+        for _ in 0..32 {
+            if Self::ctor_calls_method_on_this(class_decl, current) {
+                return true;
             }
-            self.w.push_str(";
-");
+            let Some((args, _)) = extract_this_delegation(current) else { return false };
+            let Some(target) = class_decl.constructors.iter().find(|c| c.params.len() == args.len()) else {
+                return false;
+            };
+            current = target;
         }
-        self.emit_ancestor_ctor_tails(&parent, &grandparent_args);
-        let owned = ctor_owned_param_names(&ctor.params);
+        false
+    }
+
+    /// Replay a deferred constructor body against the handle `__jux_self`
+    /// (§S.4.4). With `args`, the constructor's parameters are bound to them
+    /// in a block of their own, as an ancestor or a delegation target is
+    /// called; without, they are the parameters already in scope.
+    ///
+    /// A constructor that delegates with `this(...)` replays its target
+    /// first, then its own remaining statements. When the target itself did
+    /// not defer, its body already ran in the inner builder, and only the
+    /// ancestors it names are left to replay.
+    fn emit_ctor_replay(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+        args: Option<&[juxc_ast::Expr]>,
+    ) {
+        if let Some(args) = args {
+            self.w.emit_indent();
+            self.w.push_str("{\n");
+            self.w.indent_inc();
+            for (i, p) in ctor.params.iter().enumerate() {
+                self.w.emit_indent();
+                self.w.push_str("let ");
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                self.w.push_str(" = ");
+                match args.get(i) {
+                    Some(a) => self.emit_expr(a),
+                    None => self.emit_default_value_for(&p.ty),
+                }
+                self.w.push_str(";\n");
+            }
+        }
         let prev_params = std::mem::replace(
             &mut self.current_fn_params,
             ctor.params.iter().map(|p| p.name.text.clone()).collect(),
         );
-        let mut tail: Vec<juxc_ast::Stmt> = Vec::new();
-        for init in &parent.init_blocks {
-            tail.extend(init.statements.iter().cloned());
+        let owned = ctor_owned_param_names(&ctor.params);
+        if let Some((target_args, rest)) = extract_this_delegation(ctor) {
+            let target = class_decl
+                .constructors
+                .iter()
+                .find(|c| c.params.len() == target_args.len())
+                .cloned();
+            if let Some(target) = target {
+                if Self::ctor_defers(class_decl, &target) {
+                    self.emit_ctor_replay(class_decl, &target, Some(&target_args));
+                } else {
+                    let super_args = extract_super_args(&target).unwrap_or_default();
+                    self.emit_ancestor_ctor_tails(class_decl, &super_args);
+                }
+            }
+            self.emit_ctor_body_stmts(&rest, &owned);
+        } else {
+            let super_args = extract_super_args(ctor).unwrap_or_default();
+            self.emit_ancestor_ctor_tails(class_decl, &super_args);
+            let mut tail: Vec<juxc_ast::Stmt> = Vec::new();
+            for init in &class_decl.init_blocks {
+                tail.extend(init.statements.iter().cloned());
+            }
+            tail.extend(ctor.body.statements.iter().cloned());
+            self.emit_ctor_body_stmts(&tail, &owned);
         }
-        tail.extend(ctor.body.statements.iter().cloned());
-        self.emit_ctor_body_stmts(&tail, &owned);
         self.current_fn_params = prev_params;
-        self.w.indent_dec();
-        self.w.line("}");
+        if args.is_some() {
+            self.w.indent_dec();
+            self.w.line("}");
+        }
     }
 
     /// Does any ancestor of `class_decl` defer its constructor body?
@@ -1004,11 +1091,7 @@ impl RustEmitter {
             let Some(parent) = self.class_asts.get(&bare).cloned() else {
                 return false;
             };
-            if parent
-                .constructors
-                .iter()
-                .any(|c| Self::ctor_calls_method_on_this(&parent, c))
-            {
+            if parent.constructors.iter().any(|c| Self::ctor_defers(&parent, c)) {
                 return true;
             }
             cur = parent;
@@ -1023,7 +1106,7 @@ impl RustEmitter {
     ) {
         // Decide up front whether the body has to run against the HANDLE
         // rather than the raw inner - see `pending_ctor_tail`.
-        self.defer_ctor_body = Self::ctor_calls_method_on_this(class_decl, ctor);
+        self.defer_ctor_body = Self::ctor_defers(class_decl, ctor);
         // An ancestor whose body was deferred is replayed by whoever actually
         // builds the object, so this constructor needs the handle shape too
         // even when its own body is perfectly ordinary.
@@ -1050,6 +1133,9 @@ impl RustEmitter {
         // Statements the inner builder handed over because they call a method
         // on `this` (see `pending_ctor_tail`).
         let ctor_tail = std::mem::take(&mut self.pending_ctor_tail);
+        // A delegation whose target defers leaves no tail of its own to hand
+        // over; the whole chain is replayed in `new` all the same.
+        let delegation_defers = self.defer_ctor_body && extract_this_delegation(ctor).is_some();
         self.defer_ctor_body = false;
 
         // Thin public `new` delegating to `new_inner`.
@@ -1084,7 +1170,7 @@ impl RustEmitter {
             } else {
                 ("std::rc::Rc::new(", ")")
             };
-        if ctor_binds.is_empty() && ctor_tail.is_empty() && !ancestors_defer {
+        if ctor_binds.is_empty() && ctor_tail.is_empty() && !ancestors_defer && !delegation_defers {
             self.w.push_str("Self(");
             self.w.push_str(wrap_open);
             self.w.push_str("Self::new_inner");
@@ -1131,13 +1217,18 @@ impl RustEmitter {
                 let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
                 self.current_fn_params =
                     ctor.params.iter().map(|p| p.name.text.clone()).collect();
-                let super_args = extract_super_args(ctor).unwrap_or_default();
-                self.emit_ancestor_ctor_tails(class_decl, &super_args);
+                if extract_this_delegation(ctor).is_some() {
+                    // `this(...)`: the target's chain, then this body.
+                    self.emit_ctor_replay(class_decl, ctor, None);
+                } else {
+                    let super_args = extract_super_args(ctor).unwrap_or_default();
+                    self.emit_ancestor_ctor_tails(class_decl, &super_args);
+                }
                 self.current_fn_params.clear();
                 self.emitting_wrapper_class = prev_wrapper;
                 self.this_alias = prev_alias;
             }
-            if !ctor_tail.is_empty() {
+            if !ctor_tail.is_empty() && extract_this_delegation(ctor).is_none() {
                 let prev_alias = self.this_alias.replace("__jux_self".to_string());
                 let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
                 self.current_fn_params =
@@ -1277,10 +1368,13 @@ impl RustEmitter {
         // `new_inner__K` builds the same flattened inner struct, then
         // the rest of this body mutates it.
         if let Some((delegate_args, rest)) = extract_this_delegation(ctor) {
+            // Deferred: the rest of the body, and the target's own deferred
+            // body, run against the handle in `new` (`emit_ctor_replay`).
+            let rest: &[juxc_ast::Stmt] = if self.defer_ctor_body { &[] } else { &rest };
             self.emit_ctor_delegation(
                 class_decl,
                 &delegate_args,
-                &rest,
+                rest,
                 "new_inner",
             );
             self.emitting_wrapper_class = prev_wrapper;
