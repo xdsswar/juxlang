@@ -43,7 +43,31 @@ impl RustEmitter {
         // operator override that ISN'T `= delete;` doesn't change the
         // derive list — the override goes onto the inherent impl and
         // a trait wrapper bridges to it, same as on classes.
-        self.w.line(&record_derive_attribute(record_decl));
+        // Whether the record has a default value is the checker's question as
+        // much as the backend's (`new R[n]`, JUX-LANG-V1 §5.5), so it is
+        // answered once, in tycheck, for both.
+        let pkg = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .map(|unit| unit.package.join("."))
+            .unwrap_or_default();
+        let fqn = if pkg.is_empty() {
+            record_decl.name.text.clone()
+        } else {
+            format!("{pkg}.{}", record_decl.name.text)
+        };
+        let has_default = if self.symbols.records.contains_key(&fqn) {
+            record_decl
+                .components
+                .iter()
+                .all(|c| juxc_tycheck::defaults::member_has_default(&c.ty, &fqn, &self.symbols))
+        } else {
+            record_decl
+                .components
+                .iter()
+                .all(|c| crate::analysis::field_supports_default(&c.ty))
+        };
+        self.w.line(&record_derive_attribute(record_decl, has_default));
 
         // pub struct Name<T, U> { …components… }
         self.w.emit_indent();
@@ -383,7 +407,7 @@ impl RustEmitter {
 /// corresponding auto-derive: when the user wrote
 /// `operator==(...) { ... }` we emit `impl PartialEq` from the
 /// override and don't want a competing derive.
-fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl) -> String {
+fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl, all_default: bool) -> String {
     let mut derives: Vec<&str> = vec!["Debug", "Clone"];
 
     let has_eq_op = record_decl
@@ -408,9 +432,6 @@ fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl) -> String {
     let all_eq = component_tys.iter().all(|t| field_supports_eq(t));
     let all_hash = component_tys.iter().all(|t| field_supports_hash(t));
     let all_copy = component_tys.iter().all(|t| field_supports_copy(t));
-    let all_default = component_tys
-        .iter()
-        .all(|t| crate::analysis::field_supports_default(t));
 
     // PartialEq: derived unless the user wrote operator== (override
     // or delete). The user's override path emits its own `impl

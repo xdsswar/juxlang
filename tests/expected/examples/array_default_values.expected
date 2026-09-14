@@ -1,0 +1,9 @@
+points 2: (0, 0) and (5, 0)
+equal true, different false
+operator== ignores noise true, sees x false
+node at 4,2 null true on true weight 1.5 flags 7
+span 0 at 0 label ''
+shade Light
+grid rows 2, row 1 still 0
+generic 0 ''
+accounts 2: 7 7 true

@@ -77,10 +77,21 @@ class/struct uses:
 
 ```rust
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct S { pub x: isize, pub y: isize }   // fields in declaration order
+impl Default for S { fn default() -> Self { S { x: 0, y: 0 } } }
 impl S { pub fn new(x: isize, y: isize) -> S { S { x, y } } }
 ```
+
+- `==` is the structural `operator==` a struct has without writing one
+  (Operators §O.1): field by field. A struct that declares its own
+  `operator==`, or `operator<=>`, uses that instead, and the derive is left
+  off.
+- Its default value, which `new S[n]` fills the array with (JUX-LANG-V1 §5.5),
+  is each field at its initializer, or at its type's own default when it has
+  none: zero, `null` for a pointer, the first variant of a C enum. The `impl
+  Default` is written out rather than derived, since a raw pointer has no
+  `Default`.
 
 - It is `Copy`, giving the "copied on assignment" value semantics (§7.6): `var b
   = a;` copies, and mutating `a` does not touch `b`. Its fields must therefore be

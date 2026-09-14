@@ -44,6 +44,7 @@ use juxc_source::Span;
 pub mod check;
 pub mod const_eval;
 pub(crate) mod definite_assign;
+pub mod defaults;
 pub mod env;
 pub mod expand;
 pub mod infer;

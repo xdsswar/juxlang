@@ -115,6 +115,15 @@ impl RustEmitter {
                     // `self.data[i]` moves out of a borrowed `Vec<T>` (E0507).
                     // The enclosing impl already bounds the param `T: Clone`.
                     juxc_tycheck::Ty::Param(_) => true,
+                    // A nullable element is an `Option`, which is `Copy` only
+                    // when its payload is. `Obj? a = objs[0];` and
+                    // `objs[0]!!` over a `Vec<Obj?>` moved the element out of
+                    // the vector (E0507). The use-site share-clone a wrapper
+                    // class gets does not reach inside an `Option`, so every
+                    // non-primitive payload clones here.
+                    juxc_tycheck::Ty::Nullable(inner) => {
+                        !matches!(**inner, juxc_tycheck::Ty::Primitive(_))
+                    }
                     juxc_tycheck::Ty::User { name, .. } => {
                         let bare = name.rsplit('.').next().unwrap_or(name);
                         // Wrapper classes share-clone at use sites; tuple

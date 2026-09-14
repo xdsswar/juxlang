@@ -199,6 +199,241 @@ pub(crate) fn synth_iface_type_ref(bare: &str, span: Span) -> TypeRef {
 /// nested blocks — `if`/`else`/`while` bodies — but stops at function
 /// boundaries (a nested function decl would have its own pass, and we
 /// don't have nested functions yet anyway).
+/// Call `f` on every expression in `block`, recursively: nested blocks,
+/// lambda bodies, anonymous-class members, switch arms and loop headers
+/// included.
+///
+/// The matches below list every variant with no catch-all, so a new kind of
+/// expression or statement does not compile until someone decides how it is
+/// walked. The hand-written walkers elsewhere in this file each cover the
+/// shapes their own question needed, and each missed some.
+pub(crate) fn for_each_expr(block: &Block, f: &mut dyn FnMut(&Expr)) {
+    for st in &block.statements {
+        for_each_expr_in_stmt(st, f);
+    }
+}
+
+/// [`for_each_expr`] over one expression and everything inside it.
+pub(crate) fn for_each_expr_in(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    match e {
+        Expr::Literal(_)
+        | Expr::Path(_)
+        | Expr::This(_)
+        | Expr::Super(_)
+        | Expr::MethodRef(_) => {}
+        Expr::Out(inner, _)
+        | Expr::TypeOf(inner, _)
+        | Expr::Await(inner, _)
+        | Expr::ErrorProp(inner, _)
+        | Expr::NotNullAssert(inner, _) => for_each_expr_in(inner, f),
+        Expr::Call(c) => {
+            for_each_expr_in(&c.callee, f);
+            for a in &c.args {
+                for_each_expr_in(a, f);
+            }
+        }
+        Expr::Binary(b) => {
+            for_each_expr_in(&b.left, f);
+            for_each_expr_in(&b.right, f);
+        }
+        Expr::Unary(u) => for_each_expr_in(&u.operand, f),
+        Expr::Range(r) => {
+            for_each_expr_in(&r.start, f);
+            if let Some(step) = &r.step {
+                for_each_expr_in(step, f);
+            }
+            for_each_expr_in(&r.end, f);
+        }
+        Expr::Cast(c) => for_each_expr_in(&c.value, f),
+        Expr::SizeOf(sz) => for_each_expr_in(&sz.operand, f),
+        Expr::NewArray(n) => {
+            for_each_expr_in(&n.size, f);
+            for inner in &n.inner_sizes {
+                for_each_expr_in(inner, f);
+            }
+        }
+        Expr::NewArrayLit(n) => {
+            for el in &n.elements {
+                for_each_expr_in(el, f);
+            }
+        }
+        Expr::Index(i) => {
+            for_each_expr_in(&i.array, f);
+            for_each_expr_in(&i.index, f);
+        }
+        Expr::Field(fe) => for_each_expr_in(&fe.object, f),
+        Expr::InterpString(sx) => {
+            for seg in &sx.segments {
+                if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                    for_each_expr_in(inner, f);
+                }
+            }
+        }
+        Expr::TypeTest(t) => for_each_expr_in(&t.value, f),
+        Expr::NewObject(n) => {
+            for a in &n.args {
+                for_each_expr_in(a, f);
+            }
+            if let Some(body) = &n.anonymous_body {
+                for b in &body.init_blocks {
+                    for_each_expr(b, f);
+                }
+                for m in &body.methods {
+                    if let Some(b) = &m.body {
+                        for_each_expr(b, f);
+                    }
+                }
+            }
+        }
+        Expr::Switch(sw) => {
+            for_each_expr_in(&sw.scrutinee, f);
+            for arm in &sw.arms {
+                if let Some(guard) = &arm.guard {
+                    for_each_expr_in(guard, f);
+                }
+                match &arm.body {
+                    juxc_ast::SwitchBody::Expr(inner) => for_each_expr_in(inner, f),
+                    juxc_ast::SwitchBody::Block(b) => for_each_expr(b, f),
+                }
+            }
+        }
+        Expr::Lambda(l) => match &l.body {
+            juxc_ast::LambdaBody::Expr(inner) => for_each_expr_in(inner, f),
+            juxc_ast::LambdaBody::Block(b) => for_each_expr(b, f),
+        },
+        Expr::Elvis(el) => {
+            for_each_expr_in(&el.value, f);
+            for_each_expr_in(&el.fallback, f);
+        }
+        Expr::Ternary(t) => {
+            for_each_expr_in(&t.condition, f);
+            for_each_expr_in(&t.then_branch, f);
+            for_each_expr_in(&t.else_branch, f);
+        }
+        Expr::TupleLit(items, _) => {
+            for item in items {
+                for_each_expr_in(item, f);
+            }
+        }
+        Expr::TryExpr(t) => walk_try(t, f),
+        Expr::IncDec(i) => for_each_expr_in(&i.target, f),
+    }
+}
+
+fn walk_try(t: &juxc_ast::TryStmt, f: &mut dyn FnMut(&Expr)) {
+    for_each_expr(&t.body, f);
+    for c in &t.catches {
+        for_each_expr(&c.body, f);
+    }
+    if let Some(fin) = &t.finally {
+        for_each_expr(fin, f);
+    }
+}
+
+fn for_each_expr_in_stmt(st: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    match st {
+        Stmt::Expr(e) | Stmt::Throw(e, _) => for_each_expr_in(e, f),
+        Stmt::Return(value, _) => {
+            if let Some(e) = value {
+                for_each_expr_in(e, f);
+            }
+        }
+        Stmt::VarDecl(v) => {
+            if let Some(init) = &v.init {
+                for_each_expr_in(init, f);
+            }
+        }
+        Stmt::If(i) => {
+            for_each_expr_in(&i.condition, f);
+            for_each_expr(&i.then_block, f);
+            match i.else_branch.as_deref() {
+                Some(ElseBranch::Block(b)) => for_each_expr(b, f),
+                Some(ElseBranch::If(inner)) => for_each_expr_in_stmt(&Stmt::If(inner.clone()), f),
+                None => {}
+            }
+        }
+        Stmt::While(w) => {
+            for_each_expr_in(&w.condition, f);
+            for_each_expr(&w.body, f);
+        }
+        Stmt::DoWhile(d) => {
+            for_each_expr(&d.body, f);
+            for_each_expr_in(&d.condition, f);
+        }
+        Stmt::ForEach(fe) => {
+            for_each_expr_in(&fe.iter, f);
+            for_each_expr(&fe.body, f);
+        }
+        Stmt::Assign(a) => {
+            for_each_expr_in(&a.target, f);
+            for_each_expr_in(&a.value, f);
+        }
+        Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Labeled { stmt, .. } => for_each_expr_in_stmt(stmt, f),
+        Stmt::SuperCall(args, _) => {
+            for a in args {
+                for_each_expr_in(a, f);
+            }
+        }
+        Stmt::Try(t) => walk_try(t, f),
+        Stmt::Unsafe(b) | Stmt::Block(b) => for_each_expr(b, f),
+        Stmt::IfCfg(c) => {
+            for_each_expr(&c.then_block, f);
+            if let Some(b) = &c.else_block {
+                for_each_expr(b, f);
+            }
+        }
+        Stmt::ForC(fc) => {
+            if let Some(init) = &fc.init {
+                for_each_expr_in_stmt(init, f);
+            }
+            if let Some(cond) = &fc.cond {
+                for_each_expr_in(cond, f);
+            }
+            if let Some(update) = &fc.update {
+                for_each_expr_in_stmt(update, f);
+            }
+            for_each_expr(&fc.body, f);
+        }
+    }
+}
+
+/// The type parameters among `params` that a `new T[n]` in `block` uses as
+/// its element type. Each element starts at `T`'s default value (JUX-LANG-V1
+/// §5.5), so the declaration needs `T: Default` (§T.2.1).
+pub(crate) fn new_array_element_params(
+    params: &[TypeParam],
+    blocks: &[&Block],
+    exprs: &[&Expr],
+) -> HashSet<String> {
+    let names: HashSet<&str> =
+        params.iter().filter(|p| !p.is_const()).map(|p| p.name.text.as_str()).collect();
+    let mut found = HashSet::new();
+    if names.is_empty() {
+        return found;
+    }
+    let mut visit = |e: &Expr| {
+        if let Expr::NewArray(n) = e {
+            let t = &n.element_type;
+            if t.generic_args.is_empty()
+                && t.fn_shape.is_none()
+                && t.name.segments.len() == 1
+                && names.contains(t.name.segments[0].text.as_str())
+            {
+                found.insert(t.name.segments[0].text.clone());
+            }
+        }
+    };
+    for b in blocks {
+        for_each_expr(b, &mut visit);
+    }
+    for e in exprs {
+        for_each_expr_in(e, &mut visit);
+    }
+    found
+}
+
 /// Call every [`CallExpr`] in `block`, recursively.
 ///
 /// Structural only: it knows where calls can appear, not what they mean. A

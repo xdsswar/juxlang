@@ -141,6 +141,7 @@ A Jux type parameter carries the bounds the program writes. The lowering needs a
 | a `HashMap` / `HashSet` key | `Eq + Hash` | Rust puts those on the container's methods, so a class merely HOLDING a `HashMap<K, V>` fails at the first lookup. |
 | a `BTreeMap` / `BTreeSet` key | `Ord` | Same rule, ordered containers. |
 | the element of a fixed array field (`T[N]`) | `Default` | Constructing one lowers to `array::from_fn(|_| Default::default())`. |
+| the element of a `new T[n]` anywhere in the declaration | `Default` | Every element starts at `T`'s default value (`JUX-LANG-V1.md` §5.5). |
 
 The analysis follows inheritance and nesting: a bound needed by a method inherited from a generic base reaches the subclass too, and `Vec<HashMap<K, V>>` pins `K` exactly as a bare `HashMap<K, V>` does. Only parameters that are actually used that way get the bound, so a generic class that merely STORES a value stays usable with types that satisfy none of it.
 

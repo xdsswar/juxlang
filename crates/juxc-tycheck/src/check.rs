@@ -4168,6 +4168,25 @@ impl<'a> Checker<'a> {
                 for inner in &n.inner_sizes {
                     self.check_const_size_expr_at(inner, true, n.span);
                 }
+                // Every element starts at the element type's default value
+                // (JUX-LANG-V1 §5.5), so the type needs one. Without this the
+                // Rust compiler reported a missing `Default` on a type the
+                // program never mentioned by that name.
+                let element = ty_from_ref(&n.element_type, &self.env, self.symbols);
+                if !crate::defaults::ty_has_default(&element, self.symbols) {
+                    let written = type_ref_display(&n.element_type);
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0458_ArrayElementHasNoDefault,
+                            format!(
+                                "`new {written}[…]` has nothing to start its elements from: \
+                                 `{written}` has no default value -- list the elements with \
+                                 `new {written}[]{{…}}`, or collect them in a `Vec<{written}>`",
+                            ),
+                        )
+                        .with_span(n.span),
+                    );
+                }
             }
 
             Expr::NewArrayLit(n) => {

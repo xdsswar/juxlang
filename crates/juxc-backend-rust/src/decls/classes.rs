@@ -187,10 +187,27 @@ impl RustEmitter {
         // A `@layout(c)` value struct (§L.1.2) gets a C-compatible layout and is
         // `Copy` (its fields are primitives / pointers / other `@layout(c)`
         // structs), giving Jux's "copied on assignment" value semantics.
+        //
+        // `PartialEq` carries the structural `operator==` a struct gets without
+        // writing one (Operators §O.1); each permitted field type has one, so
+        // the derive always holds. Without it a record with a struct component
+        // could not have its own `==` and did not compile. A struct that
+        // declares `operator==` (or deletes it) gets that instead, and so does
+        // one declaring `operator<=>`, whose `PartialEq` bridge is synthesized
+        // with the operator impls; a derive beside either would be a second
+        // `impl PartialEq`.
         let is_value_struct = crate::is_layout_c_struct(class_decl);
+        let declares_equality = class_decl
+            .operators
+            .iter()
+            .any(|o| matches!(o.kind, OperatorKind::Eq | OperatorKind::Cmp));
         if is_value_struct {
             self.w.line("#[repr(C)]");
-            self.w.line("#[derive(Clone, Copy, Debug)]");
+            if declares_equality {
+                self.w.line("#[derive(Clone, Copy, Debug)]");
+            } else {
+                self.w.line("#[derive(Clone, Copy, Debug, PartialEq)]");
+            }
         } else if has_fn_field {
             self.w.line("#[derive(Clone)]");
         } else {
@@ -310,6 +327,36 @@ impl RustEmitter {
             self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
             self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.w.push_str("\") } }\n");
+        }
+        // A `@layout(c)` struct's default value (JUX-LANG-V1 §5.5): each field
+        // at its initializer, or at its type's own default. Written out rather
+        // than derived, because a raw-pointer field (`*mut T`) has no `Default`
+        // and an initializer is not something a derive can see. It is what
+        // `new S[n]` fills its elements with.
+        if is_value_struct {
+            let name = to_rust_ident(&class_decl.name.text);
+            self.w.line(&format!("impl Default for {name} {{"));
+            self.w.indent_inc();
+            self.w.line("fn default() -> Self {");
+            self.w.indent_inc();
+            self.w.line("Self {");
+            self.w.indent_inc();
+            for field in class_decl.fields.iter().filter(|f| !f.is_static) {
+                self.w.emit_indent();
+                self.w.push_str(&to_rust_ident(&field.name.text));
+                self.w.push_str(": ");
+                match &field.default {
+                    Some(default) => self.emit_ctor_field_init(field.ty.as_ref(), default),
+                    None => self.emit_field_storage_default(field),
+                }
+                self.w.push_str(",\n");
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
         }
         self.w.newline();
 
@@ -1889,15 +1936,12 @@ impl RustEmitter {
     }
 
     /// Type-param names that need a `+ Default` bound on this class's
-    /// inherent impl — every param used as the **element of a fixed
-    /// array field** (`T[N] storage;`). Constructing such a field
-    /// (`new T[N]`) lowers to `std::array::from_fn(|_| Default::
-    /// default())` (see `emit_new_array`), which requires `T: Default`.
-    /// The struct declaration itself doesn't need the bound (it merely
-    /// stores `[T; N]`), so only the impl-header emission consults
-    /// this. A `new T[k]` *local* in a class without such a field is
-    /// outside this scan — exotic enough to leave for the const-eval
-    /// phase.
+    /// inherent impl: every param used as the **element of a fixed
+    /// array field** (`T[N] storage;`), and every one a `new T[n]` anywhere
+    /// in the class builds an array of. Each element starts at `T`'s default
+    /// value (JUX-LANG-V1 §5.5), which the lowering asks `Default` for. The
+    /// struct declaration itself doesn't need the bound (it merely stores
+    /// `[T; N]`), so only the impl-header emission consults this.
     pub(crate) fn class_default_bound_params(
         class_decl: &juxc_ast::ClassDecl,
     ) -> HashSet<String> {
@@ -1926,6 +1970,29 @@ impl RustEmitter {
                 }
             }
         }
+        // Every body the class owns, and every field initializer.
+        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
+        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
+        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
+        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
+        blocks.extend(class_decl.init_blocks.iter());
+        let mut exprs: Vec<&juxc_ast::Expr> = class_decl.fields.iter().filter_map(|f| f.default.as_ref()).collect();
+        for prop in &class_decl.properties {
+            exprs.extend(prop.initializer.as_ref());
+            let bodies = prop.getter.iter().map(|g| &g.body).chain(prop.setter.iter().map(|s| &s.body));
+            for body in bodies {
+                match body {
+                    juxc_ast::AccessorBody::Auto => {}
+                    juxc_ast::AccessorBody::Expr(e) => exprs.push(e),
+                    juxc_ast::AccessorBody::Block(b) => blocks.push(b),
+                }
+            }
+        }
+        defaulted.extend(crate::analysis::new_array_element_params(
+            &class_decl.generic_params,
+            &blocks,
+            &exprs,
+        ));
         defaulted
     }
 
@@ -5142,11 +5209,16 @@ impl RustEmitter {
             // `String` prints with quotes. Methods are `FnDecl`, so the same
             // collector the free-function path uses applies unchanged.
             let displayed = self.fn_displayed_generic_params(method);
-            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // A method's own `T` in a `new T[n]` needs `Default` (§T.2.1).
+            let defaulted = crate::analysis::new_array_element_params(
+                &method.generic_params,
+                &method.body.iter().collect::<Vec<_>>(),
+                &[],
+            );
             self.emit_generic_params_with_clone_bound_plus_display(
                 &combined,
                 &displayed,
-                &none,
+                &defaulted,
             );
         }
         self.w.push('(');
@@ -5310,11 +5382,16 @@ impl RustEmitter {
             // Without it the universal renderer falls back to `Debug` and a
             // `String` argument prints with quotes.
             let displayed = self.fn_displayed_generic_params(method);
-            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // A method's own `T` in a `new T[n]` needs `Default` (§T.2.1).
+            let defaulted = crate::analysis::new_array_element_params(
+                &method.generic_params,
+                &method.body.iter().collect::<Vec<_>>(),
+                &[],
+            );
             self.emit_generic_params_with_clone_bound_plus_display(
                 &combined_method_generics,
                 &displayed,
-                &none,
+                &defaulted,
             );
         }
         self.w.push('(');

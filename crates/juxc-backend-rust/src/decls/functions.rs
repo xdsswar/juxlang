@@ -392,11 +392,17 @@ impl RustEmitter {
             // renderer falls back to `Debug` and a `String` prints with
             // quotes. Collected from this function's own body.
             let displayed = self.fn_displayed_generic_params(fn_decl);
-            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // `new T[n]` in the body fills its elements with `T`'s default
+            // value, so `T` needs `Default` (§T.2.1).
+            let defaulted = crate::analysis::new_array_element_params(
+                &fn_decl.generic_params,
+                &fn_decl.body.iter().collect::<Vec<_>>(),
+                &[],
+            );
             self.emit_generic_params_with_clone_bound_plus_display(
                 &combined_generics,
                 &displayed,
-                &none,
+                &defaulted,
             );
         }
         self.w.push('(');
@@ -933,13 +939,18 @@ impl RustEmitter {
             // local/param can hit the drop-order E0597. Resolve the root's type
             // via the span-keyed `expr_types` map (local_types isn't populated
             // yet — the elision decision runs BEFORE the body statements emit).
-            let Some(juxc_tycheck::Ty::User { name: tn, .. }) =
-                self.expr_types.get(&crate::exprs::expr_span_of(r))
-            else {
-                return false;
-            };
-            let bare = tn.rsplit('.').next().unwrap_or(tn);
-            self.is_wrapper_class(bare)
+            match self.expr_types.get(&crate::exprs::expr_span_of(r)) {
+                Some(juxc_tycheck::Ty::User { name: tn, .. }) => {
+                    let bare = tn.rsplit('.').next().unwrap_or(tn);
+                    // A collection handle is read through the same kind of
+                    // guard (`xs.borrow()[0]`) as a wrapper class.
+                    self.is_wrapper_class(bare) || self.collection_name_is_handle(tn)
+                }
+                // So is an array (§6.5.2): `return items[0];` at the end of a
+                // body kept `items.borrow()` alive past `items`.
+                Some(juxc_tycheck::Ty::Array { .. }) => self.arrays_are_handles_here(),
+                _ => false,
+            }
         };
 
         // The read can sit ANYWHERE in the returned expression, not just at its

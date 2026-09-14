@@ -446,6 +446,12 @@ pub enum Code {
     /// reachability rule (JLS 14.21) — conservative, so it only fires
     /// when control CLEARLY falls through.
     E0460_MissingReturn,
+    /// E0458 -- `new T[n]` where `T` has **no default value** (JUX-LANG-V1
+    /// §5.5): a class, an ordinary struct, an interface, a function type, or
+    /// an enum or record built only from those. The array has nothing to put
+    /// in its elements before the program writes them. `new T[]{…}` lists
+    /// them; a `Vec<T>` grows as they are made.
+    E0458_ArrayElementHasNoDefault,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -848,6 +854,7 @@ impl Code {
             Code::E0731_QuestionNeedsConversion  => "E0731",
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0460_MissingReturn            => "E0460",
+            Code::E0458_ArrayElementHasNoDefault => "E0458",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

@@ -582,6 +582,27 @@ with a production or an `E0203` site, never with neither.
 
 ---
 
+## E19. `T?[]` and `T[]?` are one type
+
+**Conflict.** The grammar (`JUX-GRAMMAR-ADDENDUM.md` §A.2.7) builds types by
+composition: `nullable-type = simple-type '?'?` and `array-type = type
+array-dim+`, so `Node?[]` is an array of nullable `Node`, and `Node[]?` is a
+nullable array of `Node`. They are different types.
+
+**Today.** The compiler's type reference carries one nullable flag for the
+whole type, so both spellings mean the same thing, a nullable array. An array
+whose ELEMENTS may be `null` cannot be written, and `new Node?[n]` does not
+parse.
+
+**Resolution.** DOCUMENTED, not fixed. Representing the two needs nullability
+per level of the type, which every consumer of a type reference would have to
+learn. Until then, a sequence of nullable elements is a `Vec<Node?>`, which
+works, and `new Node[n]` of a class is `E0458` (§5.5) with that advice.
+
+**Spec status:** The grammar stands. Phase 1 accepts a subset of it.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

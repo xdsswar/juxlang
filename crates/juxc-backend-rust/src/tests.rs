@@ -5168,6 +5168,57 @@ fn pointer_sources_all_index_through_offset() {
     assert!(rust.contains("(*pp).offset(1)"), "deref then index: {rust}");
 }
 
+/// A `@layout(c)` struct's default value is written out (a pointer field has
+/// no `Default`, and initializers are honoured), and it derives `PartialEq`
+/// for the structural `operator==` unless it declares its own.
+#[test]
+fn layout_c_struct_has_default_and_structural_equality() {
+    let rust = emit(
+        "@layout(c) struct Node { public int* data = null; public double weight = 1.5; } \
+         @layout(c) struct Plain { public int x; public int y; } \
+         @layout(c) struct Custom { public int x; \
+           public bool operator==(Custom other) { return this.x == other.x; } \
+           public int operator hash() { return this.x; } } \
+         public void main() { Plain[] ps = new Plain[2]; Node[] ns = new Node[1]; }",
+    );
+    assert!(rust.contains("impl Default for Node {"), "Node default: {rust}");
+    assert!(rust.contains("data: std::ptr::null_mut(),"), "pointer field: {rust}");
+    assert!(rust.contains("weight: 1.5"), "initializer: {rust}");
+    assert!(rust.contains("#[derive(Clone, Copy, Debug, PartialEq)]\nstruct Plain"), "derive: {rust}");
+    assert!(rust.contains("#[derive(Clone, Copy, Debug)]\nstruct Custom"), "operator== wins: {rust}");
+}
+
+/// `new T[n]` of a type parameter needs `T: Default`, in a free function and
+/// in a method alike; a function that never builds one does not get it.
+#[test]
+fn new_array_of_type_parameter_adds_default_bound() {
+    let rust = emit(
+        "public <T> T firstOf(int n) { T[] items = new T[n]; return items[0]; } \
+         public <T> int count(T[] xs) { return xs.length; } \
+         class Maker { public <E> E[] make(int n) { return new E[n]; } } \
+         public void main() { }",
+    );
+    assert!(rust.contains("fn firstOf<T: Clone + std::fmt::Debug + 'static + Default>"), "free fn: {rust}");
+    assert!(!rust.contains("fn count<T: Clone + std::fmt::Debug + 'static + Default>"), "no new: {rust}");
+    assert!(rust.contains("fn make<E: Clone + std::fmt::Debug + 'static + Default>"), "method: {rust}");
+    // `return items[0];` last in the body keeps `return`, so the `borrow()`
+    // guard drops before `items` does.
+    assert!(rust.contains("return items.borrow()[0].clone();"), "tail read: {rust}");
+}
+
+/// Reading a nullable element out of a collection clones the `Option`, so the
+/// element is not moved out of the vector.
+#[test]
+fn nullable_element_read_clones_out_of_the_collection() {
+    let rust = emit(
+        "class Obj { public int v = 3; } \
+         public void main() { var objs = new Vec<Obj?>(); objs.push(new Obj()); \
+         Obj? a = objs[0]; int b = objs[0]!!.v; }",
+    );
+    assert!(rust.contains("let a: Option<Obj> = objs[0].clone();"), "read: {rust}");
+    assert!(rust.contains("(objs[0].clone()).unwrap_or_else"), "assert: {rust}");
+}
+
 /// `&xs[i]` into an array handle takes the address from the buffer's own
 /// pointer. Through `addr_of_mut!(xs.borrow_mut()[i])` the `RefMut` guard
 /// lived to the end of the enclosing block, so reading `xs` again in the same
@@ -5280,7 +5331,8 @@ fn layout_c_struct_lowers_to_repr_c_value() {
     );
     assert!(rust.contains("#[repr(C)]"), "missing #[repr(C)]: {rust}");
     assert!(
-        rust.contains("#[derive(Clone, Copy, Debug)]"),
+        // `PartialEq` is its structural `operator==` (Operators §O.1).
+        rust.contains("#[derive(Clone, Copy, Debug, PartialEq)]"),
         "value struct should derive Copy: {rust}"
     );
     assert!(rust.contains("struct P {"), "expected a plain struct P: {rust}");

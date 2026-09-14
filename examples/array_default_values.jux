@@ -1,0 +1,102 @@
+// What `new T[n]` fills its elements with (JUX-LANG-V1 §5.5).
+//
+// Every element starts at the element type's default value: zero, `false`,
+// `""`, `null` for a pointer, the first plain variant of an enum, a record
+// with every component at its own default, and a `@layout(c)` struct with
+// each field at its initializer or at zero. A `@layout(c)` struct also
+// compares field by field with `==`.
+//
+// A struct that declares its own `operator==` compares with that instead.
+//
+// A class has no default value, so `new Account[n]` is rejected (E0458). A
+// sequence of objects that fills up over time is a `Vec`, and reading an
+// element out of a `Vec<Account?>` copies the reference out rather than
+// moving it.
+
+@layout(c, repr = "i32")
+enum Mode { Off = 0, On = 1 }
+
+@layout(c)
+struct Pt {
+    public int x;
+    public int y;
+}
+
+/** A struct with initializers: its default value uses them. */
+@layout(c)
+struct Node {
+    public Pt at = new Pt(4, 2);
+    public int* data = null;
+    public Mode mode = Mode.On;
+    public double weight = 1.5;
+    public ubyte flags = 7;
+}
+
+/** Equal when `x` matches; `noise` does not take part. */
+@layout(c)
+struct Loose {
+    public int x;
+    public int noise;
+
+    public bool operator==(Loose other) {
+        return this.x == other.x;
+    }
+
+    public int operator hash() {
+        return this.x;
+    }
+}
+
+record Span(int start, Pt origin, String label) {}
+
+enum Shade { Light, Dark(int level) }
+
+class Account {
+    public int id;
+
+    public Account(int id) {
+        this.id = id;
+    }
+}
+
+/** An array of a type parameter starts at that type's default too. */
+public <T> T firstOf(int n) {
+    T[] items = new T[n];
+    return items[0];
+}
+
+public void main() {
+    Pt[] points = new Pt[2];
+    points[1].x = 5;
+    print($"points ${points.length}: (${points[0].x}, ${points[0].y}) and (${points[1].x}, ${points[1].y})");
+
+    Pt[3] fixed = new Pt[3];
+    print($"equal ${points[0] == fixed[2]}, different ${points[0] == points[1]}");
+
+    Loose[] loose = new Loose[2];
+    loose[1].noise = 9;
+    print($"operator== ignores noise ${loose[0] == loose[1]}, sees x ${loose[0] == new Loose(1, 0)}");
+
+    Node[] nodes = new Node[1];
+    print($"node at ${nodes[0].at.x},${nodes[0].at.y} null ${nodes[0].data == null} on ${nodes[0].mode == Mode.On} weight ${nodes[0].weight} flags ${nodes[0].flags}");
+
+    Span[] spans = new Span[2];
+    print($"span ${spans[1].start} at ${spans[1].origin.y} label '${spans[1].label}'");
+
+    Shade[] shades = new Shade[2];
+    print($"shade ${shades[0]}");
+
+    int[][] grid = new int[2][3];
+    grid[0][1] = 9;
+    print($"grid rows ${grid.length}, row 1 still ${grid[1][1]}");
+
+    int zero = firstOf<int>(3);
+    String empty = firstOf<String>(3);
+    print($"generic ${zero} '${empty}'");
+
+    var accounts = new Vec<Account?>();
+    accounts.push(new Account(7));
+    accounts.push(null);
+    Account? first = accounts[0];
+    print($"accounts ${accounts.len()}: ${first!!.id} ${accounts[0]!!.id} ${accounts[1] == null}");
+}

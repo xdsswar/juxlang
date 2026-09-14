@@ -581,6 +581,23 @@ class Palette {
 
 A `new T[n]` expression whose value is not going into a slot declared `T[N]` produces the runtime-sized form. It is what Java's array expression means, and it is the only reading that makes the sentence above true: a value that is only ever a fixed array cannot be handed to a `T[]` parameter without copying it, and copying it would break the reference semantics of 6.5.2. The stack form is what an explicit `T[N]` slot asks for, and it stays exactly that.
 
+**What a new array holds.** `new T[n]` has `n` elements before the program writes any of them, so each starts at the *default value* of `T`:
+
+- `0` for every integer type, `0.0` for `float` and `double`, `false` for `bool`, `'\0'` for `char`, and `""` for `String`;
+- `null` for a nullable type and for a raw pointer (`T*`);
+- an empty array for a runtime-sized array type, and a filled one for a fixed `T[N]` (so `new int[2][3]` is two separate rows of three zeros);
+- for an enum, its first variant that carries no payload;
+- for a record, every component at its own default value;
+- for a `@layout(c)` struct, every field at its initializer when it has one and at its own default value otherwise, which for a struct with no initializers is the all-zero value a C program expects.
+
+A class, an ordinary struct (a reference type, exactly like a class), an interface and a function type have no default value, and neither does an enum whose every variant carries a payload, or a record with a component of any of these. `new T[n]` of such a type is `E0458`: there is no object to put in the elements, and Jux does not invent one. List the elements instead (`new Shape[]{a, b}`), or collect them in a `Vec<Shape>` as they are made.
+
+```java
+Pt[] points = new Pt[4];          // @layout(c) struct: four {0, 0}
+Color[] paint = new Color[2];     // enum: two of its first plain variant
+Shape[] shapes = new Shape[3];    // ERROR E0458: a class has no default value
+```
+
 A `String` constant is a constant STRING, usable anywhere a `String` is: the declaration lowers to a string slice, because allocation is not a constant operation, and each use owns its own copy the way a string literal already does.
 
 **Multi-dimensional arrays.** An array type may stack any number of dimension suffixes. Following Java, the type reads left-to-right as nesting from the outside in: `int[][]` is "an array of (arrays of `int`)", and the leftmost `[…]` is the OUTERMOST dimension. Dimensions may be dynamic (`[]`), fixed (`[N]`), or a mix:

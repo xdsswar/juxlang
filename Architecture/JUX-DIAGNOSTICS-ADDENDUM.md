@@ -415,6 +415,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
 | `E0453`  | Generic type inference has no solution (uninferable `new X<>()`) | Type system §T.4.2 |
+| `E0458`  | `new T[n]` where `T` has no default value to start its elements from (a class, an ordinary struct, an interface, a function type, or an enum or record built only from those); list the elements with `new T[]{…}` or collect them in a `Vec<T>` | JUX-LANG-V1 §5.5 |
 | `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0464`  | Reassignment of a `final`/`const` binding (parameter or local) | §M.14.2 |
 | `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |

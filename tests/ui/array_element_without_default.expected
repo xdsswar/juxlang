@@ -1,0 +1,4 @@
+array_element_without_default.jux:31:26: [E0458] error: `new Account[…]` has nothing to start its elements from: `Account` has no default value -- list the elements with `new Account[]{…}`, or collect them in a `Vec<Account>`
+array_element_without_default.jux:32:22: [E0458] error: `new Shape[…]` has nothing to start its elements from: `Shape` has no default value -- list the elements with `new Shape[]{…}`, or collect them in a `Vec<Shape>`
+array_element_without_default.jux:33:23: [E0458] error: `new Reply[…]` has nothing to start its elements from: `Reply` has no default value -- list the elements with `new Reply[]{…}`, or collect them in a `Vec<Reply>`
+array_element_without_default.jux:34:23: [E0458] error: `new Entry[…]` has nothing to start its elements from: `Entry` has no default value -- list the elements with `new Entry[]{…}`, or collect them in a `Vec<Entry>`

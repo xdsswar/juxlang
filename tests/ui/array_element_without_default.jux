@@ -1,0 +1,41 @@
+// `new T[n]` starts every element at T's default value (JUX-LANG-V1 §5.5).
+// A class, an interface, an enum whose every variant has a payload, and a
+// record holding any of those have none. The types after them do.
+class Account {
+    public int id = 0;
+}
+
+interface Shape {
+    double area();
+}
+
+enum Reply { Text(String body), Code(int value) }
+
+record Entry(String key, Account owner) {}
+
+@layout(c)
+struct Pixel {
+    public ubyte r;
+    public ubyte g;
+}
+
+enum Tone { Quiet, Loud(int level) }
+
+record Sample(int at, Pixel colour, Tone tone, Account? owner) {}
+
+public <T> void generic(int n) {
+    T[] items = new T[n];
+}
+
+public void main() {
+    Account[] accounts = new Account[2];
+    Shape[] shapes = new Shape[2];
+    Reply[] replies = new Reply[2];
+    Entry[] entries = new Entry[2];
+
+    Pixel[] pixels = new Pixel[2];
+    Tone[] tones = new Tone[2];
+    Sample[] samples = new Sample[2];
+    String[] names = new String[2];
+    int[][] grid = new int[2][2];
+}
