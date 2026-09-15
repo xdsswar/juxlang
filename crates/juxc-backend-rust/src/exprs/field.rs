@@ -1557,16 +1557,23 @@ impl RustEmitter {
             // value: passing one on while the caller still reads it copies it,
             // as Java's reference would have left the caller's copy intact.
             Some(juxc_tycheck::Ty::User { name, .. }) => {
-                self.class_is_rust_clone(name) || self.type_name_is_record(name)
+                self.class_is_rust_clone(name) || self.type_name_is_value_type(name)
             }
             _ => false,
         }
     }
 
-    /// Whether `name` (bare or fully qualified) names a user record.
-    pub(crate) fn type_name_is_record(&self, name: &str) -> bool {
-        self.symbols.records.contains_key(name)
-            || self.symbols.records.keys().any(|k| k.rsplit('.').next() == Some(name))
+    /// Whether `name` (bare or fully qualified) names a Jux VALUE type that is
+    /// `Clone` but not `Copy`: a record, or an enum a variant of which carries a
+    /// non-`Copy` payload. Such a value is copied wherever the source reads it
+    /// again (JUX-LANG-V1 §7.6, §7.7.2), so `var b = ok; print(ok);` works.
+    pub(crate) fn type_name_is_value_type(&self, name: &str) -> bool {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        let is_record = self.symbols.records.contains_key(name)
+            || self.symbols.records.keys().any(|k| k.rsplit('.').next() == Some(bare));
+        let is_enum = self.symbols.enums.contains_key(name)
+            || self.symbols.enums.keys().any(|k| k.rsplit('.').next() == Some(bare));
+        is_record || (is_enum && !self.enum_is_copy(name))
     }
 
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {

@@ -17,7 +17,90 @@
 
 ---
 
+## Current State (2026-09-15)
+
+> **Read this first.** The phased plan in §I.1 to §I.10 was written before
+> the plugin existed. It proposed a TextMate-highlighted file type with no PSI,
+> leaning on `juxc-lsp` for all semantics, and a declaration-level PSI only
+> later. That is not what was built. The sections below are kept as design
+> history; where they disagree with this section, this section describes the
+> plugin as it is. The source of truth is
+> `ide/intellij-plugin/src/main/resources/META-INF/plugin.xml`.
+
+### What exists
+
+- **A full PSI plugin.** `JuxParserDefinition` registers a recursive-descent
+  parser written in Kotlin (`dev.jux.intellij.parser`: `JuxParser`,
+  `JuxStatements`, `JuxExpressions`, `JuxTypes`) that builds a tree for
+  declarations, statements and expressions. Highlighting is native
+  (`JuxSyntaxHighlighterFactory` plus a color-settings page), not TextMate.
+- **Tokens generated from the compiler's lexer.** The `generateJuxTokens`
+  Gradle task builds `JuxTokenTypes` and `JuxKeywords` from
+  `ide/intellij-plugin/grammar/jux-tokens.json`, which is exported from
+  `juxc-lex` (`grammar_spec`) and `juxc-driver` (`grammar_export`). The
+  plugin's token alphabet cannot drift from the compiler's. This answers the
+  single-sourcing question §I.7 and §I.11 raised, at the token level; the
+  grammar rules themselves are still hand-written in Kotlin.
+- **A hybrid engine with `juxc-lsp`.** The plugin owns what lives in the PSI:
+  completion, go-to declaration and implementation, find usages, rename,
+  parameter info and the structure view. The language server supplies what
+  needs the real type checker: diagnostics, hover with exact types, and code
+  actions. `JuxLspDescriptor` switches the LSP client's own completion,
+  go-to-definition, signature help, references and document symbols off so
+  nothing appears twice. The server is reached through the IDE's native LSP
+  client (`lsp.xml`, 2025.2+) or through the LSP4IJ fallback (`lsp4ij.xml`),
+  never both. A status-bar widget names the engine that is serving.
+- **Editing and navigation.** Structure view, folding, breadcrumbs, brace and
+  quote handling, smart enter, move statement, surround-with, formatter with a
+  code-style page, optimize imports, live and postfix templates, parameter
+  info, parameter-name inlay hints, quick documentation, type hierarchy,
+  go-to class and symbol backed by a file-based declaration index, and gutter
+  markers for run, overrides, subtypes and observable properties.
+- **Inspections.** Native inspections with quick-fixes (unreachable code,
+  unused import, unused local, unresolved reference, missing `@Override`,
+  observable-property checks, test-annotation placement, inheritance-shape
+  checks), plus a missing-import annotator and an auto-importer.
+- **Refactoring.** Rename (in place for locals and parameters, with a
+  collision check), Introduce Variable, Introduce Constant, Inline Variable
+  and Safe Delete. Generate constructor, getters, setters, and Implement /
+  Override Methods.
+- **Project, build, run and test.** New Project and New Module wizards,
+  New Jux File (Class, Interface, Enum, Struct, Record, Annotation), New Jux
+  Package, run configurations with a gutter run action, a test run
+  configuration with a test-runner tree (`JuxTestEventsConverter`,
+  `JuxTestConsoleProperties`, `JuxTestLocator`), Jux build and project tool
+  windows, and IDE-wide toolchain settings that find `juxc`, `jux` and
+  `juxc-lsp` from settings, `JUX_HOME`, `PATH` or common install locations.
+  The toolchain's `.jux.d`
+  stubs (standard library and bound Rust crates) are indexed as an external
+  library.
+- **Build.** IntelliJ Platform Gradle Plugin 2.x against
+  `intellijIdea("2026.1.3")`, JDK 21 toolchain, `sinceBuild` 242, no
+  `untilBuild` cap. Plugin id `dev.jux.lang`, version 0.0.8 at the time of
+  writing.
+
+### Still open
+
+None of these are in the plugin today:
+
+- Source-root kinds (Jux Sources Root, Jux Test Sources Root) and the
+  "Mark Directory as" actions (§I.4).
+- The package-mismatch inspection and its quick-fixes (§I.4).
+- Project View "Package View" mode (§I.4).
+- Refactor → Move Class.
+- Refactor → Change Signature.
+- Refactor → Extract Method.
+- A `juxc-lsp` binary bundled inside the plugin; the server is still found on
+  the machine (§I.6).
+- JetBrains Marketplace publishing (§I.9).
+- A debugger (out of scope, as before).
+
+---
+
 ## Design Philosophy (Non-Normative)
+
+> **History.** This section and the phase plan below describe the original
+> proposal. See "Current State" above for what the plugin actually is.
 
 The TextMate grammar gives every editor a coloring story. The LSP gives every editor diagnostics, hover, goto-def, and rename. Both work in IntelliJ today. But the IntelliJ user experience is gated on three things those layers cannot deliver:
 
@@ -29,6 +112,9 @@ This addendum specifies a plugin that delivers items (1) and (3) cheaply, and a 
 
 ### What this plugin is NOT
 
+*(Superseded in part: the plugin now does carry its own Kotlin parser, with
+its tokens generated from `juxc-lex`. See "Current State".)*
+
 - It is NOT a Kotlin re-implementation of the Jux parser. The Rust front end is canonical; duplicating it in Java/Kotlin would invite drift and double maintenance cost.
 - It is NOT a debugger. Debugging belongs to a future runtime-side addendum.
 - It is NOT exclusively for IntelliJ IDEA. The same plugin works in CLion, GoLand, PyCharm, WebStorm, Rider, RustRover, and Android Studio (any IDE built on the IntelliJ Platform). The plugin descriptor declares `com.intellij.modules.platform` only — no IDE-specific module dependencies.
@@ -36,6 +122,14 @@ This addendum specifies a plugin that delivers items (1) and (3) cheaply, and a 
 ---
 
 ## §I.1 — Goals and Non-Goals
+
+> **History.** The phase numbers in this table are the original plan. Rows
+> 1, 4, 8 to 18 are built (row 2 was replaced by native highlighting, and
+> rows 15 and 16 are served by the plugin's PSI rather than by LSP
+> delegation). Rows 3, 5, 6, 7, 19, 20, 21 and 22 are still open. The
+> Non-Goals list is also out of date: the PSI covers expressions and
+> statements, and Introduce Variable, Inline Variable, live templates,
+> postfix templates and inspections all ship.
 
 ### Goals
 
@@ -75,6 +169,11 @@ This addendum specifies a plugin that delivers items (1) and (3) cheaply, and a 
 ## §I.2 — Plugin Layout and Build
 
 ### Repository location
+
+*(History: the planned layout. The real tree has no `textmate/` resource
+folder and adds `parser/`, `psi/`, `resolve/`, `completion/`,
+`inspections/`, `refactoring/`, `run/`, `lsp4ij/` and more; the descriptor
+snippet below also predates the plugin id change to `dev.jux.lang`.)*
 
 ```
 ide/intellij-plugin/
@@ -186,6 +285,10 @@ object JuxFileType : LanguageFileType(JuxLanguage) {
     override fun getIcon(): Icon = JuxIcons.FILE
 }
 ```
+
+*(History: the plugin now registers `JuxParserDefinition` and a native
+syntax highlighter; the TextMate path described in the next two paragraphs
+was never shipped.)*
 
 `JuxLanguage` extends `com.intellij.lang.Language` with the canonical id `"Jux"`. **No `ParserDefinition` is registered in Phase 1** — the language is "syntax-highlight-only" until the PSI work in §I.8 lands. This is a supported configuration (Markdown, plain-text-with-syntax-highlighting, and several JetBrains-bundled languages do exactly this).
 
@@ -347,6 +450,14 @@ The Jux submenu is **always visible** under any directory inside an IntelliJ pro
 
 ## §I.6 — LSP Integration
 
+> **History.** The shipped integration differs from this sketch in three
+> ways: `juxc-lsp` is resolved through the toolchain settings, `JUX_HOME`,
+> `PATH` and common install locations (`JuxToolchain.resolveJuxcLsp`) rather
+> than `PATH` alone; LSP4IJ is
+> wired as an optional dependency with its own server factory rather than
+> left to manual user setup; and the descriptor turns several LSP features
+> off because the plugin's PSI serves them (see "Current State").
+
 ### Ultimate (native LSP API)
 
 The plugin's `JuxLspServerSupportProvider` extends `com.intellij.platform.lsp.api.LspServerSupportProvider`:
@@ -382,6 +493,14 @@ A more ambitious option is to bundle LSP4IJ's reusable runtime into this plugin 
 ---
 
 ## §I.7 — Refactoring Strategy
+
+> **History.** The tiers below were the plan. In practice the plugin went
+> straight to an expression-level PSI written by hand in Kotlin, not
+> Grammar-Kit and JFlex, with tokens generated from `juxc-lex`. Rename, Find
+> Usages, Safe Delete, the structure view, Introduce Variable, Introduce
+> Constant and Inline Variable are PSI-backed today. Move Class, Extract
+> Method, Change Signature, Inline Method and Structural Search and Replace
+> are not built.
 
 "Intelligent refactoring" in the IntelliJ sense decomposes into three tiers:
 
@@ -427,6 +546,10 @@ This tier requires implementing a Jux parser in IntelliJ-platform-compatible Kot
 
 ## §I.8 — PSI: When and How Much
 
+> **History.** This matrix assumed PSI would be added in stages. The plugin
+> has a full PSI now, so the "Requires PSI scope" column no longer gates
+> anything; what remains open is listed under "Current State".
+
 The decision matrix for adding PSI to the plugin:
 
 | Refactoring user is asking for       | Requires PSI scope                | Phase |
@@ -467,6 +590,10 @@ Pre-release builds (`0.4.0-rc.1`, `0.4.0-rc.2`, …) ship on the marketplace's `
 ---
 
 ## §I.10 — Implementation Phases
+
+> **History.** The original phase plan, kept for context. The plugin did not
+> follow this order (it skipped the TextMate phase and built the PSI early).
+> For what is done and what is open, see "Current State".
 
 | Phase | Deliverable                                                                                                                  |
 |-------|------------------------------------------------------------------------------------------------------------------------------|

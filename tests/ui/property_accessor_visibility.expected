@@ -1,1 +1,2 @@
+property_accessor_visibility.jux:6:31: [E0972] error: the setter of property `Hidden` is `public`, which is more visible than the property itself (`private`) -- a setter may only narrow its property's visibility
 property_accessor_visibility.jux:16:5: [E0972] error: cannot write property `Balance` of `Account` from top-level code -- its setter is `private`

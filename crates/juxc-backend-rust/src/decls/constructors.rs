@@ -365,6 +365,7 @@ impl RustEmitter {
         // the body's writes. The `__self`-builder below gets that order.
         let simple = if class_decl.init_blocks.is_empty() {
             extract_simple_ctor_inits(ctor, class_decl)
+                .filter(|simple| !self.defer_ctor_body || simple.side_effects.is_empty())
         } else {
             None
         };
@@ -930,13 +931,52 @@ impl RustEmitter {
         class_decl: &juxc_ast::ClassDecl,
         super_args: &[juxc_ast::Expr],
     ) {
+        // The parent's constructor body is written in the PARENT's type
+        // parameters (`this.items = new Vec<T>();` in `Store<T>`), but it runs
+        // inside the child's `new`, where `T` means nothing. Read it through
+        // the child's `extends Store<String>` arguments while it is emitted.
+        let saved_subst = self.kind_type_subst.clone();
+        if let Some(parent_ty) = &class_decl.extends {
+            let parent_params = parent_ty
+                .name
+                .segments
+                .last()
+                .and_then(|seg| self.class_ast_named(&seg.text))
+                .map(|parent| parent.generic_params)
+                .unwrap_or_default();
+            let mut subst = std::collections::HashMap::new();
+            for (param, arg) in parent_params.iter().zip(parent_ty.generic_args.iter()) {
+                let Some(arg_ty) = arg.as_type() else { continue };
+                // A chain composes: `Mid<U> extends Base<U>` inside
+                // `Leaf extends Mid<String>` reads `U` as `String`.
+                let resolved = match arg_ty.name.segments.as_slice() {
+                    [only] if arg_ty.generic_args.is_empty() => {
+                        saved_subst.get(&only.text).cloned().unwrap_or_else(|| arg_ty.clone())
+                    }
+                    _ => arg_ty.clone(),
+                };
+                subst.insert(param.name.text.clone(), resolved);
+            }
+            if !subst.is_empty() {
+                self.kind_type_subst = subst;
+            }
+        }
+        self.emit_ancestor_ctor_tails_in_scope(class_decl, super_args);
+        self.kind_type_subst = saved_subst;
+    }
+
+    fn emit_ancestor_ctor_tails_in_scope(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        super_args: &[juxc_ast::Expr],
+    ) {
         let Some(parent_ty) = &class_decl.extends else {
             return;
         };
         let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.clone()) else {
             return;
         };
-        let Some(parent) = self.class_asts.get(&parent_bare).cloned() else {
+        let Some(parent) = self.class_ast_named(&parent_bare) else {
             return;
         };
         // Match the parent constructor the same way the inner builder does:
@@ -947,7 +987,7 @@ impl RustEmitter {
             .find(|c| c.params.len() == super_args.len())
             .or_else(|| parent.constructors.first())
             .cloned();
-        let defers = ctor.as_ref().is_some_and(|c| Self::ctor_defers(&parent, c));
+        let defers = ctor.as_ref().is_some_and(|c| self.ctor_defers(&parent, c));
         let grandparent_args = ctor
             .as_ref()
             .and_then(extract_super_args)
@@ -995,9 +1035,19 @@ impl RustEmitter {
     /// does. A delegating constructor that ran its target's body in the inner
     /// builder skipped exactly the part that could not run there.
     fn ctor_defers(
+        &self,
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
     ) -> bool {
+        // A class that extends another, or that another extends, runs its
+        // `init` blocks and constructor body against the finished handle, root
+        // class first, after EVERY field initializer of the hierarchy has run
+        // (JUX-LANG-V1 §7.3.1, ERRATA E21). Run inside the inner builder
+        // instead, a parent's body ran in the middle of its child's field
+        // setup, and a child's body ran before its parent's.
+        if self.class_in_hierarchy(class_decl) {
+            return true;
+        }
         let mut current = ctor;
         for _ in 0..32 {
             if Self::ctor_calls_method_on_this(class_decl, current) {
@@ -1055,7 +1105,7 @@ impl RustEmitter {
                 .find(|c| c.params.len() == target_args.len())
                 .cloned();
             if let Some(target) = target {
-                if Self::ctor_defers(class_decl, &target) {
+                if self.ctor_defers(class_decl, &target) {
                     self.emit_ctor_replay(class_decl, &target, Some(&target_args));
                 } else {
                     let super_args = extract_super_args(&target).unwrap_or_default();
@@ -1080,6 +1130,34 @@ impl RustEmitter {
         }
     }
 
+    /// The declaration of the class named `name`, bare or fully qualified.
+    /// `class_asts` is keyed by FQN in a packaged program, so a bare `extends`
+    /// name found nothing there and the parent's constructor was skipped.
+    pub(crate) fn class_ast_named(&self, name: &str) -> Option<juxc_ast::ClassDecl> {
+        if let Some(found) = self.class_asts.get(name) {
+            return Some(found.clone());
+        }
+        if let Some(fqn) = self.resolve_bare_class_fqn(name) {
+            if let Some(found) = self.class_asts.get(&fqn) {
+                return Some(found.clone());
+            }
+        }
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        self.class_asts.values().find(|c| c.name.text == bare).cloned()
+    }
+
+    /// Whether `class_decl` takes part in an `extends` chain: it extends a
+    /// class, or some class extends it.
+    fn class_in_hierarchy(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        class_decl.extends.is_some()
+            || self.class_asts.values().any(|c| {
+                c.extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last())
+                    .is_some_and(|seg| seg.text == class_decl.name.text)
+            })
+    }
+
     /// Does any ancestor of `class_decl` defer its constructor body?
     fn ancestor_chain_defers(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
         let mut cur = class_decl.clone();
@@ -1088,10 +1166,10 @@ impl RustEmitter {
             let Some(bare) = parent_ty.name.segments.last().map(|s| s.text.clone()) else {
                 return false;
             };
-            let Some(parent) = self.class_asts.get(&bare).cloned() else {
+            let Some(parent) = self.class_ast_named(&bare) else {
                 return false;
             };
-            if parent.constructors.iter().any(|c| Self::ctor_defers(&parent, c)) {
+            if parent.constructors.iter().any(|c| self.ctor_defers(&parent, c)) {
                 return true;
             }
             cur = parent;
@@ -1106,7 +1184,7 @@ impl RustEmitter {
     ) {
         // Decide up front whether the body has to run against the HANDLE
         // rather than the raw inner - see `pending_ctor_tail`.
-        self.defer_ctor_body = Self::ctor_defers(class_decl, ctor);
+        self.defer_ctor_body = self.ctor_defers(class_decl, ctor);
         // An ancestor whose body was deferred is replayed by whoever actually
         // builds the object, so this constructor needs the handle shape too
         // even when its own body is perfectly ordinary.
@@ -1389,6 +1467,7 @@ impl RustEmitter {
         // its init blocks run after construction and mutate `this`.
         let simple = if class_decl.init_blocks.is_empty() {
             extract_simple_ctor_inits(ctor, class_decl)
+                .filter(|simple| !self.defer_ctor_body || simple.side_effects.is_empty())
         } else {
             None
         };
@@ -1765,8 +1844,11 @@ impl RustEmitter {
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // A class with `init { }` blocks binds the inner to `let mut __self`
-        // so the init pass can mutate it before returning (§M.1).
-        let has_init = !class_decl.init_blocks.is_empty();
+        // so the init pass can mutate it before returning (§M.1). In a
+        // hierarchy the init blocks run later, against the handle, after the
+        // ancestors' constructors (ERRATA E21).
+        let in_hierarchy = self.class_in_hierarchy(class_decl);
+        let has_init = !class_decl.init_blocks.is_empty() && !in_hierarchy;
         self.w.emit_indent();
         if has_init {
             self.w.push_str("let mut __self = ");
@@ -1866,14 +1948,36 @@ impl RustEmitter {
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
         self.emit_static_init_trigger();
-        if self.sync_classes.contains(&class_decl.name.text) {
-            self.w.line("Self(crate::JuxSync::new(Self::new_inner()))");
+        let wrapped = if self.sync_classes.contains(&class_decl.name.text) {
+            "Self(crate::JuxSync::new(Self::new_inner()))"
         } else if self.is_box_class(&class_decl.name.text) {
-            self.w.line("Self(std::boxed::Box::new(Self::new_inner()))");
+            "Self(std::boxed::Box::new(Self::new_inner()))"
         } else if self.is_refcell_class(&class_decl.name.text) {
-            self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
+            "Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))"
         } else {
-            self.w.line("Self(std::rc::Rc::new(Self::new_inner()))");
+            "Self(std::rc::Rc::new(Self::new_inner()))"
+        };
+        let replays = in_hierarchy
+            && (self.ancestor_chain_defers(class_decl) || !class_decl.init_blocks.is_empty());
+        if replays {
+            // The implicit constructor still runs the parent's constructor
+            // chain (JUX-LANG-V1 §7.3.1), then this class's init blocks, each
+            // against the handle the fields were built into.
+            self.w.line(&format!("let __jux_self = {wrapped};"));
+            let prev_alias = self.this_alias.replace("__jux_self".to_string());
+            let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
+            self.emit_ancestor_ctor_tails(class_decl, &[]);
+            let init: Vec<juxc_ast::Stmt> = class_decl
+                .init_blocks
+                .iter()
+                .flat_map(|b| b.statements.iter().cloned())
+                .collect();
+            self.emit_ctor_body_stmts(&init, &HashSet::new());
+            self.emitting_wrapper_class = prev_wrapper;
+            self.this_alias = prev_alias;
+            self.w.line("__jux_self");
+        } else {
+            self.w.line(wrapped);
         }
         self.w.indent_dec();
         self.w.line("}");

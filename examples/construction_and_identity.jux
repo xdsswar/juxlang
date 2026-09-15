@@ -1,0 +1,89 @@
+// Construction order, value copies and identity (JUX-LANG-V1 §7.3.1, §7.7.2,
+// OPERATORS §O.4.1, ERRATA E21).
+//
+// - Every field initializer of a hierarchy runs before any constructor body,
+//   base class first, then each class's `init` blocks and body, root first. A
+//   subclass with no constructor of its own still runs its parent's.
+// - An enum value with a payload is copied, so reading it again after passing
+//   or assigning it works.
+// - A class without `operator==` compares and hashes by identity.
+// - `throw e;` in a catch keeps the concrete exception type.
+
+public String note(String what) {
+    print(what);
+    return what;
+}
+
+public class Base {
+    protected String tag = note("base field");
+    public Base() {
+        print("base body");
+        this.hook();
+    }
+    public void hook() { print("base hook"); }
+}
+
+public class Child extends Base {
+    private String own = note("child field");
+    init { print("child init"); }
+    public Child() { print("child body"); }
+    public void hook() { print("child hook sees " + own); }
+}
+
+public class Quiet extends Base {
+    private int n = 7;
+    public void hook() { print("quiet hook sees " + n); }
+}
+
+public enum Reply { Ok(int status, String body), Moved(String location) }
+
+public void show(Reply r) { print(r); }
+
+public class Conn {
+    public int port;
+    public Conn(int port) { this.port = port; }
+}
+
+public class AppError extends Exception {
+    public AppError(String m) { super(m); }
+}
+
+public void work() throws Exception {
+    try {
+        throw new AppError("boom");
+    } catch (Exception e) {
+        throw e;
+    }
+}
+
+public void main() {
+    new Child();
+    print("--");
+    new Quiet();
+    print("--");
+
+    var ok = Reply.Ok(200, "fine");
+    show(ok);
+    var copy = ok;
+    print(ok);
+    print(copy);
+
+    var a = new Conn(80);
+    var b = new Conn(80);
+    var alias = a;
+    print(a == b);
+    print(a == alias);
+    var seen = new HashSet<Conn>();
+    seen.insert(a);
+    seen.insert(alias);
+    seen.insert(b);
+    print(seen.len());
+
+    try {
+        work();
+    } catch (AppError err) {
+        print("caught AppError " + err.getMessage());
+    } catch (Exception err) {
+        print("caught Exception " + err.getMessage());
+    }
+}

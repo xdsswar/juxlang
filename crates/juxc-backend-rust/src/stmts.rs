@@ -872,6 +872,21 @@ impl RustEmitter {
                 // String payload here — the typed object IS the
                 // payload, and the catch-site recovers it
                 // verbatim.
+                if let Some((binder, depth)) = self.catch_rethrow.clone() {
+                    if matches!(e, Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == binder) {
+                        // `throw e;` of a sliced binder: restore the slice
+                        // into the whole payload and rethrow the concrete
+                        // exception it came from.
+                        self.w.push_str("{ __jux_full");
+                        for _ in 0..depth {
+                            self.w.push_str(".__parent");
+                        }
+                        self.w.push_str(" = ");
+                        self.w.push_str(&to_rust_ident(&binder));
+                        self.w.push_str("; __jux_unhandled = Some(::std::boxed::Box::new(__jux_full) as ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>); break '__jux_catch; }\n");
+                        return;
+                    }
+                }
                 if self.in_catch_arm {
                     // **Catch-arm throw parking** (§X.3.2): the new
                     // exception runs `finally` first, then propagates
@@ -1074,23 +1089,34 @@ impl RustEmitter {
         self.w.push_str("Ok(__jux_boxed) => {\n");
         self.w.indent_inc();
         self.w.emit_indent();
+        // A body that rethrows its binder keeps the whole payload beside the
+        // slice, so the rethrow can hand the concrete exception on.
+        let rethrows = slice_depth > 0 && block_rethrows(body, binder);
+        if rethrows {
+            self.w.line("let mut __jux_full = *__jux_boxed;");
+            self.w.emit_indent();
+        }
         self.w.push_str("let ");
         if binder_mut {
             self.w.push_str("mut ");
         }
         self.w.push_str(binder);
-        self.w.push_str(" = (*__jux_boxed)");
+        self.w.push_str(if rethrows { " = __jux_full" } else { " = (*__jux_boxed)" });
         // Upcast slice: a subclass payload binds the BASE slice the
         // body was type-checked against (`__parent` per inheritance
-        // step). Phase-1 note: a rethrown binder carries the sliced
-        // type, not the original concrete one.
+        // step).
         for _ in 0..slice_depth {
             self.w.push_str(".__parent");
         }
         self.w.push_str(";\n");
         let prev_arm = self.in_catch_arm;
         self.in_catch_arm = true;
+        let prev_rethrow = std::mem::replace(
+            &mut self.catch_rethrow,
+            rethrows.then(|| (binder.to_string(), slice_depth)),
+        );
         self.emit_block_contents(body);
+        self.catch_rethrow = prev_rethrow;
         self.in_catch_arm = prev_arm;
         // Trailing `break '__jux_catch;` is the arm's normal-completion exit:
         // once a catch matches, stop dispatching the remaining clauses. Omit it
@@ -2048,10 +2074,10 @@ impl RustEmitter {
         // borrowed `&V` is not a `V`).
         let element_is_record = match self.expr_types.get(&expr_span_of(&f.iter)) {
             Some(Ty::Array { element, .. }) => {
-                matches!(element.as_ref(), Ty::User { name, .. } if self.type_name_is_record(name))
+                matches!(element.as_ref(), Ty::User { name, .. } if self.type_name_is_value_type(name))
             }
             Some(Ty::User { generic_args, .. }) => {
-                matches!(generic_args.first(), Some(Ty::User { name, .. }) if self.type_name_is_record(name))
+                matches!(generic_args.first(), Some(Ty::User { name, .. }) if self.type_name_is_value_type(name))
             }
             _ => false,
         };
@@ -4249,13 +4275,13 @@ impl RustEmitter {
                 let Some(class_name) = &self.enclosing_class else {
                     return false;
                 };
-                let Some(class) = self.lookup_class_by_bare_or_fqn(class_name) else {
-                    return false;
-                };
-                let Some(field) = class.fields.get(qn.segments[0].text.as_str()) else {
-                    return false;
-                };
-                field.is_static && !field.is_final
+                // Up the `extends` chain: a subclass constructor replaying its
+                // parent's body writes the parent's static by its bare name, and
+                // missing it there took the lock twice in one statement.
+                matches!(
+                    self.lookup_class_field_owner_in_chain(class_name, &qn.segments[0].text),
+                    Some((_, true, false))
+                )
             }
             _ => false,
         }
@@ -4712,6 +4738,31 @@ impl RustEmitter {
 /// to [`expr_span_of`] on the inner expression. `Stmt::Return(None, _)`
 /// has no expression span — falls back to `Span::DUMMY` so the
 /// marker emission skips it cleanly.
+/// Whether `block` contains `throw <binder>;` outside any nested lambda.
+fn block_rethrows(block: &juxc_ast::Block, binder: &str) -> bool {
+    fn stmt_rethrows(stmt: &Stmt, binder: &str) -> bool {
+        match stmt {
+            Stmt::Throw(Expr::Path(qn), _) => qn.segments.len() == 1 && qn.segments[0].text == binder,
+            Stmt::If(i) => {
+                block_rethrows(&i.then_block, binder)
+                    || match i.else_branch.as_deref() {
+                        Some(ElseBranch::Block(b)) => block_rethrows(b, binder),
+                        Some(ElseBranch::If(inner)) => stmt_rethrows(&Stmt::If(inner.clone()), binder),
+                        None => false,
+                    }
+            }
+            Stmt::While(w) => block_rethrows(&w.body, binder),
+            Stmt::DoWhile(d) => block_rethrows(&d.body, binder),
+            Stmt::ForC(f) => block_rethrows(&f.body, binder),
+            Stmt::ForEach(f) => block_rethrows(&f.body, binder),
+            Stmt::Block(b) | Stmt::Unsafe(b) => block_rethrows(b, binder),
+            Stmt::Labeled { stmt, .. } => stmt_rethrows(stmt, binder),
+            _ => false,
+        }
+    }
+    block.statements.iter().any(|s| stmt_rethrows(s, binder))
+}
+
 /// Make a Jux loop label safe to emit as a Rust label. A Jux label that
 /// happens to spell a Rust keyword (`loop`, `match`, `move`, `ref`, …) would
 /// emit an invalid Rust label (`'loop:`), so prefix exactly those. Non-keyword

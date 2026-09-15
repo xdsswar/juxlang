@@ -6,8 +6,10 @@
 // `thread_local!` instead, which is the rule that already covered class,
 // interface and polymorphic-base payloads; a collection is one too.
 //
-// Field initializers also run in the order Java gives them: a base's fields
-// before its constructor, then the derived class's.
+// Construction runs every field initializer of the hierarchy first, base class
+// first, and only then the constructor bodies, base class first (JUX-LANG-V1
+// §7.3.1, ERRATA E21). Java would run the base constructor before the derived
+// class's fields; Jux never lets a constructor see a field that is not set.
 
 public class Log {
     public static Vec<String> events = new Vec<String>();

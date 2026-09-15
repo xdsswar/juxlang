@@ -293,6 +293,72 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// Whether `class_decl` or an ancestor declares `operator==`, `operator<=>`
+    /// or `operator hash`, any of which gives the class structural equality.
+    pub(crate) fn class_chain_declares_equality(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        let mut current = Some(class_decl.clone());
+        let mut depth = 0;
+        while let Some(class) = current {
+            if class.operators.iter().any(|o| {
+                matches!(o.kind, OperatorKind::Eq | OperatorKind::Cmp | OperatorKind::Hash)
+            }) {
+                return true;
+            }
+            depth += 1;
+            if depth > 64 {
+                break;
+            }
+            current = class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last())
+                .and_then(|seg| self.class_ast_named(&seg.text));
+        }
+        false
+    }
+
+    /// `impl PartialEq`, `Eq` and `Hash` by identity for a wrapper class: two
+    /// handles are equal when they share one cell, and the cell's address is
+    /// the hash (§O.4.1).
+    pub(crate) fn emit_identity_eq_hash(&mut self, class_name: &str, generic_params: &[juxc_ast::TypeParam]) {
+        let address = if self.sync_classes.contains(class_name) {
+            "self.0.as_ptr()"
+        } else if self.is_box_class(class_name) {
+            return;
+        } else {
+            "std::rc::Rc::as_ptr(&self.0)"
+        };
+        let other_address = address.replace("self.0", "other.0");
+        let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (trait_path, body) in [
+            ("PartialEq", Some(format!("fn eq(&self, other: &Self) -> bool {{ std::ptr::eq({address}, {other_address}) }}"))),
+            ("Eq", None),
+            ("std::hash::Hash", Some(format!("fn hash<H: std::hash::Hasher>(&self, state: &mut H) {{ std::ptr::hash({address}, state) }}"))),
+        ] {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            if !generic_params.is_empty() {
+                self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+            }
+            self.w.push(' ');
+            self.w.push_str(trait_path);
+            self.w.push_str(" for ");
+            self.w.push_str(class_name);
+            self.emit_generic_params_as_args(generic_params);
+            match body {
+                Some(body) => {
+                    self.w.push_str(" {\n");
+                    self.w.indent_inc();
+                    self.w.line(&body);
+                    self.w.indent_dec();
+                    self.w.line("}");
+                }
+                None => self.w.push_str(" {}\n"),
+            }
+        }
+        self.w.newline();
+    }
+
     /// `impl Display for Class { fn fmt(...) { f.write_str(&self.__op_string()) } }`.
     fn emit_display_wrapper(&mut self, class_name: &str) {
         self.w.emit_indent();

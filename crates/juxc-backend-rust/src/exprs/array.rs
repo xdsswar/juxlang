@@ -161,7 +161,7 @@ impl RustEmitter {
                                     .any(|k| k.rsplit('.').next().unwrap_or(k) == bare)))
                             // A record is a value that derives `Clone`, and
                             // `var l = loans[0];` moved it out of the Vec.
-                            || self.type_name_is_record(name)
+                            || self.type_name_is_value_type(name)
                     }
                     _ => false,
                 };

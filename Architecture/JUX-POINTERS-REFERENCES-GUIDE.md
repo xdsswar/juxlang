@@ -369,9 +369,15 @@ call it. Plain `@export` uses the Jux name as the C symbol; `@export(name = "…
 sets a custom one. The signature must be C-compatible (primitive, raw pointer,
 `@layout(c)` struct/enum, or `String`); it may not be generic, `async`, `unsafe`,
 or `throws` (**E0508**). A `String` parameter/return is marshalled by a generated
-wrapper: inbound C strings are copied into Jux Strings, and a returned String is
-handed back via `into_raw` (the C caller owns that buffer; it is not freed on the
-Jux side, mirroring the inbound rule in §5.2).
+wrapper. Inbound, a C string is copied into a Jux String (a null pointer
+becomes the empty string). Outbound, the wrapper does not give up ownership of
+the returned String. It converts it to a C string, stores that in a
+thread-local slot that belongs to the exported function, and returns a
+`const char*` into it. The pointer stays valid until the same function returns
+its next string on the same thread; storing the new one frees the old one. The
+C caller must not `free` the pointer, and should copy the text if it needs it
+for longer. A String that contains a NUL byte has no C spelling and comes back
+as a null pointer.
 
 ```jux
 @export

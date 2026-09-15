@@ -12,6 +12,46 @@
 
 ---
 
+## Current Status (2026-09-15)
+
+> **Read this first.** The plan below was written before most of the editor
+> work happened. Here is where the editor-side pieces actually stand.
+
+### What is in the repository
+
+- `editors/jux.tmLanguage.json` exists and is the only TextMate grammar.
+- `editors/jux.tmbundle/` contains only `info.plist`. There is no
+  `Syntaxes/` folder, so it does not match the layout §E.5 describes and
+  carries no grammar for a TextMate-bundle host to load.
+- The grammar has fallen behind the lexer. The compiler's keyword list,
+  exported to `ide/intellij-plugin/grammar/jux-tokens.json`, has 58
+  keywords; `jux.tmLanguage.json` is missing three of them: `ref`, `typeof`
+  and `weak`. (The "53 reserved keywords" count in §E.2 is also stale.)
+- There is no VS Code extension, no Zed extension, and no setup
+  documentation for Neovim, Helix or Sublime Text. The editor matrix in §E.4
+  is a plan, not a description.
+- IntelliJ is served by a native PSI plugin, not by the TextMate bundle. It
+  generates its token types from `jux-tokens.json` and runs a hybrid engine
+  with `juxc-lsp`; see "Current State" in `JUX-INTELLIJ-PLUGIN-ADDENDUM.md`.
+  §E.5 below is kept as history.
+
+### Planned fixes
+
+1. **Generate the TextMate grammar from `jux-tokens.json`** instead of
+   editing it by hand, the same way the IntelliJ plugin's token types are
+   generated. This replaces the manual "mirror the keyword list" rule in §E.2
+   and the CI check proposed under Open Questions, and closes the `ref` /
+   `typeof` / `weak` gap for good.
+2. **Add `Syntaxes/jux.tmLanguage.json` to `editors/jux.tmbundle/`** (written
+   by the same generator) so the bundle loads in any TextMate-bundle host.
+3. **A VS Code extension** that ships the generated grammar, registers
+   `*.jux` as `source.jux`, and launches `juxc-lsp`.
+4. **A Zed extension** that registers the grammar and `juxc-lsp`.
+5. **Setup documentation for Neovim, Helix and Sublime Text**: filetype
+   registration and the `juxc-lsp` server entry for each.
+
+---
+
 ## Design Philosophy (Non-Normative)
 
 Phase 1 of Jux is a transpiler — `juxc` lowers `.jux` source to Rust and hands it to `rustc`. The compiler is already a multi-crate Rust workspace (`juxc-lex`, `juxc-parse`, `juxc-ast`, `juxc-tycheck`, …) with first-class diagnostics. The cheapest path to good editor support is therefore **to reuse the existing front end** rather than rebuild it inside an IDE plugin.
@@ -124,6 +164,13 @@ This addendum stays focused on the **editor-side concerns** — coloring, packag
 ---
 
 ## §E.5 — IntelliJ-Specific Notes
+
+> **History.** Written when the plan for IntelliJ was a TextMate bundle plus
+> an LSP registration. The project instead ships a native IntelliJ plugin
+> with its own PSI parser (`ide/intellij-plugin`), which registers the file
+> type, highlights natively and launches `juxc-lsp` itself. The notes below
+> apply only to someone loading the bare TextMate bundle, which currently has
+> no `Syntaxes/` folder and so no grammar in it (see "Current Status").
 
 ### Bundle layout
 

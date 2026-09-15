@@ -1059,6 +1059,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if qn.segments.len() == 1 {
                     let bare = qn.segments[0].text.as_str();
                     if let Some((enum_fqn, enum_sig)) = symbols.lookup_enum(bare) {
+                        // `HttpResponse.Ok(200, "fine")` builds a value of the enum.
+                        // Untyped, a later `var b = ok;` could not tell the value
+                        // must be copied, and moved it instead.
+                        if enum_sig.variants.contains_key(method_name) {
+                            return Ty::User { name: enum_fqn.to_string(), generic_args: Vec::new() };
+                        }
                         if let Some(method) = enum_sig.methods.get(method_name) {
                             if method.is_static {
                                 return return_type_in_method(

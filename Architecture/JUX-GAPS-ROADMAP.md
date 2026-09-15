@@ -30,7 +30,8 @@ Gaps are grouped by category, not priority. The summary table at the end orders 
 - ✅ **Tooling / IDE commitment** (gap 3.3). `JUX-EDITOR-TOOLING-ADDENDUM.md`, `JUX-LSP-SERVER-ADDENDUM.md`, `JUX-INTELLIJ-PLUGIN-ADDENDUM.md`.
 - ✅ **Memory layout and ABI** (gap 4.2). `JUX-LAYOUT-ABI-ADDENDUM.md`, `JUX-RUNTIME-ABI-ADDENDUM.md`.
 - ✅ **Compiler diagnostics specification** (gap 4.4). `JUX-DIAGNOSTICS-ADDENDUM.md`.
-- ✅ **Nested / inner / anonymous classes — positioned** (gap 2.3). `JUX-MISSING-DEFS-ADDENDUM.md` §M.9 (explicitly unsupported in Phase 1, codes E0991–E0993).
+- ✅ **Nested / inner / anonymous classes** (gap 2.3). `JUX-MISSING-DEFS-ADDENDUM.md` §M.9. Static nested types are implemented (`examples/nested_types.jux`, `examples/nested_types_inherited.jux`) and anonymous classes compile (`examples/stress_anonymous.jux`). Only local types (declared in a function body) are rejected, with `E0993`. `E0991` and `E0992` are not in the compiler's code table.
+- ✅ **Exceptions, `unsafe` + FFI, async streams, strings/I/O/time, testing.** See the status notes on gaps 1.2, 1.4, 1.5, 3.2 and 4.1, and the refreshed priority table below.
 
 ---
 
@@ -45,7 +46,8 @@ Gaps are grouped by category, not priority. The summary table at the end orders 
 > Equality, ordering, hashing, and formatting are **operator overrides**
 > (`operator==`, `operator hash`, `operator string`, the four ordering operators),
 > C++-style — no interface ceremony, no magic method names. The compiler
-> implements and enforces this (consistency codes E0930 ordering-completeness /
+> implements and enforces this (consistency codes E0930 operator conflict, for
+> example `operator<=>` declared alongside an individual ordering operator, and
 > E0931 equality⇔hashing). The **only** nominal foundational interfaces are
 > `Iterable<T>` / `Iterator<T>` (`next() -> T?`), specified in `JUX-CORE-LIB`
 > §K.5 and driving `for-each` desugaring — both implemented (`user_iterable.jux`).
@@ -74,9 +76,14 @@ Open questions to resolve:
 
 ---
 
-### 1.2. Error Type Hierarchy
+### 1.2. Error Type Hierarchy (✅ RESOLVED)
 
-**Priority:** Blocking
+> **Status (2026-09-15): DONE.** Specified in `JUX-EXCEPTIONS-ADDENDUM.md` and
+> implemented; gated by examples such as `checked_exceptions.jux`,
+> `runtime_exceptions.jux`, `exception_cause.jux` and `arith_exception.jux`.
+> The text below is the original gap description.
+
+**Priority:** Blocking (historical)
 **Size:** S (~100 lines)
 **Blocks:** §7.11 (error handling), §16.7 (Result-based errors), every `throws` clause in every example.
 
@@ -125,9 +132,13 @@ What remains of this section is the `jux.std` facade's removal, tracked with
 the rest of the std work rather than here.
 
 ---
-### 1.4. Strings, I/O, Time
+### 1.4. Strings, I/O, Time (✅ RESOLVED)
 
-**Priority:** Blocking
+> **Status (2026-09-15): DONE** as Phase-1 wrappers over the Rust std, not as
+> the `std.string` / `std.io` / `std.time` packages sketched below. Gated by
+> `examples/string_api.jux` and `examples/io_and_time.jux`.
+
+**Priority:** Blocking (historical)
 **Size:** M (~600 lines combined)
 **Blocks:** Practical programs.
 
@@ -158,9 +169,9 @@ the rest of the std work rather than here.
 
 ---
 
-### 1.5. Async Streams
+### 1.5. Async Streams (✅ RESOLVED)
 
-**Priority:** Blocking
+**Priority:** Blocking (historical)
 **Size:** S (~150 lines)
 **Blocks:** Real I/O code. Every networking example needs streams.
 
@@ -210,6 +221,13 @@ The `std.json` design is the critical one: does Jux have derive-style annotation
 
 **Recommendation:** Use compile-time annotations. `@Serializable` on a record auto-generates `toJson()` and `fromJson()`. This requires committing to a metaprogramming model first (see §3.4 below).
 
+> **Status (2026-09-15): partly done, by a different route.** There is no
+> `std.net` / `std.http` package. Networking and HTTP work today through
+> `rust.*` crate bindings: `examples/tcp_echo.jux` uses raw sockets from the
+> Rust std, and `examples/http_server` runs a `tiny_http` server whose routes
+> come from a `@Route` annotation read back from the compile-time
+> `jux.meta.Registry`. JSON has no example or gate yet.
+
 ---
 
 ## Category 2 — Type System Polish
@@ -249,9 +267,20 @@ Document this in the §19.1 addendum on foundational interfaces.
 
 ---
 
-### 2.3. Nested and Inner Classes
+### 2.3. Nested and Inner Classes (✅ RESOLVED)
 
-**Priority:** Important
+> **Status (2026-09-15): implemented.** The recommendation below was adopted
+> in `JUX-MISSING-DEFS-ADDENDUM.md` §M.9. Static nested types work, including
+> qualified access (`new HttpServer.Config()`), bare access from inside the
+> owner, deeper nesting and use from subclasses (`examples/nested_types.jux`,
+> `examples/nested_types_inherited.jux`). Anonymous classes are supported too
+> (`examples/stress_anonymous.jux`), which reverses the "skip" advice below.
+> Inner (non-static) classes are not a separate form, since every nested type
+> is static. Local types declared in a function body are rejected with
+> `E0993`, the only code of the old E0991 to E0993 range that the compiler
+> defines.
+
+**Priority:** Important (historical)
 **Size:** S
 **Blocks:** Idiomatic class organization.
 
@@ -331,9 +360,13 @@ Roughly Rust's `const fn` model. Powerful enough for `RingBuffer<T, N + 1>`-styl
 
 ## Category 3 — Toolchain
 
-### 3.1. Build System and Package Manager
+### 3.1. Build System and Package Manager (✅ RESOLVED)
 
-**Priority:** Blocking (for any user with multiple files)
+> **Status (2026-09-15): DONE.** `JUX-BUILD-SYSTEM-ADDENDUM.md` is written and
+> implemented: `jux.toml`, multi-module workspaces, path and git dependencies,
+> `rust.*` crate dependencies and `--target` cross-compilation.
+
+**Priority:** Blocking (historical)
 **Size:** L
 **Blocks:** Multi-file projects, dependency use, the entire ecosystem.
 
@@ -349,9 +382,9 @@ Roughly Rust's `const fn` model. Powerful enough for `RingBuffer<T, N + 1>`-styl
 
 ---
 
-### 3.2. Testing Framework
+### 3.2. Testing Framework (✅ RESOLVED)
 
-**Priority:** Blocking (no language ships without one in 2026)
+**Priority:** Blocking (historical)
 **Size:** S
 **Blocks:** CI for any Jux project.
 
@@ -423,9 +456,15 @@ This is the longest-lead spec gap. Probably v0.2.
 
 ## Category 4 — Strategic / Cross-Cutting
 
-### 4.1. FFI Safety Boundaries
+### 4.1. FFI Safety Boundaries (✅ RESOLVED)
 
-**Priority:** Blocking
+> **Status (2026-09-15): DONE.** `unsafe` is a keyword and C FFI goes through
+> `unsafe native` blocks, with `@export` for the reverse direction. Gated by
+> `examples/unsafe_basics.jux` and the `examples/ffi_*.jux` set (strings,
+> structs, enums, out-parameters and pointers, variadics, export). The
+> decision below (require `unsafe`) is the one that was taken.
+
+**Priority:** Blocking (historical)
 **Size:** M
 **Blocks:** Any C interop in real code.
 
@@ -445,9 +484,12 @@ Write a small addendum touching §3.2 (add the keyword) and §8 (specify when `u
 
 ---
 
-### 4.2. Memory Layout and ABI
+### 4.2. Memory Layout and ABI (✅ RESOLVED)
 
-**Priority:** Blocking (for FFI)
+> **Status (2026-09-15):** specified in `JUX-LAYOUT-ABI-ADDENDUM.md` and
+> `JUX-RUNTIME-ABI-ADDENDUM.md` (see the Resolved list above).
+
+**Priority:** Blocking (historical)
 **Size:** M
 **Blocks:** Real C interop, generated `.h` files (§2.3), shared libraries.
 
@@ -504,28 +546,31 @@ The order suggested for sequencing addenda:
 | # | Addendum | Priority | Size | Why now |
 |---|----------|----------|------|---------|
 | 1 | ~~§19.1 — Foundational Interfaces~~ | ✅ resolved | — | Superseded by the **operator-based** value-semantics design (`JUX-CORE-LIB` §72); only `Iterable`/`Iterator` are nominal, both implemented. See §1.1 note. |
-| 2 | §19.2 — Exception Hierarchy | Blocking | S | Every `throws` clause references undefined `Exception` |
-| 3 | §3.2 + §8 — `unsafe` and FFI Boundaries | Blocking | M | Decide before any real FFI work |
-| 4 | §18.6 — Async Streams | Blocking | S | Needed for real I/O examples |
-| 5 | §19.3 — Collections | Blocking | M | Almost every example references `List`, `Map`, `Set` |
-| 6 | §19.4-6 — Strings, I/O, Time | Blocking | M | Practical programs |
-| 7 | §20 — Build System (`jux.toml`) | Blocking | L | Multi-file projects |
-| 8 | §21 — Testing Framework | Blocking | S | CI from day one |
-| 9 | §8.5 — Memory Layout and ABI | Blocking | M | FFI correctness |
-| 10 | §19.7 — Equality semantics (rolls into §19.1) | Blocking | — | Captured in #1 |
-| 11 | §7.x — Nested classes | Important | S | Idiomatic class organization |
+| 2 | ~~§19.2: Exception Hierarchy~~ | ✅ resolved | n/a | `JUX-EXCEPTIONS-ADDENDUM.md`, implemented and gated (§1.2) |
+| 3 | ~~§3.2 + §8: `unsafe` and FFI Boundaries~~ | ✅ resolved | n/a | `unsafe native` blocks + `@export`, `examples/ffi_*.jux` (§4.1) |
+| 4 | ~~§18.6: Async Streams~~ | ✅ resolved | n/a | `JUX-ASYNC-ADDENDUM-v2.md` §18.6, `examples/async_streams.jux` (§1.5) |
+| 5 | ~~§19.3: Collections~~ | ✅ resolved | n/a | Rust std collections under their own names, reference semantics (§1.3) |
+| 6 | ~~§19.4-6: Strings, I/O, Time~~ | ✅ resolved | n/a | Phase-1 wrappers over the Rust std (§1.4) |
+| 7 | ~~§20: Build System (`jux.toml`)~~ | ✅ resolved | n/a | `JUX-BUILD-SYSTEM-ADDENDUM.md` (§3.1) |
+| 8 | ~~§21: Testing Framework~~ | ✅ resolved | n/a | `JUX-TESTING-ADDENDUM.md`, `jux test` (§3.2) |
+| 9 | ~~§8.5: Memory Layout and ABI~~ | ✅ resolved | n/a | `JUX-LAYOUT-ABI-ADDENDUM.md`, `JUX-RUNTIME-ABI-ADDENDUM.md` (§4.2) |
+| 10 | ~~§19.7: Equality semantics (rolls into §19.1)~~ | ✅ resolved | n/a | Operator overrides, E0931 (§1.1, §2.2) |
+| 11 | ~~§7.x: Nested classes~~ | ✅ resolved | n/a | Static nested types + anonymous classes (§2.3) |
 | 12 | §x — Operator overloading | Important | S | Math/vector libraries |
 | 13 | §19.8 — Reflection (compile-time) | Important | M | Serialization, frameworks |
 | 14 | §x — Const evaluation | Important | M | Const generics in embedded |
 | 15 | §22 — Diagnostics spec | Important | S | Reproducible tooling |
 | 16 | §x — Edition model | Important | S | Long-term ecosystem |
-| 17 | §19.9-11 — Networking/HTTP/JSON | Important | L | Servers |
+| 17 | §19.9-11 — Networking/HTTP/JSON | ◐ partial | L | Networking and HTTP work through `rust.*` crates (`examples/tcp_echo.jux`, `examples/http_server`); JSON open (§1.6) |
 | 18 | §x — Macros / annotation processing | Important | L | Derive-style annotations |
 | 19 | §x — Pattern matching extensions | Nice-to-have | S | Ergonomics |
 | 20 | §x — Doc generator output | Nice-to-have | S | Discoverability |
 | 21 | §x — IDE / LSP commitment | Nice-to-have (for spec) | S | Adoption |
 
-Items 1-9 are the v0.1 critical path. Items 10-18 fill out v0.2. Items 19-21 are polish.
+Items 1-9 were the v0.1 critical path, and all of them are resolved as of
+2026-09-15. Items 10-18 fill out v0.2. Items 19-21 are polish. The rows for
+items 12 to 21 were not re-audited in that pass, so treat their priorities as
+the original plan rather than current status.
 
 ---
 

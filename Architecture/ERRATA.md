@@ -603,6 +603,138 @@ works, and `new Node[n]` of a class is `E0458` (§5.5) with that advice.
 
 ---
 
+## E20. Structs are value types
+
+**Conflict.** JUX-LANG-V1 §5.2 and §7.6 define `struct` as a stack-allocated
+value type copied on assignment, but §5.5 calls "an ordinary struct" a reference
+type, "exactly like a class", and the grammar's Phase-1 note routes `struct`
+through the class node with value semantics "a later turn". Today a struct is a
+shared handle.
+
+**Resolution.** §7.6 is normative. A `struct`:
+
+- is a value: assignment, argument passing, return and storage into a field,
+  array or collection each COPY it. A class-typed field inside a struct is a
+  handle, so the copy shares that object (a shallow copy, as C# does);
+- lowers to a plain Rust `struct` deriving `Clone`, plus `Copy` when every field
+  is `Copy`; it is never behind `Rc<RefCell>`;
+- has no identity (`===` on a struct is `E0442`) and no inheritance (`extends`
+  on a struct is `E0423`); it may `implement` interfaces, and a struct stored in
+  an interface-typed slot is copied into it;
+- gets an implicit constructor taking every field in declaration order when it
+  declares none (`new Point(3.0, 4.0)`), in addition to explicit constructors;
+  a field with an initializer may be omitted from the positional form only by
+  declaring a constructor;
+- gets `operator==`, `operator hash` and `operator string` derived exactly as a
+  record does (OPERATORS §O.3.2), unless a field type lacks the operator;
+- has a default value (`new Point[4]`) when every field has one (§5.5);
+- has public fields by default, and may declare methods and a `drop` block.
+
+`@layout(c)` structs (LAYOUT-ABI §L.1.2) are the same value type with C layout.
+
+**Spec status:** §5.5 and the grammar's Phase-1 note are corrected to point here.
+
+---
+
+## E21. Construction order with field initializers hoisted
+
+**Conflict.** JUX-LANG-V1 §7.3.1 runs every field initializer of the whole
+hierarchy before any constructor body (a deliberate divergence from Java).
+`JUX-SEMANTICS-ADDENDUM.md` §S.4.4 lists field initializers per class after the
+super call, and `JUX-MISSING-DEFS-ADDENDUM.md` §M.1.4 runs a class's constructor
+body BEFORE its `init` blocks, contradicting §M.1.2.
+
+**Resolution.** For `new C(args)`:
+
+1. Every field initializer of the hierarchy runs, base class first, each class
+   in textual order.
+2. For each class from the root down: its `init` blocks in textual order, then
+   its constructor body (with `super(...)` / `this(...)` resolved first, as the
+   constructor's statement zero).
+
+A virtual call made from a base constructor dispatches to the subclass override
+and sees the subclass's initialized fields, but the subclass's `init` blocks and
+constructor body have NOT run yet. A class that declares no constructor gets the
+implicit one, which still runs its parent's constructor chain.
+
+**Spec status:** §S.4.4 and §M.1.4 are corrected to match §7.3.1.
+
+---
+
+## E22. An auto-property with no initializer is nullable, including primitives
+
+**Conflict.** `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.1.2 says an
+uninitialized `int` property defaults to `0`; `JUX-MISSING-DEFS-ADDENDUM.md`
+§M.7.3.1 says it is implicitly `int?` and reads `null`.
+
+**Resolution.** §M.7.3.1 is normative: no initializer (or `= null`) makes the
+property `T?`, for primitives too. `Count = Count + 1` on such a property is a
+Jux type error (`E0410`/`E0418`), and `= 0` gives a non-nullable `int`.
+
+**Spec status:** §P.1.2 is corrected.
+
+---
+
+## E23. The borrow model is the runtime-checked shared handle
+
+**Conflict.** JUX-LANG-V1 §6.3, §6.4, §6.9 and `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.7
+describe a static borrow checker with compile errors for conflicting borrows,
+use-after-move and override mutability changes. `JUX-DIAGNOSTICS-ADDENDUM.md`
+records the decision that Jux has no user-visible borrow checker: every class is
+a shared handle (§CR), aliasing is the normal case, and conflicting mutation is
+caught at run time by the handle's cell.
+
+**Resolution.** The diagnostics decision is normative. §6.3/§6.4/§6.9 and §T.7
+describe a representation Jux does not use; their compile errors do not reject
+programs. Where a static check is cheap and certain it may be reported as a
+warning. Structs (E20) are copied, not borrowed, so they add no borrow rules.
+
+**Spec status:** §T.7 and V1 §6.3/§6.4/§6.9 carry a pointer to this entry.
+
+---
+
+## E24. Collection combinators live on `Iterable<T>`, not on `Vec`
+
+**Conflict.** JUX-LANG-V1 §7.9 shows `users.map(...)`, `.filter(...)` and
+`.reduce(...)` on a list, while the standard library is Rust's std with Rust's
+names, and `JUX-CORE-LIB-ADDENDUM.md` §K.5 puts the combinators on the Jux
+`Iterable<T>` protocol.
+
+**Resolution.** `Vec` and the other `rust.std` collections keep their Rust
+surface (`iter()`, `len()`, `push()`); the default combinators (`map`,
+`filter`, `reduce`, `take`, `skip`, `zip`, `chain`, `any`, `all`, `count`) are
+default methods of `Iterable<T>`, available on every Jux iterable and on
+`iter()` results.
+
+**Spec status:** §7.9's example is rewritten to that surface.
+
+---
+
+## E25. Diagnostic codes given two meanings
+
+**Conflict.** The catalog lists `E0302` as "cyclic module import", but the
+compiler has raised `E0302` for a same-package import since it was published.
+`E0908` means "dynamic linkage in the core profile" in the build system and "C++
+template without `instantiate`" in bindgen. Several addenda quote codes the
+implementation raises under another number.
+
+**Resolution.**
+
+- `E0302` keeps its published meaning, same-package import. Cyclic module
+  imports get `E0308` *(reserved)*.
+- `E0908` keeps the build-system meaning; the bindgen C++ template diagnostic is
+  `E0909` *(reserved, C++ is deferred)*.
+- The quoted numbers follow the implementation: or-pattern bindings `E0447`
+  (was `E0270`), unrelated casts `E0442` (was `E0310`), default-method conflicts
+  `E0430` (was `E0810`), protected access through a base type `E0415` (was
+  `E0830`), `@Override` on a non-override `E0426` (was `E0471`).
+- Bindgen's `E0306`, `E0907`, `W0305`, `W0306`, `W0307` join the catalog as
+  reserved rows.
+
+**Spec status:** the catalog and the addenda are corrected.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

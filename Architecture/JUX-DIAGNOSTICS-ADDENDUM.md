@@ -350,7 +350,8 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | Code     | Description                                         | Source                        |
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
-| `E0302`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
+| `E0302`  | Import of a type from the importing file's own package | Build system §B.4 / `ERRATA.md` E25 |
+| `E0308`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
 | `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) *(reserved)* | JUX-LANG-V1 §3.6 / Annotations §A.13 |
@@ -362,6 +363,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0325`  | `freestanding = true` but no `@entry` function declared *(reserved)* | Entry Points §E.6 |
 | `E0326`  | A class member named `main` with an entry-shaped signature is not `static` | Entry Points §E.1.2.2 |
 | `E0305`  | Identifier is a Rust keyword and cannot be lowered    | Bindgen §G.2                   |
+| `E0306`  | Stub declaration collides with a user declaration in the same package *(reserved)* | Bindgen §G.12 |
 
 ### Type Checking (`E0400–E0499`)
 
@@ -411,7 +413,6 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0448`  | Malformed named-argument list (unknown name, duplicate slot, positional after named) | Grammar §A.2.9 / Type system §T.3.2 |
 | `E0449`  | Default-value expression references another parameter (Phase-1 limitation; §S.1.3 full form deferred) | Semantics §S.1.3 |
 | `E0450`  | Ambiguous overload (Phase 1: overlapping constructor arity ranges) | Type system §T.3 |
-| `E0450`  | Ambiguous overload *(reserved)*                      | Type system §T.3.3            |
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
 | `E0453`  | Generic type inference has no solution (uninferable `new X<>()`) | Type system §T.4.2 |
@@ -532,7 +533,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0900`  | Backend cannot lower construct *(reserved)*                 | Pipeline §C.9.4                |
 | `E0905`  | Cannot resolve dependency *(reserved)*                      | Build system §B.5.4            |
+| `E0907`  | A `.jux.d` declaration has a body *(reserved)*               | Bindgen §G.12                  |
 | `E0908`  | Dynamic linkage unavailable in `core` profile *(reserved)*   | Build system §B.14.6           |
+| `E0909`  | C++ template referenced without `instantiate` *(reserved)*   | Bindgen §G.8.4 / `ERRATA.md` E25 |
 | `E0910`  | `init` block escapes `this` *(reserved)*                     | Missing-defs §M.1.3            |
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
@@ -583,6 +586,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0210`  | Module declares no exported symbols *(reserved)*            | Build system §B.3.4            |
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation *(reserved)* | Missing-defs §M.3 / Operators §O.9 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
+| `W0305`  | Two foreign symbols map to one Jux name; the second is renamed *(reserved)* | Bindgen §G.12 |
+| `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |
+| `W0307`  | A foreign item was skipped (macro, unmappable type) *(reserved)* | Bindgen §G.12              |
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module *(reserved)*    | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |

@@ -351,16 +351,10 @@ interface-const   = 'const' type identifier '=' expression ';'
 struct-decl       = visibility? 'struct' identifier generic-params? struct-body
 struct-body       = '{' ( field-decl | function-decl | drop-decl )* '}'
 
--- Phase-1 representation note: the parser accepts `struct-decl` and routes it
--- through the same node as `class-decl`, flagged `is_struct` (an implicitly
--- `final` class with no `extends`/`implements`). This lets struct types parse,
--- resolve, type-check, and populate the symbol table today — chiefly so
--- bindgen-generated `.jux.d` stubs of Rust structs (§G.6.3) autocomplete in Jux
--- syntax. The distinct value-type semantics of a struct (copy-on-assign, no
--- inheritance as a checked rule, lowering to a Rust `struct` rather than the
--- class handle representation) are a later turn; `is_struct` preserves the
--- origin so that turn needs no re-parse. `drop-decl` in a struct body is not yet
--- parsed (no generated stub emits one).
+-- Representation note: the parser routes `struct-decl` through the same node
+-- as `class-decl`, flagged `is_struct`. A struct is a VALUE type (`ERRATA.md`
+-- E20): copied on assignment and pass, no identity, no `extends`, lowered to a
+-- plain Rust `struct` rather than the class handle.
 
 record-decl       = visibility? 'record' identifier generic-params?
                     '(' record-component-list? ')'
@@ -787,7 +781,7 @@ or-pattern        = pattern ( '|' pattern )+
 Resolution rules:
 
 - Bindings introduced by `var`-bindings, type-patterns with name, or record/enum sub-patterns are visible in the case body and any guard.
-- Or-patterns require all alternatives to bind the same set of names with the same types (`E0270`).
+- Or-patterns require all alternatives to bind the same set of names with the same types (`E0447`).
 - A pattern is **irrefutable** if it always matches its scrutinee. Local-variable destructuring (`var (x, y) = ...`) requires an irrefutable pattern (`E0271`); switch cases admit refutable patterns.
 - Exhaustiveness checking (sealed types, ranges of integer types) follows the rules of JUX-LANG-V1 §7.5 and §6.9.7.
 
@@ -937,7 +931,7 @@ The `as` operator performs **checked or unchecked conversions** between types. P
 | Pointer → Pointer (different element types)             | `as`        | unsafe; permitted only inside `unsafe` blocks |
 | Class instance → raw `T*`                               | `as`        | unsafe        |
 
-Conversions not in this table are rejected at compile time (`E0310`).
+Conversions not in this table are rejected at compile time (`E0442`).
 
 The `=> T x` form is the **only** way to combine a type test with a binding. Plain `as` does not bind: `var d = a as Dog` either succeeds (and `d` is `Dog`) or throws.
 

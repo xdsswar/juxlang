@@ -679,7 +679,7 @@ The two places `bindgen` cannot infer a decision — C-pointer ownership (§G.7.
 | `W0305` | warning | Two foreign symbols transformed to the same Jux name; second renamed with suffix (§G.4.1) |
 | `W0306` | warning | C-pointer ownership defaulted to `borrow`; specify `ownership` in `jux.toml` to silence (§G.7.5) |
 | `E0907` | error  | A `.jux.d` declaration has a non-elided body (stubs must be signature-only) |
-| `E0908` | error  | A C++ template was referenced without an explicit `instantiate` entry (§G.8.4) |
+| `E0909` | error  | A C++ template was referenced without an explicit `instantiate` entry (§G.8.4) |
 | `W0307` | warning | A foreign item was skipped (Rust macro, un-mappable type); listed for visibility (§8.2) |
 
 `E0907` is the one stub-specific structural check: a `.jux.d` file whose function has a `{ ... }` body rather than `;` is rejected — bodies belong in the foreign implementation, not the stub.

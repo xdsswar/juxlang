@@ -1,0 +1,18 @@
+base field
+child field
+base body
+child hook sees child field
+child init
+child body
+--
+base field
+base body
+quiet hook sees 7
+--
+Ok(status: 200, body: fine)
+Ok(status: 200, body: fine)
+Ok(status: 200, body: fine)
+false
+true
+2
+caught AppError boom

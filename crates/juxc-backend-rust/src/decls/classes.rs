@@ -1337,6 +1337,13 @@ impl RustEmitter {
         if !has_to_string {
             self.emit_identity_display(name, true, &class_decl.generic_params);
         }
+        // §O.2.6 / §O.4.1: a class that declares no `operator==` compares by
+        // identity, and hashes by identity, so `a == b` works and the object
+        // can be a set element or a map key. A class (or an ancestor) with
+        // its own `==`, `<=>` or `hash` keeps those.
+        if !self.class_chain_declares_equality(class_decl) {
+            self.emit_identity_eq_hash(name, &class_decl.generic_params);
+        }
         if class_decl.generic_params.is_empty() {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(name, op);

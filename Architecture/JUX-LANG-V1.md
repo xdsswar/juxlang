@@ -603,7 +603,7 @@ A `new T[n]` expression whose value is not going into a slot declared `T[N]` pro
 - for a record, every component at its own default value;
 - for a `@layout(c)` struct, every field at its initializer when it has one and at its own default value otherwise, which for a struct with no initializers is the all-zero value a C program expects.
 
-A class, an ordinary struct (a reference type, exactly like a class), an interface and a function type have no default value, and neither does an enum whose every variant carries a payload, or a record with a component of any of these. `new T[n]` of such a type is `E0458`: there is no object to put in the elements, and Jux does not invent one. List the elements instead (`new Shape[]{a, b}`), or collect them in a `Vec<Shape>` as they are made.
+A class, a struct with a field that has no default value (a struct is a value type, `ERRATA.md` E20), an interface and a function type have no default value, and neither does an enum whose every variant carries a payload, or a record with a component of any of these. `new T[n]` of such a type is `E0458`: there is no object to put in the elements, and Jux does not invent one. List the elements instead (`new Shape[]{a, b}`), or collect them in a `Vec<Shape>` as they are made.
 
 ```java
 Pt[] points = new Pt[4];          // @layout(c) struct: four {0, 0}
@@ -863,6 +863,8 @@ This matches Java's intuition: primitives are values, objects are references. Th
 
 ### 6.3. Mutation
 
+> **Superseded by `ERRATA.md` E23.** Classes are runtime-checked shared handles; the borrow errors this section describes do not reject programs.
+
 Methods do not declare whether they mutate `this` — the compiler infers this from the body. If a method assigns to a field of `this` (or calls another mutating method on `this`), it requires exclusive access to the receiver. Otherwise it requires only shared access.
 
 ```java
@@ -1016,6 +1018,8 @@ public void describe(Token t) {
 For sealed types, the compiler knows the complete set of implementers, so the mutation union is exact and the optimizer can devirtualize.
 
 ### 6.4. Move Semantics
+
+> **Superseded by `ERRATA.md` E23.** Classes are runtime-checked shared handles; the borrow errors this section describes do not reject programs.
 
 Ownership transfers in three situations:
 
@@ -1245,6 +1249,8 @@ This design accepts two principled limitations to keep the language simple:
 The combination still produces faster code than Java (no GC pauses, no JIT warmup, no boxing) while being safer than C/C++ (no UB, no use-after-free).
 
 ### 6.9. Borrowing Across Inheritance
+
+> **Superseded by `ERRATA.md` E23.** Classes are runtime-checked shared handles; the borrow errors this section describes do not reject programs.
 
 This section specifies how the borrow checker treats values whose static type is a class participating in a hierarchy. The rules are designed so that no upcast, no virtual dispatch, and no `super` call can produce a borrow-check failure that requires the user to think about inheritance.
 
@@ -1836,7 +1842,7 @@ public class Dog extends Animal {
 }
 ```
 
-The `@Override` annotation is recommended on every override. The compiler emits a warning (`W0470`) for an override missing it, and an error (`E0471`) if the method below claims `@Override` but doesn't actually override anything.
+The `@Override` annotation is recommended on every override. The compiler emits a warning (`W0470`) for an override missing it, and an error (`E0426`) if the method below claims `@Override` but doesn't actually override anything.
 
 #### 7.4.2. Virtual Methods and Mutation Inference
 
@@ -2591,11 +2597,11 @@ public (int, int) -> int makeAdder(int base) {
 // Async function type
 public () async -> String taskFactory();
 
-// Higher-order methods on collections
+// Higher-order methods on iterables (ERRATA E24: `Iterable<T>` default methods)
 var users = new Vec<User>();
-var names = users.map(u -> u.name);                     // Vec<String>
-var adults = users.filter(u -> u.age >= 18);
-var totalAge = users.reduce(0, (acc, u) -> acc + u.age);
+var names = users.iter().map(u -> u.name);                     // Iterable<String>
+var adults = users.iter().filter(u -> u.age >= 18);
+var totalAge = users.iter().reduce(0, (acc, u) -> acc + u.age);
 
 // Method references
 users.forEach(User::greet);
@@ -4639,8 +4645,8 @@ The following are unresolved and require further design work. (Items resolved by
 // File: main.jux
 package com.example.zoo;
 
-import std.io.print;
-import std.collections.List;
+// No imports: `Vec` and `HashMap` (Rust's std collections) and `print` are in
+// scope in every file.
 
 public sealed abstract class Animal permits Dog, Cat, Bird {
     protected String name;
@@ -4658,6 +4664,7 @@ public sealed abstract class Animal permits Dog, Cat, Bird {
     }
 
     public String getName() { return name; }
+    public int getAge() { return age; }
 }
 
 public interface Trainable {
@@ -4685,8 +4692,10 @@ public final class Dog extends Animal implements Trainable {
 
     @Override
     public void learn(String command) {
-        tricks.add(command);
+        tricks.push(command);
     }
+
+    public int trickCount() { return tricks.len(); }
 }
 
 public final class Cat extends Animal {
@@ -4713,25 +4722,49 @@ public final class Bird extends Animal {
 
 // Top-level entry: this file is named main.jux, so these statements run at start.
 var zoo = new Vec<Animal>();
-zoo.add(new Dog("Rex", age: 3));
-zoo.add(new Cat("Whiskers"));
-zoo.add(new Bird("Tweety", age: 1));
+var ages = new HashMap<String, int>();
+zoo.push(new Dog("Rex", age: 3));
+zoo.push(new Cat("Whiskers"));
+zoo.push(new Bird("Tweety", age: 1));
 
-// Teach Rex some tricks (only Dogs are Trainable)
 for (var animal : zoo) {
     animal.introduce();
     animal.speak();
+    ages.insert(animal.getName(), animal.getAge());
 
+    // Only Dogs are Trainable: teach Rex some tricks.
     if (animal => Dog d) {
-        d.learn("sit");
-        d.learn("roll over");
+        var commands = new Vec<String>();
+        commands.push("sit");
+        commands.push("roll over");
+        d.learnAll(commands);
+        print($"${d.getName()} knows ${d.trickCount()} tricks");
     }
 }
 
-print("Zoo has " + zoo.size() + " animals");
+print("Zoo has " + zoo.len() + " animals");
+
+var rexAge = ages.get("Rex");        // int? : null when the key is missing
+if (rexAge != null) {
+    print($"Rex is $rexAge");
+}
 ```
 
-This program exercises: top-level statements, sealed inheritance hierarchies (with the new exact mutation analysis from §6.9.7), interfaces with default methods, abstract classes, record-style constructors with default arguments, polymorphism through a `Vec<Animal>`, type-test pattern matching with `=>`, and the borrow checker quietly enforcing safety throughout.
+Running it with `jux run main.jux` prints:
+
+```
+I am Rex, age 3
+Rex says woof
+Rex knows 2 tricks
+I am Whiskers, age 0
+Whiskers says meow
+I am Tweety, age 1
+Tweety sings
+Zoo has 3 animals
+Rex is 3
+```
+
+This program exercises: top-level statements, sealed inheritance hierarchies (with the new exact mutation analysis from §6.9.7), interfaces with default methods, abstract classes, constructors with default and named arguments, polymorphism through a `Vec<Animal>`, the Rust std collections under their own names (`Vec` with `push`/`len`, `HashMap` with `insert`/`get`), a nullable map lookup narrowed by a `null` check, type-test pattern matching with `=>`, string interpolation, and the borrow checker quietly enforcing safety throughout.
 
 ---
 

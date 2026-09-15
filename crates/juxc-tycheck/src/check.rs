@@ -2111,6 +2111,30 @@ impl<'a> Checker<'a> {
         // never enforced: a lowercase-initial property name compiles
         // unchanged with this suppressible warning.
         for prop in &class.properties {
+            // §P.1.3 / §M.7.7: a setter may be as visible as its property or
+            // less, never more. `private int Hidden { get; public set; }`
+            // would hand every caller a write to a value most of them cannot
+            // even read.
+            if let Some(setter) = &prop.setter {
+                if let Some(setter_vis) = setter.visibility {
+                    if visibility_rank(setter_vis) > visibility_rank(prop.visibility) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0972_PropertyAccessorVisibility,
+                                format!(
+                                    "the setter of property `{}` is `{}`, which is more visible than the \
+                                     property itself (`{}`) -- a setter may only narrow its property's \
+                                     visibility",
+                                    prop.name.text,
+                                    visibility_word(setter_vis),
+                                    visibility_word(prop.visibility),
+                                ),
+                            )
+                            .with_span(setter.span),
+                        );
+                    }
+                }
+            }
             let starts_lower = prop
                 .name
                 .text
@@ -3469,6 +3493,28 @@ impl<'a> Checker<'a> {
         ) else {
             return;
         };
+        // §S.2.5: the bitwise operators are for integers. On two `bool`s they
+        // would be a non-short-circuiting `&&`/`||`, which reads as a typo of
+        // the logical operator and is refused.
+        if matches!(b.op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+            && l == Primitive::Bool
+            && r == Primitive::Bool
+        {
+            let (word, logical) = match b.op {
+                BinaryOp::BitAnd => ("&", "&&"),
+                BinaryOp::BitOr => ("|", "||"),
+                _ => ("^", "!="),
+            };
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!("the bitwise operator `{word}` does not apply to `bool` operands (§S.2.5)"),
+                )
+                .with_span(b.span)
+                .with_help(format!("use the logical operator `{logical}`")),
+            );
+            return;
+        }
         if crate::ty::promote_numeric(l, r) != crate::ty::NumericPromotion::NoCommonType {
             return;
         }
@@ -3663,6 +3709,24 @@ impl<'a> Checker<'a> {
                 // object. Any other write (a method, external code, another
                 // instance, a static method) is rejected. Covers plain `=`,
                 // compound `+=`, and desugared `++`/`--` (all `Stmt::Assign`).
+                // A record is immutable (JUX-LANG-V1 §7.6): its components are
+                // set once by its constructor, and a changed copy comes from
+                // `with(...)`.
+                if let Some((record, component)) = self.record_component_write(&a.target) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0465_FinalFieldReassigned,
+                            format!(
+                                "cannot assign to `{component}`: `{record}` is a record, and a \
+                                 record's components cannot change after construction (§7.6)",
+                            ),
+                        )
+                        .with_span(a.span)
+                        .with_help(format!(
+                            "make a changed copy instead: `x.with({component}: value)`"
+                        )),
+                    );
+                }
                 if let Some(field) = self.final_field_assign_violation(&a.target) {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -5241,6 +5305,44 @@ impl<'a> Checker<'a> {
         self.symbols
             .lookup_method(name, &f.field.text)
             .is_some_and(|(m, _)| m.is_property)
+    }
+
+    /// `(record, component)` when `target` writes a component of a record
+    /// value: `v.x = ...` on a record-typed receiver, or a bare component name
+    /// inside one of the record's own methods.
+    fn record_component_write(&self, target: &juxc_ast::Expr) -> Option<(String, String)> {
+        let bare = |fqn: &str| fqn.rsplit('.').next().unwrap_or(fqn).to_string();
+        match target {
+            Expr::Field(f) => {
+                let Ty::User { name, .. } = infer_expr(&f.object, &self.env, self.symbols) else {
+                    return None;
+                };
+                let (fqn, record) = self
+                    .symbols
+                    .records
+                    .get_key_value(&name)
+                    .or_else(|| self.symbols.records.iter().find(|(k, _)| k.rsplit('.').next() == Some(name.as_str())))?;
+                record
+                    .components
+                    .iter()
+                    .any(|c| c.name == f.field.text)
+                    .then(|| (bare(fqn), f.field.text.clone()))
+            }
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = &qn.segments[0].text;
+                if self.env.lookup(name).is_some() {
+                    return None;
+                }
+                let current = self.env.current_class.as_deref()?;
+                let record = self.symbols.records.get(current)?;
+                record
+                    .components
+                    .iter()
+                    .any(|c| &c.name == name)
+                    .then(|| (bare(current), name.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// When `target` is a **disallowed** write to a `final`/`const` field,
@@ -9493,6 +9595,29 @@ impl<'a> Checker<'a> {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// How widely a visibility modifier exposes a member, for comparing two of
+/// them: `public` above `protected` above package access above `private`.
+/// `internal` (module-wide) sits with `protected`, both wider than a package.
+fn visibility_rank(v: juxc_ast::Visibility) -> u8 {
+    match v {
+        juxc_ast::Visibility::Public => 4,
+        juxc_ast::Visibility::Protected | juxc_ast::Visibility::Internal => 3,
+        juxc_ast::Visibility::Package => 2,
+        juxc_ast::Visibility::Private => 1,
+    }
+}
+
+/// The source spelling of a visibility, `package` for the unwritten one.
+fn visibility_word(v: juxc_ast::Visibility) -> &'static str {
+    match v {
+        juxc_ast::Visibility::Public => "public",
+        juxc_ast::Visibility::Protected => "protected",
+        juxc_ast::Visibility::Internal => "internal",
+        juxc_ast::Visibility::Package => "package",
+        juxc_ast::Visibility::Private => "private",
+    }
+}
 
 /// Whether a declared return type is a pointer to `void`.
 fn return_is_void_pointer(rt: &juxc_ast::ReturnType) -> bool {

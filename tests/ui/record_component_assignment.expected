@@ -1,0 +1,3 @@
+record_component_assignment.jux:2:27: [E0465] error: cannot assign to `x`: `Vector3` is a record, and a record's components cannot change after construction (§7.6)
+record_component_assignment.jux:7:5: [E0465] error: cannot assign to `x`: `Vector3` is a record, and a record's components cannot change after construction (§7.6)
+record_component_assignment.jux:12:11: [E0410] error: the bitwise operator `&` does not apply to `bool` operands (§S.2.5)

@@ -971,6 +971,12 @@ struct RustEmitter {
     /// same way. Cleared inside nested try closures (their own
     /// machinery owns control flow there).
     pub(crate) in_catch_arm: bool,
+    /// The catch binder, and how many `__parent` steps it was sliced by,
+    /// when the arm matched a SUBCLASS of the caught type and its body
+    /// rethrows the binder. `throw e;` then puts the slice back into the
+    /// whole payload and rethrows that, so an outer `catch (AppError a)` still
+    /// matches (§X.2.2).
+    pub(crate) catch_rethrow: Option<(String, usize)>,
     /// True while emitting an enum's `&self` method body. A
     /// `switch (this)` there matches on the borrowed receiver, so
     /// payload binders come out `&T` — the scrutinee emission clones
@@ -4826,6 +4832,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             pending_method_suffix: None,
             pending_decl_suffix: None,
             in_catch_arm: false,
+            catch_rethrow: None,
             in_enum_method: false,
             current_switch_enum: None,
             test_mode: false,

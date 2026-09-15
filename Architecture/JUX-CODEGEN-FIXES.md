@@ -291,7 +291,12 @@ Thread every binding through a `to_rust_ident()` helper that emits the `r#match`
 **Acceptance criteria.**
 
 - [x] All three payload kinds (none / tuple / record) produce a `Display` arm that prints `Variant`, `Variant(v1, v2, …)`, or `Variant(field1: v1, field2: v2, …)` respectively, matching `JUX-LANG-V1.md` §7.7.2.
-- [x] A test enum with a record-variant field named `match` (or any other Rust keyword) compiles and prints correctly.
+- [ ] A test enum with a record-variant field named `match` (or any other Rust keyword) compiles and prints correctly.
+      *Not yet verified (2026-09-15).* This box was ticked without a test
+      behind it. `examples/rust_keyword_names.jux` covers keyword-named class
+      fields, methods, parameters and locals, but no example or gate exercises
+      an enum record-variant whose field is a Rust keyword. Add one before
+      ticking this again.
 - [x] The `Event` test case above produces exactly the three expected output strings.
 
 ---
@@ -512,8 +517,9 @@ abstract interface methods are skipped (no trait-default body to forward
 to). Wired into both the wrapper class path and the legacy non-wrapper
 class path, beside each inherent-impl close.
 
-Regression: `examples/interface_default_inherit.jux` +
-`bin/jux/tests/interface_default_inherit.rs`. Behavior already specified
+Regression: `examples/interface_default_inherit.jux`, gated by its exact
+output in `tests/expected/examples/interface_default_inherit.expected`
+(checked by `bin/jux/tests/run.rs`). Behavior already specified
 in §7.4.3 — this was a pure codegen gap, no spec change.
 
 ---
@@ -577,7 +583,8 @@ the §G.9.2 call-site-borrow mechanism. A self-aliasing call
 avoid `E0502`. Constructors are excluded (their params forward into owned
 fields — the opposite of pass-by-reference).
 
-Regression: `examples/collection_pass_by_ref.jux` +
-`bin/jux/tests/collection_pass_by_ref.rs`.
+Regression: `examples/collection_pass_by_ref.jux`, gated by its exact
+output in `tests/expected/examples/collection_pass_by_ref.expected`
+(checked by `bin/jux/tests/run.rs`).
 
 *End of codegen fixes addendum.*

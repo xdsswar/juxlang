@@ -637,14 +637,15 @@ fn interface_constant_scope() {
 #[test]
 fn static_collection() {
     // A mutable `static` whose payload is a collection handle, and the
-    // Java field-initializer order around it.
+    // construction order around it: every field initializer of the hierarchy
+    // before any constructor body (JUX-LANG-V1 §7.3.1, ERRATA E21).
     common::expect_output(
         "static_collection",
         "static-collection",
         &[
             "base-field",
-            "base-ctor",
             "derived-field",
+            "base-ctor",
             "derived-ctor",
             "base-field/derived-field",
             "4",

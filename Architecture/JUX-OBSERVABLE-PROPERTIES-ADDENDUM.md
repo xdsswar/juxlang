@@ -75,12 +75,14 @@ The type is any valid Jux type. There is no wrapper type — `int` is `int`, `St
 
 ### P.1.2. Uninitialized Properties
 
-A property declared without an initializer defaults to `null` (or the zero value for
-primitives):
+A property declared without an initializer is implicitly nullable and defaults to `null`,
+primitives included (`JUX-MISSING-DEFS-ADDENDUM.md` §M.7.3.1, `ERRATA.md` E22). Give it an
+initializer to keep the non-nullable type:
 
 ```java
-public String Now { get; set; };    // null by default
-public int Count { get; set; };     // 0 by default
+public String Now { get; set; };    // String?, null by default
+public int Count { get; set; };     // int?, null by default
+public int Total { get; set; } = 0; // int, 0 by default
 ```
 
 ### P.1.3. Visibility on Accessors

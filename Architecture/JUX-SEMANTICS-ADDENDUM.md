@@ -186,7 +186,7 @@ var saturated = n.saturatingToInt();   // returns int.MAX_VALUE
 - `<<`, `>>` shift by a count taken modulo the width of the LHS type (the same rule as Java for `int`/`long`, applied uniformly here). A count at or above the width, or a negative count, is therefore never an overflow: `1L << 65` is `2` and `1L << -1` is `long.MIN_VALUE`, in a debug build and a release build alike.
 - `>>` is **arithmetic** (sign-extending) on signed integer types and **logical** (zero-extending) on unsigned types. There is no separate `>>>` operator — the type determines the behavior. This eliminates the Java footgun where `int >> n` accidentally sign-extends.
 - `~`, `&`, `|`, `^` operate on the binary representation of the value at the type's natural width.
-- Bitwise operators on `bool` are not permitted (`E0420`); use logical operators.
+- Bitwise operators on `bool` are not permitted (`E0410`); use logical operators.
 - Bitwise operators on `char` are permitted and operate on the 32-bit Unicode scalar value.
 
 ### S.2.6. Mixed-Type Arithmetic
@@ -325,7 +325,7 @@ For `new C(args)`:
 2. **Resolve super-call.** The constructor's first statement is either `this(...)` or `super(...)` (explicit) or implicit `super()` (per JUX-LANG-V1 §A.2.4 / `JUX-GRAMMAR-ADDENDUM.md`).
    - For `super(...)`: recursively initialize the superclass portion. The vtable pointer is set to point at C's vtable (not the superclass's) — so virtual calls to overridden methods from inside the superclass constructor dispatch to **C**'s overrides. Java's rule.
    - For `this(...)`: initialize via the named alternative constructor; that constructor's chain runs to completion, then we return to step 5.
-3. **Field initializers.** Field initializer expressions of class C are evaluated **in textual order** and assigned to their fields.
+3. **Field initializers.** Field initializer expressions of class C are evaluated **in textual order** and assigned to their fields. Per JUX-LANG-V1 §7.3.1 and `ERRATA.md` E21, the initializers of the WHOLE hierarchy run before any `init` block or constructor body, base class first: a base constructor that calls an override sees the subclass fields already initialized.
 4. **Init blocks.** All `init { }` blocks of class C are run, in textual order (per `ERRATA.md` E2 they run **before** the constructor body, after the parent's construction completes — Java's order).
 5. **Constructor body.** The body of `new(...)` runs.
 6. **Done.** The reference is returned to the caller.

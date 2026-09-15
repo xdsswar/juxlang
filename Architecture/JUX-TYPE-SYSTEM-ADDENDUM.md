@@ -595,6 +595,10 @@ Each `=>` binding introduces a fresh name; the original name's refinement is wha
 
 ## §T.7 — Borrow Inference Algorithm
 
+> **Superseded by `ERRATA.md` E23.** Jux has no user-visible borrow checker: classes are
+> runtime-checked shared handles (`JUX-CLASS-REPRESENTATION-ADDENDUM.md`), and the
+> compile errors below do not reject programs. The section is kept as design history.
+
 The borrow checker is the language's central technical guarantee. The user-visible model is in JUX-LANG-V1 §6 and §6.9. This section gives the algorithm.
 
 ### T.7.1. Setup
@@ -706,7 +710,7 @@ For class C implementing interfaces I₁, I₂, ..., for each method `m`:
 1. **C overrides `m` directly?** Use C's implementation. End.
 2. **A superclass of C provides `m`?** Use the superclass's implementation (Java rule: class methods win over default interface methods). End.
 3. **Exactly one of I₁..Iₙ provides a default `m`?** Use that one. End.
-4. **Multiple of I₁..Iₙ provide default `m`?** Emit `E0810`: "C must override `m`; defaults from I₁ and I₂ conflict." (No magic resolution.)
+4. **Multiple of I₁..Iₙ provide default `m`?** Emit `E0430`: "C must override `m`; defaults from I₁ and I₂ conflict." (No magic resolution.)
 5. **None provides a default and `m` is abstract?** C must override; emit `E0811` if not.
 
 ### T.8.3. Explicit Disambiguation
@@ -822,7 +826,7 @@ public class Dog extends Animal {
     public void example(Animal a, Dog d) {
         var x = name;             -- OK: this.name is protected and we are a subclass
         var y = d.name;            -- OK: d's static type is Dog (a subclass)
-        var z = a.name;            -- ERROR E0830: cannot access protected `name` through Animal type
+        var z = a.name;            -- ERROR E0415: cannot access protected `name` through Animal type
     }
 }
 ```
@@ -835,7 +839,7 @@ The check happens during name resolution / type checking:
   - The receiver's static type must be the declaring class or a subclass thereof, AND
   - The accessing context must be the declaring class, a subclass thereof, or in the declaring class's module (which gives package-style access).
 
-If both conditions fail, emit `E0830`.
+If both conditions fail, emit `E0415`.
 
 ---
 

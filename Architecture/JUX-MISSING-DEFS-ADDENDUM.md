@@ -111,13 +111,13 @@ This prevents partially-constructed objects from being observed by other code.
 
 `init` blocks of a superclass run before any `init` blocks of the subclass — they are part of the superclass's construction, which completes before the subclass's body or `init` blocks run. The full order:
 
-1. Subclass constructor's `super(...)` resolves first.
-2. Superclass field initializers run.
+1. Field initializers of the whole hierarchy run, superclass first (JUX-LANG-V1 §7.3.1).
+2. Superclass `init` blocks run.
 3. Superclass constructor body runs.
-4. Superclass `init` blocks run.
-5. Subclass field initializers run.
-6. Subclass constructor body runs.
-7. Subclass `init` blocks run.
+4. Subclass `init` blocks run.
+5. Subclass constructor body runs.
+
+`init` blocks run before their own class's constructor body, as §M.1.2 says (`ERRATA.md` E21).
 
 This matches the rule for `drop` (`JUX-SEMANTICS-ADDENDUM.md` §S.5.2), but inverted.
 

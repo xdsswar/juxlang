@@ -1,0 +1,13 @@
+public record Vector3(double x, double y, double z) {
+    public void nudge() { x = 1.0; }
+}
+
+public void main() {
+    var v = new Vector3(1.0, 2.0, 3.0);
+    v.x = 5.0;
+    var w = v.with(x: 5.0);
+    print(w.x);
+    bool a = true;
+    bool b = false;
+    print(a & b);
+}

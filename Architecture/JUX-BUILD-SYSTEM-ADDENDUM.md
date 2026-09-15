@@ -384,7 +384,7 @@ If no match is found, emit `E0301` ("name not found"). If multiple matches exist
 
 ### B.4.6. Cyclic Imports
 
-A cycle in the dependency graph between source modules is rejected (`E0302`) unless one of the modules is `@async-init` (per JUX-LANG-V1 §10.1.7). Cyclic imports across packages (rather than across source modules within a package) are always rejected.
+A cycle in the dependency graph between source modules is rejected (`E0308`) unless one of the modules is `@async-init` (per JUX-LANG-V1 §10.1.7). Cyclic imports across packages (rather than across source modules within a package) are always rejected.
 
 ---
 

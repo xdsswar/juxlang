@@ -3736,7 +3736,10 @@ fn class_without_operators_emits_no_op_method() {
         "#,
     );
     assert!(!rust.contains("__op_"), "unexpected __op_* method: {rust}");
-    assert!(!rust.contains("impl PartialEq for Plain"), "got: {rust}");
+    // §O.2.6 / §O.4.1: with no `operator==` the class compares and hashes by
+    // identity, so its `PartialEq` compares the shared cell's address.
+    assert!(rust.contains("impl PartialEq for Plain"), "identity PartialEq expected: {rust}");
+    assert!(rust.contains("std::ptr::eq("), "identity comparison expected: {rust}");
     // §O.4.1: a class WITHOUT `operator string` still prints, via the
     // identity-format Display (`Plain@<addr>`).
     assert!(
