@@ -606,20 +606,23 @@ impl RustEmitter {
             }
 
             self.w.push_str(" => ");
+            // Inside the format string the names are TEXT, printed as the user
+            // wrote them: a `r#` raw-identifier prefix belongs to Rust paths,
+            // not to output (Codegen Fix 4).
             if n == 0 {
                 self.w.push_str("write!(f, \"");
-                self.w.push_str(&to_rust_ident(&variant.name.text));
+                self.w.push_str(&variant.name.text);
                 self.w.push_str("\"),\n");
             } else {
                 self.w.push_str("write!(f, \"");
-                self.w.push_str(&to_rust_ident(&variant.name.text));
+                self.w.push_str(&variant.name.text);
                 self.w.push('(');
                 for (i, slot) in variant.payload.iter().enumerate() {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
                     if let Some(name) = &slot.name {
-                        self.w.push_str(&to_rust_ident(&name.text));
+                        self.w.push_str(&name.text);
                         self.w.push_str(": ");
                     }
                     self.w.push_str("{}");

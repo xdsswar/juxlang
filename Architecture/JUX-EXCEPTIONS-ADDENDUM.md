@@ -207,6 +207,8 @@ For `try B0 catch (E1 e1) B1 catch (E2 e2) B2 ... finally Bf`:
      - Execute `Bf` (if present), then re-throw `e`.
 4. If `Bf` itself throws while propagating an earlier exception:
    - Per `JUX-SEMANTICS-ADDENDUM.md` §S.5.3, the new exception is added to the original's `.suppressed` list. The original propagates.
+   - This applies whether the propagating exception came from `B0` with no matching catch, or was thrown by the catch body `Bᵢ` that handled it.
+5. If `Bf` completes with `return`, `break` or `continue` while an exception propagates, the jump wins and the exception is discarded. A `finally` that jumps is almost always a mistake, and the jump is what the code says.
 
 ### X.3.3. Expression Semantics
 

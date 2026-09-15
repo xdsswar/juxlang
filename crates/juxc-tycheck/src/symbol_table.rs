@@ -1562,6 +1562,10 @@ pub fn build_workspace(
     // its ancestors declare unless it redeclares one. Merged here, once the
     // chains are finite, so every later lookup of `operators` sees them.
     inherit_class_operators(&mut table);
+    // §S.4.1: a class whose static field initializers can do something
+    // observable initializes as one step on first use, like one with
+    // `static { }` blocks, so those effects run once and in textual order.
+    mark_effectful_static_initializers(&mut table);
     // Cross-class rule passes that need every class registered first:
     // final/sealed extends, final-method override checks, and
     // `@Override`-annotation verification.
@@ -2804,6 +2808,63 @@ fn check_final_method_overrides(table: &SymbolTable, diagnostics: &mut Vec<Diagn
 /// whose parent closes the loop is reported and its `extends` link is CUT, so
 /// every pass after this one sees a finite hierarchy -- reporting alone would
 /// leave them all to meet the same loop.
+fn mark_effectful_static_initializers(table: &mut SymbolTable) {
+    // Bare names of the program's own classes: constructing one runs user
+    // code. A bound Rust type (`new Vec<String>()`) does not.
+    let user_classes: std::collections::HashSet<String> = table
+        .classes
+        .iter()
+        .filter(|(_, c)| !c.is_external)
+        .map(|(fqn, _)| fqn.rsplit('.').next().unwrap_or(fqn).to_string())
+        .collect();
+    for class in table.classes.values_mut() {
+        if class.has_static_init || class.is_external {
+            continue;
+        }
+        class.has_static_init = class.fields.values().any(|f| {
+            f.is_static && f.default.as_ref().is_some_and(|e| static_initializer_has_effects(e, &user_classes))
+        });
+    }
+}
+
+/// Whether evaluating a static field initializer can be observed: it calls
+/// something, or constructs one of the program's own classes. Conservative:
+/// any expression form not listed as effect-free counts as an effect.
+fn static_initializer_has_effects(e: &juxc_ast::Expr, user_classes: &std::collections::HashSet<String>) -> bool {
+    use juxc_ast::Expr;
+    let any = |es: &mut dyn Iterator<Item = &Expr>| {
+        for x in es {
+            if static_initializer_has_effects(x, user_classes) {
+                return true;
+            }
+        }
+        false
+    };
+    match e {
+        Expr::Literal(_) | Expr::Path(_) | Expr::Lambda(_) | Expr::MethodRef(_) | Expr::This(_) => false,
+        Expr::Field(f) => static_initializer_has_effects(&f.object, user_classes),
+        Expr::Unary(u) => static_initializer_has_effects(&u.operand, user_classes),
+        Expr::Binary(b) => any(&mut [&*b.left, &*b.right].into_iter()),
+        Expr::Cast(c) => static_initializer_has_effects(&c.value, user_classes),
+        Expr::Ternary(t) => any(&mut [&*t.condition, &*t.then_branch, &*t.else_branch].into_iter()),
+        Expr::TupleLit(items, _) => any(&mut items.iter()),
+        Expr::NewArrayLit(a) => any(&mut a.elements.iter()),
+        Expr::NewArray(a) => {
+            static_initializer_has_effects(&a.size, user_classes) || a.inner_sizes.iter().any(|s| static_initializer_has_effects(s, user_classes))
+        }
+        Expr::InterpString(s) => s.segments.iter().any(|seg| match seg {
+            juxc_ast::InterpSegment::Expr(x) => static_initializer_has_effects(x, user_classes),
+            _ => false,
+        }),
+        Expr::NewObject(n) => {
+            n.class_name.segments.last().is_some_and(|s| user_classes.contains(&s.text))
+                || n.anonymous_body.is_some()
+                || any(&mut n.args.iter())
+        }
+        _ => true,
+    }
+}
+
 fn inherit_class_operators(table: &mut SymbolTable) {
     // Each class's OWN operators, snapshotted before any merge, so a chain is
     // read the same way whatever order the classes are visited in.

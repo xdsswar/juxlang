@@ -1,0 +1,59 @@
+// Three everyday shapes that used to stop at the Rust compiler.
+//
+// - A `switch` over a nullable value matches literals and `null` directly
+//   (JUX-LANG-V1 §7.5, A.3).
+// - `x in collection` works on a `Vec`, a `HashSet`, a `HashMap` key set and an
+//   array (OPERATORS §O.2.4).
+// - A record component or enum payload named with a word Rust reserves
+//   (`match`, `loop`) prints under the name the program gave it.
+
+public String answer(String? reply) {
+    return switch (reply) {
+        case "yes" | "y" -> "affirmative";
+        case "no" -> "negative";
+        case null -> "no reply";
+        default -> "unclear: " + reply;
+    };
+}
+
+public String bucket(int? score) {
+    return switch (score) {
+        case 100 -> "perfect";
+        case null -> "not graded";
+        default -> "graded";
+    };
+}
+
+public record Rule(String match, int loop) {}
+
+public enum Token { Word(String match), End }
+
+public void main() {
+    print(answer("yes"));
+    print(answer("y"));
+    print(answer("no"));
+    print(answer(null));
+    print(answer("maybe"));
+    print(bucket(100));
+    print(bucket(null));
+    print(bucket(42));
+
+    var ids = new Vec<int>();
+    ids.push(3);
+    ids.push(5);
+    print(3 in ids);
+    print(4 in ids);
+    var tags = new HashSet<String>();
+    tags.insert("red");
+    print("red" in tags);
+    var ages = new HashMap<String, int>();
+    ages.insert("ann", 31);
+    print("ann" in ages);
+    print("bob" in ages);
+    int[] primes = new int[]{2, 3, 5};
+    print(5 in primes);
+
+    print(new Rule("*.jux", 2));
+    print(Token.Word("hi"));
+    print(Token.End);
+}

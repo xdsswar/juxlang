@@ -413,6 +413,35 @@ public class IllegalStateException extends RuntimeException {
     }
 }
 "###),
+    ("exceptions/ExceptionInInitializerError.jux", r###"/**
+ * jux.std.exceptions.ExceptionInInitializerError
+ *
+ * A class's static initialization threw (JUX-SEMANTICS §S.4.1). The use
+ * that ran the initializer receives this error with the original
+ * exception as its cause; the class is then erroneous, and every later
+ * use receives a fresh one with no cause.
+ */
+package jux.std.exceptions;
+
+public final class ExceptionInInitializerError extends RuntimeException {
+    /**
+     * An initialization failure with no recorded cause.
+     */
+    public ExceptionInInitializerError(String message) {
+        super(message);
+    }
+
+    /**
+     * An initialization failure caused by `cause`.
+     */
+    public ExceptionInInitializerError(String message, Exception? cause) {
+        super(message);
+        if (cause != null) {
+            this.__causeBox = new Exception[]{cause};
+        }
+    }
+}
+"###),
     ("exceptions/IndexOutOfBoundsException.jux", r###"/**
  * jux.std.exceptions.IndexOutOfBoundsException
  *

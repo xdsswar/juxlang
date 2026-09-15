@@ -701,7 +701,17 @@ impl RustEmitter {
             // (`contains_key("k")` via `Borrow<str>`, `contains("x")`
             // via `Pattern`); any other operand borrows.
             let bare_str = is_string_literal(&b.left);
-            self.w.push_str(if is_map { ".contains_key(" } else { ".contains(" });
+            let method = if is_map { "contains_key" } else { "contains" };
+            // A collection or array is a shared handle (§6.5.1/§6.5.2); the
+            // lookup method lives on what it holds, so borrow first.
+            if let Some(borrow) = self.collection_handle_borrow(&b.right, method) {
+                self.w.push_str(borrow);
+            } else if matches!(self.receiver_ty_of(&b.right), Some(Ty::Array { .. })) && self.expr_is_collection_handle(&b.right) {
+                self.w.push_str(".borrow()");
+            }
+            self.w.push('.');
+            self.w.push_str(method);
+            self.w.push('(');
             if bare_str {
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = true; // keep the literal &str

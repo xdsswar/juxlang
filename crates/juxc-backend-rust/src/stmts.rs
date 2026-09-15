@@ -1765,13 +1765,56 @@ impl RustEmitter {
         // in both success and failure paths — and BEFORE an
         // unmatched exception resumes or a try-body `return`
         // completes (Java ordering).
-        if let Some(fin) = &t.finally {
+        let fin_closure = t.finally.as_ref().filter(|fin| {
+            !block_contains_fn_return(fin) && !block_contains_jump(fin) && !crate::analysis::block_contains_await(fin)
+        });
+        if let Some(fin) = fin_closure {
+            // **A `finally` that throws while an exception propagates does
+            // not replace it (§X.3.2).** The body becomes a closure run on
+            // both paths: on the propagating one it runs under
+            // `catch_unwind`, and what it throws is added to the original's
+            // `suppressed` list before the original resumes. A `finally`
+            // that leaves the function or a loop keeps the inline form below,
+            // since a closure cannot carry that jump.
+            let mut muts = std::collections::HashSet::new();
+            crate::analysis::collect_mutated_names(fin, &mut muts, &self.user_mut_methods);
+            let binding = if muts.is_empty() { "let" } else { "let mut" };
+            self.w.line(&format!("{binding} __jux_finally = || {{"));
+            self.w.indent_inc();
             self.emit_block_contents(fin);
+            self.w.indent_dec();
+            self.w.line("};");
+            self.w.line("if let Some(__jux_p) = __jux_unhandled {");
+            self.w.indent_inc();
+            let callee = if muts.is_empty() { "&__jux_finally" } else { "&mut __jux_finally" };
+            self.w.line(&format!(
+                "if let Err(__jux_q) = std::panic::catch_unwind(std::panic::AssertUnwindSafe({callee})) {{"
+            ));
+            self.w.indent_inc();
+            self.w.line("if let (Some(__jux_original), Some(__jux_thrown)) =");
+            self.w.line("    (crate::__jux_exception_part(&*__jux_p), crate::__jux_exception_part(&*__jux_q))");
+            self.w.line("{");
+            self.w.indent_inc();
+            // `__suppressed` is a shared array handle, so the push is seen by
+            // whoever catches the original (the payload is only borrowed here).
+            self.w.line("__jux_original.__suppressed.borrow_mut().push(__jux_thrown.clone());");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.line("std::panic::resume_unwind(__jux_p);");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.line("__jux_finally();");
+        } else {
+            if let Some(fin) = &t.finally {
+                self.emit_block_contents(fin);
+            }
+            // Resume an unmatched/uncaught exception now that `finally`
+            // ran.
+            self.w
+                .line("if let Some(__jux_p) = __jux_unhandled { std::panic::resume_unwind(__jux_p); }");
         }
-        // Resume an unmatched/uncaught exception now that `finally`
-        // ran.
-        self.w
-            .line("if let Some(__jux_p) = __jux_unhandled { std::panic::resume_unwind(__jux_p); }");
         // Complete a `return` the try body initiated. When THIS try
         // is itself nested inside another try's closure, the real
         // return threads outward as `Some(...)` again — the restored
@@ -4813,6 +4856,52 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
 /// re-return lands inside the outer closure too) and switch-statement
 /// arm blocks. Lambda bodies are SKIPPED — a `return` there belongs to
 /// the lambda, not the enclosing function.
+/// True when `block` contains a `break` or `continue` anywhere, a loop inside
+/// it included. Conservative on purpose: its one caller only needs to know
+/// that a closure is certainly safe for the block.
+pub(crate) fn block_contains_jump(block: &juxc_ast::Block) -> bool {
+    fn stmt_jumps(s: &Stmt) -> bool {
+        match s {
+            Stmt::Break(..) | Stmt::Continue(..) => true,
+            Stmt::If(i) => {
+                if block_contains_jump(&i.then_block) {
+                    return true;
+                }
+                let mut cursor = i.else_branch.as_deref();
+                while let Some(branch) = cursor {
+                    match branch {
+                        juxc_ast::ElseBranch::If(inner) => {
+                            if block_contains_jump(&inner.then_block) {
+                                return true;
+                            }
+                            cursor = inner.else_branch.as_deref();
+                        }
+                        juxc_ast::ElseBranch::Block(b) => return block_contains_jump(b),
+                    }
+                }
+                false
+            }
+            Stmt::While(w) => block_contains_jump(&w.body),
+            Stmt::DoWhile(d) => block_contains_jump(&d.body),
+            Stmt::Labeled { stmt, .. } => stmt_jumps(stmt),
+            Stmt::ForEach(f) => block_contains_jump(&f.body),
+            Stmt::ForC(f) => block_contains_jump(&f.body),
+            Stmt::Try(t) => {
+                block_contains_jump(&t.body)
+                    || t.catches.iter().any(|c| block_contains_jump(&c.body))
+                    || t.finally.as_ref().is_some_and(block_contains_jump)
+            }
+            Stmt::Block(b) | Stmt::Unsafe(b) => block_contains_jump(b),
+            Stmt::Expr(juxc_ast::Expr::Switch(sw)) => sw.arms.iter().any(|arm| match &arm.body {
+                juxc_ast::SwitchBody::Block(b) => block_contains_jump(b),
+                juxc_ast::SwitchBody::Expr(_) => false,
+            }),
+            _ => false,
+        }
+    }
+    block.statements.iter().any(stmt_jumps)
+}
+
 pub(crate) fn block_contains_fn_return(block: &juxc_ast::Block) -> bool {
     block_contains_return_where(block, &|_| true)
 }

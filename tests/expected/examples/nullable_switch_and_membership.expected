@@ -1,0 +1,17 @@
+affirmative
+affirmative
+negative
+no reply
+unclear: maybe
+perfect
+not graded
+graded
+true
+false
+true
+true
+false
+true
+Rule(match: *.jux, loop: 2)
+Word(match: hi)
+End

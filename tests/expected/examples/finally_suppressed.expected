@@ -1,0 +1,7 @@
+caught: query failed
+  suppressed: closing db failed
+caught: wrapped: lookup failed
+  suppressed: closing cache failed
+work done
+caught: closing file failed
+cleanups: 2

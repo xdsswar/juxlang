@@ -131,7 +131,12 @@ impl RustEmitter {
         let prev_enclosing = self.enclosing_class.take();
         self.enclosing_class = Some(class_decl.name.text.clone());
         let prev_has_static_init = self.emitting_class_has_static_init;
-        self.emitting_class_has_static_init = !class_decl.static_init_blocks.is_empty();
+        // Blocks, or static field initializers with effects the symbol table
+        // found (§S.4.1): either way the class initializes as one step.
+        self.emitting_class_has_static_init = !class_decl.static_init_blocks.is_empty()
+            || self
+                .lookup_class_by_bare_or_fqn(&class_decl.name.text)
+                .is_some_and(|c| c.has_static_init);
         // `int`-typed const-generic params (`<int N>`) are visible to
         // every body in the class; bare value reads of `N` emit
         // `(N as isize)` (see `const_int_params`). Restored at the end
@@ -5034,13 +5039,14 @@ impl RustEmitter {
     /// `enclosing_class` is already set by the caller, so static-field writes
     /// inside the block lower to their module-scope `LazyLock<Mutex<T>>`.
     pub(crate) fn emit_static_init_fn(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        if class_decl.static_init_blocks.is_empty() {
+        if !self.emitting_class_has_static_init {
             return;
         }
         use crate::analysis::collect_mutated_names;
         use crate::stmts::stmt_span;
         self.w.indent_inc();
-        self.w.line("fn __static_init() {");
+        // `pub`: a read of `other.pkg.Config.x` triggers it from another module.
+        self.w.line("pub fn __static_init() {");
         self.w.indent_inc();
         // Re-entrancy-safe once-latch. `Once` alone deadlocks/panics if the
         // initializer re-enters (a static block that reads a static field or
@@ -5053,10 +5059,28 @@ impl RustEmitter {
         );
         self.w
             .line("static __JUX_STATIC_GUARD: std::sync::Once = std::sync::Once::new();");
+        // Erroneous-class latch: a class whose initializer threw is never
+        // initialized again, and every later use says so.
+        self.w.line(
+            "static __JUX_STATIC_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);",
+        );
+        let failed_raise = format!(
+            "std::panic::panic_any(crate::jux::std::exceptions::ExceptionInInitializerError::new(String::from(\"class {} failed to initialize\")))",
+            class_decl.name.text
+        );
+        self.w.line(&format!(
+            "if __JUX_STATIC_FAILED.load(std::sync::atomic::Ordering::SeqCst) {{ {failed_raise} }}"
+        ));
         self.w
             .line("if __JUX_STATIC_GUARD.is_completed() || __JUX_STATIC_BUSY.with(|b| b.get()) { return; }");
         self.w.line("__JUX_STATIC_BUSY.with(|b| b.set(true));");
+        self.w.line("let mut __jux_failure = None;");
         self.w.line("__JUX_STATIC_GUARD.call_once(|| {");
+        self.w.indent_inc();
+        // The initializer's exception is caught here rather than left to
+        // unwind through `Once`, which would poison it and leave the busy flag
+        // set, so the next use would silently see a half-initialized class.
+        self.w.line("if let Err(__jux_p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {");
         self.w.indent_inc();
         // Static context: no `this`. Collect mutated locals so reassignments
         // inside the block promote to `let mut`.
@@ -5067,17 +5091,73 @@ impl RustEmitter {
             self.collect_mut_slot_locals(block, &mut muts);
         }
         self.mutated_in_fn = muts;
+        // Static field initializers and `static { }` blocks run in textual
+        // order (§S.4.1). A field's storage is lazy, so forcing it here is
+        // what runs its initializer at its place in the sequence.
+        enum Step<'a> {
+            Field(&'a juxc_ast::FieldDecl),
+            Block(&'a juxc_ast::Block),
+        }
+        let mut steps: Vec<(usize, Step)> = Vec::new();
+        for field in &class_decl.fields {
+            let runtime_storage = field.is_static
+                && (!field.is_final
+                    || self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field)));
+            if runtime_storage && field.default.is_some() {
+                steps.push((field.span.start as usize, Step::Field(field)));
+            }
+        }
         for block in &class_decl.static_init_blocks {
-            for stmt in &block.statements {
-                self.emit_source_marker(stmt_span(stmt));
-                self.w.emit_indent();
-                self.emit_stmt(stmt);
+            steps.push((block.span.start as usize, Step::Block(block)));
+        }
+        steps.sort_by_key(|(start, _)| *start);
+        for (_, step) in steps {
+            match step {
+                Step::Field(field) => {
+                    let slot = format!("{}_{}", class_decl.name.text, to_rust_ident(&field.name.text));
+                    if self.static_type_needs_thread_local(&juxc_tycheck::resolved_field_type(field)) {
+                        self.w.line(&format!("{slot}.with(|_| ());"));
+                    } else {
+                        self.w.line(&format!("std::sync::LazyLock::force(&{slot});"));
+                    }
+                }
+                Step::Block(block) => {
+                    for stmt in &block.statements {
+                        self.emit_source_marker(stmt_span(stmt));
+                        self.w.emit_indent();
+                        self.emit_stmt(stmt);
+                    }
+                }
             }
         }
         self.this_alias = prev_this;
         self.w.indent_dec();
+        self.w.line("})) {");
+        self.w.indent_inc();
+        self.w.line("__JUX_STATIC_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);");
+        self.w.line("__jux_failure = Some(__jux_p);");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
         self.w.line("});");
         self.w.line("__JUX_STATIC_BUSY.with(|b| b.set(false));");
+        // The use that ran the failing initializer gets the original exception
+        // as the cause; a thread that waited on another thread's failed
+        // attempt gets the plain error.
+        self.w.line("if let Some(__jux_p) = __jux_failure {");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.emit_exception_of_payload_closure();
+        self.w.push('\n');
+        self.w.line(&format!(
+            "std::panic::panic_any(crate::jux::std::exceptions::ExceptionInInitializerError::new__1(String::from(\"class {} failed to initialize\"), Some(__jux_exception_of(__jux_p))));",
+            class_decl.name.text
+        ));
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.line(&format!(
+            "if __JUX_STATIC_FAILED.load(std::sync::atomic::Ordering::SeqCst) {{ {failed_raise} }}"
+        ));
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

@@ -1,0 +1,56 @@
+// Class initialization (JUX-SEMANTICS §S.4.1).
+//
+// - Static field initializers and `static { }` blocks run together, once, in
+//   textual order, on the first use of the class: reading or writing a static
+//   field, calling a static method, or constructing an instance.
+// - A class whose initializer throws is erroneous. The use that ran it gets an
+//   `ExceptionInInitializerError` caused by the original exception; every
+//   later use gets a fresh one with no cause.
+
+public String note(String what) {
+    print(what);
+    return what;
+}
+
+public class Order {
+    public static String first = note("first field");
+    static { print("block runs between the fields"); }
+    public static String second = note("second field");
+    public static int uses = 0;
+}
+
+public class Settings {
+    public static String host = note("host initialized");
+    public static String port = note("port initialized");
+    public static String describe() { return host + ":" + port; }
+}
+
+public class Broken {
+    public static int limit = 10;
+    static {
+        if (limit > 5) {
+            throw new IllegalStateException("limit too high");
+        }
+    }
+    public static int read() { return limit; }
+}
+
+public void main() {
+    print("main starts");
+    Order.uses = 1;
+    print(Order.uses);
+    print(Settings.describe());
+
+    try {
+        Broken.read();
+    } catch (ExceptionInInitializerError e) {
+        print("first use: " + e.getMessage());
+        print("cause: " + e.getCause()!!.getMessage());
+    }
+    try {
+        Broken.read();
+    } catch (ExceptionInInitializerError e) {
+        print("later use: " + e.getMessage());
+        print("has cause: " + (e.getCause() != null));
+    }
+}

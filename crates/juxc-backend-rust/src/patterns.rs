@@ -37,6 +37,11 @@ impl RustEmitter {
         // "a" => … }` — rather than the owned `String` (which Rust won't
         // compare against `&str` patterns).
         let scrut_is_string = self.scrutinee_is_string(&s.scrutinee);
+        // A NULLABLE scrutinee (`String? s`, `int? n`) is an `Option`: `case
+        // null` is `None`, and every literal case is that value inside
+        // `Some`. A `String?` matches through `.as_deref()` so the literal is
+        // a `&str` pattern, as it is for a plain `String`.
+        let scrut_nullable = self.scrutinee_nullable_inner(&s.scrutinee);
         // A scrutinee typed as an interface or an open base class is a trait
         // object, and `case Ins i ->` asks for its runtime type. Rust has no
         // pattern for that, so such an arm binds the value by reference and
@@ -80,6 +85,8 @@ impl RustEmitter {
         }
         if scrut_is_string {
             self.w.push_str(".as_str()");
+        } else if matches!(scrut_nullable, Some(juxc_tycheck::Ty::String)) {
+            self.w.push_str(".as_deref()");
         }
         self.w.push_str(" {\n");
         for arm in &s.arms {
@@ -103,6 +110,8 @@ impl RustEmitter {
             };
             if runtime_type_test.is_some() {
                 self.w.push_str("ref __jux_subject");
+            } else if scrut_nullable.is_some() {
+                self.emit_nullable_scrutinee_pattern(&arm.pattern);
             } else {
                 self.emit_pattern(&arm.pattern);
             }
@@ -394,6 +403,44 @@ impl RustEmitter {
     /// True when the switch scrutinee is `String`-typed (so the `match` should
     /// be on `.as_str()` to compare against `&str` literal patterns). Mirrors
     /// [`Self::scrutinee_enum_bare`]'s type resolution.
+    /// The value type inside a nullable scrutinee (`String` for `String? s`),
+    /// or `None` when the scrutinee is not nullable.
+    fn scrutinee_nullable_inner(&self, scrutinee: &juxc_ast::Expr) -> Option<juxc_tycheck::Ty> {
+        let ty = self.expr_types.get(&crate::exprs::expr_span_of(scrutinee)).cloned().or_else(|| match scrutinee {
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                self.local_types.iter().rev().find_map(|s| s.get(&qn.segments[0].text)).cloned()
+            }
+            _ => None,
+        })?;
+        match ty {
+            juxc_tycheck::Ty::Nullable(inner) => Some(*inner),
+            _ => None,
+        }
+    }
+
+    /// A top-level case pattern against a nullable scrutinee: a non-null
+    /// literal or range sits inside `Some(...)`; `null`, `_` and bindings keep
+    /// their own shape.
+    fn emit_nullable_scrutinee_pattern(&mut self, pattern: &juxc_ast::Pattern) {
+        match pattern {
+            juxc_ast::Pattern::Literal(Literal::Null, _) => self.emit_pattern(pattern),
+            juxc_ast::Pattern::Literal(..) | juxc_ast::Pattern::Range { .. } => {
+                self.w.push_str("Some(");
+                self.emit_pattern(pattern);
+                self.w.push(')');
+            }
+            juxc_ast::Pattern::Or(alts, _) => {
+                for (i, alt) in alts.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(" | ");
+                    }
+                    self.emit_nullable_scrutinee_pattern(alt);
+                }
+            }
+            _ => self.emit_pattern(pattern),
+        }
+    }
+
     fn scrutinee_is_string(&self, scrutinee: &juxc_ast::Expr) -> bool {
         // String literal scrutinee (`switch ("x")`): `Span::DUMMY`, so it never
         // appears in `expr_types` — recognize it directly.

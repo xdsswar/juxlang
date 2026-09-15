@@ -1,0 +1,76 @@
+// A `finally` that throws while an exception is already propagating
+// (JUX-EXCEPTIONS §X.3.2).
+//
+// The original exception keeps propagating. What the `finally` threw is added
+// to the original's suppressed list, so a failing cleanup never hides the
+// failure that caused it. On the normal path there is nothing to hide, and a
+// throwing `finally` simply throws.
+
+public class Resource {
+    public String name;
+    public Resource(String name) { this.name = name; }
+    public void close() {
+        throw new IllegalStateException("closing " + name + " failed");
+    }
+}
+
+public class Stats {
+    public static int cleanups = 0;
+}
+
+public void query() {
+    var db = new Resource("db");
+    try {
+        throw new IllegalArgumentException("query failed");
+    } finally {
+        Stats.cleanups = Stats.cleanups + 1;
+        db.close();
+    }
+}
+
+public void wrapped() {
+    var cache = new Resource("cache");
+    try {
+        throw new IllegalArgumentException("lookup failed");
+    } catch (IllegalArgumentException e) {
+        throw new IllegalStateException("wrapped: " + e.getMessage());
+    } finally {
+        Stats.cleanups = Stats.cleanups + 1;
+        cache.close();
+    }
+}
+
+public void clean() {
+    var file = new Resource("file");
+    try {
+        print("work done");
+    } finally {
+        file.close();
+    }
+}
+
+public void report(Exception e) {
+    print("caught: " + e.getMessage());
+    for (var s : e.getSuppressed()) {
+        print("  suppressed: " + s.getMessage());
+    }
+}
+
+public void main() {
+    try {
+        query();
+    } catch (Exception e) {
+        report(e);
+    }
+    try {
+        wrapped();
+    } catch (Exception e) {
+        report(e);
+    }
+    try {
+        clean();
+    } catch (Exception e) {
+        report(e);
+    }
+    print("cleanups: " + Stats.cleanups);
+}

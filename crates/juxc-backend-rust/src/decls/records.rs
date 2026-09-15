@@ -360,10 +360,13 @@ impl RustEmitter {
             fmt_body.push_str(": {}");
             // A float component prints the way every Jux float does (LANG-V1
             // 3.4): `Display` wrote `Pt(x: 1, y: 2.5)` for `new Pt(1.0, 2.5)`.
+            // The label above is text; the field access is a Rust path, where a
+            // component named `match` is `r#match`.
+            let field = to_rust_ident(&comp.name.text);
             if crate::analysis::type_ref_is_float(&comp.ty) {
-                args.push(format!("crate::jux_float(self.{})", comp.name.text));
+                args.push(format!("crate::jux_float(self.{field})"));
             } else {
-                args.push(format!("self.{}", comp.name.text));
+                args.push(format!("self.{field}"));
             }
         }
         fmt_body.push(')');

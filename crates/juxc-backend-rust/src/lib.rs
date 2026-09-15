@@ -6514,6 +6514,28 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // checker won't allow a method call on a partially-moved
         // `self`).
         let throwable_fqns = self.throwable_class_fqns();
+        // `(class, __parent hops to Exception)` for every class the
+        // payload-to-`Exception` helper tries; see its emission below.
+        let exception_root: Option<String> = if self.symbols.classes.contains_key("jux.std.exceptions.Exception") {
+            Some("jux.std.exceptions.Exception".to_string())
+        } else {
+            self.symbols.find_fqn_by_bare("Exception")
+        };
+        let exception_part_arms: Vec<(String, usize)> = exception_root
+            .as_ref()
+            .map(|root| {
+                throwable_fqns
+                    .iter()
+                    .filter_map(|fqn| self.extends_chain_distance(fqn, root).map(|d| (fqn.clone(), d)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // A class's Rust path from the crate root: package-less classes sit at
+        // the root itself.
+        let self_path = |fqn: &str| match backend_fqn::fqn_package(fqn) {
+            Some(pkg) => format!("crate::{}::{}", juxc_lex::to_rust_path(pkg), backend_fqn::fqn_bare(fqn)),
+            None => format!("crate::{}", backend_fqn::fqn_bare(fqn)),
+        };
         let mut source = self.w.into_string();
         // In split mode, `async fn` / `panic_any` / `catch_unwind` may live in
         // any per-unit body file, so the Cargo-feature and panic-hook decisions
@@ -6640,6 +6662,30 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
                     "}\n",
                 ));
                 source.push_str(&wrapper);
+            }
+        }
+        // **The `Exception` part of a thrown payload** (§X.3.2). A `finally`
+        // that throws while another exception propagates records the new one
+        // on the original, and a panic payload is only `dyn Any`: exact-type
+        // downcasts, one per known exception class, find the `Exception` slice
+        // inside whichever class was thrown. Emitted once, when used.
+        let exception_part_used = source.contains("__jux_exception_part(") || split_text.contains("__jux_exception_part(");
+        if exception_part_used {
+            if let Some(root) = exception_root.clone() {
+                let root_path = self_path(&root);
+                let mut helper = String::from("\n/// The `Exception` part of a thrown payload, whichever exception class it is.\n");
+                helper.push_str(&format!(
+                    "pub fn __jux_exception_part(p: &(dyn ::std::any::Any + ::std::marker::Send)) -> Option<&{root_path}> {{\n"
+                ));
+                for (fqn, depth) in &exception_part_arms {
+                    let path = self_path(fqn);
+                    let slice: String = ".__parent".repeat(*depth);
+                    helper.push_str(&format!(
+                        "    if let Some(e) = p.downcast_ref::<{path}>() {{\n        return Some(&e{slice});\n    }}\n"
+                    ));
+                }
+                helper.push_str("    None\n}\n");
+                source.push_str(&helper);
             }
         }
         // `main.rs` first, then every per-unit body + `mod.rs` (split mode); the

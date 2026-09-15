@@ -305,7 +305,12 @@ Mere mention of the class name in a type position (e.g., declaring a variable `F
 
 The initializer runs to completion before any other thread observes the class as initialized. Synchronization is implicit — concurrent first-uses block on a single initializer execution.
 
+Class initialization runs the class's static field initializers and its `static { }` blocks **together, in textual order**, as one step. A static field declared above a block is assigned before the block runs; a block above a field runs before that field's initializer. (Java's order, JLS 12.4.2.)
+
 If a static initializer throws an exception, the class is marked **erroneous**; subsequent uses throw `ExceptionInInitializerError` immediately. The initializer is never retried. (Same as Java; same as Swift type initializers.)
+
+- The use that ran the failing initializer receives an `ExceptionInInitializerError` whose `cause` is the original exception and whose message names the class: `"class Config failed to initialize"`.
+- Every later use receives a fresh `ExceptionInInitializerError` with the same message and no cause. The static fields are never observed half-assigned from outside the initializer.
 
 ### S.4.2. Static Initializer Order Across Classes
 

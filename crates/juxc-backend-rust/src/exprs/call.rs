@@ -356,9 +356,23 @@ impl RustEmitter {
                     }
                     _ => None,
                 });
-                owner
-                    .and_then(|fqn| self.symbols.classes.get(&fqn))
-                    .is_some_and(|c| !c.is_external && c.methods.contains_key(&f.field.text))
+                // Inherited methods count: `e.getSuppressed()` on an
+                // `IllegalStateException` is declared on `Exception`, and
+                // already hands back an array handle.
+                let mut cursor = owner.and_then(|fqn| self.symbols.classes.get(&fqn));
+                let mut declared = false;
+                for _ in 0..64 {
+                    let Some(class) = cursor else { break };
+                    if class.is_external {
+                        break;
+                    }
+                    if class.methods.contains_key(&f.field.text) {
+                        declared = true;
+                        break;
+                    }
+                    cursor = class.extends_fqn.as_deref().and_then(|p| self.symbols.classes.get(p));
+                }
+                declared
             }
             _ => false,
         };
@@ -541,10 +555,10 @@ impl RustEmitter {
     /// name and sliced down to its `Exception` part -- the same thing a
     /// `catch (Exception e)` clause does, driven by the same subclass list. A
     /// payload that is no exception at all is re-raised.
-    fn emit_exception_of_payload_closure(&mut self) {
+    pub(crate) fn emit_exception_of_payload_closure(&mut self) {
         const BASE: &str = "jux.std.exceptions.Exception";
         self.w.push_str(
-            "let __jux_exception_of = |__jux_p: Box<dyn std::any::Any + Send>| -> crate::jux::std::exceptions::Exception { ",
+            "let __jux_exception_of = |__jux_p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>| -> crate::jux::std::exceptions::Exception { ",
         );
         self.w.push_str(
             "let __jux_p = match __jux_p.downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
