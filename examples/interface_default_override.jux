@@ -70,6 +70,7 @@ public class Intern extends Staff {
         this.mentor = mentor;
     }
 
+    @Override
     public String role() {
         return $"intern, mentored by ${this.mentor}";
     }

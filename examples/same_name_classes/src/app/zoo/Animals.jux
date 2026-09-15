@@ -21,6 +21,7 @@ public class Cat extends Base {
         this.lives = 9;
     }
 
+    @Override
     public String describe() {
         return "cat " + name + " with " + lives + " lives";
     }

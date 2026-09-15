@@ -513,6 +513,9 @@ pub enum Code {
     /// comparison is a `bool`, which the second cannot order against a number
     /// (Grammar §A.4 level 10).
     E0476_ChainedComparison,
+    /// E0478 -- Writing through a `? extends` wildcard (Type system §T.2.2):
+    /// the receiver holds SOME subtype, so no value is known to fit it.
+    E0478_WildcardIsReadOnly,
     /// E0477 -- `@Test` or a test hook (`@BeforeEach`, ...) on a method, or on a
     /// function that takes parameters or returns a value (Testing §TS.1).
     E0477_TestAnnotationMisplaced,
@@ -615,6 +618,9 @@ pub enum Code {
     /// `annotation`, usually a misspelling (`@Tset`). A warning, not an error:
     /// the annotation has no effect either way (ANNOTATIONS §A.12).
     W0241_UnknownAnnotation,
+    /// W0470 -- A method that overrides an inherited one without `@Override`
+    /// (JUX-LANG-V1 §7.4.1). The annotation is what makes the intent checkable.
+    W0470_MissingOverrideAnnotation,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -923,6 +929,7 @@ impl Code {
             Code::E0272_GuardNotBool             => "E0272",
             Code::E0475_AmbiguousOverload        => "E0475",
             Code::E0476_ChainedComparison        => "E0476",
+            Code::E0478_WildcardIsReadOnly       => "E0478",
             Code::E0477_TestAnnotationMisplaced  => "E0477",
             Code::E0512_VoidInInterpolation      => "E0512",
             Code::E0993_LocalTypeDeclaration    => "E0993",
@@ -938,6 +945,7 @@ impl Code {
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
+            Code::W0470_MissingOverrideAnnotation => "W0470",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",

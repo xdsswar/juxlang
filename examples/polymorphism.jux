@@ -27,13 +27,16 @@ public abstract class Mammal extends Animal {
 
 public class Dog extends Mammal {
     public Dog(String name) { super(name); }
+    @Override
     public String sound() { return $"Woof"; }
 }
 
 public class Bat extends Mammal {
     public Bat(String name) { super(name); }
+    @Override
     public int legs() { return 2; }                       // overrides Mammal.legs
     // `super.sound()` — static call to the nearest ancestor (Mammal) version.
+    @Override
     public String sound() { return $"${super.sound()} (squeak)"; }
 }
 

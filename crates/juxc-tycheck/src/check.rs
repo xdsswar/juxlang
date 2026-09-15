@@ -9675,6 +9675,54 @@ impl<'a> Checker<'a> {
     /// caller's position in the hierarchy; `subst_params`/`subst_args` carry the
     /// generic substitution in effect, so a parameter typed `T` is checked
     /// against the bound type rather than against `T` itself.
+    /// E0478 (§T.2.2): a `Vec<? extends Animal>` holds values of SOME subtype
+    /// of `Animal`, so nothing can be written into it -- not even a `Dog`, since
+    /// the receiver may be a `Vec<Cat>`. Reading is what the wildcard is for.
+    fn check_wildcard_receiver_write(
+        &mut self,
+        callee_name: &str,
+        params: &[ParamSig],
+        subst_params: &[TypeParam],
+        subst_args: &[Ty],
+        call_span: Span,
+    ) {
+        fn mentions(ty: &TypeRef, name: &str) -> bool {
+            if ty.name.segments.len() == 1 && ty.name.segments[0].text == name {
+                return true;
+            }
+            ty.generic_args.iter().any(|arg| match arg {
+                juxc_ast::GenericArg::Type(t) => mentions(t, name),
+                juxc_ast::GenericArg::Wildcard(w) => match &w.bound {
+                    Some(juxc_ast::WildcardBound::Extends(t) | juxc_ast::WildcardBound::Super(t)) => mentions(t, name),
+                    None => false,
+                },
+            })
+        }
+        for (i, tp) in subst_params.iter().enumerate() {
+            let Some(Ty::Wildcard(crate::ty::Wildcard::Extends(bound))) = subst_args.get(i) else {
+                continue;
+            };
+            if !params.iter().any(|p| mentions(&p.ty, &tp.name.text)) {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0478_WildcardIsReadOnly,
+                    format!(
+                        "`{callee_name}` takes a `{}`, and a `? extends {bound}` receiver holds values of some \
+                         unknown subtype -- nothing is known to fit it (§T.2.2)",
+                        tp.name.text,
+                    ),
+                )
+                .with_span(call_span)
+                .with_help(format!(
+                    "read through the wildcard, or declare the parameter as `{bound}` to write into it",
+                )),
+            );
+            return;
+        }
+    }
+
     fn check_call_args(
         &mut self,
         callee_name: &str,
@@ -9686,6 +9734,7 @@ impl<'a> Checker<'a> {
         subst_params: &[TypeParam],
         subst_args: &[Ty],
     ) {
+        self.check_wildcard_receiver_write(callee_name, params, subst_params, subst_args, call_span);
         // ---- variadic callee (§7.2 / §E.1.2.1) ----
         //
         // The last parameter being `T...` switches the mapping:

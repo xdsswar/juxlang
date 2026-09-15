@@ -1844,6 +1844,8 @@ public class Dog extends Animal {
 
 The `@Override` annotation is recommended on every override. The compiler emits a warning (`W0470`) for an override missing it, and an error (`E0426`) if the method below claims `@Override` but doesn't actually override anything.
 
+`W0470` covers a method that REPLACES an inherited implementation, where silently overriding the wrong method changes behaviour. Implementing an interface method is not an override in that sense (there was no implementation to replace), so it does not warn, though `@Override` is accepted and checked there too.
+
 #### 7.4.2. Virtual Methods and Mutation Inference
 
 A method participates in **dynamic dispatch** (the call's target is selected at runtime) when it is overridable per §7.4.1. Methods on `final` classes, methods marked `final` or `const`, `private` methods, and `static` methods are **statically resolved** — the compiler picks the target at compile time.

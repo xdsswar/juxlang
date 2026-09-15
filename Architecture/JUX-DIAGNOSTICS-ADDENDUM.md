@@ -428,6 +428,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
 | `E0475`  | Ambiguous overloaded call: several members apply and none is more specific | Type system §T.3.3 |
+| `E0478`  | Write through a `? extends` wildcard (read-only in `T`) | Type system §T.2.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
@@ -590,6 +591,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0210`  | Module declares no exported symbols *(reserved)*            | Build system §B.3.4            |
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation | Missing-defs §M.3 / Operators §O.9 |
 | `W0241`  | Unknown annotation: neither built in nor declared (often a misspelling) | Annotations §A.12 |
+| `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
 | `W0305`  | Two foreign symbols map to one Jux name; the second is renamed *(reserved)* | Bindgen §G.12 |
 | `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |

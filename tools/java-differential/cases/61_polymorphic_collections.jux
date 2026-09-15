@@ -7,7 +7,9 @@ public class Shape {
 public class Square extends Shape {
     private int side;
     public Square(int side) { this.side = side; }
+    @Override
     public String name() { return "square"; }
+    @Override
     public int area() { return this.side * this.side; }
 }
 
@@ -15,7 +17,9 @@ public class Rect extends Shape {
     private int w;
     private int h;
     public Rect(int w, int h) { this.w = w; this.h = h; }
+    @Override
     public String name() { return "rect"; }
+    @Override
     public int area() { return this.w * this.h; }
 }
 

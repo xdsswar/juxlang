@@ -27,11 +27,13 @@ public class Child extends Base {
     private String own = note("child field");
     init { print("child init"); }
     public Child() { print("child body"); }
+    @Override
     public void hook() { print("child hook sees " + own); }
 }
 
 public class Quiet extends Base {
     private int n = 7;
+    @Override
     public void hook() { print("quiet hook sees " + n); }
 }
 

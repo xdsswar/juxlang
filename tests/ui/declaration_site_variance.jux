@@ -1,0 +1,9 @@
+public interface Source<out T> {
+    T get();
+}
+
+public interface Sink<in T> {
+    void put(T item);
+}
+
+public void main() {}

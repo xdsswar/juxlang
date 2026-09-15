@@ -8,7 +8,7 @@
 // - The same rules hold for instance and static methods.
 
 public class Animal { public String name() { return "animal"; } }
-public class Dog extends Animal { public String name() { return "dog"; } }
+public class Dog extends Animal { @Override public String name() { return "dog"; } }
 
 public class Vet {
     public String treat(Animal a) { return "general care for a " + a.name(); }

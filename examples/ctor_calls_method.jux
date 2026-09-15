@@ -36,5 +36,6 @@ public class Base {
 public class Child extends Base {
     public int v = 7;
     public Child() { }
+    @Override
     public void show() { print(this.v); }
 }

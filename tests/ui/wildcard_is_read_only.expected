@@ -1,0 +1,1 @@
+wildcard_is_read_only.jux:9:5: [E0478] error: `push` takes a `T`, and a `? extends Animal` receiver holds values of some unknown subtype -- nothing is known to fit it (§T.2.2)

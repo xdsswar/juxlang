@@ -1577,6 +1577,7 @@ pub fn build_workspace(
     check_sealed_interface_implementers(&table, diagnostics);
     check_final_method_overrides(&table, diagnostics);
     check_override_annotations(&table, diagnostics);
+    check_missing_override_annotations(&table, diagnostics);
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
     check_interface_on_exception_class(&table, diagnostics);
@@ -2688,6 +2689,57 @@ fn class_implements_declare(table: &SymbolTable, class_sig: &ClassSig, method_na
 /// Verify every method annotated with `@Override` actually
 /// overrides a method from an ancestor class. Fires E0426 when
 /// no matching method exists in the extends chain.
+/// W0470 (§7.4.1): a method that REPLACES an inherited implementation without
+/// saying so. Overriding by accident -- a name that happens to match a parent's
+/// -- changes what every base-typed call does, and the annotation is what makes
+/// the intent checkable (E0426 covers the opposite mistake).
+///
+/// Implementing an interface method is not an override in this sense: there was
+/// no implementation to replace, so it does not warn.
+fn check_missing_override_annotations(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    for (child_name, child) in &table.classes {
+        if child.is_external {
+            continue;
+        }
+        for (method_name, method) in &child.methods {
+            if method.is_static || has_annotation(&method.annotations, "override") {
+                continue;
+            }
+            let mut cursor = child.extends_fqn.clone();
+            let mut depth = 0usize;
+            while let Some(ancestor_name) = cursor {
+                if depth > 64 {
+                    break;
+                }
+                let Some(ancestor) = table.classes.get(&ancestor_name) else { break };
+                // An ABSTRACT ancestor method has no body to replace: the
+                // subclass is required to provide one, which is not the
+                // accident this warning is about.
+                let replaces = ancestor.methods.get(method_name).is_some_and(|m| {
+                    !m.is_static && !m.is_abstract && !matches!(m.visibility, juxc_ast::Visibility::Private)
+                });
+                if replaces {
+                    let bare = child_name.rsplit('.').next().unwrap_or(child_name);
+                    let ancestor_bare = ancestor_name.rsplit('.').next().unwrap_or(&ancestor_name);
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            code::Code::W0470_MissingOverrideAnnotation,
+                            format!(
+                                "`{bare}.{method_name}` replaces `{ancestor_bare}.{method_name}` without `@Override`",
+                            ),
+                        )
+                        .with_span(method.span)
+                        .with_help("add `@Override` above it, or rename the method if overriding was not intended"),
+                    );
+                    break;
+                }
+                cursor = ancestor.extends_fqn.clone();
+                depth += 1;
+            }
+        }
+    }
+}
+
 fn check_override_annotations(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (child_name, child) in &table.classes {
         for (method_name, method) in &child.methods {

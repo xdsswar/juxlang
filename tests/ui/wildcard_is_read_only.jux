@@ -1,0 +1,16 @@
+public class Animal {}
+public class Dog extends Animal {}
+
+public int count(Vec<? extends Animal> animals) {
+    return animals.len();
+}
+
+public void stock(Vec<? extends Animal> animals) {
+    animals.push(new Dog());
+}
+
+public void main() {
+    var pack = new Vec<Dog>();
+    pack.push(new Dog());
+    print(count(pack));
+}

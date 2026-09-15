@@ -13,7 +13,7 @@ public class Tok {
 public record Event(String topic, int day) {}
 
 public class Member { public String name() { return "member"; } }
-public class Premium extends Member { public String name() { return "premium"; } }
+public class Premium extends Member { @Override public String name() { return "premium"; } }
 
 public class Club {
     private Vec<Member> members = new Vec<Member>();

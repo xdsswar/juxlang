@@ -18,6 +18,7 @@ public class Container {
 
 public class Box extends Container {
     public Box(int v) { super(v); }
+    @Override
     public String describe() { return "box of " + this.get(); }
 }
 

@@ -20,6 +20,7 @@ public class Car extends Base {
         this.plate = plate;
     }
 
+    @Override
     public String describe() {
         return "car " + plate + " on " + wheels + " wheels";
     }

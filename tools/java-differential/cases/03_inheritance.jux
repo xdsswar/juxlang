@@ -6,10 +6,12 @@ public class Animal {
 }
 public class Dog extends Animal {
     public Dog(String n) { super(n); }
+    @Override
     public String speak() { return "woof"; }
 }
 public class Puppy extends Dog {
     public Puppy(String n) { super(n); }
+    @Override
     public String speak() { return "yip (" + super.speak() + ")"; }
 }
 public void main() {

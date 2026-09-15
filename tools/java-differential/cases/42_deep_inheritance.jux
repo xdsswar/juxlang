@@ -6,15 +6,18 @@ public class A {
 }
 public class B extends A {
     public B() {}
+    @Override
     public String who() { return "B<" + super.who() + ">"; }
 }
 public class C extends B {
     public C() {}
+    @Override
     public String who() { return "C<" + super.who() + ">"; }
     public String tagOf() { return this.tag; }
 }
 public class D extends C {
     public D() {}
+    @Override
     public String who() { return "D<" + super.who() + ">"; }
 }
 public void main() {

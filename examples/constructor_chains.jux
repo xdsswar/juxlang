@@ -52,6 +52,7 @@ class Button extends Widget {
         print($"Button() sees ${this.describe()}");
     }
 
+    @Override
     public String describe() {
         return "button " + this.id;
     }
@@ -81,6 +82,7 @@ class Square extends Polygon {
         super("square");
     }
 
+    @Override
     public String kind() {
         return "four-sided " + this.name;
     }

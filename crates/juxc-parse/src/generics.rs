@@ -45,6 +45,31 @@ impl<'a> Parser<'a> {
         if !self.at_generic_close() {
             loop {
                 let start = self.peek_span();
+                // `<out T>` / `<in T>`: declaration-site variance, which Jux
+                // does not have -- its generics are invariant and variance is
+                // written at the USE site with a wildcard (§T.2.1/§T.2.2).
+                // Reported once here, then the modifier is skipped so the rest
+                // of the declaration still parses.
+                let variance = match (self.peek(), self.tokens.get(self.pos + 1).map(|t| &t.kind)) {
+                    (TokenKind::Ident(word), Some(TokenKind::Ident(_))) if word == "out" || word == "in" => {
+                        Some(if word == "out" { "out" } else { "in" })
+                    }
+                    _ => None,
+                };
+                if let Some(word) = variance {
+                    self.diagnostics.push(
+                        juxc_diagnostics::Diagnostic::error(
+                            juxc_diagnostics::code::Code::E0200_UnexpectedToken,
+                            format!(
+                                "`{word}` on a type parameter declares variance, which Jux generics do not have: \
+                                 they are invariant, and a use site asks for variance with a wildcard \
+                                 (`Source<? extends T>` to read, `Sink<? super T>` to write)",
+                            ),
+                        )
+                        .with_span(start),
+                    );
+                    self.advance();
+                }
                 // **Const-generic parameter** (grammar §A.2.6:
                 // `generic-param = 'int' identifier | type identifier`).
                 // Shape: a primitive type name followed by the param

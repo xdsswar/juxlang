@@ -90,6 +90,8 @@ The type checker tracks which methods are available on a wildcarded type:
 - For `List<? super T>`: every method whose `T`-positions are input-only (the parameter never appears as a method return type or as the type of a read-from field).
 - Methods that mix `T` in input and output positions (e.g., `swap(T a, T b) -> (T, T)`) are unavailable through wildcards.
 
+Calling a method that takes `T` on a `? extends` receiver is `E0478`: the receiver holds values of SOME subtype, and no argument is known to be of that subtype. Read through the wildcard, or declare the parameter with the element type itself.
+
 ### T.2.3. Bounded-Wildcard Borrow Checker Interaction
 
 Per JUX-LANG-V1 §6.9.6: wildcards expose only the matching read or write API, so the borrow inference treats them as "shared-only" or "exclusive-only" respectively. Read-only-API calls require shared access; write-only-API calls require exclusive access.

@@ -1,0 +1,2 @@
+declaration_site_variance.jux:1:25: [E0200] error: `out` on a type parameter declares variance, which Jux generics do not have: they are invariant, and a use site asks for variance with a wildcard (`Source<? extends T>` to read, `Sink<? super T>` to write)
+declaration_site_variance.jux:5:23: [E0200] error: `in` on a type parameter declares variance, which Jux generics do not have: they are invariant, and a use site asks for variance with a wildcard (`Source<? extends T>` to read, `Sink<? super T>` to write)
