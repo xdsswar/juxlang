@@ -465,6 +465,16 @@ pub enum Code {
     /// (Layout-ABI §L.6.5). The pointer addresses the object's payload, whose
     /// fields it reaches; methods belong to the reference-counted handle.
     E0515_MethodThroughClassPointer,
+    /// E0516 -- `&` applied to something with no address: a literal, a call,
+    /// an arithmetic result, or a class object's field (Layout-ABI §L.6.1a).
+    E0516_AddressOfNonPlace,
+    /// E0517 -- `*` applied to a value that is not a pointer, or to a `void*`,
+    /// whose pointee has no type to read (Layout-ABI §L.6.1a).
+    E0517_DerefOfNonPointer,
+    /// E0518 -- An operation pointers do not have: stepping by a non-integer,
+    /// stepping a `void*`, adding two pointers, multiplying or dividing one,
+    /// or a bitwise operator on one (Layout-ABI §L.6.1a).
+    E0518_InvalidPointerOperation,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -871,6 +881,9 @@ impl Code {
             Code::E0513_FunctionDoesNotFitPointer => "E0513",
             Code::E0514_CapturingLambdaAsPointer => "E0514",
             Code::E0515_MethodThroughClassPointer => "E0515",
+            Code::E0516_AddressOfNonPlace        => "E0516",
+            Code::E0517_DerefOfNonPointer        => "E0517",
+            Code::E0518_InvalidPointerOperation  => "E0518",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

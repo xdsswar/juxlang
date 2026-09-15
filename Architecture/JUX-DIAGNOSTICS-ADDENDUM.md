@@ -480,6 +480,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0513`  | A function given where a function pointer is expected does not fit it: not a free function, generic, overloaded, declares `throws`, or its parameters or result do not correspond | Layout-ABI §L.6.4 |
 | `E0514`  | A lambda that captures a local, a parameter, a field or `this` is given where a function pointer is expected | Layout-ABI §L.6.4 |
 | `E0515`  | A method called through a class pointer (`(*p).get()`): the pointer reaches the object's fields, not its methods | Layout-ABI §L.6.5 |
+| `E0516`  | `&` of something that is not a place: a literal, a call, an arithmetic result, or a class object's field | Layout-ABI §L.6.1a |
+| `E0517`  | `*` on a value that is not a pointer, or on a `void*` | Layout-ABI §L.6.1a |
+| `E0518`  | An operation pointers do not have: a non-integer step, stepping a `void*`, `p + q`, `p * n`, a bitwise operator | Layout-ABI §L.6.1a |
 
 ### Lowering (`E0600–E0699`)
 

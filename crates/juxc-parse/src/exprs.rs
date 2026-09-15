@@ -377,7 +377,10 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_unary()?;
         while self.at_kw(Keyword::As) {
             self.advance(); // consume `as`
-            let ty = self.parse_type_ref()?;
+            let saved = std::mem::replace(&mut self.in_as_type, true);
+            let ty = self.parse_type_ref();
+            self.in_as_type = saved;
+            let ty = ty?;
             let span = expr_span(&expr).join(ty.span);
             expr = Expr::Cast(CastExpr {
                 value: Box::new(expr),

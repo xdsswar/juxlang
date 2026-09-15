@@ -1930,6 +1930,81 @@ fn unary_op_to_kind(op: UnaryOp) -> Option<OperatorKind> {
 ///
 /// The arithmetic rule is intentionally simple; a proper common-type
 /// rule (promoting `int + long` to `long`, etc.) lands in Phase D.
+/// Whether a type reference names a pointer to `void` (`void*`, `void**`).
+pub fn type_ref_is_void_pointer(t: &juxc_ast::TypeRef) -> bool {
+    t.ptr_depth > 0
+        && t.fn_shape.is_none()
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "void"
+}
+
+/// Whether the pointer `e` evaluates to has `void` at its base: a `void*`
+/// local, parameter, field or return value, a cast to `void*`, or a step or
+/// dereference of a deeper `void` pointer that is still a pointer. Tracked
+/// beside [`pointer_depth`] because `Ty` lowers `void` to `Unknown`.
+pub(crate) fn pointer_base_is_void(e: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> bool {
+    let class_of = |object: &Expr| match infer_expr(object, env, symbols) {
+        Ty::User { name, .. } => Some(name),
+        _ => None,
+    };
+    let returns_void = |rt: &ReturnType| match rt {
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => type_ref_is_void_pointer(t),
+        ReturnType::Void => false,
+    };
+    match e {
+        Expr::Cast(c) => type_ref_is_void_pointer(&c.ty),
+        Expr::Unary(u) if u.op == UnaryOp::Deref => {
+            pointer_depth(&u.operand, env, symbols) >= 2 && pointer_base_is_void(&u.operand, env, symbols)
+        }
+        Expr::Index(i) => pointer_depth(&i.array, env, symbols) >= 2 && pointer_base_is_void(&i.array, env, symbols),
+        Expr::Binary(b) if matches!(b.op, BinaryOp::Add | BinaryOp::Sub) => {
+            (pointer_depth(&b.left, env, symbols) > 0 && pointer_base_is_void(&b.left, env, symbols))
+                || (pointer_depth(&b.right, env, symbols) > 0 && pointer_base_is_void(&b.right, env, symbols))
+        }
+        Expr::Ternary(t) => {
+            pointer_base_is_void(&t.then_branch, env, symbols) || pointer_base_is_void(&t.else_branch, env, symbols)
+        }
+        Expr::IncDec(i) => pointer_base_is_void(&i.target, env, symbols),
+        Expr::Path(qn) if qn.segments.len() == 1 => {
+            let name = qn.segments[0].text.as_str();
+            if env.lookup(name).is_some() {
+                return env.is_void_base(name);
+            }
+            env.current_class
+                .as_deref()
+                .and_then(|c| symbols.lookup_field(c, name))
+                .is_some_and(|(f, _)| type_ref_is_void_pointer(&f.ty))
+        }
+        Expr::Field(f) => class_of(&f.object)
+            .and_then(|c| symbols.lookup_field(&c, &f.field.text))
+            .is_some_and(|(fs, _)| type_ref_is_void_pointer(&fs.ty)),
+        Expr::Call(c) if matches!(infer_expr(&c.callee, env, symbols), Ty::FnPtr { .. }) => {
+            matches!(
+                infer_expr(&c.callee, env, symbols),
+                Ty::FnPtr { return_ptr_depth, ref return_type, .. } if return_ptr_depth > 0 && matches!(**return_type, Ty::Void)
+            )
+        }
+        Expr::Call(c) => match c.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if env.lookup(name).is_some() {
+                    return false;
+                }
+                env.unqualified
+                    .get(name)
+                    .and_then(|fqn| symbols.functions.get(fqn))
+                    .or_else(|| symbols.lookup_function(name).map(|(_, f)| f))
+                    .is_some_and(|f| returns_void(&f.return_type))
+            }
+            Expr::Field(f) => class_of(&f.object)
+                .and_then(|c| symbols.lookup_method(&c, &f.field.text).map(|(m, _)| returns_void(&m.return_type)))
+                .unwrap_or(false),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// How many raw-pointer levels `e` has (`int*` is 1), or 0 for a value that is
 /// not a pointer.
 ///
@@ -1967,6 +2042,8 @@ pub(crate) fn pointer_depth(e: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> u
         Expr::Ternary(t) => {
             pointer_depth(&t.then_branch, env, symbols).max(pointer_depth(&t.else_branch, env, symbols))
         }
+        // `end++` / `--p` on a pointer is still that pointer.
+        Expr::IncDec(i) => pointer_depth(&i.target, env, symbols),
         Expr::Path(qn) if qn.segments.len() == 1 => {
             let name = qn.segments[0].text.as_str();
             if env.lookup(name).is_some() {
@@ -1983,6 +2060,14 @@ pub(crate) fn pointer_depth(e: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> u
             .and_then(|c| symbols.lookup_field(&c, &f.field.text))
             .map(|(fs, _)| fs.ty.ptr_depth)
             .unwrap_or(0),
+        // A call through a function pointer (a local, parameter or field of
+        // type `fn(...) -> void*`) yields its declared result depth.
+        Expr::Call(c) if matches!(infer_expr(&c.callee, env, symbols), Ty::FnPtr { .. }) => {
+            match infer_expr(&c.callee, env, symbols) {
+                Ty::FnPtr { return_ptr_depth, .. } => return_ptr_depth,
+                _ => 0,
+            }
+        }
         Expr::Call(c) => match c.callee.as_ref() {
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let name = qn.segments[0].text.as_str();

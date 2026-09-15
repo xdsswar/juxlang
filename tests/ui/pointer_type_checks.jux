@@ -1,0 +1,69 @@
+// Pointer types are checked (Layout-ABI §L.6.1a): pointee and depth must match
+// with no widening, `void*` converts only by a cast, `null` fits every pointer,
+// a pointer is not an integer, and `&`, `*` and pointer arithmetic apply only
+// where they mean something. The lines marked `ok` must stay silent.
+
+@layout(c)
+struct Pt {
+    public i32 x;
+    public i32 y;
+}
+
+class Box {
+    public int n = 1;
+}
+
+public unsafe long* widen(int* p) {
+    return p;
+}
+
+public unsafe int* none() {
+    return null;
+}
+
+public unsafe i32 read(i32* p) {
+    return *p;
+}
+
+public void main() {
+    int n = 7;
+    i32 small = 3;
+    double d = 1.5;
+    long m = 2;
+    var box = new Box();
+    var s = new Pt(1, 2);
+    int* outside = null;
+    long* cast = outside as long*;
+    unsafe {
+        int* ok1 = &n;
+        i32* width = &n;
+        double* other = &n;
+        int** deep = &n;
+        int* fromInt = n;
+        int toInt = ok1;
+        void* v = &n;
+        void* ok2 = &n as void*;
+        int* back = ok2;
+        int* ok3 = ok2 as int*;
+        ok1 = null;
+        ok1 = &d;
+        print(read(&n));
+        print(read(&small));
+        print(ok1 == 0);
+        long* lp = &m;
+        print(ok1 == lp);
+        print(ok1 == null);
+        int* lit = &5;
+        int* field = &box.n;
+        i32* ok4 = &s.x;
+        int bad = *n;
+        var voidRead = *ok2;
+        var step = ok1 + 1.5;
+        var voidStep = ok2 + 1;
+        var sum = ok1 + ok1;
+        var product = ok1 * 2;
+        var ok5 = ok1 + 1;
+        long ok6 = ok3 - ok1;
+        long mixed = lp - ok1;
+    }
+}

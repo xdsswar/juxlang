@@ -351,6 +351,11 @@ pub(crate) struct Checker<'a> {
     /// outside a function body, and also inside constructor bodies
     /// (constructors don't `return value;`).
     pub(crate) current_return: Option<Ty>,
+    /// Raw-pointer depth of the enclosing function's declared return type
+    /// (`int*` is 1), for the pointer check on `return` (§L.6.1a).
+    pub(crate) current_return_ptr: u8,
+    /// Whether the enclosing function returns a pointer to `void`.
+    pub(crate) current_return_void: bool,
     /// Per-expression inferred type, keyed by source [`Span`]. Populated
     /// as the checker walks each function/method/constructor body in
     /// [`Self::check_expr`] and friends. The map is moved out via
@@ -505,6 +510,8 @@ impl<'a> Checker<'a> {
             symbols,
             diagnostics,
             current_return: None,
+            current_return_ptr: 0,
+            current_return_void: false,
             expr_types: HashMap::new(),
             call_expansions: HashMap::new(),
             ctor_selections: HashMap::new(),
@@ -1084,9 +1091,14 @@ impl<'a> Checker<'a> {
                 let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
                 self.env.declare(&param.name.text, ty);
                 self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+                if crate::infer::type_ref_is_void_pointer(&param.ty) {
+                    self.env.declare_void_base(&param.name.text);
+                }
             }
             let saved = self.current_return.take();
-            self.current_return = Some(return_type_to_ty(
+            self.current_return_ptr = return_ptr_depth(&method.return_type);
+        self.current_return_void = return_is_void_pointer(&method.return_type);
+        self.current_return = Some(return_type_to_ty(
                 &method.return_type,
                 &self.env,
                 self.symbols,
@@ -1651,6 +1663,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if crate::infer::type_ref_is_void_pointer(&param.ty) {
+                self.env.declare_void_base(&param.name.text);
+            }
             // `weak` parameter (§M.14.3): validate its class type (E0455) and
             // register it so reads route through `.get()` (E0456).
             if param.is_weak {
@@ -1664,6 +1679,8 @@ impl<'a> Checker<'a> {
         self.declare_const_generic_params(&fn_decl.generic_params);
         self.check_iface_return_type(&fn_decl.return_type);
         let saved = self.current_return.take();
+        self.current_return_ptr = return_ptr_depth(&fn_decl.return_type);
+        self.current_return_void = return_is_void_pointer(&fn_decl.return_type);
         self.current_return = Some(return_type_to_ty(
             &fn_decl.return_type,
             &self.env,
@@ -2330,6 +2347,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if crate::infer::type_ref_is_void_pointer(&param.ty) {
+                self.env.declare_void_base(&param.name.text);
+            }
         }
         let saved = self.current_return.take();
         self.current_return = None; // constructors don't return values
@@ -2401,6 +2421,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if crate::infer::type_ref_is_void_pointer(&param.ty) {
+                self.env.declare_void_base(&param.name.text);
+            }
             // `weak` parameter (§M.14.3): validate class type (E0455) and
             // register so reads route through `.get()` (E0456).
             if param.is_weak {
@@ -2411,6 +2434,8 @@ impl<'a> Checker<'a> {
         self.validate_sig_return(&method.return_type, &[]);
         self.check_iface_return_type(&method.return_type);
         let saved = self.current_return.take();
+        self.current_return_ptr = return_ptr_depth(&method.return_type);
+        self.current_return_void = return_is_void_pointer(&method.return_type);
         self.current_return = Some(return_type_to_ty(
             &method.return_type,
             &self.env,
@@ -2926,8 +2951,13 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if crate::infer::type_ref_is_void_pointer(&param.ty) {
+                self.env.declare_void_base(&param.name.text);
+            }
         }
         let saved = self.current_return.take();
+        self.current_return_ptr = return_ptr_depth(&op.return_type);
+        self.current_return_void = return_is_void_pointer(&op.return_type);
         self.current_return = Some(return_type_to_ty(&op.return_type, &self.env, self.symbols));
         self.check_block(body);
         self.current_return = saved;
@@ -3399,11 +3429,19 @@ impl<'a> Checker<'a> {
                         // The erased `Ty` drops `ptr_depth`, so `compatible`
                         // would otherwise compare `int` against `<unknown>?` and
                         // wrongly reject `int* p = null;` / `RawHandle* h = null;`.
-                        let ptr_null_ok = v.ty.as_ref().is_some_and(|t| t.ptr_depth > 0)
-                            && matches!(
-                                v.init.as_ref(),
-                                Some(Expr::Literal(juxc_ast::Literal::Null))
-                            );
+                        let ptr_null_ok = match (v.ty.as_ref(), v.init.as_ref()) {
+                            // §L.6.1a: a pointer on either side is checked as a
+                            // pointer (pointee and depth, no widening), which also
+                            // lets `null` into any pointer slot.
+                            (Some(t), Some(init)) => self.check_pointer_flow(
+                                t.ptr_depth,
+                                crate::infer::type_ref_is_void_pointer(t),
+                                d,
+                                init,
+                                v.span,
+                            ),
+                            _ => false,
+                        };
                         if let Some(init) = v.init.as_ref() {
                             self.check_literal_fits(d, init, v.span);
                         }
@@ -3451,11 +3489,37 @@ impl<'a> Checker<'a> {
                     (None, Some(init)) => self.expr_ptr_depth(init),
                     (None, None) => 0,
                 };
+                let void_base = match (&v.ty, &v.init) {
+                    (Some(t), _) => crate::infer::type_ref_is_void_pointer(t),
+                    (None, Some(init)) => crate::infer::pointer_base_is_void(init, &self.env, self.symbols),
+                    (None, None) => false,
+                };
                 self.env.declare(&v.name.text, final_ty);
                 self.env.declare_pointer(&v.name.text, ptr_depth);
+                if void_base {
+                    self.env.declare_void_base(&v.name.text);
+                }
             }
 
             Stmt::Assign(a) => {
+                // `p += n` / `p -= n`: the step must be an integer (§L.6.1a).
+                if matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
+                    && self.expr_ptr_depth(&a.target) > 0
+                {
+                    let step_ty = infer_expr(&a.value, &self.env, self.symbols);
+                    let integer = match &step_ty {
+                        Ty::Primitive(p) => crate::ty::integer_bits(*p).is_some(),
+                        _ => true,
+                    };
+                    if !integer {
+                        self.push_pointer_op(
+                            &format!("a pointer steps by an integer count of elements, and this step is a `{step_ty}`"),
+                            a.span,
+                        );
+                        self.check_expr(&a.value);
+                        return;
+                    }
+                }
                 // `p += n` / `p -= n` (and `p++` as a statement) step a pointer.
                 if !self.in_unsafe
                     && matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
@@ -3546,8 +3610,13 @@ impl<'a> Checker<'a> {
                 // null;`, the FFI handle-reset idiom) — `null` is the sole `T*`
                 // literal (§L.6.1). The erased `Ty` drops `ptr_depth`, so we read
                 // the target's declared `TypeRef` to recognize the pointer slot.
-                let ptr_null_ok = matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
-                    && self.assign_target_is_raw_pointer(&a.target);
+                let ptr_null_ok = (matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
+                    && self.assign_target_is_raw_pointer(&a.target))
+                    || (a.op.is_none() && {
+                        let target_depth = self.expr_ptr_depth(&a.target);
+                        let target_void = crate::infer::pointer_base_is_void(&a.target, &self.env, self.symbols);
+                        self.check_pointer_flow(target_depth, target_void, &target_ty, &a.value, a.span)
+                    });
                 if a.op.is_none() {
                     self.check_literal_fits(&effective_target, &a.value, a.span);
                 }
@@ -3591,7 +3660,9 @@ impl<'a> Checker<'a> {
                         let found = infer_expr(expr, &self.env, self.symbols);
                         if let Some(exp) = &expected {
                             self.check_literal_fits(exp, expr, *ret_span);
-                            if !compatible(exp, &found, self.symbols) {
+                            let pointer_checked =
+                                self.check_pointer_flow(self.current_return_ptr, self.current_return_void, exp, expr, *ret_span);
+                            if !pointer_checked && !compatible(exp, &found, self.symbols) {
                                 self.diagnostics.push(
                                     Diagnostic::error(
                                         code::Code::E0410_TypeMismatch,
@@ -4279,6 +4350,9 @@ impl<'a> Checker<'a> {
                     matches!(infer_expr(&c.value, &self.env, self.symbols), Ty::FnPtr { .. });
                 if !self.in_unsafe && (c.ty.fn_pointer_shape().is_some() || from_fn_pointer) {
                     self.unsafe_pointer_op("a cast to or from a function pointer", c.span);
+                } else if !self.in_unsafe && (c.ty.ptr_depth > 0 || self.expr_ptr_depth(&c.value) > 0) {
+                    // §L.5.2 items 3-4: reinterpreting an address.
+                    self.unsafe_pointer_op("a cast to or from a raw pointer", c.span);
                 }
             }
 
@@ -4343,6 +4417,11 @@ impl<'a> Checker<'a> {
                         .with_span(u.span),
                     );
                 }
+                match u.op {
+                    juxc_ast::UnaryOp::AddrOf => self.check_address_of(u),
+                    juxc_ast::UnaryOp::Deref => self.check_deref(u),
+                    _ => {}
+                }
                 // §O.3.4 — unary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
                 if let Some(kind) = op_kind_for_unary(u.op) {
@@ -4355,6 +4434,7 @@ impl<'a> Checker<'a> {
                 self.check_expr(&b.left);
                 self.check_expr(&b.right);
                 self.check_numeric_operands(b);
+                self.check_pointer_operators(b);
                 if !self.in_unsafe
                     && matches!(b.op, juxc_ast::BinaryOp::Add | juxc_ast::BinaryOp::Sub)
                     && (self.expr_ptr_depth(&b.left) > 0 || self.expr_ptr_depth(&b.right) > 0)
@@ -6591,6 +6671,239 @@ impl<'a> Checker<'a> {
             .with_help(format!(
                 "to keep the literal's low bits, cast it explicitly: `{v} as {slot}` (§S.2.4)"
             )),
+        );
+    }
+
+    /// §L.6.1a: a value flowing into a slot of pointer depth `slot_depth` over
+    /// `slot_pointee`. Returns true when a pointer is involved on either side,
+    /// in which case the pointer rules have been applied (and any mismatch
+    /// reported) and the caller skips its ordinary compatibility check. A
+    /// `null` into a pointer slot is accepted here.
+    pub(crate) fn check_pointer_flow(
+        &mut self,
+        slot_depth: u8,
+        slot_void: bool,
+        slot_pointee: &Ty,
+        value: &Expr,
+        fallback: Span,
+    ) -> bool {
+        let is_null = matches!(value, Expr::Literal(juxc_ast::Literal::Null));
+        if is_null {
+            return slot_depth > 0;
+        }
+        let value_depth = self.expr_ptr_depth(value);
+        if slot_depth == 0 && value_depth == 0 {
+            return false;
+        }
+        let value_pointee = infer_expr(value, &self.env, self.symbols);
+        if matches!(slot_pointee, Ty::FnPtr { .. }) || matches!(value_pointee, Ty::FnPtr { .. }) {
+            return false;
+        }
+        // A conditional's span starts at its (spanless) condition literal, so
+        // the statement's span is the better place to point.
+        let span = match expr_span(value) {
+            s if s == Span::DUMMY || matches!(value, Expr::Ternary(_)) => fallback,
+            s => s,
+        };
+        let value_void = value_depth > 0 && crate::infer::pointer_base_is_void(value, &self.env, self.symbols);
+        let expected = pointer_type_text(if slot_void { &Ty::Void } else { slot_pointee }, slot_depth);
+        let found = pointer_type_text(if value_void { &Ty::Void } else { &value_pointee }, value_depth);
+        if slot_depth != value_depth {
+            let help = if slot_depth == 0 {
+                "a pointer is not an integer: convert with `p as ulong` inside `unsafe`, or read through it with `*p`"
+            } else if value_depth == 0 {
+                "take the address with `&x`, convert an integer with `n as T*` inside `unsafe`, or use `null`"
+            } else {
+                "the pointer depths differ: add `&` or `*` to reach the level the slot holds"
+            };
+            self.push_pointer_mismatch(&expected, &found, help, span);
+            return true;
+        }
+        let verdict = match (slot_void, value_void) {
+            (true, true) => PointeeMatch::Same,
+            (true, false) | (false, true) => PointeeMatch::Void,
+            (false, false) => pointees_match(slot_pointee, &value_pointee),
+        };
+        match verdict {
+            PointeeMatch::Same => {}
+            PointeeMatch::Void => self.push_pointer_mismatch(
+                &expected,
+                &found,
+                "a `void*` converts only by a cast: `p as void*`, or `v as T*`, inside `unsafe`",
+                span,
+            ),
+            PointeeMatch::Different => {
+                let help = if pointee_is(slot_pointee, value_pointee.clone(), &[Primitive::Int, Primitive::I32])
+                    || pointee_is(slot_pointee, value_pointee.clone(), &[Primitive::Uint, Primitive::U32])
+                {
+                    "a Jux `int` is pointer-sized, so `int*` and `i32*` point at different widths; use the fixed width the memory has"
+                } else {
+                    "pointer types never convert implicitly; a cast (`p as T*`, inside `unsafe`) reinterprets the memory"
+                };
+                self.push_pointer_mismatch(&expected, &found, help, span);
+            }
+        }
+        true
+    }
+
+    fn push_pointer_mismatch(&mut self, expected: &str, found: &str, help: &str, span: Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0410_TypeMismatch,
+                format!("mismatched pointer types: expected `{expected}`, found `{found}`"),
+            )
+            .with_span(span)
+            .with_help(help),
+        );
+    }
+
+    /// §L.6.1a: `&e` needs a place, and a class object's field is reached
+    /// through `&obj`, not `&obj.field`.
+    fn check_address_of(&mut self, u: &juxc_ast::UnaryExpr) {
+        let operand = u.operand.as_ref();
+        let problem = match operand {
+            Expr::Path(_) | Expr::Index(_) | Expr::This(_) => None,
+            Expr::Unary(inner) if inner.op == juxc_ast::UnaryOp::Deref => None,
+            Expr::Field(f) => {
+                let owner = infer_expr(&f.object, &self.env, self.symbols);
+                match &owner {
+                    Ty::User { name, .. } if self.symbols.classes.get(name).is_some_and(|c| !c.is_layout_c) => Some(format!(
+                        "`&` cannot take the address of a field of a class object; take `&` of the object itself (a `{}*` reaches its fields, §L.6.5)",
+                        name.rsplit('.').next().unwrap_or(name),
+                    )),
+                    _ => None,
+                }
+            }
+            Expr::Literal(_) => Some("`&` needs a place with an address, and a literal has none; store it in a local first".to_string()),
+            Expr::Call(_) => Some("`&` needs a place with an address, and a call's result has none; store it in a local first".to_string()),
+            Expr::Binary(_) | Expr::Unary(_) | Expr::Ternary(_) | Expr::Cast(_) => {
+                Some("`&` needs a place with an address, and a computed value has none; store it in a local first".to_string())
+            }
+            _ => None,
+        };
+        if let Some(message) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0516_AddressOfNonPlace, message).with_span(u.span),
+            );
+        }
+    }
+
+    /// §L.6.1a: `*e` needs a typed pointer.
+    fn check_deref(&mut self, u: &juxc_ast::UnaryExpr) {
+        let depth = self.expr_ptr_depth(&u.operand);
+        let pointee = infer_expr(&u.operand, &self.env, self.symbols);
+        if depth == 0 {
+            if matches!(pointee, Ty::Unknown | Ty::Param(_) | Ty::FnPtr { .. }) {
+                return;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0517_DerefOfNonPointer,
+                    format!("`*` reads through a pointer, and this value is not one: its type is `{pointee}`"),
+                )
+                .with_span(u.span),
+            );
+        } else if depth == 1 && (matches!(pointee, Ty::Void) || crate::infer::pointer_base_is_void(&u.operand, &self.env, self.symbols)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0517_DerefOfNonPointer,
+                    "a `void*` has no pointee type to read; cast it to a typed pointer first (`p as T*`)",
+                )
+                .with_span(u.span),
+            );
+        }
+    }
+
+    /// §L.6.1a: the arithmetic and comparisons pointers have, and those they do not.
+    fn check_pointer_operators(&mut self, b: &juxc_ast::BinaryExpr) {
+        let (ld, rd) = (self.expr_ptr_depth(&b.left), self.expr_ptr_depth(&b.right));
+        if ld == 0 && rd == 0 {
+            return;
+        }
+        let span = b.span;
+        match b.op {
+            BinaryOp::Eq | BinaryOp::NotEq => {
+                let null_side = matches!(*b.left, Expr::Literal(juxc_ast::Literal::Null))
+                    || matches!(*b.right, Expr::Literal(juxc_ast::Literal::Null));
+                if null_side {
+                    return;
+                }
+                let lt = infer_expr(&b.left, &self.env, self.symbols);
+                let rt = infer_expr(&b.right, &self.env, self.symbols);
+                if matches!(lt, Ty::FnPtr { .. }) || matches!(rt, Ty::FnPtr { .. }) {
+                    return;
+                }
+                if ld != rd || pointees_match(&lt, &rt) != PointeeMatch::Same {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0410_TypeMismatch,
+                            format!(
+                                "cannot compare `{}` with `{}`: a pointer compares only with a pointer of the same type, or `null`",
+                                pointer_type_text(&lt, ld),
+                                pointer_type_text(&rt, rd),
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+            }
+            BinaryOp::Add | BinaryOp::Sub => {
+                if ld > 0 && rd > 0 {
+                    if b.op == BinaryOp::Add {
+                        self.push_pointer_op("two pointers cannot be added; subtract them for the distance, or step one by an integer", span);
+                    } else {
+                        let lt = infer_expr(&b.left, &self.env, self.symbols);
+                        let rt = infer_expr(&b.right, &self.env, self.symbols);
+                        if ld != rd || pointees_match(&lt, &rt) != PointeeMatch::Same {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!(
+                                        "`q - p` needs two pointers of the same type, found `{}` and `{}`",
+                                        pointer_type_text(&lt, ld),
+                                        pointer_type_text(&rt, rd),
+                                    ),
+                                )
+                                .with_span(span),
+                            );
+                        }
+                    }
+                    return;
+                }
+                let (pointer, step, depth) = if ld > 0 { (&b.left, &b.right, ld) } else { (&b.right, &b.left, rd) };
+                if ld == 0 && b.op == BinaryOp::Sub {
+                    self.push_pointer_op("an integer minus a pointer has no meaning; write `p - n`", span);
+                    return;
+                }
+                let pointee = infer_expr(pointer, &self.env, self.symbols);
+                if depth == 1 && (matches!(pointee, Ty::Void) || crate::infer::pointer_base_is_void(pointer, &self.env, self.symbols)) {
+                    self.push_pointer_op("a `void*` has no element size to step by; cast it to a typed pointer first", span);
+                    return;
+                }
+                let step_ty = infer_expr(step, &self.env, self.symbols);
+                let integer = match &step_ty {
+                    Ty::Primitive(p) => crate::ty::integer_bits(*p).is_some(),
+                    Ty::Unknown | Ty::Param(_) => true,
+                    _ => false,
+                };
+                if !integer {
+                    self.push_pointer_op(&format!("a pointer steps by an integer count of elements, and this step is a `{step_ty}`"), span);
+                }
+            }
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+            | BinaryOp::Shl | BinaryOp::Shr => {
+                self.push_pointer_op(
+                    "this operator is not defined on pointers; convert to an integer with `p as ulong` inside `unsafe` if the address arithmetic is intended",
+                    span,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn push_pointer_op(&mut self, message: &str, span: Span) {
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0518_InvalidPointerOperation, message.to_string()).with_span(span),
         );
     }
 
@@ -8944,8 +9257,15 @@ impl<'a> Checker<'a> {
             // A raw-pointer parameter takes `null`, its only literal (§L.6.1),
             // as a `T*` local does. The erased `Ty` drops `ptr_depth`, so
             // `compatible` alone rejected `new Env(null, 7)` for a `Table*`.
-            let pointer_null = param.ty.ptr_depth > 0
-                && matches!(arg, Expr::Literal(juxc_ast::Literal::Null));
+            let pointer_null = !param.is_out
+                && !matches!(arg, Expr::Out(..))
+                && self.check_pointer_flow(
+                    param.ty.ptr_depth,
+                    crate::infer::type_ref_is_void_pointer(&param.ty),
+                    &expected,
+                    arg,
+                    call_span,
+                );
             if !pointer_null
                 && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
                 && !compatible(&expected, &found, self.symbols)
@@ -8984,6 +9304,77 @@ impl<'a> Checker<'a> {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Whether a declared return type is a pointer to `void`.
+fn return_is_void_pointer(rt: &juxc_ast::ReturnType) -> bool {
+    match rt {
+        juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => crate::infer::type_ref_is_void_pointer(t),
+        juxc_ast::ReturnType::Void => false,
+    }
+}
+
+/// The raw-pointer depth a declared return type carries.
+fn return_ptr_depth(rt: &juxc_ast::ReturnType) -> u8 {
+    match rt {
+        juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t.ptr_depth,
+        juxc_ast::ReturnType::Void => 0,
+    }
+}
+
+/// `int**` for a pointee `int` at depth 2; the bare type at depth 0.
+fn pointer_type_text(pointee: &Ty, depth: u8) -> String {
+    let base = match pointee {
+        Ty::Void => "void".to_string(),
+        other => other.to_string(),
+    };
+    format!("{base}{}", "*".repeat(depth as usize))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PointeeMatch {
+    Same,
+    /// One side is `void`, the other is not.
+    Void,
+    Different,
+}
+
+/// Whether two pointees are one type (§L.6.1a): same representation for
+/// primitives, same declaration for user types, no widening. An unknown or
+/// generic pointee is given the benefit of the doubt.
+fn pointees_match(a: &Ty, b: &Ty) -> PointeeMatch {
+    let strip = |t: &Ty| match t {
+        Ty::Nullable(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    let (a, b) = (strip(a), strip(b));
+    match (&a, &b) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) | (Ty::Param(_), _) | (_, Ty::Param(_)) => PointeeMatch::Same,
+        (Ty::Void, Ty::Void) => PointeeMatch::Same,
+        (Ty::Void, _) | (_, Ty::Void) => PointeeMatch::Void,
+        (Ty::Primitive(x), Ty::Primitive(y)) => {
+            if crate::ty::same_representation(*x, *y) {
+                PointeeMatch::Same
+            } else {
+                PointeeMatch::Different
+            }
+        }
+        (Ty::User { name: x, .. }, Ty::User { name: y, .. }) => {
+            if x == y || x.rsplit('.').next() == y.rsplit('.').next() {
+                PointeeMatch::Same
+            } else {
+                PointeeMatch::Different
+            }
+        }
+        _ if a == b => PointeeMatch::Same,
+        _ => PointeeMatch::Different,
+    }
+}
+
+/// Whether the pointees are the two primitives in `pair`, in either order.
+fn pointee_is(a: &Ty, b: Ty, pair: &[Primitive; 2]) -> bool {
+    matches!((a, &b), (Ty::Primitive(x), Ty::Primitive(y))
+        if (*x == pair[0] && *y == pair[1]) || (*x == pair[1] && *y == pair[0]))
+}
 
 /// Foreign-call argument BRIDGE (§G interop). A `rust.*` / crate callee whose
 /// parameter is a Rust **slice** (`&[T]`, spelled `T[]` in the `.jux.d` stub)

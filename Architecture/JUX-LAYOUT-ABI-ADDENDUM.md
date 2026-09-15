@@ -502,6 +502,44 @@ These are exactly the obligations Rust's `unsafe` carries. The list is short and
 
 The literal `null` is a value of type `T*` for any `T`, and is the only `T*` literal.
 
+### L.6.1a. Pointer Types Are Checked
+
+A pointer type is its pointee and its depth: `int*` is one level over `int`,
+`int**` two. The compiler compares both wherever a value flows into a slot (a
+declaration, an assignment, a `return`, a call argument) and on either side of
+`==` / `!=`. "Pointer types are not implicitly compatible" (§L.5.3) means
+exactly this:
+
+- **Same pointee, same depth.** `long*` and `i64*` are one type, as are `byte*`
+  and `i8*`: the names denote the same width. `int*` and `i32*` are not, since a
+  Jux `int` is pointer-sized (§5.1). Nor are `int*` and `int**`, `int*` and
+  `double*`, or `A*` and `B*` for different aggregates, whatever their fields.
+  No widening applies: an `int*` never becomes a `long*`.
+- **`void*` converts only by a cast**, `p as void*` and `v as int*`, in either
+  direction.
+- **`null` fits every pointer slot**, a local or parameter as much as a field,
+  and a function returning `T*` may `return null;`.
+- **A pointer is not an integer.** `int* p = x;`, `int x = p;`, `p = 5;` and
+  `p == 0` are mismatches; `p as ulong` and `n as int*` are the conversions.
+
+A mismatch is `E0410`, reported at the value and naming both types in full:
+"expected `int*`, found `double*`".
+
+**Casts.** Every cast whose source or target is a pointer (`p as long*`,
+`p as ulong`, `n as int*`, `(void*) p`) is an `unsafe` operation (§L.5.2 items
+3 and 4): outside `unsafe` it is `E0506`.
+
+**Operands**, checked inside `unsafe` too, since `unsafe` does not suspend type
+checking (§L.5.3):
+
+| Form | Rule | Otherwise |
+|------|------|-----------|
+| `&e` | `e` is a place: a local, a parameter, a struct or record field, an array element, `*p`, `p[i]`. A literal, a call or an arithmetic result has no address, and a class object's field is reached through `&obj` (§L.6.5) | `E0516` |
+| `*e` | `e` is a pointer, and not a `void*`, which has no pointee type to read | `E0517` |
+| `p + n`, `n + p`, `p - n`, `p += n`, `p -= n` | `n` is an integer, and `p` is not a `void*`, which has no element size | `E0518` |
+| `q - p` | the same pointer type on both sides | `E0410` |
+| `p + q`, `p * n`, `p / n`, `p % n`, and the bitwise operators with a pointer operand | not defined on pointers | `E0518` |
+
 ### L.6.2. Operations on Raw Pointers
 
 Inside `unsafe { }`:
@@ -546,6 +584,7 @@ Outside `unsafe`, **none** of these operations compile: `&x`, `*p`, `p[i]`, `p +
 - **A pointer is anything of pointer type**, not only a local declared `T*`: a parameter, a field (read with or without `this.`), the result of a function or method declared to return `T*`, a `var` whose initializer is a pointer expression (`var q = p + 1;`), and one level of a `T**` (`*pp`, `pp[i]`). Each is indexed, stepped and measured the same way.
 - **`p[i]` is a place.** It can be read, assigned (`p[i] = v`), and compound-assigned (`p[i] += v`), exactly like `*(p + i)`.
 - **The C-style cast works for pointer types too**: `(int*) n`, `(void*) p`, `(int**) n`. A `*` directly before the closing parenthesis always makes it a cast.
+- **After `as`, a `*` followed by an operand is multiplication**: `n as long * 2` is `(n as long) * 2`. A `*` followed by anything else ends the type as a pointer: `p as int*;`, `(n as int*) + 1`.
 - **Nothing is checked.** As in C, stepping a pointer outside the allocation it points into, or reading through a dangling one, is undefined behaviour. The compiler neither tracks lengths nor inserts bounds checks; that is what makes it `unsafe`.
 
 *(Phase 1 lowering: `p[i]` is `*p.offset(i as isize)`, `p + n` is `p.offset(n as isize)`, `q - p` is `q.offset_from(p) as i64`, and the compound forms reassign the offset pointer. `&xs[i]` on an array is `(*xs.as_ptr()).as_mut_ptr().offset(i)`: the address comes from the cell's own pointer with no borrow guard, so `xs` stays usable beside the pointer, in the same statement as well as after it.)*

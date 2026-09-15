@@ -133,7 +133,7 @@ private fun PsiBuilder.parseBinary(minPrec: Int): PsiBuilder.Marker? {
         val m = left.precede()
         advanceLexer() // operator
         val node = when (op) {
-            T.AS_KW -> { parseType(); E.CAST_EXPRESSION }
+            T.AS_KW -> { parseAsType(); E.CAST_EXPRESSION }
             T.FAT_ARROW -> { // type-test `e => Type [binding]`
                 parseType()
                 if (at(T.IDENTIFIER)) advanceLexer()

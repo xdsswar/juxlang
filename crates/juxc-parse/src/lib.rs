@@ -164,6 +164,11 @@ pub(crate) struct Parser<'a> {
     /// Set once the depth limit has been reported, so a single over-deep file
     /// yields one E0201 instead of one per nested construct on the way out.
     pub(crate) depth_reported: bool,
+    /// Set while the type after `as` is parsed. There a `*` followed by the
+    /// start of an operand is multiplication (`n as long * 2`), not a pointer
+    /// marker; a `*` followed by anything else (`(n as int*) + 1`, `p as T*;`)
+    /// is still a pointer (Layout-ABI §L.6.2).
+    pub(crate) in_as_type: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -173,6 +178,7 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             pending_gt: 0,
+            in_as_type: false,
             diagnostics: Vec::new(),
             pending_stmts: Vec::new(),
             tuple_tmp_counter: 0,

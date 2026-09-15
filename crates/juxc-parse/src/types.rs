@@ -22,6 +22,26 @@ impl<'a> Parser<'a> {
     ///
     /// Guards the recursion depth (E0201) and delegates to
     /// [`Self::parse_type_ref_inner`]. See [`crate::MAX_NESTING`].
+    /// Whether the `*` at the cursor is followed by the start of an operand,
+    /// which makes it multiplication after `as T` (§L.6.2): `n as long * 2`.
+    fn star_is_multiplication(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+                | Some(TokenKind::Int(_))
+                | Some(TokenKind::Float(_))
+                | Some(TokenKind::Char(_))
+                | Some(TokenKind::Str(_))
+                | Some(TokenKind::LParen)
+                | Some(TokenKind::Minus)
+                | Some(TokenKind::Bang)
+                | Some(TokenKind::Tilde)
+                | Some(TokenKind::Kw(juxc_lex::Keyword::This))
+                | Some(TokenKind::Kw(juxc_lex::Keyword::New))
+                | Some(TokenKind::Kw(juxc_lex::Keyword::Sizeof))
+        )
+    }
+
     pub(crate) fn parse_type_ref(&mut self) -> Option<TypeRef> {
         if !self.enter_nesting() {
             return None;
@@ -223,7 +243,8 @@ impl<'a> Parser<'a> {
         // `*` is unambiguous (it's never the multiply operator there). Pointers
         // are `unsafe`-only — the type checker enforces the `unsafe` context.
         let mut ptr_depth: u8 = 0;
-        while self.eat(&TokenKind::Star) {
+        while self.at(&TokenKind::Star) && !(self.in_as_type && self.star_is_multiplication()) {
+            self.advance();
             ptr_depth = ptr_depth.saturating_add(1);
         }
 

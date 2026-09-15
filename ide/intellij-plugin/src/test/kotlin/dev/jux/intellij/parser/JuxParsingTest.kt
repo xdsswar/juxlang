@@ -845,6 +845,33 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("`(count) * 2` is not a cast: $casts", casts.none { it.startsWith("(count)") })
     }
 
+    /** After `as`, `*` before an operand multiplies; before anything else it is a pointer. */
+    fun testAsCastThenMultiplyParses() {
+        val psi = createPsiFile(
+            "AsMul.jux",
+            """
+            public void main() {
+                int n = 3;
+                long a = n as long * 2;
+                unsafe {
+                    int* p = null;
+                    var q = (n as int*) + 1;
+                    long* r = p as long*;
+                }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription} @ ${it.textOffset}" },
+            errors.isEmpty(),
+        )
+        val products = PsiTreeUtil.findChildrenOfAnyType(psi, PsiElement::class.java)
+            .filter { it.elementType === JuxElementTypes.BINARY_EXPRESSION }
+            .map { it.text }
+        assertTrue("`n as long * 2` is a product: $products", products.any { it == "n as long * 2" })
+    }
+
     fun testBorrowedStubParametersParse() {
         val psi = createPsiFile(
             "Stub.jux",

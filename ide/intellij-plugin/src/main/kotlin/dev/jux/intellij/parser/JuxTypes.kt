@@ -1,6 +1,7 @@
 package dev.jux.intellij.parser
 
 import com.intellij.lang.PsiBuilder
+import com.intellij.psi.tree.TokenSet
 import com.intellij.psi.tree.IElementType
 import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.highlight.JuxTokenTypes as T
@@ -28,7 +29,19 @@ fun PsiBuilder.parseQualifiedName() {
  * tuple/function type `( … ) -> T`, or `void`, followed by `[]` / `?` / `*`
  * suffixes.
  */
-fun PsiBuilder.parseType() {
+/** Tokens that can begin an operand: after `as T`, a `*` before one is multiplication. */
+private val OPERAND_START: TokenSet = TokenSet.orSet(
+    T.LITERALS,
+    TokenSet.create(T.IDENTIFIER, T.LPAREN, T.MINUS, T.BANG, T.TILDE, T.THIS_KW, T.NEW_KW, T.SIZEOF_KW),
+)
+
+/**
+ * The type after `as`: the same grammar, except that a `*` followed by an
+ * operand ends the type (`n as long * 2` is a multiplication, §L.6.2).
+ */
+fun PsiBuilder.parseAsType() = parseType(asType = true)
+
+fun PsiBuilder.parseType(asType: Boolean = false) {
     val m = mark()
     // Whether a base type was actually parsed. When it wasn't (the token here
     // can't start a type — e.g. a leading `*`/`&` of a deref/address-of
@@ -71,7 +84,9 @@ fun PsiBuilder.parseType() {
             when {
                 at(T.LBRACKET) -> skipMatched(T.LBRACKET, T.RBRACKET)
                 at(T.QUESTION) -> advanceLexer()
-                at(T.STAR) -> advanceLexer()
+                // After `as`, `*` before an operand is multiplication:
+                // `n as long * 2` (Layout-ABI §L.6.2).
+                at(T.STAR) -> if (asType && lookAhead(1) in OPERAND_START) break else advanceLexer()
                 else -> break
             }
         }

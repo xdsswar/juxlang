@@ -37,6 +37,10 @@ pub struct TypeEnv {
     /// gate on `p[i]` / `p + n` (§L.6.2) needs to know which names are
     /// pointers. A name absent here is not one.
     ptr_depths: Vec<HashMap<String, u8>>,
+    /// The names in the matching scope that are pointers to `void`. `Ty`
+    /// lowers `void` to `Unknown`, so this is how `void*` stays distinct from
+    /// a typed pointer (§L.6.1a).
+    void_bases: Vec<HashSet<String>>,
     /// Name of the class whose method body we're currently inside —
     /// `None` at top level, `Some("Foo")` while walking `class Foo`'s
     /// method bodies. Drives `Expr::This` inference. Stored as the
@@ -76,6 +80,7 @@ impl TypeEnv {
         Self {
             scopes: vec![HashMap::new()],
             ptr_depths: vec![HashMap::new()],
+            void_bases: vec![HashSet::new()],
             current_class: None,
             generic_params: HashSet::new(),
             generic_bounds: HashMap::new(),
@@ -91,6 +96,7 @@ impl TypeEnv {
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.ptr_depths.push(HashMap::new());
+        self.void_bases.push(HashSet::new());
     }
 
     /// Pop the innermost scope. Silently does nothing when only the
@@ -100,6 +106,7 @@ impl TypeEnv {
         if self.scopes.len() > 1 {
             self.scopes.pop();
             self.ptr_depths.pop();
+            self.void_bases.pop();
         }
     }
 
@@ -116,6 +123,27 @@ impl TypeEnv {
         if let Some(top) = self.ptr_depths.last_mut() {
             top.remove(name);
         }
+        if let Some(top) = self.void_bases.last_mut() {
+            top.remove(name);
+        }
+    }
+
+    /// Record that `name`, just declared in the innermost scope, is a pointer
+    /// to `void` (`void*`, `void**`), whose pointee has no type.
+    pub fn declare_void_base(&mut self, name: &str) {
+        if let Some(top) = self.void_bases.last_mut() {
+            top.insert(name.to_string());
+        }
+    }
+
+    /// Whether the binding `name` resolves to is a pointer to `void`.
+    pub fn is_void_base(&self, name: &str) -> bool {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return self.void_bases.get(i).is_some_and(|v| v.contains(name));
+            }
+        }
+        false
     }
 
     /// Record that `name`, just declared in the innermost scope, is a raw

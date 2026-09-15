@@ -1,0 +1,22 @@
+pointer_type_checks.jux:17:12: [E0410] error: mismatched pointer types: expected `long*`, found `int*`
+pointer_type_checks.jux:36:18: [E0506] error: a cast to or from a raw pointer requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+pointer_type_checks.jux:39:22: [E0410] error: mismatched pointer types: expected `i32*`, found `int*`
+pointer_type_checks.jux:40:25: [E0410] error: mismatched pointer types: expected `double*`, found `int*`
+pointer_type_checks.jux:41:22: [E0410] error: mismatched pointer types: expected `int**`, found `int*`
+pointer_type_checks.jux:42:24: [E0410] error: mismatched pointer types: expected `int*`, found `int`
+pointer_type_checks.jux:43:21: [E0410] error: mismatched pointer types: expected `int`, found `int*`
+pointer_type_checks.jux:44:19: [E0410] error: mismatched pointer types: expected `void*`, found `int*`
+pointer_type_checks.jux:46:21: [E0410] error: mismatched pointer types: expected `int*`, found `void*`
+pointer_type_checks.jux:49:15: [E0410] error: mismatched pointer types: expected `int*`, found `double*`
+pointer_type_checks.jux:50:20: [E0410] error: mismatched pointer types: expected `i32*`, found `int*`
+pointer_type_checks.jux:52:15: [E0410] error: cannot compare `int*` with `int`: a pointer compares only with a pointer of the same type, or `null`
+pointer_type_checks.jux:54:15: [E0410] error: cannot compare `int*` with `long*`: a pointer compares only with a pointer of the same type, or `null`
+pointer_type_checks.jux:56:20: [E0516] error: `&` needs a place with an address, and a literal has none; store it in a local first
+pointer_type_checks.jux:57:22: [E0516] error: `&` cannot take the address of a field of a class object; take `&` of the object itself (a `Box*` reaches its fields, §L.6.5)
+pointer_type_checks.jux:59:19: [E0517] error: `*` reads through a pointer, and this value is not one: its type is `int`
+pointer_type_checks.jux:60:24: [E0517] error: a `void*` has no pointee type to read; cast it to a typed pointer first (`p as T*`)
+pointer_type_checks.jux:61:20: [E0518] error: a pointer steps by an integer count of elements, and this step is a `double`
+pointer_type_checks.jux:62:24: [E0518] error: a `void*` has no element size to step by; cast it to a typed pointer first
+pointer_type_checks.jux:63:19: [E0518] error: two pointers cannot be added; subtract them for the distance, or step one by an integer
+pointer_type_checks.jux:64:23: [E0518] error: this operator is not defined on pointers; convert to an integer with `p as ulong` inside `unsafe` if the address arithmetic is intended
+pointer_type_checks.jux:67:22: [E0410] error: `q - p` needs two pointers of the same type, found `long*` and `int*`
