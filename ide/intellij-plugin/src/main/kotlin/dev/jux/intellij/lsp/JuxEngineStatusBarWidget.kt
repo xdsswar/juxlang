@@ -109,10 +109,10 @@ class JuxEngineStatusBarWidget(private val project: Project) :
                 "Semantics come from the language server.<br>$exe"
 
             JuxLspState.Engine.FALLBACK -> if (exe == null) {
-                "No <code>juxc-lsp</code> on PATH or \$JUX_HOME — the plugin's own " +
+                "No <code>juxc-lsp</code> on PATH or \$JUX_HOME, so the plugin's own " +
                     "parser and inspections are in charge.<br>Click to set the toolchain."
             } else {
-                "The language server is not running — the plugin's own parser and " +
+                "The language server is not running, so the plugin's own parser and " +
                     "inspections are in charge.<br>$exe<br>Click to set the toolchain."
             }
         }

@@ -42,7 +42,7 @@ class JuxPropertyNeverObservedInspection : LocalInspectionTool() {
             problems.add(
                 manager.createProblemDescriptor(
                     target,
-                    "Property '$name' is never observed or bound (W0971) — consider a plain field",
+                    "Property '$name' is never observed or bound (W0971); consider a plain field",
                     null as Array<com.intellij.codeInspection.LocalQuickFix>?,
                     ProblemHighlightType.WEAK_WARNING,
                     isOnTheFly,

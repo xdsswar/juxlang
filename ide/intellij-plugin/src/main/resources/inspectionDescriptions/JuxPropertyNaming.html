@@ -5,7 +5,7 @@ Reports observable properties whose name does not start with an uppercase letter
 <p>
 PascalCase property names are the visual signal that a name is a
 <code>{ get; set; }</code> property rather than a plain field. This is a
-convention, never an error — camelCase properties compile fine. The quick-fix
+convention, never an error: camelCase properties compile fine. The quick-fix
 renames the property and all resolving usages (reads, writes,
 <code>.observers.attach(…)</code> and <code>.bind(…)</code> sites) in one
 undoable operation. Names starting with <code>_</code> are exempt.

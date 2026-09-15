@@ -37,7 +37,7 @@ class JuxMisplacedAccessorBlockInspection : LocalInspectionTool() {
             problems.add(
                 manager.createProblemDescriptor(
                     anchor,
-                    "Accessor block must come before `=` — write `Name { get; set; } = init;`",
+                    "Accessor block must come before `=`: write `Name { get; set; } = init;`",
                     RemoveEqBeforeAccessorFix(),
                     ProblemHighlightType.GENERIC_ERROR_OR_WARNING,
                     isOnTheFly,

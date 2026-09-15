@@ -17,15 +17,24 @@ fun PsiBuilder.parseBlock() {
     val m = mark()
     expectOrError(T.LBRACE, "'{' expected")
     while (!eof() && !at(T.RBRACE)) {
+        // A member modifier cannot begin a statement: the block's `}` is
+        // missing, and what follows belongs to the enclosing type. Stop here
+        // so the next members still parse as members.
+        if (atAny(MEMBER_ONLY_START)) break
         val before = currentOffset
         parseStatement()
         if (currentOffset == before) { // no progress — skip a token to recover
             val e = mark()
+            val message = unexpectedTokenMessage()
+            val orphanClause = at(T.CATCH_KW) || at(T.FINALLY_KW)
             advanceLexer()
-            e.error("unexpected token")
+            // An orphan `catch (E e)` takes its header with it; its block then
+            // parses as an ordinary block, so the mistake is one error.
+            if (orphanClause && at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN)
+            e.error(message)
         }
     }
-    expectOrError(T.RBRACE, "'}' expected")
+    closeBrace()
     m.done(E.CODE_BLOCK)
 }
 
@@ -82,6 +91,10 @@ private fun PsiBuilder.parseIfStatement() {
     } else if (expect(T.LPAREN)) {
         parseExpression()
         expectOrError(T.RPAREN, "')' expected")
+    } else {
+        // `if x > 0 {`: the condition is still read, so the body parses.
+        errorHere("'(' expected")
+        parseExpression()
     }
     parseStatement()
     if (expect(T.ELSE_KW)) parseStatement()
@@ -94,6 +107,9 @@ private fun PsiBuilder.parseWhileStatement() {
     if (expect(T.LPAREN)) {
         parseExpression()
         expectOrError(T.RPAREN, "')' expected")
+    } else {
+        errorHere("'(' expected")
+        parseExpression()
     }
     parseStatement()
     m.done(E.WHILE_STATEMENT)
@@ -197,8 +213,8 @@ private fun PsiBuilder.parseLocalVariable() {
     while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
     if (at(T.VAR_KW)) advanceLexer() else parseType()
     if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // destructuring `var (x, y)`
-    else expectOrError(T.IDENTIFIER, "variable name expected")
-    if (expect(T.EQ)) parseExpression()
+    else expectOrError(T.IDENTIFIER, "Variable name expected")
+    if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     m.done(E.LOCAL_VARIABLE)
 }
@@ -220,7 +236,12 @@ private fun PsiBuilder.parseLabeledOrExprOrLocal() {
     } else {
         m.rollbackTo()
         val e = mark()
-        parseExpression()
+        if (parseExpression() == null) {
+            // Nothing here starts an expression: leave the token to the
+            // block, which names it (`'else' without 'if'`).
+            e.drop()
+            return
+        }
         semicolon()
         e.done(E.EXPRESSION_STATEMENT)
     }
@@ -231,7 +252,7 @@ private fun PsiBuilder.tryLocalVarTail(): Boolean {
     parseType()
     if (!at(T.IDENTIFIER)) return false
     advanceLexer() // name
-    if (expect(T.EQ)) parseExpression()
+    if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     return true
 }
@@ -256,7 +277,7 @@ private fun PsiBuilder.parseTryCore(): PsiBuilder.Marker {
             val v = mark()
             parseType()
             while (at(T.PIPE)) { advanceLexer(); parseType() }
-            expectOrError(T.IDENTIFIER, "exception name expected")
+            expectOrError(T.IDENTIFIER, "Exception name expected")
             v.done(E.LOCAL_VARIABLE)
             expectOrError(T.RPAREN, "')' expected")
         }
@@ -289,7 +310,12 @@ fun PsiBuilder.parseSwitch(asExpression: Boolean): PsiBuilder.Marker {
     while (!eof() && !at(T.RBRACE)) {
         val before = currentOffset
         parseSwitchCase()
-        if (currentOffset == before) { val e = mark(); advanceLexer(); e.error("unexpected token") }
+        if (currentOffset == before) {
+            val e = mark()
+            val message = unexpectedTokenMessage()
+            advanceLexer()
+            e.error(message)
+        }
     }
     expectOrError(T.RBRACE, "'}' expected")
     m.done(if (asExpression) E.SWITCH_EXPRESSION else E.SWITCH_STATEMENT)
@@ -309,8 +335,17 @@ private fun PsiBuilder.parseSwitchCase() {
         at(T.DEFAULT_KW) -> advanceLexer()
         else -> { m.drop(); return }
     }
-    // `->` (lenient: also accept `=>`) then an expression `;` or a block.
-    if (!expect(T.ARROW)) expect(T.FAT_ARROW)
+    // `->` (lenient: also accept `=>`) then an expression `;` or a block. A
+    // Java-style `case 1:` marks the `:` and parses on as if `->` were there.
+    if (!expect(T.ARROW) && !expect(T.FAT_ARROW)) {
+        if (at(T.COLON)) {
+            val colon = mark()
+            advanceLexer()
+            colon.error("'->' expected")
+        } else {
+            errorHere("'->' expected")
+        }
+    }
     if (at(T.LBRACE)) parseBlock() else { parseExpression(); semicolon() }
     m.done(E.SWITCH_CASE)
 }

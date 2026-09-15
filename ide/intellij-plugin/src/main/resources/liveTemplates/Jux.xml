@@ -64,7 +64,7 @@
     <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
-  <template name="propr" value="public $TYPE$ $NAME$ { get; private set; } = $INIT$;$END$" description="read-outside property — private setter (§P.1.3)" toReformat="false" toShortenFQNames="false">
+  <template name="propr" value="public $TYPE$ $NAME$ { get; private set; } = $INIT$;$END$" description="read-outside property, private setter (§P.1.3)" toReformat="false" toShortenFQNames="false">
     <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
     <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
     <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>

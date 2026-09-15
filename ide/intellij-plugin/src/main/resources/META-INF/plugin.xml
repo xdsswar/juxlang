@@ -22,7 +22,7 @@
       <a href="https://github.com/xdsswar/juxlang">github.com/xdsswar/juxlang</a>.
     </p>
     <p>
-      Full IDE support for <b>Jux</b> — a Java/C#-shaped language that lowers to
+      Full IDE support for <b>Jux</b>, a Java/C#-shaped language that lowers to
       Rust. Write familiar class/interface/enum/record syntax and ship native
       binaries through the Rust toolchain, with a first-class editing experience
       modelled on IntelliJ's own Java plugin.
@@ -44,30 +44,30 @@
         comment toggling</li>
       <li><b>Parameter Info</b> (<code>Ctrl+P</code>) for calls and constructors,
         listing every overload with the active parameter in bold</li>
-      <li><b>Surround With</b> (<code>Ctrl+Alt+T</code>) — <code>if</code>,
+      <li><b>Surround With</b> (<code>Ctrl+Alt+T</code>): <code>if</code>,
         <code>while</code>, <code>for</code>, <code>try/catch</code>,
         <code>unsafe { }</code> and more, plus <code>(expr)</code> /
         <code>!(expr)</code> over a selected expression</li>
       <li><b>Move Statement Up/Down</b>
-        (<code>Ctrl+Shift+Up</code>/<code>Down</code>) — moves whole statements
+        (<code>Ctrl+Shift+Up</code>/<code>Down</code>): moves whole statements
         and whole members, and will not lift one out of its block</li>
       <li><b>Type Hierarchy</b> (<code>Ctrl+H</code>) with supertype, subtype and
         combined views</li>
       <li><b>Spellchecking</b> of comments, plain strings and declaration names
         (interpolation holes stay code, not prose)</li>
-      <li><b>Optimize Imports</b> (<code>Ctrl+Alt+O</code>) — removes unused and
+      <li><b>Optimize Imports</b> (<code>Ctrl+Alt+O</code>): removes unused and
         duplicate imports and sorts the rest, just like Java</li>
     </ul>
 
     <h3>Refactoring</h3>
     <ul>
-      <li><b>Extract Variable</b> (<code>Ctrl+Alt+V</code>) — hoists the selected
+      <li><b>Extract Variable</b> (<code>Ctrl+Alt+V</code>): hoists the selected
         expression into a <code>var</code>, replaces every occurrence, and opens
         an in-place rename</li>
-      <li><b>Introduce Constant</b> (<code>Ctrl+Alt+C</code>) — a
+      <li><b>Introduce Constant</b> (<code>Ctrl+Alt+C</code>): a
         <code>private static final</code> field on the enclosing type, with the
         type read off the source</li>
-      <li><b>Inline Variable</b> (<code>Ctrl+Alt+N</code>) — with guards against
+      <li><b>Inline Variable</b> (<code>Ctrl+Alt+N</code>): with guards against
         reassignment and side effects, and parentheses where precedence needs
         them</li>
       <li><b>Safe Delete</b> for any declaration, listing the usages that would
@@ -79,20 +79,20 @@
     <ul>
       <li>Generate a <b>constructor</b>, <b>getters</b>, and <b>setters</b> from
         a class's fields</li>
-      <li><b>Override / Implement Methods</b> — stubs for inherited methods not
+      <li><b>Override / Implement Methods</b>: stubs for inherited methods not
         yet declared, walking the supertype chain</li>
     </ul>
 
     <h3>Intelligence (via <code>juxc-lsp</code>)</h3>
     <ul>
-      <li>Live <b>diagnostics</b> with precise Jux error codes — workspace-aware,
+      <li>Live <b>diagnostics</b> with precise Jux error codes: workspace-aware,
         so cross-file and cross-package errors surface on the right file</li>
       <li><b>Completion</b> over keywords, project types, and receiver-aware
         members, with <b>auto-import</b> on accept and import quick-fixes</li>
       <li><b>Hover</b> showing inferred expression types and declaration
         signatures</li>
       <li>Autocomplete and auto-import over the <b>Rust standard library</b> and
-        any bound Rust crate — rendered in Jux syntax — indexed automatically
+        any bound Rust crate, rendered in Jux syntax, indexed automatically
         from your toolchain and project dependencies</li>
     </ul>
 
@@ -118,7 +118,7 @@
       Community editions, install the free
       <a href="https://plugins.jetbrains.com/plugin/23257-lsp4ij">LSP4IJ</a>
       plugin and the same features light up through it. When both clients are
-      available the built-in one takes precedence automatically — only one
+      available the built-in one takes precedence automatically, so only one
       <code>juxc-lsp</code> instance ever runs.
     </p>
   ]]></description>
@@ -219,6 +219,14 @@
     <annotator
         language="Jux"
         implementationClass="dev.jux.intellij.highlight.JuxMissingImportAnnotator"/>
+    <!-- Mistakes that parse but are never meant (unclosed strings, `=` in a
+         condition, `=>` lambdas, `let`/`elif`/`function`), with fixes. -->
+    <annotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxSyntaxHintAnnotator"/>
+    <!-- Alt+Enter on a syntax error: insert the missing token, remove a stray one. -->
+    <errorQuickFixProvider
+        implementation="dev.jux.intellij.editor.JuxSyntaxQuickFixProvider"/>
     <!-- "Add unambiguous imports on the fly" for Jux type names. -->
     <referenceImporter
         implementation="dev.jux.intellij.completion.JuxReferenceImporter"/>

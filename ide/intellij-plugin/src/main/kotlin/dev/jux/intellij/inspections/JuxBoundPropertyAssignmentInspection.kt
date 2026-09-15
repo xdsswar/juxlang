@@ -48,7 +48,7 @@ class JuxBoundPropertyAssignmentInspection : LocalInspectionTool() {
             problems.add(
                 manager.createProblemDescriptor(
                     lhs,
-                    "'$chain' is bound — direct assignment is not allowed (E0973)",
+                    "'$chain' is bound; direct assignment is not allowed (E0973)",
                     null as Array<com.intellij.codeInspection.LocalQuickFix>?,
                     ProblemHighlightType.GENERIC_ERROR,
                     isOnTheFly,

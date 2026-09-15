@@ -16,7 +16,7 @@ import dev.jux.intellij.psi.JuxElementTypes as E
 /** A dotted name `a.b.c`, wrapped in [E.QUALIFIED_NAME]. */
 fun PsiBuilder.parseQualifiedName() {
     val m = mark()
-    expectOrError(T.IDENTIFIER, "identifier expected")
+    expectOrError(T.IDENTIFIER, "Identifier expected")
     while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) {
         advanceLexer() // `.`
         advanceLexer() // ident
@@ -74,7 +74,7 @@ fun PsiBuilder.parseType(asType: Boolean = false) {
             if (at(T.LT)) parseTypeArguments()
         }
         else -> {
-            expectOrError(T.IDENTIFIER, "type expected")
+            expectOrError(T.IDENTIFIER, "Type expected")
             baseParsed = false
         }
     }
@@ -82,7 +82,10 @@ fun PsiBuilder.parseType(asType: Boolean = false) {
     if (baseParsed) {
         while (true) {
             when {
-                at(T.LBRACKET) -> skipMatched(T.LBRACKET, T.RBRACKET)
+                // `T[]` and `T[N]`. Anything longer is not a type suffix (the
+                // `[3;` of an unfinished `new int[3;` must not run to EOF).
+                at(T.LBRACKET) && lookAhead(1) === T.RBRACKET -> { advanceLexer(); advanceLexer() }
+                at(T.LBRACKET) && lookAhead(2) === T.RBRACKET -> { advanceLexer(); advanceLexer(); advanceLexer() }
                 at(T.QUESTION) -> advanceLexer()
                 // After `as`, `*` before an operand is multiplication:
                 // `n as long * 2` (Layout-ABI §L.6.2).
@@ -134,7 +137,15 @@ private fun PsiBuilder.parseAngleList(listType: IElementType, typeParams: Boolea
     // For type parameters, the first identifier of each comma segment is the
     // parameter NAME (a declaration); after `extends`/`&` come bound references.
     var atSegmentHead = typeParams
+    // The previous depth-1 token was a complete type name, so an identifier
+    // now means the `>` is missing (`Vec<int items`).
+    var afterTypeName = false
     while (!eof() && depth > 0) {
+        if (atAny(ANGLE_LIST_STOP) || (!typeParams && depth == 1 && afterTypeName && at(T.IDENTIFIER))) {
+            errorHere("'>' expected")
+            break
+        }
+        afterTypeName = false
         when (val t = tokenType) {
             T.LT -> { depth++; advanceLexer() }
             T.LT_LT -> { depth += 2; advanceLexer() }
@@ -172,13 +183,16 @@ private fun PsiBuilder.parseAngleList(listType: IElementType, typeParams: Boolea
                     }
                     atSegmentHead = false
                 }
-                t === T.IDENTIFIER -> { parseTypeRefName(); atSegmentHead = false }
+                t === T.IDENTIFIER -> { parseTypeRefName(); atSegmentHead = false; afterTypeName = true }
                 else -> advanceLexer()
             }
         }
     }
     m.done(listType)
 }
+
+/** Tokens that never appear inside a `< … >` clause: reaching one means the `>` is missing. */
+private val ANGLE_LIST_STOP: TokenSet = TokenSet.create(T.SEMICOLON, T.LBRACE, T.RBRACE, T.EQ)
 
 /** A qualified type NAME `a.b.C` (no generic suffix), wrapped in [E.TYPE_REFERENCE]. */
 private fun PsiBuilder.parseTypeRefName() {
@@ -197,6 +211,8 @@ fun PsiBuilder.skipAngleBalanced() {
     if (!at(T.LT)) return
     var depth = 0
     while (!eof()) {
+        // A speculative probe must not run past a statement or a block.
+        if (atAny(ANGLE_LIST_STOP)) return
         when (tokenType) {
             T.LT -> depth++
             T.LT_LT -> depth += 2

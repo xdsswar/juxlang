@@ -15,7 +15,7 @@ object JuxLicense {
 
     private const val KEY = "dev.jux.license.acceptedVersion"
 
-    const val TITLE = "Jux Language Plugin — License & Disclaimer"
+    const val TITLE = "Jux Language Plugin: License & Disclaimer"
 
     /** The agreement shown in the dialog (and mirrored in the plugin description). */
     val TEXT = """

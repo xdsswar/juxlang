@@ -88,7 +88,7 @@ private fun PsiBuilder.parseAssignment(): PsiBuilder.Marker? {
     if (atAny(ASSIGN_OPS)) {
         val m = left.precede()
         advanceLexer()
-        parseExpression() // right-associative; allows a lambda on the RHS
+        parseExpressionOrError() // right-associative; allows a lambda on the RHS
         m.done(E.ASSIGNMENT_EXPRESSION)
         return m
     }
@@ -144,7 +144,10 @@ private fun PsiBuilder.parseBinary(minPrec: Int): PsiBuilder.Marker? {
                 if (atContextual("step")) { advanceLexer(); parseBinary(prec + 1) }
                 E.RANGE_EXPRESSION
             }
-            else -> { parseBinary(prec + 1); E.BINARY_EXPRESSION }
+            else -> {
+                if (parseBinary(prec + 1) == null) errorHere("Expression expected")
+                E.BINARY_EXPRESSION
+            }
         }
         m.done(node)
         left = m
@@ -406,7 +409,14 @@ private fun PsiBuilder.parseNew(): PsiBuilder.Marker {
             if (at(T.LBRACE)) skipMatched(T.LBRACE, T.RBRACE)
         }
         at(T.LBRACKET) -> {
-            skipMatched(T.LBRACKET, T.RBRACKET)
+            // `new T[n]`, `new T[a][b]`, `new T[]{…}`: each size is an
+            // expression, and a missing `]` is reported at the statement
+            // instead of running to the end of the file.
+            while (at(T.LBRACKET)) {
+                advanceLexer()
+                if (!at(T.RBRACKET)) parseExpression()
+                if (!expectOrError(T.RBRACKET, "']' expected")) break
+            }
             if (at(T.LBRACE)) skipMatched(T.LBRACE, T.RBRACE) // array initializer
         }
         at(T.LBRACE) -> skipMatched(T.LBRACE, T.RBRACE)
@@ -430,7 +440,18 @@ private fun PsiBuilder.parseArgumentList() {
     advanceLexer() // `(`
     if (!at(T.RPAREN)) {
         parseArgument()
-        while (at(T.COMMA)) { advanceLexer(); parseArgument() }
+        while (!eof()) {
+            if (at(T.COMMA)) {
+                advanceLexer()
+                parseArgument()
+            } else if (!at(T.RPAREN) && JUX_EXPR_START.contains(tokenType)) {
+                // `add(1 2)`: a missing comma, not a missing `)`.
+                errorHere("',' or ')' expected")
+                parseArgument()
+            } else {
+                break
+            }
+        }
     }
     expectOrError(T.RPAREN, "')' expected")
     m.done(E.ARGUMENT_LIST)
@@ -445,7 +466,7 @@ private fun PsiBuilder.parseArgument() {
     // Out-arg mode (§6.x): `tryParse("42", out n)` — `out` is contextual, so
     // it only counts when an identifier follows.
     if (atContextual("out") && (lookAhead(1) === T.IDENTIFIER || lookAhead(1) === T.THIS_KW)) advanceLexer()
-    parseExpression()
+    parseExpressionOrError()
 }
 
 /**

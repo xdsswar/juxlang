@@ -19,7 +19,7 @@ import javax.swing.JPanel
 class JuxProjectOptionsStep(private val builder: JuxModuleBuilder) : ModuleWizardStep() {
 
     private val executable = JBRadioButton(
-        "Executable — a runnable program (builds a binary from main())",
+        "Executable: a runnable program (builds a binary from main())",
         builder.projectKind == JuxProjectKind.EXECUTABLE,
     )
     private val library = JBRadioButton(

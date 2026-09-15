@@ -58,7 +58,7 @@ class JuxInheritedTypeParamInspection : LocalInspectionTool() {
                 problems.add(
                     manager.createProblemDescriptor(
                         ref,
-                        "Type parameter '$text' is not declared here — use '$bound' " +
+                        "Type parameter '$text' is not declared here; use '$bound' " +
                             "(the type bound by the supertype clause)",
                         UseBoundTypeFix(bound),
                         ProblemHighlightType.WARNING,

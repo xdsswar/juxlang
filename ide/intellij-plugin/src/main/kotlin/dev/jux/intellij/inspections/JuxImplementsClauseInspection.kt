@@ -36,7 +36,7 @@ class JuxImplementsClauseInspection : LocalInspectionTool() {
                     problems.add(
                         manager.createProblemDescriptor(
                             ref,
-                            "Interfaces extend other interfaces — 'implements' is not allowed " +
+                            "Interfaces extend other interfaces; 'implements' is not allowed " +
                                 "on an interface declaration",
                             null as com.intellij.codeInspection.LocalQuickFix?,
                             ProblemHighlightType.ERROR, isOnTheFly,

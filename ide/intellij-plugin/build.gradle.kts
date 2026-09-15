@@ -85,6 +85,15 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.0.8</h3>
+            <p>Broken code while you type: one clear message at the mistake, and a fix on Alt+Enter.</p>
+            <ul>
+              <li><b>Syntax errors name the mistake</b>: <b>'else' without 'if'</b>, <b>'catch' without 'try'</b>, <b>Unexpected ')'</b>, <b>Expression expected</b>, <b>',' or ')' expected</b>, and <b>'->' expected</b> on a Java-style <b>case 1:</b>.</li>
+              <li><b>One mistake, one error</b>: a missing <b>}</b> no longer turns every following member red, and an unclosed <b>&lt;</b> or <b>[</b> stops at its own statement.</li>
+              <li><b>Alt+Enter on a syntax error</b> inserts the missing <b>;</b> <b>)</b> <b>]</b> <b>}</b> <b>&gt;</b> or <b>,</b> after the last token, removes a stray token, or turns <b>case 1:</b> into <b>case 1 -&gt;</b>.</li>
+              <li><b>Hints for common slips</b>, each with a fix: <b>if (x = 5)</b>, a lambda written with <b>=&gt;</b>, <b>'abc'</b> as a char, an unclosed string or comment, and <b>let</b>, <b>elif</b> or <b>function</b> from other languages.</li>
+            </ul>
+
             <h3>0.0.7</h3>
             <p>A semantic engine: the editor now understands Jux the way IntelliJ understands Java.</p>
             <ul>

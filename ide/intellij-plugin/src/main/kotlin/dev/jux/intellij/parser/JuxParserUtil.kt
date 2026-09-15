@@ -38,9 +38,70 @@ fun PsiBuilder.expectOrError(type: IElementType, message: String): Boolean {
     return false
 }
 
-/** Statement/declaration terminator recovery: a missing `;` is non-fatal. */
+/**
+ * Statement/declaration terminator recovery: a missing `;` is non-fatal.
+ *
+ * A stray closer right before the `;` (`print(1));`) is the actual mistake, so
+ * it is marked as such and the `;` still ends the statement: one error where
+ * the old parse gave "';' expected" and then "unexpected token" on the same
+ * character.
+ */
 fun PsiBuilder.semicolon() {
-    expectOrError(T.SEMICOLON, "';' expected")
+    if (expect(T.SEMICOLON)) return
+    if ((at(T.RPAREN) || at(T.RBRACKET)) && lookAhead(1) === T.SEMICOLON) {
+        val stray = mark()
+        val text = tokenText
+        advanceLexer()
+        stray.error("Unexpected '$text'")
+        advanceLexer() // `;`
+        return
+    }
+    errorHere("';' expected")
+}
+
+/**
+ * Parse a required expression, reporting "Expression expected" when none
+ * starts here: `int x = ;`, `3 + ;`. Returns the expression marker, if any.
+ */
+fun PsiBuilder.parseExpressionOrError(): PsiBuilder.Marker? {
+    val parsed = parseExpression()
+    if (parsed == null) errorHere("Expression expected")
+    return parsed
+}
+
+/**
+ * The message for a token that cannot start a statement here, named for the
+ * mistake it usually is: an `else` or `catch` whose opener is missing, a stray
+ * closer, a `case` outside a switch.
+ */
+fun PsiBuilder.unexpectedTokenMessage(): String = when (tokenType) {
+    T.ELSE_KW -> "'else' without 'if'"
+    T.CATCH_KW -> "'catch' without 'try'"
+    T.FINALLY_KW -> "'finally' without 'try'"
+    T.CASE_KW -> "'case' outside a switch"
+    else -> "Unexpected '${tokenText ?: ""}'"
+}
+
+/**
+ * Modifiers that can only begin a member, never a statement. A block that
+ * meets one is missing its closing brace: the member belongs to the enclosing
+ * type, not to the method body.
+ */
+val MEMBER_ONLY_START: TokenSet = TokenSet.create(
+    T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW, T.ABSTRACT_KW, T.SEALED_KW,
+)
+
+private val MISSING_BRACE_REPORTED_AT = com.intellij.openapi.util.Key.create<Int>("jux.missing.brace.offset")
+
+/**
+ * Close a `{ … }` block: consume `}`, or report "'}' expected" once per
+ * position -- nested blocks that all end at the same member report it once.
+ */
+fun PsiBuilder.closeBrace() {
+    if (expect(T.RBRACE)) return
+    if (getUserData(MISSING_BRACE_REPORTED_AT) == currentOffset) return
+    putUserData(MISSING_BRACE_REPORTED_AT, currentOffset)
+    errorHere("'}' expected")
 }
 
 /**
@@ -54,7 +115,7 @@ fun PsiBuilder.consumeMemberName(): Boolean {
         advanceLexer()
         return true
     }
-    errorHere("name expected")
+    errorHere("Name expected")
     return false
 }
 

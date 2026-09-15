@@ -101,7 +101,7 @@ class JuxParser : PsiParser {
         }
         if (b.at(T.AS_KW)) {
             b.advanceLexer()
-            b.expectOrError(T.IDENTIFIER, "import alias expected")
+            b.expectOrError(T.IDENTIFIER, "Import alias expected")
         }
         b.semicolon()
         m.done(E.IMPORT_STATEMENT)
@@ -225,7 +225,7 @@ class JuxParser : PsiParser {
     private fun parseTypeDeclaration(b: PsiBuilder, decl: PsiBuilder.Marker) {
         val kind = b.tokenType
         b.advanceLexer() // the type keyword
-        b.expectOrError(T.IDENTIFIER, "type name expected")
+        b.expectOrError(T.IDENTIFIER, "Type name expected")
         if (b.at(T.LT)) parseTypeParameters(b)
         if (kind === T.RECORD_KW && b.at(T.LPAREN)) parseRecordComponents(b)
         parseSupertypeClauses(b)
@@ -236,7 +236,7 @@ class JuxParser : PsiParser {
 
     private fun parseTypeAlias(b: PsiBuilder, decl: PsiBuilder.Marker) {
         b.advanceLexer() // `type`
-        b.expectOrError(T.IDENTIFIER, "alias name expected")
+        b.expectOrError(T.IDENTIFIER, "Alias name expected")
         if (b.at(T.LT)) parseTypeParameters(b)
         b.expectOrError(T.EQ, "'=' expected")
         parseType(b)
@@ -368,7 +368,7 @@ class JuxParser : PsiParser {
             decl.done(E.CONSTRUCTOR_DECLARATION)
             return
         }
-        b.consumeDeclName("name expected")
+        b.consumeDeclName("Name expected")
         if (b.at(T.LT)) parseTypeParameters(b) // method type params after name
         if (b.at(T.LPAREN)) {
             parseParameterList(b)
@@ -479,7 +479,7 @@ class JuxParser : PsiParser {
                 val err = b.mark()
                 b.advanceLexer()
                 err.error(
-                    "the 'init' accessor was removed (§P) — use '{ get; }' for a " +
+                    "The 'init' accessor was removed; use '{ get; }' for a " +
                         "read-only property settable in the constructor",
                 )
             }
@@ -571,7 +571,7 @@ class JuxParser : PsiParser {
         }
         b.parseType()
         if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs
-        b.consumeDeclName("parameter name expected")
+        b.consumeDeclName("Parameter name expected")
         if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
         p.done(E.PARAMETER)
     }
@@ -607,7 +607,7 @@ class JuxParser : PsiParser {
             parseAnnotations(b)
             b.parseType()
             if (b.at(T.ELLIPSIS)) b.advanceLexer()
-            b.consumeDeclName("component name expected")
+            b.consumeDeclName("Component name expected")
             c.done(E.RECORD_COMPONENT)
             if (!b.expect(T.COMMA)) break
         }
