@@ -557,9 +557,29 @@ impl RustEmitter {
             self.emit_expr_coerced_to_iface(element_type, elem);
             return;
         }
+        // A numeric element widens into the element type (§S.2.7): `double[]
+        // a = {1, 2, 3}` is three doubles, and `long[] b = {anInt}` a long.
+        let widen = self
+            .type_ref_primitive(element_type)
+            .and_then(|t| self.numeric_widen_or_arm(elem, t));
+        let widen_inner = widen.is_some() && crate::exprs::cast_needs_inner_parens(elem);
+        if widen.is_some() {
+            self.w.push('(');
+            if widen_inner {
+                self.w.push('(');
+            }
+        }
         self.emit_expr(elem);
         if self.wrapper_value_needs_clone(elem) || self.value_place_needs_clone(elem) {
             self.w.push_str(".clone()");
+        }
+        if let Some(cast) = widen {
+            if widen_inner {
+                self.w.push(')');
+            }
+            self.w.push_str(" as ");
+            self.w.push_str(cast);
+            self.w.push(')');
         }
     }
 }

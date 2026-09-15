@@ -736,7 +736,7 @@ impl RustEmitter {
                         // (never narrows); skipped under nullable/sealed wraps.
                         let widen = if !do_some && !wrap_upcast {
                             self.return_type_primitive()
-                                .and_then(|t| self.numeric_widen_to(e, t))
+                                .and_then(|t| self.numeric_widen_or_arm(e, t))
                         } else {
                             None
                         };
@@ -2377,6 +2377,12 @@ impl RustEmitter {
             // A local's declared type is a value slot — an interface-typed
             // local lowers to `Rc<dyn Trait>`.
             self.emit_value_type_as_rust(ty);
+        } else if var.init.as_ref().is_some_and(untyped_literal_arith) {
+            // `var n = 1;` is an `int` (ERRATA E15), but Rust gives an
+            // unconstrained integer literal `i32`: `var acc = 1;` doubled past
+            // 2^31 panicked in debug and printed `0` in release, and `var z =
+            // 3000000000;` did not compile. Say the type.
+            self.w.push_str(": isize");
         }
         if let Some(init) = &var.init {
             self.w.push_str(" = ");
@@ -2452,7 +2458,7 @@ impl RustEmitter {
                     var.ty
                         .as_ref()
                         .and_then(|t| self.type_ref_primitive(t))
-                        .and_then(|target| self.numeric_widen_to(init, target))
+                        .and_then(|target| self.numeric_widen_or_arm(init, target))
                 };
                 let widen_inner =
                     num_widen.is_some() && crate::exprs::cast_needs_inner_parens(init);
@@ -3938,13 +3944,14 @@ impl RustEmitter {
         } else {
             // Numeric coercion into a typed target: `m = v.len();` (uint -> int)
             // or `longVar = intExpr;` (int -> long widening). Cast the RHS to the
-            // target's numeric type when it differs; never narrows. Skipped for
-            // compound (`+=`) and nullable assigns.
-            let num_widen = if is_compound || assign_nullable {
+            // target's numeric type when it differs; never narrows. A compound
+            // assignment widens its operand the same way (`d += anInt`, `d++`),
+            // since Rust has no `f64 += isize`. Skipped for nullable assigns.
+            let num_widen = if assign_nullable {
                 None
             } else {
                 self.operand_primitive(a_target)
-                    .and_then(|t| self.numeric_widen_to(a_value, t))
+                    .and_then(|t| self.numeric_widen_or_arm(a_value, t))
             };
             let widen_inner =
                 num_widen.is_some() && crate::exprs::cast_needs_inner_parens(a_value);
@@ -4674,5 +4681,24 @@ fn stmt_contains_return_where(s: &Stmt, pred: &dyn Fn(&Option<juxc_ast::Expr>) -
             juxc_ast::SwitchBody::Expr(_) => false,
         }),
         _ => false,
+    }
+}
+
+/// An expression built only from unsuffixed integer literals (`1`, `-1`,
+/// `3 * 1000`), whose type Rust would pick as `i32` when nothing else pins it.
+fn untyped_literal_arith(e: &Expr) -> bool {
+    match e {
+        Expr::Binary(b) => {
+            matches!(
+                b.op,
+                juxc_ast::BinaryOp::Add
+                    | juxc_ast::BinaryOp::Sub
+                    | juxc_ast::BinaryOp::Mul
+                    | juxc_ast::BinaryOp::Div
+                    | juxc_ast::BinaryOp::Rem
+            ) && untyped_literal_arith(&b.left)
+                && untyped_literal_arith(&b.right)
+        }
+        other => juxc_tycheck::infer::untyped_int_literal(other),
     }
 }

@@ -341,10 +341,14 @@ impl RustEmitter {
                 fmt_body.push_str(", ");
             }
             fmt_body.push_str(&comp.name.text);
-            // A float component keeps its decimal point (`{:?}`): `Display`
-            // wrote `Pt(x: 1, y: 2.5)` for `new Pt(1.0, 2.5)`.
-            fmt_body.push_str(if crate::analysis::type_ref_is_float(&comp.ty) { ": {:?}" } else { ": {}" });
-            args.push(format!("self.{}", comp.name.text));
+            fmt_body.push_str(": {}");
+            // A float component prints the way every Jux float does (LANG-V1
+            // 3.4): `Display` wrote `Pt(x: 1, y: 2.5)` for `new Pt(1.0, 2.5)`.
+            if crate::analysis::type_ref_is_float(&comp.ty) {
+                args.push(format!("crate::jux_float(self.{})", comp.name.text));
+            } else {
+                args.push(format!("self.{}", comp.name.text));
+            }
         }
         fmt_body.push(')');
 

@@ -386,6 +386,141 @@ pub fn primitive_name(p: Primitive) -> &'static str {
 }
 
 // ============================================================================
+// Numeric promotion (JUX-SEMANTICS §S.2.6)
+// ============================================================================
+
+/// What two numeric operands of an arithmetic or bitwise operator become.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericPromotion {
+    /// Both operands are brought to this type, and so is the result.
+    To(Primitive),
+    /// A signed and an unsigned integer that no one type holds (`int + uint`,
+    /// `long + ulong`): `E0410` in an arithmetic operator, and an exact
+    /// comparison in a relational one.
+    NoCommonType,
+    /// One operand is not a number (`bool`), so promotion does not apply.
+    NotNumeric,
+}
+
+/// A floating-point primitive.
+pub fn is_float_primitive(p: Primitive) -> bool {
+    matches!(p, Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64)
+}
+
+/// An unsigned integer primitive.
+pub fn is_unsigned_primitive(p: Primitive) -> bool {
+    matches!(
+        p,
+        Primitive::Uint
+            | Primitive::Ubyte
+            | Primitive::U8
+            | Primitive::Ushort
+            | Primitive::U16
+            | Primitive::U32
+            | Primitive::Ulong
+            | Primitive::U64
+    )
+}
+
+/// The width in bits of an integer primitive, with `int` / `uint` at their
+/// widest (64); `None` for a float, `bool` or `char`.
+pub fn integer_bits(p: Primitive) -> Option<u32> {
+    Some(match p {
+        Primitive::Byte | Primitive::I8 | Primitive::Ubyte | Primitive::U8 => 8,
+        Primitive::Short | Primitive::I16 | Primitive::Ushort | Primitive::U16 => 16,
+        Primitive::I32 | Primitive::U32 => 32,
+        Primitive::Int | Primitive::Uint | Primitive::Long | Primitive::I64 | Primitive::Ulong | Primitive::U64 => 64,
+        _ => return None,
+    })
+}
+
+/// Whether the signed integer type `signed` holds every value of the unsigned
+/// integer type `unsigned` on every target (§S.2.6 rule 4): its smallest
+/// possible width is larger than the unsigned type's largest. `int` and `uint`
+/// are 32 or 64 bits by target, so `long` holds `u32` and not `uint`.
+pub fn signed_holds_unsigned(signed: Primitive, unsigned: Primitive) -> bool {
+    let smallest_signed = match signed {
+        Primitive::Int => 32,
+        other => match integer_bits(other) {
+            Some(bits) => bits,
+            None => return false,
+        },
+    };
+    integer_bits(unsigned).is_some_and(|largest_unsigned| smallest_signed > largest_unsigned)
+}
+
+/// Two primitives with one representation (`long` and `i64`, `double` and
+/// `f64`).
+pub fn same_representation(a: Primitive, b: Primitive) -> bool {
+    fn canonical(p: Primitive) -> Primitive {
+        match p {
+            Primitive::I8 => Primitive::Byte,
+            Primitive::U8 => Primitive::Ubyte,
+            Primitive::I16 => Primitive::Short,
+            Primitive::U16 => Primitive::Ushort,
+            Primitive::I64 => Primitive::Long,
+            Primitive::U64 => Primitive::Ulong,
+            Primitive::F32 => Primitive::Float,
+            Primitive::F64 => Primitive::Double,
+            other => other,
+        }
+    }
+    canonical(a) == canonical(b)
+}
+
+/// The type two numeric operands meet in (§S.2.6 rules 1-5):
+///
+/// 1. a `double` operand makes both `double`; otherwise a `float` makes both
+///    `float`;
+/// 2. equal types stay;
+/// 3. two signed, or two unsigned, integers take the wider;
+/// 4. a signed and an unsigned integer take the signed type when it holds the
+///    unsigned one on every target, and otherwise have no common type;
+/// 5. a `char` is an `int`.
+///
+/// An untyped literal operand takes the other operand's type instead; that is
+/// the caller's to apply, since only the caller sees the expression.
+pub fn promote_numeric(l: Primitive, r: Primitive) -> NumericPromotion {
+    if matches!(l, Primitive::Bool) || matches!(r, Primitive::Bool) {
+        return NumericPromotion::NotNumeric;
+    }
+    let l = if l == Primitive::Char { Primitive::Int } else { l };
+    let r = if r == Primitive::Char { Primitive::Int } else { r };
+    if same_representation(l, r) {
+        return NumericPromotion::To(l);
+    }
+    if is_float_primitive(l) || is_float_primitive(r) {
+        let double = |p: Primitive| matches!(p, Primitive::Double | Primitive::F64);
+        return NumericPromotion::To(if double(l) || double(r) { Primitive::Double } else { Primitive::Float });
+    }
+    let rank = |p: Primitive| -> u8 {
+        match p {
+            Primitive::Byte | Primitive::I8 | Primitive::Ubyte | Primitive::U8 => 1,
+            Primitive::Short | Primitive::I16 | Primitive::Ushort | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 => 3,
+            Primitive::Int | Primitive::Uint => 4,
+            _ => 5,
+        }
+    };
+    match (is_unsigned_primitive(l), is_unsigned_primitive(r)) {
+        (false, false) | (true, true) => NumericPromotion::To(if rank(l) >= rank(r) { l } else { r }),
+        (false, true) if signed_holds_unsigned(l, r) => NumericPromotion::To(l),
+        (true, false) if signed_holds_unsigned(r, l) => NumericPromotion::To(r),
+        _ => NumericPromotion::NoCommonType,
+    }
+}
+
+/// Whether a value of `from` widens into a slot of `to` (§S.2.7): the two meet
+/// in `to` under [`promote_numeric`]. A `char` is not a number here; it
+/// converts by cast.
+pub fn numeric_widens(from: Primitive, to: Primitive) -> bool {
+    if from == Primitive::Char || to == Primitive::Char {
+        return false;
+    }
+    matches!(promote_numeric(from, to), NumericPromotion::To(p) if same_representation(p, to))
+}
+
+// ============================================================================
 // TypeRef -> Ty lowering
 // ============================================================================
 

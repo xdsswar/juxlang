@@ -2507,7 +2507,10 @@ pub(crate) fn numeric_constant(type_name: &str, field: &str) -> Option<String> {
     };
     let is_float = matches!(rust_ty, "f32" | "f64");
     let rust_const = match field {
-        "MIN_VALUE" if is_float => "MIN_POSITIVE",
+        // Java's `MIN_VALUE` is the smallest POSITIVE value, subnormal
+        // included (`4.9E-324`); Rust's `MIN_POSITIVE` is the smallest normal
+        // one, a different number. The bit pattern `1` is the former.
+        "MIN_VALUE" if is_float => return Some(format!("{rust_ty}::from_bits(1)")),
         "MIN_VALUE" => "MIN",
         "MAX_VALUE" => "MAX",
         "NAN" if is_float => "NAN",

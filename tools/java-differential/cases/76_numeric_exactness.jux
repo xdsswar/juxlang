@@ -1,0 +1,100 @@
+// Numbers that must come out right (JUX-SEMANTICS §S.2, JUX-LANG-V1 §3.4).
+//
+// Every line prints what Java prints for the same program; the twin is
+// `tools/java-differential/cases/76_numeric_exactness`. Where Jux has a type
+// Java lacks (`uint`), the comment says what the rule is.
+
+record Reading(double value, float gain) {}
+
+enum Sample { Level(double db), Silent }
+
+class Holder<T> {
+    private T item;
+    public Holder(T item) { this.item = item; }
+    public String show() { return $"Holder(${item})"; }
+}
+
+const double LIMIT = 6.0;
+
+double twice(float x) { return x * 2; }
+
+int lastIndex(Vec<String> names) { return names.len() - 1; }
+
+public void main() {
+    // Float text: Java's Double.toString, digit for digit.
+    print(1.0);
+    print(100.0 / 3.0);
+    print(1e7);
+    print(0.001);
+    print(1e-4);
+    print(1e21);
+    print(0.1 + 0.2);
+    print(1.0 / 0.0);
+    print(-1.0 / 0.0);
+    print(0.0 / 0.0);
+    print(-0.0);
+    print(double.MIN_VALUE);
+    print(float.MIN_VALUE);
+    print(0.1f);
+    print(new Reading(2.0, 0.5f));
+    print(Sample.Level(50.0));
+    print(new Holder<double>(4.0).show());
+    print(LIMIT);
+    print($"interpolated ${3.0} and concatenated " + 7.0);
+
+    // Promotion: the narrower operand widens, a literal takes the other type.
+    int k = 4;
+    print(k / 2 * 1.0);
+    int a = 3;
+    int b = 4;
+    print(a * b * 0.5);
+    i32 small = 2147483600;
+    print(small + 7);
+    long wide = small + 1000000000L;
+    print(wide);
+    bool flag = k > 2;
+    print(flag ? 1 : 2.5);
+    print(twice(1.25f));
+
+    // Slots widen: float into double, short into i32, int literals into doubles.
+    float f = 1.5f;
+    double d = f;
+    short s = 7;
+    i32 fromShort = s;
+    double[] halves = {1, 2, 3};
+    d += 1;
+    d += k;
+    d++;
+    print(d);
+    print(fromShort);
+    print(halves[2]);
+
+    // A `var` of an integer literal is an `int`, not a 32-bit value.
+    var acc = 1;
+    for (int i = 0; i < 40; i++) {
+        acc = acc * 2;
+    }
+    print(acc);
+
+    // Casts saturate, NaN becomes zero, and a large double is Infinity as a float.
+    print((i32) 1e30);
+    print((long) (0.0 / 0.0));
+    print((float) 1e40);
+    print((i32) -2.9);
+
+    // Shift counts are taken modulo the width, in every build.
+    long one = 1L;
+    int by = 65;
+    print(one << by);
+
+    // Integer division truncates toward zero; `%` takes the dividend's sign.
+    print(-7 / 2);
+    print(-7 % 3);
+
+    // uint (no Java equivalent): a length in an `int` slot is computed signed,
+    // and a signed/unsigned comparison compares the values.
+    var names = new Vec<String>();
+    print(lastIndex(names));
+    int before = -1;
+    print(before < names.len());
+}

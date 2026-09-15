@@ -736,6 +736,15 @@ struct RustEmitter {
     /// pointer, `(&mut *xs.as_ptr())[i]`, rather than a `borrow_mut()` guard that
     /// would outlive the statement taking the address.
     pub(crate) emitting_raw_place: bool,
+    /// Set for the one arithmetic expression being emitted into a signed
+    /// integer slot whose operands are `uint` values and literals (§S.2.7):
+    /// its `uint` operands are converted to this type first. See
+    /// `numeric_widen_or_arm`.
+    pub(crate) signed_slot_target: Option<juxc_tycheck::Primitive>,
+    /// Set for the one unsuffixed integer literal about to be emitted into a
+    /// float slot, which is then written as a float literal (`1.0`). See
+    /// `numeric_widen_or_arm`.
+    pub(crate) int_literal_as_float: bool,
     /// True while we're emitting the place behind an `out` argument
     /// (§M.4) — `setIt(out b.field)`. The place is passed by exclusive
     /// reference (`&mut`), so a wrapper-class field must take the
@@ -3906,6 +3915,10 @@ impl RustEmitter {
         w.push_str("#![allow(non_camel_case_types)]\n");
         w.push_str("#![allow(non_upper_case_globals)]\n");
         w.push_str("#![allow(clippy::all)]\n");
+        // An overflow rustc can see coming (`int.MAX_VALUE + 1` through a
+        // local) follows the runtime rule of §S.2.1, panic in debug and wrap
+        // in release; the deny-by-default lint made it a build failure.
+        w.push_str("#![allow(arithmetic_overflow)]\n");
         // The one lint that stays ON, and promoted to an error. A delegating
         // body — a trait impl calling the inherent method it wraps, a `Kind`
         // forwarder, a `super` shim — is self-recursive if and only if the
@@ -3961,8 +3974,25 @@ impl RustEmitter {
         w.push_str("pub struct JuxShow<T>(pub T);\n");
         w.push_str("pub trait JuxShowViaDisplay { fn jux_show(self) -> String; }\n");
         w.push_str("impl<T: std::fmt::Display> JuxShowViaDisplay for &&JuxShow<T> {\n");
-        w.push_str("    fn jux_show(self) -> String { format!(\"{}\", self.0) }\n");
+        w.push_str("    fn jux_show(self) -> String { jux_display_text(&self.0) }\n");
         w.push_str("}\n");
+        // A float reaching the `Display` tier is one whose type the emitter
+        // could not see: a generic `T` holding a `double`, a `const`, a value
+        // behind a reference. `Display` drops the point on a whole number and
+        // spells `inf`, so the text is re-laid out in Java's form (LANG-V1
+        // 3.4). The type is asked of the value at run time, which works inside
+        // generic code where a trait tier cannot tell an `f64` from any `T`;
+        // `Display`'s digits read back as the same value, so nothing is lost.
+        w.push_str(concat!(
+            "pub fn jux_display_text<T: std::fmt::Display + ?Sized>(v: &T) -> String {\n",
+            "    let text = format!(\"{}\", v);\n",
+            "    match std::any::type_name_of_val(v).trim_start_matches('&') {\n",
+            "        \"f64\" => text.parse::<f64>().map(crate::jux_float).unwrap_or(text),\n",
+            "        \"f32\" => text.parse::<f32>().map(crate::jux_float).unwrap_or(text),\n",
+            "        _ => text,\n",
+            "    }\n",
+            "}\n",
+        ));
         w.push_str("pub trait JuxShowViaDebug { fn jux_show(self) -> String; }\n");
         w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &JuxShow<T> {\n");
         w.push_str("    fn jux_show(self) -> String { format!(\"{:?}\", self.0) }\n");
@@ -3986,15 +4016,119 @@ impl RustEmitter {
         // cell. Naming the shape keeps the emitted Rust readable: a two-
         // dimensional `int[][]` is `JuxArr<Vec<JuxArr<Vec<isize>>>>` rather
         // than the same thing spelled out, which nests to four lines.
-        w.push_str("/// Render a floating-point value the way Jux prints one (LANG-V1 3.4).\n");
-        w.push_str("///\n");
-        w.push_str("/// Rust's `Display` for a float drops the decimal point on a whole\n");
-        w.push_str("/// number, so a `double` holding 1 prints as `1` and reads as an `int`.\n");
-        w.push_str("/// `Debug` keeps it, and is identical everywhere else -- including the\n");
-        w.push_str("/// shortest-roundtrip digits and the `inf` / `NaN` spellings.\n");
-        w.push_str("pub fn jux_float<T: std::fmt::Debug>(v: T) -> String {\n");
-        w.push_str("    format!(\"{:?}\", v)\n");
-        w.push_str("}\n");
+        // Float text is Java's `Double.toString` / `Float.toString` (LANG-V1
+        // 3.4). Rust's `{:e}` gives the shortest digits that read back as the
+        // value, and Java picks the same digits except in two corners handled
+        // below: at least two significant digits, and an even last digit when
+        // two candidates are equally near. Checked against the JDK over 1.2
+        // million random `double` and `float` bit patterns.
+        w.push_str(r##"/// Render a floating-point value the way Jux prints one (LANG-V1 3.4),
+/// which is Java's `Double.toString` / `Float.toString`.
+pub trait JuxFloatText { fn jux_float_text(&self) -> String; }
+impl<T: JuxFloatText + ?Sized> JuxFloatText for &T {
+    fn jux_float_text(&self) -> String { (**self).jux_float_text() }
+}
+pub fn jux_float<T: JuxFloatText>(v: T) -> String {
+    v.jux_float_text()
+}
+macro_rules! jux_float_text_impl {
+    ($t:ty) => {
+        impl JuxFloatText for $t {
+            fn jux_float_text(&self) -> String {
+                let v = *self;
+                let sign = if v.is_sign_negative() { "-" } else { "" };
+                let a = v.abs();
+                if v.is_nan() {
+                    String::from("NaN")
+                } else if v.is_infinite() {
+                    format!("{sign}Infinity")
+                } else if a == 0.0 {
+                    format!("{sign}0.0")
+                } else {
+                    // The shortest digits that read back as the value.
+                    let (mut digits, mut exp) = jux_float_split(&format!("{:e}", a));
+                    // Java writes at least two significant digits, and when one
+                    // would do it takes the two-digit decimal nearest the exact
+                    // value: `4.9E-324`, not `5.0E-324`, for the smallest subnormal.
+                    if digits.len() == 1 {
+                        (digits, exp) = jux_float_split(&format!("{:.1e}", a));
+                    }
+                    // Of two shortest decimals equally near the exact value, Java
+                    // takes the one whose last digit is even.
+                    let n = digits.len();
+                    let last = digits.as_bytes()[n - 1] - b'0';
+                    if n > 1 && last % 2 == 1 {
+                        let exact = jux_float_split(&format!("{:.800e}", a as f64)).0;
+                        for other in [last - 1, last + 1] {
+                            let mut cand = digits[..n - 1].to_owned();
+                            cand.push((b'0' + other.min(9)) as char);
+                            let text = format!("{}.{}e{}", &cand[..1], &cand[1..], exp);
+                            let tie = other <= 9
+                                && text.parse::<$t>().ok() == Some(a)
+                                && exact.len() > n
+                                && exact[..n - 1] == digits[..n - 1]
+                                && exact.as_bytes()[n - 1] - b'0' == last.min(other)
+                                && exact.as_bytes()[n] == b'5'
+                                && exact[n + 1..].bytes().all(|b| b == b'0');
+                            if tie {
+                                digits = cand;
+                                break;
+                            }
+                        }
+                    }
+                    jux_float_layout(sign, digits, exp)
+                }
+            }
+        }
+    };
+}
+jux_float_text_impl!(f64);
+jux_float_text_impl!(f32);
+/// `1.2345e21` as its significant digits (`"12345"`, trailing zeros
+/// dropped) and its exponent (`21`).
+fn jux_float_split(sci: &str) -> (String, i32) {
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci, "0"));
+    let mut digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    (digits, exp.parse().unwrap_or(0))
+}
+/// Java's layout: plain decimal for 1e-3 <= |v| < 1e7, `d.dddE<exp>`
+/// otherwise, and always at least one digit after the point.
+fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
+    if (-3..7).contains(&exp) {
+        if exp >= 0 {
+            let int_len = exp as usize + 1;
+            let mut int_part = digits.clone();
+            while int_part.len() < int_len {
+                int_part.push('0');
+            }
+            let frac = if digits.len() > int_len { &digits[int_len..] } else { "0" };
+            format!("{sign}{}.{frac}", &int_part[..int_len])
+        } else {
+            format!("{sign}0.{}{digits}", "0".repeat((-exp - 1) as usize))
+        }
+    } else {
+        let frac = if digits.len() > 1 { &digits[1..] } else { "0" };
+        format!("{sign}{}.{frac}E{exp}", &digits[..1])
+    }
+}
+"##);
+        w.push_str(concat!(
+            "/// `a <=> b` on floats (Semantics 2.3): IEEE total order, except that\n",
+            "/// every NaN is one value sorting after `+Infinity`, whatever its sign\n",
+            "/// bit. `0.0 / 0.0` yields a NaN with the sign bit set on x86, which\n",
+            "/// `total_cmp` alone sorts first.\n",
+            "pub fn jux_fcmp(a: f64, b: f64) -> isize {\n",
+            "    match (a.is_nan(), b.is_nan()) {\n",
+            "        (true, true) => 0,\n",
+            "        (true, false) => 1,\n",
+            "        (false, true) => -1,\n",
+            "        (false, false) => a.total_cmp(&b) as isize,\n",
+            "    }\n",
+            "}\n",
+        ));
         w.push_str("/// The cell inside a Jux array or collection handle.\n");
         w.push_str("///\n");
         w.push_str("/// A plain `RefCell` would hold the value just as well, but its `Debug`\n");
@@ -4604,6 +4738,8 @@ impl RustEmitter {
             byref_param_names: HashSet::new(),
             emitting_lvalue: false,
             emitting_raw_place: false,
+            signed_slot_target: None,
+            int_literal_as_float: false,
             emitting_out_place: false,
             collection_args_prehoisted: false,
             emitting_const_context: false,

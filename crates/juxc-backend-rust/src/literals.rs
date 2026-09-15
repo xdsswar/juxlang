@@ -94,10 +94,21 @@ impl RustEmitter {
     /// We don't preserve the user's exact letter case, just the base
     /// and the digit count.
     pub(crate) fn emit_int_lit(&mut self, lit: &juxc_ast::IntLit) {
+        // An unsuffixed integer literal in a float slot (`d += 1`, `double[]
+        // a = {1, 2}`) is written as the float it becomes (§S.2.7).
+        if lit.kind.is_none() && std::mem::take(&mut self.int_literal_as_float) {
+            self.w.push_str(&format!("{}.0", lit.value));
+            return;
+        }
         let width = lit.digit_width as usize;
         match lit.radix {
             juxc_ast::IntRadix::Decimal => {
-                self.w.push_str(&lit.value.to_string());
+                // A `uL` literal keeps its bits in the `i64` (see the parser).
+                if lit.kind == Some(juxc_ast::IntKind::ULong) {
+                    self.w.push_str(&(lit.value as u64).to_string());
+                } else {
+                    self.w.push_str(&lit.value.to_string());
+                }
             }
             juxc_ast::IntRadix::Hex => {
                 self.w.push_str(&format!("0x{:0width$X}", lit.value, width = width));
@@ -114,23 +125,23 @@ impl RustEmitter {
         }
     }
 
-    /// Emit a float literal: value formatted to keep its float-ness,
-    /// plus optional `f32` suffix.
-    ///
-    /// `f64::to_string()` may produce `"3"` for `3.0` (and Rust would
-    /// then parse it as integer). We append `.0` when the formatted
-    /// text contains neither a `.` nor an `e`, so the emitted literal is
-    /// unambiguously a float to rustc.
+    /// Emit a float literal: the shortest spelling of its value that reads
+    /// back exactly, plus a suffix for an `f`-suffixed Jux literal or for a
+    /// double too large to be read as a `float`.
     pub(crate) fn emit_float_lit(&mut self, lit: &juxc_ast::FloatLit) {
-        let s = lit.value.to_string();
-        if s.contains('.') || s.contains('e') || s.contains('E') {
-            self.w.push_str(&s);
-        } else {
-            self.w.push_str(&s);
-            self.w.push_str(".0");
-        }
+        // `Debug` is the shortest spelling that reads back as the value and
+        // keeps an exponent (`1e40`, not forty digits), and always has a `.` or
+        // an `e`, so Rust never reads it as an integer.
+        let s = format!("{:?}", lit.value);
+        self.w.push_str(&s);
         if let Some(kind) = lit.kind {
             self.w.push_str(kind.as_rust_suffix());
+        } else if lit.value.is_finite() && lit.value.abs() > f64::from(f32::MAX) {
+            // A double literal beyond `float`'s range, as in `(float) 1e40`.
+            // Rust types an unsuffixed literal from its cast, so `1e40 as f32`
+            // read the literal as an out-of-range `f32` and refused to build;
+            // the cast itself is `Infinity`, as §S.2.4 says.
+            self.w.push_str("f64");
         }
     }
 

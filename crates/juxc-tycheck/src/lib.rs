@@ -147,7 +147,7 @@ fn flag_async_decl(f: &FnDecl, file_idx: usize, out: &mut Vec<Diagnostic>) {
     }
 }
 pub use symbol_table::SymbolTable;
-pub use ty::{ty_from_ref_in_env, ArrayKind, Primitive, Ty};
+pub use ty::{ty_from_ref_in_env, ArrayKind, NumericPromotion, Primitive, Ty};
 
 /// Resolve a field's type the way the symbol table does: the written type if
 /// present, otherwise inferred from its (literal) initializer. The backend

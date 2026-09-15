@@ -71,11 +71,13 @@ fn int_main_returns_isize() {
 }
 
 /// `var` lowers to immutable `let` (no `let mut`) — until we have
-/// reassignment statements, none of our `var`s are mutated.
+/// reassignment statements, none of our `var`s are mutated. An integer-literal
+/// initializer names `isize`: `var x = 10;` is an `int` (ERRATA E15), where
+/// Rust alone would pick `i32`.
 #[test]
 fn var_lowers_to_let_not_let_mut() {
     let rust = emit("public void main() { var x = 10; print(x); }");
-    assert!(rust.contains("let x = 10;"), "expected `let x = 10;`, got: {rust}");
+    assert!(rust.contains("let x: isize = 10;"), "expected `let x: isize = 10;`, got: {rust}");
     // Scope the negative assertion to the user's binding — the
     // emitted runtime prelude (channels, tasks) legitimately uses
     // `let mut` internally.
@@ -97,7 +99,7 @@ fn integer_literal_has_no_suffix() {
 fn simple_binary_has_no_outer_parens() {
     let rust = emit("public void main() { var s = 1 + 2; print(s); }");
     assert!(
-        rust.contains("let s = 1 + 2;"),
+        rust.contains("let s: isize = 1 + 2;"),
         "expected no parens around `1 + 2`, got: {rust}",
     );
 }
@@ -107,7 +109,7 @@ fn simple_binary_has_no_outer_parens() {
 fn mixed_precedence_has_no_redundant_parens() {
     let rust = emit("public void main() { var s = 1 + 2 * 3; print(s); }");
     assert!(
-        rust.contains("let s = 1 + 2 * 3;"),
+        rust.contains("let s: isize = 1 + 2 * 3;"),
         "expected `1 + 2 * 3`, got: {rust}",
     );
 }
@@ -119,7 +121,7 @@ fn mixed_precedence_has_no_redundant_parens() {
 fn lower_prec_subexpr_keeps_parens() {
     let rust = emit("public void main() { var s = (1 + 2) * 3; print(s); }");
     assert!(
-        rust.contains("let s = (1 + 2) * 3;"),
+        rust.contains("let s: isize = (1 + 2) * 3;"),
         "expected `(1 + 2) * 3`, got: {rust}",
     );
 }
@@ -281,9 +283,9 @@ fn var_promoted_to_let_mut_only_when_reassigned() {
                while (i < n) { i = i + 1; }
            }"#,
     );
-    assert!(rust.contains("let mut i = 0;"), "i should be let mut: {rust}");
+    assert!(rust.contains("let mut i: isize = 0;"), "i should be let mut: {rust}");
     assert!(
-        rust.contains("let n = 5;") && !rust.contains("let mut n"),
+        rust.contains("let n: isize = 5;") && !rust.contains("let mut n"),
         "n should stay immutable: {rust}",
     );
 }
@@ -3501,8 +3503,8 @@ fn one_float_payload_disqualifies_enum_eq_hash() {
 
 /// A primitive-only record gets an `impl std::fmt::Display` block whose
 /// format matches the spec example: `"Point(x: 1.5, y: 2.7)"`. A `double`
-/// component renders through `{:?}`, which keeps the decimal point on a whole
-/// number (`Point(x: 1.0, ...)`, LANG-V1 3.4) where `{}` would print `1`.
+/// component renders through `jux_float`, which keeps the decimal point on a
+/// whole number (`Point(x: 1.0, ...)`, LANG-V1 3.4) where `{}` would print `1`.
 #[test]
 fn primitive_record_emits_display_impl() {
     let rust = emit(
@@ -3516,7 +3518,7 @@ fn primitive_record_emits_display_impl() {
         "missing Display impl: {rust}",
     );
     assert!(
-        rust.contains(r#"write!(f, "Point(x: {:?}, y: {:?})", self.x, self.y)"#),
+        rust.contains(r#"write!(f, "Point(x: {}, y: {})", crate::jux_float(self.x), crate::jux_float(self.y))"#),
         "format mismatch: {rust}",
     );
 }
@@ -3942,7 +3944,7 @@ fn primitive_arithmetic_is_not_rewritten() {
         }
         "#,
     );
-    assert!(rust.contains("let x = 1 + 2"), "primitive `+` must stay: {rust}");
+    assert!(rust.contains("let x: isize = 1 + 2"), "primitive `+` must stay: {rust}");
     assert!(!rust.contains("__op_add"), "no class op rewrite on primitives: {rust}");
 }
 
@@ -6039,4 +6041,114 @@ fn slot_typed_lambda_params_and_payload_binders_print_as_floats() {
         rust.contains(r#"format!("{}", crate::jux_float(v))"#),
         "lambda parameter not rendered as a float: {rust}",
     );
+}
+
+// ============================================================================
+// Numeric exactness (JUX-SEMANTICS §S.2, JUX-LANG-V1 §3.4)
+// ============================================================================
+
+/// `<=>` on floats is IEEE total order with one NaN (§S.2.3), not
+/// `partial_cmp`, which answered `0` for NaN and for `-0.0 <=> 0.0`.
+#[test]
+fn float_spaceship_uses_total_order() {
+    let rust = emit(
+        r#"
+        int f(double a, double b) { return a <=> b; }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("crate::jux_fcmp(a, b)"), "got: {rust}");
+}
+
+/// A signed and an unsigned integer that no one type holds compare as
+/// `i128`, so `-1 < 5u` is true; the cast to the unsigned side made it false.
+#[test]
+fn signed_unsigned_comparison_is_exact() {
+    let rust = emit(
+        r#"
+        bool f(int a, uint b) { return a < b; }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("(a as i128) < (b as i128)"), "got: {rust}");
+}
+
+/// A shift count that is not a literal inside the width is masked in debug
+/// and release alike (§S.2.5); a bare `<<` panicked in debug.
+#[test]
+fn variable_shift_count_is_masked() {
+    let rust = emit(
+        r#"
+        long f(long x, int k) { return (x << k) + (x << 3); }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("x.wrapping_shl(k as u32)"), "got: {rust}");
+    assert!(rust.contains("x << 3"), "a literal count in range stays an operator: {rust}");
+}
+
+/// `uint` arithmetic flowing into a signed slot is computed in the slot's
+/// type (§S.2.7): `int last = v.len() - 1;` is `-1` for an empty list.
+#[test]
+fn uint_arithmetic_in_signed_slot_is_computed_signed() {
+    let rust = emit(
+        r#"
+        int f(uint n) { int last = n - 1; return last; }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("let last: isize = (n as isize) - 1;"), "got: {rust}");
+}
+
+/// `var n = 1;` is an `int` (ERRATA E15); Rust would type the bare literal
+/// `i32`.
+#[test]
+fn var_with_untyped_literal_is_an_int() {
+    let rust = emit(
+        r#"
+        public void main() { var acc = 1; acc = acc * 2; print(acc); }
+        "#,
+    );
+    assert!(rust.contains("let mut acc: isize = 1;"), "got: {rust}");
+}
+
+/// An integer literal in a float slot is written as a float, and an integer
+/// value widens with a cast, compound assignments included.
+#[test]
+fn integer_values_widen_into_float_slots() {
+    let rust = emit(
+        r#"
+        double f(int n) { double d = 1.5; d += 1; d += n; double[] a = {1, 2}; return d; }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("d += 1.0;"), "got: {rust}");
+    assert!(rust.contains("d += (n as f64);"), "got: {rust}");
+    assert!(rust.contains("vec![1.0, 2.0]"), "got: {rust}");
+}
+
+/// A promoted operand is cast as a unit: `a * b * 0.5` casts `a * b`, where
+/// `a * b as f64` casts `b` alone.
+#[test]
+fn promoted_binary_operand_is_parenthesized() {
+    let rust = emit(
+        r#"
+        double f(int a, int b) { return a * b * 0.5; }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("((a * b) as f64) * 0.5"), "got: {rust}");
+}
+
+/// A double literal past `float`'s range keeps its `f64` type under a cast,
+/// and `double.MIN_VALUE` is Java's smallest positive value, subnormal.
+#[test]
+fn float_literal_edges() {
+    let rust = emit(
+        r#"
+        public void main() { float f = (float) 1e40; print(f); print(double.MIN_VALUE); }
+        "#,
+    );
+    assert!(rust.contains("1e40f64 as f32"), "got: {rust}");
+    assert!(rust.contains("f64::from_bits(1)"), "got: {rust}");
 }

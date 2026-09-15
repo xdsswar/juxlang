@@ -105,7 +105,7 @@ public void main() {
                     toolIdx = row;
                     print("tool: " + tl[row].name() + " " + tl[row].tag());
                 } else {
-                    int swatch = (my - tl.len() * 40) / 28;
+                    int swatch = (my - (int) tl.len() * 40) / 28;
                     if (swatch >= 0 && swatch < pal.len()) { colorIdx = swatch; }
                 }
             } else {

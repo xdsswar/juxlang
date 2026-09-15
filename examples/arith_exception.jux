@@ -63,7 +63,7 @@ public void main() {
     literalDivide();
     finallyOrdering();
     // Untouched behaviors: integer division still truncates, float
-    // division by zero still follows IEEE (inf), mixed promotion holds.
+    // division by zero still follows IEEE (Infinity), mixed promotion holds.
     print(5 / 2);
     print(1.0 / 0.0);
     print(7 / 2.0);

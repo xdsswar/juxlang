@@ -479,12 +479,17 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // higher-order callbacks; emitting `Unknown` keeps the
         // call-site flow open for the backend to wire up.
         Expr::MethodRef(_) => Ty::Unknown,
-        // Ternary: take the then-branch's type as the result
-        // type. The else-branch should unify; Phase 1 doesn't
-        // enforce that here — rustc surfaces real mismatches on
-        // the emitted `if`. Generic / numeric coercion across
-        // branches is a future tycheck refinement.
-        Expr::Ternary(t) => infer_expr(&t.then_branch, env, symbols),
+        // Ternary: two numeric arms meet in one type (§S.2.6, JLS 15.25):
+        // `t ? 1 : 2.0` is a `double`. Any other pair takes the then-branch's
+        // type; the else-branch should unify, and rustc surfaces a real
+        // mismatch on the emitted `if`.
+        Expr::Ternary(t) => {
+            let then_ty = infer_expr(&t.then_branch, env, symbols);
+            let else_ty = infer_expr(&t.else_branch, env, symbols);
+            numeric_operands_type(&t.then_branch, &then_ty, &t.else_branch, &else_ty)
+                .map(Ty::Primitive)
+                .unwrap_or(then_ty)
+        }
         // `await expr` resolves to the operand's value type. In a
         // proper Future model the operand would be `Future<T>` and
         // this would unwrap to `T`; Phase 1 doesn't track Future
@@ -2069,7 +2074,18 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::BitXor
         | BinaryOp::BitAnd => {
             let right_ty = infer_expr(&b.right, env, symbols);
-            numeric_promote(&left_ty, &right_ty)
+            // A signed/unsigned pair with no common type is reported once, at
+            // this operator (E0410); its result is unknown, so an enclosing
+            // `a - b - c` does not report the same mistake again.
+            if let (Ty::Primitive(l), Ty::Primitive(r)) = (&left_ty, &right_ty) {
+                if !untyped_int_literal(&b.left)
+                    && !untyped_int_literal(&b.right)
+                    && crate::ty::promote_numeric(*l, *r) == crate::ty::NumericPromotion::NoCommonType
+                {
+                    return Ty::Unknown;
+                }
+            }
+            numeric_operands_type(&b.left, &left_ty, &b.right, &right_ty)
                 .map(Ty::Primitive)
                 .unwrap_or(left_ty)
         }
@@ -2085,81 +2101,56 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     }
 }
 
-/// Java-style numeric promotion of two operand types: the common primitive an
-/// arithmetic/bitwise op over `l` and `r` produces, or `None` when either side
-/// is not a numeric primitive (so the caller keeps its existing left-type
-/// fallback). Mirrors `juxc_backend_rust`'s `numeric_promote_target` exactly so
-/// the inferred result type matches the operand casts the backend emits:
-/// a float operand wins (`double`, or `float` only when both floats are 32-bit);
-/// otherwise the wider integer, with a same-width signed/unsigned tie resolving
-/// to the unsigned type.
-fn numeric_promote(l: &Ty, r: &Ty) -> Option<Primitive> {
+/// The type two numeric operands produce (§S.2.6), or `None` when either is not
+/// a numeric primitive or the two have no common type (the checker reports the
+/// latter), so the caller keeps its left-type fallback.
+///
+/// An untyped literal takes the other operand's type (`x + 1` with `i32 x` is an
+/// `i32`), which is also what Rust infers for the unsuffixed literal the backend
+/// emits; everything else goes through [`crate::ty::promote_numeric`], the rule
+/// the backend's operand casts follow.
+pub(crate) fn numeric_operands_type(left: &Expr, l: &Ty, right: &Expr, r: &Ty) -> Option<Primitive> {
     let (Ty::Primitive(lp), Ty::Primitive(rp)) = (l, r) else {
         return None;
     };
     let (lp, rp) = (*lp, *rp);
-    if matches!(lp, Primitive::Bool) || matches!(rp, Primitive::Bool) {
-        return None;
+    let int_like = |p: Primitive| crate::ty::integer_bits(p).is_some();
+    if untyped_int_literal(left) && int_like(rp) {
+        return Some(rp);
     }
-    // Java's unary numeric promotion: a `char` operand becomes an `int` in any
-    // arithmetic or bitwise expression, which is why `char c2 = c + 1;` needs
-    // an explicit `(char)` in Java and here. Inferring `char` instead made the
-    // cast back look like an identity, and the emitted Rust then tried to add
-    // an integer to a Rust `char` -- rustc E0369, straight out of the compiler.
-    // Comparisons answer `bool` before ever reaching this, so two chars
-    // compared are unaffected.
-    let lp = if lp == Primitive::Char { Primitive::Int } else { lp };
-    let rp = if rp == Primitive::Char { Primitive::Int } else { rp };
-    if lp == rp {
+    if untyped_int_literal(right) && int_like(lp) {
         return Some(lp);
     }
-    let is_float = |p: Primitive| {
-        matches!(
-            p,
-            Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64
-        )
-    };
-    if is_float(lp) || is_float(rp) {
-        let is_f64 = |p: Primitive| matches!(p, Primitive::Double | Primitive::F64);
-        return Some(if is_f64(lp) || is_f64(rp) {
-            Primitive::Double
-        } else {
-            Primitive::Float
-        });
+    if untyped_float_literal(left) && crate::ty::is_float_primitive(rp) {
+        return Some(rp);
     }
-    let rank = |p: Primitive| -> u8 {
-        match p {
-            Primitive::Byte | Primitive::I8 | Primitive::Ubyte | Primitive::U8 => 1,
-            Primitive::Short | Primitive::I16 | Primitive::Ushort | Primitive::U16 => 2,
-            Primitive::I32 | Primitive::U32 => 3,
-            Primitive::Int | Primitive::Uint => 4,
-            Primitive::Long | Primitive::I64 | Primitive::Ulong | Primitive::U64 => 5,
-            _ => 0,
-        }
-    };
-    let unsigned = |p: Primitive| {
-        matches!(
-            p,
-            Primitive::Uint
-                | Primitive::Ubyte
-                | Primitive::U8
-                | Primitive::Ushort
-                | Primitive::U16
-                | Primitive::U32
-                | Primitive::Ulong
-                | Primitive::U64,
-        )
-    };
-    let (rl, rr) = (rank(lp), rank(rp));
-    Some(if rl > rr {
-        lp
-    } else if rr > rl {
-        rp
-    } else if unsigned(lp) {
-        lp
-    } else {
-        rp
-    })
+    if untyped_float_literal(right) && crate::ty::is_float_primitive(lp) {
+        return Some(lp);
+    }
+    match crate::ty::promote_numeric(lp, rp) {
+        crate::ty::NumericPromotion::To(p) => Some(p),
+        _ => None,
+    }
+}
+
+/// An integer literal written with no suffix (`1`, `-1`, `0xFF`), whose type is
+/// the context's (§S.2.6).
+pub fn untyped_int_literal(e: &Expr) -> bool {
+    match e {
+        Expr::Literal(Literal::Int(lit)) => lit.kind.is_none(),
+        Expr::Unary(u) if u.op == UnaryOp::Neg => untyped_int_literal(&u.operand),
+        _ => false,
+    }
+}
+
+/// A floating-point literal written with no `f` suffix, which adopts either
+/// float type.
+pub fn untyped_float_literal(e: &Expr) -> bool {
+    match e {
+        Expr::Literal(Literal::Float(lit)) => lit.kind.is_none(),
+        Expr::Unary(u) if u.op == UnaryOp::Neg => untyped_float_literal(&u.operand),
+        _ => false,
+    }
 }
 
 /// Map a [`BinaryOp`] to the [`OperatorKind`] that would override it,

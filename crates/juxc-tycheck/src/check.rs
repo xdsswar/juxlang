@@ -716,6 +716,11 @@ impl<'a> Checker<'a> {
                             );
                         }
                     }
+                    let slot_ty = match &c.ty {
+                        Some(t) => ty_from_ref(t, &self.env, self.symbols),
+                        None => found.clone(),
+                    };
+                    self.check_const_integer_fits(&c.name.text, &slot_ty, &c.value, c.span);
                 }
                 // Foreign-function blocks: validate each signature is
                 // FFI-compatible (E0508). No bodies to walk.
@@ -3308,6 +3313,52 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// §S.2.6: the operands of an arithmetic or bitwise operator must meet in one
+    /// type. A signed and an unsigned integer that no one type holds (`int` and
+    /// `uint`, `long` and `ulong`) do not, and silently picking either side is
+    /// how `-1 + len` became a huge unsigned number. An untyped literal takes
+    /// the other side's type and never trips this; a comparison compares the
+    /// values exactly and is not checked here.
+    fn check_numeric_operands(&mut self, b: &juxc_ast::BinaryExpr) {
+        if !matches!(
+            b.op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+        ) {
+            return;
+        }
+        if crate::infer::untyped_int_literal(&b.left) || crate::infer::untyped_int_literal(&b.right) {
+            return;
+        }
+        let (Ty::Primitive(l), Ty::Primitive(r)) = (
+            infer_expr(&b.left, &self.env, self.symbols),
+            infer_expr(&b.right, &self.env, self.symbols),
+        ) else {
+            return;
+        };
+        if crate::ty::promote_numeric(l, r) != crate::ty::NumericPromotion::NoCommonType {
+            return;
+        }
+        let (ln, rn) = (crate::ty::primitive_name(l), crate::ty::primitive_name(r));
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0410_TypeMismatch,
+                format!(
+                    "`{ln}` and `{rn}` have no common type: no one integer type holds every value \
+                     of both, so either result type could be wrong -- cast one operand to the type \
+                     you mean, `({ln})` or `({rn})`"
+                ),
+            )
+            .with_span(b.span),
+        );
+    }
+
     /// Walk one statement, emitting diagnostics where types disagree.
     /// (see `match_null_test` below for the null-test shapes)
     fn check_stmt(&mut self, stmt: &Stmt) {
@@ -4303,6 +4354,7 @@ impl<'a> Checker<'a> {
             Expr::Binary(b) => {
                 self.check_expr(&b.left);
                 self.check_expr(&b.right);
+                self.check_numeric_operands(b);
                 if !self.in_unsafe
                     && matches!(b.op, juxc_ast::BinaryOp::Add | juxc_ast::BinaryOp::Sub)
                     && (self.expr_ptr_depth(&b.left) > 0 || self.expr_ptr_depth(&b.right) > 0)
@@ -5869,6 +5921,53 @@ impl<'a> Checker<'a> {
     /// overruns are reported regardless, since they're real errors either way.
     fn check_const_size_expr(&mut self, size: &Expr, heapable: bool) {
         self.check_const_size_expr_at(size, heapable, juxc_source::Span::DUMMY)
+    }
+
+    /// An integer constant's initializer is evaluated here, at compile time
+    /// (§T.11.6), so an overflow is `E0842` rather than a value Rust rejects
+    /// later: `const long OV = long.MAX_VALUE + 1;`, `const i32 X = 2147483647 +
+    /// 1;`. The folded value must also fit the constant's own type, which the
+    /// 64-bit evaluation alone does not show for a narrower one.
+    fn check_const_integer_fits(&mut self, name: &str, slot: &Ty, value: &Expr, fallback: Span) {
+        let Ty::Primitive(p) = slot else { return };
+        let Some(bits) = crate::ty::integer_bits(*p) else { return };
+        let ctx = crate::const_eval::ConstCtx {
+            symbols: self.symbols,
+            generic_param_names: &self.const_param_names,
+            enclosing_class: None,
+        };
+        let span = match expr_span(value) {
+            s if s == Span::DUMMY => fallback,
+            s => s,
+        };
+        let message = match crate::const_eval::eval_const_int(value, &ctx) {
+            Err(crate::const_eval::ConstEvalError::Panic(msg)) => msg,
+            Ok(v) => {
+                let v = i128::from(v);
+                let (lo, hi): (i128, i128) = if crate::ty::is_unsigned_primitive(*p) {
+                    (0, (1i128 << bits) - 1)
+                } else {
+                    (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+                };
+                // `int` and `uint` hold 64 bits here; a 32-bit target is the
+                // runtime rule's to report, like any `int` arithmetic.
+                if (lo..=hi).contains(&v) || crate::infer::untyped_int_literal(value) {
+                    return;
+                }
+                format!(
+                    "it evaluates to {v}, which does not fit `{}` ({lo} to {hi})",
+                    crate::ty::primitive_name(*p),
+                )
+            }
+            Err(_) => return,
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0842_ConstEvalPanic,
+                format!("the initializer of constant `{name}` cannot be evaluated: {message}"),
+            )
+            .with_span(span),
+        );
     }
 
     /// As [`Self::check_const_size_expr`], with a span to fall back on when
@@ -9649,6 +9748,10 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         {
             true
         }
+        // Widening (§S.2.7): a value fits a slot of a type it promotes to under
+        // §S.2.6 -- `double d = aFloat;`, `i32 x = aShort;`, `double d = anI32;`.
+        // No value changes, and the backend writes the cast.
+        (Ty::Primitive(to), Ty::Primitive(from)) if crate::ty::numeric_widens(*from, *to) => true,
         // Arrays — recurse on element. Per JUX-LANG-V1 §5.6, a
         // FIXED-size array (`found`) flows into a runtime-sized
         // (`Dynamic`) slot (`expected`) — the size info is simply
@@ -12696,5 +12799,58 @@ public void main() { }");
             has(&d, code::Code::E0200_UnexpectedToken),
             "`s++` on a String should fire E0200: {d:?}",
         );
+    }
+    // ---- Numeric promotion and slots (JUX-SEMANTICS §S.2.6, §S.2.7) ----
+
+    /// A signed and an unsigned integer that no one type holds have no common
+    /// type in arithmetic: silently picking the unsigned side made `-1 + len`
+    /// a huge number.
+    #[test]
+    fn signed_unsigned_arithmetic_without_common_type_is_e0410() {
+        let d = run("int f(int a, uint b) { return a + (int) b; }
+                     long g(long a, ulong b) { var c = a + b; return 0L; }");
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+        let d = run("long f(long a, u32 b) { return a + b; }
+                     int g(int a, ushort b) { return a * b; }");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "a holding signed type is fine: {d:?}");
+    }
+
+    /// Comparisons are exact, never an error, and an untyped literal takes the
+    /// other side's type.
+    #[test]
+    fn signed_unsigned_comparison_and_literals_are_accepted() {
+        let d = run("bool f(int a, uint b) { return a < b; }
+                     uint g(uint b) { return b - 1; }");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+    }
+
+    /// A value widens into a slot of a type it promotes to (§S.2.7).
+    #[test]
+    fn numeric_widening_into_slots_is_accepted() {
+        let d = run("double f(float x) { double d = x; return x; }
+                     i32 g(short s) { i32 x = s; return s; }
+                     double h(i32 n) { double d = n; return d; }");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+    }
+
+    /// The arms of a conditional promote: `t ? 1 : 2.5` is a `double`.
+    #[test]
+    fn ternary_numeric_arms_promote() {
+        let d = run("int f(bool t) { int x = t ? 1 : 2.5; return x; }");
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "a double into an int slot: {d:?}");
+        let d = run("double f(bool t) { double x = t ? 1 : 2.5; return x; }");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+    }
+
+    /// An integer constant is evaluated at compile time: an overflow, and a
+    /// value outside the constant's own type, are E0842.
+    #[test]
+    fn integer_constant_overflow_is_e0842() {
+        let d = run("const long OV = 9223372036854775807L + 1L;");
+        assert!(has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
+        let d = run("const i32 X = 2147483647 + 1;");
+        assert!(has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
+        let d = run("const i32 X = 2147483646 + 1;");
+        assert!(!has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
     }
 }

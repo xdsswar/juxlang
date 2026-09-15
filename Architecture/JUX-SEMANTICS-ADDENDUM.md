@@ -112,6 +112,8 @@ For each profile:
 
 Panic means: abort via the panic handler (see §S.7) after reporting the condition and source location. Per `ERRATA.md` E1, panics are **not catchable from Jux source** — they are not exceptions. Two conditions that once panicked no longer do: `!!` on null raises a catchable `NullPointerException` and a failing downcast raises a catchable `ClassCastException` (`ERRATA.md` E11), joining integer division by zero. What settled that was not the argument but the evidence: both types are declared classes here, so a `catch` clause naming one compiled, and then the abort went straight through it. Code that wants a recoverable overflow uses the checked methods below, which return a `Result`. Wrap means: produce the bit-equivalent result modulo `2^N`.
 
+The rule is the same when the compiler can see the overflow coming: `int x = int.MAX_VALUE; print(x + 1);` panics in a debug build and prints `int.MIN_VALUE` in a release build, and is not rejected at compile time. Only a `const` initializer is evaluated by the compiler, and an overflow there is `E0842` (Type system §T.11.6).
+
 This matches Rust's overflow story almost exactly. Programmers who *want* wrapping behavior unconditionally use the explicit wrapping operators:
 
 ```jux
@@ -132,8 +134,8 @@ The wrapping (`+%`, `-%`, `*%`, `<<%`, `>>%`) operators are added to the lexical
 
 ### S.2.2. Integer Division and Remainder
 
-- `a / 0` for integer `a` panics in all profiles — an uncatchable abort via the panic handler (`ERRATA.md` E1). There is no "implementation-defined" or "undefined" case. Code that wants a recoverable division uses `a.checkedDiv(b)` (`Result`-shaped).
-- `a % 0` panics with the same diagnostic.
+- `a / 0` for integer `a` throws `ArithmeticException("/ by zero")` in all profiles, as in Java, and a `catch` can handle it (`ERRATA.md` E1, the Java-parity carve-out). There is no "implementation-defined" or "undefined" case. Code that wants no exception uses `a.checkedDiv(b)` (`Result`-shaped).
+- `a % 0` throws the same exception.
 - `int.MIN_VALUE / -1` (the only signed-overflow case for division) panics in debug, wraps to `int.MIN_VALUE` in release. Same for `%`.
 - `a / b` truncates toward zero. `a % b` has the sign of `a` (the C99/Java/Rust convention). `(a / b) * b + (a % b) == a` always holds for valid `a`, `b`.
 
@@ -181,7 +183,7 @@ var saturated = n.saturatingToInt();   // returns int.MAX_VALUE
 
 ### S.2.5. Bitwise Operations
 
-- `<<`, `>>` shift by a count taken modulo the width of the LHS type (the same rule as Java for `int`/`long`, applied uniformly here).
+- `<<`, `>>` shift by a count taken modulo the width of the LHS type (the same rule as Java for `int`/`long`, applied uniformly here). A count at or above the width, or a negative count, is therefore never an overflow: `1L << 65` is `2` and `1L << -1` is `long.MIN_VALUE`, in a debug build and a release build alike.
 - `>>` is **arithmetic** (sign-extending) on signed integer types and **logical** (zero-extending) on unsigned types. There is no separate `>>>` operator — the type determines the behavior. This eliminates the Java footgun where `int >> n` accidentally sign-extends.
 - `~`, `&`, `|`, `^` operate on the binary representation of the value at the type's natural width.
 - Bitwise operators on `bool` are not permitted (`E0420`); use logical operators.
@@ -189,24 +191,38 @@ var saturated = n.saturatingToInt();   // returns int.MAX_VALUE
 
 ### S.2.6. Mixed-Type Arithmetic
 
-Jux does **not** silently promote operands to a common type. `int + long` is a compile error (`E0410`). The user writes `(a as long) + b` or `a + (b as int)` explicitly. This eliminates Java's silent promotion surprises.
+Operands of two different numeric types are brought to one type before the operation, the way Java's binary numeric promotion does it (JLS 5.6.2), with one refusal Java never needed because it has no unsigned types. The rule applies to the arithmetic operators (`+ - * / %`), the bitwise operators (`& | ^`), and the two arms of `? :`:
 
-The exceptions (where promotion is automatic and well-defined):
+1. If either operand is a `double` (`f64`), the other becomes a `double`. Otherwise, if either is a `float` (`f32`), the other becomes a `float`. This includes an integer operand: `count * 1.5` is a `double`.
+2. Two integers of the same type stay that type.
+3. Two signed integers, or two unsigned integers, become the wider of the two. The widths run `byte < short < i32 < int < long`, and `ubyte < ushort < u32 < uint < ulong`: `int + long` is a `long`, `short + byte` is a `short`.
+4. A signed and an unsigned integer become the signed type when it holds every value of the unsigned one on every target, that is, when the signed type's smallest possible width is larger than the unsigned type's largest possible width. `int` and `uint` are pointer-sized, 32 or 64 bits by target, so `long + u32` is a `long` and `int + ushort` is an `int`, while `long + uint`, `int + u32`, `int + uint` and `long + ulong` have no type that holds both operands. Those are `E0410`, and a cast says which meaning is wanted: `a + (int) b`, `(uint) a + b`.
+5. A `char` operand of an arithmetic or bitwise operator is an `int`, as in Java: `'a' + 1` is the `int` `98`, and `(char) ('a' + 1)` is `'b'` (§S.3.4). Two `char`s compared stay `char`s.
+
+The shift operators do not promote: `a << n` has the type of `a`, and `n` may be any integer type (§S.2.5).
+
+**Comparisons are exact.** `< <= > >= == !=` between a signed and an unsigned integer compare the two mathematical values, whatever their types: `-1 < 5u` is `true`, and `i < xs.len()` compiles and is correct for every `i`, negative included. No conversion can make a comparison lie, so none is an error. Comparisons between other mixed types promote as rule 1 and 3 say.
+
+Promotion never changes a value it does not have to: an integer that becomes a `double` is exact up to 2^53, and beyond that rounds half to even (§S.2.4).
+
+The literal rules below refine this:
 
 - Untyped integer literals are coerced to whichever numeric type the surrounding context demands, when the value fits. `long x = 1` works because `1` adapts to `long`. A literal that does **not** fit the slot it flows into (a local or field initializer, an assignment, a `return`, a call argument or parameter default, either arm of a `? :`, or an element of an array literal) is `E0202`: `byte b = 300;`, `u32 pid = -1;`. Where the low bits are what is meant, as in the C idiom `(DWORD)-1`, the cast says so and follows §S.2.4: `-1 as u32` is `4294967295`.
 - Untyped float literals adapt to `float` or `double` similarly.
-- A typed literal (e.g., `1L`, `2.0f`) does not adapt; mixing it with another type requires an explicit `as`.
+- An untyped literal operand takes the other operand's type: in `i32 y = x + 1;` the `1` is an `i32`, and in `f + 2` with `float f` the `2` is a `float`. It does not widen the other side.
+- A typed literal (e.g., `1L`, `2.0f`) does not adapt; it promotes like any other value of its type.
 
-> **Edit to JUX-LANG-V1 §5.1:** Add a paragraph after the primitive types table: "Arithmetic between two distinct numeric types requires an explicit `as` cast. Untyped integer and float literals automatically adopt the surrounding type when the value fits. See §S.2.6."
+> **Edit to JUX-LANG-V1 §5.1:** Add a paragraph after the primitive types table: "Operands of two different numeric types are promoted to one type, as Java does; a signed and an unsigned integer that no one type holds need a cast. Untyped integer and float literals adopt the surrounding type when the value fits. See §S.2.6."
 
 ### S.2.7. Assignment-Context Numeric Coercion
 
-Mixed-type **arithmetic** stays strict (§S.2.6), but a numeric value flowing into a typed SLOT (a local initializer, an assignment target, a `return`, or a call argument) is coerced to the slot's numeric type automatically, in two safe cases:
+A numeric value flowing into a typed SLOT (a local or field initializer, an assignment target, a compound assignment such as `d += n`, a `return`, a call argument, an element of an array literal, or an argument to a collection method such as `push`) is coerced to the slot's numeric type automatically, in two safe cases:
 
-- **Widening.** A narrower numeric value adapts to a wider slot: `long x = anInt;`, `double d = aFloat;`, `return anInt;` from a `long`-returning function. This never loses information (it is the Java widening direction) and the compiler emits the matching cast.
+- **Widening.** A value adapts to a slot of a type it promotes to under §S.2.6: `long x = anInt;`, `double d = aFloat;`, `i32 x = aShort;`, `double d = anI32;`, `double[] a = {1, 2, 3};`, `return anInt;` from a `long`-returning function. This never loses a value (it is the Java widening direction) and the compiler emits the matching cast. `++` and `--` on a `float` or `double` add and subtract `1.0`.
 - **`uint` to a signed integer.** A `uint` value (notably a collection length or index, `list.len()`) flows into an `int` (or wider) slot without an explicit cast: `int n = list.len();`, `int size() { return data.len(); }`. This is the "size() is int" ergonomic, the most common cross-signedness case.
+- **`uint` arithmetic in a signed slot is computed signed.** When the value flowing into an `int` or `long` slot is `+`, `-` or `*` over `uint` values and untyped literals only, each `uint` operand is converted to the slot's type first and the arithmetic happens there: `int last = list.len() - 1;` is `-1` for an empty list, where computing in `uint` would underflow. A collection length is far inside the signed range, so the conversion never changes a value. The same expression anywhere else (`uint u = list.len() - 1;`) is unsigned arithmetic, and underflows by §S.2.1.
 
-Narrowing (e.g. `long` into `int`, `double` into `int`) is NOT automatic and still requires an explicit `as`. These coercions apply only at assignment-style slots, never to the operands of a binary operator: `intVal + longVal` remains a compile error per §S.2.6.
+Narrowing (e.g. `long` into `int`, `double` into `int`) is NOT automatic and still requires an explicit `as`. The operands of a binary operator follow §S.2.6, not this section.
 
 ---
 
@@ -260,7 +276,7 @@ There is **no random byte indexing that returns a `char`**. Random char indexing
 
 `char` is a 32-bit Unicode scalar value (per JUX-LANG-V1 §5.1). The valid range is `0x0..0xD7FF` and `0xE000..0x10FFFF`; values in the surrogate range `0xD800..0xDFFF` are not valid `char`s. Constructing a `char` from an out-of-range integer panics in debug, wraps to a valid scalar via masking in release (the same overflow policy as integers, §S.2.1).
 
-Arithmetic on `char` is permitted (`'a' + 1 == 'b'`). The result is a `char` after range-checking. Mixing `char` with `int` requires `as` (per §S.2.6).
+Arithmetic on `char` is permitted, and follows Java: the `char` operand is an `int`, so `'a' + 1` is the `int` `98` (§S.2.6 rule 5). A cast turns the result back into a `char`: `(char) ('a' + 1)` is `'b'`, range-checked as above.
 
 ### S.3.5. String Interpolation
 
@@ -584,7 +600,7 @@ This addendum makes the following parts of JUX-LANG-V1 implementable rather than
 | Float semantics              | §S.2.3  | NaN equality, IEEE conformance, `<=>` total order |
 | Numeric conversions          | §S.2.4  | Cast table, infallibility promise          |
 | Bit operations               | §S.2.5  | `>>` arithmetic-vs-logical by signedness   |
-| Mixed-type arithmetic        | §S.2.6  | Disallow silent promotion                  |
+| Mixed-type arithmetic        | §S.2.6  | Java promotion; unholdable signed/unsigned mix refused; exact comparisons |
 | String length and indexing   | §S.3.2  | byte-vs-char distinction                   |
 | String equality, hashing     | §S.3.3  | UTF-8-bytes definition                     |
 | `char` arithmetic            | §S.3.4  | Range-checked, panic-on-overflow           |

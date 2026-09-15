@@ -149,11 +149,12 @@ impl<'a> Parser<'a> {
     /// Logical-OR layer: left-associative short-circuit `||` per §A.4
     /// level 4. Loosest binary operator currently modeled.
     pub(crate) fn parse_logic_or(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_logic_and()?;
         while matches!(self.peek(), TokenKind::OrOr) {
             self.advance();
             let right = self.parse_logic_and()?;
-            left = make_binary(BinaryOp::Or, left, right);
+            left = make_binary(BinaryOp::Or, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -161,11 +162,12 @@ impl<'a> Parser<'a> {
     /// Logical-AND layer: left-associative short-circuit `&&` per §A.4
     /// level 5. Tighter than `||`, looser than `|`.
     pub(crate) fn parse_logic_and(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_typetest()?;
         while matches!(self.peek(), TokenKind::AndAnd) {
             self.advance();
             let right = self.parse_typetest()?;
-            left = make_binary(BinaryOp::And, left, right);
+            left = make_binary(BinaryOp::And, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -201,33 +203,36 @@ impl<'a> Parser<'a> {
 
     /// Bitwise-OR layer: left-associative `|` per §A.4 level 6.
     pub(crate) fn parse_bit_or(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_bit_xor()?;
         while matches!(self.peek(), TokenKind::Pipe) {
             self.advance();
             let right = self.parse_bit_xor()?;
-            left = make_binary(BinaryOp::BitOr, left, right);
+            left = make_binary(BinaryOp::BitOr, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
 
     /// Bitwise-XOR layer: left-associative `^` per §A.4 level 7.
     pub(crate) fn parse_bit_xor(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_bit_and()?;
         while matches!(self.peek(), TokenKind::Caret) {
             self.advance();
             let right = self.parse_bit_and()?;
-            left = make_binary(BinaryOp::BitXor, left, right);
+            left = make_binary(BinaryOp::BitXor, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
 
     /// Bitwise-AND layer: left-associative `&` per §A.4 level 8.
     pub(crate) fn parse_bit_and(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_equality()?;
         while matches!(self.peek(), TokenKind::Amp) {
             self.advance();
             let right = self.parse_equality()?;
-            left = make_binary(BinaryOp::BitAnd, left, right);
+            left = make_binary(BinaryOp::BitAnd, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -236,11 +241,12 @@ impl<'a> Parser<'a> {
     /// includes `===` / `!==`, but those are reference-identity operators
     /// we don't model yet.
     pub(crate) fn parse_equality(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_comparison()?;
         while let Some(op) = self.peek_eq_op() {
             self.advance();
             let right = self.parse_comparison()?;
-            left = make_binary(op, left, right);
+            left = make_binary(op, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -250,11 +256,12 @@ impl<'a> Parser<'a> {
     /// parses but should be rejected later. We accept it here and let a
     /// future tycheck pass complain. Operand is [`Self::parse_range`].
     pub(crate) fn parse_comparison(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_three_way()?;
         while let Some(op) = self.peek_cmp_op() {
             self.advance();
             let right = self.parse_three_way()?;
-            left = make_binary(op, left, right);
+            left = make_binary(op, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -264,11 +271,12 @@ impl<'a> Parser<'a> {
     /// between the comparison family and ranges so `a <=> b > 0`
     /// reads as `(a <=> b) > 0`.
     pub(crate) fn parse_three_way(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let left = self.parse_range()?;
         if matches!(self.peek(), TokenKind::Spaceship) {
             self.advance();
             let right = self.parse_range()?;
-            return Some(make_binary(BinaryOp::Cmp, left, right));
+            return Some(make_binary(BinaryOp::Cmp, left, right, start.join(self.last_consumed_span())));
         }
         Some(left)
     }
@@ -310,11 +318,12 @@ impl<'a> Parser<'a> {
     /// Shift layer: left-associative `<<` and `>>` per §A.4 level 14.
     /// Operand is [`Self::parse_additive`] — additive binds tighter.
     pub(crate) fn parse_shift(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_additive()?;
         while let Some(op) = self.peek_shift_op() {
             self.advance();
             let right = self.parse_additive()?;
-            left = make_binary(op, left, right);
+            left = make_binary(op, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -333,11 +342,12 @@ impl<'a> Parser<'a> {
 
     /// Additive layer: left-associative `+` and `-`.
     pub(crate) fn parse_additive(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_multiplicative()?;
         while let Some(op) = self.peek_add_op() {
             self.advance();
             let right = self.parse_multiplicative()?;
-            left = make_binary(op, left, right);
+            left = make_binary(op, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -345,11 +355,12 @@ impl<'a> Parser<'a> {
     /// Multiplicative layer: left-associative `*`, `/`, `%`. Operand is
     /// [`Self::parse_as`] — `as` casts bind tighter than multiplicative.
     pub(crate) fn parse_multiplicative(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
         let mut left = self.parse_as()?;
         while let Some(op) = self.peek_mul_op() {
             self.advance();
             let right = self.parse_as()?;
-            left = make_binary(op, left, right);
+            left = make_binary(op, left, right, start.join(self.last_consumed_span()));
         }
         Some(left)
     }
@@ -1205,7 +1216,7 @@ impl<'a> Parser<'a> {
                             Diagnostic::error(
                                 code::Code::E0202_NumericLiteralOutOfRange,
                                 format!(
-                                    "the literal `{text}` is out of range -- the largest a 64-bit signed integer literal can be is 9223372036854775807",
+                                    "the literal `{text}` is out of range -- the largest a 64-bit signed integer literal can be is 9223372036854775807, and a `uL` literal 18446744073709551615",
                                 ),
                             )
                             .with_span(span),
@@ -1787,10 +1798,15 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
     }
 }
 
-/// Wrap two operands and a [`BinaryOp`] into an `Expr::Binary`, joining
-/// the operand spans to span the whole expression.
-pub(crate) fn make_binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    let span = expr_span(&left).join(expr_span(&right));
+/// Wrap two operands and a [`BinaryOp`] into an `Expr::Binary` spanning
+/// `span`, the tokens from the left operand's first to the right operand's
+/// last.
+///
+/// The span is taken from the tokens, not joined from the operands, because a
+/// literal operand has no span of its own: `k / 2` and `k / 2 * 1.0` both
+/// joined to the same range, collided in the span-keyed `expr_types`, and the
+/// `double` product read back as the `int` quotient (it printed `2`).
+pub(crate) fn make_binary(op: BinaryOp, left: Expr, right: Expr, span: Span) -> Expr {
     Expr::Binary(BinaryExpr {
         op,
         left: Box::new(left),

@@ -15,5 +15,5 @@ public void main() {
 
     // Value form — `count` is a lowercase identifier, treated as a value.
     var count = 5;
-    print(sizeof(count));    // 4 (size of i32, count's inferred type)
+    print(sizeof(count));    // 8 on a 64-bit target (`count` is an `int`)
 }

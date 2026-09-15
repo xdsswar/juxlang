@@ -56,7 +56,7 @@ fn divide_by_zero_throws_catchable_arithmetic_exception() {
             "handled",
             "cleanup",
             "2",
-            "inf",
+            "Infinity",
             "3.5",
         ],
         "unexpected output:\n{stdout}",

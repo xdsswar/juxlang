@@ -615,18 +615,22 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
-                    // A float payload keeps its decimal point, as in a record.
-                    let spec = if crate::analysis::type_ref_is_float(&slot.ty) { "{:?}" } else { "{}" };
                     if let Some(name) = &slot.name {
                         self.w.push_str(&to_rust_ident(&name.text));
                         self.w.push_str(": ");
                     }
-                    self.w.push_str(spec);
+                    self.w.push_str("{}");
                 }
                 self.w.push_str(")\"");
-                for i in 0..n {
+                for (i, slot) in variant.payload.iter().enumerate() {
                     self.w.push_str(", ");
-                    self.w.push_str(&format!("f{i}"));
+                    // A float payload prints the way every Jux float does, as
+                    // in a record.
+                    if crate::analysis::type_ref_is_float(&slot.ty) {
+                        self.w.push_str(&format!("crate::jux_float(f{i})"));
+                    } else {
+                        self.w.push_str(&format!("f{i}"));
+                    }
                 }
                 self.w.push_str("),\n");
             }

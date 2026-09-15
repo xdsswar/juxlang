@@ -54,7 +54,14 @@ pub(crate) fn parse_int_literal_signed(text: &str, negate: bool) -> Option<IntLi
     } else {
         magnitude as i128
     };
-    lit.value = i64::try_from(signed).ok()?;
+    lit.value = match i64::try_from(signed) {
+        Ok(v) => v,
+        // A `uL` literal holds the full `ulong` range: `18446744073709551615uL`
+        // is `ulong.MAX_VALUE`. Its bits are kept in the `i64`, which the
+        // emitter and the checker read back as unsigned for this suffix.
+        Err(_) if !negate && lit.kind == Some(IntKind::ULong) => u64::try_from(magnitude).ok()? as i64,
+        Err(_) => return None,
+    };
     Some(lit)
 }
 

@@ -388,6 +388,9 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_binary(&mut self, b: &BinaryExpr) {
+        // Armed by `numeric_widen_or_arm` for exactly this expression, and
+        // taken here so it cannot reach any other.
+        let signed_slot = self.signed_slot_target.take();
         // **Pointer arithmetic (§L.6.2).** Rust has no `+` / `-` on raw
         // pointers, so `p + n` was a rustc error. Offsets step by the pointee's
         // size, exactly as in C: `p + n` is `p.offset(n)`, `p - n` is
@@ -701,6 +704,31 @@ impl RustEmitter {
         // `<=>` without a user overload (§A.4 level 11): primitives
         // and String go through partial_cmp; Ordering's repr makes
         // the -1/0/+1 mapping a plain cast.
+        if matches!(b.op, juxc_ast::BinaryOp::Cmp)
+            && (self.operand_is_float(&b.left) == Some(true) || self.operand_is_float(&b.right) == Some(true))
+        {
+            // On floats `<=>` is IEEE total order (§S.2.3): `-0.0 < +0.0`, and
+            // NaN sorts after `+Infinity`. `partial_cmp` answered `0` for both.
+            // Both sides are compared as `f64`, which keeps the order of every
+            // `float` and integer operand; `jux_fcmp` makes every NaN one value.
+            let rust_name_of = |e: &Expr| self.operand_primitive(e).map(crate::exprs::rust_primitive_name);
+            let (cast_l, cast_r) = (rust_name_of(&b.left) != Some("f64"), rust_name_of(&b.right) != Some("f64"));
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.w.push_str("crate::jux_fcmp(");
+            self.emit_expr_with_parent_prec(&b.left, if cast_l { u8::MAX } else { 0 }, false);
+            if cast_l {
+                self.w.push_str(" as f64");
+            }
+            self.w.push_str(", ");
+            self.emit_expr_with_parent_prec(&b.right, if cast_r { u8::MAX } else { 0 }, false);
+            if cast_r {
+                self.w.push_str(" as f64");
+            }
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return;
+        }
         if matches!(b.op, juxc_ast::BinaryOp::Cmp) {
             self.w.push('(');
             self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
@@ -787,13 +815,58 @@ impl RustEmitter {
         } else {
             None
         };
-        let target_name = promote.map(crate::exprs::rust_primitive_name);
+        // **A signed/unsigned comparison compares the values** (§S.2.6): when
+        // neither type holds the other's range (`isize < usize`), both sides
+        // go to `i128`, which holds every 64-bit integer of either sign. Casting
+        // to the unsigned side, as promotion used to, made `-1 < 5u` false.
+        let wide_compare = is_cmp && self.comparison_needs_i128(&b.left, &b.right);
+        let target_name = if let Some(slot) = signed_slot {
+            Some(crate::exprs::rust_primitive_name(slot))
+        } else if wide_compare {
+            Some("i128")
+        } else {
+            promote.map(crate::exprs::rust_primitive_name)
+        };
+        // **Shifts never overflow** (§S.2.5): the count is taken modulo the
+        // width of the left operand, in a debug build as in a release one. A
+        // literal count inside the width is an ordinary `<<`; any other count
+        // goes through `wrapping_shl`/`wrapping_shr`, which mask it the same
+        // way, where a bare `<<` panicked in debug and masked in release.
+        // An unsuffixed literal on the left (`1 << n`) takes its type from the
+        // context, so it has no width to mask by here and keeps the operator.
+        if matches!(b.op, BinaryOp::Shl | BinaryOp::Shr) && !juxc_tycheck::infer::untyped_int_literal(&b.left) {
+            if let Some(width) = self.operand_primitive(&b.left).and_then(juxc_tycheck::ty::integer_bits) {
+                if !shift_count_is_in_width(&b.right, width) {
+                    self.emitting_comparison_operand = prev_cmp;
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
+                    self.w.push_str(if b.op == BinaryOp::Shl { ".wrapping_shl(" } else { ".wrapping_shr(" });
+                    self.emit_expr_with_parent_prec(&b.right, u8::MAX, false);
+                    self.w.push_str(" as u32)");
+                    self.emitting_format_arg = prev;
+                    return;
+                }
+            }
+        }
         // Compared by the Rust spelling, as `numeric_widen_to` does: `long` and
         // `i64` are distinct Jux primitives but one Rust type, and a cast
         // between them (`(x as i64) * 2i64`) is noise.
         let rust_name_of = |e: &Expr| self.operand_primitive(e).map(crate::exprs::rust_primitive_name);
-        let cast_left = target_name.is_some() && rust_name_of(&b.left) != target_name;
-        let cast_right = target_name.is_some() && rust_name_of(&b.right) != target_name;
+        // In a signed slot (`int last = xs.len() - 1;`) every `uint` leaf is
+        // converted to the slot's type and nested arithmetic is emitted the
+        // same way, so the subtraction happens signed; a literal needs nothing.
+        let slot_leaf = |e: &Expr| {
+            signed_slot.is_some() && !Self::is_signed_slot_arith_node(e) && !juxc_tycheck::infer::untyped_int_literal(e)
+        };
+        let (cast_left, cast_right) = if signed_slot.is_some() {
+            (slot_leaf(&b.left), slot_leaf(&b.right))
+        } else {
+            (
+                target_name.is_some() && rust_name_of(&b.left) != target_name,
+                target_name.is_some() && rust_name_of(&b.right) != target_name,
+            )
+        };
         // Inside an enum method `self` is `&Self`; comparing it to a variant
         // value (`this == Op.Add`) is `&Op == Op`, which the derived `PartialEq`
         // does not cover (rustc E0277). Deref the `this`/`super` operand so both
@@ -821,7 +894,16 @@ impl RustEmitter {
             self.w.push_str("(*");
         }
         let left_mark = self.w.mark();
-        self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
+        // A cast binds tighter than any binary operator, so the operand it
+        // applies to must be a single unit: `a * b * 0.5` promotes `a * b`, and
+        // emitting it at the operator's own precedence wrote `(a * b as f64)`,
+        // which Rust reads as `a * (b as f64)`.
+        let left_prec = if cast_left { u8::MAX } else { prec };
+        if signed_slot.is_some() && Self::is_signed_slot_arith_node(&b.left) {
+            self.signed_slot_target = signed_slot;
+        }
+        self.emit_expr_with_parent_prec(&b.left, left_prec, /*right=*/ false);
+        self.signed_slot_target = None;
         if deref_left {
             self.w.push(')');
         }
@@ -856,7 +938,12 @@ impl RustEmitter {
         if deref_right {
             self.w.push_str("(*");
         }
-        self.emit_expr_with_parent_prec(&b.right, prec, /*right=*/ true);
+        let right_prec = if cast_right { u8::MAX } else { prec };
+        if signed_slot.is_some() && Self::is_signed_slot_arith_node(&b.right) {
+            self.signed_slot_target = signed_slot;
+        }
+        self.emit_expr_with_parent_prec(&b.right, right_prec, /*right=*/ true);
+        self.signed_slot_target = None;
         if deref_right {
             self.w.push(')');
         }
@@ -893,81 +980,130 @@ impl RustEmitter {
         }
     }
 
-    /// The common Rust numeric type two operands of a binary op must be cast to,
-    /// or `None` when no cast is needed (same type, a non-numeric operand, or an
-    /// unknown type). Rust has no implicit numeric coercion, so a mixed-width or
-    /// mixed-signedness op (`isize + i64`, `isize < usize`, `isize * f64`) is a
-    /// hard error; we widen both sides to a common type, Java-promotion style:
+    /// The common numeric type two operands of a binary op are cast to, or
+    /// `None` when no cast is needed (same type, a non-numeric operand, an
+    /// untyped literal, or an unknown type). Rust has no implicit numeric
+    /// coercion, so `isize + i64` or `isize * f64` does not compile; both sides
+    /// go to the type §S.2.6 names, which `juxc_tycheck::ty::promote_numeric`
+    /// computes for the checker and the backend alike.
     ///
-    /// - any float operand wins (`f64` unless both floats are 32-bit → `f32`);
-    /// - otherwise both are integers: the wider rank wins, and a same-width
-    ///   signed/unsigned tie resolves to the **unsigned** type — so a length /
-    ///   index value (`usize`) keeps its natural space and stays usable as an
-    ///   index after the op (`v.len() - 1`, `i < v.len()`).
-    ///
-    /// Used for arithmetic, bitwise, and comparison ops. Bool/char operands and
-    /// unknown types yield `None` (left untouched).
+    /// Used for arithmetic, bitwise, and comparison ops. A signed/unsigned pair
+    /// with no common type has already been reported (`E0410`) in an arithmetic
+    /// op, and a comparison of one goes to `i128` (`comparison_needs_i128`);
+    /// neither is promoted here.
     pub(crate) fn numeric_promote_target(
         &self,
         left: &Expr,
         right: &Expr,
         is_arith: bool,
     ) -> Option<juxc_tycheck::Primitive> {
+        use juxc_tycheck::ty::{integer_bits, is_float_primitive, promote_numeric, same_representation, NumericPromotion};
         use juxc_tycheck::Primitive as P;
-        let lp0 = self.operand_primitive(left)?;
-        let rp0 = self.operand_primitive(right)?;
-        if matches!(lp0, P::Bool) || matches!(rp0, P::Bool) {
+        let lp = self.operand_primitive(left)?;
+        let rp = self.operand_primitive(right)?;
+        // **An untyped literal takes the other operand's type** (§S.2.6): in
+        // `i32 y = x + 1` the `1` is an `i32`, and Rust infers exactly that
+        // for an unsuffixed literal, so no cast is written on either side.
+        // Promoting as if the literal were an `int` cast `x` up to `isize`
+        // and then failed to store the result back in an `i32`.
+        let int_like = |p: P| integer_bits(p).is_some();
+        if (juxc_tycheck::infer::untyped_int_literal(left) && int_like(rp))
+            || (juxc_tycheck::infer::untyped_int_literal(right) && int_like(lp))
+            || (juxc_tycheck::infer::untyped_float_literal(left) && is_float_primitive(rp))
+            || (juxc_tycheck::infer::untyped_float_literal(right) && is_float_primitive(lp))
+        {
             return None;
         }
-        // Java's unary numeric promotion: a `char` operand becomes an `int` in
-        // an arithmetic or bitwise op. Two chars COMPARED stay chars, because
-        // Rust orders them identically and a cast would only add noise; a char
-        // compared against a number still promotes, since the two are not
-        // comparable otherwise.
-        let promote_char = is_arith || (lp0 == P::Char) != (rp0 == P::Char);
-        if !promote_char && (lp0 == P::Char || rp0 == P::Char) {
+        // A `char` operand is an `int` in an arithmetic or bitwise op (rule 5).
+        // Two chars COMPARED stay chars, because Rust orders them identically
+        // and a cast would only add noise; a char compared against a number
+        // still promotes, since the two are not comparable otherwise.
+        if !is_arith && lp == P::Char && rp == P::Char {
             return None;
         }
-        let lp = if lp0 == P::Char { P::Int } else { lp0 };
-        let rp = if rp0 == P::Char { P::Int } else { rp0 };
-        if lp == rp {
+        match promote_numeric(lp, rp) {
             // Two chars in an arithmetic op agree only AFTER promotion, so they
             // still both need the cast Rust has no implicit form of.
-            return (lp0 == P::Char).then_some(P::Int);
+            NumericPromotion::To(_) if same_representation(lp, rp) && lp != P::Char => None,
+            NumericPromotion::To(p) => Some(p),
+            NumericPromotion::NoCommonType | NumericPromotion::NotNumeric => None,
         }
-        let is_float = |p: P| matches!(p, P::Float | P::Double | P::F32 | P::F64);
-        if is_float(lp) || is_float(rp) {
-            let is_f64 = |p: P| matches!(p, P::Double | P::F64);
-            return Some(if is_f64(lp) || is_f64(rp) { P::Double } else { P::Float });
+    }
+
+    /// The cast a value needs to fit a numeric slot of `target` (see
+    /// [`Self::numeric_widen_to`]), with two cases written in place instead of
+    /// cast (§S.2.7), each armed for the expression about to be emitted:
+    ///
+    /// - a `uint` expression in a signed integer slot is computed in the slot's
+    ///   type: `int last = xs.len() - 1;` gives `-1` for an empty collection
+    ///   instead of an unsigned underflow;
+    /// - an unsuffixed integer literal in a float slot is written as a float
+    ///   literal: `d += 1` is `d += 1.0`.
+    pub(crate) fn numeric_widen_or_arm(
+        &mut self,
+        value: &Expr,
+        target: juxc_tycheck::Primitive,
+    ) -> Option<&'static str> {
+        if self.is_signed_slot_arith(value, target) {
+            self.signed_slot_target = Some(target);
+            return None;
         }
-        // Both integers. Rank by width; pointer-width (`isize`/`usize`) and the
-        // 64-bit explicit widths share the top tiers.
-        let rank = |p: P| -> u8 {
-            match p {
-                P::Byte | P::I8 | P::Ubyte | P::U8 => 1,
-                P::Short | P::I16 | P::Ushort | P::U16 => 2,
-                P::I32 | P::U32 => 3,
-                P::Int | P::Uint => 4,
-                P::Long | P::I64 | P::Ulong | P::U64 => 5,
-                _ => 0,
+        if juxc_tycheck::ty::is_float_primitive(target) && juxc_tycheck::infer::untyped_int_literal(value) {
+            self.int_literal_as_float = true;
+            return None;
+        }
+        self.numeric_widen_to(value, target)
+    }
+
+    /// A `+`, `-` or `*` node, the operators a signed slot computes in its own
+    /// type. Division keeps its checked helper and is left as it is.
+    fn is_signed_slot_arith_node(e: &Expr) -> bool {
+        matches!(e, Expr::Binary(b) if matches!(b.op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul))
+    }
+
+    /// Whether `value` is arithmetic over `uint` values and untyped literals
+    /// only, with at least one `uint`, flowing into the signed integer slot
+    /// `target`.
+    fn is_signed_slot_arith(&self, value: &Expr, target: juxc_tycheck::Primitive) -> bool {
+        use juxc_tycheck::Primitive as P;
+        if !matches!(target, P::Int | P::Long | P::I64) || !Self::is_signed_slot_arith_node(value) {
+            return false;
+        }
+        fn leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match e {
+                Expr::Binary(b) if matches!(b.op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) => {
+                    leaves(&b.left, out);
+                    leaves(&b.right, out);
+                }
+                other => out.push(other),
             }
+        }
+        let mut found = Vec::new();
+        leaves(value, &mut found);
+        let mut any_uint = false;
+        for leaf in found {
+            if juxc_tycheck::infer::untyped_int_literal(leaf) {
+                continue;
+            }
+            match self.operand_primitive(leaf) {
+                Some(P::Uint) => any_uint = true,
+                _ => return false,
+            }
+        }
+        any_uint
+    }
+
+    /// Whether comparing `left` with `right` needs both sides widened to
+    /// `i128`: one is a signed and the other an unsigned integer, and neither
+    /// type holds the other's values (§S.2.6, "comparisons are exact").
+    pub(crate) fn comparison_needs_i128(&self, left: &Expr, right: &Expr) -> bool {
+        let (Some(l), Some(r)) = (self.operand_primitive(left), self.operand_primitive(right)) else {
+            return false;
         };
-        let unsigned = |p: P| {
-            matches!(
-                p,
-                P::Uint | P::Ubyte | P::U8 | P::Ushort | P::U16 | P::U32 | P::Ulong | P::U64,
-            )
-        };
-        let (rl, rr) = (rank(lp), rank(rp));
-        Some(if rl > rr {
-            lp
-        } else if rr > rl {
-            rp
-        } else if unsigned(lp) {
-            lp
-        } else {
-            rp
-        })
+        if juxc_tycheck::infer::untyped_int_literal(left) || juxc_tycheck::infer::untyped_int_literal(right) {
+            return false;
+        }
+        juxc_tycheck::ty::promote_numeric(l, r) == juxc_tycheck::NumericPromotion::NoCommonType
     }
 
     /// The primitive of the enclosing function's declared return type, when it
@@ -1376,5 +1512,14 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
+    }
+}
+
+/// Whether a shift count is a literal already inside the left operand's
+/// width, so a plain `<<` / `>>` means what §S.2.5 says without masking.
+fn shift_count_is_in_width(count: &Expr, width: u32) -> bool {
+    match count {
+        Expr::Literal(juxc_ast::Literal::Int(lit)) => lit.value >= 0 && (lit.value as u64) < u64::from(width),
+        _ => false,
     }
 }

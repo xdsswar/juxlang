@@ -212,14 +212,27 @@ Inside `${...}` any expression is permitted, including method calls. The result 
 Raw strings can also be interpolated with `$"""..."""` and disable escape processing while still permitting `${...}`.
 
 **Floating-point values keep their decimal point.** A `float` or `double` whose value happens to be
-whole renders as `1.0`, never as `1` -- printed on its own, interpolated, or nested inside a
-collection, all three agree. A `double` that printed as `1` would be indistinguishable from an `int`
-in program output, which is exactly when it matters. Every other value renders through its
-`toString()` as described above.
+whole renders as `1.0`, never as `1` -- printed on its own, interpolated, concatenated to a string,
+or nested inside a collection, record or enum, all agree. A `double` that printed as `1` would be
+indistinguishable from an `int` in program output, which is exactly when it matters. Every other
+value renders through its `toString()` as described above.
+
+The text is Java's `Double.toString` (and `Float.toString` for a `float`), so a program's output
+diffs clean against the same program on a JVM:
+
+- a value `v` with `10^-3 <= |v| < 10^7` is written as decimal digits, a point, and at least one
+  digit after it: `1.0`, `0.001`, `1234567.5`;
+- any other finite value is written as one digit, a point, at least one more digit, `E`, and the
+  exponent: `1.0E7`, `1.0E-5`, `1.2345E21`, `4.9E-324`;
+- the digits are the fewest that still read back as exactly the same value: `0.1 + 0.2` is
+  `0.30000000000000004`, and a `float` `0.1f` is `0.1`;
+- zero is `0.0` or `-0.0`, and the special values are `NaN`, `Infinity` and `-Infinity`.
 
 ```java
 print(1.0);            // 1.0
 print(3.0 / 2.0);      // 1.5
+print(1e21);           // 1.0E21
+print(1.0 / 0.0);      // Infinity
 print(true ? 1 : 2.0); // 1.0  -- the arms promote (JLS 15.25), so this is a double
 ```
 

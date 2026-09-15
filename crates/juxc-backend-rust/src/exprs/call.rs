@@ -2883,7 +2883,7 @@ impl RustEmitter {
                 self.callee_param_type(&call.callee, i)
                     .as_ref()
                     .and_then(|t| self.type_ref_primitive(t))
-                    .and_then(|target| self.numeric_widen_to(arg, target))
+                    .and_then(|target| self.numeric_widen_or_arm(arg, target))
             };
             let widen_inner = num_widen.is_some() && crate::exprs::cast_needs_inner_parens(arg);
             if num_widen.is_some() {

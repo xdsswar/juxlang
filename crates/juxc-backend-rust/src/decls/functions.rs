@@ -1258,7 +1258,7 @@ impl RustEmitter {
                 // not implicitly widen). Widens only, never narrows.
                 let widen = if !wrap_some && !wrap_upcast {
                     self.return_type_primitive()
-                        .and_then(|t| self.numeric_widen_to(expr, t))
+                        .and_then(|t| self.numeric_widen_or_arm(expr, t))
                 } else {
                     None
                 };
