@@ -20,7 +20,8 @@ class JuxCommenter : CodeDocumentationAwareCommenter {
     override fun getDocumentationCommentPrefix(): String = "/**"
     override fun getDocumentationCommentLinePrefix(): String = "*"
     override fun getDocumentationCommentSuffix(): String = "*/"
-    override fun isDocumentationComment(element: PsiComment?): Boolean = false
+    override fun isDocumentationComment(element: PsiComment?): Boolean =
+        element?.tokenType === JuxTokenTypes.DOC_COMMENT
 
     override fun getLineCommentTokenType(): IElementType = JuxTokenTypes.LINE_COMMENT
     override fun getBlockCommentTokenType(): IElementType = JuxTokenTypes.BLOCK_COMMENT

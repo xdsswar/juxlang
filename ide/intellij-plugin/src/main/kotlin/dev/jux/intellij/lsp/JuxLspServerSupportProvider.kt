@@ -58,4 +58,25 @@ class JuxLspDescriptor(project: Project) : ProjectWideLspServerDescriptor(projec
     override fun isSupportedFile(file: VirtualFile): Boolean = file.fileType == JuxFileType
 
     override fun createCommandLine(): GeneralCommandLine = JuxLspCommandLine.create()
+
+    /**
+     * The hybrid engine's division of labour. The plugin owns everything that
+     * lives in the PSI -- completion, go-to, find usages, rename, parameter
+     * info, document highlights, the outline -- so the client's generic LSP
+     * versions of those are switched off rather than shown twice. The server
+     * keeps what needs the real type checker: diagnostics, hover, code actions.
+     */
+    override val lspCustomization: com.intellij.platform.lsp.api.customization.LspCustomization =
+        object : com.intellij.platform.lsp.api.customization.LspCustomization() {
+            override val completionCustomizer =
+                com.intellij.platform.lsp.api.customization.LspCompletionDisabled
+            override val goToDefinitionCustomizer =
+                com.intellij.platform.lsp.api.customization.LspGoToDefinitionDisabled
+            override val signatureHelpCustomizer =
+                com.intellij.platform.lsp.api.customization.LspSignatureHelpDisabled
+            override val findReferencesCustomizer =
+                com.intellij.platform.lsp.api.customization.LspFindReferencesDisabled
+            override val documentSymbolCustomizer =
+                com.intellij.platform.lsp.api.customization.LspDocumentSymbolDisabled
+        }
 }

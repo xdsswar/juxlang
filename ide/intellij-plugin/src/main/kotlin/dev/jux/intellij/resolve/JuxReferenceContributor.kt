@@ -31,6 +31,7 @@ class JuxReferenceContributor : PsiReferenceContributor() {
             PlatformPatterns.psiElement(JuxCompositeElement::class.java),
             object : PsiReferenceProvider() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
+                    importReferences(element)?.let { return it }
                     if (element.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
                     val name = nameLeaf(element) ?: return PsiReference.EMPTY_ARRAY
                     val range = TextRange.from(name.startOffsetInParent, name.textLength)
@@ -38,6 +39,56 @@ class JuxReferenceContributor : PsiReferenceContributor() {
                 }
             },
         )
+    }
+
+    /**
+     * References from an import to the types it names, or null when [element]
+     * is not part of one.
+     *
+     * `import some.Truck;` puts the path in a QUALIFIED_NAME whose last segment
+     * is the type. A grouped `import some.{Auto, Bus as B};` leaves the items as
+     * identifiers of the IMPORT_STATEMENT itself, after the package path; an
+     * alias after `as` names nothing and gets no reference.
+     */
+    private fun importReferences(element: PsiElement): Array<PsiReference>? {
+        val type = element.elementType
+        if (type === E.QUALIFIED_NAME && element.parent?.elementType === E.IMPORT_STATEMENT) {
+            // `import a.b.{...}` and `import a.b.*`: the path is only a package.
+            var after = element.node.treeNext
+            while (after != null && after.elementType === com.intellij.psi.TokenType.WHITE_SPACE) after = after.treeNext
+            if (after != null && after.elementType === JuxTokenTypes.DOT) return PsiReference.EMPTY_ARRAY
+            val ids = element.node.getChildren(null).filter { it.elementType === JuxTokenTypes.IDENTIFIER }
+            if (ids.size < 2) return PsiReference.EMPTY_ARRAY
+            val last = ids.last()
+            val range = TextRange.from(last.startOffset - element.textRange.startOffset, last.textLength)
+            val pkg = ids.dropLast(1).joinToString(".") { it.text }
+            return arrayOf(JuxImportReference(element, range, pkg, last.text))
+        }
+        if (type === E.IMPORT_STATEMENT) {
+            val path = element.node.findChildByType(E.QUALIFIED_NAME) ?: return PsiReference.EMPTY_ARRAY
+            if (element.node.findChildByType(JuxTokenTypes.LBRACE) == null) return PsiReference.EMPTY_ARRAY
+            val pkg = path.getChildren(null)
+                .filter { it.elementType === JuxTokenTypes.IDENTIFIER }
+                .joinToString(".") { it.text }
+            val out = ArrayList<PsiReference>()
+            var afterBrace = false
+            var afterAs = false
+            var c = element.node.firstChildNode
+            while (c != null) {
+                when (c.elementType) {
+                    JuxTokenTypes.LBRACE -> afterBrace = true
+                    JuxTokenTypes.AS_KW -> afterAs = true
+                    JuxTokenTypes.COMMA -> afterAs = false
+                    JuxTokenTypes.IDENTIFIER -> if (afterBrace && !afterAs) {
+                        val range = TextRange.from(c.startOffset - element.textRange.startOffset, c.textLength)
+                        out.add(JuxImportReference(element, range, pkg, c.text))
+                    }
+                }
+                c = c.treeNext
+            }
+            return out.toTypedArray()
+        }
+        return null
     }
 
     /**

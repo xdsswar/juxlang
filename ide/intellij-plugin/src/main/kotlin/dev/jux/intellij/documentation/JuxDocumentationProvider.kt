@@ -19,7 +19,60 @@ import dev.jux.intellij.psi.JuxPropertyDeclaration
  * cross-file targets resolve through [dev.jux.intellij.resolve.JuxReference]
  * before reaching this provider.
  */
-class JuxDocumentationProvider : AbstractDocumentationProvider() {
+class JuxDocumentationProvider : AbstractDocumentationProvider(), com.intellij.lang.documentation.CodeDocumentationProvider {
+
+    // ---- `/**` + Enter: the documentation stub ---------------------------------
+
+    override fun findExistingDocComment(contextElement: com.intellij.psi.PsiComment?): com.intellij.psi.PsiComment? =
+        contextElement
+
+    /** The comment and the declaration it documents: the next non-space sibling. */
+    override fun parseContext(startPoint: PsiElement): com.intellij.openapi.util.Pair<PsiElement, com.intellij.psi.PsiComment>? {
+        var comment: PsiElement? = startPoint
+        while (comment != null && comment !is com.intellij.psi.PsiComment) comment = comment.parent
+        val doc = comment as? com.intellij.psi.PsiComment ?: return null
+        val owner = documentedDeclaration(doc) ?: return null
+        return com.intellij.openapi.util.Pair.create(owner, doc)
+    }
+
+    /**
+     * The tags Java writes for a method: one `@param` per parameter (type
+     * parameters as `@param <T>`), `@return` unless it returns `void`, and one
+     * `@throws` per declared exception. Constructors get parameters only.
+     */
+    override fun generateDocumentationContentStub(contextComment: com.intellij.psi.PsiComment?): String? {
+        val comment = contextComment ?: return null
+        val decl = documentedDeclaration(comment) ?: return null
+        val type = decl.node.elementType
+        if (type !== E.METHOD_DECLARATION && type !== E.CONSTRUCTOR_DECLARATION && type !== E.OPERATOR_DECLARATION) {
+            return null
+        }
+        val sb = StringBuilder()
+        decl.node.findChildByType(E.TYPE_PARAMETER_LIST)?.psi?.children
+            ?.filterIsInstance<JuxNamedElement>()
+            ?.forEach { tp -> tp.name?.let { sb.append("* @param <").append(it).append(">\n") } }
+        decl.node.findChildByType(E.PARAMETER_LIST)?.psi?.children
+            ?.filter { it.elementType === E.PARAMETER }
+            ?.forEach { p -> (p as? JuxNamedElement)?.name?.let { sb.append("* @param ").append(it).append("\n") } }
+        if (type === E.METHOD_DECLARATION || type === E.OPERATOR_DECLARATION) {
+            val returnType = decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+            if (returnType != null && returnType != "void") sb.append("* @return\n")
+        }
+        decl.node.findChildByType(E.THROWS_CLAUSE)?.psi?.children
+            ?.filter { it.elementType === E.TYPE_REFERENCE }
+            ?.forEach { sb.append("* @throws ").append(it.text.trim()).append("\n") }
+        return sb.toString()
+    }
+
+    private fun documentedDeclaration(comment: PsiElement): PsiElement? {
+        var next = comment.nextSibling
+        while (next != null && (next is com.intellij.psi.PsiWhiteSpace || next is com.intellij.psi.PsiComment)) {
+            next = next.nextSibling
+        }
+        // A doc comment on the first member of a body sits before the member node.
+        return next?.takeIf { it is JuxNamedElement }
+    }
+
     /** The one-line summary shown in the navigation bar / Ctrl+hover preview. */
     override fun getQuickNavigateInfo(element: PsiElement?, originalElement: PsiElement?): String? {
         val decl = element as? JuxNamedElement ?: return null

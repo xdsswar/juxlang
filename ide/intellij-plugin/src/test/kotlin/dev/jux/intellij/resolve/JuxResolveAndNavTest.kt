@@ -283,12 +283,13 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        // `m.leaf.v` is a chained receiver (`m.leaf`). The in-file resolver must
-        // DEFER (null) rather than mis-resolve `v` via App's same-named `leaf`
-        // field (type Wrong) — that would jump to the wrong `v`.
+        // `m.leaf.v` is a chained receiver (`m.leaf`). It must resolve through
+        // `m`'s type (Mid.leaf: Right), never through App's same-named `leaf`
+        // field (type Wrong), which would jump to the wrong `v`.
         val offset = myFixture.file.text.indexOf(".v;") + 1
         val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
-        assertNull("chained member must defer, not mis-resolve to Wrong.v", resolved)
+        assertNotNull("the chain resolves", resolved)
+        assertEquals("Right", (resolved!!.parent.parent as? JuxTypeDeclaration)?.name)
     }
 
     fun testStaticMethodIsNotAnOverride() {

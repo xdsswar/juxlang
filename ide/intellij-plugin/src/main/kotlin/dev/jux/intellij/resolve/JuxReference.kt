@@ -3,6 +3,8 @@ package dev.jux.intellij.resolve
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiReferenceBase
+import com.intellij.psi.impl.source.resolve.ResolveCache
+import dev.jux.intellij.highlight.JuxTokenTypes
 import com.intellij.psi.util.elementType
 import dev.jux.intellij.psi.JuxElementFactory
 import dev.jux.intellij.psi.JuxElementTypes as E
@@ -23,6 +25,10 @@ import dev.jux.intellij.psi.JuxNamedElement
 class JuxReference(element: PsiElement, range: TextRange) :
     PsiReferenceBase<PsiElement>(element, range) {
 
+    private companion object {
+        val RESOLVER = ResolveCache.AbstractResolver<JuxReference, PsiElement> { ref, _ -> ref.doResolve() }
+    }
+
     /**
      * Soft by design: this resolver only covers in-file symbols plus
      * project-wide types — an unresolved reference here is routinely a member
@@ -31,12 +37,44 @@ class JuxReference(element: PsiElement, range: TextRange) :
     override fun isSoft(): Boolean = true
 
     override fun resolve(): PsiElement? {
+        // A bare parsing environment has no resolve cache; answer uncached there.
+        val cache = element.project.getService(ResolveCache::class.java) ?: return doResolve()
+        return cache.resolveWithCaching(this, RESOLVER, false, false)
+    }
+
+    private fun doResolve(): PsiElement? {
+        val t = element.elementType
+        // A call's arity picks between overloads of the same name.
+        val parent = element.parent
+        val argCount = if (parent?.elementType === E.CALL_EXPRESSION && parent.firstChild === element) {
+            JuxTypeEngine.argumentCount(parent)
+        } else {
+            null
+        }
+        // The type engine first: it follows the receiver's real type through
+        // chains, `var` inference, generics and bounds, inherited members and
+        // imports -- the cases a name walk cannot see.
+        when (t) {
+            E.FIELD_ACCESS_EXPRESSION ->
+                JuxTypeEngine.resolveMemberAccess(element, argCount)?.let { return it.element }
+            E.REFERENCE_EXPRESSION ->
+                JuxTypeEngine.resolveReferenceExpression(element, argCount)?.let { return it }
+            E.TYPE_REFERENCE -> {
+                val ids = element.node.getChildren(null)
+                    .takeWhile { it.elementType !== E.TYPE_ARGUMENT_LIST }
+                    .filter { it.elementType === JuxTokenTypes.IDENTIFIER }
+                    .map { it.text }
+                if (ids.isNotEmpty()) {
+                    val qualifier = if (ids.size > 1) ids.dropLast(1).joinToString(".") else null
+                    JuxTypeEngine.resolveTypeName(element, ids.last(), qualifier)?.let { return it }
+                }
+            }
+        }
         // Member access (`recv.field` / `recv.method`): resolve through the
         // receiver's type FIRST, so Go-to lands on the right member even when an
         // unrelated enclosing-class member shares the name. Falls back to the
         // by-name walk when the receiver type can't be inferred in-file (stdlib
         // / chained receivers stay with the LSP).
-        val t = element.elementType
         if (t === E.FIELD_ACCESS_EXPRESSION || t === E.METHOD_REF_EXPRESSION) {
             resolveMember()?.let { return it }
         }

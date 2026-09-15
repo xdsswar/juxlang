@@ -243,6 +243,9 @@ object JuxTypeIndex {
         return candidates.first()
     }
 
+    /** Every type named [name] in the project and its libraries. */
+    fun typesNamed(project: Project, name: String): List<JuxTypeDeclaration> = candidateTypes(project, name)
+
     /**
      * Every type named [name] in the project.
      *

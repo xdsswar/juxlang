@@ -124,7 +124,9 @@ class JuxCompletionContributor : CompletionContributor() {
                     // probe only reports "active" when juxc-lsp can ACTUALLY
                     // serve — toolchain resolvable + session up — so a missing
                     // or broken toolchain never silences the fallback.)
-                    if (lspProvidesCompletion(parameters)) return
+                    // Hybrid engine: the plugin owns completion whether or not
+                    // juxc-lsp is serving (the client's own completion is
+                    // switched off in JuxLspDescriptor), so nothing stands down.
 
                     // Inside an `import a.b.<caret>;` path. Must be tested BEFORE
                     // the member branch: a dotted import path is also "after a
@@ -157,7 +159,15 @@ class JuxCompletionContributor : CompletionContributor() {
                     // project type names. This is the context-awareness that keeps
                     // the popup showing only relevant options.
                     if (isTypeOnlyContext(parameters)) {
-                        addVisibleDeclarations(parameters, result, typesOnly = true)
+                        // After `new`, the type is a constructor call: accepting
+                        // `Truck` writes `Truck(` + `)` with the caret inside, as
+                        // Java does, on top of any import the item adds.
+                        addVisibleDeclarations(
+                            parameters,
+                            result,
+                            typesOnly = true,
+                            constructorCall = isAfterNew(parameters),
+                        )
                         return
                     }
 
@@ -196,11 +206,12 @@ class JuxCompletionContributor : CompletionContributor() {
         parameters: CompletionParameters,
         result: CompletionResultSet,
         typesOnly: Boolean = false,
+        constructorCall: Boolean = false,
     ) {
         val offset = parameters.offset
         val seen = HashSet<String>()
         fun add(element: LookupElement, name: String) {
-            if (seen.add(name)) result.addElement(element)
+            if (seen.add(name)) result.addElement(if (constructorCall) constructorCall(element) else element)
         }
 
         // Value-position tiers (locals, params, members, setter `value`) — skipped
@@ -385,9 +396,9 @@ class JuxCompletionContributor : CompletionContributor() {
     }
 
     /** A method lookup: parens inserted on selection, caret between them. */
-    private fun method(decl: JuxNamedElement, name: String): LookupElement {
+    private fun method(decl: JuxNamedElement, name: String, presentedReturnType: String? = null): LookupElement {
         val params = (decl as PsiElement).node.findChildByType(E.PARAMETER_LIST)?.text ?: "()"
-        val returnType = decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+        val returnType = presentedReturnType ?: decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
         var builder = LookupElementBuilder.create(name)
             .withIcon(AllIcons.Nodes.Method)
             .withTailText(params.replace(Regex("\\s+"), " "), true)
@@ -528,6 +539,7 @@ class JuxCompletionContributor : CompletionContributor() {
      * why this stands down entirely while a server is attached.
      */
     private fun addMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
+        if (addEngineMemberCompletion(parameters, result)) return
         val expression = receiverExpressionBeforeDot(parameters) ?: return
         val target = dev.jux.intellij.resolve.JuxTypeInference
             .resolveReceiverExpression(expression, parameters.position) ?: return
@@ -567,6 +579,62 @@ class JuxCompletionContributor : CompletionContributor() {
                     )
             }
         }
+    }
+
+    /**
+     * Members after `qualifier.` from the type engine: the qualifier's real
+     * type, followed through calls, chains, `var` inference, generics and a
+     * type parameter's bound, with each member's type shown as the receiver
+     * sees it (`Box<Truck>.get()` reads `Truck`, not `T`). Reports whether the
+     * qualifier had a type at all; when it did not, the caller falls back.
+     */
+    private fun addEngineMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet): Boolean {
+        val access = parameters.position.parent ?: return false
+        if (access.elementType !== E.FIELD_ACCESS_EXPRESSION) return false
+        val qualifier = dev.jux.intellij.resolve.JuxTypeEngine.firstExpressionChild(access) ?: return false
+        val qualifierType = dev.jux.intellij.resolve.JuxTypeEngine.typeOf(qualifier)
+        dev.jux.intellij.resolve.JuxTypeEngine.classOf(qualifierType) ?: return false
+        val static = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType) is
+            dev.jux.intellij.resolve.JuxType.Static
+        val from = PsiTreeUtil.getParentOfType(parameters.position, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
+        val seen = HashSet<String>()
+        for (member in dev.jux.intellij.resolve.JuxTypeEngine.membersOf(qualifierType)) {
+            val m = member.element
+            val named = m as? JuxNamedElement ?: continue
+            val name = named.name ?: continue
+            if (!dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(m, from)) continue
+            if (dev.jux.intellij.resolve.JuxTypeEngine.isStaticMember(m) != static) continue
+            val key = if (m.elementType === E.METHOD_DECLARATION) {
+                "$name/${dev.jux.intellij.resolve.JuxHierarchy.arity(m)}"
+            } else {
+                name
+            }
+            if (!seen.add(key)) continue
+            when (m.elementType) {
+                E.METHOD_DECLARATION -> {
+                    val returnType = dev.jux.intellij.resolve.JuxTypeEngine.returnType(member)
+                    result.addElement(method(named, name, returnType.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()))
+                }
+                E.FIELD_DECLARATION, E.CONST_DECLARATION, E.RECORD_COMPONENT, E.PROPERTY_DECLARATION -> {
+                    val type = dev.jux.intellij.resolve.JuxTypeEngine.memberType(member)
+                    val icon = if (m.elementType === E.PROPERTY_DECLARATION) AllIcons.Nodes.Property else AllIcons.Nodes.Field
+                    var b = LookupElementBuilder.create(name).withIcon(icon)
+                    val text = type.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()
+                        ?: m.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+                    if (text != null) b = b.withTypeText(text, true)
+                    result.addElement(ranked(b, P_MEMBER))
+                }
+                E.ENUM_CONSTANT -> result.addElement(
+                    ranked(
+                        LookupElementBuilder.create(name)
+                            .withIcon(AllIcons.Nodes.Enum)
+                            .withTypeText(member.owner.decl.name, true),
+                        P_MEMBER,
+                    ),
+                )
+            }
+        }
+        return true
     }
 
     // ---- §P property surface after `.` ----------------------------------------
@@ -894,6 +962,33 @@ class JuxCompletionContributor : CompletionContributor() {
         }
         return false
     }
+
+    /** True when the word before the type being completed is `new`. */
+    private fun isAfterNew(parameters: CompletionParameters): Boolean {
+        val text = parameters.editor.document.charsSequence
+        var i = parameters.offset - 1
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        while (i >= 0 && text[i].isWhitespace()) i--
+        val end = i + 1
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        return text.subSequence(i + 1, end).toString() == "new"
+    }
+
+    /**
+     * A type item accepted after `new`: its own insert handler (the auto-import)
+     * runs first, then the constructor parentheses go in with the caret
+     * between them -- `new Truck(<caret>)`, as Java writes it.
+     */
+    private fun constructorCall(element: LookupElement): LookupElement =
+        com.intellij.codeInsight.lookup.LookupElementDecorator.withDelegateInsertHandler(element) { context, item ->
+            item.handleInsert(context)
+            val caret = context.editor.caretModel.offset
+            val doc = context.document
+            if (caret >= doc.textLength || doc.charsSequence[caret] != '(') {
+                doc.insertString(caret, "()")
+            }
+            context.editor.caretModel.moveToOffset(caret + 1)
+        }
 
     /**
      * True when the caret sits in a member-access position — i.e. the nearest

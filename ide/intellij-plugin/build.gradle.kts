@@ -85,6 +85,17 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.0.7</h3>
+            <p>A semantic engine: the editor now understands Jux the way IntelliJ understands Java.</p>
+            <ul>
+              <li><b>Completion after a dot follows real types</b>: method-call chains, <b>var</b> locals typed by a call, a bounded type parameter's members, inherited members, generics carried through (<b>Box&lt;Truck&gt;.get()</b> reads <b>Truck</b>), and the standard library and bound crates.</li>
+              <li><b>Go to Declaration, Find Usages and Rename work across files and packages</b>, through chains, generics, imports and static calls. Renaming a class rewrites its imports.</li>
+              <li><b>Auto-import like Java</b>: an unimported class is red with <b>Import 'pkg.Type'</b> on Alt+Enter, the "pkg.Type? Alt+Enter" hint appears by itself, and "Add unambiguous imports on the fly" is honoured. Never a duplicate import, a self-import, or an import from the same package.</li>
+              <li><b>new Truck</b> completes as <b>new Truck(&lt;caret&gt;)</b> and imports the class.</li>
+              <li><b>/**</b> + Enter writes <b>@param</b>, <b>@return</b> and <b>@throws</b> from the signature.</li>
+              <li>With <b>juxc-lsp</b> running, the plugin keeps completion and navigation (the language server's generic versions are switched off, so nothing is shown twice); the server still supplies compile errors and hover.</li>
+            </ul>
+
             <h3>0.0.6</h3>
             <p>Unsafe and C interop code reads the way the compiler reads it.</p>
             <ul>

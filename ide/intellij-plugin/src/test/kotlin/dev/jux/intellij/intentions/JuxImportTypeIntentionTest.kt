@@ -3,7 +3,7 @@ package dev.jux.intellij.intentions
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
- * [JuxImportTypeIntention] — the "Import 'pkg.Type'" Alt+Enter action. Verifies
+ * [JuxImportTypeFix] — the "Import 'pkg.Type'" Alt+Enter fix. Verifies
  * it appears (and inserts the right import) for an unqualified cross-package
  * type, and stays out of the way for same-package / already-imported / in-file
  * types.

@@ -453,6 +453,19 @@ object JuxHierarchy {
         return out
     }
 
+    /**
+     * The members [type] itself declares -- methods, properties, fields,
+     * constants, enum constants and record components -- in offer order,
+     * without walking supertypes. The type engine walks those itself, so it
+     * can carry each supertype's generic arguments.
+     */
+    fun allMembersDeclaredIn(type: JuxTypeDeclaration): List<PsiElement> {
+        val out = ArrayList<PsiElement>()
+        for (et in MEMBER_KINDS) out.addAll(directChildren(type, et))
+        out.addAll(recordComponents(type))
+        return out
+    }
+
     /** Member element types enumerated by [allMembers], in offer order. */
     private val MEMBER_KINDS = listOf(
         JuxElementTypes.METHOD_DECLARATION,

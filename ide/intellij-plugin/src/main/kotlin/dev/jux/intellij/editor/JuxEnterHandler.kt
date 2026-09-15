@@ -60,6 +60,10 @@ class JuxEnterHandler : EnterHandlerDelegateAdapter() {
                     val insertion = "\n$indent * \n$indent */"
                     document.insertString(offset, insertion)
                     val caret = offset + 1 + indent.length + 3 // "\n" + indent + " * "
+                    // With the comment closed, the declaration below it parses
+                    // again, and its signature supplies the tags Java writes:
+                    // `@param` per parameter, `@return`, `@throws`.
+                    insertDocTags(file, document, caret, indent)
                     caretOffset.set(caret)
                     caretAdvance.set(0)
                     editor.caretModel.moveToOffset(caret)
@@ -84,6 +88,26 @@ class JuxEnterHandler : EnterHandlerDelegateAdapter() {
             // Never break the Enter key.
         }
         return EnterHandlerDelegate.Result.Continue
+    }
+
+    /**
+     * After the skeleton is in: one ` * @tag` line per tag the documented
+     * declaration's signature calls for, below the caret's description line.
+     */
+    private fun insertDocTags(file: PsiFile, document: com.intellij.openapi.editor.Document, caret: Int, indent: String) {
+        val manager = com.intellij.psi.PsiDocumentManager.getInstance(file.project)
+        manager.commitDocument(document)
+        val comment = com.intellij.psi.util.PsiTreeUtil.getNonStrictParentOfType(
+            file.findElementAt(caret),
+            com.intellij.psi.PsiComment::class.java,
+        ) ?: return
+        val stub = dev.jux.intellij.documentation.JuxDocumentationProvider()
+            .generateDocumentationContentStub(comment)
+            ?.takeIf { it.isNotBlank() } ?: return
+        val lineEnd = document.getLineEndOffset(document.getLineNumber(caret))
+        val lines = stub.trimEnd('\n').lines().joinToString("") { "\n$indent $it" }
+        document.insertString(lineEnd, lines)
+        manager.commitDocument(document)
     }
 
     /**

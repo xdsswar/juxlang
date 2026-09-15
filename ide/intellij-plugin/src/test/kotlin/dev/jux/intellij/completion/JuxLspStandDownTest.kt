@@ -6,21 +6,15 @@ import dev.jux.intellij.lsp.JuxLspState
 /**
  * What the plugin contributes while `juxc-lsp` IS serving.
  *
- * This is the configuration most users are in — the server starts on the first
- * `.jux` file opened — and it was the one configuration never tested: the
- * fixture starts no server, so `isServing` short-circuited to `false` and every
- * other test in this package exercised the fallback.
+ * This is the configuration most users are in: the server starts on the first
+ * `.jux` file opened. Under the hybrid engine the plugin owns completion in
+ * BOTH configurations -- its PSI type engine follows chains, generics and
+ * imports, and renders items with Java's insert handlers -- while the native
+ * client's own LSP completion is switched off (`JuxLspDescriptor`), so the
+ * popup is never doubled. The server keeps diagnostics and hover.
  *
- * The contract has three parts, and the value here is that it is a CONTRACT
- * rather than an accident of ordering in one function:
- *
- * 1. the plugin stands down for everything the server does better,
- * 2. except inside a `$"…${ }…"` interpolation hole, which the server sees as
- *    one opaque string token and never completes,
- * 3. and except the §P observable surface, which the server does not model.
- *
- * Both exceptions are placed BEFORE the stand-down in the dispatch, so a
- * refactor that reorders it would silently delete two features.
+ * These tests pin that nothing stands down any more: the same names come out
+ * serving or not.
  */
 class JuxLspStandDownTest : BasePlatformTestCase() {
 
@@ -47,22 +41,19 @@ class JuxLspStandDownTest : BasePlatformTestCase() {
         return myFixture.completeBasic()?.map { it.lookupString } ?: emptyList()
     }
 
-    fun testTheFallbackStandsDownWhileTheServerServes() {
+    fun testCompletionIsThePluginsWhileTheServerServes() {
         val code = "public class Model { }\nvoid main() { <caret> }"
-        assertTrue("the fallback offers names on its own", offeredWithoutServer(code).isNotEmpty())
-        assertTrue(
-            "the server supplies a better list; the plugin must not duplicate it",
-            offeredWhileServing(code).isEmpty(),
-        )
+        assertTrue("offered without a server", offeredWithoutServer(code).contains("Model"))
+        assertTrue("and the same while serving", offeredWhileServing(code).contains("Model"))
     }
 
-    fun testMemberCompletionStandsDownToo() {
+    fun testMemberCompletionIsThePluginsWhileTheServerServes() {
         val code = """
             public class Leaf { public int size() { return 1; } }
             void main() { Leaf l = new Leaf(); l.<caret> }
         """.trimIndent()
-        assertTrue("the fallback resolves it", offeredWithoutServer(code).contains("size"))
-        assertTrue("the server owns members", offeredWhileServing(code).isEmpty())
+        assertTrue("members without a server", offeredWithoutServer(code).contains("size"))
+        assertTrue("and while serving", offeredWhileServing(code).contains("size"))
     }
 
     /**

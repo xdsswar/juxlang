@@ -214,6 +214,14 @@
     <annotator
         language="Jux"
         implementationClass="dev.jux.intellij.highlight.JuxStringAnnotator"/>
+    <!-- A type name that needs an import: red with "Import 'pkg.Type'" on
+         Alt+Enter and the auto-import question hint, as in Java. -->
+    <annotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxMissingImportAnnotator"/>
+    <!-- "Add unambiguous imports on the fly" for Jux type names. -->
+    <referenceImporter
+        implementation="dev.jux.intellij.completion.JuxReferenceImporter"/>
     <!-- Always-on semantic diagnostics: runs juxc in check mode (JSON output,
          no codegen) off the EDT and paints real compiler errors/warnings
          inline. Stands down when juxc-lsp is serving (it publishes its own) or
@@ -416,11 +424,6 @@
         implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
 
     <!-- Alt+Enter intentions. -->
-    <intentionAction>
-        <language>Jux</language>
-        <className>dev.jux.intellij.intentions.JuxImportTypeIntention</className>
-        <category>Jux</category>
-    </intentionAction>
 
     <!-- Native inspections (IDE-side, no LSP needed) with quick-fixes. -->
     <localInspection
