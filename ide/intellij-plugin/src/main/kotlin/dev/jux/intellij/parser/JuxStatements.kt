@@ -346,7 +346,12 @@ private fun PsiBuilder.parseSwitchCase() {
             errorHere("'->' expected")
         }
     }
-    if (at(T.LBRACE)) parseBlock() else { parseExpression(); semicolon() }
+    // `default -> throw new IllegalStateException(..);` is a statement arm.
+    when {
+        at(T.LBRACE) -> parseBlock()
+        at(T.THROW_KW) -> parseStatement()
+        else -> { parseExpressionOrError(); semicolon() }
+    }
     m.done(E.SWITCH_CASE)
 }
 

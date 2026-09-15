@@ -205,6 +205,30 @@ class JuxSyntaxErrorsTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("no errors after the statement: $errs", errs.none { it.line >= 3 })
     }
 
+    fun testNewerJavaShapesParseClean() {
+        val errs = errors(
+            """
+            public sealed interface Shape permits Circle, Square {}
+            public record Circle(double r) implements Shape {}
+            public String kind(char c) {
+                return switch (c) {
+                    case 'a' | 'e' -> "vowel";
+                    case 'x'..='z' -> "late";
+                    default -> throw new IllegalStateException("bad");
+                };
+            }
+            void main() {
+                char[] xs = {
+                    'a',
+                    'b',
+                };
+                if (xs != null && xs.length > 0) { print(xs[0]); }
+            }
+            """,
+        )
+        assertTrue("no errors: $errs", errs.isEmpty())
+    }
+
     fun testValidCodeStaysClean() {
         val errs = errors(
             """
