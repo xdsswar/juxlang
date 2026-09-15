@@ -84,7 +84,7 @@ use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
 use crate::env::TypeEnv;
-use crate::infer::{infer_block, infer_expr};
+use crate::infer::infer_expr;
 use crate::symbol_table::{ParamSig, SymbolTable};
 use crate::ty::{
     compose_extends_substitution, infer_generic_args, is_subtype, lower_member_type, substitute,
@@ -3966,7 +3966,23 @@ impl<'a> Checker<'a> {
                         Ty::User { name, .. } => {
                             self.iterable_element_type(name).unwrap_or(Ty::Unknown)
                         }
-                        _ => Ty::Unknown,
+                        // `s.chars()` (CORE-LIB K.7) iterates a String's `char`s.
+                        // Left untyped, `c - 'a'` in the body typed as whatever
+                        // the other operand was.
+                        _ => match &f.iter {
+                            Expr::Call(call) if call.args.is_empty() => match call.callee.as_ref() {
+                                Expr::Field(field)
+                                    if matches!(infer_expr(&field.object, &self.env, self.symbols), Ty::String) =>
+                                {
+                                    match field.field.text.as_str() {
+                                        "chars" => Ty::Primitive(Primitive::Char),
+                                        _ => Ty::Unknown,
+                                    }
+                                }
+                                _ => Ty::Unknown,
+                            },
+                            _ => Ty::Unknown,
+                        },
                     }
                 };
                 self.env.push_scope();
@@ -4703,9 +4719,8 @@ impl<'a> Checker<'a> {
                     }
                     // `when <cond>` guard (§A.2.8) — walk it for the
                     // usual diagnostics. Pattern bindings live in the
-                    // arm's scope, which infer_block re-declares below
-                    // for block bodies; guard expressions over binders
-                    // resolve through the resolver pass.
+                    // arm's scope declared above, so the guard and a
+                    // block body both see them.
                     if let Some(g) = &arm.guard {
                         self.check_expr(g);
                     }
@@ -4713,13 +4728,11 @@ impl<'a> Checker<'a> {
                         SwitchBody::Expr(e) => self.check_expr(e),
                         SwitchBody::Block(b) => {
                             self.env.push_scope();
-                            // The arm's pattern may introduce
-                            // bindings; let infer_block declare them so
-                            // body expression checks resolve. (Phase
-                            // C's walker already does this for variant
-                            // bindings; we just reuse it here for the
-                            // statements-only walk.)
-                            infer_block(b, &mut self.env, self.symbols);
+                            // Checked like any block, not only walked for its
+                            // declarations: its expressions need their types
+                            // (a collection field read in `case 1 -> { return
+                            // vars.len(); }` otherwise had none) and their errors.
+                            self.check_block(b);
                             self.env.pop_scope();
                         }
                     }
@@ -8561,6 +8574,19 @@ impl<'a> Checker<'a> {
         if class_name.is_empty() {
             return;
         }
+        // An anonymous class's methods are checked like any class's, with
+        // `this` typed as the type being implemented and the enclosing
+        // body's locals still in scope (they are captures). Unchecked, their
+        // expressions had no types, so `s.toUpperCase()` on a `String`
+        // parameter reached rustc unlowered.
+        if let Some(body) = &n.anonymous_body {
+            let this_ty = Ty::User { name: class_name.clone(), generic_args: Vec::new() };
+            let saved_return = self.current_return.take();
+            for method in &body.methods {
+                self.check_method(method, &this_ty);
+            }
+            self.current_return = saved_return;
+        }
 
         // Lower the explicit generic args (if any) into `Ty`s. Empty
         // when the user wrote the bare `new Box(...)` form — in that
@@ -9348,7 +9374,24 @@ impl<'a> Checker<'a> {
             self.call_expansions.insert(call_span, plan);
         }
         for (i, arg) in args.iter().enumerate() {
+            // A lambda argument's untyped parameters take the parameter's
+            // function type (`app("abc", x -> x.length())` makes `x` a
+            // String), exactly as a lambda stored into a typed local does. Only
+            // a fully concrete slot is used: a `T` still to be inferred from
+            // the call says nothing yet.
+            if let (Expr::Lambda(_), Some(param)) = (arg, arg_to_param[i].and_then(|j| params.get(j))) {
+                let slot_raw = match declaring_class {
+                    Some(class) => lower_member_type(&param.ty, class, self.symbols),
+                    None => ty_from_ref(&param.ty, &self.env, self.symbols),
+                };
+                if let Ty::Fn { params: slot_params, .. } = substitute(&slot_raw, subst_params, subst_args) {
+                    if slot_params.iter().all(ty_is_concrete) {
+                        self.lambda_slot_params = Some(slot_params);
+                    }
+                }
+            }
             self.check_expr(arg);
+            self.lambda_slot_params = None;
             let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else {
                 continue;
             };
@@ -10454,6 +10497,21 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
 /// `x == null` (when `want_eq`) or `x != null` (when not), in either operand
 /// order, with `x` a bare single-segment name. `None` for every other shape --
 /// narrowing only claims what it can see plainly.
+/// Whether `ty` names a type with nothing left to infer: no type parameter
+/// and no unknown anywhere inside it.
+fn ty_is_concrete(ty: &Ty) -> bool {
+    match ty {
+        Ty::Param(_) | Ty::Unknown | Ty::Wildcard(_) => false,
+        Ty::Nullable(inner) => ty_is_concrete(inner),
+        Ty::Array { element, .. } => ty_is_concrete(element),
+        Ty::User { generic_args, .. } => generic_args.iter().all(ty_is_concrete),
+        Ty::Fn { params, return_type, .. } | Ty::FnPtr { params, return_type, .. } => {
+            params.iter().all(ty_is_concrete) && ty_is_concrete(return_type)
+        }
+        _ => true,
+    }
+}
+
 /// The names `cond` proves non-null when it evaluates to `outcome`, in source
 /// order: `x != null` itself when true, `x == null` when false, and through
 /// `&&` (true) or `||` (false) the names of both sides. Duplicates are kept;

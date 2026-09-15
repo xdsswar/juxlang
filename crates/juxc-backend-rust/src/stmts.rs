@@ -2043,7 +2043,20 @@ impl RustEmitter {
             }
             _ => false,
         };
-        let body_moves_var = !element_is_copy && body_moves_path(&f.body, &f.var_name.text);
+        // A record element is a value: the loop variable is a copy, which is
+        // also what lets `acc + p` hand it to a by-value `operator+` (a
+        // borrowed `&V` is not a `V`).
+        let element_is_record = match self.expr_types.get(&expr_span_of(&f.iter)) {
+            Some(Ty::Array { element, .. }) => {
+                matches!(element.as_ref(), Ty::User { name, .. } if self.type_name_is_record(name))
+            }
+            Some(Ty::User { generic_args, .. }) => {
+                matches!(generic_args.first(), Some(Ty::User { name, .. }) if self.type_name_is_record(name))
+            }
+            _ => false,
+        };
+        let body_moves_var =
+            !element_is_copy && (element_is_record || body_moves_path(&f.body, &f.var_name.text));
 
         // **Re-entrancy guard.** When the iterable is a collection field read
         // through a wrapper's `.0.borrow()` (`for (n : this.items) …`), iterating
@@ -3360,7 +3373,12 @@ impl RustEmitter {
         // RHS to produce a `String` that Rust then rejects. The
         // idiomatic form is `s.push_str(&rhs)` — works for both
         // `String` and `&str` RHS via `AsRef<str>` semantics.
+        // A field of a class object is written through the object's cell,
+        // which the wrapper-field store below does (appending there too).
+        let target_in_cell = matches!(&a.target, Expr::Field(tf)
+            if !tf.safe && self.receiver_is_wrapper_class(&tf.object));
         if matches!(a.op, Some(juxc_ast::BinaryOp::Add))
+            && !target_in_cell
             && matches!(
                 self.expr_types.get(&expr_span_of(&a.target)),
                 Some(Ty::String),
@@ -3581,7 +3599,27 @@ impl RustEmitter {
                 }
                 self.w.push('.');
                 self.w.push_str(&to_rust_ident(&tf.field.text));
-                if let Some(op) = a.op {
+                // `buf += s` on a `String` field appends, as the local form
+                // above does: Rust has no `String += String`.
+                let class_of_field = if matches!(&*tf.object, Expr::This(_)) {
+                    self.enclosing_class.clone()
+                } else {
+                    self.receiver_class_bare(&tf.object)
+                };
+                let string_field = class_of_field
+                    .and_then(|c| self.lookup_class_field_ty_in_chain(&c, &tf.field.text))
+                    .is_some_and(|ty| matches!(ty, Ty::String));
+                if matches!(a.op, Some(juxc_ast::BinaryOp::Add)) && string_field {
+                    let rhs_is_text = matches!(
+                        self.expr_types.get(&expr_span_of(&a.value)),
+                        Some(Ty::String),
+                    ) || matches!(&a.value, Expr::Literal(juxc_ast::Literal::String(..)));
+                    self.w.push_str(if rhs_is_text {
+                        ".push_str(&__jux_v)"
+                    } else {
+                        ".push_str(&crate::__jux_show!(__jux_v))"
+                    });
+                } else if let Some(op) = a.op {
                     self.w.push(' ');
                     self.w.push_str(op.as_rust_str());
                     self.w.push_str("= __jux_v");

@@ -1676,6 +1676,17 @@ pub(crate) fn extract_simple_ctor_inits(
                     let bare = p.segments.first().map(|s| s.text.as_str()).unwrap_or("");
                     let touches_instance = p.segments.len() == 1
                         && instance_names.contains(bare);
+                    // `value = a;` is Java's implicit-`this` store into one of
+                    // this class's own fields: the same init as
+                    // `this.value = a;`. Sending it down the `__self` path
+                    // instead default-initialized a generic `A` field first,
+                    // demanding `A: Default`.
+                    let own_field = touches_instance
+                        && class_decl.fields.iter().any(|fd| !fd.is_static && fd.name.text == bare);
+                    if own_field && !expr_reads_instance_state(&a.value, &instance_names) {
+                        inits.push((bare.to_string(), a.value.clone()));
+                        continue;
+                    }
                     if !touches_instance
                         && !expr_reads_instance_state(&a.value, &instance_names)
                     {
@@ -3097,6 +3108,14 @@ impl crate::RustEmitter {
         };
         // A bare generic-parameter name (`T`) is not a concrete type.
         if ty.name.segments.len() == 1 && generic_names.contains(last) {
+            return false;
+        }
+        // `String` is Jux's own value type (`Ty::String`), passed like any
+        // value, even though a `rust.std` stub of the same name exists to
+        // carry its methods. Reading it with `line.split(" ")` made the
+        // parameter `&mut String`, because some OTHER type's `split` takes
+        // `&mut self` and the mutating-method set is keyed by name.
+        if ty.name.segments.len() == 1 && last == "String" {
             return false;
         }
         // Resolve to a class signature and read the foreign flag. The

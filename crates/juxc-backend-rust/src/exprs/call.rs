@@ -1772,6 +1772,12 @@ impl RustEmitter {
                             .map(|s| s.text.clone());
                     }
                 }
+                // A method the class only gets from an interface it (or an
+                // ancestor) implements -- an abstract class calling `price()`
+                // declared by `Priced` -- is a call on `self` too.
+                if !on_self && as_static_on.is_none() {
+                    on_self = self.enclosing_class_interface_declares(name);
+                }
                 if let Some(class_name) = as_static_on {
                     self.w.push_str(&class_name);
                     self.w.push_str("::");
@@ -5285,12 +5291,20 @@ impl RustEmitter {
                 true
             }
             "indexOf" => {
+                // A `char` needle is its own Rust pattern; a `String` one is
+                // borrowed as `&str`.
+                let char_needle = call
+                    .args
+                    .first()
+                    .is_some_and(|a| self.operand_primitive(a) == Some(juxc_tycheck::Primitive::Char));
                 self.w.push('(');
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".find(");
                 self.emit_call_args(call);
-                self.w
-                    .push_str(".as_str()).map(|__i| __i as isize).unwrap_or(-1))");
+                if !char_needle {
+                    self.w.push_str(".as_str()");
+                }
+                self.w.push_str(").map(|__i| __i as isize).unwrap_or(-1))");
                 true
             }
             "split" => {
@@ -5446,6 +5460,38 @@ impl RustEmitter {
     /// same stored value. When `collection_args_prehoisted` is set the
     /// argument is already a coerced temp, so the ladder is skipped (the
     /// bare temp is emitted) — see that flag's doc.
+    /// Whether an interface implemented by the enclosing class or one of its
+    /// ancestors (directly or through the interface's own parents) declares
+    /// a non-static method `name`.
+    fn enclosing_class_interface_declares(&self, name: &str) -> bool {
+        let mut interfaces: Vec<String> = Vec::new();
+        let mut cursor = self.enclosing_class.clone();
+        let mut depth = 0;
+        while let Some(class) = cursor {
+            let Some(sig) = self.lookup_class_by_bare_or_fqn(&class) else { break };
+            interfaces.extend(sig.implements.iter().filter_map(|t| t.name.segments.last().map(|s| s.text.clone())));
+            cursor = sig.extends_fqn.clone().or_else(|| {
+                sig.extends.as_ref().and_then(|t| t.name.segments.last()).map(|s| s.text.clone())
+            });
+            depth += 1;
+            if depth > 64 {
+                break;
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some(iface_name) = interfaces.pop() {
+            if !seen.insert(iface_name.clone()) {
+                continue;
+            }
+            let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&iface_name) else { continue };
+            if iface.methods.get(name).is_some_and(|m| !m.is_static) {
+                return true;
+            }
+            interfaces.extend(iface.extends.iter().filter_map(|t| t.name.segments.last().map(|s| s.text.clone())));
+        }
+        false
+    }
+
     /// Whether a bare call `name(...)` inside a class body calls a field of
     /// function type on `this`: the enclosing class (or an ancestor) has such
     /// a field and no method of that name, and no local or parameter in scope
@@ -5503,6 +5549,30 @@ impl RustEmitter {
         if self.collection_args_prehoisted {
             self.emit_expr(arg);
             return;
+        }
+        // An integer argument for an integer parameter of another width or
+        // sign converts: `xs.remove(i)` with a Jux `int` (`isize`) index into
+        // Rust's `usize` slot. The checker has accepted the pair; an untyped
+        // literal needs nothing, Rust infers it.
+        if !juxc_tycheck::infer::untyped_int_literal(arg) {
+            let target = self
+                .callee_param_type(&call.callee, i)
+                .as_ref()
+                .and_then(|t| self.type_ref_primitive(t));
+            if let (Some(target), Some(source)) = (target, self.operand_primitive(arg)) {
+                use juxc_tycheck::ty::integer_bits;
+                let target_rust = crate::exprs::rust_primitive_name(target);
+                if integer_bits(target).is_some()
+                    && integer_bits(source).is_some()
+                    && crate::exprs::rust_primitive_name(source) != target_rust
+                {
+                    self.w.push('(');
+                    self.emit_expr(arg);
+                    self.w.push_str(") as ");
+                    self.w.push_str(target_rust);
+                    return;
+                }
+            }
         }
         // **Foreign slot: lend the interior (§6.5.1).** A crate wants the
         // sequence, never the handle. Emitted as a method RECEIVER so the

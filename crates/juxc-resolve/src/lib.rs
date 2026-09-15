@@ -106,6 +106,15 @@ impl PackageExports {
             std::collections::HashMap::new();
         let mut class_parents: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // Interface method names and parents, and the interfaces each class
+        // implements: an abstract class calls a method only its interface
+        // declares by its bare name (`price()` in `Item implements Priced`),
+        // so those names are the class's members too. Collected across every
+        // unit first, since an interface may live in a later file.
+        let mut interface_members: std::collections::HashMap<String, (HashSet<String>, Vec<String>)> =
+            std::collections::HashMap::new();
+        let mut class_interfaces: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for unit in units {
             let pkg = unit
                 .package
@@ -123,7 +132,23 @@ impl PackageExports {
             // Workspace-wide class member/parent index for cross-file
             // inherited-member resolution (see the field docs).
             for item in &unit.items {
+                if let TopLevelDecl::Interface(d) = item {
+                    let methods = d.methods.iter().map(|m| m.name.text.clone()).collect();
+                    let parents = d
+                        .extends
+                        .iter()
+                        .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+                        .collect();
+                    interface_members.insert(d.name.text.clone(), (methods, parents));
+                }
                 if let TopLevelDecl::Class(d) = item {
+                    class_interfaces.insert(
+                        d.name.text.clone(),
+                        d.implements
+                            .iter()
+                            .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+                            .collect(),
+                    );
                     let mut members: HashSet<String> = HashSet::new();
                     for f in &d.fields {
                         members.insert(f.name.text.clone());
@@ -157,6 +182,19 @@ impl PackageExports {
                         false
                     }
                 };
+            }
+        }
+        for (class, interfaces) in class_interfaces {
+            let mut stack = interfaces;
+            let mut seen: HashSet<String> = HashSet::new();
+            while let Some(iface) = stack.pop() {
+                if !seen.insert(iface.clone()) {
+                    continue;
+                }
+                if let Some((methods, parents)) = interface_members.get(&iface) {
+                    class_members.entry(class.clone()).or_default().extend(methods.iter().cloned());
+                    stack.extend(parents.iter().cloned());
+                }
             }
         }
         Self {
@@ -606,8 +644,13 @@ impl Resolver {
                     for m in &class_decl.methods {
                         members.insert(m.name.text.clone());
                     }
+                    // Merged, not replaced: the workspace index already
+                    // added the methods of the interfaces this class
+                    // implements, which its own declaration does not list.
                     self.class_members
-                        .insert(class_decl.name.text.clone(), members);
+                        .entry(class_decl.name.text.clone())
+                        .or_default()
+                        .extend(members);
                     if let Some(parent) = &class_decl.extends {
                         if let Some(seg) = parent.name.segments.first() {
                             self.class_parents

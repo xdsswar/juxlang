@@ -1,0 +1,117 @@
+// Ordinary code from a bug hunt that did not compile: lambdas passed as
+// arguments using String methods, an anonymous class doing the same, a
+// Caesar shift over `chars()`, appending to a String field, `indexOf` with a
+// char, `Vec.remove` with an `int` index, a record accumulated in a for-each,
+// a generic constructor assigning its field by bare name, a collection field
+// read inside a switch arm, and an abstract class calling a method its
+// interface declares.
+
+import rust.std.HashMap;
+
+public int apply(String s, (String) -> int f) { return f(s); }
+public String transform(String s, (String) -> String f) { return f(s); }
+
+public interface Listener { void on(String s); }
+
+public String rot(String s, int shift) {
+    String out = "";
+    for (var c : s.chars()) {
+        out += (char) ('a' + (c - 'a' + shift) % 26);
+    }
+    return out;
+}
+
+public int words(String line) {
+    var parts = line.split(" ");
+    return parts.length;
+}
+
+public class Log {
+    private String text = "";
+    public void write(String s) { text += s; }
+    public void writeNumber(int n) { this.text += n; }
+    public String get() { return text; }
+}
+
+public record Money(double amount) {
+    public Money operator+(Money o) { return new Money(amount + o.amount); }
+}
+
+public class Box<A> {
+    public A value;
+    public Box(A a) { value = a; }
+}
+
+public class Registry {
+    private HashMap<String, int> counts = new HashMap<String, int>();
+    public void add(String k) { counts.insert(k, 1); }
+    public int describe(int mode) {
+        switch (mode) {
+            case 1 -> { return counts.len(); }
+            default -> { return -1; }
+        }
+    }
+}
+
+public interface Priced { double price(); }
+public abstract class Item implements Priced {
+    public double doubled() { return price() * 2; }
+}
+public class Book extends Item { public double price() { return 12.5; } }
+
+public void main() {
+    print(apply("hello", x -> x.length()));
+    print(transform("hello", x -> x.toUpperCase()));
+
+    Listener shout = new Listener() {
+        public void on(String s) { print(s.toUpperCase() + "!"); }
+    };
+    shout.on("hey");
+
+    print(rot("abc", 1));
+    print(rot("xyz", 3));
+
+    var lines = new Vec<String>();
+    lines.push("one two three");
+    lines.push("four");
+    for (var l : lines) {
+        print(words(l));
+    }
+
+    var log = new Log();
+    log.write("a");
+    log.write("b");
+    log.writeNumber(7);
+    print(log.get());
+
+    char plus = '+';
+    print("+-*".indexOf(plus));
+    print("+-*".indexOf("*"));
+
+    var xs = new Vec<String>();
+    xs.push("a");
+    xs.push("b");
+    xs.push("c");
+    int at = 1;
+    xs.remove(at);
+    print(xs.len());
+
+    var payments = new Vec<Money>();
+    payments.push(new Money(1.5));
+    payments.push(new Money(2.25));
+    var total = new Money(0.0);
+    for (var p : payments) {
+        total = total + p;
+    }
+    print(total);
+
+    var boxed = new Box<String>("boxed");
+    print(boxed.value);
+
+    var reg = new Registry();
+    reg.add("x");
+    reg.add("y");
+    print(reg.describe(1));
+
+    print(new Book().doubled());
+}

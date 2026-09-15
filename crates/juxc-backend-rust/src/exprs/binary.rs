@@ -357,6 +357,33 @@ impl RustEmitter {
         if let Some(Ty::Primitive(p)) = self.expr_types.get(&expr_span_of(e)) {
             return Some(*p);
         }
+        // An arithmetic node with no recorded type of its own has the type its
+        // operands promote to, which is how the checker computed it. Without
+        // this `'a' + (c - 'a' + shift) % 26` saw a typed `char` on the left
+        // and an untyped right, skipped promotion, and asked Rust to add an
+        // `isize` to a `char`.
+        if let Expr::Binary(b) = e {
+            if matches!(
+                b.op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem
+            ) {
+                use juxc_tycheck::ty::{promote_numeric, NumericPromotion};
+                let as_arith = |p: juxc_tycheck::Primitive| {
+                    if p == juxc_tycheck::Primitive::Char { juxc_tycheck::Primitive::Int } else { p }
+                };
+                let untyped = juxc_tycheck::infer::untyped_int_literal;
+                match (self.operand_primitive(&b.left), self.operand_primitive(&b.right)) {
+                    (Some(l), Some(r)) => {
+                        if let NumericPromotion::To(p) = promote_numeric(l, r) {
+                            return Some(as_arith(p));
+                        }
+                    }
+                    (Some(l), None) if untyped(&b.right) => return Some(as_arith(l)),
+                    (None, Some(r)) if untyped(&b.left) => return Some(as_arith(r)),
+                    _ => {}
+                }
+            }
+        }
         // A bare name inside a method can be an implicit `this.field`, and a
         // field read carries no `expr_types` entry of its own. Without this
         // the operand looked untyped, promotion was skipped for the whole
