@@ -2070,6 +2070,14 @@ impl RustEmitter {
             self.emit_call_with_byref_writeback(call);
             return;
         }
+        // **A mutating method on a value struct stored in an object**
+        // (`h.spot.scale(2.0)`, ERRATA E20) runs on the field in place. The
+        // re-entrancy hoist below would clone the struct out of the borrow and
+        // scale the copy.
+        if let Some(cf) = self.value_struct_field_mut_callee(&call.callee) {
+            self.emit_value_struct_field_mut_call(call, cf);
+            return;
+        }
         if self.call_needs_borrow_hoist(call) {
             // When the RECEIVER is itself read through a wrapper
             // `.0.borrow()` (field-path receiver), both the receiver
@@ -3612,6 +3620,66 @@ impl RustEmitter {
             }
         }
         self.w.push_str(" }");
+    }
+
+    /// The callee of `obj.field.m(...)` when `field` is a value struct read
+    /// through an object's borrow and `m` mutates its receiver.
+    fn value_struct_field_mut_callee<'c>(&self, callee: &'c Expr) -> Option<&'c juxc_ast::FieldExpr> {
+        let Expr::Field(cf) = callee else { return None };
+        // `this.spot.m()` / `h.spot.m()`, or the bare implicit-`this` field
+        // `spot.m()` inside the class's own method.
+        let bare_self_field = match &*cf.object {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = &qn.segments[0].text;
+                self.emitting_wrapper_class
+                    && !self.local_types.iter().any(|scope| scope.contains_key(name))
+                    && !self.current_fn_params.contains(name)
+                    && self.wrapper_field_parent_depth(&Expr::This(qn.span), name).is_some()
+            }
+            _ => false,
+        };
+        if !bare_self_field {
+            self.callee_receiver_reads_through_borrow(callee)?;
+        }
+        if !self.user_mut_methods.contains(&cf.field.text) {
+            return None;
+        }
+        let Some(juxc_tycheck::Ty::User { name, .. }) = self.receiver_ty_of(&cf.object) else {
+            return None;
+        };
+        self.class_ast_named(name.rsplit('.').next().unwrap_or(&name))
+            .is_some_and(|c| c.is_struct)
+            .then_some(cf)
+    }
+
+    /// `({ let __jux_arg0 = a; obj.0.borrow_mut().field.m(__jux_arg0) })`: the
+    /// arguments first (Java order, and so none of them reads the object while
+    /// it is mutably borrowed), then the method on the field in place.
+    fn emit_value_struct_field_mut_call(&mut self, call: &CallExpr, callee: &juxc_ast::FieldExpr) {
+        self.w.push_str("({ ");
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        for (i, arg) in call.args.iter().enumerate() {
+            self.w.push_str(&format!("let __jux_arg{i} = "));
+            self.emit_call_arg_value(call, i, arg);
+            self.w.push_str("; ");
+        }
+        self.emitting_format_arg = prev_fmt;
+        // As an exclusive place: the object's mutable borrow, no clone.
+        let prev_lvalue = std::mem::replace(&mut self.emitting_lvalue, true);
+        let prev_out = std::mem::replace(&mut self.emitting_out_place, true);
+        self.emit_expr(&callee.object);
+        self.emitting_lvalue = prev_lvalue;
+        self.emitting_out_place = prev_out;
+        self.w.push('.');
+        self.w.push_str(&to_rust_ident(&callee.field.text));
+        self.w.push('(');
+        for i in 0..call.args.len() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&format!("__jux_arg{i}"));
+        }
+        self.w.push_str(") })");
     }
 
     /// Emit `recv.m(args…)` with the RECEIVER hoisted out of its `.0.borrow()`:

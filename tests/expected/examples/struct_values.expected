@@ -1,0 +1,15 @@
+a.x 3.0, b.x 9.0
+after nudge 3.0
+shifted 4.0, original 3.0
+25.0
+Point(x: 6.0, y: 8.0)
+true
+false
+Point(x: 0.0, y: 0.0)
+stored 6.0
+scaled in place 3.0
+dust 0.0, smoke 7.0
+floor 12.0
+floor still 12.0
+shape 1.0, tile 5.0
+2

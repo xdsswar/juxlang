@@ -110,7 +110,9 @@ fn user_type_has_default(name: &str, symbols: &SymbolTable, visiting: &mut Vec<S
         if class.is_external {
             return true;
         }
-        return class.is_layout_c
+        // A value struct (E20) has a default when every field does; a class is
+        // a reference and has none.
+        return class.is_struct
             && class
                 .fields
                 .values()

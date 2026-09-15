@@ -3976,6 +3976,10 @@ public async int example() throws ParseError {
 
 A spawned task that fails with no awaiter triggers the runtime's unhandled-rejection hook. The default hook logs the error and aborts the process; embedders can override it via `Runtime.onUnhandledRejection`.
 
+- A task has **no awaiter** once its handle is gone without having been awaited (the handle went out of scope, or `spawn(...)` was called as a statement). A failure that happened before that moment is reported then; a failure after it is reported when it happens.
+- `task.cancel()` is not a failure, and reports nothing.
+- The default hook writes `Unhandled exception in spawned task: <exception class FQN>: <message>` to standard error and ends the process with exit status 101, the status an uncaught exception in `main` uses.
+
 Because direct async calls require `await` (§10.1.2), unhandled rejections can only come from spawned tasks. This is a much smaller surface area than JavaScript, where any call that returns a Promise can be silently dropped.
 
 #### 10.1.9. Cancellation

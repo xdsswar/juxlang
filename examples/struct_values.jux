@@ -1,0 +1,99 @@
+// Structs are values (ERRATA E20, JUX-LANG-V1 §7.6).
+//
+// - Assignment, argument passing, returning and storing into a field, an array
+//   or a collection each COPY the struct; changing the copy leaves the
+//   original alone.
+// - A struct with no constructor gets one taking every field in order.
+// - `==`, hashing and printing are derived from the fields, as for a record,
+//   and `===` on a struct is the same test as `==`.
+// - A struct stored inside an object or an array element is changed in place
+//   by a field write or a mutating method.
+
+public interface Shape { double area(); }
+
+public struct Point {
+    public double x;
+    public double y;
+    public double lengthSquared() { return x * x + y * y; }
+    public void scale(double k) { x = x * k; y = y * k; }
+}
+
+public struct Cell {
+    public int row;
+    public int col;
+}
+
+public struct Rect implements Shape {
+    public double w;
+    public double h;
+    public double area() { return w * h; }
+    public void grow() { w = w + 1.0; }
+}
+
+public struct Particle {
+    public Point pos;
+    public String name;
+    public Particle(String name, Point pos) { this.name = name; this.pos = pos; }
+}
+
+public class Room {
+    public Rect floor = new Rect(2.0, 3.0);
+    public void extend() { floor.grow(); }
+}
+
+public void nudge(Point p) { p.x = 100.0; }
+
+public Point shifted(Point p) {
+    p.x = p.x + 1.0;
+    return p;
+}
+
+public void main() {
+    var a = new Point(3.0, 4.0);
+    var b = a;
+    b.x = 9.0;
+    print("a.x " + a.x + ", b.x " + b.x);
+    nudge(a);
+    print("after nudge " + a.x);
+    var moved = shifted(a);
+    print("shifted " + moved.x + ", original " + a.x);
+    print(a.lengthSquared());
+    a.scale(2.0);
+    print(a);
+    print(a == new Point(6.0, 8.0));
+    print(a === b);
+
+    var grid = new Point[2];
+    print(grid[0]);
+    grid[1] = a;
+    a.x = 0.0;
+    print("stored " + grid[1].x);
+    grid[1].scale(0.5);
+    print("scaled in place " + grid[1].x);
+
+    var dust = new Particle("dust", a);
+    var smoke = dust;
+    smoke.pos.x = 7.0;
+    smoke.name = "smoke";
+    print(dust.name + " " + dust.pos.x + ", " + smoke.name + " " + smoke.pos.x);
+
+    var room = new Room();
+    room.floor.w = 10.0;
+    room.floor.grow();
+    room.extend();
+    print("floor " + room.floor.w);
+    var copy = room.floor;
+    copy.w = 1.0;
+    print("floor still " + room.floor.w);
+
+    Rect tile = new Rect(1.0, 1.0);
+    Shape shape = tile;
+    tile.w = 5.0;
+    print("shape " + shape.area() + ", tile " + tile.area());
+
+    var cells = new HashSet<Cell>();
+    cells.insert(new Cell(1, 2));
+    cells.insert(new Cell(1, 2));
+    cells.insert(new Cell(2, 1));
+    print(cells.len());
+}

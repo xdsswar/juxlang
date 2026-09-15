@@ -884,6 +884,10 @@ pub struct ClassSig {
     /// `.0.borrow()` field rewrite, and lower `T*` to `*mut T` (not `*mut
     /// T_Inner`). Only `struct` (not `class`) may carry it (E0509).
     pub is_layout_c: bool,
+    /// Declared with `struct`: a VALUE type (ERRATA E20), copied on assignment,
+    /// argument passing and storage, lowered to a plain Rust struct and never
+    /// the `Rc<RefCell>` handle. `is_layout_c` is the C-layout subset.
+    pub is_struct: bool,
     /// True when the class is declared `final` — no other class may
     /// extend it. Enforced by `check_final_and_sealed_extends`.
     pub is_final: bool,
@@ -2375,6 +2379,22 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
         let Some(extends) = child.extends.as_ref() else {
             continue;
         };
+        // A struct is a value type with no inheritance (ERRATA E20); say so,
+        // rather than report the parent as final or the missing `super(...)`.
+        if child.is_struct {
+            let bare = child_name.rsplit('.').next().unwrap_or(child_name);
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0423_ExtendsNotAClass,
+                    format!(
+                        "struct `{bare}` cannot extend anything -- a struct is a value type with no \
+                         inheritance; implement an interface, or declare `{bare}` as a class",
+                    ),
+                )
+                .with_span(extends.span),
+            );
+            continue;
+        }
         // Prefer the resolved FQN; fall back to the bare last
         // segment so single-unit / no-package builds still work
         // before the FQN finalize pass populates `extends_fqn`.
@@ -4091,6 +4111,7 @@ fn insert_class(
             // `class`-misuse case is rejected separately (E0509); we only flag
             // the valid struct form here so the backend lowers it by value.
             is_layout_c: class_decl.is_struct && is_layout_c_annotation(&class_decl.annotations),
+            is_struct: class_decl.is_struct,
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
             permits: class_decl.permits.iter().map(|n| n.text.clone()).collect(),

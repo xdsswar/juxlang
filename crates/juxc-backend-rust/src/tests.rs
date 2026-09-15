@@ -5192,7 +5192,9 @@ fn layout_c_struct_has_default_and_structural_equality() {
     assert!(rust.contains("impl Default for Node {"), "Node default: {rust}");
     assert!(rust.contains("data: std::ptr::null_mut(),"), "pointer field: {rust}");
     assert!(rust.contains("weight: 1.5"), "initializer: {rust}");
-    assert!(rust.contains("#[derive(Clone, Copy, Debug, PartialEq)]\nstruct Plain"), "derive: {rust}");
+    // Derived from the field types, as a record's are (ERRATA E20): two `int`s
+    // compare and hash.
+    assert!(rust.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\nstruct Plain"), "derive: {rust}");
     assert!(rust.contains("#[derive(Clone, Copy, Debug)]\nstruct Custom"), "operator== wins: {rust}");
 }
 
@@ -5468,7 +5470,7 @@ fn layout_c_struct_lowers_to_repr_c_value() {
     assert!(rust.contains("#[repr(C)]"), "missing #[repr(C)]: {rust}");
     assert!(
         // `PartialEq` is its structural `operator==` (Operators §O.1).
-        rust.contains("#[derive(Clone, Copy, Debug, PartialEq)]"),
+        rust.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]"),
         "value struct should derive Copy: {rust}"
     );
     assert!(rust.contains("struct P {"), "expected a plain struct P: {rust}");

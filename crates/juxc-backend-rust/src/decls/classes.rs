@@ -201,18 +201,39 @@ impl RustEmitter {
         // one declaring `operator<=>`, whose `PartialEq` bridge is synthesized
         // with the operator impls; a derive beside either would be a second
         // `impl PartialEq`.
-        let is_value_struct = crate::is_layout_c_struct(class_decl);
+        let is_value_struct = class_decl.is_struct;
         let declares_equality = class_decl
             .operators
             .iter()
             .any(|o| matches!(o.kind, OperatorKind::Eq | OperatorKind::Cmp));
         if is_value_struct {
-            self.w.line("#[repr(C)]");
-            if declares_equality {
-                self.w.line("#[derive(Clone, Copy, Debug)]");
-            } else {
-                self.w.line("#[derive(Clone, Copy, Debug, PartialEq)]");
+            // A value struct (ERRATA E20) derives what a record would, from its
+            // field types: `Copy` when every field copies, `Eq`/`Hash` when
+            // every field has them (a `double` does not). `Default` comes from
+            // the class path's own impl. `@layout(c)` adds the C layout.
+            if crate::is_layout_c_struct(class_decl) {
+                self.w.line("#[repr(C)]");
             }
+            let field_tys: Vec<&juxc_ast::TypeRef> =
+                class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+            let declares_hash = class_decl.operators.iter().any(|o| o.kind == OperatorKind::Hash);
+            let mut derives = vec!["Clone"];
+            if self.struct_is_copy(class_decl) {
+                derives.push("Copy");
+            }
+            if !has_fn_field {
+                derives.push("Debug");
+            }
+            if !declares_equality {
+                derives.push("PartialEq");
+                if field_tys.iter().all(|t| crate::analysis::field_supports_eq(t)) {
+                    derives.push("Eq");
+                    if !declares_hash {
+                        derives.push("Hash");
+                    }
+                }
+            }
+            self.w.line(&format!("#[derive({})]", derives.join(", ")));
         } else if has_fn_field {
             self.w.line("#[derive(Clone)]");
         } else {
@@ -698,7 +719,10 @@ impl RustEmitter {
             .operators
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
-        if !has_to_string {
+        if !has_to_string && class_decl.is_struct {
+            // A struct prints its fields, the way a record does (§O.3.2).
+            self.emit_struct_display(class_decl);
+        } else if !has_to_string {
             self.emit_identity_display(
                 &class_decl.name.text,
                 false,
@@ -3054,6 +3078,60 @@ impl RustEmitter {
             return_type,
             span,
         }
+    }
+
+    /// `impl Display for S` printing `S(field: value, ...)`, the text a record
+    /// with the same components prints (OPERATORS §O.3.2).
+    fn emit_struct_display(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let name = &class_decl.name.text;
+        let fields: Vec<&juxc_ast::FieldDecl> = class_decl.fields.iter().filter(|f| !f.is_static).collect();
+        let mut fmt_body = format!("{name}(");
+        let mut args = Vec::new();
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 {
+                fmt_body.push_str(", ");
+            }
+            fmt_body.push_str(&field.name.text);
+            fmt_body.push_str(": {}");
+            let access = format!("self.{}", to_rust_ident(&field.name.text));
+            let is_float = field.ty.as_ref().is_some_and(crate::analysis::type_ref_is_float);
+            // A raw pointer (`int* data`) has no `Display`; the universal
+            // formatter prints its address.
+            let shows = field.ty.as_ref().is_some_and(|t| {
+                t.ptr_depth == 0 && crate::analysis::field_supports_display_in(t, &std::collections::HashSet::new())
+            });
+            args.push(if is_float {
+                format!("crate::jux_float({access})")
+            } else if shows {
+                access
+            } else {
+                format!("crate::__jux_show!(&{access})")
+            });
+        }
+        fmt_body.push(')');
+        self.w.emit_indent();
+        self.w.push_str("impl");
+        let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if !class_decl.generic_params.is_empty() {
+            self.emit_generic_params_with_clone_bound_plus_display(&class_decl.generic_params, &none, &none);
+        }
+        self.w.push_str(" std::fmt::Display for ");
+        self.w.push_str(&to_rust_ident(name));
+        self.emit_generic_params_as_args(&class_decl.generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");
+        self.w.indent_inc();
+        if args.is_empty() {
+            self.w.line(&format!("write!(f, \"{fmt_body}\")"));
+        } else {
+            self.w.line(&format!("write!(f, \"{fmt_body}\", {})", args.join(", ")));
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
     }
 
     /// Copy the operators `class_decl` inherits into its inherent impl (§O.2.9),

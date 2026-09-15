@@ -29,7 +29,7 @@ use juxc_source::Span;
 
 use crate::common::{Ident, QualifiedName, Visibility};
 use crate::decls::{
-    AccessorBody, Annotation, AnnotationArg, ClassDecl, ConstructorDecl, FieldDecl, FnDecl, Param,
+    AccessorBody, ClassDecl, ConstructorDecl, FieldDecl, FnDecl, Param,
     PropertyDecl, ReturnType, TopLevelDecl,
 };
 use crate::exprs::{Expr, FieldExpr};
@@ -65,40 +65,26 @@ fn desugar_top_level(item: &mut TopLevelDecl) {
     }
 }
 
-/// True when `annotations` carries `@layout(c)` (Layout-ABI §L.1.2) — a `layout`
-/// annotation with a positional `c` argument. Local copy of the same check used
-/// in tycheck/backend (kept here so the AST crate has no dependency on them).
-fn is_layout_c(annotations: &[Annotation]) -> bool {
-    annotations.iter().any(|a| {
-        let is_layout = a
-            .name
-            .segments
-            .last()
-            .map(|s| s.text.eq_ignore_ascii_case("layout"))
-            .unwrap_or(false);
-        is_layout
-            && a.args.iter().any(|arg| {
-                matches!(arg,
-                    AnnotationArg::Positional(Expr::Path(qn))
-                        if qn.segments.last()
-                            .map(|s| s.text.eq_ignore_ascii_case("c"))
-                            .unwrap_or(false))
-            })
-    })
-}
-
-/// Synthesize an implicit positional constructor for a `@layout(c)` value struct
-/// that declares none — mapping its instance fields (in declaration order) to
-/// constructor parameters and assigning each (`new POINT(x, y)`), the C-struct
-/// "make one from its fields" idiom. Matches how a `record` gets its canonical
-/// constructor, so definite-assignment (§S.4.5), `new` resolution, and the
-/// backend all see an ordinary constructor.
+/// Synthesize the implicit positional constructor of a value struct that
+/// declares none (ERRATA E20): its instance fields, in declaration order, become
+/// constructor parameters and each is assigned (`new Point(3.0, 4.0)`). A field
+/// with an initializer is a parameter too; only a declared constructor may leave
+/// fields out. Matches how a `record` gets its canonical constructor, so
+/// definite-assignment (§S.4.5), `new` resolution, and the backend all see an
+/// ordinary constructor. `@layout(c)` structs (§L.1.2) are the same value type.
 ///
-/// Skipped when the struct already declares a constructor, OR any instance field
-/// has an initializer (the author manages construction) or lacks a written type
-/// (no parameter type to form).
+/// Skipped when the struct already declares a constructor, a field lacks a
+/// written type (no parameter type to form), or the struct is a bound Rust
+/// type (`@rust("minifb::WindowOptions")` in a crate stub): a foreign type is
+/// built the way its crate discovers, never through an invented constructor.
 fn synth_value_struct_ctor(class: &mut ClassDecl) {
-    if !class.is_struct || !class.constructors.is_empty() || !is_layout_c(&class.annotations) {
+    if !class.is_struct || !class.constructors.is_empty() {
+        return;
+    }
+    let is_foreign = class.annotations.iter().any(|a| {
+        a.name.segments.last().is_some_and(|s| s.text.eq_ignore_ascii_case("rust"))
+    });
+    if is_foreign {
         return;
     }
     // Collect owned (name, type, span) for each instance field. Bail out if any
@@ -108,9 +94,9 @@ fn synth_value_struct_ctor(class: &mut ClassDecl) {
         if f.is_static {
             continue;
         }
-        match (&f.ty, f.default.is_some()) {
-            (Some(ty), false) => fields.push((f.name.clone(), ty.clone(), f.span)),
-            _ => return,
+        match &f.ty {
+            Some(ty) => fields.push((f.name.clone(), ty.clone(), f.span)),
+            None => return,
         }
     }
     if fields.is_empty() {

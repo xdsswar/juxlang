@@ -197,13 +197,13 @@ impl RustEmitter {
                 && inner.name.segments.len() == 1
             {
                 let bare = &inner.name.segments[0].text;
-                // …but a `@layout(c)` value struct is ALREADY a flat `#[repr(C)]`
-                // struct (no `_Inner` handle), so `S*` is just `*mut S`.
+                // …but a value struct is ALREADY a flat struct (no `_Inner`
+                // handle), so `S*` is just `*mut S`.
                 if self
                     .symbols
                     .classes
                     .get(bare)
-                    .is_some_and(|c| !c.is_layout_c)
+                    .is_some_and(|c| !c.is_struct)
                 {
                     self.w.push_str(bare);
                     self.w.push_str("_Inner");
@@ -1347,6 +1347,18 @@ impl RustEmitter {
                 _ => "0",
             };
             self.w.push_str(default);
+        } else if ty.name.segments.len() == 1 && !ty.nullable && ty.fn_shape.is_none() {
+            // Named, so the default has a type even where nothing else pins
+            // it: `var cells = new Point[4]` has no declared element type to
+            // infer a bare `Default::default()` from.
+            if ty.generic_args.is_empty() {
+                self.emit_type_as_rust(ty);
+                self.w.push_str("::default()");
+            } else {
+                self.w.push('<');
+                self.emit_type_as_rust(ty);
+                self.w.push_str(">::default()");
+            }
         } else {
             self.w.push_str("Default::default()");
         }

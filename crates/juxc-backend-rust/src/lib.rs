@@ -1560,8 +1560,9 @@ pub(crate) fn compute_wrapper_classes(
         if crate::decls::classes::sealed_decl_lowers_to_enum(d.cd) {
             return false;
         }
-        // A `@layout(c) struct` is a C-compatible VALUE type (§L.1.2).
-        if is_layout_c_struct(d.cd) {
+        // Every `struct` is a VALUE type (ERRATA E20), `@layout(c)` ones with a
+        // C layout on top (§L.1.2): never behind the shared handle.
+        if d.cd.is_struct {
             return false;
         }
         if is_intrinsic_class(&d.pkg, &d.cd.name.text) {
@@ -4515,15 +4516,37 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // Spawned bodies run on pool threads, so captures must be
         // Send — tycheck's E0702 capture scan enforces the Jux-level
         // rule (no wrapper-class objects).
-        w.push_str("pub struct JuxTask<T>(Option<futures::future::RemoteHandle<T>>);\n");
+        //
+        // **Unhandled rejections (LANG-V1 §10.1.8).** The handle and the
+        // running future share a small state. A failure is parked there for
+        // the awaiter; a handle dropped without being awaited marks the task
+        // ORPHANED, and a failure that is (or becomes) orphaned goes to the
+        // crate's `__jux_unhandled_rejection` hook instead of vanishing.
+        w.push_str("pub struct JuxTaskShared {\n");
+        w.push_str("    // (orphaned, parked failure)\n");
+        w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
+        w.push_str("}\n");
+        w.push_str("pub struct JuxTask<T>(Option<futures::future::RemoteHandle<Result<T, ()>>>, std::sync::Arc<JuxTaskShared>);\n");
         w.push_str("impl<T: 'static> JuxTask<T> {\n");
+        w.push_str("    /// The awaiter's side of a failed task: rethrow what it threw.\n");
+        w.push_str("    fn settle(shared: &JuxTaskShared, result: Result<T, ()>) -> T {\n");
+        w.push_str("        match result {\n");
+        w.push_str("            Ok(v) => v,\n");
+        w.push_str("            Err(()) => {\n");
+        w.push_str("                let parked = shared.state.lock().unwrap_or_else(|e| e.into_inner()).1.take();\n");
+        w.push_str("                std::panic::resume_unwind(parked.expect(\"a failed task parks its exception\"))\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
         w.push_str("    pub fn blockingGet(mut self) -> T {\n");
-        w.push_str("        futures::executor::block_on(self.0.take().expect(\"task already consumed\"))\n");
+        w.push_str("        let handle = self.0.take().expect(\"task already consumed\");\n");
+        w.push_str("        Self::settle(&self.1, futures::executor::block_on(handle))\n");
         w.push_str("    }\n");
         w.push_str("    pub fn cancel(mut self) {\n");
         w.push_str("        // Dropping the RemoteHandle cancels the remote\n");
-        w.push_str("        // computation (the Drop impl would FORGET it).\n");
+        w.push_str("        // computation (the Drop impl would FORGET it). A\n");
+        w.push_str("        // cancelled task has no failure to report.\n");
         w.push_str("        if let Some(h) = self.0.take() {\n");
         w.push_str("            std::mem::drop(h);\n");
         w.push_str("        }\n");
@@ -4537,6 +4560,16 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    fn drop(&mut self) {\n");
         w.push_str("        if let Some(h) = self.0.take() {\n");
         w.push_str("            h.forget();\n");
+        w.push_str("            // Nobody will await it now: a failure already parked is\n");
+        w.push_str("            // unhandled, and a later one will be reported by the task.\n");
+        w.push_str("            let parked = {\n");
+        w.push_str("                let mut state = self.1.state.lock().unwrap_or_else(|e| e.into_inner());\n");
+        w.push_str("                state.0 = true;\n");
+        w.push_str("                state.1.take()\n");
+        w.push_str("            };\n");
+        w.push_str("            if let Some(p) = parked {\n");
+        w.push_str("                crate::__jux_unhandled_rejection(p);\n");
+        w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
@@ -4544,7 +4577,14 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    type Output = T;\n");
         w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
         w.push_str("        let h = self.0.as_mut().expect(\"awaiting a cancelled task\");\n");
-        w.push_str("        std::pin::Pin::new(h).poll(cx)\n");
+        w.push_str("        match std::pin::Pin::new(h).poll(cx) {\n");
+        w.push_str("            std::task::Poll::Pending => std::task::Poll::Pending,\n");
+        w.push_str("            std::task::Poll::Ready(result) => {\n");
+        w.push_str("                // Consumed: the handle's drop must not orphan the task.\n");
+        w.push_str("                self.0 = None;\n");
+        w.push_str("                std::task::Poll::Ready(Self::settle(&self.1, result))\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str(
@@ -4554,12 +4594,32 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("pub fn __jux_spawn<T: Send + 'static>(\n");
         w.push_str("    fut: impl std::future::Future<Output = T> + Send + 'static,\n");
         w.push_str(") -> JuxTask<T> {\n");
-        w.push_str("    JuxTask(Some(\n");
-        w.push_str(
-            "        futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, fut)\n",
-        );
-        w.push_str("            .expect(\"spawn\"),\n");
-        w.push_str("    ))\n");
+        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared { state: std::sync::Mutex::new((false, None)) });\n");
+        w.push_str("    let task_side = shared.clone();\n");
+        w.push_str("    let guarded = async move {\n");
+        w.push_str("        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {\n");
+        w.push_str("            Ok(v) => Ok(v),\n");
+        w.push_str("            Err(p) => {\n");
+        w.push_str("                let orphaned = {\n");
+        w.push_str("                    let mut state = task_side.state.lock().unwrap_or_else(|e| e.into_inner());\n");
+        w.push_str("                    if state.0 {\n");
+        w.push_str("                        Some(p)\n");
+        w.push_str("                    } else {\n");
+        w.push_str("                        state.1 = Some(p);\n");
+        w.push_str("                        None\n");
+        w.push_str("                    }\n");
+        w.push_str("                };\n");
+        w.push_str("                if let Some(p) = orphaned {\n");
+        w.push_str("                    crate::__jux_unhandled_rejection(p);\n");
+        w.push_str("                }\n");
+        w.push_str("                Err(())\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("    };\n");
+        w.push_str("    JuxTask(\n");
+        w.push_str("        Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\")),\n");
+        w.push_str("        shared,\n");
+        w.push_str("    )\n");
         w.push_str("}\n\n");
         // Channel runtime — JUX-ASYNC v2 §18.3. A bounded async
         // channel: `send` suspends when full, `receive` suspends
@@ -6663,6 +6723,23 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
                 ));
                 source.push_str(&wrapper);
             }
+        }
+        // **The unhandled-rejection hook** (LANG-V1 §10.1.8). A spawned task
+        // that fails with nobody to await it lands here: the default hook
+        // reports the exception the way an uncaught one in `main` is reported
+        // and ends the process with the same status.
+        if source.contains("pub struct JuxTaskShared") {
+            let mut hook = String::from(
+                "\n/// The default unhandled-rejection hook: report the exception a spawned task\n/// threw with nobody awaiting it, then end the process.\npub fn __jux_unhandled_rejection(p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>) {\n",
+            );
+            for fqn in &throwable_fqns {
+                let path = self_path(fqn);
+                hook.push_str(&format!(
+                    "    if let Some(e) = p.downcast_ref::<{path}>() {{\n        eprintln!(\"Unhandled exception in spawned task: {fqn}: {{}}\", e.getMessage());\n        std::process::exit(101);\n    }}\n"
+                ));
+            }
+            hook.push_str("    if let Some(s) = p.downcast_ref::<&str>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
+            source.push_str(&hook);
         }
         // **The `Exception` part of a thrown payload** (§X.3.2). A `finally`
         // that throws while another exception propagates records the new one

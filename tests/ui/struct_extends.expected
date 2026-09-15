@@ -1,0 +1,1 @@
+struct_extends.jux:5:30: [E0423] error: struct `Point3` cannot extend anything -- a struct is a value type with no inheritance; implement an interface, or declare `Point3` as a class

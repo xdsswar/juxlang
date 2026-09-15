@@ -2298,6 +2298,10 @@ impl<'a> Checker<'a> {
     fn enclosing_parent_needing_args(&self) -> Option<String> {
         let class_fqn = self.env.current_class.as_deref()?;
         let class = self.symbols.classes.get(class_fqn)?;
+        // A struct's `extends` is already E0423; it has no parent to call.
+        if class.is_struct {
+            return None;
+        }
         let parent_key = class.extends_fqn.clone().or_else(|| {
             class
                 .extends
@@ -7025,7 +7029,7 @@ impl<'a> Checker<'a> {
             Expr::Field(f) => {
                 let owner = infer_expr(&f.object, &self.env, self.symbols);
                 match &owner {
-                    Ty::User { name, .. } if self.symbols.classes.get(name).is_some_and(|c| !c.is_layout_c) => Some(format!(
+                    Ty::User { name, .. } if self.symbols.classes.get(name).is_some_and(|c| !c.is_struct) => Some(format!(
                         "`&` cannot take the address of a field of a class object; take `&` of the object itself (a `{}*` reaches its fields, §L.6.5)",
                         name.rsplit('.').next().unwrap_or(name),
                     )),
@@ -7508,7 +7512,7 @@ impl<'a> Checker<'a> {
                             .symbols
                             .classes
                             .get(&name)
-                            .is_some_and(|class| !class.is_layout_c && !class.is_external);
+                            .is_some_and(|class| !class.is_struct && !class.is_external);
                         if is_handle_class && self.symbols.lookup_method(&name, &f.field.text).is_some() {
                             self.diagnostics.push(
                                 Diagnostic::error(

@@ -618,9 +618,10 @@ shared handle.
   handle, so the copy shares that object (a shallow copy, as C# does);
 - lowers to a plain Rust `struct` deriving `Clone`, plus `Copy` when every field
   is `Copy`; it is never behind `Rc<RefCell>`;
-- has no identity (`===` on a struct is `E0442`) and no inheritance (`extends`
-  on a struct is `E0423`); it may `implement` interfaces, and a struct stored in
-  an interface-typed slot is copied into it;
+- has no identity: `===` on a struct is the same test as `==` (JUX-LANG-V1
+  §7.14.3, as for a record), and no inheritance (`extends` on a struct is
+  `E0423`); it may `implement` interfaces, and a struct stored in an
+  interface-typed slot is copied into it;
 - gets an implicit constructor taking every field in declaration order when it
   declares none (`new Point(3.0, 4.0)`), in addition to explicit constructors;
   a field with an initializer may be omitted from the positional form only by

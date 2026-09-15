@@ -1,0 +1,38 @@
+// A spawned task that fails with nobody to await it (JUX-LANG-V1 §10.1.8).
+//
+// - An awaited task's exception reaches the awaiter, where `catch` handles it.
+// - A cancelled task reports nothing.
+// - A task whose handle is dropped without an await, and which fails, is an
+//   unhandled rejection: the default hook reports it on standard error and
+//   ends the process with status 101.
+
+public async int check(String what) {
+    throw new IllegalStateException(what + " failed");
+}
+
+public async int slowCheck(String what) {
+    await Task.delay(50);
+    throw new IllegalArgumentException(what + " failed later");
+}
+
+public void startAndForget() {
+    spawn(slowCheck("audit"));
+}
+
+public async void main() {
+    var awaited = spawn(check("login"));
+    try {
+        await awaited;
+    } catch (IllegalStateException e) {
+        print("handled: " + e.getMessage());
+    }
+
+    var cancelled = spawn(check("backup"));
+    cancelled.cancel();
+    print("cancelled backup");
+
+    startAndForget();
+    print("audit started");
+    await Task.delay(2000);
+    print("not reached: the unhandled failure ends the process first");
+}

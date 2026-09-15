@@ -747,7 +747,9 @@ impl RustEmitter {
                 // An `out` field place needs an exclusive `&mut` into the
                 // interior, so take the mutable borrow; the `RefMut` temporary
                 // lives to the end of the call statement (§M.4).
-                if self.emitting_out_place {
+                // So does a write THROUGH this field: `h.spot.x = 5.0` changes
+                // a value struct stored inside the object, in place (E20).
+                if self.emitting_out_place || self.emitting_lvalue {
                     self.w.push_str(".0.borrow_mut()");
                 } else {
                     self.w.push_str(".0.borrow()");
@@ -1148,6 +1150,7 @@ impl RustEmitter {
                 // an interface is a `dyn` handle -- both keep pointer identity.
                 self.symbols.records.keys().any(|k| same(k, name, bare))
                     || self.symbols.enums.keys().any(|k| same(k, name, bare))
+                    || self.lookup_class_by_bare_or_fqn(name).is_some_and(|c| c.is_struct)
             }
             _ => false,
         }
@@ -1645,7 +1648,40 @@ impl RustEmitter {
             || self.symbols.records.keys().any(|k| k.rsplit('.').next() == Some(bare));
         let is_enum = self.symbols.enums.contains_key(name)
             || self.symbols.enums.keys().any(|k| k.rsplit('.').next() == Some(bare));
-        is_record || (is_enum && !self.enum_is_copy(name))
+        is_record || (is_enum && !self.enum_is_copy(name)) || self.struct_is_clone_only(name)
+    }
+
+    /// Whether `name` is a value `struct` (ERRATA E20) that is `Clone` but not
+    /// `Copy`: some field (a `String`, another struct, a collection) cannot be
+    /// copied bit for bit, so every re-read of a place clones it.
+    pub(crate) fn struct_is_clone_only(&self, name: &str) -> bool {
+        self.class_ast_named(name.rsplit('.').next().unwrap_or(name))
+            .is_some_and(|c| c.is_struct && !self.struct_is_copy(&c))
+    }
+
+    /// Whether every instance field of a struct is `Copy`, which lets the
+    /// struct derive `Copy` and be passed around without `.clone()`. A field
+    /// that is itself a struct counts when that struct is `Copy` in turn.
+    pub(crate) fn struct_is_copy(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        self.struct_is_copy_within(class_decl, 0)
+    }
+
+    fn struct_is_copy_within(&self, class_decl: &juxc_ast::ClassDecl, depth: usize) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        class_decl.fields.iter().filter(|f| !f.is_static).all(|f| {
+            let Some(ty) = f.ty.as_ref() else { return false };
+            if crate::analysis::field_supports_copy(ty) {
+                return true;
+            }
+            let nested = ty.generic_args.is_empty() && !ty.nullable && ty.array_shape.is_none();
+            nested
+                && ty.name.segments.last().is_some_and(|s| {
+                    self.class_ast_named(&s.text)
+                        .is_some_and(|inner| inner.is_struct && self.struct_is_copy_within(&inner, depth + 1))
+                })
+        })
     }
 
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {

@@ -1,0 +1,12 @@
+public struct Point {
+    public int x;
+}
+
+public struct Point3 extends Point {
+    public int z;
+}
+
+public void main() {
+    var p = new Point(1);
+    print(p.x);
+}
