@@ -1,0 +1,69 @@
+// Operators are inherited and overridden like methods (OPERATORS §O.2.9).
+//
+// - `Coin` writes no operators and compares, hashes, prints, orders and adds
+//   through `Money`'s.
+// - `Note` overrides `==`, `hash` and `string`; a `Money`-typed reference to a
+//   `Note` runs the override.
+// - A base-typed value in a `HashSet` hashes and compares through its runtime
+//   class.
+// - A generic class's `operator string` reaches its subclasses too.
+
+public class Money {
+    public int cents;
+    public Money(int c) { cents = c; }
+    public bool operator==(Money o) { return cents == o.cents; }
+    public int operator hash() { return cents; }
+    public String operator string() { return "$" + cents; }
+    public int operator<=>(Money o) { return cents - o.cents; }
+    public Money operator+(Money o) { return new Money(cents + o.cents); }
+}
+
+public class Coin extends Money {
+    public Coin(int c) { super(c); }
+}
+
+public class Note extends Money {
+    public Note(int c) { super(c); }
+    public bool operator==(Money o) { return false; }
+    public int operator hash() { return 7; }
+    public String operator string() { return "note " + cents; }
+}
+
+public class Crate<T> {
+    public T item;
+    public Crate(T item) { this.item = item; }
+    public String operator string() { return "crate of " + item; }
+}
+
+public class Labelled extends Crate<String> {
+    public Labelled(String s) { super(s); }
+}
+
+public void main() {
+    Coin a = new Coin(5);
+    Coin b = new Coin(5);
+    print(a == b);
+    print(a);
+    print(a < b);
+    print(a + b);
+
+    Money m = a;
+    Money n = new Note(5);
+    print(m == b);
+    print(n == m);
+    print(m == n);
+    print(n);
+    print(m + n);
+
+    var wallet = new HashSet<Money>();
+    wallet.insert(m);
+    wallet.insert(b);
+    wallet.insert(n);
+    print(wallet.len());
+    var coins = new HashSet<Coin>();
+    coins.insert(a);
+    coins.insert(b);
+    print(coins.len());
+
+    print(new Labelled("tools"));
+}

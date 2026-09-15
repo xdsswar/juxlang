@@ -1738,8 +1738,9 @@ fn class_bound_uses_marker_trait_kind() {
     // `Debug` so a base-typed value (a `Rc<dyn …Kind>`) can be another
     // generic's type argument -- a parameter that reaches a format position
     // carries a `Display` bound, and every class emits an identity one.
+    // `JuxIdentity` lets a base-typed handle name its object for `===`.
     assert!(
-        rust.contains("pub trait AnimalKind: std::fmt::Debug + std::fmt::Display {}"),
+        rust.contains("pub trait AnimalKind: std::fmt::Debug + std::fmt::Display + crate::JuxIdentity {}"),
         "marker decl: {rust}",
     );
     assert!(rust.contains("impl AnimalKind for Animal {}"), "marker impl: {rust}");
@@ -1914,7 +1915,7 @@ fn interface_lowers_to_pub_trait_with_method_signatures() {
         "#,
     );
     assert!(
-        rust.contains("pub trait Drawable: std::fmt::Debug {"),
+        rust.contains("pub trait Drawable: std::fmt::Debug + crate::JuxIdentity {"),
         "trait header: {rust}"
     );
     // Interface methods emit as `&self` so the interface can be used as a

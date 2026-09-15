@@ -700,6 +700,8 @@ impl RustEmitter {
                 &class_decl.generic_params,
             );
         }
+        let address = self.class_identity_address(&class_decl.name.text, false);
+        self.emit_jux_identity_impl(&class_decl.name.text, &class_decl.generic_params, address);
         if class_decl.generic_params.is_empty() {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(&class_decl.name.text, op);
@@ -724,7 +726,7 @@ impl RustEmitter {
             // PartialEq impl is the one emitted by `emit_operator_trait_impl`
             // — we leave that path alone and skip the synthesized form.
             if has_cmp && !has_eq {
-                self.emit_partial_eq_from_cmp(&class_decl.name.text);
+                self.emit_partial_eq_from_cmp(&class_decl.name.text, "other.clone()");
             }
             // Per spec §O.2.7 the user MUST define `operator hash` if
             // they define `operator==`. When both are present we
@@ -1233,6 +1235,9 @@ impl RustEmitter {
         for op in &class_decl.operators {
             self.emit_operator_as_method(op);
         }
+        if !class_decl.is_abstract {
+            self.emit_inherited_operator_methods(class_decl);
+        }
         self.emitting_wrapper_class = prev_wrapper;
         self.w.line("}");
         self.w.newline();
@@ -1330,13 +1335,42 @@ impl RustEmitter {
         // §O.4.1 identity default — wrapper shape: the address is the shared
         // Rc cell, stable across aliases. Emitted for generic classes too;
         // see the note on the legacy path.
-        let has_to_string = class_decl
-            .operators
+        // Inherited operators count (§O.2.9): a `Coin` whose base declares
+        // `operator string` prints through it. An abstract class copies no
+        // inherited members, so only its own operators have a body to call.
+        let effective_ops = if class_decl.is_abstract {
+            class_decl.operators.clone()
+        } else {
+            self.class_effective_operators(class_decl)
+        };
+        let has_to_string = effective_ops
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
         if !has_to_string {
             self.emit_identity_display(name, true, &class_decl.generic_params);
+        } else if !class_decl.generic_params.is_empty() {
+            // The operator trait bridges below are non-generic only, but a
+            // class's `Kind` trait needs `Display` either way: a generic class
+            // that declares or inherits `operator string` prints through it.
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_kind_generic_params(class_decl);
+            self.w.push_str(" std::fmt::Display for ");
+            self.w.push_str(name);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+            self.w.indent_inc();
+            self.w.line("f.write_str(&self.__op_string())");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
         }
+        let address = self.class_identity_address(name, true);
+        self.emit_jux_identity_impl(name, &class_decl.generic_params, address);
         // §O.2.6 / §O.4.1: a class that declares no `operator==` compares by
         // identity, and hashes by identity, so `a == b` works and the object
         // can be a set element or a map key. A class (or an ancestor) with
@@ -1345,23 +1379,15 @@ impl RustEmitter {
             self.emit_identity_eq_hash(name, &class_decl.generic_params);
         }
         if class_decl.generic_params.is_empty() {
-            for op in &class_decl.operators {
+            for op in &effective_ops {
                 self.emit_operator_trait_impl(name, op);
             }
-            let has_eq = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Eq);
-            let has_hash = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Hash);
-            let has_cmp = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Cmp);
-            if has_cmp && !has_eq {
-                self.emit_partial_eq_from_cmp(name);
+            let has_eq = effective_ops.iter().any(|o| o.kind == OperatorKind::Eq);
+            let has_hash = effective_ops.iter().any(|o| o.kind == OperatorKind::Hash);
+            let cmp = effective_ops.iter().find(|o| o.kind == OperatorKind::Cmp);
+            if let (Some(cmp), false) = (cmp, has_eq) {
+                let arg = self.operator_other_arg(cmp);
+                self.emit_partial_eq_from_cmp(name, arg);
             }
             if has_eq && has_hash {
                 self.emit_eq_marker(name);
@@ -2976,8 +3002,79 @@ impl RustEmitter {
                 out.push((emitted, m.clone()));
             }
         }
+        // Operators are virtual members too (§O.2.9): one this class declares
+        // and no ancestor does gets its slot here, so a base-typed `a == b`
+        // runs the runtime class's operator.
+        let parent_ops = parent
+            .as_deref()
+            .and_then(|p| self.lookup_class_by_bare_or_fqn(p))
+            .map(|p| p.operators.clone())
+            .unwrap_or_default();
+        if let Some(decl) = self.class_ast_named(class_bare) {
+            for op in decl.operators.iter().filter(|o| !o.is_deleted && !parent_ops.contains_key(&o.kind)) {
+                let Some(op_sig) = sig.operators.get(&op.kind) else { continue };
+                out.push((
+                    crate::decls::synthetic_op_method_name(op.kind).to_string(),
+                    Self::operator_method_sig(op_sig.params.clone(), op_sig.return_type.clone(), op_sig.span),
+                ));
+            }
+            if self.equality_share_owner(class_bare).as_deref() == Some(decl.name.text.as_str()) {
+                let ty = Self::param_type_ref(&decl.name.text, decl.name.span);
+                out.push(("__jux_share".to_string(), Self::operator_method_sig(Vec::new(), ReturnType::Type(ty), decl.name.span)));
+            }
+        }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
+    }
+
+    /// A public, non-static [`MethodSig`] for a member the compiler adds to a
+    /// `Kind` trait (an operator slot, `__jux_share`).
+    fn operator_method_sig(
+        params: Vec<juxc_tycheck::symbol_table::ParamSig>,
+        return_type: ReturnType,
+        span: juxc_source::Span,
+    ) -> MethodSig {
+        MethodSig {
+            visibility: juxc_ast::Visibility::Public,
+            throws: Vec::new(),
+            annotations: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_static: false,
+            is_property: false,
+            is_unsafe: false,
+            is_foreign_result: false,
+            generic_params: Vec::new(),
+            params,
+            return_type,
+            span,
+        }
+    }
+
+    /// Copy the operators `class_decl` inherits into its inherent impl (§O.2.9),
+    /// as [`Self::emit_inherited_wrapper_methods`] does for methods, plus the
+    /// `__jux_share` handle rebuild its hierarchy's `dyn` equality calls.
+    fn emit_inherited_operator_methods(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let own = class_decl.operators.len();
+        let inherited: Vec<juxc_ast::OperatorDecl> =
+            self.class_effective_operators(class_decl).into_iter().skip(own).collect();
+        for op in &inherited {
+            self.emit_operator_as_method(op);
+        }
+        if let Some(owner) = self.equality_share_owner(&class_decl.name.text) {
+            let ty = Self::param_type_ref(&owner, class_decl.name.span);
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("pub fn __jux_share(&self) -> ");
+            self.emit_return_type_as_rust(&ty);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.w.line("std::rc::Rc::new(self.clone())");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+            self.w.indent_dec();
+        }
     }
 
     /// Emit a `<Name>Kind` trait method *signature* from a [`MethodSig`]:
@@ -3531,7 +3628,9 @@ impl RustEmitter {
             // -- `Loud<Store<int>>` did not compile, though `Loud<int>` did.
             // Every class emits an identity `Display` (O.4.1), so nothing can
             // implement a `Kind` trait without satisfying it.
-            self.w.push_str("std::fmt::Debug + std::fmt::Display");
+            // `JuxIdentity` so a base-typed handle can say which object it
+            // points at (`===`, and identity `==` / hashing).
+            self.w.push_str("std::fmt::Debug + std::fmt::Display + crate::JuxIdentity");
         }
         // A polymorphic base that IMPLEMENTS an interface carries it as a
         // supertrait, so a base-typed value — which is a `Rc<dyn <Base>Kind>`,
@@ -3638,6 +3737,16 @@ impl RustEmitter {
                 &hook_targets,
                 &accessor_fields,
             );
+        }
+        // A base-typed value compares and hashes by identity unless the
+        // hierarchy declares its own equality. A generic base's trait carries
+        // parameters the impl would have to bound, so it keeps the old surface.
+        if c_is_poly && !trait_is_generic {
+            if self.class_chain_declares_equality(class_decl) {
+                self.emit_dyn_operator_eq_hash(&class_bare);
+            } else {
+                self.emit_dyn_identity_eq_hash(&format!("{class_bare}Kind"));
+            }
         }
         // --- impls ---
         // A dispatch-relevant ABSTRACT class provides no concrete bodies, so it

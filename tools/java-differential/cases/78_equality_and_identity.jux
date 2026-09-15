@@ -1,0 +1,67 @@
+// Equality, hashing and identity through a hierarchy: inherited and
+// overridden operators run on the runtime class, and a class without its
+// own equality compares by identity through any static type.
+
+public interface Shape { double area(); }
+
+public class Node implements Shape {
+    public int id;
+    public Node(int id) { this.id = id; }
+    public double area() { return 0.0; }
+}
+
+public class Leaf extends Node {
+    public Leaf(int id) { super(id); }
+}
+
+public class Money {
+    public int cents;
+    public Money(int c) { cents = c; }
+    public bool operator==(Money o) { return cents == o.cents; }
+    public int operator hash() { return cents; }
+    public String operator string() { return "$" + cents; }
+}
+
+public class Coin extends Money {
+    public Coin(int c) { super(c); }
+}
+
+public class Note extends Money {
+    public Note(int c) { super(c); }
+    public bool operator==(Money o) { return false; }
+    public int operator hash() { return 7; }
+    public String operator string() { return "note " + cents; }
+}
+
+public void main() {
+    Leaf leaf = new Leaf(1);
+    Node node = leaf;
+    Shape shape = leaf;
+    Node other = new Leaf(1);
+    print(node == leaf);
+    print(shape === node);
+    print(node == other);
+    print(node != other);
+    var nodes = new HashSet<Node>();
+    nodes.insert(node);
+    nodes.insert(leaf);
+    nodes.insert(other);
+    print(nodes.len());
+
+    Coin a = new Coin(5);
+    Coin b = new Coin(5);
+    Money m = a;
+    Money n = new Note(5);
+    print(a == b);
+    print(a === b);
+    print(m == b);
+    print(n == m);
+    print(m == n);
+    print(a);
+    print(n);
+    var wallet = new HashSet<Money>();
+    wallet.insert(m);
+    wallet.insert(b);
+    wallet.insert(n);
+    print(wallet.len());
+}

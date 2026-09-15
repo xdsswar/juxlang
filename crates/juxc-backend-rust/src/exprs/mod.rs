@@ -2585,12 +2585,18 @@ impl RustEmitter {
         self.w.push_str("{ #[derive(Clone, Debug)] struct ");
         self.w.push_str(&struct_name);
         if captures.is_empty() {
-            self.w.push_str("; impl ");
+            self.w.push_str("; ");
         } else {
             self.w.push_str(" { ");
             self.emit_anon_capture_field_decls(&captures, false);
-            self.w.push_str(" } impl ");
+            self.w.push_str(" } ");
         }
+        // Every interface trait requires `JuxIdentity` (`===` and identity
+        // hashing through an interface-typed handle), so the anonymous
+        // implementer answers with its own address.
+        self.w.push_str("impl crate::JuxIdentity for ");
+        self.w.push_str(&struct_name);
+        self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } impl ");
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         self.w.push_str(" for ");

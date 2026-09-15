@@ -287,6 +287,9 @@ impl RustEmitter {
         // sealed lowerings all carry `#[derive(…, Debug)]`), so the bound is
         // always satisfiable.
         self.w.push_str(": std::fmt::Debug");
+        // `JuxIdentity`: an interface-typed handle still names one object, so
+        // `===` and identity hashing reach it through the vtable.
+        self.w.push_str(" + crate::JuxIdentity");
         // **Interface `extends` → Rust supertrait bounds.** Jux's
         // `interface Entity<E> extends Id, Named, Comparable<E>` becomes
         // `trait Entity<E>: std::fmt::Debug + Id + Named + Comparable<E>`.
@@ -430,6 +433,11 @@ impl RustEmitter {
         // what a class `Kind` trait lists as a supertrait) rejected it.
         // Forwarding the trait over `Rc<T>` states what is already true.
         self.emit_interface_rc_forwarding_impl(interface);
+        // An interface-typed value compares and hashes by identity, so it can
+        // be a set element or a map key.
+        if interface.generic_params.is_empty() {
+            self.emit_dyn_identity_eq_hash(&interface.name.text);
+        }
 
         // Static interface methods: free functions named
         // `<Interface>_<method>`. The call-site dispatch in

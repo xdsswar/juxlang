@@ -160,7 +160,8 @@ impl RustEmitter {
         let synth = synthetic_op_method_name(op.kind);
         match op.kind {
             OperatorKind::Eq if arity == 1 => {
-                self.emit_partial_eq_wrapper(class_name);
+                let arg = self.operator_other_arg(op);
+                self.emit_partial_eq_wrapper(class_name, arg);
             }
             OperatorKind::ToString if arity == 0 => {
                 self.emit_display_wrapper(class_name);
@@ -169,7 +170,8 @@ impl RustEmitter {
                 self.emit_hash_wrapper(class_name);
             }
             OperatorKind::Cmp if arity == 1 => {
-                self.emit_partial_ord_wrapper(class_name);
+                let arg = self.operator_other_arg(op);
+                self.emit_partial_ord_wrapper(class_name, arg);
             }
             // Binary arithmetic / bitwise / shift family — single
             // shape. Output type comes from the user's return type.
@@ -218,7 +220,7 @@ impl RustEmitter {
     }
 
     /// `impl PartialEq for Class { fn eq(...) { self.__op_eq(other.clone()) } }`.
-    fn emit_partial_eq_wrapper(&mut self, class_name: &str) {
+    fn emit_partial_eq_wrapper(&mut self, class_name: &str, arg: &str) {
         self.w.emit_indent();
         self.w.push_str("impl PartialEq for ");
         self.w.push_str(class_name);
@@ -230,7 +232,7 @@ impl RustEmitter {
         // (`operator==(Path other)` — `other: Path`). Classes derive
         // `Clone`, so this is cheap (Arc-clone-shaped under current
         // class representation).
-        self.w.line("self.__op_eq(other.clone())");
+        self.w.line(&format!("self.__op_eq({arg})"));
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();
@@ -359,6 +361,225 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// `impl crate::JuxIdentity for Name { fn __jux_identity(&self) -> *const () { … } }`.
+    ///
+    /// `address` is the expression naming the object's storage: the shared
+    /// cell for a class handle, `self` for a value. Every class, record and
+    /// enum gets one, whatever operators it declares, because the root `Kind`
+    /// trait and every interface trait require it (see the prelude's
+    /// `JuxIdentity`).
+    pub(crate) fn emit_jux_identity_impl(
+        &mut self,
+        type_name: &str,
+        generic_params: &[juxc_ast::TypeParam],
+        address: &str,
+    ) {
+        self.w.emit_indent();
+        self.w.push_str("impl");
+        if !generic_params.is_empty() {
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+        }
+        self.w.push_str(" crate::JuxIdentity for ");
+        self.w.push_str(&to_rust_ident(type_name));
+        self.emit_generic_params_as_args(generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.line(&format!("fn __jux_identity(&self) -> *const () {{ {address} as *const () }}"));
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
+    /// How a trait wrapper hands `other: &Self` to a one-operand operator.
+    ///
+    /// The operator's parameter is written as the class it compares with. When
+    /// that class is a polymorphic base the parameter is a `Rc<dyn …Kind>`, so
+    /// the concrete `Self` converts with the `From` impl every class in the
+    /// hierarchy has; otherwise the clone already has the parameter's type.
+    pub(crate) fn operator_other_arg(&self, op: &OperatorDecl) -> &'static str {
+        let dyn_param = op.params.first().is_some_and(|p| {
+            !p.ty.nullable
+                && p.ty.array_shape.is_none()
+                && p.ty.name.segments.last().is_some_and(|s| self.is_poly_base_class(&s.text))
+        });
+        if dyn_param {
+            "other.clone().into()"
+        } else {
+            "other.clone()"
+        }
+    }
+
+    /// Every operator `class_decl` has: its own, then each ancestor's that no
+    /// closer class redeclares (§O.2.9). An inherited operator's parameter and
+    /// return types are read through the `extends` arguments, as an inherited
+    /// method's are, so `Store<T>`'s `operator+(Store<T>)` reads as
+    /// `operator+(Store<String>)` in `Names extends Store<String>`.
+    pub(crate) fn class_effective_operators(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<OperatorDecl> {
+        use super::classes::substitute_type_ref;
+        let mut out: Vec<OperatorDecl> = class_decl.operators.clone();
+        let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> = std::collections::HashMap::new();
+        let mut cursor = class_decl.extends.clone();
+        for _ in 0..64 {
+            let Some(parent_ref) = cursor else { break };
+            let Some(parent) = parent_ref.name.segments.last().and_then(|s| self.class_ast_named(&s.text)) else {
+                break;
+            };
+            let mut next = std::collections::HashMap::new();
+            for (param, arg) in parent.generic_params.iter().zip(parent_ref.generic_args.iter()) {
+                if let juxc_ast::GenericArg::Type(t) = arg {
+                    next.insert(param.name.text.clone(), substitute_type_ref(t, &subst));
+                }
+            }
+            subst = next;
+            for op in &parent.operators {
+                if out.iter().any(|o| o.kind == op.kind) {
+                    continue;
+                }
+                let mut inherited = op.clone();
+                if !subst.is_empty() {
+                    for p in &mut inherited.params {
+                        p.ty = substitute_type_ref(&p.ty, &subst);
+                    }
+                    inherited.return_type = match &inherited.return_type {
+                        ReturnType::Type(t) => ReturnType::Type(substitute_type_ref(t, &subst)),
+                        ReturnType::AsyncType(t) => ReturnType::AsyncType(substitute_type_ref(t, &subst)),
+                        ReturnType::Void => ReturnType::Void,
+                    };
+                }
+                out.push(inherited);
+            }
+            cursor = parent.extends.clone();
+        }
+        out
+    }
+
+    /// The topmost class in `class_bare`'s chain (itself included) that
+    /// declares operator `kind`. That class's `Kind` trait owns the operator's
+    /// slot; every class below it fills or overrides the slot.
+    pub(crate) fn operator_introducer(&self, class_bare: &str, kind: OperatorKind) -> Option<juxc_ast::ClassDecl> {
+        let mut found = None;
+        let mut cursor = self.class_ast_named(class_bare);
+        for _ in 0..64 {
+            let Some(class) = cursor else { break };
+            if class.operators.iter().any(|o| o.kind == kind && !o.is_deleted) {
+                found = Some(class.clone());
+            }
+            cursor = class
+                .extends
+                .as_ref()
+                .and_then(|e| e.name.segments.last())
+                .and_then(|s| self.class_ast_named(&s.text));
+        }
+        found
+    }
+
+    /// The class whose `Kind` trait carries `__jux_share` for `class_bare`'s
+    /// hierarchy: the polymorphic base that introduces `operator==` taking its
+    /// own type.
+    ///
+    /// A base-typed `==` runs through `dyn …Kind`, where the other operand is
+    /// only a `&dyn …Kind`, but the operator takes the handle `Rc<dyn …Kind>`.
+    /// `__jux_share` rebuilds that handle from the borrowed value.
+    pub(crate) fn equality_share_owner(&self, class_bare: &str) -> Option<String> {
+        let owner = self.operator_introducer(class_bare, OperatorKind::Eq)?;
+        let name = owner.name.text.clone();
+        if !owner.generic_params.is_empty() || !self.is_poly_base_class(&name) {
+            return None;
+        }
+        let op = owner.operators.iter().find(|o| o.kind == OperatorKind::Eq)?;
+        let takes_own_type = op.params.len() == 1
+            && op.params[0].ty.generic_args.is_empty()
+            && op.params[0].ty.array_shape.is_none()
+            && !op.params[0].ty.nullable
+            && op.params[0].ty.name.segments.last().is_some_and(|s| {
+                self.resolve_bare_class_fqn(&s.text).is_some()
+                    && self.resolve_bare_class_fqn(&s.text) == self.resolve_bare_class_fqn(&name)
+            });
+        takes_own_type.then_some(name)
+    }
+
+    /// `PartialEq` / `Eq` / `Hash` for `dyn <class>Kind` through the
+    /// hierarchy's own operators (§O.2.9), so a base-typed value compares with
+    /// the most-derived `operator==` and hashes with its `operator hash`.
+    pub(crate) fn emit_dyn_operator_eq_hash(&mut self, class_bare: &str) {
+        let target = format!("dyn {}Kind", to_rust_ident(class_bare));
+        let eq_owner = self.equality_share_owner(class_bare);
+        let hash_owner = self
+            .operator_introducer(class_bare, OperatorKind::Hash)
+            .filter(|c| c.generic_params.is_empty())
+            .map(|c| c.name.text);
+        if let Some(owner) = &eq_owner {
+            let path = format!("{}{}Kind", self.cross_package_prefix(owner), to_rust_ident(owner));
+            self.w.line(&format!("impl PartialEq for {target} {{"));
+            self.w.indent_inc();
+            self.w.line(&format!(
+                "fn eq(&self, other: &Self) -> bool {{ {path}::__op_eq(self, {path}::__jux_share(other)) }}"
+            ));
+            self.w.indent_dec();
+            self.w.line("}");
+            if hash_owner.is_some() {
+                self.w.line(&format!("impl Eq for {target} {{}}"));
+            }
+        }
+        if let Some(owner) = &hash_owner {
+            let path = format!("{}{}Kind", self.cross_package_prefix(owner), to_rust_ident(owner));
+            self.w.line(&format!("impl std::hash::Hash for {target} {{"));
+            self.w.indent_inc();
+            self.w.line(&format!(
+                "fn hash<H: std::hash::Hasher>(&self, state: &mut H) {{ state.write_isize({path}::__op_hash(self)) }}"
+            ));
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        if eq_owner.is_some() || hash_owner.is_some() {
+            self.w.newline();
+        }
+    }
+
+    /// `PartialEq`, `Eq` and `Hash` for `dyn <trait_name>`, by identity.
+    ///
+    /// A base-typed or interface-typed value is a `Rc<dyn …>`, and `Rc` only
+    /// compares and hashes when its pointee does. Without these a
+    /// `HashSet<Animal>` or `a == b` on two `Animal`s did not compile, even
+    /// though the class compares by identity (§O.2.6, §O.4.1).
+    pub(crate) fn emit_dyn_identity_eq_hash(&mut self, trait_name: &str) {
+        let target = format!("dyn {}", to_rust_ident(trait_name));
+        let id = |who: &str| format!("crate::JuxIdentity::__jux_identity({who})");
+        self.w.line(&format!("impl PartialEq for {target} {{"));
+        self.w.indent_inc();
+        self.w.line(&format!(
+            "fn eq(&self, other: &Self) -> bool {{ std::ptr::eq({}, {}) }}",
+            id("self"),
+            id("other")
+        ));
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.line(&format!("impl Eq for {target} {{}}"));
+        self.w.line(&format!("impl std::hash::Hash for {target} {{"));
+        self.w.indent_inc();
+        self.w.line(&format!(
+            "fn hash<H: std::hash::Hasher>(&self, state: &mut H) {{ std::ptr::hash({}, state) }}",
+            id("self")
+        ));
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
+    /// The `__jux_identity` address of a class's instance, by handle shape.
+    pub(crate) fn class_identity_address(&self, class_name: &str, wrapper: bool) -> &'static str {
+        if !wrapper {
+            "self as *const Self"
+        } else if self.sync_classes.contains(class_name) {
+            "self.0.as_ptr()"
+        } else if self.is_box_class(class_name) {
+            "&*self.0 as *const _"
+        } else {
+            "std::rc::Rc::as_ptr(&self.0)"
+        }
+    }
+
     /// `impl Display for Class { fn fmt(...) { f.write_str(&self.__op_string()) } }`.
     fn emit_display_wrapper(&mut self, class_name: &str) {
         self.w.emit_indent();
@@ -412,7 +633,7 @@ impl RustEmitter {
     /// `<=`, `>`, `>=` for free per spec §O.2.1 — they go through
     /// Rust's default `PartialOrd::lt/le/gt/ge` which all dispatch
     /// through `partial_cmp`.
-    fn emit_partial_ord_wrapper(&mut self, class_name: &str) {
+    fn emit_partial_ord_wrapper(&mut self, class_name: &str, arg: &str) {
         self.w.emit_indent();
         self.w.push_str("impl PartialOrd for ");
         self.w.push_str(class_name);
@@ -425,7 +646,7 @@ impl RustEmitter {
         // `self.__op_cmp(other.clone())` returns isize; `.cmp(&0)`
         // converts it to Ordering via isize's own Ord impl
         // (negative → Less, zero → Equal, positive → Greater).
-        self.w.line("Some(self.__op_cmp(other.clone()).cmp(&0))");
+        self.w.line(&format!("Some(self.__op_cmp({arg}).cmp(&0))"));
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();
@@ -442,7 +663,7 @@ impl RustEmitter {
     ///
     /// The class-level emitter (`emit_class_decl`) calls this when it
     /// sees `Cmp` without `Eq` after the per-operator trait loop runs.
-    pub(super) fn emit_partial_eq_from_cmp(&mut self, class_name: &str) {
+    pub(super) fn emit_partial_eq_from_cmp(&mut self, class_name: &str, arg: &str) {
         self.w.emit_indent();
         self.w.push_str("impl PartialEq for ");
         self.w.push_str(class_name);
@@ -450,7 +671,7 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("fn eq(&self, other: &Self) -> bool {");
         self.w.indent_inc();
-        self.w.line("self.__op_cmp(other.clone()) == 0");
+        self.w.line(&format!("self.__op_cmp({arg}) == 0"));
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();
@@ -538,7 +759,13 @@ impl RustEmitter {
         self.w.push_str("fn ");
         self.w.push_str(method);
         self.w.push_str("(self, rhs: ");
-        if let Some(p) = rhs_ty {
+        // A polymorphic base's own type lowers to `Rc<dyn …Kind>` in a
+        // parameter, but `impl Add for Money` fixes `rhs` to `Money`. The
+        // trait keeps `Self` and the call converts it.
+        let rhs_into = rhs_is_self && self.is_poly_base_class(class_name);
+        if rhs_into {
+            self.w.push_str("Self");
+        } else if let Some(p) = rhs_ty {
             self.emit_value_type_as_rust(&p.ty);
         } else {
             // Defensive — caller (`emit_operator_trait_impl`) only
@@ -551,7 +778,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("self.");
         self.w.push_str(synth);
-        self.w.push_str("(rhs)\n");
+        self.w.push_str(if rhs_into { "(rhs.into())\n" } else { "(rhs)\n" });
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();

@@ -96,7 +96,7 @@ Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary 
 
 For `a == b`:
 
-1. If `a`'s type defines `operator==(U)` and `b` is assignable to `U`: dispatch there.
+1. If `a`'s type defines or inherits `operator==(U)` (§O.2.9) and `b` is assignable to `U`: dispatch there, to the override of `a`'s runtime class.
 2. Else if `a`'s type is a record/struct/enum: auto-derived structural `operator==` (per §O.3).
 3. Else if `a`'s type is a primitive: built-in.
 4. Else (a class with no `operator==`): **reference identity** — same as `===`.
@@ -149,6 +149,45 @@ public record Amount(int cents) {
 
 `operator string() = delete` and the other `= delete` forms (§O.3.4) are
 suppressions rather than declarations and carry no visibility of their own.
+
+### O.2.9. Operators and Inheritance
+
+An operator declared in a class is an instance member of that class, and it
+follows the rules every instance method follows:
+
+1. **Inherited.** A subclass has every operator its superclasses declare. A
+   `Coin extends Money` compares, hashes, prints and adds through `Money`'s
+   operators without writing any of its own.
+2. **Overridable.** A subclass redeclares an operator to replace it. Operators
+   are keyed by kind (`==`, `hash`, `string`, `+`, ...), so a redeclaration
+   replaces the inherited operator of that kind.
+3. **Dispatched on the runtime class.** When the left operand is typed as a
+   superclass, the operator that runs is the one the object's runtime class
+   has, exactly as a method call on a base-typed reference runs the override:
+
+   ```jux
+   Money m = new Coin(5);
+   Money n = new Note(5);     // Note overrides operator== and operator string
+   n == m;                    // Note's operator==
+   m == n;                    // Money's operator== (Coin inherits it)
+   $"$n";                     // Note's operator string
+   ```
+
+   `a == b` runs the LEFT operand's `operator==`, so it is not symmetric when
+   the two runtime classes declare different ones. A class that needs a
+   symmetric comparison declares one `operator==` at the base and does not
+   override it.
+4. **Hashing follows the runtime class too.** A base-typed value in a `HashSet`
+   or a `HashMap` key hashes and compares through its runtime class's
+   `operator hash` and `operator==`.
+5. **The pairing rule stays per declaration.** §O.2.7 checks the operators a
+   class writes itself. A subclass that inherits both `==` and `hash` satisfies
+   it without declaring either.
+
+A class with no `operator==` anywhere in its hierarchy compares and hashes by
+identity (§O.4.1), through a base-typed or interface-typed reference as well
+as through its own type: two references to one object are `==` and `===`
+whichever static types they carry.
 
 
 ---

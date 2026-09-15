@@ -6,6 +6,16 @@ use juxc_ast::{Expr, FieldExpr};
 use juxc_tycheck::Ty;
 
 use crate::exprs::{expr_span_of, ty_kind_from_ref_with_params};
+
+/// One side of an identity comparison; see [`RustEmitter::identity_operand`].
+pub(crate) struct IdentityOperand {
+    /// The class or interface name, bare.
+    pub(crate) name: String,
+    /// The value is a `Rc<dyn …>` rather than the class's own handle.
+    pub(crate) is_dyn: bool,
+    /// The class or an ancestor declares `==`, `<=>` or `hash`.
+    pub(crate) declares_equality: bool,
+}
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
@@ -1141,6 +1151,68 @@ impl RustEmitter {
             }
             _ => false,
         }
+    }
+
+    /// How an identity comparison sees `e`: the user class or interface it is
+    /// typed as, whether the value is a `dyn` handle (a polymorphic base or an
+    /// interface), and whether the type declares its own equality.
+    ///
+    /// `None` for anything else (a value type, a nullable, an unknown), which
+    /// keeps the comparison on the path it had.
+    pub(crate) fn identity_operand(&self, e: &Expr) -> Option<IdentityOperand> {
+        let ty = match e {
+            Expr::This(_) => self.enclosing_class.clone().map(|name| Ty::User { name, generic_args: Vec::new() }),
+            _ => self.expr_types.get(&expr_span_of(e)).cloned().or_else(|| match e {
+                Expr::Path(qn) if qn.segments.len() == 1 => {
+                    let n = qn.segments[0].text.clone();
+                    self.local_types.iter().rev().find_map(|s| s.get(&n)).cloned()
+                }
+                _ => None,
+            }),
+        }?;
+        let Ty::User { name, .. } = ty else { return None };
+        if let Some(class) = self.class_ast_named(&name) {
+            return Some(IdentityOperand {
+                name: class.name.text.clone(),
+                is_dyn: self.is_poly_base_class(&name),
+                declares_equality: self.class_chain_declares_equality(&class),
+            });
+        }
+        let (_, iface) = self.lookup_interface_by_bare_or_fqn(&name)?;
+        if iface.is_external {
+            return None;
+        }
+        Some(IdentityOperand {
+            name: name.rsplit('.').next().unwrap_or(&name).to_string(),
+            is_dyn: true,
+            declares_equality: false,
+        })
+    }
+
+    /// `std::ptr::eq(crate::JuxIdentity::__jux_identity(&l), …(&r))`: whether
+    /// two class or interface handles point at one object, whatever shape
+    /// each handle has.
+    pub(crate) fn emit_identity_compare(&mut self, left: &Expr, right: &Expr, is_eq: bool) {
+        if !is_eq {
+            self.w.push('!');
+        }
+        self.w.push_str("std::ptr::eq(");
+        for (i, side) in [left, right].into_iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str("crate::JuxIdentity::__jux_identity(&");
+            let parens = receiver_needs_parens(side);
+            if parens {
+                self.w.push('(');
+            }
+            self.emit_expr(side);
+            if parens {
+                self.w.push(')');
+            }
+            self.w.push(')');
+        }
+        self.w.push(')');
     }
 
     pub(crate) fn receiver_is_box_class(&self, recv: &Expr) -> bool {

@@ -4424,6 +4424,26 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         );
         w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
         w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        // Object identity (§T.1.4, §O.4.1). A class value can sit behind two
+        // handle shapes: its own `C(Rc<RefCell<C_Inner>>)` newtype, or a
+        // `Rc<dyn BaseKind>` / `Rc<dyn Iface>` that boxes a clone of that
+        // newtype. Two views of ONE object therefore share no `Rc` allocation,
+        // only the cell inside, so `===` asks each operand for that address.
+        // Every class, record and enum implements this; the root `Kind` trait
+        // and every interface trait list it as a supertrait, so a `dyn` handle
+        // answers through its vtable.
+        w.push_str("pub trait JuxIdentity {\n");
+        w.push_str("    fn __jux_identity(&self) -> *const ();\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for std::rc::Rc<T> {\n");
+        w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for &T {\n");
+        w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for ::std::boxed::Box<T> {\n");
+        w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
+        w.push_str("}\n\n");
         // Character-indexed `String` access (CORE-LIB K.7): an index outside
         // the string throws a catchable `IndexOutOfBoundsException` with the
         // JDK's message, where a bare `chars().nth(i).unwrap()` panicked with

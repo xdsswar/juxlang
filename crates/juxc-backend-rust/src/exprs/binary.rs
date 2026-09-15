@@ -115,6 +115,24 @@ fn type_ref_is_string(ty: &juxc_ast::TypeRef) -> bool {
 /// don't cross-module-import a tiny helper). True when emitting
 /// `expr.method()` would require wrapping `expr` in parens —
 /// false for atoms, true for composite shapes.
+/// The overloadable operator a binary operator dispatches to, if any.
+fn binary_operator_kind(op: BinaryOp) -> Option<OperatorKind> {
+    Some(match op {
+        BinaryOp::Cmp => OperatorKind::Cmp,
+        BinaryOp::Add => OperatorKind::Plus,
+        BinaryOp::Sub => OperatorKind::Minus,
+        BinaryOp::Mul => OperatorKind::Mul,
+        BinaryOp::Div => OperatorKind::Div,
+        BinaryOp::Rem => OperatorKind::Rem,
+        BinaryOp::BitAnd => OperatorKind::BitAnd,
+        BinaryOp::BitOr => OperatorKind::BitOr,
+        BinaryOp::BitXor => OperatorKind::BitXor,
+        BinaryOp::Shl => OperatorKind::Shl,
+        BinaryOp::Shr => OperatorKind::Shr,
+        _ => return None,
+    })
+}
+
 fn receiver_needs_parens(e: &Expr) -> bool {
     !matches!(
         e,
@@ -425,6 +443,39 @@ impl RustEmitter {
         if matches!(b.op, BinaryOp::Add | BinaryOp::Sub) && self.emit_pointer_arithmetic(b) {
             return;
         }
+        // **`==` on objects without their own equality is identity** (§O.2.6).
+        // Two handles of one class meet the class's identity `PartialEq`; a
+        // base-typed or interface-typed handle, or two different classes, go
+        // through the object address, since those handles are different Rust
+        // types.
+        if matches!(b.op, BinaryOp::Eq | BinaryOp::NotEq)
+            && !matches!(&*b.left, Expr::Literal(juxc_ast::Literal::Null))
+            && !matches!(&*b.right, Expr::Literal(juxc_ast::Literal::Null))
+        {
+            if let (Some(l), Some(r)) = (self.identity_operand(&b.left), self.identity_operand(&b.right)) {
+                if !l.declares_equality && !r.declares_equality && (l.is_dyn || r.is_dyn || l.name != r.name) {
+                    self.emit_identity_compare(&b.left, &b.right, b.op == BinaryOp::Eq);
+                    return;
+                }
+                // A base-typed operand with a user `operator==` calls the
+                // operator through its `Kind` slot, which runs the runtime
+                // class's override (§O.2.9). Rust's `==` on two `Rc<dyn …>`
+                // would move its right operand, and has no impl at all between
+                // a handle and a concrete class.
+                if l.declares_equality && (l.is_dyn || r.is_dyn) {
+                    if let Some(param) = self.class_operator_param(&l.name, OperatorKind::Eq) {
+                        if b.op == BinaryOp::NotEq {
+                            self.w.push('!');
+                        }
+                        self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
+                        self.w.push_str(".__op_eq(");
+                        self.emit_operator_argument(&b.right, &r, &param);
+                        self.w.push(')');
+                        return;
+                    }
+                }
+            }
+        }
         // **A null test narrows the other side of `&&` / `||`** (§7.10).
         // `it != null && it.qty() < 5` evaluates the right only when `it` is
         // there, so the right reads the value, not the `Option`.
@@ -544,6 +595,15 @@ impl RustEmitter {
                 self.w.push_str(if is_eq { " == " } else { " != " });
                 self.emit_expr(&b.right);
                 return;
+            }
+            // A `dyn` handle (base-typed or interface-typed) boxes a clone of
+            // the class handle, so it shares no `Rc` with any other view of the
+            // object; ask both sides for the object's address instead.
+            if let (Some(l), Some(r)) = (self.identity_operand(&b.left), self.identity_operand(&b.right)) {
+                if l.is_dyn || r.is_dyn || l.name != r.name {
+                    self.emit_identity_compare(&b.left, &b.right, is_eq);
+                    return;
+                }
             }
             if !is_eq {
                 self.w.push('!');
@@ -1508,6 +1568,40 @@ impl RustEmitter {
         }
     }
 
+    /// The first parameter type of operator `kind` on class `class`, inherited
+    /// operators included.
+    pub(crate) fn class_operator_param(&self, class: &str, kind: OperatorKind) -> Option<juxc_ast::TypeRef> {
+        let sig = self.lookup_class_by_bare_or_fqn(class)?;
+        sig.operators.get(&kind)?.params.first().map(|p| p.ty.clone())
+    }
+
+    /// Emit `arg` for an operator parameter typed `param`, converting a class
+    /// handle to the parameter's shape: a concrete class into a base's
+    /// `Rc<dyn …Kind>` with `.into()`, a subclass handle into the base handle
+    /// with a trait-object upcast.
+    fn emit_operator_argument(
+        &mut self,
+        arg: &Expr,
+        arg_side: &crate::exprs::field::IdentityOperand,
+        param: &juxc_ast::TypeRef,
+    ) {
+        let param_class = param
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.clone())
+            .filter(|n| !param.nullable && param.array_shape.is_none() && self.is_poly_base_class(n));
+        self.emit_expr_with_parent_prec(arg, u8::MAX, false);
+        match param_class {
+            Some(base) if arg_side.is_dyn && arg_side.name != base => {
+                let prefix = self.cross_package_prefix(&base);
+                self.w.push_str(&format!(".clone() as std::rc::Rc<dyn {prefix}{base}Kind>"));
+            }
+            Some(_) if !arg_side.is_dyn => self.w.push_str(".clone().into()"),
+            _ => self.w.push_str(".clone()"),
+        }
+    }
+
     /// Emit `b` as a direct inherent method call:
     /// `<LHS>.<synth>(<RHS>.clone())`. The LHS is emitted at maximum
     /// precedence so any composite expression gets parens (a method
@@ -1521,8 +1615,20 @@ impl RustEmitter {
         self.w.push('.');
         self.w.push_str(synth);
         self.w.push('(');
-        self.emit_expr(&b.right);
-        self.w.push_str(".clone())");
+        // An operator over a polymorphic base takes the base handle, so a
+        // concrete or subclass-typed operand converts on the way in.
+        let param = match (&b.op, self.identity_operand(&b.left)) {
+            (op, Some(left)) => binary_operator_kind(*op).and_then(|k| self.class_operator_param(&left.name, k)),
+            _ => None,
+        };
+        match (param, self.identity_operand(&b.right)) {
+            (Some(param), Some(right)) => self.emit_operator_argument(&b.right, &right, &param),
+            _ => {
+                self.emit_expr(&b.right);
+                self.w.push_str(".clone()");
+            }
+        }
+        self.w.push(')');
     }
 
     /// Emit a string-concatenation `Add` as a single Rust `format!`

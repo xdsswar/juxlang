@@ -1558,6 +1558,10 @@ pub fn build_workspace(
     // to be made finite rather than merely reported -- every later pass would
     // otherwise meet the same loop.
     break_inheritance_cycles(&mut table, diagnostics);
+    // Operators are instance members (§O.2.9): a subclass has every operator
+    // its ancestors declare unless it redeclares one. Merged here, once the
+    // chains are finite, so every later lookup of `operators` sees them.
+    inherit_class_operators(&mut table);
     // Cross-class rule passes that need every class registered first:
     // final/sealed extends, final-method override checks, and
     // `@Override`-annotation verification.
@@ -2800,6 +2804,93 @@ fn check_final_method_overrides(table: &SymbolTable, diagnostics: &mut Vec<Diagn
 /// whose parent closes the loop is reported and its `extends` link is CUT, so
 /// every pass after this one sees a finite hierarchy -- reporting alone would
 /// leave them all to meet the same loop.
+fn inherit_class_operators(table: &mut SymbolTable) {
+    // Each class's OWN operators, snapshotted before any merge, so a chain is
+    // read the same way whatever order the classes are visited in.
+    let own: HashMap<String, HashMap<OperatorKind, OperatorSig>> = table
+        .classes
+        .iter()
+        .map(|(fqn, class)| (fqn.clone(), class.operators.clone()))
+        .collect();
+    let fqns: Vec<String> = table.classes.keys().cloned().collect();
+    for fqn in fqns {
+        let mut merged = own.get(&fqn).cloned().unwrap_or_default();
+        // `extends Store<String>` binds the parent's `T`; an operator the
+        // parent declares over `T` reads as `String` here. Composed level by
+        // level, as inherited methods are.
+        let mut subst: HashMap<String, TypeRef> = HashMap::new();
+        let mut child = fqn.clone();
+        for _ in 0..64 {
+            let Some(child_sig) = table.classes.get(&child) else { break };
+            let (Some(parent_fqn), Some(extends)) = (child_sig.extends_fqn.clone(), child_sig.extends.clone()) else {
+                break;
+            };
+            let Some(parent_sig) = table.classes.get(&parent_fqn) else { break };
+            let mut next = HashMap::new();
+            for (param, arg) in parent_sig.generic_params.iter().zip(extends.generic_args.iter()) {
+                if let juxc_ast::GenericArg::Type(arg_ty) = arg {
+                    next.insert(param.name.text.clone(), substitute_type_ref(arg_ty, &subst));
+                }
+            }
+            subst = next;
+            for (kind, op) in own.get(&parent_fqn).into_iter().flatten() {
+                if merged.contains_key(kind) {
+                    continue; // a closer class redeclares it
+                }
+                let mut inherited = op.clone();
+                for param in &mut inherited.params {
+                    param.ty = substitute_type_ref(&param.ty, &subst);
+                }
+                inherited.return_type = match &inherited.return_type {
+                    ReturnType::Type(t) => ReturnType::Type(substitute_type_ref(t, &subst)),
+                    ReturnType::AsyncType(t) => ReturnType::AsyncType(substitute_type_ref(t, &subst)),
+                    ReturnType::Void => ReturnType::Void,
+                };
+                merged.insert(*kind, inherited);
+            }
+            child = parent_fqn;
+        }
+        if let Some(class) = table.classes.get_mut(&fqn) {
+            class.operators = merged;
+        }
+    }
+}
+
+/// `ty` with every bare type-parameter name in `subst` replaced, through
+/// generic arguments, wildcard bounds and nullability.
+fn substitute_type_ref(ty: &TypeRef, subst: &HashMap<String, TypeRef>) -> TypeRef {
+    if subst.is_empty() {
+        return ty.clone();
+    }
+    if ty.fn_shape.is_none() && ty.generic_args.is_empty() && ty.name.segments.len() == 1 {
+        if let Some(replacement) = subst.get(&ty.name.segments[0].text) {
+            let mut out = replacement.clone();
+            out.nullable |= ty.nullable;
+            if ty.array_shape.is_some() {
+                out.array_shape = ty.array_shape.clone();
+            }
+            return out;
+        }
+    }
+    let mut out = ty.clone();
+    out.generic_args = ty
+        .generic_args
+        .iter()
+        .map(|arg| match arg {
+            juxc_ast::GenericArg::Type(t) => juxc_ast::GenericArg::Type(substitute_type_ref(t, subst)),
+            juxc_ast::GenericArg::Wildcard(w) => {
+                let mut w = w.clone();
+                w.bound = w.bound.map(|b| match b {
+                    juxc_ast::WildcardBound::Extends(t) => juxc_ast::WildcardBound::Extends(substitute_type_ref(&t, subst)),
+                    juxc_ast::WildcardBound::Super(t) => juxc_ast::WildcardBound::Super(substitute_type_ref(&t, subst)),
+                });
+                juxc_ast::GenericArg::Wildcard(w)
+            }
+        })
+        .collect();
+    out
+}
+
 fn break_inheritance_cycles(table: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     let parent_of = |t: &SymbolTable, name: &str| -> Option<String> {
         let c = t.classes.get(name)?;

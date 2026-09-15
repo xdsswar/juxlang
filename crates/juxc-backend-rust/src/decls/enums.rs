@@ -390,6 +390,9 @@ impl RustEmitter {
         if !enum_decl.variants.is_empty() && !has_string_override && !string_deleted {
             self.emit_enum_auto_display(enum_decl);
         }
+        // A value's identity is its own address; interfaces it implements
+        // require the impl (see the prelude's `JuxIdentity`).
+        self.emit_jux_identity_impl(&enum_decl.name.text, &enum_decl.generic_params, "self as *const Self");
 
         // Operator trait wrappers — Display, PartialEq override,
         // Hash, etc. Deletion is filtered inside the emitter; the

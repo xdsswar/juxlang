@@ -1,3 +1,4 @@
+// DIVERGES: ERRATA E21 runs every field initializer in the hierarchy before any constructor body; Java runs base-ctor before derived-field
 public class Base {
     protected String note = mark("base-field");
     public Base() {

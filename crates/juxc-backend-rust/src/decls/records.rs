@@ -220,6 +220,9 @@ impl RustEmitter {
         if display_ok {
             self.emit_record_display_impl(record_decl);
         }
+        // A value's identity is its own address; interfaces it implements
+        // require the impl (see the prelude's `JuxIdentity`).
+        self.emit_jux_identity_impl(&record_decl.name.text, &record_decl.generic_params, "self as *const Self");
 
         // Operator trait wrappers — non-generic records only (bound
         // propagation deferred, same as classes). Each non-deleted
