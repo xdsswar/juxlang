@@ -162,6 +162,12 @@ pub enum Code {
     /// emitted Rust and surfaces as a much less helpful rustc `E0412
     /// cannot find type`.
     E0417_UnknownType,
+    /// E0418 — A field, property or method reached through a receiver typed
+    /// `T?` that no null test has narrowed (`cur.v` on an `N? cur`). The
+    /// value may be null, and the member belongs to the `T` inside: narrow
+    /// it, use `?.`, or assert it with `!!` (LANG-V1 §7.10). Without this
+    /// the access reached rustc as a method or field lookup on `Option<T>`.
+    E0418_MemberOfNullable,
     /// E0420 — `class C extends F` where `F` is declared `final`.
     /// Final classes cannot be subclassed.
     E0420_FinalClassExtended,
@@ -837,6 +843,7 @@ impl Code {
             Code::E0415_ProtectedAccess          => "E0415",
             Code::E0416_PackagePrivateAccess     => "E0416",
             Code::E0417_UnknownType              => "E0417",
+            Code::E0418_MemberOfNullable         => "E0418",
             Code::E0420_FinalClassExtended       => "E0420",
             Code::E0421_FinalMethodOverridden    => "E0421",
             Code::E0422_SealedClassNotPermitted  => "E0422",

@@ -1,0 +1,78 @@
+// Inside a class a bare call `touch(n)` is `this.touch(n)`, and it behaves
+// the same way: the argument is shared when the caller reads it again, a
+// field of function type can be called by its bare name, and the result's
+// members can be read directly (`peek().text`).
+
+public class Counter { public int v = 0; }
+
+public class Tok {
+    public String text;
+    public Tok(String t) { this.text = t; }
+}
+
+public record Event(String topic, int day) {}
+
+public class Member { public String name() { return "member"; } }
+public class Premium extends Member { public String name() { return "premium"; } }
+
+public class Club {
+    private Vec<Member> members = new Vec<Member>();
+    private Vec<Event> events = new Vec<Event>();
+    private Tok tok = new Tok("first-token");
+    private (int) -> void tap = x -> {};
+    private (Event) -> void onEvent = e -> {};
+
+    private void touch(Counter c) { c.v = c.v + 1; }
+    private Tok peek() { return tok; }
+
+    public void setTap((int) -> void f) { tap = f; }
+    public void setOnEvent((Event) -> void f) { onEvent = f; }
+
+    public int bump() {
+        var c = new Counter();
+        touch(c);
+        touch(c);
+        return c.v;
+    }
+
+    public String firstText() { return peek().text; }
+
+    public void fire(int v) { tap(v); }
+
+    public void publish(Event e) {
+        onEvent(e);
+        this.onEvent(e);
+        events.push(e);
+        print("published " + e.topic);
+    }
+
+    public int firstDay() {
+        var first = events[0];
+        return first.day;
+    }
+
+    public void add(Member m) { members.push(m); }
+    public int size() { return members.len(); }
+}
+
+public int size(String s) { return s.length(); }
+
+public void main() {
+    var club = new Club();
+    print(club.bump());
+    print(club.firstText());
+    club.setTap(x -> print("tap " + x));
+    club.fire(3);
+    club.setOnEvent(e -> print("event " + e.topic));
+    club.publish(new Event("launch", 7));
+    print(club.firstDay());
+
+    club.add(new Premium());
+    var plain = new Member();
+    club.add(plain);
+    print(plain.name());
+    print(club.size());
+
+    String w = "ab";
+    print(w + " has " + size(w) + " chars");
+}

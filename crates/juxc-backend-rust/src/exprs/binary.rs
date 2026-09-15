@@ -398,6 +398,22 @@ impl RustEmitter {
         if matches!(b.op, BinaryOp::Add | BinaryOp::Sub) && self.emit_pointer_arithmetic(b) {
             return;
         }
+        // **A null test narrows the other side of `&&` / `||`** (§7.10).
+        // `it != null && it.qty() < 5` evaluates the right only when `it` is
+        // there, so the right reads the value, not the `Option`.
+        if matches!(b.op, BinaryOp::And | BinaryOp::Or) {
+            let proven = self.null_narrowed_locals(&b.left, b.op == BinaryOp::And);
+            if !proven.is_empty() {
+                let prec = binary_prec(b.op);
+                self.emit_expr_with_parent_prec(&b.left, prec, false);
+                self.w.push_str(if b.op == BinaryOp::And { " && " } else { " || " });
+                let depth = self.expr_narrowed.len();
+                self.expr_narrowed.extend(proven);
+                self.emit_expr_with_parent_prec(&b.right, prec, true);
+                self.expr_narrowed.truncate(depth);
+                return;
+            }
+        }
         // String-concat trigger fires when either operand is
         // **typed** as `String` — covers literals (parser sets
         // their type to `Ty::String` upstream) AND identifier

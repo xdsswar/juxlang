@@ -1658,6 +1658,9 @@ pub(crate) fn extract_simple_ctor_inits(
                     if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1)
                         && !expr_reads_instance_state(&a.value, &instance_names)
                     {
+                        if hoisting_reorders(&inits, &f.field.text) {
+                            return None;
+                        }
                         side_effects.push(stmt.clone());
                         continue;
                     }
@@ -1676,6 +1679,10 @@ pub(crate) fn extract_simple_ctor_inits(
                     if !touches_instance
                         && !expr_reads_instance_state(&a.value, &instance_names)
                     {
+                        let written = p.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                        if hoisting_reorders(&inits, written) {
+                            return None;
+                        }
                         side_effects.push(stmt.clone());
                         continue;
                     }
@@ -1688,6 +1695,31 @@ pub(crate) fn extract_simple_ctor_inits(
         }
     }
     Some(SimpleCtorInits { super_args, inits, side_effects })
+}
+
+/// Whether running a side effect that writes `written` BEFORE the already
+/// collected field initializers would change what they compute.
+///
+/// The fast path emits every side effect ahead of the struct literal, so a
+/// statement that came after `this.id = "M" + next;` in the source would run
+/// first, and `next++` would make the id read the bumped counter (Java reads
+/// it before the bump). That reorder is only observable when an earlier
+/// initializer reads the written name, or calls something that might; either
+/// sends the constructor down the sequential `__self` path, which keeps the
+/// source order. `this.items = items; count++;` stays on the fast path.
+fn hoisting_reorders(inits: &[(String, Expr)], written: &str) -> bool {
+    let mut observable = false;
+    for (_, init) in inits {
+        crate::worker::walk_expr(init, &mut |e: &Expr| match e {
+            Expr::Path(qn) if qn.segments.last().is_some_and(|s| s.text == written) => {
+                observable = true
+            }
+            Expr::Field(f) if f.field.text == written => observable = true,
+            Expr::Call(_) => observable = true,
+            _ => {}
+        });
+    }
+    observable
 }
 
 /// Whether a pattern's source form carried explicit parens. Lets the
@@ -3779,7 +3811,9 @@ impl crate::RustEmitter {
             // instance (`Rc::new(Animal::new()) as Rc<dyn AnimalKind>`). Detect the
             // construction precisely (not just "non-place") so a call that already
             // returns the dyn base type isn't double-wrapped.
-            if target_is_polybase && matches!(expr, Expr::NewObject(_)) {
+            let concrete_local = matches!(expr, Expr::Path(qn)
+                if qn.segments.len() == 1 && self.concrete_polybase_locals.contains(&qn.segments[0].text));
+            if target_is_polybase && (matches!(expr, Expr::NewObject(_)) || concrete_local) {
                 return IfaceCoercion::WrapClass {
                     clone_first: self.wrapper_value_needs_clone(expr),
                 };

@@ -380,7 +380,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0416`  | Access to a package-private / `internal` member, **or use of a package-private TYPE**, from outside its package | §4.4 |
 | `E0420`  | `class C extends F` where `F` is `final`            | JUX-LANG-V1 §7.4               |
 | `E0421`  | Override of a `final` method                        | JUX-LANG-V1 §7.4.1             |
-| `E0422`  | Sealed class extended outside its `permits` list    | JUX-LANG-V1 §7.4               |
+| `E0422`  | Sealed class extended, or sealed interface implemented, outside its `permits` list | JUX-LANG-V1 §7.4 |
 | `E0423`  | `extends` target is not a class                     | classes-rules §1.2             |
 | `E0424`  | `implements` target is not an interface             | classes-rules §3               |
 | `E0425`  | `this` referenced in a static context               | —                              |
@@ -427,6 +427,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
+| `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed | LANG-V1 §7.10 |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
 > diagnostic ("generic type inference has no solution", §T.4.2) originally

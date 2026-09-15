@@ -951,6 +951,24 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // A nullable local read where a null test has already proved it
+        // present (`it != null && it.qty() < 5`): the value inside.
+        if let Expr::Path(qn) = expr {
+            if qn.segments.len() == 1
+                && self.expr_narrowed.iter().any(|n| *n == qn.segments[0].text)
+                && self.nullable_locals.contains(&qn.segments[0].text)
+            {
+                let name = qn.segments[0].text.clone();
+                let narrowed = std::mem::take(&mut self.expr_narrowed);
+                self.w.push_str(&to_rust_ident(&name));
+                if self.nullable_local_shares(&name) {
+                    self.w.push_str(".clone()");
+                }
+                self.w.push_str(".unwrap()");
+                self.expr_narrowed = narrowed;
+                return;
+            }
+        }
         // A free function or a lambda given where a function pointer is
         // expected becomes a C-ABI entry point (Layout-ABI §L.6.4). Tycheck
         // records the pointer type under the value's span when it accepts one.
@@ -1151,6 +1169,28 @@ impl RustEmitter {
                         return;
                     }
                 }
+                // A record's own component read by its bare name (§O.8.1:
+                // `new Vec3(x + o.x, ...)`) is `this.x`.
+                if qn.segments.len() == 1 && !self.emitting_call_callee {
+                    let name = qn.segments[0].text.as_str();
+                    let is_component = self
+                        .enclosing_record
+                        .as_ref()
+                        .is_some_and(|r| r.components.iter().any(|c| c.name.text == name));
+                    let shadowed = self.current_fn_params.contains(name)
+                        || self.local_types.iter().any(|s| s.contains_key(name));
+                    if is_component && !shadowed && self.this_alias.is_some() {
+                        let span = qn.span;
+                        let this_field = juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span,
+                        };
+                        self.emit_field(&this_field);
+                        return;
+                    }
+                }
                 if qn.segments.len() == 1 && !self.emitting_call_callee {
                     if let Some(class_name) = self.enclosing_class.clone() {
                         let name = qn.segments[0].text.clone();
@@ -1327,7 +1367,13 @@ impl RustEmitter {
             // operand bare rather than a broken `.unwrap_or_else` on a
             // non-Option value.
             Expr::NotNullAssert(inner, _) => {
-                if self.expression_is_already_nullable(inner) {
+                // `x!!` where a null test already unwrapped `x`: the read
+                // is the value itself, so there is nothing left to assert.
+                let narrowed_read = matches!(&**inner, Expr::Path(qn)
+                    if qn.segments.len() == 1 && self.expr_narrowed.contains(&qn.segments[0].text));
+                if narrowed_read {
+                    self.emit_expr(inner);
+                } else if self.expression_is_already_nullable(inner) {
                     // Parenthesize so postfix chains bind to the
                     // unwrapped value (`(expr).unwrap…().id`). The
                     // operand emits with the format/comparison flags
@@ -1449,7 +1495,16 @@ impl RustEmitter {
         // agree, so a mixed pair reached rustc as a type error -- on a line the
         // Jux source gives no reason to suspect. The same widening the binary
         // operators use applies here, with the same helper.
-        let promote = self.numeric_promote_target(&t.then_branch, &t.else_branch, true);
+        // Two arms of the same primitive keep it: `b ? 'a' : 'b'` is a `char`,
+        // not the `int` that promoting two chars for arithmetic would give.
+        let same_primitive = self
+            .operand_primitive(&t.then_branch)
+            .is_some_and(|p| Some(p) == self.operand_primitive(&t.else_branch));
+        let promote = if same_primitive {
+            None
+        } else {
+            self.numeric_promote_target(&t.then_branch, &t.else_branch, true)
+        };
         let cast = |emitter: &Self, arm: &Expr| {
             promote.filter(|p| emitter.operand_primitive(arm) != Some(*p))
         };
@@ -1475,11 +1530,19 @@ impl RustEmitter {
         self.w.push_str(" { ");
         let then_cast = cast(self, &t.then_branch);
         let then_own = own_literal_arm && is_str_literal(&t.then_branch);
+        // §7.10: each arm sees what the condition proved for it.
+        let depth = self.expr_narrowed.len();
+        let when_true = self.null_narrowed_locals(&t.condition, true);
+        self.expr_narrowed.extend(when_true);
         self.emit_ternary_arm(&t.then_branch, wrap_each_arm, then_cast, then_own);
+        self.expr_narrowed.truncate(depth);
         self.w.push_str(" } else { ");
         let else_cast = cast(self, &t.else_branch);
         let else_own = own_literal_arm && is_str_literal(&t.else_branch);
+        let when_false = self.null_narrowed_locals(&t.condition, false);
+        self.expr_narrowed.extend(when_false);
         self.emit_ternary_arm(&t.else_branch, wrap_each_arm, else_cast, else_own);
+        self.expr_narrowed.truncate(depth);
         self.w.push_str(" }");
         self.emitting_nullable_target = prev;
     }
@@ -1506,9 +1569,12 @@ impl RustEmitter {
             self.w.push('(');
         }
         // Clearing the format-arg flag is what makes the literal own itself:
-        // that flag is the only reason it would not.
+        // that flag is the only reason it would not. Any other arm is a value
+        // the `if` hands out, so it is owned as well: a field read through a
+        // borrow in a format argument could stay a reference, but out of an
+        // `if` it would move out of the borrow.
         let prev_format_arg = self.emitting_format_arg;
-        if own_string {
+        if own_string || !matches!(arm, Expr::Literal(_)) {
             self.emitting_format_arg = false;
         }
         self.emit_expr(arm);

@@ -1542,9 +1542,20 @@ impl RustEmitter {
             // collection shares by clone without being named here. The list
             // this replaces covered exactly the six `rust.std` containers and
             // nothing else.
-            Some(juxc_tycheck::Ty::User { name, .. }) => self.class_is_rust_clone(name),
+            // A record lowers to a struct that derives `Clone`, and it is a
+            // value: passing one on while the caller still reads it copies it,
+            // as Java's reference would have left the caller's copy intact.
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                self.class_is_rust_clone(name) || self.type_name_is_record(name)
+            }
             _ => false,
         }
+    }
+
+    /// Whether `name` (bare or fully qualified) names a user record.
+    pub(crate) fn type_name_is_record(&self, name: &str) -> bool {
+        self.symbols.records.contains_key(name)
+            || self.symbols.records.keys().any(|k| k.rsplit('.').next() == Some(name))
     }
 
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {

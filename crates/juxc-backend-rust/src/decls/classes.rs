@@ -2143,14 +2143,25 @@ impl RustEmitter {
             }
         }
         // A call on a value whose declared type is `C<T>` can return `T`
-        // (`b.get()` on a `Box<T>`), so every method of a generic class whose
-        // return is that class's own parameter maps to the argument supplied
-        // here. Resolved through the class signature so no name is guessed.
+        // (`b.get()` on a `Box<T>`), and a field or property read can hold
+        // one (`p.first` on a `Pair<K, V>`), so every such member of a generic
+        // class whose type is that class's own parameter maps to the argument
+        // supplied here. Resolved through the class signature so no name is
+        // guessed.
         for p in &fn_decl.params {
             let Some(seg) = p.ty.name.segments.last() else { continue };
             let Some(cls) = self.lookup_class_by_bare_or_fqn(&seg.text) else { continue };
-            for (mname, msig) in &cls.methods {
-                let juxc_ast::ReturnType::Type(rt) = &msig.return_type else { continue };
+            let returns = cls.methods.iter().filter_map(|(name, m)| match &m.return_type {
+                juxc_ast::ReturnType::Type(rt) => Some((name, rt)),
+                _ => None,
+            });
+            let stored = cls
+                .fields
+                .iter()
+                .filter(|(_, f)| !f.is_static)
+                .map(|(name, f)| (name, &f.ty))
+                .chain(cls.properties.iter().filter(|(_, pr)| !pr.is_static).map(|(name, pr)| (name, &pr.ty)));
+            for (mname, rt) in returns.chain(stored) {
                 if !rt.generic_args.is_empty() || rt.name.segments.len() != 1 {
                     continue;
                 }
@@ -2426,6 +2437,16 @@ impl RustEmitter {
                     if matches!(&*f.object, Expr::This(_)) {
                         if let Some(param) = generic_members.get(f.field.text.as_str()) {
                             out.insert(param.clone());
+                        }
+                    }
+                    // `p.first` on a NAMED receiver, keyed `"p.first"` the
+                    // way `b.get()` is below.
+                    if let Expr::Path(rq) = &*f.object {
+                        if rq.segments.len() == 1 {
+                            let key = format!("{}.{}", rq.segments[0].text, f.field.text);
+                            if let Some(param) = generic_members.get(&key) {
+                                out.insert(param.clone());
+                            }
                         }
                     }
                     mark_field_read(&f.object, generic_members, out);
@@ -3087,6 +3108,36 @@ impl RustEmitter {
             .classes
             .keys()
             .any(|fqn| self.class_is_a(fqn, b) && self.class_is_a(fqn, t))
+            // A record implementing interface `b` is itself the target `t`:
+            // records have no subtypes, so that is the only way one can be.
+            || self.symbols.records.iter().any(|(fqn, record)| {
+                fqn.rsplit('.').next() == Some(t)
+                    && record.implements.iter().any(|i| {
+                        i.name.segments.last().is_some_and(|s| s.text == b || self.interface_extends(&s.text, b))
+                    })
+            })
+    }
+
+    /// Whether interface `child` extends interface `ancestor`, directly or
+    /// through its own parents.
+    fn interface_extends(&self, child: &str, ancestor: &str) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![child.to_string()];
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&name) else { continue };
+            for parent in &iface.extends {
+                if let Some(seg) = parent.name.segments.last() {
+                    if seg.text == ancestor {
+                        return true;
+                    }
+                    stack.push(seg.text.clone());
+                }
+            }
+        }
+        false
     }
 
     fn hook_targets_for_base(&self, b: &str) -> Vec<String> {
@@ -4318,7 +4369,7 @@ impl RustEmitter {
                 self.w.push_str(" for ");
                 self.w.push_str(&to_rust_ident(&class_decl.name.text));
                 self.emit_generic_params_as_args(&class_decl.generic_params);
-                self.w.push_str(" {}\n\n");
+                self.emit_method_less_iface_impl_body(class_decl, interface_ty);
                 continue;
             }
             methods.sort_by(|a, b| a.0.cmp(&b.0));
@@ -4471,7 +4522,7 @@ impl RustEmitter {
                 self.w.push_str(" for ");
                 self.w.push_str(&to_rust_ident(&class_decl.name.text));
                 self.emit_generic_params_as_args(&class_decl.generic_params);
-                self.w.push_str(" {}\n\n");
+                self.emit_method_less_iface_impl_body(class_decl, interface_ty);
                 continue;
             }
             self.w.emit_indent();
@@ -4650,6 +4701,42 @@ impl RustEmitter {
             self.w.line("}");
             self.w.newline();
         }
+    }
+
+    /// Close an `impl Iface for Class` that has no methods to write: a
+    /// marker interface, or one whose every method is a default the class
+    /// keeps.
+    ///
+    /// The impl is `{}` unless the program type-tests that interface against
+    /// something this class is (`cmd => Ins`, `case Ins i ->`). Then it still
+    /// needs the `__jux_as_<T>` overrides: without them the trait's default
+    /// `None` answers and the test is false for a value that IS an `Ins`.
+    fn emit_method_less_iface_impl_body(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        interface_ty: &juxc_ast::TypeRef,
+    ) {
+        let hooks: Vec<String> = match interface_ty.name.segments.first() {
+            Some(iface) => self
+                .interface_hook_targets(&iface.text)
+                .into_iter()
+                .filter(|t| self.class_is_a(&class_decl.name.text, t))
+                .collect(),
+            None => Vec::new(),
+        };
+        if hooks.is_empty() {
+            self.w.push_str(" {}\n\n");
+            return;
+        }
+        let iface = interface_ty.name.segments[0].text.clone();
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        for t in &hooks {
+            self.emit_downcast_hook_impl(t, &iface);
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
     }
 
     /// Expand an interface `TypeRef` (with concrete args, e.g.

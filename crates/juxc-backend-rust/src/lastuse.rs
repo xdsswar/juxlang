@@ -160,6 +160,27 @@ impl Walker {
         }
     }
 
+    /// A string concat or interpolation lowers to ONE `format!`, which
+    /// borrows every argument until the whole string is built. In
+    /// `w + " -> " + size(w)` the textually last read of `w` is an argument
+    /// to `size`, and moving it there while the macro still borrows the first
+    /// `w` is rustc's E0505. So a name read more than once among
+    /// `uses[first..]` keeps every one of those reads, the last included, from
+    /// moving: the call gets a copy.
+    fn share_within_format(&mut self, first: usize) {
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        for u in &self.uses[first..] {
+            *seen.entry(u.name.as_str()).or_insert(0) += 1;
+        }
+        let repeated: HashSet<String> =
+            seen.into_iter().filter(|(_, n)| *n > 1).map(|(name, _)| name.to_string()).collect();
+        for u in &mut self.uses[first..] {
+            if repeated.contains(&u.name) {
+                u.repeats = true;
+            }
+        }
+    }
+
     fn loop_body(&mut self, b: &Block) {
         self.depth += 1;
         self.block(b);
@@ -277,8 +298,12 @@ impl Walker {
                 }
             }
             Expr::Binary(b) => {
+                let first = self.uses.len();
                 self.expr(&b.left);
                 self.expr(&b.right);
+                if b.op == juxc_ast::BinaryOp::Add {
+                    self.share_within_format(first);
+                }
             }
             Expr::Unary(u) => self.expr(&u.operand),
             Expr::Range(r) => {
@@ -293,11 +318,13 @@ impl Walker {
             }
             Expr::Field(f) => self.expr(&f.object),
             Expr::InterpString(s) => {
+                let first = self.uses.len();
                 for seg in &s.segments {
                     if let InterpSegment::Expr(inner) = seg {
                         self.expr(inner);
                     }
                 }
+                self.share_within_format(first);
             }
             Expr::Elvis(el) => {
                 self.expr(&el.value);

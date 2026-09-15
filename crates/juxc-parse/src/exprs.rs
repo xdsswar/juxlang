@@ -1485,7 +1485,8 @@ impl<'a> Parser<'a> {
                         loop {
                             let Some(e) = self.parse_expr() else { break };
                             elements.push(e);
-                            if !self.eat(&TokenKind::Comma) {
+                            // A trailing comma before `}` is allowed.
+                            if !self.eat(&TokenKind::Comma) || self.at(&TokenKind::RBrace) {
                                 break;
                             }
                         }

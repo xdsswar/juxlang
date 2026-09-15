@@ -1,0 +1,6 @@
+circle r=1.0 area=3.0 circle
+square side=2.0 area=4.0 not a circle
+triangle 3.0x4.0 area=6.0 not a circle
+circle r=20.0 area=1200.0 huge circle
+diameter 5.0 doubled 10.0
+false

@@ -419,7 +419,26 @@ impl Checker<'_> {
                     self.check_pattern_shape(alt, ty, &mut ignored);
                 }
             }
-            Pattern::TypeBind { binder, .. } => bindings.push((binder.clone(), Ty::Unknown)),
+            // `case Ins i ->` binds the value AS an `Ins`, so `i.count` in
+            // the arm reads the class's field. Left `Unknown`, the arm body
+            // lost the receiver's class and a field read lowered as if `i`
+            // were a plain struct.
+            Pattern::TypeBind { type_name, binder, .. } => {
+                let written = juxc_ast::TypeRef {
+                    name: juxc_ast::QualifiedName {
+                        segments: vec![type_name.clone()],
+                        span: type_name.span,
+                    },
+                    generic_args: Vec::new(),
+                    nullable: false,
+                    array_shape: None,
+                    fn_shape: None,
+                    ptr_depth: 0,
+                    span: type_name.span,
+                };
+                let bound = crate::ty::ty_from_ref(&written, &self.env, self.symbols);
+                bindings.push((binder.clone(), bound));
+            }
             Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::Range { .. } => {}
         }
     }

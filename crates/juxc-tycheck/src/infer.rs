@@ -401,7 +401,7 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
             Ty::Unknown
         }
-        Expr::This(_) => infer_this(env),
+        Expr::This(_) => infer_this(env, symbols),
         Expr::Super(_) => infer_super(env, symbols),
         // `x => T` is a runtime type test — always boolean.
         Expr::TypeTest(_) => Ty::Primitive(Primitive::Bool),
@@ -486,6 +486,14 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::Ternary(t) => {
             let then_ty = infer_expr(&t.then_branch, env, symbols);
             let else_ty = infer_expr(&t.else_branch, env, symbols);
+            // Two arms of one primitive type give that type (JLS 15.25):
+            // `b ? 'a' : 'b'` is a `char`. Binary numeric promotion is for
+            // arms that differ; applied to two `char`s it made an `int`.
+            if let (Ty::Primitive(a), Ty::Primitive(b)) = (&then_ty, &else_ty) {
+                if a == b && !untyped_int_literal(&t.then_branch) && !untyped_int_literal(&t.else_branch) {
+                    return then_ty;
+                }
+            }
             numeric_operands_type(&t.then_branch, &then_ty, &t.else_branch, &else_ty)
                 .map(Ty::Primitive)
                 .unwrap_or(then_ty)
@@ -574,20 +582,33 @@ fn primitive_from_float_kind(kind: Option<FloatKind>) -> Primitive {
 /// downstream code that cares about ordering (e.g. Phase D's
 /// signature unification) will need to read the params off the
 /// symbol table directly.
-fn infer_this(env: &TypeEnv) -> Ty {
-    match &env.current_class {
-        Some(name) => {
-            let generic_args = env
-                .generic_params
-                .iter()
-                .map(|p| Ty::Param(p.clone()))
-                .collect();
-            Ty::User {
-                name: name.clone(),
-                generic_args,
-            }
-        }
-        None => Ty::Unknown,
+fn infer_this(env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let Some(name) = &env.current_class else {
+        return Ty::Unknown;
+    };
+    // `this` inside `Cache<K, V>` is `Cache<K, V>`, its arguments in the
+    // order the declaration lists them. They used to be read off the env's
+    // in-scope generic parameters, a `HashSet`: the order changed from run to
+    // run, so `this.cb` on a `(K, V) -> void` field sometimes substituted as
+    // `(V, K) -> void` and the same file failed about half the time. That set
+    // also holds a generic METHOD's own parameters, which are not arguments
+    // of the class.
+    let declared = symbols
+        .classes
+        .get(name)
+        .map(|c| &c.generic_params)
+        .or_else(|| symbols.records.get(name).map(|r| &r.generic_params))
+        .or_else(|| symbols.interfaces.get(name).map(|i| &i.generic_params));
+    let generic_args = match declared {
+        Some(params) => params.iter().map(|p| Ty::Param(p.name.text.clone())).collect(),
+        None => match env.lookup("this") {
+            Some(Ty::User { generic_args, .. }) => generic_args.clone(),
+            _ => Vec::new(),
+        },
+    };
+    Ty::User {
+        name: name.clone(),
+        generic_args,
     }
 }
 
@@ -976,6 +997,26 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     infer_generic_args(&fn_sig.generic_params, &param_tys, &arg_tys)
                 };
                 return substitute_via_inference(&base, &fn_sig.generic_params, &inferred);
+            }
+            // Java's implicit `this`: inside a class, `peek()` naming one of
+            // its methods (or a field of function type) is `this.peek()`, and
+            // has that call's type. Left `Unknown`, `peek().text` lost the
+            // class of its receiver.
+            if let Some(class) = env.current_class.as_deref() {
+                let on_this = symbols.lookup_method(class, name).is_some()
+                    || symbols.lookup_field(class, name).is_some_and(|(f, _)| f.ty.closure_shape().is_some());
+                if on_this && env.lookup(name).is_none() {
+                    let this_call = CallExpr {
+                        callee: Box::new(Expr::Field(FieldExpr {
+                            object: Box::new(Expr::This(qn.span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        })),
+                        ..c.clone()
+                    };
+                    return infer_call(&this_call, env, symbols);
+                }
             }
             Ty::Unknown
         }

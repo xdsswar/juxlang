@@ -1,0 +1,41 @@
+// Switch arms Java programmers write every day: character literals and
+// character ranges, a `default -> throw`, and array initializers with a
+// trailing comma. A `char` ternary stays a `char`.
+
+public String kind(char c) {
+    return switch (c) {
+        case 'a' | 'e' | 'i' | 'o' | 'u' -> "vowel";
+        case 'x'..='z' -> "late letter";
+        case '0'..='9' -> "digit";
+        default -> "other";
+    };
+}
+
+public int weight(int k) {
+    switch (k) {
+        case 1 -> { return 10; }
+        case 2 -> { return 20; }
+        default -> throw new IllegalStateException("no weight for " + k);
+    }
+}
+
+public void main() {
+    char[] samples = {
+        'a',
+        'y',
+        '7',
+        'q',
+    };
+    for (var c : samples) {
+        print(c + " " + kind(c));
+    }
+    print(weight(1) + weight(2));
+    try {
+        print(weight(9));
+    } catch (IllegalStateException e) {
+        print("caught " + e.getMessage());
+    }
+    bool upper = true;
+    char mark = upper ? 'Y' : 'n';
+    print(mark);
+}

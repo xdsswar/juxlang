@@ -1,0 +1,109 @@
+// Seven programs that compiled and ran but printed the wrong thing, found by
+// writing ordinary applications: constructor statement order, type patterns
+// over an interface or an open base class, a type test against a marker
+// interface, a String held in a generic field, a field-initializer lambda
+// over a double, out-of-range String indexing, and a two-parameter function
+// field (which also type-checked only half the time).
+
+public class Member {
+    private static int next = 1;
+    private String memberId;
+    public Member() {
+        this.memberId = "M" + next;
+        next++;
+    }
+    public String id() { return memberId; }
+}
+
+public interface Cmd { int id(); }
+public class Ins implements Cmd {
+    public int count;
+    public Ins(int count) { this.count = count; }
+    public int id() { return 1; }
+}
+public class Stop implements Cmd { public int id() { return 2; } }
+public class Noop implements Cmd { public int id() { return 3; } }
+
+public String describe(Cmd c) {
+    switch (c) {
+        case Ins i when i.count > 10 -> { return "big insert " + i.count; }
+        case Ins i -> { return "insert " + i.count; }
+        case Stop s -> {
+            String label = "stop " + s.id();
+            return label;
+        }
+        default -> { return "other " + c.id(); }
+    }
+}
+
+public abstract class Animal {}
+public class Dog extends Animal {}
+public class Cat extends Animal {}
+public String kind(Animal a) {
+    return switch (a) {
+        case Dog d -> "dog";
+        case Cat c -> "cat";
+        default -> "animal";
+    };
+}
+
+public interface Marker {}
+public class Tagged implements Marker { public int tag = 7; }
+
+public class Pair<A, B> {
+    public A first;
+    public B second;
+    public Pair(A a, B b) { this.first = a; this.second = b; }
+}
+public <K, V> String showPair(Pair<K, V> p) { return "<" + p.first + ", " + p.second + ">"; }
+
+public class Holder {
+    public (double) -> String render = x -> "value " + x;
+}
+
+public class Cache<K, V> {
+    private (K, V) -> String cb;
+    public Cache((K, V) -> String cb) { this.cb = cb; }
+    public String fire(K k, V v) { return this.cb(k, v); }
+}
+
+public void main() {
+    print(new Member().id());
+    print(new Member().id());
+
+    print(describe(new Ins(3)));
+    print(describe(new Ins(30)));
+    print(describe(new Stop()));
+    print(describe(new Noop()));
+    print(kind(new Dog()));
+    print(kind(new Cat()));
+
+    Marker m = new Tagged();
+    if (m => Tagged t) { print("tagged " + t.tag); } else { print("not tagged"); }
+    print(m => Tagged);
+
+    print(showPair(new Pair<String, int>("answer", 42)));
+
+    print(new Holder().render(5.0));
+
+    String s = "ab";
+    try {
+        print(s.substring(1, 9));
+    } catch (IndexOutOfBoundsException e) {
+        print("caught " + e.getMessage());
+    }
+    try {
+        print(s.substring(3));
+    } catch (IndexOutOfBoundsException e) {
+        print("caught " + e.getMessage());
+    }
+    try {
+        print(s.charAt(5));
+    } catch (IndexOutOfBoundsException e) {
+        print("caught " + e.getMessage());
+    }
+    print(s.substring(1) + s.charAt(0));
+
+    var cache = new Cache<String, int>((k, v) -> k + "=" + v);
+    print(cache.fire("n", 4));
+}

@@ -1088,6 +1088,7 @@ impl RustEmitter {
         // later reader, and so must copy rather than move (see `crate::lastuse`).
         let prev_non_final =
             std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
+        let prev_concrete_polybase = std::mem::take(&mut self.concrete_polybase_locals);
         let prev_captures = std::mem::replace(
             &mut self.captures_read_again,
             crate::lastuse::captures_read_again(body, &self.current_fn_params),
@@ -1183,6 +1184,7 @@ impl RustEmitter {
         }
         self.forced_cell_locals = prev_forced;
         self.non_final_uses = prev_non_final;
+        self.concrete_polybase_locals = prev_concrete_polybase;
         self.captures_read_again = prev_captures;
         self.local_types.pop();
         self.in_lambda_body = prev_lam;

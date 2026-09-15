@@ -1,0 +1,4 @@
+member_of_nullable.jux:3:12: [W0457] warning: field `next` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)
+member_of_nullable.jux:9:11: [E0418] error: `cur` may be null here (its type is `Node?`), so `.value` has no value to reach
+member_of_nullable.jux:10:11: [E0418] error: `cur` may be null here (its type is `Node?`), so `get()` has no value to reach
+member_of_nullable.jux:17:11: [E0418] error: `head.next` may be null here (its type is `Node?`), so `.value` has no value to reach

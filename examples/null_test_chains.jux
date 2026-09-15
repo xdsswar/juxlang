@@ -1,0 +1,69 @@
+// A null test narrows wherever its outcome is known (LANG-V1 §7.10): the
+// right of `&&` after `x != null`, the right of `||` after `x == null`, the
+// branches of `?:`, an `if` or `else if` built from such a chain, and the
+// code after a guard clause that tests several names at once.
+
+public class Item {
+    public String name;
+    public int qty;
+    public Item(String name, int qty) { this.name = name; this.qty = qty; }
+    public int getQty() { return qty; }
+}
+
+public int lowStock(Item? it) {
+    if (it != null && it.getQty() < 5) {
+        return it.getQty();
+    }
+    return -1;
+}
+
+public String label(Item? it) {
+    return it != null ? it.name + " x" + it.qty : "none";
+}
+
+public bool empty(Item? it) { return it == null || it.qty == 0; }
+
+public String pair(Item? a, Item? b) {
+    if (a == null || b == null) {
+        return "incomplete";
+    }
+    return a.name + "+" + b.name;
+}
+
+public String first(String? s, String? t) {
+    if (s != null && t != null && s.length() > 0) {
+        return s + t;
+    } else if (t != null) {
+        return "only " + t;
+    } else {
+        return "neither";
+    }
+}
+
+public void main() {
+    var bolt = new Item("bolt", 3);
+    print(lowStock(bolt));
+    print(lowStock(new Item("nut", 9)));
+    print(lowStock(null));
+    print(label(bolt));
+    print(label(null));
+    print(empty(null));
+    print(empty(new Item("gear", 0)));
+    print(empty(bolt));
+    print(pair(bolt, null));
+    print(pair(bolt, new Item("gear", 1)));
+    print(first("a", "b"));
+    print(first(null, "b"));
+    print(first(null, null));
+
+    Item? current = bolt;
+    if (current != null) {
+        print("have " + current.name);
+    }
+    current = null;
+    print(current == null ? "cleared" : current.name);
+
+    String? word = "hello";
+    var length = word != null ? word.length() : 0;
+    print(length);
+}

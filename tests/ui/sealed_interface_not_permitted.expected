@@ -1,0 +1,3 @@
+sealed_interface_not_permitted.jux:4:30: [E0422] error: `Blob` is not permitted to implement `Shape` (not listed in its `permits` clause)
+sealed_interface_not_permitted.jux:5:37: [E0422] error: `Dot` is not permitted to implement `Shape` (not listed in its `permits` clause)
+sealed_interface_not_permitted.jux:8:12: [E0440] error: non-exhaustive `switch` on sealed interface `Shape`: no arm covers Square; add explicit `case` arms for each, or a `case _` wildcard at the end

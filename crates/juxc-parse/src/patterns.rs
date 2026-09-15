@@ -7,7 +7,7 @@ use juxc_ast::{Literal, Pattern, SwitchArm, SwitchBody, SwitchExpr};
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
 
-use crate::literals::{parse_float_literal_text, parse_int_literal_text};
+use crate::literals::{parse_float_literal_text, parse_int_literal_text, process_string_escapes};
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -85,9 +85,19 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::Arrow, "'->' after pattern in switch arm");
 
-        // Body: a `{`-led block, or a single expression terminated by `;`.
+        // Body: a `{`-led block, a `throw`, or a single expression terminated
+        // by `;`. `default -> throw new IllegalStateException(..);` is the
+        // arrow switch's own idiom (Java 14+, EXCEPTIONS addendum): the throw
+        // is a statement, so it becomes the arm's one-statement block.
         let body = if self.at(&TokenKind::LBrace) {
             SwitchBody::Block(self.parse_block())
+        } else if self.at_kw(Keyword::Throw) {
+            let body_start = self.peek_span();
+            let stmt = self.parse_stmt()?;
+            SwitchBody::Block(juxc_ast::Block {
+                statements: vec![stmt],
+                span: body_start.join(self.last_consumed_span()),
+            })
         } else {
             let body_start = self.peek_span();
             let expr = self.parse_expr()?;
@@ -177,6 +187,17 @@ impl<'a> Parser<'a> {
                 let s = s.clone();
                 self.advance();
                 Some(Pattern::Literal(Literal::String(s), self.last_consumed_span()))
+            }
+            // `'a'`, and the range `'a'..='z'` (§A.3's own example).
+            TokenKind::Char(raw) => {
+                let raw = raw.clone();
+                self.advance();
+                let first_span = self.last_consumed_span();
+                let first_lit = Literal::Char(self.pattern_char(&raw, first_span));
+                if let Some(range) = self.try_parse_range_tail(&first_lit, first_span) {
+                    return Some(range);
+                }
+                Some(Pattern::Literal(first_lit, first_span))
             }
             TokenKind::Bool(b) => {
                 let b = *b;
@@ -293,6 +314,27 @@ impl<'a> Parser<'a> {
     /// `Some(Pattern::Range { … })` when the lookahead matches a
     /// range, `None` otherwise (caller falls back to the plain
     /// literal pattern).
+    /// Decode a character literal's raw text the way an expression does,
+    /// reporting a bad escape or more than one character at `span`.
+    fn pattern_char(&mut self, raw: &str, span: juxc_source::Span) -> char {
+        let (decoded, errors) = process_string_escapes(raw);
+        for msg in errors {
+            self.diagnostics.push(Diagnostic::error(code::Code::E0200_UnexpectedToken, msg).with_span(span));
+        }
+        let mut chars = decoded.chars();
+        let ch = chars.next().unwrap_or('\0');
+        if chars.next().is_some() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "character literal must contain exactly one character",
+                )
+                .with_span(span),
+            );
+        }
+        ch
+    }
+
     fn try_parse_range_tail(
         &mut self,
         start_lit: &Literal,
@@ -332,12 +374,23 @@ impl<'a> Parser<'a> {
                     span: start_span.join(end_span),
                 })
             }
+            TokenKind::Char(raw) => {
+                self.advance();
+                let end_span = self.last_consumed_span();
+                let end_lit = Literal::Char(self.pattern_char(&raw, end_span));
+                Some(Pattern::Range {
+                    start: start_lit.clone(),
+                    end: end_lit,
+                    inclusive,
+                    span: start_span.join(end_span),
+                })
+            }
             _ => {
                 let here = self.peek_span();
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "expected a numeric literal after `..[=]` in a range pattern",
+                        "expected a numeric or character literal after `..[=]` in a range pattern",
                     )
                     .with_span(here),
                 );

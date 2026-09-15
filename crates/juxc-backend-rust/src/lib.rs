@@ -809,6 +809,22 @@ struct RustEmitter {
     /// one function doesn't leak into another's emission. Cleared
     /// in tandem with [`Self::mutated_in_fn`].
     pub(crate) nullable_locals: HashSet<String>,
+    /// Nullable locals a surrounding `&&`, `||` or `?:` has proved non-null
+    /// for the operand being emitted (§7.10). A read of one there is the
+    /// `Option`'s contents, so it emits unwrapped. Pushed and truncated
+    /// around exactly that operand, so the test itself still sees the
+    /// `Option`.
+    pub(crate) expr_narrowed: Vec<String>,
+    /// `var` locals initialized by `new Base(...)` of a polymorphic base
+    /// class. Written without a type, such a local holds the CONCRETE
+    /// object, where a local declared `Base b = ...` holds the
+    /// `Rc<dyn BaseKind>` handle; passing it into a `Base` slot therefore
+    /// wraps it instead of cloning a handle it does not have. Per body.
+    pub(crate) concrete_polybase_locals: HashSet<String>,
+    /// The record whose operators and methods are being emitted. Inside
+    /// them a bare component name is `this.component` and a bare call of
+    /// one of its methods is `this.method(...)`, as in a class body.
+    pub(crate) enclosing_record: Option<juxc_ast::RecordDecl>,
     /// Names of in-scope `ref` bindings (§M.13) — locals and params
     /// whose slot is an `Rc<RefCell<T>>` shared reference to a
     /// value-typed object. Reads clone out (`x.borrow().clone()`),
@@ -3502,6 +3518,20 @@ fn compute_downcast_targets(units: &[juxc_ast::CompilationUnit]) -> HashSet<Stri
     out
 }
 
+fn cast_targets_pattern(p: &juxc_ast::Pattern, out: &mut HashSet<String>) {
+    match p {
+        juxc_ast::Pattern::TypeBind { type_name, .. } => {
+            out.insert(type_name.text.clone());
+        }
+        juxc_ast::Pattern::Or(alts, _) => {
+            for alt in alts {
+                cast_targets_pattern(alt, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn cast_targets_block(b: &juxc_ast::Block, out: &mut HashSet<String>) {
     for s in &b.statements {
         cast_targets_stmt(s, out);
@@ -3690,6 +3720,9 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         Expr::Switch(s) => {
             cast_targets_expr(&s.scrutinee, out);
             for arm in &s.arms {
+                // `case Ins i ->` over an interface tests the runtime type
+                // through the same hook a `=>` does.
+                cast_targets_pattern(&arm.pattern, out);
                 if let Some(g) = &arm.guard {
                     cast_targets_expr(g, out);
                 }
@@ -4385,6 +4418,31 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         );
         w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
         w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        // Character-indexed `String` access (CORE-LIB K.7): an index outside
+        // the string throws a catchable `IndexOutOfBoundsException` with the
+        // JDK's message, where a bare `chars().nth(i).unwrap()` panicked with
+        // a payload no `catch` could match and `skip/take` quietly clamped
+        // `"ab".substring(1, 9)` to `"b"`.
+        w.push_str(concat!(
+            "pub fn jux_substring(s: &str, begin: isize, end: Option<isize>) -> String {\n",
+            "    let length = s.chars().count() as isize;\n",
+            "    let end = end.unwrap_or(length);\n",
+            "    if begin < 0 || end > length || begin > end {\n",
+            "        std::panic::panic_any(crate::jux::std::exceptions::IndexOutOfBoundsException::new(\n",
+            "            format!(\"Range [{begin}, {end}) out of bounds for length {length}\"),\n",
+            "        ));\n",
+            "    }\n",
+            "    s.chars().skip(begin as usize).take((end - begin) as usize).collect()\n",
+            "}\n",
+            "pub fn jux_char_at(s: &str, at: isize) -> char {\n",
+            "    match usize::try_from(at).ok().and_then(|i| s.chars().nth(i)) {\n",
+            "        Some(c) => c,\n",
+            "        None => std::panic::panic_any(crate::jux::std::exceptions::IndexOutOfBoundsException::new(\n",
+            "            format!(\"Index {at} out of bounds for length {}\", s.chars().count()),\n",
+            "        )),\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // Async-runtime helper: `__jux_yield_now()` returns a one-
         // shot yielding Future. On first poll it registers a
         // wake-up and returns `Poll::Pending`; on second poll it
@@ -4747,6 +4805,9 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             emitting_comparison_operand: false,
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
+            expr_narrowed: Vec::new(),
+            concrete_polybase_locals: HashSet::new(),
+            enclosing_record: None,
             ref_locals: HashSet::new(),
             forced_cell_locals: HashSet::new(),
             pointer_locals: HashMap::new(),

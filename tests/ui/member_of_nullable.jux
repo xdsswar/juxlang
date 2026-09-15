@@ -1,0 +1,18 @@
+public class Node {
+    public int value = 1;
+    public Node? next = null;
+    public int get() { return value; }
+}
+
+public void main() {
+    Node? cur = new Node();
+    print(cur.value);
+    print(cur.get());
+    if (cur != null) {
+        print(cur.value);
+    }
+    print(cur?.value);
+    print(cur!!.value);
+    Node head = new Node();
+    print(head.next.value);
+}

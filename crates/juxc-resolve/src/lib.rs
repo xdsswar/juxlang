@@ -728,17 +728,18 @@ impl Resolver {
     /// methods/operators are walked. Deleted operators have no body
     /// and are skipped silently.
     fn visit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
-        // Static-field names declared on the record are visible as
-        // bare identifiers inside every operator / method body
-        // (Java rule, also applies to Java records per JEP 395 §3).
-        // Component names ARE visible bare too because each
-        // component is a parameter of the canonical ctor; method
-        // bodies still need `this.x` to read them, so we don't
-        // declare the component names here.
+        // A record's own members are visible as bare identifiers inside
+        // every operator / method body, as in a Java record (JEP 395) and
+        // the OPERATORS addendum's own `Vec3` (§O.8.1: `new Vec3(x+o.x, ...)`,
+        // `magnitude()`): static fields, components, and methods. They are
+        // declared in an OUTER scope so a parameter of the same name still
+        // shadows them; tycheck and the backend resolve what each one is.
         let static_field_names: Vec<&str> = record_decl
             .static_fields
             .iter()
             .map(|f| f.name.text.as_str())
+            .chain(record_decl.components.iter().map(|c| c.name.text.as_str()))
+            .chain(record_decl.methods.iter().map(|m| m.name.text.as_str()))
             .collect();
         for op in &record_decl.operators {
             let Some(body) = &op.body else { continue };

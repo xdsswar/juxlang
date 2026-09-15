@@ -148,6 +148,7 @@ impl RustEmitter {
         // inherent operator methods, then user-declared methods.
         // `emit_operator_as_method` skips deleted operators (no
         // inherent method for a `= delete;` declaration).
+        let prev_record = self.enclosing_record.replace(record_decl.clone());
         for op in &record_decl.operators {
             self.emit_operator_as_method(op);
         }
@@ -157,6 +158,7 @@ impl RustEmitter {
         for method in &record_decl.methods {
             self.emit_method(method);
         }
+        self.enclosing_record = prev_record;
         // Static fields declared inside the record body (JEP 395 §3,
         // Java-records-with-static). `final` / `const` ones lower as
         // associated `pub const`; mutable ones get the same
@@ -285,7 +287,15 @@ impl RustEmitter {
                             && record_decl.components.iter().any(|c| &c.name.text == name))
                 })
                 .collect();
-            if provided.is_empty() {
+            // A value typed as the interface may be this record at run time:
+            // `x => Ins i` asks the `__jux_as_Ins` hook, whose default answers
+            // `None`, so the record answers for itself.
+            let hooks: Vec<String> = self
+                .interface_hook_targets(&iface_name.text)
+                .into_iter()
+                .filter(|t| t == &record_decl.name.text)
+                .collect();
+            if provided.is_empty() && hooks.is_empty() {
                 self.w.push_str(" {}\n\n");
             } else {
                 self.w.push_str(" {\n");
@@ -296,6 +306,9 @@ impl RustEmitter {
                     } else {
                         self.emit_record_component_accessor(name, sig);
                     }
+                }
+                for t in &hooks {
+                    self.emit_downcast_hook_impl(t, &iface_name.text);
                 }
                 self.w.indent_dec();
                 self.w.emit_indent();

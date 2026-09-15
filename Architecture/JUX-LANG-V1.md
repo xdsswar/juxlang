@@ -2715,11 +2715,60 @@ when its branch cannot fall through -- it ends in `return` or `throw` on
 every path -- because that is exactly the condition under which the code
 after it is unreachable from the null case.
 
-Narrowing is lexical: it ends where the enclosing block does, and a block that
-REBINDS the name gets none of it. `s = maybeNull();` anywhere in the block --
-before the test or after it -- puts the declared `T?` back for the whole block,
-because a lexical rule cannot promise anything about what a later assignment
-holds. Writing THROUGH the binding is not rebinding it: `s.field = v` and
+**A test narrows wherever its outcome is already known, inside an expression
+as well as across statements.** `&&` evaluates its right side only when the
+left was true, `||` only when it was false, and `?:` picks a branch by the
+condition, so each of those positions has proved something:
+
+```java
+if (it != null && it.qty() < 5) { ... }     // right of `&&`: `it` is non-null
+if (it == null || it.qty() == 0) { ... }    // right of `||`: `it` is non-null
+var length = nm != null ? nm.length() : 0;  // then-branch of `?:`
+var label  = nm == null ? "-" : nm;         // else-branch of `?:`
+```
+
+A condition built from `&&` narrows every name any of its `!= null`
+conjuncts tests, in the right-hand operands after that conjunct and in the
+then-branch of an `if` (or `?:`) it controls. Dually, a condition built from
+`||` narrows the names of its `== null` disjuncts after them, in the
+else-branch, and past a guard clause that cannot fall through:
+
+```java
+if (a == null || b == null) {
+    return;
+}
+print(a.name + b.name);                     // both narrowed
+```
+
+Nothing else is inferred: `!(x == null)` and a test hidden inside a called
+method do not narrow. The rebinding rule below applies to all of these
+positions unchanged.
+
+**A member of a `T?` needs a value first.** Reading a field or property of,
+or calling a method on, a receiver whose type is `T?` where no test has
+narrowed it is `E0418`. The three ways through are the ones above: narrow it
+with a null test, reach through the null with `?.` (the result is nullable),
+or assert it with `!!` (a `NullPointerException` when it is null).
+
+```java
+N? cur = find();
+print(cur.v);                // E0418: `cur` may be null
+if (cur != null) {
+    print(cur.v);            // narrowed
+}
+print(cur?.v);               // int?
+print(cur!!.v);              // throws NullPointerException on null
+```
+
+Narrowing is lexical: it ends where the region it covers does, and a region
+that REBINDS the name gets none of it. The region is the branch the test
+proves the name for -- the then-branch of `x != null`, the else-branch of
+`x == null` -- and, for a guard clause, the rest of the enclosing block.
+`s = maybeNull();` anywhere in that region, before the use or after it, puts
+the declared `T?` back for the whole region, because a lexical rule cannot
+promise anything about what a later assignment holds. An assignment OUTSIDE
+the region does not matter: the branch starts from the value just tested.
+Writing THROUGH the binding is not rebinding it: `s.field = v` and
 `xs[0] = v` leave the binding itself alone and narrow normally, which is what
 makes a guard clause followed by writes to the guarded object work at all.
 

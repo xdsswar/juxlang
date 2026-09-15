@@ -657,6 +657,23 @@ impl RustEmitter {
             self.emit_extern_c_call_through(call, &args, ret, true);
             return;
         }
+        // A field of function type called by its bare name (`tap(v)` for a
+        // `(int) -> void tap` field) is the call `this.tap(v)`, unless a local
+        // or parameter of that name shadows it.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && self.bare_call_is_fn_field(&qn.segments[0].text) {
+                let rewritten = CallExpr {
+                    callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                        object: Box::new(Expr::This(qn.span)),
+                        field: qn.segments[0].clone(),
+                        safe: false,
+                        span: qn.span,
+                    })),
+                    ..call.clone()
+                };
+                return self.emit_call(&rewritten);
+            }
+        }
         // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
         // field chain. Re-shape the receiver into the class path it names, so
         // every static-call path below sees what it sees for `Crate.make()`.
@@ -1711,6 +1728,13 @@ impl RustEmitter {
                 // (which would emit a bare `method(args)` that
                 // Rust can't find).
                 let mut as_static_on: Option<String> = None;
+                if self
+                    .enclosing_record
+                    .as_ref()
+                    .is_some_and(|r| r.methods.iter().any(|m| m.name.text == *name && !m.modifiers.contains(&juxc_ast::FnModifier::Static)))
+                {
+                    on_self = true;
+                }
                 if let Some(iface_name) = &self.enclosing_interface {
                     if let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(iface_name) {
                         if let Some(m) = iface.methods.get(name.as_str()) {
@@ -1768,7 +1792,14 @@ impl RustEmitter {
                     self.w.push(')');
                     return;
                 }
-                if on_self {
+                // A method sharing its name with a field (`name()` beside a
+                // `name` field) is spelled `self.name()` directly: through the
+                // `this.name` path the callee would read as the field.
+                let shares_field_name = self
+                    .enclosing_class
+                    .as_deref()
+                    .is_some_and(|class| self.lookup_class_field_ty_in_chain(class, name).is_some());
+                if on_self && shares_field_name {
                     let alias = self.this_alias.as_deref().unwrap_or("self");
                     self.w.push_str(alias);
                     self.w.push('.');
@@ -1783,10 +1814,29 @@ impl RustEmitter {
                         if i > 0 {
                             self.w.push_str(", ");
                         }
-                        self.emit_expr(arg);
+                        self.emit_call_arg_value(call, i, arg);
                     }
                     self.emitting_format_arg = prev;
                     self.w.push(')');
+                    return;
+                }
+                if on_self {
+                    // Java's implicit `this`: `touch(n)` IS `this.touch(n)`,
+                    // so it is emitted through that path and gets everything
+                    // it does -- a shared argument where the caller reads the
+                    // value again, the receiver borrow rules, the overload
+                    // suffix. Emitting a bare `self.touch(n)` here moved `n`
+                    // into the first of two calls.
+                    let rewritten = CallExpr {
+                        callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(qn.span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        })),
+                        ..call.clone()
+                    };
+                    self.emit_call(&rewritten);
                     return;
                 }
             }
@@ -2061,6 +2111,12 @@ impl RustEmitter {
                         self.w.push_str(", ");
                     }
                     self.emit_expr(arg);
+                    // The closure takes its arguments by value, so a place
+                    // read again after the call passes a copy (a record, a
+                    // String) or a shared handle (a class object).
+                    if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
+                        self.w.push_str(".clone()");
+                    }
                 }
                 self.emitting_format_arg = prev;
                 self.w.push(')');
@@ -4077,6 +4133,17 @@ impl RustEmitter {
         let Some(recv_ty) = recv_ty else {
             return false;
         };
+        // A `String?` local a null test has narrowed (§7.10) is a `String`
+        // here: its declared type is still recorded as nullable, but the
+        // receiver emits unwrapped, so `nm.length()` is the String method.
+        let recv_ty = match (recv_ty, &*f.object) {
+            (juxc_tycheck::Ty::Nullable(inner), Expr::Path(qn))
+                if qn.segments.len() == 1 && self.local_is_narrowed(&qn.segments[0].text) =>
+            {
+                *inner
+            }
+            (other, _) => other,
+        };
         // The Jux native array facade (`int[]`, `T[]`) — distinct from the
         // rust.std collections, which carry their real Rust method surface.
         let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
@@ -5235,41 +5302,61 @@ impl RustEmitter {
                 true
             }
             "substring" => {
-                // `s.substring(start, end)` — char-indexed slice — and the
-                // one-arg `s.substring(start)`, which runs to the end. The
-                // one-arg form used to fall through this code emitting an
-                // empty `take((() - start))`, which reached rustc as
-                // "cannot subtract {integer} from ()".
-                self.w.push('(');
+                // `s.substring(start, end)` is a char-indexed slice and the
+                // one-arg `s.substring(start)` runs to the end. Both go
+                // through the prelude's `jux_substring`, which throws
+                // `IndexOutOfBoundsException` for a range outside the string.
+                self.w.push_str("crate::jux_substring(&");
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".chars().skip((");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
+                self.w.push_str(", ");
                 if let Some(start) = call.args.first() {
-                    self.emit_expr(start);
+                    self.emit_index_as_isize(start);
                 }
-                self.w.push_str(") as usize)");
-                if let Some(end) = call.args.get(1) {
-                    self.w.push_str(".take(((");
-                    self.emit_expr(end);
-                    self.w.push_str(") - (");
-                    if let Some(start) = call.args.first() {
-                        self.emit_expr(start);
+                match call.args.get(1) {
+                    Some(end) => {
+                        self.w.push_str(", Some(");
+                        self.emit_index_as_isize(end);
+                        self.w.push_str("))");
                     }
-                    self.w.push_str(")) as usize)");
+                    None => self.w.push_str(", None)"),
                 }
                 self.emitting_format_arg = prev;
-                self.w.push_str(".collect::<String>())");
                 true
             }
             "charAt" => {
+                self.w.push_str("crate::jux_char_at(&");
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".chars().nth((");
-                self.emit_call_args(call);
-                self.w.push_str(") as usize).unwrap()");
+                self.w.push_str(", ");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(index) = call.args.first() {
+                    self.emit_index_as_isize(index);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Emit a character index for the prelude's `String` helpers, which take
+    /// `isize` (Jux `int`). An `int` expression is already one; a narrower or
+    /// unsigned index is converted, so a negative `long` is still reported
+    /// as out of range rather than wrapped into a huge `usize`.
+    fn emit_index_as_isize(&mut self, index: &Expr) {
+        let is_int = matches!(
+            self.expr_types.get(&crate::exprs::expr_span_of(index)),
+            Some(juxc_tycheck::Ty::Primitive(juxc_tycheck::Primitive::Int))
+        ) || matches!(index, Expr::Literal(_));
+        if is_int {
+            self.emit_expr(index);
+        } else {
+            self.w.push('(');
+            self.emit_expr(index);
+            self.w.push_str(") as isize");
         }
     }
 
@@ -5359,6 +5446,41 @@ impl RustEmitter {
     /// same stored value. When `collection_args_prehoisted` is set the
     /// argument is already a coerced temp, so the ladder is skipped (the
     /// bare temp is emitted) — see that flag's doc.
+    /// Whether a bare call `name(...)` inside a class body calls a field of
+    /// function type on `this`: the enclosing class (or an ancestor) has such
+    /// a field and no method of that name, and no local or parameter in scope
+    /// is called `name`.
+    fn bare_call_is_fn_field(&self, name: &str) -> bool {
+        let Some(class) = self.enclosing_class.as_deref() else {
+            return false;
+        };
+        if self.local_types.iter().any(|scope| scope.contains_key(name))
+            || self.current_fn_params.iter().any(|p| p == name)
+        {
+            return false;
+        }
+        // Walk the class and its ancestors: the nearest declaration wins, and
+        // a method there is a method call, not a field call.
+        let mut cursor = Some(class.to_string());
+        let mut depth = 0;
+        while let Some(current) = cursor {
+            let Some(sig) = self.lookup_class_by_bare_or_fqn(&current) else {
+                return false;
+            };
+            if sig.methods.contains_key(name) || depth > 64 {
+                return false;
+            }
+            if let Some(field) = sig.fields.get(name) {
+                return !field.is_static && field.ty.closure_shape().is_some();
+            }
+            cursor = sig.extends_fqn.clone().or_else(|| {
+                sig.extends.as_ref().and_then(|t| t.name.segments.last()).map(|s| s.text.clone())
+            });
+            depth += 1;
+        }
+        false
+    }
+
     fn emit_collection_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
         // A lambda flowing into a foreign `impl FnMut(..)` param lowers to a
         // BARE Rust closure, not the default `Rc<dyn Fn>` (§G.3). The generic

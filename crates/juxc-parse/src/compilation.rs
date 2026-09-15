@@ -523,6 +523,10 @@ impl<'a> Parser<'a> {
             )?;
             return Some(TopLevelDecl::Class(class_decl));
         }
+        if is_sealed_top && !is_abstract_top && !is_final_top && self.at_kw(Keyword::Interface) {
+            let interface_decl = self.parse_interface_decl(annotations, visibility, true)?;
+            return Some(TopLevelDecl::Interface(interface_decl));
+        }
         if is_abstract_top || is_final_top || is_sealed_top {
             // A class modifier was consumed but no `class` followed —
             // surface the diagnostic now so the user gets a clear
@@ -554,7 +558,7 @@ impl<'a> Parser<'a> {
             return Some(TopLevelDecl::Record(record_decl));
         }
         if self.at_kw(Keyword::Interface) {
-            let interface_decl = self.parse_interface_decl(annotations, visibility)?;
+            let interface_decl = self.parse_interface_decl(annotations, visibility, false)?;
             return Some(TopLevelDecl::Interface(interface_decl));
         }
         if self.at_kw(Keyword::Type) {

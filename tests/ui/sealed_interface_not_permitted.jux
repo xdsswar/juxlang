@@ -1,0 +1,13 @@
+public sealed interface Shape permits Circle, Square {}
+public record Circle(double r) implements Shape {}
+public record Square(double side) implements Shape {}
+public class Blob implements Shape {}
+public record Dot(int x) implements Shape {}
+
+public String describe(Shape s) {
+    return switch (s) {
+        case Circle c -> "circle";
+    };
+}
+
+public void main() { print(describe(new Circle(1.0))); }

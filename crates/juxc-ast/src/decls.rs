@@ -247,6 +247,13 @@ pub struct InterfaceDecl {
     /// a constant declaration; an initializer is required because
     /// the field can't be assigned elsewhere.
     pub fields: Vec<FieldDecl>,
+    /// `true` for `sealed interface I permits A, B`: only the types in
+    /// [`Self::permits`] may implement or extend it, which makes a `switch`
+    /// over an `I` exhaustive once every one of them has an arm.
+    pub is_sealed: bool,
+    /// The bare type names a sealed interface's `permits` clause lists.
+    /// Empty for an interface that is not sealed.
+    pub permits: Vec<Ident>,
     /// Span covering the whole `interface Name { … }` declaration.
     pub span: Span,
 }

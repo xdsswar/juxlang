@@ -1373,6 +1373,10 @@ pub struct InterfaceSig {
     /// Drives the `Box<dyn Trait>` (owned foreign trait object) vs
     /// `Rc<dyn Trait>` (Jux-internal shared) wrapper choice in the backend.
     pub is_external: bool,
+    /// `sealed interface`: only [`Self::permits`] may implement it.
+    pub is_sealed: bool,
+    /// Bare names from a sealed interface's `permits` clause.
+    pub permits: Vec<String>,
     /// The real, fully-qualified Rust path of a foreign trait
     /// (`std::io::Read`), from the stub's `@rust("...")` annotation. Mirrors
     /// [`ClassSig::rust_path`], and the backend needs it for a reason a class
@@ -1558,6 +1562,7 @@ pub fn build_workspace(
     // final/sealed extends, final-method override checks, and
     // `@Override`-annotation verification.
     check_final_and_sealed_extends(&table, diagnostics);
+    check_sealed_interface_implementers(&table, diagnostics);
     check_final_method_overrides(&table, diagnostics);
     check_override_annotations(&table, diagnostics);
     check_abstract_methods_implemented(&table, diagnostics);
@@ -2451,6 +2456,10 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
             // Phase-1; cross-package implements is unusual.
             let key = if table.interfaces.contains_key(bare) {
                 bare.to_string()
+            } else if let Some(fqn) =
+                table.interfaces.keys().find(|fqn| fqn_bare(fqn) == bare).cloned()
+            {
+                fqn
             } else {
                 // Search FQNs for a matching bare suffix.
                 table
@@ -2464,7 +2473,8 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
                     .cloned()
                     .unwrap_or_else(|| bare.to_string())
             };
-            if table.interfaces.contains_key(&key) {
+            if let Some(iface) = table.interfaces.get(&key) {
+                check_sealed_interface_permits(iface, &key, child_name, impl_ty.span, diagnostics);
                 continue; // valid implements
             }
             // Decide which non-interface kind it is (if any) for a
@@ -2491,6 +2501,57 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
                     )
                     .with_span(impl_ty.span),
                 );
+            }
+        }
+    }
+}
+
+/// E0422 for a sealed interface (LANG-V1 §7): `implementer` implements or
+/// extends `iface`, which lists its permitted types, and is not among them.
+fn check_sealed_interface_permits(
+    iface: &InterfaceSig,
+    iface_name: &str,
+    implementer: &str,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !iface.is_sealed || iface.permits.iter().any(|p| p == fqn_bare(implementer)) {
+        return;
+    }
+    diagnostics.push(
+        Diagnostic::error(
+            code::Code::E0422_SealedClassNotPermitted,
+            format!(
+                "`{implementer}` is not permitted to implement `{iface_name}` (not listed in its `permits` clause)",
+            ),
+        )
+        .with_span(span),
+    );
+}
+
+/// The sealed-interface half of [`check_final_and_sealed_extends`]'s rule for
+/// the types a class check does not see: a record's `implements` and an
+/// interface's `extends`.
+fn check_sealed_interface_implementers(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    let resolve = |bare: &str| -> Option<(&String, &InterfaceSig)> {
+        table
+            .interfaces
+            .get_key_value(bare)
+            .or_else(|| table.interfaces.iter().find(|(fqn, _)| fqn_bare(fqn) == bare))
+    };
+    for (record_name, record) in &table.records {
+        for ty in &record.implements {
+            let Some(seg) = ty.name.segments.last() else { continue };
+            if let Some((key, iface)) = resolve(&seg.text) {
+                check_sealed_interface_permits(iface, key, record_name, ty.span, diagnostics);
+            }
+        }
+    }
+    for (child_name, child) in &table.interfaces {
+        for ty in &child.extends {
+            let Some(seg) = ty.name.segments.last() else { continue };
+            if let Some((key, iface)) = resolve(&seg.text) {
+                check_sealed_interface_permits(iface, key, child_name, ty.span, diagnostics);
             }
         }
     }
@@ -4118,6 +4179,8 @@ fn insert_interface(
             methods,
             fields,
             is_external,
+            is_sealed: interface_decl.is_sealed,
+            permits: interface_decl.permits.iter().map(|p| p.text.clone()).collect(),
             rust_path: rust_path_annotation(&interface_decl.annotations),
             span: interface_decl.span,
         },

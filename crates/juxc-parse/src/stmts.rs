@@ -1267,7 +1267,10 @@ impl<'a> Parser<'a> {
                     self.parse_expr()?
                 };
                 elements.push(e);
-                if !self.eat(&TokenKind::Comma) {
+                // A trailing comma before `}` is allowed (grammar: array
+                // initializer), so a list written one element per line can
+                // end every line the same way.
+                if !self.eat(&TokenKind::Comma) || self.at(&TokenKind::RBrace) {
                     break;
                 }
             }

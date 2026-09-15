@@ -152,13 +152,16 @@ impl RustEmitter {
                         let bare = name.rsplit('.').next().unwrap_or(name);
                         // Wrapper classes share-clone at use sites; tuple
                         // sentinel and unknown names stay un-cloned.
-                        !self.is_wrapper_class(bare)
+                        (!self.is_wrapper_class(bare)
                             && (self.symbols.classes.contains_key(name.as_str())
                                 || self
                                     .symbols
                                     .classes
                                     .keys()
-                                    .any(|k| k.rsplit('.').next().unwrap_or(k) == bare))
+                                    .any(|k| k.rsplit('.').next().unwrap_or(k) == bare)))
+                            // A record is a value that derives `Clone`, and
+                            // `var l = loans[0];` moved it out of the Vec.
+                            || self.type_name_is_record(name)
                     }
                     _ => false,
                 };

@@ -350,6 +350,25 @@ fn match_simple_not_null_check(cond: &Expr) -> Option<&str> {
     match_null_comparison(cond, juxc_ast::BinaryOp::NotEq)
 }
 
+/// The names `cond` proves non-null when it evaluates to `outcome` (§7.10):
+/// `x != null` when true, `x == null` when false, and through `&&` (true) or
+/// `||` (false) the names on both sides, in source order.
+pub(crate) fn null_tested_names<'e>(cond: &'e Expr, outcome: bool, out: &mut Vec<&'e str>) {
+    match cond {
+        Expr::Binary(b)
+            if (b.op == juxc_ast::BinaryOp::And && outcome)
+                || (b.op == juxc_ast::BinaryOp::Or && !outcome) =>
+        {
+            null_tested_names(&b.left, outcome, out);
+            null_tested_names(&b.right, outcome, out);
+        }
+        _ => {
+            let found = if outcome { match_simple_not_null_check(cond) } else { match_simple_null_check(cond) };
+            out.extend(found);
+        }
+    }
+}
+
 /// `x == null` / `null == x`, with `x` a bare identifier. The mirror of
 /// [`match_simple_not_null_check`]; it proves the binding non-null on the
 /// other side of the branch (§7.10).
@@ -2247,6 +2266,14 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        let holds_concrete_polybase = var.ty.is_none()
+            && matches!(&var.init, Some(Expr::NewObject(n))
+                if n.class_name.segments.last().is_some_and(|s| self.is_poly_base_class(&s.text)));
+        if holds_concrete_polybase {
+            self.concrete_polybase_locals.insert(var.name.text.clone());
+        } else {
+            self.concrete_polybase_locals.remove(&var.name.text);
+        }
         // `ref` local (§M.13): the slot is an `Rc<RefCell<T>>` shared
         // reference. Initializing from another `ref` binding shares
         // the handle; a plain value wraps into a fresh object. The
@@ -4338,7 +4365,7 @@ impl RustEmitter {
     /// The same question `not_null_operand_shares` asks about a `!!` operand,
     /// keyed on the name instead of an expression, because that is what the
     /// `if let` has in hand.
-    fn nullable_local_shares(&self, name: &str) -> bool {
+    pub(crate) fn nullable_local_shares(&self, name: &str) -> bool {
         // Asked the safe way round: share UNLESS the payload is known to be
         // `Copy`. A `var` binding is not always in `local_types` -- an
         // inferred one often is not -- and the two answers are not
@@ -4401,6 +4428,49 @@ impl RustEmitter {
         )
     }
 
+    /// The nullable locals `cond` proves present when it evaluates to
+    /// `outcome`: the names [`null_tested_names`] finds that are `Option`s
+    /// here, each once.
+    pub(crate) fn null_narrowed_locals(&self, cond: &Expr, outcome: bool) -> Vec<String> {
+        let mut names = Vec::new();
+        null_tested_names(cond, outcome, &mut names);
+        let mut out: Vec<String> = Vec::new();
+        for name in names {
+            if self.nullable_locals.contains(name)
+                && !self.pointer_locals.contains_key(name)
+                && !out.iter().any(|n| n == name)
+            {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+
+    /// Whether the nullable local `name` reads as its contents right here:
+    /// inside an operand a null test proved it for, or in a branch where it
+    /// was shadowed with them.
+    pub(crate) fn local_is_narrowed(&self, name: &str) -> bool {
+        self.expr_narrowed.iter().any(|n| n == name) || !self.nullable_locals.contains(name)
+    }
+
+    /// `let x = x.unwrap();` for each name, sharing a non-`Copy` payload so
+    /// the outer binding is still whole after the block, and marking the
+    /// names non-null for the block. Returns the names to put back.
+    fn shadow_narrowed(&mut self, names: &[String]) -> Vec<String> {
+        let mut restored = Vec::new();
+        for name in names {
+            if !self.nullable_locals.contains(name) {
+                continue;
+            }
+            let ident = to_rust_ident(name);
+            let share = if self.nullable_local_shares(name) { ".clone()" } else { "" };
+            self.w.line(&format!("let {ident} = {ident}{share}.unwrap();"));
+            self.nullable_locals.remove(name);
+            restored.push(name.clone());
+        }
+        restored
+    }
+
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
         // Smart-cast bookkeeping: when the condition is `name !=
         // null`, `name` inside the `then` block is the unwrapped
@@ -4425,6 +4495,27 @@ impl RustEmitter {
         let guard_narrows = null_name.is_some()
             && if_stmt.else_branch.is_none()
             && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block);
+        // A condition that is a chain rather than one test
+        // (`it != null && it.qty() < 5`, `a == null || b == null`) narrows
+        // the same way (§7.10), but cannot be an `if let`: the names it
+        // proves present are shadowed with their contents inside the branch
+        // they are proved for, and past a guard clause.
+        let compound = cast_name.is_none()
+            && null_name.is_none()
+            && !matches!(&if_stmt.condition, Expr::TypeTest(t) if t.binder.is_some());
+        // A branch that reassigns a name keeps its `Option` there, as the
+        // checker keeps its `T?`.
+        let then_assigned = juxc_tycheck::assigned::names_assigned_in(&if_stmt.then_block);
+        let then_narrowed: Vec<String> = if compound {
+            self.null_narrowed_locals(&if_stmt.condition, true)
+                .into_iter()
+                .filter(|n| !then_assigned.contains(n))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let else_narrowed =
+            if compound { self.null_narrowed_locals(&if_stmt.condition, false) } else { Vec::new() };
 
         // Type-test smart-cast: `if (x => Dog d) { … }` lowers to
         // `if let Some(d) = x.__jux_as_Dog() { … }` — `d` is a fresh `Dog`
@@ -4465,7 +4556,9 @@ impl RustEmitter {
             }
         }
         self.w.indent_inc();
+        let restored_then = self.shadow_narrowed(&then_narrowed);
         self.emit_block_contents(&if_stmt.then_block);
+        self.nullable_locals.extend(restored_then);
         self.w.indent_dec();
         // Restore: outside the block, the binding regains its
         // declared nullable type for subsequent uses (the next
@@ -4502,7 +4595,19 @@ impl RustEmitter {
                         self.w.push_str(" {\n");
                     }
                     self.w.indent_inc();
+                    // `else if (x != null)` proves `x` for its own branch.
+                    let inner_assigned = juxc_tycheck::assigned::names_assigned_in(&inner.then_block);
+                    let inner_narrowed: Vec<String> = if binder_test.is_none() {
+                        self.null_narrowed_locals(&inner.condition, true)
+                            .into_iter()
+                            .filter(|n| !inner_assigned.contains(n))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let restored_inner = self.shadow_narrowed(&inner_narrowed);
                     self.emit_block_contents(&inner.then_block);
+                    self.nullable_locals.extend(restored_inner);
                     self.w.indent_dec();
                     self.w.emit_indent();
                     self.w.push('}');
@@ -4518,7 +4623,9 @@ impl RustEmitter {
                         self.emit_unwrap_shadow(name);
                         self.nullable_locals.remove(name);
                     }
+                    let restored_else = self.shadow_narrowed(&else_narrowed);
                     self.emit_block_contents(block);
+                    self.nullable_locals.extend(restored_else);
                     self.w.indent_dec();
                     self.w.emit_indent();
                     self.w.push('}');
@@ -4537,6 +4644,12 @@ impl RustEmitter {
                 self.emit_unwrap_shadow(name);
                 self.nullable_locals.remove(name);
             }
+        }
+        if compound
+            && if_stmt.else_branch.is_none()
+            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block)
+        {
+            self.shadow_narrowed(&else_narrowed);
         }
     }
 

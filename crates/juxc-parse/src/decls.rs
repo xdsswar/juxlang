@@ -228,7 +228,7 @@ impl<'a> Parser<'a> {
                             .parse_struct_decl(member_anns.clone(), member_vis)
                             .map(juxc_ast::TopLevelDecl::Class),
                         TokenKind::Kw(Keyword::Interface) => self
-                            .parse_interface_decl(member_anns.clone(), member_vis)
+                            .parse_interface_decl(member_anns.clone(), member_vis, is_sealed)
                             .map(juxc_ast::TopLevelDecl::Interface),
                         TokenKind::Kw(Keyword::Record) => self
                             .parse_record_decl(member_anns.clone(), member_vis)
@@ -838,6 +838,7 @@ impl<'a> Parser<'a> {
         &mut self,
         annotations: Vec<juxc_ast::Annotation>,
         visibility: Visibility,
+        is_sealed: bool,
     ) -> Option<InterfaceDecl> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Interface, "expected `interface` keyword");
@@ -856,6 +857,18 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
+        }
+        // `sealed interface Shape permits Circle, Square` (LANG-V1 §7): the
+        // clause names every type allowed to implement it.
+        let permits = self.parse_permits_clause();
+        if !is_sealed && !permits.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`permits` clause is only valid on a `sealed` class or interface",
+                )
+                .with_span(name.span),
+            );
         }
         self.expect(&TokenKind::LBrace, "'{' to start interface body");
 
@@ -1079,6 +1092,8 @@ impl<'a> Parser<'a> {
             extends,
             methods,
             fields,
+            is_sealed,
+            permits,
             span: start.join(end),
         })
     }

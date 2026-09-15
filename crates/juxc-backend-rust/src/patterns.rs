@@ -37,6 +37,14 @@ impl RustEmitter {
         // "a" => … }` — rather than the owned `String` (which Rust won't
         // compare against `&str` patterns).
         let scrut_is_string = self.scrutinee_is_string(&s.scrutinee);
+        // A scrutinee typed as an interface or an open base class is a trait
+        // object, and `case Ins i ->` asks for its runtime type. Rust has no
+        // pattern for that, so such an arm binds the value by reference and
+        // tests it in the guard through the `__jux_as_<T>` hook; a sealed
+        // hierarchy lowers to an enum and keeps its variant patterns.
+        let dyn_scrutinee = self
+            .cast_source_bare(&s.scrutinee)
+            .filter(|bare| self.source_is_dyn(bare));
         let scrutinee_mark = self.w.len();
         self.emit_expr(&s.scrutinee);
         // Enum `&self` method dispatch: clone the receiver so payload
@@ -85,7 +93,19 @@ impl RustEmitter {
             // keyword itself, which was emitted naked above.
             self.w.push_str("    ");
             let prev_guards = std::mem::take(&mut self.pattern_string_guards);
-            self.emit_pattern(&arm.pattern);
+            let runtime_type_test = match (&arm.pattern, &dyn_scrutinee) {
+                (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, Some(source))
+                    if &type_name.text != source =>
+                {
+                    Some((type_name.text.clone(), to_rust_ident(&binder.text)))
+                }
+                _ => None,
+            };
+            if runtime_type_test.is_some() {
+                self.w.push_str("ref __jux_subject");
+            } else {
+                self.emit_pattern(&arm.pattern);
+            }
             // The arm's bindings shadow any outer name for its guard and body,
             // and a binding typed `T?` is an `Option` the way a nullable local
             // is (`null` when printed, not `None`).
@@ -118,13 +138,27 @@ impl RustEmitter {
             // A string literal nested in a tuple or record pattern came back
             // as a binder; its comparison leads the guard.
             let string_guards = std::mem::replace(&mut self.pattern_string_guards, prev_guards);
+            if let Some((target, binder)) = &runtime_type_test {
+                // `case Ins i when i.ok() ->` needs `i` inside the guard, and
+                // edition 2021 has no `if let` guards, so the test binds it
+                // in a `match` of its own.
+                self.w.push_str(" if ");
+                match &arm.guard {
+                    Some(guard) => {
+                        self.w.push_str(&format!("match __jux_subject.__jux_as_{target}() {{ Some({binder}) => "));
+                        self.emit_expr(guard);
+                        self.w.push_str(", None => false }");
+                    }
+                    None => self.w.push_str(&format!("__jux_subject.__jux_as_{target}().is_some()")),
+                }
+            }
             for (i, (binder, literal)) in string_guards.iter().enumerate() {
                 self.w.push_str(if i == 0 { " if " } else { " && " });
                 self.w.push_str(binder);
                 self.w.push_str(" == ");
                 self.emit_rust_string_literal(literal);
             }
-            if let Some(guard) = &arm.guard {
+            if let Some(guard) = arm.guard.as_ref().filter(|_| runtime_type_test.is_none()) {
                 if string_guards.is_empty() {
                     self.w.push_str(" if ");
                     self.emit_expr(guard);
@@ -139,6 +173,10 @@ impl RustEmitter {
             // unbox (`let l = *l;`) so the arm body sees a plain enum value
             // (the decl boxed the self-referential slot to avoid E0072).
             let rebinds = self.boxed_recursive_binders(&arm.pattern);
+            // The arm matched, so the hook answers `Some`: bind its value.
+            let downcast_let = runtime_type_test.as_ref().map(|(target, binder)| {
+                format!("let Some({binder}) = __jux_subject.__jux_as_{target}() else {{ unreachable!() }};")
+            });
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {
                     // Per-arm nullable wrap: skip when the value
@@ -151,10 +189,14 @@ impl RustEmitter {
                         && !self.expression_is_already_nullable(e);
                     // An expression-bodied arm with boxed binders becomes a
                     // block so the unbox `let`s can precede the value.
-                    if !rebinds.is_empty() {
+                    if !rebinds.is_empty() || downcast_let.is_some() {
                         self.w.push_str("{ ");
                         for b in &rebinds {
                             self.w.push_str(&format!("let {b} = *{b}; "));
+                        }
+                        if let Some(bind) = &downcast_let {
+                            self.w.push_str(bind);
+                            self.w.push(' ');
                         }
                     }
                     if wrap {
@@ -164,7 +206,7 @@ impl RustEmitter {
                     if wrap {
                         self.w.push(')');
                     }
-                    if !rebinds.is_empty() {
+                    if !rebinds.is_empty() || downcast_let.is_some() {
                         self.w.push_str(" }");
                     }
                 }
@@ -172,6 +214,11 @@ impl RustEmitter {
                     self.w.push_str("{\n");
                     for bind in &rebinds {
                         self.w.push_str(&format!("        let {bind} = *{bind};\n"));
+                    }
+                    if let Some(bind) = &downcast_let {
+                        self.w.push_str("        ");
+                        self.w.push_str(bind);
+                        self.w.push('\n');
                     }
                     // Statements inside a block-bodied arm sit at the
                     // arm-depth + 1 (two levels of 4-space prefix from
@@ -202,6 +249,22 @@ impl RustEmitter {
             }
             self.local_types.pop();
             self.w.push_str(",\n");
+        }
+        // Type patterns over a trait object are guards, which Rust does not
+        // count toward exhaustiveness. The checker has already proved the arms
+        // cover every permitted type of a sealed interface (E0440 otherwise),
+        // so the arm Rust asks for can never run.
+        let tests_runtime_type = dyn_scrutinee.as_ref().is_some_and(|source| {
+            s.arms.iter().any(|arm| {
+                matches!(&arm.pattern, juxc_ast::Pattern::TypeBind { type_name, .. } if &type_name.text != source)
+            })
+        });
+        let has_catch_all = s.arms.iter().any(|arm| {
+            arm.guard.is_none()
+                && matches!(&arm.pattern, juxc_ast::Pattern::Wildcard(_) | juxc_ast::Pattern::Bind(_))
+        });
+        if tests_runtime_type && !has_catch_all {
+            self.w.push_str("    _ => unreachable!(\"every permitted type has an arm\"),\n");
         }
         self.w.push('}');
         if hoist_scrutinee {
@@ -244,7 +307,7 @@ impl RustEmitter {
 
     fn collect_typed_binders(&self, p: &juxc_ast::Pattern, out: &mut Vec<(String, juxc_tycheck::Ty)>) {
         match p {
-            juxc_ast::Pattern::Bind(name) => {
+            juxc_ast::Pattern::Bind(name) | juxc_ast::Pattern::TypeBind { binder: name, .. } => {
                 if let Some(ty) = self.expr_types.get(&name.span) {
                     out.push((name.text.clone(), ty.clone()));
                 }

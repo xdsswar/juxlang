@@ -1,0 +1,52 @@
+// A sealed interface (LANG-V1 §7): `permits` names every type that may
+// implement it, so a switch with an arm per permitted type needs no
+// `default`. Records and classes can both implement one, and a record's
+// methods read its components by their bare names.
+
+public sealed interface Shape permits Circle, Square, Tri {
+    double area();
+}
+
+public record Circle(double r) implements Shape {
+    public double area() { return 3.0 * r * r; }
+    public double diameter() { return r * 2.0; }
+    public double doubled() { return diameter() * 2.0; }
+}
+
+public record Tri(double base, double height) implements Shape {
+    public double area() { return base * height / 2.0; }
+}
+
+public class Square implements Shape {
+    public double side;
+    public Square(double side) { this.side = side; }
+    public double area() { return side * side; }
+}
+
+public String describe(Shape s) {
+    return switch (s) {
+        case Circle c -> "circle r=" + c.r;
+        case Square q -> "square side=" + q.side;
+        case Tri t -> "triangle " + t.base + "x" + t.height;
+    };
+}
+
+public String size(Shape s) {
+    switch (s) {
+        case Circle c when c.r > 10.0 -> { return "huge circle"; }
+        case Circle c -> { return "circle"; }
+        default -> { return "not a circle"; }
+    }
+}
+
+public void main() {
+    Shape[] shapes = { new Circle(1.0), new Square(2.0), new Tri(3.0, 4.0), new Circle(20.0), };
+    for (var s : shapes) {
+        print(describe(s) + " area=" + s.area() + " " + size(s));
+    }
+    Shape one = new Circle(2.5);
+    if (one => Circle c) {
+        print("diameter " + c.diameter() + " doubled " + c.doubled());
+    }
+    print(one => Square);
+}

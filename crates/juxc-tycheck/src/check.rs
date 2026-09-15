@@ -2212,6 +2212,28 @@ impl<'a> Checker<'a> {
             self.in_async = saved_async;
             self.env.pop_scope();
         }
+        // A lambda stored by a field initializer
+        // (`(double) -> void cb = x -> print("v " + x);`) is checked the way
+        // one stored into a local is: its untyped parameters take the slot's
+        // types, so `x` is a `double` in the body and prints as `5.0`, and
+        // the body's own mistakes are reported. `this` is in scope, as in an
+        // `init` block, since the initializer runs during construction.
+        for field in &class.fields {
+            let (Some(default @ Expr::Lambda(_)), Some(fty)) = (&field.default, &field.ty) else {
+                continue;
+            };
+            let Ty::Fn { params, .. } = ty_from_ref(fty, &self.env, self.symbols) else {
+                continue;
+            };
+            self.env.push_scope();
+            if !field.is_static {
+                self.env.declare("this", this_ty.clone());
+            }
+            self.lambda_slot_params = Some(params);
+            self.check_expr(default);
+            self.lambda_slot_params = None;
+            self.env.pop_scope();
+        }
         // Destructor block (§6.6 / §S.5). At most one per class; the
         // body runs with `this` in scope, synchronously.
         if class.drop_blocks.len() > 1 {
@@ -3330,17 +3352,92 @@ impl<'a> Checker<'a> {
         self.assigned_in_block = saved;
     }
 
-    /// `(name, non-null type)` when `name` is a binding currently typed `T?`
-    /// that this block never assigns to -- the two conditions a null-test
-    /// narrowing needs. `None` otherwise, which reads as "do not narrow".
-    fn narrowable(&self, name: &str) -> Option<(String, Ty)> {
-        if self.assigned_in_block.contains(name) {
-            return None;
+    /// E0418 (§7.10): `recv.member` where `recv` is `T?` and no test has
+    /// narrowed it. Only a member the `T` inside actually has is reported --
+    /// a field or property for a read, a method for a call -- so an
+    /// `Option` method on a `T?` (`maybe.unwrap()`) and a name `T` lacks
+    /// (reported as unknown elsewhere) are left alone.
+    fn check_nullable_receiver(&mut self, f: &juxc_ast::FieldExpr, is_call: bool) {
+        if f.safe {
+            return;
         }
-        match self.env.lookup(name) {
-            Some(Ty::Nullable(inner)) => Some((name.to_string(), (**inner).clone())),
-            _ => None,
+        let Ty::Nullable(inner) = infer_expr(&f.object, &self.env, self.symbols) else {
+            return;
+        };
+        let Ty::User { name, .. } = *inner else {
+            return;
+        };
+        let member = f.field.text.as_str();
+        let belongs_to_inner = if is_call {
+            self.symbols.lookup_method(&name, member).is_some()
+        } else {
+            self.symbols.lookup_field(&name, member).is_some()
+                || self.symbols.lookup_property(&name, member).is_some()
+        };
+        if !belongs_to_inner {
+            return;
         }
+        fn spelled(e: &Expr) -> Option<String> {
+            match e {
+                Expr::Path(qn) => Some(qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".")),
+                Expr::This(_) => Some("this".to_string()),
+                Expr::Field(inner) => spelled(&inner.object).map(|o| format!("{o}.{}", inner.field.text)),
+                _ => None,
+            }
+        }
+        let shown = spelled(&f.object).unwrap_or_else(|| "this value".to_string());
+        let bare = name.rsplit('.').next().unwrap_or(&name);
+        let what = if is_call { format!("`{member}()`") } else { format!("`.{member}`") };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0418_MemberOfNullable,
+                format!("`{shown}` may be null here (its type is `{bare}?`), so {what} has no value to reach"),
+            )
+            .with_span(f.span)
+            .with_help(format!(
+                "test it first (`if ({shown} != null) {{ ... }}`), reach through the null with `?.`, \
+                 or assert it with `!!`"
+            )),
+        );
+    }
+
+    /// Every binding `cond` proves non-null when it evaluates to `outcome`,
+    /// each with its non-null type (§7.10): the `!= null` conjuncts of an
+    /// `&&` chain when true, the `== null` disjuncts of an `||` chain when
+    /// false. Bindings the block reassigns are left out, as for any
+    /// narrowing.
+    fn narrowings(
+        &self,
+        cond: &Expr,
+        outcome: bool,
+        assigned: &std::collections::HashSet<String>,
+    ) -> Vec<(String, Ty)> {
+        let mut names = Vec::new();
+        null_tested_names(cond, outcome, &mut names);
+        let mut out: Vec<(String, Ty)> = Vec::new();
+        for name in names {
+            if out.iter().any(|(n, _)| n == name) || assigned.contains(name) {
+                continue;
+            }
+            if let Some(Ty::Nullable(inner)) = self.env.lookup(name) {
+                out.push((name.to_string(), (**inner).clone()));
+            }
+        }
+        out
+    }
+
+    /// Run `check` with `narrowed` declared non-null in a scope of its own.
+    fn check_narrowed(&mut self, narrowed: &[(String, Ty)], check: impl FnOnce(&mut Self)) {
+        if narrowed.is_empty() {
+            check(self);
+            return;
+        }
+        self.env.push_scope();
+        for (name, ty) in narrowed {
+            self.env.declare(name, ty.clone());
+        }
+        check(self);
+        self.env.pop_scope();
     }
 
     /// §S.2.6: the operands of an arithmetic or bitwise operator must meet in one
@@ -3708,23 +3805,32 @@ impl<'a> Checker<'a> {
                 // the then-branch cannot fall through, for everything after
                 // the `if` as well. That last form is the guard clause, and
                 // it is the one this language could not previously express.
-                let narrow_then = match_null_test(&if_stmt.condition, false)
-                    .and_then(|n| self.narrowable(n));
-                let narrow_else = match_null_test(&if_stmt.condition, true)
-                    .and_then(|n| self.narrowable(n));
+                // A branch narrows unless the BRANCH reassigns the name: the
+                // value tested is the value the branch starts with. Code after
+                // a guard clause is the rest of the enclosing block, so that
+                // form asks the enclosing block.
+                let then_assigned = crate::assigned::names_assigned_in(&if_stmt.then_block);
+                let narrow_then = self.narrowings(&if_stmt.condition, true, &then_assigned);
+                let else_assigned = match if_stmt.else_branch.as_deref() {
+                    Some(ElseBranch::Block(b)) => crate::assigned::names_assigned_in(b),
+                    _ => self.assigned_in_block.clone(),
+                };
+                let narrow_else = self.narrowings(&if_stmt.condition, false, &else_assigned);
+                let enclosing_assigned = self.assigned_in_block.clone();
+                let narrow_after = self.narrowings(&if_stmt.condition, false, &enclosing_assigned);
 
                 self.env.push_scope();
                 if let Some((name, ty)) = &smartcast {
                     self.env.declare(name, ty.clone());
                 }
-                if let Some((name, ty)) = &narrow_then {
+                for (name, ty) in &narrow_then {
                     self.env.declare(name, ty.clone());
                 }
                 self.check_block(&if_stmt.then_block);
                 self.env.pop_scope();
                 if let Some(else_branch) = &if_stmt.else_branch {
                     self.env.push_scope();
-                    if let Some((name, ty)) = &narrow_else {
+                    for (name, ty) in &narrow_else {
                         self.env.declare(name, ty.clone());
                     }
                     self.check_else_branch(else_branch);
@@ -3735,10 +3841,10 @@ impl<'a> Checker<'a> {
                 // only when the test was false -- so the binding is non-null
                 // for the rest of the enclosing block, which is the scope
                 // this `declare` lands in.
-                if let Some((name, ty)) = narrow_else {
-                    if if_stmt.else_branch.is_none()
-                        && !crate::return_check::body_can_fall_through(&if_stmt.then_block)
-                    {
+                if if_stmt.else_branch.is_none()
+                    && !crate::return_check::body_can_fall_through(&if_stmt.then_block)
+                {
+                    for (name, ty) in narrow_after {
                         self.env.declare(&name, ty);
                     }
                 }
@@ -4123,8 +4229,13 @@ impl<'a> Checker<'a> {
                     }
                     None
                 };
+                let then_assigned = crate::assigned::names_assigned_in(&if_stmt.then_block);
+                let narrow_then = self.narrowings(&if_stmt.condition, true, &then_assigned);
                 self.env.push_scope();
                 if let Some((name, ty)) = &smartcast {
+                    self.env.declare(name, ty.clone());
+                }
+                for (name, ty) in &narrow_then {
                     self.env.declare(name, ty.clone());
                 }
                 self.check_block(&if_stmt.then_block);
@@ -4277,6 +4388,7 @@ impl<'a> Checker<'a> {
 
             Expr::Field(f) => {
                 self.check_expr(&f.object);
+                self.check_nullable_receiver(f, false);
                 self.check_field_access(f);
             }
 
@@ -4432,7 +4544,16 @@ impl<'a> Checker<'a> {
 
             Expr::Binary(b) => {
                 self.check_expr(&b.left);
-                self.check_expr(&b.right);
+                // §7.10: `&&` reads its right side only when the left was
+                // true, `||` only when it was false, so a null test on the
+                // left narrows the right.
+                let nothing_assigned = std::collections::HashSet::new();
+                let proven = match b.op {
+                    BinaryOp::And => self.narrowings(&b.left, true, &nothing_assigned),
+                    BinaryOp::Or => self.narrowings(&b.left, false, &nothing_assigned),
+                    _ => Vec::new(),
+                };
+                self.check_narrowed(&proven, |this| this.check_expr(&b.right));
                 self.check_numeric_operands(b);
                 self.check_pointer_operators(b);
                 if !self.in_unsafe
@@ -4553,7 +4674,8 @@ impl<'a> Checker<'a> {
                         || matches!(&arm.pattern, Pattern::Tuple(..))
                         || matches!(&arm.pattern, Pattern::EnumVariant { path, .. }
                             if self.pattern_record_fqn(path).is_some())
-                        || matches!(&arm.pattern, Pattern::EnumVariant { args, .. } if !args.is_empty());
+                        || matches!(&arm.pattern, Pattern::EnumVariant { args, .. } if !args.is_empty())
+                        || matches!(&arm.pattern, Pattern::TypeBind { .. });
                     let mut bindings = Vec::new();
                     if destructures {
                         self.check_pattern_shape(&arm.pattern, &scrutinee_ty, &mut bindings);
@@ -4724,8 +4846,11 @@ impl<'a> Checker<'a> {
             }
             Expr::Ternary(t) => {
                 self.check_expr(&t.condition);
-                self.check_expr(&t.then_branch);
-                self.check_expr(&t.else_branch);
+                let nothing_assigned = std::collections::HashSet::new();
+                let when_true = self.narrowings(&t.condition, true, &nothing_assigned);
+                let when_false = self.narrowings(&t.condition, false, &nothing_assigned);
+                self.check_narrowed(&when_true, |this| this.check_expr(&t.then_branch));
+                self.check_narrowed(&when_false, |this| this.check_expr(&t.else_branch));
                 // Condition must be `bool`. Branches should
                 // unify; Phase 1 keeps the unification check
                 // permissive and lets rustc surface a real
@@ -5599,6 +5724,17 @@ impl<'a> Checker<'a> {
             } else {
                 return;
             }
+        } else if let Some(i) = self.symbols.interfaces.get(scrut_name) {
+            // A sealed interface's implementers are exactly its `permits`
+            // list, so type patterns naming each of them cover it.
+            if i.is_sealed && !i.permits.is_empty() {
+                SealedKind::Class {
+                    name: scrut_name,
+                    permits: i.permits.clone(),
+                }
+            } else {
+                return;
+            }
         } else {
             return;
         };
@@ -5630,7 +5766,14 @@ impl<'a> Checker<'a> {
         }
         let (scrut_label, all, scrut_name) = match &kind {
             SealedKind::Enum { name, variants } => ("enum", variants.clone(), *name),
-            SealedKind::Class { name, permits } => ("sealed class", permits.clone(), *name),
+            SealedKind::Class { name, permits } => {
+                let label = if self.symbols.interfaces.contains_key(*name) {
+                    "sealed interface"
+                } else {
+                    "sealed class"
+                };
+                (label, permits.clone(), *name)
+            }
         };
         let missing: Vec<String> = all.into_iter().filter(|v| !covered.contains(v)).collect();
         if missing.is_empty() {
@@ -7233,6 +7376,9 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        if let Expr::Field(f) = c.callee.as_ref() {
+            self.check_nullable_receiver(f, true);
+        }
         // A call THROUGH a function pointer (§L.6.4): `f(x)` on a local or
         // parameter, `table.name(x)` on a field. It is checked here in full,
         // because the rest of this function would look for a function or a
@@ -10308,6 +10454,20 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
 /// `x == null` (when `want_eq`) or `x != null` (when not), in either operand
 /// order, with `x` a bare single-segment name. `None` for every other shape --
 /// narrowing only claims what it can see plainly.
+/// The names `cond` proves non-null when it evaluates to `outcome`, in source
+/// order: `x != null` itself when true, `x == null` when false, and through
+/// `&&` (true) or `||` (false) the names of both sides. Duplicates are kept;
+/// the caller drops them.
+fn null_tested_names<'e>(cond: &'e Expr, outcome: bool, out: &mut Vec<&'e str>) {
+    match cond {
+        Expr::Binary(b) if (b.op == BinaryOp::And && outcome) || (b.op == BinaryOp::Or && !outcome) => {
+            null_tested_names(&b.left, outcome, out);
+            null_tested_names(&b.right, outcome, out);
+        }
+        _ => out.extend(match_null_test(cond, !outcome)),
+    }
+}
+
 fn match_null_test(cond: &Expr, want_eq: bool) -> Option<&str> {
     let Expr::Binary(b) = cond else { return None };
     let matches_op = match b.op {
