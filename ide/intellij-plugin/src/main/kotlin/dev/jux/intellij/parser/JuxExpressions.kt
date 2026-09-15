@@ -1,8 +1,10 @@
 package dev.jux.intellij.parser
 
 import com.intellij.lang.PsiBuilder
+import com.intellij.psi.TokenType
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.tree.TokenSet
+import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
 
@@ -64,6 +66,17 @@ private val CAST_FOLLOW: TokenSet = TokenSet.orSet(
     TYPEOF_SET,
 )
 
+/**
+ * Operators that also begin a unary operand: `(void*) &n`, `(int) *p`,
+ * `(int) -n` (Layout-ABI §L.6.2). They make `(X)` a cast only when `X` is
+ * unmistakably a type -- a primitive, `void`, or a type ending in `*`, `[]`,
+ * `?` or `>` -- so `(count) * 2` stays a product, as the compiler reads it.
+ */
+private val CAST_UNARY_FOLLOW: TokenSet = TokenSet.create(T.AMP, T.STAR, T.MINUS)
+
+/** Type-shape tokens that can end a type and never an expression in `( )`. */
+private val TYPE_MARKER_END: TokenSet = TokenSet.create(T.STAR, T.RBRACKET, T.QUESTION, T.GT)
+
 /** Entry point: parse a full expression (including lambdas and assignment). */
 fun PsiBuilder.parseExpression(): PsiBuilder.Marker? {
     tryParseLambda()?.let { return it }
@@ -113,7 +126,9 @@ private fun PsiBuilder.parseBinary(minPrec: Int): PsiBuilder.Marker? {
     var left = parseUnary() ?: return null
     while (true) {
         val op = tokenType
-        val prec = binaryPrecedence(op)
+        // `x in xs` (§O.2.4): `in` is contextual, an identifier in operator
+        // position, and binds like the comparisons.
+        val prec = if (atContextual("in")) 7 else binaryPrecedence(op)
         if (prec < 0 || prec < minPrec) break
         val m = left.precede()
         advanceLexer() // operator
@@ -135,6 +150,13 @@ private fun PsiBuilder.parseBinary(minPrec: Int): PsiBuilder.Marker? {
         left = m
     }
     return left
+}
+
+/** The token before the current one, skipping whitespace. */
+private fun PsiBuilder.previousTokenType(): IElementType? {
+    var step = -1
+    while (rawLookup(step) === TokenType.WHITE_SPACE) step--
+    return rawLookup(step)
 }
 
 private fun binaryPrecedence(op: IElementType?): Int = when (op) {
@@ -173,8 +195,12 @@ private fun PsiBuilder.parseCast(): PsiBuilder.Marker? {
     if (!at(T.LPAREN)) return null
     val m = mark()
     advanceLexer() // `(`
+    val firstText = tokenText
     parseType()
-    if (at(T.RPAREN) && CAST_FOLLOW.contains(lookAhead(1))) {
+    val next = lookAhead(1)
+    val unmistakablyType = firstText in JuxKeywords.PRIMITIVES || firstText == "void" ||
+        TYPE_MARKER_END.contains(previousTokenType())
+    if (at(T.RPAREN) && (CAST_FOLLOW.contains(next) || (unmistakablyType && CAST_UNARY_FOLLOW.contains(next)))) {
         advanceLexer() // `)`
         parseUnary()
         m.done(E.CAST_EXPRESSION)
@@ -418,7 +444,7 @@ private fun PsiBuilder.parseArgument() {
     }
     // Out-arg mode (§6.x): `tryParse("42", out n)` — `out` is contextual, so
     // it only counts when an identifier follows.
-    if (atContextual("out") && lookAhead(1) === T.IDENTIFIER) advanceLexer()
+    if (atContextual("out") && (lookAhead(1) === T.IDENTIFIER || lookAhead(1) === T.THIS_KW)) advanceLexer()
     parseExpression()
 }
 

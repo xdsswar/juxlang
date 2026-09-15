@@ -17,6 +17,7 @@ import com.intellij.psi.util.elementType
 import com.intellij.util.ProcessingContext
 import dev.jux.intellij.JuxLanguage
 import dev.jux.intellij.highlight.JuxKeywords
+import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxNamedElement
@@ -289,13 +290,19 @@ class JuxCompletionContributor : CompletionContributor() {
 
         // Tier 4: file-level type names (`Model m = new Model();`) — no import.
         val file = parameters.originalFile
-        // A native fn is only callable inside an `unsafe` block (E0506 elsewhere),
-        // so only offer them when the caret is within one — otherwise they'd be
-        // wrong-scope noise ranked above the user's own types.
+        // A native fn is only callable in an unsafe context (E0506 elsewhere):
+        // an `unsafe { }` block, or the body of a function declared `unsafe`
+        // (§L.5.1). Only offer them there — otherwise they'd be wrong-scope
+        // noise ranked above the user's own types.
         val insideUnsafe = run {
             var p: PsiElement? = parameters.position
             while (p != null && p !is JuxFile) {
                 if (p.elementType === E.UNSAFE_STATEMENT) return@run true
+                if (p.elementType === E.METHOD_DECLARATION &&
+                    p.node.findChildByType(E.MODIFIER_LIST)?.findChildByType(T.UNSAFE_KW) != null
+                ) {
+                    return@run true
+                }
                 p = p.parent
             }
             false

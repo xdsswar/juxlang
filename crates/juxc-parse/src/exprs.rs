@@ -642,6 +642,11 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Minus)
                 | Some(TokenKind::Bang)
                 | Some(TokenKind::Tilde)
+                // `(void*) &n` and `(int) *p` (§L.6.2): the cast grammar takes
+                // any unary operand. Only a primitive or marked type reaches a
+                // cast with these; a bare `(count) * 2` stays a product below.
+                | Some(TokenKind::Amp)
+                | Some(TokenKind::Star)
                 | Some(TokenKind::LParen)
                 | Some(TokenKind::Kw(Keyword::New))
                 | Some(TokenKind::Kw(Keyword::This))

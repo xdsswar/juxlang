@@ -562,6 +562,13 @@ class JuxParser : PsiParser {
         // / `weak` (§M.14.3, e.g. `weak Counter c`).
         while (b.at(T.FINAL_KW) || b.at(T.CONST_KW) || b.atRefKw() || b.at(T.WEAK_KW)) b.advanceLexer()
         if (b.at(T.IDENTIFIER) && b.tokenText == "out") b.advanceLexer() // contextual param-mode
+        // A borrowed parameter in a generated Rust binding stub (`&T x`,
+        // `&mut T x`, `.jux.d`). Without this the name bound to the wrong
+        // token and parameter info showed nonsense for every std method.
+        if (b.at(T.AMP)) {
+            b.advanceLexer()
+            if (b.at(T.IDENTIFIER) && b.tokenText == "mut") b.advanceLexer()
+        }
         b.parseType()
         if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs
         b.consumeDeclName("parameter name expected")

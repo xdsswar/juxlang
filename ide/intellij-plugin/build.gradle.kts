@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.0.6</h3>
+            <p>Unsafe and C interop code reads the way the compiler reads it.</p>
+            <ul>
+              <li>A cast whose operand starts with <b>&amp;</b>, <b>*</b> or <b>-</b> parses: <b>(void*) &amp;n</b>, <b>(int) *p</b>, <b>(long) -n</b>. A bare <b>(count) * 2</b> is still a product.</li>
+              <li><b>x in xs</b> and <b>out this.field</b> no longer show a false syntax error.</li>
+              <li>Generated Rust binding stubs with borrowed parameters (<b>&amp;T</b>, <b>&amp;mut T</b>) parse, so Parameter Info shows the right names.</li>
+              <li>Foreign functions from a <b>native</b> block are completed inside an <b>unsafe</b> function, not only inside an <b>unsafe { }</b> block.</li>
+              <li>Diagnostics follow the new numeric rules of the compiler: a signed and unsigned integer with no common type, and constant overflow, are reported in the editor.</li>
+            </ul>
+
             <h3>0.0.3</h3>
             <p>Language sync.</p>
             <ul>
@@ -121,6 +131,11 @@ intellijPlatform {
         failureLevel = listOf(
             org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
         )
+        // The IDEs `verifyPlugin` checks against; without a selection the task
+        // stops with "No IDE selected for verification".
+        ides {
+            recommended()
+        }
     }
 }
 

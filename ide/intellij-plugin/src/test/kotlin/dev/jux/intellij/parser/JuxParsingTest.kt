@@ -804,6 +804,64 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("resolves to the Box class", resolved is JuxTypeDeclaration && (resolved as JuxNamedElement).name == "Box")
     }
 
+    /**
+     * Forms the compiler accepts that the editor used to mark red: a cast whose
+     * operand starts with `&`, `*` or `-` (`(void*) &n`, §L.6.2), `x in xs`,
+     * `out this.field`, and a borrowed stub parameter `&mut T x`. A bare
+     * `(count) * 2` must stay a product, not become a cast.
+     */
+    fun testCastOperatorsInAndOutThisParse() {
+        val psi = createPsiFile(
+            "Casts.jux",
+            """
+            class Acc {
+                private int total = 0;
+                public void read(Vec<int> xs, int n) {
+                    unsafe {
+                        void* v = (void*) &n;
+                        int* p = (int*) v;
+                        int back = (int) *p;
+                        long neg = (long) -n;
+                    }
+                    int count = 3;
+                    int product = (count) * 2;
+                    bool has = n in xs;
+                    fill(out this.total);
+                }
+                public void fill(out int x) { x = 1; }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription} @ ${it.textOffset}" },
+            errors.isEmpty(),
+        )
+        val casts = PsiTreeUtil.findChildrenOfAnyType(psi, PsiElement::class.java)
+            .filter { it.elementType === JuxElementTypes.CAST_EXPRESSION }
+            .map { it.text }
+        assertTrue("`(void*) &n` is a cast: $casts", casts.any { it == "(void*) &n" })
+        assertTrue("`(int) *p` is a cast: $casts", casts.any { it == "(int) *p" })
+        assertTrue("`(count) * 2` is not a cast: $casts", casts.none { it.startsWith("(count)") })
+    }
+
+    fun testBorrowedStubParametersParse() {
+        val psi = createPsiFile(
+            "Stub.jux",
+            """
+            public class Vec<T> {
+                public void extend_from_slice(&T[] other);
+                public T* get_mut(&mut int index);
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription} @ ${it.textOffset}" },
+            errors.isEmpty(),
+        )
+    }
+
     private fun collectIdentifiers(root: PsiElement): List<PsiElement> {
         val out = ArrayList<PsiElement>()
         PsiTreeUtil.processElements(root) { e ->
