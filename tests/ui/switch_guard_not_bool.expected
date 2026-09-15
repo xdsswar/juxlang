@@ -1,0 +1,1 @@
+switch_guard_not_bool.jux:4:21: [E0272] error: a `when` guard must be a `bool`, found int

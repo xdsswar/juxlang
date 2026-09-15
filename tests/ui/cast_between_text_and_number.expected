@@ -1,0 +1,2 @@
+cast_between_text_and_number.jux:3:21: [E0442] error: cannot cast `int` to `String`: `as` converts between numbers, and text is not a number
+cast_between_text_and_number.jux:5:28: [E0442] error: cannot cast `String` to `int`: `as` converts between numbers, and text is not a number

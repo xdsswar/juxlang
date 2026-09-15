@@ -2727,7 +2727,12 @@ fn check_override_annotations(table: &SymbolTable, diagnostics: &mut Vec<Diagnos
                 let Some(ancestor) = table.classes.get(ancestor_name) else {
                     break;
                 };
-                if ancestor.methods.contains_key(method_name)
+                // A private method is not inherited (§7.4.1), so a same-named
+                // method below it overrides nothing.
+                if ancestor
+                    .methods
+                    .get(method_name)
+                    .is_some_and(|m| !matches!(m.visibility, juxc_ast::Visibility::Private))
                     || class_implements_declare(table, ancestor, method_name)
                 {
                     found = true;

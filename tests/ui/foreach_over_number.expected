@@ -1,0 +1,2 @@
+foreach_over_number.jux:3:14: [E0941] error: a for-each needs an `Iterable<T>`, and int is not one (§O.7.3)
+foreach_over_number.jux:7:14: [E0941] error: a for-each needs an `Iterable<T>`, and bool is not one (§O.7.3)

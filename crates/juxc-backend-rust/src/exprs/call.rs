@@ -643,6 +643,12 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // §K.11 static numeric built-ins on a primitive type name. The name is
+        // a keyword, so no local or class can shadow it.
+        if juxc_tycheck::infer::primitive_static_call_type(call).is_some() {
+            self.emit_primitive_static_call(call);
+            return;
+        }
         // A call THROUGH a function pointer (Layout-ABI §L.6.4), recognised by
         // the callee's recorded type: converted like a native call, and a
         // null pointer throws instead of jumping to address zero.
@@ -5042,6 +5048,30 @@ impl RustEmitter {
     /// wrapping-add wraps at 8 bits, not pointer width). Chars
     /// dispatch on `char` directly. Checked forms produce the Jux
     /// `Result<T, E>` enum.
+    /// `double.fromBits(b)` -> `f64::from_bits(b as u64)`, `float.fromBits(b)`
+    /// -> `f32::from_bits(b as u32)`, and `char.fromCodePoint(cp)`, which throws
+    /// `IllegalArgumentException` for a value that is no Unicode scalar.
+    fn emit_primitive_static_call(&mut self, call: &CallExpr) {
+        let Expr::Field(f) = &*call.callee else { return };
+        let Expr::Path(qn) = &*f.object else { return };
+        let (open, close) = match (qn.segments[0].text.as_str(), f.field.text.as_str()) {
+            ("double", "fromBits") => ("f64::from_bits((", ") as u64)"),
+            ("float", "fromBits") => ("f32::from_bits((", ") as u32)"),
+            (_, "fromCodePoint") => (
+                "char::from_u32((",
+                ") as u32).unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::IllegalArgumentException::new(String::from(\"not a Unicode scalar value\"))))",
+            ),
+            _ => return,
+        };
+        self.w.push_str(open);
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        if let Some(arg) = call.args.first() {
+            self.emit_expr(arg);
+        }
+        self.emitting_format_arg = prev;
+        self.w.push_str(close);
+    }
+
     fn emit_numeric_stdlib_method(
         &mut self,
         call: &CallExpr,
@@ -5122,7 +5152,9 @@ impl RustEmitter {
             // rustc's method set) rather than emitting a bad call.
             let signed = !rust_ty.starts_with('u');
             match method {
-                "abs" if signed => Some(".abs()"),
+                // `abs()` of `MIN_VALUE` has no positive counterpart and throws
+                // (K.11); Rust's `abs` would overflow instead.
+                "abs" if signed => Some(".checked_abs().unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"abs of the minimum value overflows\"))))"),
                 "saturatingAbs" if signed => Some(".saturating_abs()"),
                 "countOnes" => Some(".count_ones() as isize"),
                 "leadingZeros" => Some(".leading_zeros() as isize"),

@@ -1,0 +1,57 @@
+// Numeric and operator edges that used to stop at the Rust compiler
+// (SEMANTICS S.2.3, S.2.5, S.2.6; CORE-LIB K.11; OPERATORS O.2.4).
+//
+// - A shift count is taken modulo the width, a negative one included.
+// - A negative number compares exactly with an unsigned one.
+// - `~obj` on a class with `operator~` leaves the object usable.
+// - `double.fromBits`, `char.fromCodePoint`, and `abs()` of the minimum value.
+// - A blank `static final` set once in a `static { }` block.
+// - A `when` guard that is a plain boolean name.
+
+public class Mask {
+    public int bits;
+    public Mask(int bits) { this.bits = bits; }
+    public Mask operator~() { return new Mask(~bits); }
+}
+
+public class Limits {
+    public static final int CAPACITY;
+    static { CAPACITY = 64; }
+}
+
+public String describe(int n, bool urgent) {
+    return switch (n) {
+        case 0 -> "idle";
+        case 1 when urgent -> "one, urgent";
+        default -> "busy";
+    };
+}
+
+public void main() {
+    long one = 1L;
+    print(one << -1);
+    print(1L << 65);
+    uint small = 5;
+    print(-1 < small);
+    print(-1 < 5u);
+
+    var m = new Mask(0);
+    var flipped = ~m;
+    print(m.bits + " " + flipped.bits);
+
+    double zero = 0.0;
+    double negativeZero = -0.0;
+    print(zero == negativeZero);
+    print(zero.bitsEqual(negativeZero));
+    print(double.fromBits(4607182418800017408uL));
+    print(char.fromCodePoint(74u));
+    try {
+        print(int.MIN_VALUE.abs());
+    } catch (ArithmeticException e) {
+        print("abs: " + e.getMessage());
+    }
+
+    print(Limits.CAPACITY);
+    print(describe(1, true));
+    print(describe(1, false));
+}

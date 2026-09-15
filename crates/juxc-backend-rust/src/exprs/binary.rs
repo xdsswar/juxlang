@@ -955,7 +955,25 @@ impl RustEmitter {
                     self.emitting_format_arg = false;
                     self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
                     self.w.push_str(if b.op == BinaryOp::Shl { ".wrapping_shl(" } else { ".wrapping_shr(" });
+                    // `as` binds tighter than a unary minus in Rust: `-1 as u32`
+                    // is `-(1 as u32)`, which does not compile. A negative or
+                    // composite count is parenthesized first.
+                    // An untyped literal count (`-1`) is typed `i64` first:
+                    // cast straight to `u32` it would be inferred unsigned and
+                    // could not be negative.
+                    let count_parens = matches!(&*b.right, Expr::Unary(_) | Expr::Binary(_) | Expr::Ternary(_) | Expr::Cast(_));
+                    let untyped_count = juxc_tycheck::infer::untyped_int_literal(&b.right)
+                        || matches!(&*b.right, Expr::Unary(u) if juxc_tycheck::infer::untyped_int_literal(&u.operand));
+                    if count_parens || untyped_count {
+                        self.w.push('(');
+                    }
                     self.emit_expr_with_parent_prec(&b.right, u8::MAX, false);
+                    if untyped_count {
+                        self.w.push_str(" as i64");
+                    }
+                    if count_parens || untyped_count {
+                        self.w.push(')');
+                    }
                     self.w.push_str(" as u32)");
                     self.emitting_format_arg = prev;
                     return;
@@ -1210,6 +1228,24 @@ impl RustEmitter {
     /// `i128`: one is a signed and the other an unsigned integer, and neither
     /// type holds the other's values (§S.2.6, "comparisons are exact").
     pub(crate) fn comparison_needs_i128(&self, left: &Expr, right: &Expr) -> bool {
+        // A NEGATIVE literal against an unsigned operand (`-1 < 5u`) cannot
+        // adapt to the unsigned type, so it compares exactly too. The literal
+        // has no primitive of its own, so this is decided before the lookup.
+        let negative_literal = |e: &Expr| {
+            matches!(e, Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Neg && juxc_tycheck::infer::untyped_int_literal(&u.operand))
+        };
+        let unsigned = |e: &Expr| {
+            use juxc_tycheck::Primitive as P;
+            // A suffixed literal (`5u`) carries its type in the token.
+            let prim = self.operand_primitive(e).or_else(|| match e {
+                Expr::Literal(juxc_ast::Literal::Int(lit)) if lit.kind.is_some() => literal_numeric_ty(e),
+                _ => None,
+            });
+            matches!(prim, Some(P::Ubyte | P::Ushort | P::Uint | P::Ulong | P::U8 | P::U16 | P::U32 | P::U64))
+        };
+        if (negative_literal(left) && unsigned(right)) || (negative_literal(right) && unsigned(left)) {
+            return true;
+        }
         let (Some(l), Some(r)) = (self.operand_primitive(left), self.operand_primitive(right)) else {
             return false;
         };

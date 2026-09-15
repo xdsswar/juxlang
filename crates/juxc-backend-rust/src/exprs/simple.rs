@@ -383,6 +383,15 @@ impl RustEmitter {
             self.w.push_str(".__op_neg()");
             return;
         }
+        // `~obj` the same way: Rust's `Not` takes its operand by value, so
+        // `!b` moved the object and the next read of `b` did not compile.
+        if matches!(u.op, juxc_ast::UnaryOp::BitNot)
+            && self.expr_declares_operator(&u.operand, juxc_ast::OperatorKind::BitNot)
+        {
+            self.emit_expr_with_parent_prec(&u.operand, u8::MAX, false);
+            self.w.push_str(".__op_not()");
+            return;
+        }
         self.w.push_str(u.op.as_rust_str());
         // Unary precedence is higher than any binary; reusing
         // emit_expr_with_parent_prec at UNARY_PREC gives the right

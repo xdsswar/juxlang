@@ -169,6 +169,12 @@ pub(crate) struct Parser<'a> {
     /// marker; a `*` followed by anything else (`(n as int*) + 1`, `p as T*;`)
     /// is still a pointer (Layout-ABI §L.6.2).
     pub(crate) in_as_type: bool,
+    /// Token index of the `->` that ends the switch arm whose `when` guard is
+    /// being parsed. A guard is an ordinary expression, so without this
+    /// `case 1 when ready -> "go"` read `ready -> "go"` as a lambda. That one
+    /// arrow is never a lambda's; a lambda nested inside the guard
+    /// (`when xs.any(x -> x > 0)`) has its own arrow and still parses.
+    pub(crate) switch_arm_arrow: Option<usize>,
 }
 
 impl<'a> Parser<'a> {
@@ -179,6 +185,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             pending_gt: 0,
             in_as_type: false,
+            switch_arm_arrow: None,
             diagnostics: Vec::new(),
             pending_stmts: Vec::new(),
             tuple_tmp_counter: 0,

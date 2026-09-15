@@ -1,0 +1,4 @@
+test_annotation_misplaced.jux:3:17: [E0477] error: `@Test` cannot mark `insideClass`: it is a method; tests and hooks are free functions (§TS.1)
+test_annotation_misplaced.jux:7:12: [E0477] error: `@Test` cannot mark `returnsValue`: it returns a value, and the test runner has nowhere to put it (§TS.1)
+test_annotation_misplaced.jux:12:13: [E0477] error: `@Test` cannot mark `takesInput`: it takes parameters, and the test runner has nothing to pass (§TS.1)
+test_annotation_misplaced.jux:15:13: [E0477] error: `@BeforeEach` cannot mark `setup`: it takes parameters, and the test runner has nothing to pass (§TS.1)

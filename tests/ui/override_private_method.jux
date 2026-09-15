@@ -1,0 +1,16 @@
+public class Base {
+    private void secret() {}
+    public void shown() {}
+}
+
+public class Child extends Base {
+    @Override
+    public void secret() {}
+
+    @Override
+    public void shown() {}
+}
+
+public void main() {
+    new Child().secret();
+}

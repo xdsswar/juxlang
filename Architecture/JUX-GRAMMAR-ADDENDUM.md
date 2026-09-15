@@ -866,7 +866,7 @@ A few notes:
 
 - Levels 1–3 are right-associative because they read more naturally that way; everything else is left-associative or non-associative.
 - Level 9 fuses equality and the strict-identity operators (`===`, `!==`) so they cannot be chained meaningfully (`a == b === c` is a parse-stage warning `W0301`, legal but reformatted by `juxc fmt`).
-- Level 10 is non-chaining at the type-checker level: `a < b < c` parses but is rejected (`E0301`) because the middle expression has type `bool` in a comparison position. `juxc` reports the same canonical error here as Java.
+- Level 10 is non-chaining at the type-checker level: `a < b < c` parses but is rejected (`E0476`) because the middle expression has type `bool` in a comparison position. `juxc` reports the same canonical error here as Java.
 - Level 12 (`=>` / `in`) is non-associative — chaining is a parse error.
 - Level 13's `step` modifier is part of the range expression, not a separate binary operator. It binds tighter than other operators on the right of a range.
 - Level 18's `move`, `await` are unary by grammar but their semantics (§6.4, §10.1.2) make them effectively keywords; their precedence is fixed by this table. `spawn` is **not** a keyword — it is a library function in `std.async` (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.12.1) and follows ordinary call-expression precedence.

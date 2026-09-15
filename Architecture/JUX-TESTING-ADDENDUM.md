@@ -30,7 +30,7 @@ classes, no inheritance from a framework type. An annotation marks them,
   `std.testing`: Phase 1 has no annotation declarations to import, and
   none are needed.)*
 - An annotated function with parameters, a non-`void` return, or a
-  non-free position (method) is a compile error.
+  non-free position (method) is a compile error (`E0477`).
 - Hooks are synchronous in Phase 1; tests may be `async`.
 - `@Ignore` keeps a test in the build, so it still has to type-check, and
   skips it at run time. Its hooks do not run for it: an ignored test is not

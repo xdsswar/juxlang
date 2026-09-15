@@ -529,7 +529,7 @@ impl RustEmitter {
                 continue;
             }
             if field.is_final
-                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
             {
                 self.emit_static_field(field);
             }
@@ -693,7 +693,7 @@ impl RustEmitter {
             // (a wrapper-class object): those route here so the
             // thread_local form carries them (rustc E0015 otherwise).
             let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
             if field.is_static && (!field.is_final || final_needs_tl) {
                 if type_ref_mentions_any(&juxc_tycheck::resolved_field_type(field), &generic_param_names) {
                     continue;
@@ -1149,7 +1149,7 @@ impl RustEmitter {
         for field in &class_decl.fields {
             if field.is_static
                 && field.is_final
-                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
             {
                 self.emit_static_field(field);
             }
@@ -1339,7 +1339,7 @@ impl RustEmitter {
             // `final`+`!Send` payloads route here too (thread_local form);
             // see the inline-class site for the rationale.
             let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
             if field.is_static && (!field.is_final || final_needs_tl) {
                 self.emit_mutable_static_field(name, field);
             }
@@ -5180,7 +5180,7 @@ impl RustEmitter {
         for field in &class_decl.fields {
             let runtime_storage = field.is_static
                 && (!field.is_final
-                    || self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field)));
+                    || self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some()));
             if runtime_storage && field.default.is_some() {
                 steps.push((field.span.start as usize, Step::Field(field)));
             }
@@ -5224,11 +5224,10 @@ impl RustEmitter {
         // attempt gets the plain error.
         self.w.line("if let Some(__jux_p) = __jux_failure {");
         self.w.indent_inc();
-        self.w.emit_indent();
-        self.emit_exception_of_payload_closure();
-        self.w.push('\n');
+        // The cause is the `Exception` part of what was thrown (the crate's
+        // `__jux_exception_part` helper), or none for a payload that is not one.
         self.w.line(&format!(
-            "std::panic::panic_any(crate::jux::std::exceptions::ExceptionInInitializerError::new__1(String::from(\"class {} failed to initialize\"), Some(__jux_exception_of(__jux_p))));",
+            "std::panic::panic_any(crate::jux::std::exceptions::ExceptionInInitializerError::new__1(String::from(\"class {} failed to initialize\"), crate::__jux_exception_part(&*__jux_p).cloned()));",
             class_decl.name.text
         ));
         self.w.indent_dec();
@@ -5338,7 +5337,14 @@ impl RustEmitter {
     /// runtime initialization — the module-scope `LazyLock` shape (or
     /// `thread_local!` when the payload is also `!Send`). Primitives,
     /// `String` (as `&'static str`), and enum variants stay `pub const`.
-    pub(crate) fn final_static_needs_runtime_init(&self, ty: &juxc_ast::TypeRef) -> bool {
+    ///
+    /// A BLANK `static final` (no initializer, assigned once in a `static { }`
+    /// block, §S.4.1) has no value to put in a `const`, so it always takes the
+    /// runtime storage its `static` block writes.
+    pub(crate) fn final_static_needs_runtime_init(&self, ty: &juxc_ast::TypeRef, has_initializer: bool) -> bool {
+        if !has_initializer {
+            return true;
+        }
         if self.static_type_needs_thread_local(ty) {
             return true;
         }
@@ -6184,7 +6190,7 @@ impl RustEmitter {
             for field in &class_decl.fields {
                 if field.is_static
                     && field.is_final
-                    && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+                    && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
                 {
                     self.emit_static_field(field);
                 }
@@ -6199,7 +6205,7 @@ impl RustEmitter {
         for field in &class_decl.fields {
             // `final`+`!Send` payloads route here too (thread_local form).
             let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
             if field.is_static && (!field.is_final || final_needs_tl) {
                 self.emit_mutable_static_field(&class_decl.name.text, field);
             }

@@ -1,0 +1,20 @@
+public class Suite {
+    @Test
+    public void insideClass() {}
+}
+
+@Test
+public int returnsValue() {
+    return 1;
+}
+
+@Test
+public void takesInput(int x) {}
+
+@BeforeEach
+public void setup(String name) {}
+
+@Test
+public void fine() {}
+
+public void main() {}

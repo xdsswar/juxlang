@@ -149,7 +149,7 @@ Floats follow IEEE 754-2008 binary32 and binary64 exactly:
 - Float overflow produces `±Inf`, never panics.
 - `a / 0.0` for `a == 0.0` is `NaN`.
 - The default rounding mode is **round-half-to-even** (banker's rounding, IEEE default).
-- The `==` operator on floats is the IEEE bit-equality after handling `+0.0/-0.0` (so `+0.0 == -0.0`). For *exact* bit equality (NaN-payload-aware), use `Double.bitsEqual(a, b)`.
+- The `==` operator on floats is the IEEE bit-equality after handling `+0.0/-0.0` (so `+0.0 == -0.0`). For *exact* bit equality (NaN-payload-aware), use `a.bitsEqual(b)` (CORE-LIB §K.11).
 
 For hash consistency: floats hash by their canonicalized bit pattern (NaN → a single canonical NaN, `-0.0` → `+0.0`'s hash). This is what `Map<double, V>` uses.
 

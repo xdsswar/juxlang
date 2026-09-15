@@ -1,0 +1,1 @@
+void_in_interpolation.jux:6:21: [E0512] error: this interpolated expression returns `void`, so there is no value to put in the string (§S.3.5)

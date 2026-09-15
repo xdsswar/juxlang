@@ -1635,8 +1635,47 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// E0477: `@Test` and the test hooks mark a free `void` function with no
+    /// parameters (Testing §TS.1); the runner has nothing to pass and nowhere
+    /// to put a result, and a method has no receiver to call it on.
+    fn check_test_annotation(&mut self, fn_decl: &FnDecl, is_method: bool) {
+        const TEST_ANNOTATIONS: [&str; 5] = ["test", "beforeeach", "aftereach", "beforeall", "afterall"];
+        let Some(annotation) = fn_decl.annotations.iter().find(|a| {
+            a.name
+                .segments
+                .last()
+                .is_some_and(|s| TEST_ANNOTATIONS.iter().any(|t| s.text.eq_ignore_ascii_case(t)))
+        }) else {
+            return;
+        };
+        let name = annotation.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+        let returns_value = match &fn_decl.return_type {
+            juxc_ast::ReturnType::Void => false,
+            juxc_ast::ReturnType::AsyncType(t) => !(t.name.segments.len() == 1 && t.name.segments[0].text == "void"),
+            juxc_ast::ReturnType::Type(_) => true,
+        };
+        let problem = if is_method {
+            "it is a method; tests and hooks are free functions"
+        } else if !fn_decl.params.is_empty() {
+            "it takes parameters, and the test runner has nothing to pass"
+        } else if returns_value {
+            "it returns a value, and the test runner has nowhere to put it"
+        } else {
+            return;
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0477_TestAnnotationMisplaced,
+                format!("`@{name}` cannot mark `{}`: {problem} (§TS.1)", fn_decl.name.text),
+            )
+            .with_span(fn_decl.name.span)
+            .with_help("declare it as `void name()` at the top level of the file"),
+        );
+    }
+
     fn check_function(&mut self, fn_decl: &FnDecl) {
         self.check_export_signature(fn_decl);
+        self.check_test_annotation(fn_decl, false);
         let Some(body) = &fn_decl.body else { return };
         self.check_param_defaults(&fn_decl.params);
         self.env.push_scope();
@@ -2214,6 +2253,7 @@ impl<'a> Checker<'a> {
             );
         }
         for method in &class.methods {
+            self.check_test_annotation(method, true);
             self.check_method(method, &this_ty);
         }
         for op in &class.operators {
@@ -2827,6 +2867,32 @@ impl<'a> Checker<'a> {
     /// `any`. An unrelated cast can never succeed and would lower to a
     /// guaranteed-panicking downcast — reject it. Primitive / numeric casts
     /// and casts where either side is an inference hole are left alone.
+    /// E0442 for `5 as String` and `"5" as int`: `as` converts between
+    /// numbers, and text is not a number. Interpolation makes text of a value,
+    /// and parsing makes a number of text.
+    fn check_string_cast(&mut self, c: &juxc_ast::CastExpr) {
+        if c.ty.array_shape.is_some() || c.ty.nullable || c.ty.ptr_depth > 0 {
+            return;
+        }
+        let target_ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+        let src_ty = infer_expr(&c.value, &self.env, self.symbols);
+        let help = match (&src_ty, &target_ty) {
+            (Ty::Primitive(_), Ty::String) => "make text of a value with interpolation: `$\"${x}\"`",
+            (Ty::String, Ty::Primitive(_)) => "read a number out of text by parsing it, such as `s.parse<int>()`",
+            _ => return,
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0442_UnrelatedCast,
+                format!("cannot cast `{src_ty}` to `{target_ty}`: `as` converts between numbers, and text is not a number"),
+            )
+            // The target type: a literal operand's span is empty, and a cast
+            // over one would point at the start of the file.
+            .with_span(c.ty.span)
+            .with_help(help),
+        );
+    }
+
     fn check_reference_cast(&mut self, c: &juxc_ast::CastExpr) {
         if !is_plain_user_typeref(&c.ty) {
             return;
@@ -3474,6 +3540,32 @@ impl<'a> Checker<'a> {
     /// how `-1 + len` became a huge unsigned number. An untyped literal takes
     /// the other side's type and never trips this; a comparison compares the
     /// values exactly and is not checked here.
+    /// E0476: `a < b < c`. The left comparison is a `bool`, and ordering a
+    /// `bool` against a number is meaningless; the author meant `&&`.
+    fn check_comparison_chain(&mut self, b: &juxc_ast::BinaryExpr) {
+        let relational = |op: BinaryOp| matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
+        if !relational(b.op) {
+            return;
+        }
+        let Expr::Binary(inner) = &*b.left else { return };
+        if !relational(inner.op) {
+            return;
+        }
+        let middle = expr_span(&inner.right);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0476_ChainedComparison,
+                "comparisons do not chain: the first comparison is a `bool`, and a `bool` cannot be \
+                 compared with a number",
+            )
+            .with_span(b.span)
+            .with_help(format!(
+                "compare each pair and join them with `&&`: `a < b && b < c` (the middle operand at {}..{} appears in both)",
+                middle.start, middle.end,
+            )),
+        );
+    }
+
     fn check_numeric_operands(&mut self, b: &juxc_ast::BinaryExpr) {
         if !matches!(
             b.op,
@@ -4053,6 +4145,23 @@ impl<'a> Checker<'a> {
                         },
                     }
                 };
+                // §O.7.3: the iterated value must be `Iterable<T>`. A number or
+                // a `bool` never is, and reached Rust as "is not an iterator".
+                if !f.is_await && matches!(iter_ty, Ty::Primitive(_)) {
+                    let help = if matches!(iter_ty, Ty::Primitive(p) if crate::ty::integer_bits(p).is_some()) {
+                        "to count, iterate a range: `for (var i : 0..n)`"
+                    } else {
+                        "iterate an array, a collection, or a range"
+                    };
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0941_ConstraintNotSatisfied,
+                            format!("a for-each needs an `Iterable<T>`, and {iter_ty} is not one (§O.7.3)"),
+                        )
+                        .with_span(f.var_name.span)
+                        .with_help(help),
+                    );
+                }
                 self.env.push_scope();
                 self.env.declare(&f.var_name.text, var_ty);
                 self.check_block(&f.body);
@@ -4540,6 +4649,7 @@ impl<'a> Checker<'a> {
             Expr::Cast(c) => {
                 self.check_expr(&c.value);
                 self.check_reference_cast(c);
+                self.check_string_cast(c);
                 // `p as fn(A) -> R` and `f as void*` reinterpret a code address
                 // (§L.6.4), which nothing can check.
                 let from_fn_pointer =
@@ -4639,6 +4749,7 @@ impl<'a> Checker<'a> {
                 };
                 self.check_narrowed(&proven, |this| this.check_expr(&b.right));
                 self.check_numeric_operands(b);
+                self.check_comparison_chain(b);
                 self.check_pointer_operators(b);
                 if !self.in_unsafe
                     && matches!(b.op, juxc_ast::BinaryOp::Add | juxc_ast::BinaryOp::Sub)
@@ -4728,6 +4839,16 @@ impl<'a> Checker<'a> {
                             // the user gets a Jux diagnostic instead
                             // of a downstream rustc error.
                             let ty = infer_expr(e, &self.env, self.symbols);
+                            if matches!(ty, Ty::Void) {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0512_VoidInInterpolation,
+                                        "this interpolated expression returns `void`, so there is no value to put in the string (§S.3.5)",
+                                    )
+                                    .with_span(expr_span(e))
+                                    .with_help("call it on its own line, and interpolate a value instead"),
+                                );
+                            }
                             self.check_op_not_deleted(&ty, OperatorKind::ToString, s.span);
                         }
                         InterpSegment::Bare(ident) => {
@@ -4791,6 +4912,19 @@ impl<'a> Checker<'a> {
                     // block body both see them.
                     if let Some(g) = &arm.guard {
                         self.check_expr(g);
+                        let guard_ty = infer_expr(g, &self.env, self.symbols);
+                        if !is_boolish(&guard_ty) && !matches!(guard_ty, Ty::Unknown) {
+                            let guard_span = expr_span(g);
+                            let span = if guard_span.start == guard_span.end { arm.span } else { guard_span };
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0272_GuardNotBool,
+                                    format!("a `when` guard must be a `bool`, found {guard_ty}"),
+                                )
+                                .with_span(span)
+                                .with_help("write the condition the arm needs, such as `when x > 5`"),
+                            );
+                        }
                     }
                     match &arm.body {
                         SwitchBody::Expr(e) => self.check_expr(e),

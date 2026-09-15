@@ -909,6 +909,11 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// rejects duplicates with `E0402`, so today there's at most one
 /// candidate per name.
 fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // §K.11 static numeric built-ins on a primitive type NAME:
+    // `double.fromBits(b)`, `float.fromBits(b)`, `char.fromCodePoint(cp)`.
+    if let Some(ty) = primitive_static_call_type(c) {
+        return ty;
+    }
     // `operator()` (§O.2.4): a callee whose type declares the call
     // overload produces the overload's return type. Checked before
     // the named-function path so a callable LOCAL wins over a
@@ -2530,6 +2535,22 @@ fn infer_else_branch(branch: &ElseBranch, env: &mut TypeEnv, symbols: &SymbolTab
 // Tests
 // ============================================================================
 
+/// The result type of a §K.11 static built-in called on a primitive type name,
+/// or `None` when `c` is not one.
+pub fn primitive_static_call_type(c: &CallExpr) -> Option<Ty> {
+    let Expr::Field(f) = &*c.callee else { return None };
+    let Expr::Path(qn) = &*f.object else { return None };
+    if qn.segments.len() != 1 {
+        return None;
+    }
+    let prim = primitive_from_name(&qn.segments[0].text)?;
+    match (prim, f.field.text.as_str()) {
+        (Primitive::Double | Primitive::F64 | Primitive::Float | Primitive::F32, "fromBits") => Some(Ty::Primitive(prim)),
+        (Primitive::Char, "fromCodePoint") => Some(Ty::Primitive(Primitive::Char)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3455,3 +3476,4 @@ mod tests {
         }
     }
 }
+

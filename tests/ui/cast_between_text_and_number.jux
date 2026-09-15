@@ -1,0 +1,8 @@
+public void main() {
+    int n = 5;
+    var text = n as String;
+    String digits = "42";
+    var number = digits as int;
+    print(text);
+    print(number);
+}

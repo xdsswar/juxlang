@@ -79,7 +79,30 @@ impl<'a> Parser<'a> {
         // Optional `when <cond>` guard (§A.2.8). Guarded arms don't
         // count toward exhaustiveness (§T.5.6) — tycheck enforces.
         let guard = if self.eat_kw(Keyword::When) {
-            self.parse_expr()
+            // The arm's arrow is the first `->` outside any brackets.
+            let mut depth = 0usize;
+            let mut arrow = None;
+            for (i, tok) in self.tokens.iter().enumerate().skip(self.pos) {
+                match &tok.kind {
+                    TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => depth += 1,
+                    TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    TokenKind::Arrow if depth == 0 => {
+                        arrow = Some(i);
+                        break;
+                    }
+                    TokenKind::Semicolon | TokenKind::Eof if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            let prev = std::mem::replace(&mut self.switch_arm_arrow, arrow);
+            let guard = self.parse_expr();
+            self.switch_arm_arrow = prev;
+            guard
         } else {
             None
         };

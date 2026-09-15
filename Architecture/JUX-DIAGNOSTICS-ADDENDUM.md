@@ -343,7 +343,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0261`  | `switch` expression must be exhaustive *(reserved; statement form is `E0440`)* | Type system §T.5 |
 | `E0270`  | Or-pattern alternatives bind incompatible names *(reserved)* | Grammar §A.3            |
 | `E0271`  | Local-variable destructuring requires irrefutable pattern *(reserved)* | Grammar §A.3  |
-| `E0272`  | Pattern guard expression must have type `bool` *(reserved)* | Grammar §A.3             |
+| `E0272`  | Pattern guard expression must have type `bool` | Grammar §A.3             |
 
 ### Resolution (`E0300–E0399`)
 
@@ -427,6 +427,8 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0472`  | Missing required annotation parameter   | Annotations §A.13              |
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
+| `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
+| `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
 | `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed | LANG-V1 §7.10 |
 
@@ -479,6 +481,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0508`  | Type has no stable C representation in an FFI signature      | Layout-ABI §L.4                |
 | `E0509`  | `@layout(c)` on a non-aggregate (use a `struct`)             | Layout-ABI §L.1.2              |
 | `E0510`  | Explicit discriminant outside a C enum                       | Layout-ABI §L.2                |
+| `E0512`  | Interpolating an expression of type `void`                   | Semantics §S.3.5               |
 | `E0513`  | A function given where a function pointer is expected does not fit it: not a free function, generic, overloaded, declares `throws`, or its parameters or result do not correspond | Layout-ABI §L.6.4 |
 | `E0514`  | A lambda that captures a local, a parameter, a field or `this` is given where a function pointer is expected | Layout-ABI §L.6.4 |
 | `E0515`  | A method called through a class pointer (`(*p).get()`): the pointer reaches the object's fields, not its methods | Layout-ABI §L.6.5 |

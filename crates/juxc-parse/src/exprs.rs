@@ -1683,6 +1683,7 @@ impl<'a> Parser<'a> {
         match self.tokens.get(i).map(|t| &t.kind) {
             Some(TokenKind::Ident(_)) => {
                 matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Arrow))
+                    && self.switch_arm_arrow != Some(i + 1)
             }
             Some(TokenKind::LParen) => {
                 // Walk to matched RParen, then check for `->`.
@@ -1698,6 +1699,7 @@ impl<'a> Parser<'a> {
                     j += 1;
                 }
                 matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow))
+                    && self.switch_arm_arrow != Some(j)
             }
             _ => false,
         }

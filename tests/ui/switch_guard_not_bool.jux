@@ -1,0 +1,11 @@
+public String size(int n) {
+    return switch (n) {
+        case 0 -> "none";
+        case 1 when n -> "one";
+        default -> "many";
+    };
+}
+
+public void main() {
+    print(size(1));
+}

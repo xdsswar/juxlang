@@ -503,6 +503,19 @@ pub enum Code {
     /// E0474 -- An annotation argument whose type does not fit the parameter
     /// it is given to (§A.12).
     E0474_AnnotationParameterType,
+    /// E0272 -- A `when` guard on a switch arm whose expression is not a
+    /// `bool` (Grammar §A.3).
+    E0272_GuardNotBool,
+    /// E0476 -- Comparisons written as a chain (`a < b < c`). The first
+    /// comparison is a `bool`, which the second cannot order against a number
+    /// (Grammar §A.4 level 10).
+    E0476_ChainedComparison,
+    /// E0477 -- `@Test` or a test hook (`@BeforeEach`, ...) on a method, or on a
+    /// function that takes parameters or returns a value (Testing §TS.1).
+    E0477_TestAnnotationMisplaced,
+    /// E0512 -- An expression of type `void` inside a string interpolation
+    /// (Semantics §S.3.5): there is no value to turn into text.
+    E0512_VoidInInterpolation,
     /// E0993 -- A class, interface, enum, record or struct declared INSIDE a
     /// function body (JUX-MISSING-DEFS M.9.2). Local types are not part of the
     /// language: a lambda, or a nested type declared on the enclosing class,
@@ -897,6 +910,10 @@ impl Code {
             Code::E0472_MissingAnnotationParameter => "E0472",
             Code::E0473_AnnotationNotRepeatable  => "E0473",
             Code::E0474_AnnotationParameterType  => "E0474",
+            Code::E0272_GuardNotBool             => "E0272",
+            Code::E0476_ChainedComparison        => "E0476",
+            Code::E0477_TestAnnotationMisplaced  => "E0477",
+            Code::E0512_VoidInInterpolation      => "E0512",
             Code::E0993_LocalTypeDeclaration    => "E0993",
             Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",

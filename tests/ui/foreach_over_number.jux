@@ -1,0 +1,10 @@
+public void main() {
+    int count = 3;
+    for (var i : count) {
+        print(i);
+    }
+    bool done = false;
+    for (var b : done) {
+        print(b);
+    }
+}

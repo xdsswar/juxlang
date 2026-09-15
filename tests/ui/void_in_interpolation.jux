@@ -1,0 +1,7 @@
+public void log(String line) {
+    print(line);
+}
+
+public void main() {
+    print($"result: ${log("x")}");
+}

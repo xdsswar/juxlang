@@ -1,0 +1,1 @@
+chained_comparison.jux:5:9: [E0476] error: comparisons do not chain: the first comparison is a `bool`, and a `bool` cannot be compared with a number

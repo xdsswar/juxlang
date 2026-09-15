@@ -1,0 +1,8 @@
+public void main() {
+    int low = 1;
+    int mid = 2;
+    int high = 3;
+    if (low < mid < high) {
+        print("ordered");
+    }
+}
