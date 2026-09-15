@@ -777,6 +777,29 @@ impl RustEmitter {
                 let lifted = (segs.len() >= 3)
                     .then(|| self.lifted_nested_type_fqn(&segs[..segs.len() - 1]))
                     .flatten();
+                // `case Level.Junior` inside the owner of `Level` (or a
+                // subclass of it) names the lifted `Employee__Level`.
+                let nested_simple = (segs.len() == 2 && lifted.is_none())
+                    .then(|| self.enclosing_nested_type(segs[0]))
+                    .flatten();
+                if let Some(enum_name) = nested_simple {
+                    self.w.push_str(&juxc_lex::to_rust_ident(&enum_name));
+                    self.w.push_str("::");
+                    self.w.push_str(&juxc_lex::to_rust_ident(segs[1]));
+                    if !args.is_empty() || pattern_has_parens(pattern) {
+                        self.w.push('(');
+                        self.pattern_depth += 1;
+                        for (i, sub) in args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            self.emit_pattern(sub);
+                        }
+                        self.pattern_depth -= 1;
+                        self.w.push(')');
+                    }
+                    return;
+                }
                 match lifted {
                     Some(fqn) => {
                         let path = self.rust_path_for_type_fqn(&fqn);

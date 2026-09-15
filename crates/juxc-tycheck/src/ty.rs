@@ -899,6 +899,11 @@ pub fn lower_member_type_in_method(
     symbols: &SymbolTable,
 ) -> Ty {
     let mut env = TypeEnv::new();
+    // The declaring class is the enclosing scope, as in [`lower_member_type`]:
+    // a method returning its owner's nested `Stats` names `Roster__Stats`.
+    // Without it the return type lowered to `Unknown`, and every value the
+    // method produced lost its class.
+    env.current_class = Some(declaring_class.to_string());
     // The declaring class's package, for the same reason as
     // [`lower_member_type`]: a bare name in a member signature means that
     // package's type.
@@ -1650,9 +1655,21 @@ pub(crate) fn enclosing_nested_type(
 ) -> Option<String> {
     let mut scope: Option<&str> = env.current_class.as_deref();
     while let Some(s) = scope {
-        let candidate = format!("{s}__{bare}");
-        if symbols.is_type_name(&candidate) {
-            return Some(candidate);
+        // The owner itself, then its superclasses: a member type is
+        // inherited the way the other members are, so `Level` inside
+        // `Boss extends Employee` is `Employee__Level`.
+        let mut owner = Some(s.to_string());
+        for _ in 0..64 {
+            let Some(o) = owner else { break };
+            let candidate = format!("{o}__{bare}");
+            if symbols.is_type_name(&candidate) {
+                return Some(candidate);
+            }
+            owner = symbols.classes.get(&o).and_then(|c| {
+                c.extends_fqn
+                    .clone()
+                    .or_else(|| c.extends.as_ref()?.name.segments.last().map(|seg| seg.text.clone()))
+            });
         }
         scope = s.rsplit_once("__").map(|(outer, _)| outer);
     }

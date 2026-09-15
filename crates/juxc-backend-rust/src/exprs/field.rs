@@ -937,13 +937,24 @@ impl RustEmitter {
     pub(crate) fn enclosing_nested_type(&self, bare: &str) -> Option<String> {
         let mut scope: Option<&str> = self.enclosing_class.as_deref();
         while let Some(s) = scope {
-            let candidate = format!("{s}__{bare}");
-            if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
-                || self.symbols.records.contains_key(&candidate)
-                || self.symbols.enums.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
-                || self.symbols.interfaces.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
-            {
-                return Some(candidate);
+            // The owner, then its superclasses (an inherited member type).
+            let mut owner = Some(s.to_string());
+            for _ in 0..64 {
+                let Some(o) = owner else { break };
+                let o_bare = o.rsplit('.').next().unwrap_or(&o).to_string();
+                let candidate = format!("{o_bare}__{bare}");
+                if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
+                    || self.symbols.records.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
+                    || self.symbols.enums.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
+                    || self.symbols.interfaces.keys().any(|k| k == &candidate || k.rsplit('.').next() == Some(candidate.as_str()))
+                {
+                    return Some(candidate);
+                }
+                owner = self.lookup_class_by_bare_or_fqn(&o).and_then(|c| {
+                    c.extends_fqn
+                        .clone()
+                        .or_else(|| c.extends.as_ref()?.name.segments.last().map(|seg| seg.text.clone()))
+                });
             }
             scope = s.rsplit_once("__").map(|(outer, _)| outer);
         }

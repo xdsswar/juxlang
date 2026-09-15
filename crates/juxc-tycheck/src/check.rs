@@ -10097,7 +10097,13 @@ fn collect_variants_covered(
     if let Pattern::EnumVariant { path, .. } = pattern {
         match path.segments.len() {
             // `case EnumName.Variant(...)` — qualified form.
-            2 if path.segments[0].text == bare || path.segments[0].text == enum_name => {
+            // A nested enum's own body, or a subclass of its owner, names it by
+            // its simple name: `case Level.Junior` inside `Employee` for the
+            // lifted `Employee__Level`.
+            2 if path.segments[0].text == bare
+                || path.segments[0].text == enum_name
+                || bare.rsplit("__").next() == Some(path.segments[0].text.as_str()) =>
+            {
                 out.insert(path.segments[1].text.clone());
             }
             // `case Variant(...)` — bare form. The scrutinee's

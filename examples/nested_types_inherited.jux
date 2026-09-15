@@ -1,0 +1,45 @@
+// A nested type is a member like any other (MISSING-DEFS M.9): its owner
+// names it by its simple name, including in `case Level.Junior`, a subclass
+// inherits the name, and a method can hand one out to code that only ever
+// writes `var`.
+
+public class Employee {
+    public enum Level { Junior, Senior }
+    protected Level level = Level.Junior;
+
+    public int multiplier() {
+        return switch (level) {
+            case Level.Junior -> 100;
+            case Level.Senior -> 135;
+        };
+    }
+}
+
+public class Boss extends Employee {
+    public Boss() { this.level = Level.Senior; }
+    public Level rank() { return level; }
+}
+
+public class Roster {
+    public static class Stats {
+        public int count = 0;
+        public String label = "roster";
+    }
+    public Stats stats() {
+        var s = new Stats();
+        s.count = 3;
+        return s;
+    }
+}
+
+public void main() {
+    print(new Employee().multiplier());
+    var boss = new Boss();
+    print(boss.multiplier());
+    print(boss.rank());
+    print(boss.level);
+
+    var st = new Roster().stats();
+    print(st.count);
+    print(st.label);
+}
