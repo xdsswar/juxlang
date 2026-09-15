@@ -1,0 +1,27 @@
+// A bounded type parameter has exactly its bound's members: a name the bound
+// does not declare is E0413 with the nearest match, not a rustc error.
+
+abstract class Auto {
+    public abstract int getSpeed();
+    public abstract int getMileage();
+}
+
+interface Named {
+    String name();
+}
+
+public <T extends Auto> void show(T t) {
+    print(t.getSpeed());
+    print(t.getSpee());
+}
+
+public <N extends Named> void greet(N n) {
+    print(n.name());
+    print(n.nam());
+}
+
+public <U> void free(U u) {
+    print(u);
+}
+
+public void main() {}

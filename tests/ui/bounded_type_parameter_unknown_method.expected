@@ -1,0 +1,2 @@
+bounded_type_parameter_unknown_method.jux:15:13: [E0413] error: no method `getSpee` on type parameter `T`, whose bound `Auto` does not declare it -- did you mean `getSpeed`?
+bounded_type_parameter_unknown_method.jux:20:13: [E0413] error: no method `nam` on type parameter `N`, whose bound `Named` does not declare it -- did you mean `name`?

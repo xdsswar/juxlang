@@ -47,6 +47,9 @@ pub struct TypeEnv {
     /// surrounding class/record's params **and** the current method's
     /// params (if any). Cleared between methods.
     pub generic_params: HashSet<String>,
+    /// The declared bounds of the generic parameters in [`Self::generic_params`]
+    /// that have any (`<T extends Auto>` → `T -> [Auto]`).
+    pub generic_bounds: HashMap<String, Vec<juxc_ast::TypeRef>>,
     /// Dotted package path of the unit currently being checked —
     /// e.g. `["a", "lib"]` for `package a.lib;`. Empty for the
     /// crate-root (no-package) case. Drives the bare-name → FQN
@@ -75,6 +78,7 @@ impl TypeEnv {
             ptr_depths: vec![HashMap::new()],
             current_class: None,
             generic_params: HashSet::new(),
+            generic_bounds: HashMap::new(),
             current_package: Vec::new(),
             unqualified: HashMap::new(),
             weak_names: HashSet::new(),
@@ -165,11 +169,24 @@ impl TypeEnv {
         self.generic_params.insert(name.to_string());
     }
 
+    /// Bring a generic parameter into scope together with its declared
+    /// bounds (`<T extends Auto>`), so a member used on a `T` can be checked
+    /// against what the bound provides.
+    pub fn add_generic_param_bounded(&mut self, name: &str, bounds: &[juxc_ast::TypeRef]) {
+        self.generic_params.insert(name.to_string());
+        if bounds.is_empty() {
+            self.generic_bounds.remove(name);
+        } else {
+            self.generic_bounds.insert(name.to_string(), bounds.to_vec());
+        }
+    }
+
     /// Clear all in-scope generic parameters. Call when leaving a
     /// generic class/method to restore the previous (non-generic)
     /// state.
     pub fn clear_generic_params(&mut self) {
         self.generic_params.clear();
+        self.generic_bounds.clear();
     }
 }
 

@@ -1636,7 +1636,7 @@ impl<'a> Checker<'a> {
         // `xs[0]` moved out of a borrow (rustc E0507).
         let saved_generics = std::mem::take(&mut self.env.generic_params);
         for tp in &fn_decl.generic_params {
-            self.env.add_generic_param(&tp.name.text);
+            self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
@@ -2009,7 +2009,7 @@ impl<'a> Checker<'a> {
         // Register every generic param so `T` in declared types lowers
         // to `Ty::Param("T")` rather than `Unknown`.
         for tp in &class.generic_params {
-            self.env.add_generic_param(&tp.name.text);
+            self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         // Const-generic params (`<int N>`) additionally read as VALUES
         // inside every body (`return N;`) — declare them with their
@@ -2387,7 +2387,7 @@ impl<'a> Checker<'a> {
         self.in_static = is_static;
         // Method-level generic params extend the class-level set.
         for tp in &method.generic_params {
-            self.env.add_generic_param(&tp.name.text);
+            self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         self.declare_const_generic_params(&method.generic_params);
         self.env.weak_names.clear();
@@ -3228,7 +3228,7 @@ impl<'a> Checker<'a> {
         let name = crate::symbol_table::make_fqn(&self.env.current_package, &iface.name.text);
         self.env.set_class(&name);
         for tp in &iface.generic_params {
-            self.env.add_generic_param(&tp.name.text);
+            self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         self.declare_const_generic_params(&iface.generic_params);
         let this_ty = Ty::User {
@@ -3257,7 +3257,7 @@ impl<'a> Checker<'a> {
         let name = crate::symbol_table::make_fqn(&self.env.current_package, &record.name.text);
         self.env.set_class(&name);
         for tp in &record.generic_params {
-            self.env.add_generic_param(&tp.name.text);
+            self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         self.declare_const_generic_params(&record.generic_params);
         let this_ty = Ty::User {
@@ -5217,6 +5217,76 @@ impl<'a> Checker<'a> {
     /// untouched (there `protected` already grants package access), `this` and
     /// `super` are untouched, and a static member has no receiver to be
     /// responsible for.
+    /// E0413 for a method a bounded type parameter's bounds do not provide.
+    /// Silent when the parameter has no bound or any bound is not a class or
+    /// interface of this program, since then the member surface is unknown.
+    fn check_method_on_bounded_param(&mut self, param: &str, method_name: &str, span: Span) {
+        let Some(bounds) = self.env.generic_bounds.get(param).cloned() else { return };
+        let mut bound_names = Vec::new();
+        for bound in &bounds {
+            match ty_from_ref(bound, &self.env, self.symbols) {
+                Ty::User { name, .. }
+                    if self.symbols.classes.contains_key(&name) || self.symbols.interfaces.contains_key(&name) =>
+                {
+                    bound_names.push(name)
+                }
+                _ => return,
+            }
+        }
+        if bound_names.is_empty() {
+            return;
+        }
+        let provided = bound_names.iter().any(|b| {
+            self.symbols.lookup_method(b, method_name).is_some() || self.interface_provides_method(b, method_name)
+        });
+        if provided {
+            return;
+        }
+        let shown: Vec<String> = bound_names
+            .iter()
+            .map(|b| format!("`{}`", b.rsplit('.').next().unwrap_or(b)))
+            .collect();
+        let hint = self.nearest_method_hint(&bound_names[0], method_name);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0413_UnresolvedMethod,
+                format!(
+                    "no method `{method_name}` on type parameter `{param}`, whose bound {} does not declare it{hint}",
+                    shown.join(" & "),
+                ),
+            )
+            .with_span(span),
+        );
+    }
+
+    /// Whether interface `name`, or an interface it extends, declares `method`.
+    fn interface_provides_method(&self, name: &str, method: &str) -> bool {
+        let mut queue = vec![name.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(current) = queue.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            let iface = self.symbols.interfaces.get(&current).or_else(|| {
+                self.symbols
+                    .interfaces
+                    .iter()
+                    .find(|(k, _)| k.rsplit('.').next() == Some(current.as_str()))
+                    .map(|(_, v)| v)
+            });
+            let Some(iface) = iface else { continue };
+            if iface.methods.contains_key(method) {
+                return true;
+            }
+            for parent in &iface.extends {
+                if let Some(seg) = parent.name.segments.last() {
+                    queue.push(seg.text.clone());
+                }
+            }
+        }
+        false
+    }
+
     /// `" -- did you mean `x`?"` when the type has a method whose name is
     /// close to the one written, else an empty string.
     ///
@@ -7669,6 +7739,19 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
+                }
+                // **A bounded type parameter.** `<T extends Auto>` promises
+                // exactly Auto's members, so a name Auto does not have is a
+                // mistake the checker can see: `t.getSpee()` used to pass and
+                // then fail in rustc as "no method named `getSpee` found for
+                // type parameter `T`". An unbounded `T`, or a bound this
+                // symbol table does not know, stays unchecked.
+                if let Ty::Param(param) = &receiver_ty {
+                    self.check_method_on_bounded_param(param, method_name, field.field.span);
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
+                    return;
                 }
                 // Skip method-resolution on Param / Unknown / primitive
                 // receivers. We don't have the metadata to do better.
