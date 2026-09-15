@@ -1154,6 +1154,11 @@ struct RustEmitter {
     /// require `T: Copy`, which Jux generics don't carry. Set/restored
     /// alongside [`Self::const_int_params`].
     pub(crate) current_type_params: std::collections::HashSet<String>,
+    /// Every type-parameter name declared anywhere in the program (classes,
+    /// records, interfaces, functions, methods), computed on first use. A
+    /// constant that shares one of these names (`const int T = 10;`) is never
+    /// folded into a type position, where `Some(T)` means the parameter.
+    pub(crate) program_type_param_names: std::cell::OnceCell<std::collections::HashSet<String>>,
     /// In-scope generic type-param **bounds**, keyed by param name — the
     /// enclosing class's params (and, while emitting a method, that method's
     /// params too). Lets `emit_generic_params_with_clone_bound` expand a bound
@@ -4937,6 +4942,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
+            program_type_param_names: std::cell::OnceCell::new(),
             type_param_bounds: std::collections::HashMap::new(),
             in_array_size_position: false,
             dynamic_array_target: false,

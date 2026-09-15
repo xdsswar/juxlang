@@ -1,0 +1,7 @@
+int? count = 5;
+String greeting;
+public const int LIMIT = 10;
+
+public void main() {
+    print(LIMIT);
+}

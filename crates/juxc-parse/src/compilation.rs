@@ -72,10 +72,14 @@ impl<'a> Parser<'a> {
                     let stashed: Vec<_> = self.diagnostics.drain(diags_before..).collect();
                     self.pos = before;
                     let stmt_diags_before = self.diagnostics.len();
+                    // Where the statement STARTS: read before parsing it, not
+                    // after, or the synthetic entry's span begins one statement
+                    // late.
+                    let stmt_start = self.peek_span();
                     match self.parse_stmt() {
                         Some(stmt) => {
                             if script_start.is_none() {
-                                script_start = Some(self.peek_span());
+                                script_start = Some(stmt_start);
                             }
                             script_stmts.push(stmt);
                             script_stmts.append(&mut self.pending_stmts);
@@ -103,6 +107,26 @@ impl<'a> Parser<'a> {
         // (§E.1.1). Span: first statement through last. An explicit
         // `main` in the same file collides in the symbol table and
         // surfaces as the usual duplicate-declaration diagnostic.
+        // §E.1.1 / §E.1.2: top-level statements BECOME `main`, so a file that
+        // also declares `main` has statements with nowhere to run. The usual
+        // symptom is a top-level variable (`int? count = 0;`), which the
+        // grammar allows only as a `const` (§A.2.2). One diagnostic at the
+        // first statement replaces the duplicate-entry pair.
+        let declares_main = items
+            .iter()
+            .any(|item| matches!(item, TopLevelDecl::Function(f) if f.name.text == "main"));
+        if !script_stmts.is_empty() && declares_main {
+            let span = script_start.unwrap_or(start);
+            let message = if matches!(script_stmts.first(), Some(juxc_ast::Stmt::VarDecl(_))) {
+                "a top-level variable must be a constant: write `const` (or `final`) before its type, or make it a `static` field of a class"
+            } else {
+                "this file declares `main`, so top-level statements have nowhere to run: move them into `main`"
+            };
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0200_UnexpectedToken, message).with_span(span),
+            );
+            script_stmts.clear();
+        }
         if !script_stmts.is_empty() {
             let start_span = script_start.unwrap_or(start);
             let end_span = self.last_consumed_span();
@@ -565,8 +589,43 @@ impl<'a> Parser<'a> {
             let alias = self.parse_type_alias_decl(annotations, visibility)?;
             return Some(TopLevelDecl::TypeAlias(alias));
         }
+        // `int n = 3;` / `String name;` is a variable, not a function: decline,
+        // so the unit loop retries it as a top-level statement (§E.1.1 script
+        // mode, where it is a local of the synthetic `main`). Read as a
+        // function it produced a cascade about a missing `(`. The diagnostic
+        // below only survives if the statement parse fails too, as it does for
+        // `public int n = 3;`.
+        if self.top_level_looks_like_variable() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "a top-level variable must be a constant: write `const` (or `final`) before its type, \
+                     or make it a `static` field of a class",
+                )
+                .with_span(self.peek_span()),
+            );
+            return None;
+        }
         let fn_decl = self.parse_fn_decl(annotations, visibility)?;
         Some(TopLevelDecl::Function(fn_decl))
+    }
+
+    /// Whether the declaration at the cursor is `Type name = ...;` or
+    /// `Type name;` rather than a function: an `=` or `;` comes before any `(`
+    /// or `{`, outside generic brackets.
+    fn top_level_looks_like_variable(&self) -> bool {
+        let mut depth = 0usize;
+        for tok in &self.tokens[self.pos..] {
+            match &tok.kind {
+                TokenKind::Lt | TokenKind::LBracket => depth += 1,
+                TokenKind::Gt | TokenKind::RBracket => depth = depth.saturating_sub(1),
+                TokenKind::LParen | TokenKind::LBrace => return false,
+                TokenKind::Eq | TokenKind::Semicolon if depth == 0 => return true,
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// True when the cursor sits on a keyword that can ONLY start a

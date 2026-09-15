@@ -1,0 +1,44 @@
+// Overload resolution picks the most specific applicable member
+// (TYPE-SYSTEM §T.3.3), by the arguments' declared types.
+//
+// - `greet(Dog)` beats `greet(Animal)` for a `Dog`; an `Animal`-typed value
+//   takes `greet(Animal)` even when it holds a `Dog`, since overloads are
+//   chosen at compile time and methods dispatch at run time.
+// - An integer literal takes the narrowest numeric parameter that fits.
+// - The same rules hold for instance and static methods.
+
+public class Animal { public String name() { return "animal"; } }
+public class Dog extends Animal { public String name() { return "dog"; } }
+
+public class Vet {
+    public String treat(Animal a) { return "general care for a " + a.name(); }
+    public String treat(Dog d) { return "canine care for a " + d.name(); }
+    public static String file(Animal a) { return "filed as animal"; }
+    public static String file(Dog d) { return "filed as dog"; }
+}
+
+public String greet(Animal a) { return "hello, " + a.name(); }
+public String greet(Dog d) { return "woof, " + d.name(); }
+
+public String width(int x) { return "int"; }
+public String width(long x) { return "long"; }
+public String width(double x) { return "double"; }
+
+public void main() {
+    Dog rex = new Dog();
+    Animal someone = rex;
+    print(greet(rex));
+    print(greet(someone));
+
+    var vet = new Vet();
+    print(vet.treat(rex));
+    print(vet.treat(someone));
+    print(Vet.file(rex));
+    print(Vet.file(new Animal()));
+
+    print(width(42));
+    print(width(42L));
+    print(width(2.5));
+    long big = 7;
+    print(width(big));
+}

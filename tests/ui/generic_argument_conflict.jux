@@ -1,0 +1,14 @@
+public <T> T pick(T first, T second) {
+    return first;
+}
+
+public class Animal {}
+public class Dog extends Animal {}
+public class Cat extends Animal {}
+
+public void main() {
+    var mixed = pick(3, "three");
+    Animal either = pick(new Dog(), new Cat());
+    long wide = pick(3, 4L);
+    print(wide);
+}

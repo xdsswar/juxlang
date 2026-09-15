@@ -76,6 +76,36 @@ impl RustEmitter {
         juxc_tycheck::const_eval::eval_const_string(e, &ctx).ok()
     }
 
+    /// Whether `name` is a type parameter declared anywhere in the program; see
+    /// [`RustEmitter::program_type_param_names`].
+    pub(crate) fn names_a_type_param(&self, name: &str) -> bool {
+        self.program_type_param_names
+            .get_or_init(|| {
+                let s = &self.symbols;
+                let mut names = std::collections::HashSet::new();
+                let mut add = |params: &[juxc_ast::TypeParam]| {
+                    names.extend(params.iter().map(|p| p.name.text.clone()));
+                };
+                for c in s.classes.values() {
+                    add(&c.generic_params);
+                    for m in c.methods.values() {
+                        add(&m.generic_params);
+                    }
+                }
+                for r in s.records.values() {
+                    add(&r.generic_params);
+                }
+                for i in s.interfaces.values() {
+                    add(&i.generic_params);
+                }
+                for f in s.functions.values() {
+                    add(&f.generic_params);
+                }
+                names
+            })
+            .contains(name)
+    }
+
     pub(crate) fn try_const_int(&self, e: &juxc_ast::Expr) -> Option<i64> {
         let ctx = juxc_tycheck::const_eval::ConstCtx {
             symbols: &self.symbols,
@@ -237,6 +267,7 @@ impl RustEmitter {
             && ty.generic_args.is_empty()
             && ty.name.segments.len() == 1
             && ty.const_literal_text().is_none()
+            && !self.names_a_type_param(&ty.name.segments[0].text)
         {
             let probe = juxc_ast::Expr::Path(ty.name.clone());
             if let Some(v) = self.try_const_int(&probe) {

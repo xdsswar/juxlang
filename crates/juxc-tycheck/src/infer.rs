@@ -134,6 +134,10 @@ fn best_overload_by_args(
         1 => Some(candidates[0]),
         _ => {
             let arg_tys: Vec<Ty> = c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+            // §T.3.3: the most specific applicable member wins outright.
+            if let OverloadSpecificity::Unique(k) = most_specific_overload(param_lists, &candidates, &arg_tys, env, symbols) {
+                return Some(k);
+            }
             let mut best: Option<(i32, usize)> = None;
             for k in &candidates {
                 let params = param_lists[*k];
@@ -161,6 +165,116 @@ fn best_overload_by_args(
             }
             best.map(|(_, k)| k).or(Some(candidates[0]))
         }
+    }
+}
+
+/// The outcome of §T.3.3 specificity ordering over the applicable members.
+pub(crate) enum OverloadSpecificity {
+    /// One applicable member is more specific than every other.
+    Unique(usize),
+    /// Several applicable members, none more specific than the rest.
+    Tied(Vec<usize>),
+    /// No member accepts the argument types (argument checks report it).
+    NoneApplicable,
+}
+
+/// §T.3.3 over the members `candidates` of `param_lists` (already filtered by
+/// argument count). A member is APPLICABLE when every argument's type is
+/// assignable to its parameter. Member `f` is MORE SPECIFIC than `g` when each
+/// of `f`'s parameters is assignable to `g`'s and at least one differs, so
+/// `f(Dog)` beats `f(Animal)` and `log(int)` beats `log(long)` for `42`.
+pub(crate) fn most_specific_overload(
+    param_lists: &[&[ParamSig]],
+    candidates: &[usize],
+    arg_tys: &[Ty],
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> OverloadSpecificity {
+    let param_ty = |k: usize, i: usize| param_lists[k].get(i).map(|p| ty_from_ref(&p.ty, env, symbols));
+    // An argument whose type is unknown fits anything; it cannot rank members.
+    let applicable: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&k| {
+            arg_tys.iter().enumerate().all(|(i, at)| match param_ty(k, i) {
+                Some(pt) => matches!(at, Ty::Unknown) || pt == *at || crate::check::compatible(&pt, at, symbols),
+                None => true,
+            })
+        })
+        .collect();
+    if applicable.is_empty() {
+        return OverloadSpecificity::NoneApplicable;
+    }
+    let more_specific = |f: usize, g: usize| {
+        let mut strictly = false;
+        for i in 0..arg_tys.len() {
+            let (Some(fp), Some(gp)) = (param_ty(f, i), param_ty(g, i)) else { continue };
+            if fp == gp {
+                continue;
+            }
+            // Rule 3, concrete over generic: a type parameter accepts anything,
+            // so it is never the more specific side against a concrete type. A
+            // method's own `<T>` is out of scope here and lowers to `Unknown`,
+            // which counts the same way.
+            let generic = |t: &Ty| matches!(t, Ty::Param(_) | Ty::Unknown);
+            match (generic(&fp), generic(&gp)) {
+                (true, false) => return false,
+                (false, true) => {
+                    strictly = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if !crate::check::compatible(&gp, &fp, symbols) {
+                return false;
+            }
+            strictly = true;
+        }
+        strictly
+    };
+    if let Some(&winner) = applicable
+        .iter()
+        .find(|&&f| applicable.iter().all(|&g| g == f || more_specific(f, g)))
+    {
+        return OverloadSpecificity::Unique(winner);
+    }
+    let maximal: Vec<usize> = applicable
+        .iter()
+        .copied()
+        .filter(|&f| !applicable.iter().any(|&g| g != f && more_specific(g, f)))
+        .collect();
+    OverloadSpecificity::Tied(maximal)
+}
+
+/// The members of an overloaded call that tie under §T.3.3, when there is such
+/// a tie (E0475); empty when the call resolves or no member applies.
+pub(crate) fn ambiguous_overloads(
+    param_lists: &[&[ParamSig]],
+    c: &CallExpr,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Vec<usize> {
+    let count = c.args.len();
+    let candidates: Vec<usize> = param_lists
+        .iter()
+        .enumerate()
+        .filter(|(_, params)| {
+            let (lo, hi) = crate::symbol_table::ctor_arity_range(params);
+            count >= lo && hi.map_or(true, |h| count <= h)
+        })
+        .map(|(k, _)| k)
+        .collect();
+    if candidates.len() < 2 {
+        return Vec::new();
+    }
+    let arg_tys: Vec<Ty> = c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+    // Unknown argument types leave the question open; do not guess.
+    if arg_tys.iter().any(|t| matches!(t, Ty::Unknown)) {
+        return Vec::new();
+    }
+    match most_specific_overload(param_lists, &candidates, &arg_tys, env, symbols) {
+        OverloadSpecificity::Tied(members) if members.len() > 1 => members,
+        _ => Vec::new(),
     }
 }
 

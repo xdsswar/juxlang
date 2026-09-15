@@ -1,0 +1,1 @@
+const_loop_never_ends.jux:10:26: [E0840] error: constant `STUCK` did not finish computing: its evaluation exceeded the compile-time limit (a loop that never ends, or recursion too deep)

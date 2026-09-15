@@ -1,2 +1,1 @@
-entry_point_conflict.jux:7:1: [E0320] error: multiple entry points in one file (free function `main`, free function `main`) -- a program may have only one `main`; keep one and remove or rename the others
-entry_point_conflict.jux:7:1: [E0400] error: `main` is declared more than once at the top level
+entry_point_conflict.jux:5:1: [E0200] error: this file declares `main`, so top-level statements have nowhere to run: move them into `main`

@@ -1722,6 +1722,13 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
         let mut methods = Vec::new();
         let mut static_fields: Vec<juxc_ast::FieldDecl> = Vec::new();
+        // A body-less record may be closed with `;`
+        // (`public record Point(int x, int y);`), the shape a one-line record
+        // is usually written in. The grammar makes the body optional, so the
+        // semicolon is just the terminator.
+        if !self.at(&TokenKind::LBrace) {
+            self.eat(&TokenKind::Semicolon);
+        }
         if self.eat(&TokenKind::LBrace) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
                 // `record-member = annotation* ( function-decl | static-init-block )`

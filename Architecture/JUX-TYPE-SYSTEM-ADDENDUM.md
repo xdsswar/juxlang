@@ -233,7 +233,7 @@ The "more specific" partial order combines:
 4. **Member over default.** A method declared on a class is more specific than a default method inherited from an interface.
 5. **Interface depth.** A method from a more-derived interface is more specific than one from a less-derived interface.
 
-If a unique most-specific candidate exists, pick it. Otherwise emit `E0420` listing the tied candidates.
+If a unique most-specific candidate exists, pick it. Otherwise emit `E0475` listing the tied candidates.
 
 ### T.3.4. Step 3 — Verify Return Type
 
@@ -277,7 +277,7 @@ log(my_record);      // candidates: (3) only. Picks it.
 log("hi", "tag1");   // candidates: (4) only. Picks it.
 ```
 
-If two candidates remain after specificity (e.g., a `log(int)` and `log(long)` for an untyped literal `42`), the literal adapts to whichever target type makes the call unambiguous; if both apply, emit `E0420`.
+If two candidates remain after specificity (e.g., a `log(int)` and `log(long)` for an untyped literal `42`), the literal adapts to whichever target type makes the call unambiguous; if both apply, emit `E0475`.
 
 ---
 

@@ -5073,9 +5073,17 @@ impl RustEmitter {
         if let Some(init) = &field.default {
             // A `const String` slot is a `&'static str`; a non-literal
             // initializer folds to one (§T.11.7) or emits verbatim.
-            match self.const_string_fold(&field_ty, init) {
-                Some(folded) => self.emit_rust_string_literal(&folded),
-                None => self.emit_expr(init),
+            // An int or bool initializer that folds (`total(4)`, a call to a
+            // const-evaluable function) emits the computed literal: a Rust
+            // `const` cannot call the emitted, non-`const` function (§T.11.1).
+            if let Some(folded) = self.const_string_fold(&field_ty, init) {
+                self.emit_rust_string_literal(&folded);
+            } else if let Some(v) = self.try_const_int(init) {
+                self.w.push_str(&v.to_string());
+            } else if let Some(b) = self.try_const_bool(init) {
+                self.w.push_str(if b { "true" } else { "false" });
+            } else {
+                self.emit_expr(init);
             }
         } else {
             // No initializer — Rust requires one at the const/static

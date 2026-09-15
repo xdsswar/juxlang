@@ -1,0 +1,1 @@
+generic_argument_conflict.jux:10:17: [E0453] error: no `T` fits this call to `pick`: one argument is int and another is String, and no type is both (§T.4.2)

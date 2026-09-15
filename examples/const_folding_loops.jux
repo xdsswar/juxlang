@@ -1,0 +1,61 @@
+// Constants computed by ordinary functions with loops (TYPE-SYSTEM §T.11).
+//
+// A function whose body does only const-legal work is folded at compile time
+// when a constant calls it: locals, assignment, `if`, bounded `for`, `while`
+// and `do` loops with `break` and `continue`, and recursion. The constant is
+// the computed value in the program, as if written by hand.
+
+public int sumBelow(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        if (i % 3 == 0) {
+            continue;
+        }
+        total += i;
+    }
+    return total;
+}
+
+public int firstPowerOfTwoAbove(int limit) {
+    int p = 1;
+    while (true) {
+        p = p * 2;
+        if (p > limit) {
+            break;
+        }
+    }
+    return p;
+}
+
+public int digits(long value) {
+    int count = 0;
+    do {
+        count++;
+        value = value / 10;
+    } while (value > 0);
+    return count;
+}
+
+public int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+public const int SUM = sumBelow(10);
+public const int BUCKETS = firstPowerOfTwoAbove(1000);
+public const int WIDTH = digits(1234567L);
+
+public class Table {
+    public static final int CELLS = factorial(5);
+    public static final bool LARGE = CELLS > 100;
+}
+
+public void main() {
+    print(SUM);
+    print(BUCKETS);
+    print(WIDTH);
+    print(Table.CELLS);
+    print(Table.LARGE);
+}

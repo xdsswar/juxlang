@@ -1,0 +1,14 @@
+public int spin(int n) {
+    int i = 0;
+    while (i >= 0) {
+        i = i + 1;
+        i = i - 1;
+    }
+    return i;
+}
+
+public const int STUCK = spin(1);
+
+public void main() {
+    print(STUCK);
+}

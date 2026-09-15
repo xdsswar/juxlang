@@ -265,6 +265,21 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
         Expr::Cast(c) => eval(&c.value, f),
 
         Expr::Call(c) => eval_call(c, f),
+        // `i++` / `--i` on a local of the running evaluation (§T.11.2 allows
+        // mutation of values local to it).
+        Expr::IncDec(inc) => {
+            let Expr::Path(qn) = inc.target.as_ref() else {
+                return Err(ConstEvalError::NonConst("only a local can be incremented in a constant".to_string()));
+            };
+            let name = qn.segments[0].text.clone();
+            let Some(ConstVal::Int(old)) = f.locals.get(&name).cloned() else {
+                return Err(ConstEvalError::NonConst(format!("`{name}` is not an integer local of this evaluation")));
+            };
+            let new = if inc.is_inc { old.checked_add(1) } else { old.checked_sub(1) }
+                .ok_or_else(|| ConstEvalError::Panic("integer overflow".to_string()))?;
+            f.locals.insert(name, ConstVal::Int(new));
+            Ok(ConstVal::Int(if inc.is_prefix { new } else { old }))
+        }
 
         _ => Err(ConstEvalError::NonConst(
             "this expression is not const-evaluable".to_string(),
@@ -449,66 +464,148 @@ fn eval_call(c: &juxc_ast::CallExpr, f: &mut Frame) -> Result<ConstVal, ConstEva
 
 /// Walk a block; `Ok(Some(v))` means a `return` fired with value `v`.
 fn eval_block(block: &Block, f: &mut Frame) -> Result<Option<ConstVal>, ConstEvalError> {
-    for stmt in &block.statements {
-        if f.budget.ops == 0 {
-            return Err(ConstEvalError::LimitExceeded);
-        }
-        f.budget.ops -= 1;
-        match stmt {
-            Stmt::Return(Some(e), _) => return Ok(Some(eval(e, f)?)),
-            Stmt::Return(None, _) => {
-                return Err(ConstEvalError::NonConst(
-                    "a const-evaluable function must return a value".to_string(),
-                ))
-            }
-            Stmt::VarDecl(v) => {
-                let Some(init) = &v.init else {
-                    return Err(ConstEvalError::NonConst(
-                        "an uninitialized local is not const-evaluable".to_string(),
-                    ));
-                };
-                let val = eval(init, f)?;
-                f.locals.insert(v.name.text.clone(), val);
-            }
-            Stmt::If(i) => {
-                let taken = if eval_bool(&i.condition, f)? {
-                    eval_block(&i.then_block, f)?
-                } else {
-                    match &i.else_branch {
-                        None => None,
-                        Some(eb) => match eb.as_ref() {
-                            juxc_ast::ElseBranch::Block(b) => eval_block(b, f)?,
-                            juxc_ast::ElseBranch::If(inner) => {
-                                eval_if_chain(inner, f)?
-                            }
-                        },
-                    }
-                };
-                if taken.is_some() {
-                    return Ok(taken);
-                }
-            }
-            _ => {
-                return Err(ConstEvalError::NonConst(
-                    "this statement is not const-evaluable".to_string(),
-                ))
-            }
-        }
+    match exec_block(block, f)? {
+        Flow::Return(v) => Ok(Some(v)),
+        Flow::Normal => Ok(None),
+        Flow::Break | Flow::Continue => Err(ConstEvalError::NonConst(
+            "`break` or `continue` outside a loop".to_string(),
+        )),
     }
-    Ok(None)
 }
 
-/// `eval_block` for an `else if` chain (an [`juxc_ast::IfStmt`] reached through
-/// an `ElseBranch::If`).
-fn eval_if_chain(i: &juxc_ast::IfStmt, f: &mut Frame) -> Result<Option<ConstVal>, ConstEvalError> {
+/// How a statement finished: fell through, returned, or left a loop body.
+enum Flow {
+    Normal,
+    Return(ConstVal),
+    Break,
+    Continue,
+}
+
+fn exec_block(block: &Block, f: &mut Frame) -> Result<Flow, ConstEvalError> {
+    for stmt in &block.statements {
+        match exec_stmt(stmt, f)? {
+            Flow::Normal => {}
+            other => return Ok(other),
+        }
+    }
+    Ok(Flow::Normal)
+}
+
+/// One statement of a const-evaluable body (§T.11.2): locals, assignment to a
+/// local, `if`, bounded `for` / `while` / `do` loops with `break` and
+/// `continue`, and `return`. Every statement costs one unit of the op budget,
+/// so a loop that does not end reports E0840 instead of hanging the compiler.
+fn exec_stmt(stmt: &Stmt, f: &mut Frame) -> Result<Flow, ConstEvalError> {
+    if f.budget.ops == 0 {
+        return Err(ConstEvalError::LimitExceeded);
+    }
+    f.budget.ops -= 1;
+    match stmt {
+        Stmt::Return(Some(e), _) => Ok(Flow::Return(eval(e, f)?)),
+        Stmt::Return(None, _) => Err(ConstEvalError::NonConst(
+            "a const-evaluable function must return a value".to_string(),
+        )),
+        Stmt::VarDecl(v) => {
+            let Some(init) = &v.init else {
+                return Err(ConstEvalError::NonConst(
+                    "an uninitialized local is not const-evaluable".to_string(),
+                ));
+            };
+            let val = eval(init, f)?;
+            f.locals.insert(v.name.text.clone(), val);
+            Ok(Flow::Normal)
+        }
+        Stmt::Assign(a) => {
+            let Expr::Path(qn) = &a.target else {
+                return Err(ConstEvalError::NonConst(
+                    "a constant can only assign to its own locals".to_string(),
+                ));
+            };
+            let name = qn.segments[0].text.clone();
+            if qn.segments.len() != 1 || !f.locals.contains_key(&name) {
+                return Err(ConstEvalError::NonConst(format!(
+                    "`{name}` is not a local of this evaluation"
+                )));
+            }
+            let val = match a.op {
+                None => eval(&a.value, f)?,
+                Some(op) => eval_binary(op, &a.target, &a.value, f)?,
+            };
+            f.locals.insert(name, val);
+            Ok(Flow::Normal)
+        }
+        Stmt::Expr(e @ Expr::IncDec(_)) => {
+            eval(e, f)?;
+            Ok(Flow::Normal)
+        }
+        Stmt::Block(b) => exec_block(b, f),
+        Stmt::If(i) => exec_if(i, f),
+        Stmt::While(w) => {
+            while eval_bool(&w.condition, f)? {
+                match exec_block(&w.body, f)? {
+                    Flow::Break => break,
+                    Flow::Return(v) => return Ok(Flow::Return(v)),
+                    Flow::Normal | Flow::Continue => {}
+                }
+            }
+            Ok(Flow::Normal)
+        }
+        Stmt::DoWhile(d) => {
+            loop {
+                match exec_block(&d.body, f)? {
+                    Flow::Break => break,
+                    Flow::Return(v) => return Ok(Flow::Return(v)),
+                    Flow::Normal | Flow::Continue => {}
+                }
+                if !eval_bool(&d.condition, f)? {
+                    break;
+                }
+            }
+            Ok(Flow::Normal)
+        }
+        Stmt::ForC(fc) => {
+            if let Some(init) = &fc.init {
+                exec_stmt(init, f)?;
+            }
+            loop {
+                if let Some(cond) = &fc.cond {
+                    if !eval_bool(cond, f)? {
+                        break;
+                    }
+                }
+                match exec_block(&fc.body, f)? {
+                    Flow::Break => break,
+                    Flow::Return(v) => return Ok(Flow::Return(v)),
+                    Flow::Normal | Flow::Continue => {}
+                }
+                if let Some(update) = &fc.update {
+                    exec_stmt(update, f)?;
+                }
+                if f.budget.ops == 0 {
+                    return Err(ConstEvalError::LimitExceeded);
+                }
+                f.budget.ops -= 1;
+            }
+            Ok(Flow::Normal)
+        }
+        Stmt::Break(None, _) => Ok(Flow::Break),
+        Stmt::Continue(None, _) => Ok(Flow::Continue),
+        _ => Err(ConstEvalError::NonConst(
+            "this statement is not const-evaluable".to_string(),
+        )),
+    }
+}
+
+/// An `if` / `else if` / `else` chain.
+fn exec_if(i: &juxc_ast::IfStmt, f: &mut Frame) -> Result<Flow, ConstEvalError> {
     if eval_bool(&i.condition, f)? {
-        eval_block(&i.then_block, f)
+        exec_block(&i.then_block, f)
     } else {
         match &i.else_branch {
-            None => Ok(None),
+            None => Ok(Flow::Normal),
             Some(eb) => match eb.as_ref() {
-                juxc_ast::ElseBranch::Block(b) => eval_block(b, f),
-                juxc_ast::ElseBranch::If(inner) => eval_if_chain(inner, f),
+                juxc_ast::ElseBranch::Block(b) => exec_block(b, f),
+                juxc_ast::ElseBranch::If(inner) => exec_if(inner, f),
             },
         }
     }

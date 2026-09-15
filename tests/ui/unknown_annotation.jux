@@ -1,0 +1,15 @@
+public annotation Audited {}
+
+@Derive(Eq)
+public record Point(int x, int y) {}
+
+@Tset
+public void checksPoint() {}
+
+@Audited
+public void trusted() {}
+
+@Frobnicate
+public void unknown() {}
+
+public void main() {}

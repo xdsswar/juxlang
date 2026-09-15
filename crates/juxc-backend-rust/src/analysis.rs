@@ -3507,6 +3507,18 @@ impl crate::RustEmitter {
     ) -> Option<juxc_ast::TypeRef> {
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
+                // An overloaded function converts its arguments to the member
+                // tycheck picked (keyed by the callee's span), not to member 0:
+                // `f(new Dog())` against `f(Animal)` / `f(Dog)` passes a `Dog`.
+                if let Some(k) = self.symbols.function_selections.get(&qn.span) {
+                    if let Some(member) = self
+                        .symbols
+                        .function_overload_group(&qn.segments[0].text)
+                        .and_then(|group| group.get(*k))
+                    {
+                        return member.params.get(arg_idx).map(|p| p.ty.clone());
+                    }
+                }
                 if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
                     return f.params.get(arg_idx).map(|p| p.ty.clone());
                 }
@@ -3517,6 +3529,12 @@ impl crate::RustEmitter {
             // receiver path resolves to a class.
             if let juxc_ast::Expr::Path(qn) = &*f.object {
                 if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    if let Some(k) = self.symbols.method_selections.get(&f.span) {
+                        let group = self.symbols.merged_method_overloads(&class_fqn, &f.field.text);
+                        if let Some(member) = group.get(*k) {
+                            return member.params.get(arg_idx).map(|p| p.ty.clone());
+                        }
+                    }
                     if let Some(class) = self.symbols.classes.get(&class_fqn) {
                         if let Some(m) = class.methods.get(f.field.text.as_str()) {
                             return m.params.get(arg_idx).map(|p| p.ty.clone());
@@ -3543,6 +3561,19 @@ impl crate::RustEmitter {
                 // `lookup_class_by_bare_or_fqn` borrow below also touches
                 // `self`.
                 let recv_args: Vec<juxc_tycheck::Ty> = generic_args.clone();
+                // An overloaded method converts its arguments to the member
+                // tycheck picked, as a free function does (non-generic
+                // receivers; a generic one keeps the substituting walk below).
+                if recv_args.is_empty() {
+                    if let (Some(k), Some(fqn)) =
+                        (self.symbols.method_selections.get(&f.span), self.resolve_bare_class_fqn(bare))
+                    {
+                        let group = self.symbols.merged_method_overloads(&fqn, &f.field.text);
+                        if let Some(member) = group.get(*k) {
+                            return member.params.get(arg_idx).map(|p| p.ty.clone());
+                        }
+                    }
+                }
                 let mut cursor: Option<String> = Some(bare.to_string());
                 let mut depth = 0usize;
                 while let Some(cname) = cursor {

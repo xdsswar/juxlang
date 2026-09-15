@@ -506,6 +506,9 @@ pub enum Code {
     /// E0272 -- A `when` guard on a switch arm whose expression is not a
     /// `bool` (Grammar §A.3).
     E0272_GuardNotBool,
+    /// E0475 -- An overloaded call that more than one member accepts, none of
+    /// them more specific than the others (Type system §T.3.3).
+    E0475_AmbiguousOverload,
     /// E0476 -- Comparisons written as a chain (`a < b < c`). The first
     /// comparison is a `bool`, which the second cannot order against a number
     /// (Grammar §A.4 level 10).
@@ -605,6 +608,13 @@ pub enum Code {
     /// whole cycle alive forever. Annotating one back-edge field `weak` breaks
     /// it. A **warning**, not an error — the program still compiles and runs.
     W0457_UnannotatedRefCycle,
+    /// W0240 -- `@Derive(...)` does nothing: records, structs and enums derive
+    /// their operators without it (MISSING-DEFS §M.3, OPERATORS §O.9).
+    W0240_DeriveNoOp,
+    /// W0241 -- An annotation that is neither built in nor declared with
+    /// `annotation`, usually a misspelling (`@Tset`). A warning, not an error:
+    /// the annotation has no effect either way (ANNOTATIONS §A.12).
+    W0241_UnknownAnnotation,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -911,6 +921,7 @@ impl Code {
             Code::E0473_AnnotationNotRepeatable  => "E0473",
             Code::E0474_AnnotationParameterType  => "E0474",
             Code::E0272_GuardNotBool             => "E0272",
+            Code::E0475_AmbiguousOverload        => "E0475",
             Code::E0476_ChainedComparison        => "E0476",
             Code::E0477_TestAnnotationMisplaced  => "E0477",
             Code::E0512_VoidInInterpolation      => "E0512",
@@ -925,6 +936,8 @@ impl Code {
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
             Code::W0457_UnannotatedRefCycle      => "W0457",
+            Code::W0240_DeriveNoOp               => "W0240",
+            Code::W0241_UnknownAnnotation        => "W0241",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",

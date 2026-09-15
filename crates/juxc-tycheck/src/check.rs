@@ -455,6 +455,9 @@ pub(crate) struct Checker<'a> {
     /// foreign `unsafe fn` stub) is only legal when this is set (grammar
     /// §A.2.8). Reset to `false` inside a non-unsafe lambda.
     pub(crate) in_unsafe: bool,
+    /// The unit being checked is a generated crate stub (`.jux.d`), whose
+    /// binding markers are not annotations a program writes (W0241 skips it).
+    pub(crate) checking_external_unit: bool,
     /// `var x = new X<>()` declarations whose inferred type carries an
     /// **unresolved** generic argument (nothing at the construction site pinned
     /// it). Flushed at the end of each function/method/constructor body: a
@@ -531,6 +534,7 @@ impl<'a> Checker<'a> {
             in_async: false,
             in_future_slot: false,
             in_unsafe: false,
+            checking_external_unit: false,
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
             poly_bases: crate::symbol_table::polymorphic_base_bare_names(symbols),
@@ -728,12 +732,69 @@ impl<'a> Checker<'a> {
                         None => found.clone(),
                     };
                     self.check_const_integer_fits(&c.name.text, &slot_ty, &c.value, c.span);
+                    self.check_const_initializer_folds(&c.name.text, &slot_ty, &c.value, c.span);
                 }
                 // Foreign-function blocks: validate each signature is
                 // FFI-compatible (E0508). No bodies to walk.
                 TopLevelDecl::ExternBlock(block) => self.check_extern_block(block),
             }
         }
+    }
+
+    /// §T.11: a constant whose initializer CALLS something is computed at
+    /// compile time, and the program stores the result. When that cannot be
+    /// done the constant has no value, so say why here: E0840 when the
+    /// evaluation runs out of budget (a loop that never ends), E0842 when it
+    /// overflows or divides by zero, E0841 when the call does non-constant work.
+    /// An initializer without a call is left to the checks that already cover
+    /// it.
+    fn check_const_initializer_folds(&mut self, name: &str, slot: &Ty, init: &Expr, span: juxc_source::Span) {
+        fn has_call(e: &Expr) -> bool {
+            match e {
+                Expr::Call(_) => true,
+                Expr::Binary(b) => has_call(&b.left) || has_call(&b.right),
+                Expr::Unary(u) => has_call(&u.operand),
+                Expr::Ternary(t) => has_call(&t.condition) || has_call(&t.then_branch) || has_call(&t.else_branch),
+                Expr::Cast(c) => has_call(&c.value),
+                _ => false,
+            }
+        }
+        if !has_call(init) {
+            return;
+        }
+        let ctx = crate::const_eval::ConstCtx {
+            symbols: self.symbols,
+            generic_param_names: &self.const_param_names,
+            enclosing_class: None,
+        };
+        let result = match slot {
+            Ty::Primitive(Primitive::Bool) => crate::const_eval::eval_const_bool(init, &ctx).map(|_| ()),
+            Ty::String => crate::const_eval::eval_const_string(init, &ctx).map(|_| ()),
+            Ty::Primitive(p) if crate::ty::integer_bits(*p).is_some() => {
+                crate::const_eval::eval_const_int(init, &ctx).map(|_| ())
+            }
+            _ => Err(crate::const_eval::ConstEvalError::NonConst(format!(
+                "a constant of type {slot} cannot be computed by a call yet; compile-time evaluation covers integers, bools and Strings"
+            ))),
+        };
+        let at = if expr_span(init) == juxc_source::Span::DUMMY { span } else { expr_span(init) };
+        let diagnostic = match result {
+            Ok(()) | Err(crate::const_eval::ConstEvalError::Generic) => return,
+            Err(crate::const_eval::ConstEvalError::LimitExceeded) => Diagnostic::error(
+                code::Code::E0840_ConstEvalLimitExceeded,
+                format!("constant `{name}` did not finish computing: its evaluation exceeded the compile-time limit (a loop that never ends, or recursion too deep)"),
+            ),
+            Err(crate::const_eval::ConstEvalError::Panic(msg)) => Diagnostic::error(
+                code::Code::E0842_ConstEvalPanic,
+                format!("constant `{name}` fails while computing: {msg}"),
+            ),
+            Err(crate::const_eval::ConstEvalError::NonConst(msg)) => Diagnostic::error(
+                code::Code::E0841_NonConstInConstContext,
+                format!("constant `{name}` cannot be computed at compile time: {msg}"),
+            )
+            .with_help("compute it at run time instead: a `static` field set in a `static { }` block"),
+        };
+        self.diagnostics.push(diagnostic.with_span(at));
     }
 
     /// Validate every signature in a `@extern … unsafe native { … }` block is
@@ -1673,6 +1734,104 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// E0453: `pick(3, "hi")` against `<T> T pick(T a, T b)`. Two arguments
+    /// for parameters declared exactly `T` have no type in common, so no `T`
+    /// satisfies both (§T.4.2). Only the certain case is reported: a number
+    /// against text, a `bool` against either, or a value type against a class.
+    /// Two classes may still share a supertype, which inference resolves.
+    fn report_generic_conflict(
+        &mut self,
+        name: &str,
+        generic_params: &[TypeParam],
+        param_tys: &[&TypeRef],
+        arg_tys: &[Ty],
+        c: &CallExpr,
+    ) {
+        #[derive(PartialEq)]
+        enum Kind {
+            Number,
+            Bool,
+            Char,
+            Text,
+            Object,
+        }
+        let kind = |t: &Ty| match t {
+            Ty::Primitive(Primitive::Bool) => Some(Kind::Bool),
+            Ty::Primitive(Primitive::Char) => Some(Kind::Char),
+            Ty::Primitive(_) => Some(Kind::Number),
+            Ty::String => Some(Kind::Text),
+            Ty::User { .. } => Some(Kind::Object),
+            _ => None,
+        };
+        for tp in generic_params {
+            let mut first: Option<(&Ty, usize)> = None;
+            for (i, (declared, arg)) in param_tys.iter().zip(arg_tys.iter()).enumerate() {
+                let bare_t = declared.name.segments.len() == 1
+                    && declared.name.segments[0].text == tp.name.text
+                    && declared.generic_args.is_empty()
+                    && declared.array_shape.is_none()
+                    && !declared.nullable;
+                let Some(k) = (if bare_t { kind(arg) } else { None }) else { continue };
+                match first {
+                    None => first = Some((arg, i)),
+                    Some((prev, _)) if kind(prev) != Some(k) => {
+                        let span = expr_span(&c.args[i]);
+                        let span = if span.start == span.end { c.span } else { span };
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0453_GenericInferenceNoSolution,
+                                format!(
+                                    "no `{}` fits this call to `{name}`: one argument is {prev} and another is {arg}, and no type is both (§T.4.2)",
+                                    tp.name.text,
+                                ),
+                            )
+                            .with_span(span)
+                            .with_help(format!(
+                                "pass values of one type, or name the type: `{name}<{}>(...)`",
+                                tp.name.text,
+                            )),
+                        );
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// E0475: an overloaded call that several members accept with none more
+    /// specific (§T.3.3), such as `f(1, 2)` against `f(long, int)` and
+    /// `f(int, long)`. Resolving it silently to the first declared member hid a
+    /// question only the author can answer.
+    fn report_ambiguous_overload(&mut self, name: &str, lists: &[&[ParamSig]], c: &CallExpr) {
+        let tied = crate::infer::ambiguous_overloads(lists, c, &self.env, self.symbols);
+        if tied.len() < 2 {
+            return;
+        }
+        let shapes: Vec<String> = tied
+            .iter()
+            .map(|&k| {
+                let params: Vec<String> = lists[k]
+                    .iter()
+                    .map(|p| ty_from_ref(&p.ty, &self.env, self.symbols).to_string())
+                    .collect();
+                format!("`{name}({})`", params.join(", "))
+            })
+            .collect();
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0475_AmbiguousOverload,
+                format!(
+                    "call to `{name}` is ambiguous: {} {} accept these arguments, and none is more specific (§T.3.3)",
+                    shapes.join(" and "),
+                    if shapes.len() == 2 { "both" } else { "all" },
+                ),
+            )
+            .with_span(c.span)
+            .with_help("convert an argument with `as` so exactly one of them fits best"),
+        );
+    }
+
     fn check_function(&mut self, fn_decl: &FnDecl) {
         self.check_export_signature(fn_decl);
         self.check_test_annotation(fn_decl, false);
@@ -2085,6 +2244,16 @@ impl<'a> Checker<'a> {
         // to a `Rc<dyn Trait>` struct member, so reject the non-dispatchable
         // forms before the backend emits a broken field type.
         for field in &class.fields {
+            // A `static final` number, bool or String is a Rust `const`, so a
+            // call in its initializer has to fold at compile time (§T.11.1).
+            if field.is_static && field.is_final {
+                if let (Some(fty), Some(init)) = (&field.ty, &field.default) {
+                    let slot = ty_from_ref(fty, &self.env, self.symbols);
+                    if matches!(slot, Ty::Primitive(_) | Ty::String) {
+                        self.check_const_initializer_folds(&field.name.text, &slot, init, field.span);
+                    }
+                }
+            }
             if let Some(fty) = &field.ty {
                 self.check_iface_value_type(fty);
                 self.check_wildcard_storage_type(fty);
@@ -3088,6 +3257,9 @@ impl<'a> Checker<'a> {
     /// annotations) are not declared with `annotation`, so they are not in the
     /// table and are left to their own checks.
     fn check_annotation_applications(&mut self, unit: &CompilationUnit) {
+        // A generated crate stub carries binding markers (`@rust`, `@MutSelf`)
+        // that are not annotations a program writes.
+        self.checking_external_unit = unit.is_external;
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(f) => self.check_applied_annotations(&f.annotations, "METHOD"),
@@ -3164,12 +3336,74 @@ impl<'a> Checker<'a> {
         candidates.first().map(|(_, sig)| (*sig).clone())
     }
 
+    /// W0240 for `@Derive`, W0241 for a name that is neither built in nor
+    /// declared (§A.12). Called only for annotations no `annotation`
+    /// declaration matches.
+    fn check_builtin_or_unknown_annotation(&mut self, a: &juxc_ast::Annotation) {
+        if self.checking_external_unit {
+            return;
+        }
+        // The §A.1 built-ins, the §TS.1 test annotations, and the meta
+        // annotations a declaration uses. Lower case: names are
+        // case-insensitive (LANG-V1 §3.6).
+        const BUILTIN: &[&str] = &[
+            "test", "beforeall", "beforeeach", "aftereach", "afterall", "ignore", "derive", "deprecated",
+            "override", "inline", "noinline", "align", "repr", "export", "extern", "native", "nativemodule",
+            "cfg", "entry", "register", "interrupt", "plugininterface", "reflectable", "annotationtype",
+            "layout", "target", "retention", "repeatable",
+        ];
+        let Some(last) = a.name.segments.last() else { return };
+        let written = last.text.as_str();
+        let lower = written.to_ascii_lowercase();
+        if lower == "derive" {
+            self.diagnostics.push(
+                Diagnostic::warning(
+                    code::Code::W0240_DeriveNoOp,
+                    "`@Derive` does nothing: records, structs and enums get `==`, `hash` and `string` without it (§O.3)",
+                )
+                .with_span(a.span)
+                .with_help("remove the annotation"),
+            );
+            return;
+        }
+        if BUILTIN.contains(&lower.as_str()) {
+            return;
+        }
+        let declared: Vec<String> = self
+            .symbols
+            .annotations
+            .keys()
+            .map(|k| k.rsplit('.').next().unwrap_or(k).to_string())
+            .collect();
+        let suggestion = BUILTIN
+            .iter()
+            .map(|b| b.to_string())
+            .chain(declared)
+            .map(|candidate| (edit_distance(&lower, &candidate.to_ascii_lowercase()), candidate))
+            .filter(|(d, _)| *d <= 2)
+            .min_by_key(|(d, _)| *d)
+            .map(|(_, c)| c);
+        let mut diagnostic = Diagnostic::warning(
+            code::Code::W0241_UnknownAnnotation,
+            format!("`@{written}` is not a built-in annotation and no `annotation {written}` is declared, so it has no effect"),
+        )
+        .with_span(a.span);
+        diagnostic = match suggestion {
+            Some(name) => diagnostic.with_help(format!("did you mean `@{}`?", canonical_annotation_spelling(&name))),
+            None => diagnostic.with_help(format!("declare it with `public annotation {written} {{ }}`, or remove it")),
+        };
+        self.diagnostics.push(diagnostic);
+    }
+
     /// Check one declaration's annotation list, where the declaration is of
     /// the §A.3 target `kind`.
     fn check_applied_annotations(&mut self, annotations: &[juxc_ast::Annotation], kind: &str) {
         let mut seen: Vec<(String, bool)> = Vec::new();
         for a in annotations {
-            let Some(sig) = self.applied_annotation_sig(&a.name) else { continue };
+            let Some(sig) = self.applied_annotation_sig(&a.name) else {
+                self.check_builtin_or_unknown_annotation(a);
+                continue;
+            };
             let name = a.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
 
             // E0473: once per declaration unless `@Repeatable`.
@@ -7914,8 +8148,12 @@ impl<'a> Checker<'a> {
                     // against THAT member rather than against member 0.
                     let picked =
                         crate::infer::select_function_overload_typed(self.symbols, &fqn, c, &self.env);
+                    if let Some(group) = self.symbols.function_overload_group(&fqn) {
+                        let lists: Vec<&[ParamSig]> = group.iter().map(|fs| fs.params.as_slice()).collect();
+                        self.report_ambiguous_overload(name, &lists, c);
+                    }
                     if let Some((k, _)) = &picked {
-                        self.function_selections.insert(c.span, *k);
+                        self.function_selections.insert(c.span, *k); self.function_selections.insert(expr_span(&c.callee), *k);
                     }
                     let fn_sig = match &picked {
                         Some((_, s)) => s,
@@ -7971,6 +8209,7 @@ impl<'a> Checker<'a> {
                             .map(|a| infer_expr(a, &self.env, self.symbols))
                             .collect();
                         let inferred = infer_generic_args(&generic_params, &param_tys, &arg_tys);
+                        self.report_generic_conflict(name, &generic_params, &param_tys, &arg_tys, c);
                         let args: Vec<Ty> = generic_params
                             .iter()
                             .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
@@ -8164,7 +8403,7 @@ impl<'a> Checker<'a> {
                             &self.env,
                         ) {
                             Some((k, picked)) => {
-                                self.method_selections.insert(c.span, k);
+                                self.method_selections.insert(c.span, k); self.method_selections.insert(expr_span(&c.callee), k);
                                 Some(picked)
                             }
                             None => self
@@ -8480,6 +8719,13 @@ impl<'a> Checker<'a> {
                 // compose the substitution through the chain so
                 // `extends Animal<int>` propagates `T → int` onto
                 // an inherited method's param/return types.
+                {
+                    let group = self.symbols.merged_method_overloads(&name, method_name);
+                    if group.len() > 1 {
+                        let lists: Vec<&[ParamSig]> = group.iter().map(|m| m.params.as_slice()).collect();
+                        self.report_ambiguous_overload(method_name, &lists, c);
+                    }
+                }
                 if let Some((method, declaring_class)) =
                     self.symbols.lookup_method(&name, method_name)
                 {
@@ -8495,7 +8741,7 @@ impl<'a> Checker<'a> {
                         &self.env,
                     ) {
                         Some((k, picked)) => {
-                            self.method_selections.insert(c.span, k);
+                            self.method_selections.insert(c.span, k); self.method_selections.insert(expr_span(&c.callee), k);
                             picked
                         }
                         None => method.clone(),
@@ -10813,6 +11059,42 @@ fn match_null_test(cond: &Expr, want_eq: bool) -> Option<&str> {
     match target {
         Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.as_str()),
         _ => None,
+    }
+}
+
+/// Levenshtein distance between two short ASCII names.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            cur[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// How an annotation is conventionally written, for a suggestion: `test` is
+/// shown as `Test`, `beforeeach` as `BeforeEach`. A declared name keeps its own
+/// spelling.
+fn canonical_annotation_spelling(name: &str) -> String {
+    match name {
+        "beforeall" => "BeforeAll".into(),
+        "beforeeach" => "BeforeEach".into(),
+        "aftereach" => "AfterEach".into(),
+        "afterall" => "AfterAll".into(),
+        "noinline" => "NoInline".into(),
+        "nativemodule" => "NativeModule".into(),
+        "plugininterface" => "PluginInterface".into(),
+        "annotationtype" => "AnnotationType".into(),
+        other if other.chars().all(|c| c.is_ascii_lowercase()) => {
+            let mut chars = other.chars();
+            chars.next().map(|f| f.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+        }
+        other => other.to_string(),
     }
 }
 

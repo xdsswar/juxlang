@@ -446,6 +446,8 @@ The compiler validates:
 - **Repeatability.** Applying a non-`@Repeatable` annotation more than once → `E0473`.
 - **Reflection access guard.** Reading a `RUNTIME`-retention annotation when `reflection = "none"` → `E0471`.
 - **Case-insensitive collisions.** Declaring two user annotations whose names differ only in case (`@MyTag` and `@mytag`) → `E0307` (per JUX-LANG-V1.md §3.6).
+- **Unknown names.** Applying an annotation that is neither in the §A.1 table (nor one of the meta annotations `@Target`, `@Retention`, `@Repeatable`) nor declared with `annotation` → warning `W0241`, naming the closest known annotation when one is a small edit away (`@Tset` → `@Test`). It is a warning because the annotation has no effect either way. Generated crate stubs (`.jux.d`) carry binding markers and are not checked.
+- **`@Derive`.** A no-op kept for compatibility → warning `W0240` suggesting removal.
 
 ---
 

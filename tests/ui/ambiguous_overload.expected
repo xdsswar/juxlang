@@ -1,0 +1,2 @@
+ambiguous_overload.jux:15:5: [E0475] error: call to `place` is ambiguous: `place(long, int)` and `place(int, long)` both accept these arguments, and none is more specific (§T.3.3)
+ambiguous_overload.jux:17:5: [E0475] error: call to `mark` is ambiguous: `mark(long, int)` and `mark(int, long)` both accept these arguments, and none is more specific (§T.3.3)

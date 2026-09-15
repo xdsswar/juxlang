@@ -1,0 +1,18 @@
+public void place(long row, int col) {
+    print("long row");
+}
+
+public void place(int row, long col) {
+    print("long col");
+}
+
+public class Board {
+    public void mark(long row, int col) {}
+    public void mark(int row, long col) {}
+}
+
+public void main() {
+    place(1, 2);
+    place(1 as long, 2);
+    new Board().mark(3, 4);
+}
