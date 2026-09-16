@@ -1,0 +1,47 @@
+// skia_java_style: Skia code written the way it would be written in Java.
+//
+// No float suffixes, no special construction rules, the canvas held in a
+// variable, the surface held in a field, enum constants for paint styles.
+
+import rust.skia_safe.Paint;
+import rust.skia_safe.PaintStyle;
+import rust.skia_safe.Color;
+import rust.skia_safe.Rect;
+import rust.skia_safe.Point;
+import rust.skia_safe.IPoint;
+
+import board.Board;
+
+public void main() {
+    var board = new Board(200, 120);
+
+    var background = new Paint();
+    background.set_color(new Color(0xFF12141C));
+
+    var outline = new Paint();
+    outline.set_anti_alias(true);
+    outline.set_style(PaintStyle.Stroke);
+    outline.set_stroke_width(4);
+    outline.set_color(new Color(0xFFFF6A6A));
+
+    var fill = new Paint();
+    fill.set_anti_alias(true);
+    fill.set_color(new Color(0xFF3AD1C4));
+
+    // The canvas in a variable, used for several calls in a row.
+    var canvas = board.surface().canvas();
+    canvas.draw_rect(Rect.from_xywh(0, 0, 200, 120), background);
+    canvas.draw_circle(new Point(60, 60), 38, fill);
+    canvas.draw_rect(Rect.from_xywh(8, 8, 184, 104), outline);
+
+    board.save("target/skia_java_style.png");
+
+    // Read the board back: the drawing went to the board, not to a copy.
+    var pixels = board.snapshot().peek_pixels()!!;
+    var disc = pixels.get_color(new IPoint(60, 60));
+    var edge = pixels.get_color(new IPoint(8, 60));
+    var inside = pixels.get_color(new IPoint(150, 60));
+    print($"disc teal: ${disc.g() > 150 && disc.r() < 120}");
+    print($"frame red: ${edge.r() > 200 && edge.g() < 150}");
+    print($"background dark: ${inside.r() < 60 && inside.g() < 60}");
+}

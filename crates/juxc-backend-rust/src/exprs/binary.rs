@@ -1283,7 +1283,20 @@ impl RustEmitter {
         {
             return None;
         }
-        match t.name.segments[0].text.as_str() {
+        // A type alias names whatever it stands for: skia's `scalar` is an
+        // `f32`, and a `scalar` parameter takes the conversions a `float` one
+        // does. Followed a few steps, never forever.
+        let bare = t.name.segments[0].text.as_str();
+        if let Some(target) = self
+            .resolve_bare_type_fqn(bare)
+            .and_then(|fqn| self.symbols.aliases.get(&fqn))
+            .map(|a| a.target.clone())
+        {
+            if target.name.segments.last().map(|s| s.text.as_str()) != Some(bare) {
+                return self.type_ref_primitive(&target);
+            }
+        }
+        match bare {
             "byte" => Some(P::Byte),
             "ubyte" => Some(P::Ubyte),
             "short" => Some(P::Short),

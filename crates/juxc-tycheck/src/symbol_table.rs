@@ -1085,6 +1085,9 @@ pub struct ConstructorSig {
     /// Rust `new() -> Result<Self, E>` (§G.5.4) — the `new T(...)` call site
     /// unwraps the `Result`.
     pub is_foreign_result: bool,
+    /// True for a foreign zero-arg constructor that stands for Rust's
+    /// `Default::default()` (`@RustDefault`, discovered from `impl Default`).
+    pub is_rust_default: bool,
     /// Span of the constructor declaration.
     pub span: Span,
 }
@@ -4096,6 +4099,11 @@ fn insert_class(
             visibility: c.visibility,
             params: c.params.iter().map(param_sig).collect(),
             is_foreign_result: is_external && !c.throws.is_empty(),
+            is_rust_default: is_external
+                && c.annotations.iter().any(|a| {
+                    a.name.segments.len() == 1
+                        && a.name.segments[0].text.eq_ignore_ascii_case("rustdefault")
+                }),
             span: c.span,
         })
         .collect();

@@ -2853,22 +2853,67 @@ impl RustEmitter {
     /// sign change the emitted Rust needs to say out loud. An untyped literal
     /// needs nothing -- Rust infers it at the slot.
     fn emit_int_width_converted_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) -> bool {
-        if juxc_tycheck::infer::untyped_int_literal(arg) {
-            return false;
-        }
         let target = self
             .callee_param_type(&call.callee, i)
             .as_ref()
             .and_then(|t| self.type_ref_primitive(t));
-        let (Some(target), Some(source)) = (target, self.operand_primitive(arg)) else {
-            return false;
-        };
+        match target {
+            Some(target) => self.emit_numeric_slot_conversion(arg, target),
+            None => false,
+        }
+    }
+
+    /// Emit `arg` converted for a numeric parameter slot of type `target`,
+    /// and say whether a conversion was needed (§S.2.6, §S.2.7).
+    ///
+    /// - An integer of another width or sign converts with a cast; the
+    ///   checker has already accepted the pair.
+    /// - An integer flowing into a `float` / `double` slot WIDENS, as it does
+    ///   in Java. An untyped literal is written as the float it becomes
+    ///   (`8` -> `8.0`), which is what a person would have typed; any other
+    ///   integer is cast.
+    /// - An untyped integer literal into an integer slot needs nothing: Rust
+    ///   infers it from the slot.
+    pub(crate) fn emit_numeric_slot_conversion(
+        &mut self,
+        arg: &Expr,
+        target: juxc_tycheck::Primitive,
+    ) -> bool {
         use juxc_tycheck::ty::integer_bits;
         let target_rust = crate::exprs::rust_primitive_name(target);
-        if integer_bits(target).is_none()
-            || integer_bits(source).is_none()
-            || crate::exprs::rust_primitive_name(source) == target_rust
-        {
+        let target_is_float = target_rust.starts_with('f');
+        let literal = juxc_tycheck::infer::untyped_int_literal(arg);
+        if literal {
+            if !target_is_float {
+                return false;
+            }
+            // `8` / `-8` into a float slot: write the float.
+            let (negative, lit) = match arg {
+                Expr::Literal(juxc_ast::Literal::Int(l)) => (false, l),
+                Expr::Unary(u) => match &*u.operand {
+                    Expr::Literal(juxc_ast::Literal::Int(l)) => (true, l),
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            if negative {
+                self.w.push('-');
+            }
+            self.w.push_str(&format!("{}.0", lit.value));
+            return true;
+        }
+        let Some(source) = self.operand_primitive(arg) else {
+            return false;
+        };
+        if integer_bits(source).is_none() {
+            return false;
+        }
+        let converts = if target_is_float {
+            true
+        } else {
+            integer_bits(target).is_some() && crate::exprs::rust_primitive_name(source) != target_rust
+        };
+        if !converts {
             return false;
         }
         self.w.push('(');

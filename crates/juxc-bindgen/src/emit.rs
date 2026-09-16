@@ -170,7 +170,8 @@ fn render_field(out: &mut String, f: &StubField) {
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
     let mut s = format!(
-        "    {}{}({})",
+        "    {}{}{}({})",
+        if c.is_default { "@RustDefault " } else { "" },
         c.visibility.prefix(),
         c.name,
         render_params(&c.params)
@@ -197,6 +198,9 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     // return type drops the `&`, so nothing downstream could tell otherwise -
     // and the compiler has to, to clone the value out of the `RefCell` guard a
     // collection call is made through (§6.5.1).
+    if f.carries_borrow {
+        s.push_str("@RustBorrowsSelf ");
+    }
     if f.returns_borrow {
         s.push_str("@RustRefOut ");
     }
@@ -294,6 +298,7 @@ mod tests {
         let mut hm = StubType::new(TypeKind::Class, "HashMap");
         hm.generics = vec!["K".into(), "V".into()];
         hm.constructors.push(StubCtor {
+            is_default: false,
             visibility: Vis::Public,
             name: "HashMap".into(),
             params: vec![],
@@ -314,6 +319,7 @@ mod tests {
             is_unsafe: false,
             is_mut_self: false,
             returns_borrow: false,
+            carries_borrow: false,
             rust_path: None,
             doc: None,
         });
@@ -329,6 +335,7 @@ mod tests {
             is_unsafe: false,
             is_mut_self: false,
             returns_borrow: false,
+            carries_borrow: false,
             rust_path: None,
             doc: None,
         });
@@ -361,6 +368,7 @@ mod tests {
             is_unsafe: false,
             is_mut_self: false,
             returns_borrow: false,
+            carries_borrow: false,
             rust_path: None,
             doc: None,
         };
@@ -409,6 +417,7 @@ mod tests {
             is_unsafe: false,
             is_mut_self: false,
             returns_borrow: false,
+            carries_borrow: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
         };
@@ -443,6 +452,7 @@ mod tests {
             is_unsafe: true,
             is_mut_self: false,
             returns_borrow: false,
+            carries_borrow: false,
             rust_path: None,
             doc: None,
         };

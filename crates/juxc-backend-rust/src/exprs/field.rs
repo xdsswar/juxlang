@@ -2519,6 +2519,20 @@ impl RustEmitter {
         None
     }
 
+    /// Does `type_name::method` return a value that borrows its receiver
+    /// without being a reference (`@RustBorrowsSelf`, e.g. `Pixmap<'_>`)?
+    pub(crate) fn external_method_carries_borrow(&self, type_name: &str, method: &str) -> bool {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+        });
+        class.and_then(|c| c.methods.get(method)).is_some_and(|m| {
+            m.annotations.iter().any(|a| {
+                a.name.segments.len() == 1
+                    && a.name.segments[0].text.eq_ignore_ascii_case("rustborrowsself")
+            })
+        })
+    }
+
     pub(crate) fn external_method_returns_borrow(&self, type_name: &str, method: &str) -> bool {
         let class = self.symbols.classes.get(type_name).or_else(|| {
             self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))

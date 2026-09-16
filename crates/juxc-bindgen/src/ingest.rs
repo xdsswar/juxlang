@@ -94,6 +94,14 @@ pub fn generate_merged_with_pool(
     }
 
     collected.sort_by(|a, b| a.0.cmp(&b.0));
+    // A plain alias is kept only when it ends somewhere this stub can name: a
+    // primitive, or a type (or alias) the stub declares. Anything else would
+    // be an alias to nothing.
+    let declared: HashSet<String> = collected.iter().map(|(n, _)| n.clone()).collect();
+    collected.retain(|(_, item)| match item {
+        StubItem::Alias(a) => is_jux_primitive_name(&a.target) || declared.contains(&a.target),
+        _ => true,
+    });
 
     Ok(StubFile {
         package: package.to_string(),
@@ -254,6 +262,28 @@ fn inherent_impls_by_instance(
     out
 }
 
+/// Trait impls grouped the same way, so a handle alias can ask whether its
+/// exact instantiation implements `Default` or `Clone`.
+fn trait_impls_by_instance(
+    krate: &Crate,
+) -> std::collections::HashMap<String, Vec<rustdoc_types::Id>> {
+    let mut out: std::collections::HashMap<String, Vec<rustdoc_types::Id>> =
+        std::collections::HashMap::new();
+    for item in krate.index.values() {
+        let ItemEnum::Impl(im) = &item.inner else {
+            continue;
+        };
+        if im.trait_.is_none() {
+            continue;
+        }
+        let Some(key) = type_instance_key(&im.for_) else {
+            continue;
+        };
+        out.entry(key).or_default().push(item.id);
+    }
+    out
+}
+
 /// A public `type Alias = Generic<Arg>` that has methods written for exactly
 /// that instantiation becomes a class of its own.
 ///
@@ -268,6 +298,7 @@ fn build_handle_alias(
     item: &Item,
     public: &PublicPaths,
     by_instance: &std::collections::HashMap<String, Vec<rustdoc_types::Id>>,
+    traits_by_instance: &std::collections::HashMap<String, Vec<rustdoc_types::Id>>,
 ) -> Option<StubType> {
     if !alias.generics.params.is_empty() {
         return None;
@@ -279,7 +310,10 @@ fn build_handle_alias(
         return None;
     }
     let impls = by_instance.get(&key)?;
-    let (ctors, mut methods) = collect_inherent_members(krate, impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, impls, name);
+    let trait_impls: &[rustdoc_types::Id] =
+        traits_by_instance.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
+    add_default_ctor(&mut ctors, name, implements_trait(krate, trait_impls, "Default"));
     dedup_methods_by_name(&mut methods);
     if ctors.is_empty() && methods.is_empty() {
         return None;
@@ -289,6 +323,7 @@ fn build_handle_alias(
     st.methods = methods;
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item, public);
+    st.is_clone = implements_trait(krate, trait_impls, "Clone");
     Some(st)
 }
 
@@ -305,6 +340,7 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
     let public = PublicPaths::of(krate);
     // Inherent impls keyed by instantiation, for the handle-alias pattern.
     let by_instance = inherent_impls_by_instance(krate);
+    let traits_by_instance = trait_impls_by_instance(krate);
 
     let mut collected: Vec<(u32, String, StubItem)> = Vec::new();
 
@@ -331,9 +367,37 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
             }
             ItemEnum::TypeAlias(alias) if is_public(&item.visibility) => {
                 if let Some(st) =
-                    build_handle_alias(krate, name, alias, item, &public, &by_instance)
+                    build_handle_alias(
+                        krate,
+                        name,
+                        alias,
+                        item,
+                        &public,
+                        &by_instance,
+                        &traits_by_instance,
+                    )
                 {
                     collected.push((item.id.0, name.clone(), StubItem::Type(st)));
+                } else if alias.generics.params.is_empty() {
+                    // `pub type scalar = f32;` -- a crate's own name for a
+                    // primitive. Its signatures say `scalar`, and unless the
+                    // stub says what that is, a `scalar` parameter is a type
+                    // nobody knows is a float, so no conversion reaches it.
+                    // The target may itself be an alias (`scalar = SkScalar`,
+                    // which is `f32`); unresolvable chains are dropped once the
+                    // whole stub is known, in `generate_merged_with_pool`.
+                    let target = match map_type(&alias.type_) {
+                        JuxType::Prim(prim) => Some(prim.to_string()),
+                        JuxType::User { name: t, args } if args.is_empty() => Some(t),
+                        _ => None,
+                    };
+                    if let Some(target) = target.filter(|t| t != name) {
+                        collected.push((
+                            item.id.0,
+                            name.clone(),
+                            StubItem::Alias(StubAlias { name: name.clone(), target }),
+                        ));
+                    }
                 }
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
@@ -488,7 +552,8 @@ fn build_struct(
         StructKind::Tuple(_) | StructKind::Unit => all_public = false,
     }
 
-    let (ctors, mut methods) = collect_inherent_members(krate, &s.impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, &s.impls, name);
+    add_default_ctor(&mut ctors, name, implements_trait(krate, &s.impls, "Default"));
     // Rust's method resolution follows `Deref`, so `Vec<T>` really does have
     // every `[T]` method — and a stub that stops at the inherent impls is
     // simply an incomplete description of the type. `Vec` came out with 58
@@ -538,7 +603,8 @@ fn build_enum(
     // does, and a Jux enum can hold methods too (§7.7). Keeping only the
     // variants described `image::DynamicImage` as a bare tag union, so
     // `decoded.width()` was an unknown method on a type that plainly has one.
-    let (ctors, mut methods) = collect_inherent_members(krate, &e.impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, &e.impls, name);
+    add_default_ctor(&mut ctors, name, implements_trait(krate, &e.impls, "Default"));
     dedup_methods_by_name(&mut methods);
     st.constructors = ctors;
     st.methods = methods;
@@ -676,6 +742,21 @@ fn substitute_self_in_fn(f: &mut StubFn, owner: &str) {
     }
 }
 
+/// Declare the zero-arg constructor an `impl Default` implies, unless the type
+/// already has a zero-arg one of its own.
+fn add_default_ctor(ctors: &mut Vec<StubCtor>, type_name: &str, implements_default: bool) {
+    if !implements_default || ctors.iter().any(|c| c.params.is_empty()) {
+        return;
+    }
+    ctors.push(StubCtor {
+        visibility: Vis::Public,
+        name: type_name.to_string(),
+        params: Vec::new(),
+        throws: None,
+        is_default: true,
+    });
+}
+
 /// Collect constructors and methods from a type's **inherent** impl blocks.
 /// `new()` (no receiver) maps to a constructor (§G.5.1); other associated
 /// functions without a receiver map to static methods (§G.5.2); functions with
@@ -723,6 +804,7 @@ fn collect_inherent_members(
                 // A `new() -> Result<Self, E>` surfaces as a `throws E` ctor so
                 // the call site unwraps the `Result` (§G.5.4).
                 ctors.push(StubCtor {
+                    is_default: false,
                     visibility: Vis::Public,
                     name: type_name.to_string(),
                     params: map_params(f),
@@ -815,6 +897,8 @@ fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
         is_unsafe: f.header.is_unsafe,
         is_mut_self: has_mut_self_receiver(f),
         returns_borrow: f.sig.output.as_ref().is_some_and(returns_borrowed),
+        carries_borrow: has_self_receiver(f)
+            && f.sig.output.as_ref().is_some_and(carries_receiver_lifetime),
         // Set by the free-function call site (which has the rustdoc item); a
         // method leaves this `None` (it's dispatched on its `@rust`-pathed type).
         rust_path: None,
@@ -912,6 +996,22 @@ fn returns_borrowed(ty: &Type) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Whether a return type holds a borrow without being a reference: a type
+/// instantiated with a non-`'static` lifetime (`Pixmap<'_>`), directly or as
+/// the value of an `Option` / `Result`. With a `self` receiver, lifetime
+/// elision ties that lifetime to the receiver.
+fn carries_receiver_lifetime(ty: &Type) -> bool {
+    let Type::ResolvedPath(p) = ty else { return false };
+    let Some(GenericArgs::AngleBracketed { args, .. }) = p.args.as_deref() else {
+        return false;
+    };
+    args.iter().any(|a| match a {
+        GenericArg::Lifetime(l) => l != "'static",
+        GenericArg::Type(inner) => carries_receiver_lifetime(inner),
+        _ => false,
+    })
 }
 
 fn is_borrow_param(ty: &Type) -> bool {
@@ -1648,14 +1748,16 @@ pub fn rewrite_reexported_paths(
     let mut renames: Vec<(String, String)> = Vec::new();
     if let Some(root) = krate.index.get(&krate.root) {
         if let ItemEnum::Module(m) = &root.inner {
-            for id in &m.items {
-                let Some(item) = krate.index.get(id) else {
-                    continue;
-                };
-                let ItemEnum::Use(u) = &item.inner else {
-                    continue;
-                };
-                let Some(target) = u.id else { continue };
+            // Globs included: a large crate publishes most of its surface as
+            // `pub use core::*`, and the renames live inside that module
+            // (`pub use paint::Style as PaintStyle` is in skia-safe's `core`).
+            let published: Vec<(Id, String)> = m
+                .items
+                .iter()
+                .filter_map(|id| krate.index.get(id))
+                .flat_map(|item| published_names(&krate, item))
+                .collect();
+            for (target, exported_name) in published {
                 // A re-export may point at another re-export
                 // (`pub use paint::Style as PaintStyle` where `paint::Style`
                 // is itself `pub use sb::SkPaint_Style as Style`). Follow the
@@ -1685,11 +1787,11 @@ pub fn rewrite_reexported_paths(
                     }
                 }
                 let Some(defining) = defining else { continue };
-                renames.push((defining.clone(), u.name.clone()));
+                renames.push((defining.clone(), exported_name.clone()));
                 if krate.index.contains_key(&target) {
                     continue; // defined here; its own path is already right
                 }
-                exported.insert(defining, u.name.clone());
+                exported.insert(defining, exported_name);
             }
         }
     }
@@ -1747,6 +1849,17 @@ pub fn rewrite_reexported_paths(
     aliases.retain(|a| !declared.contains(a.name.as_str()));
     stub.items.extend(aliases.into_iter().map(StubItem::Alias));
     Ok(())
+}
+
+/// Whether `name` is a Jux primitive type spelling -- the language's own
+/// keywords, which is what `map_type` renders a Rust primitive as.
+fn is_jux_primitive_name(name: &str) -> bool {
+    matches!(
+        name,
+        "bool" | "char" | "byte" | "ubyte" | "short" | "ushort" | "int" | "uint" | "long"
+            | "ulong" | "float" | "double" | "i8" | "u8" | "i16" | "u16" | "i32" | "u32"
+            | "i64" | "u64" | "f32" | "f64"
+    )
 }
 
 /// The crates whose types a crate re-exports as part of its own public API.

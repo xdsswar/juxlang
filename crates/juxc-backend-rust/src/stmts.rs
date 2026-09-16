@@ -2347,6 +2347,81 @@ impl RustEmitter {
         }
     }
 
+    /// For `var x = <temporary>.m(...)` where `m` returns a borrow of its
+    /// receiver (`@RustRefOut`) and the result is kept as that borrow (its
+    /// type is not `Clone`, so nothing copies it out), emit
+    /// `let __jux_recv_N = <temporary>;` and hand back the declaration
+    /// rewritten to call `m` on that binding.
+    ///
+    /// Only a TEMPORARY receiver is hoisted. A local variable already lives
+    /// long enough, and hoisting it would move it. Nothing is cloned: the
+    /// temporary was going to be evaluated anyway, it just stops being
+    /// dropped early.
+    fn hoist_borrowed_receiver(&mut self, var: &VarDecl) -> Option<VarDecl> {
+        // `board.snapshot().peek_pixels()!!` -- the assertion wraps the call
+        // and changes nothing about what it borrows.
+        let (call, asserted) = match &var.init {
+            Some(Expr::Call(call)) => (call, None),
+            Some(Expr::NotNullAssert(inner, span)) => match &**inner {
+                Expr::Call(call) => (call, Some(*span)),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Expr::Field(f) = &*call.callee else { return None };
+        if matches!(&*f.object, Expr::Path(_) | Expr::This(_)) {
+            return None;
+        }
+        let Some(juxc_tycheck::Ty::User { name: recv_ty, .. }) = self.receiver_ty_of(&f.object)
+        else {
+            return None;
+        };
+        let carries = self.external_method_carries_borrow(&recv_ty, &f.field.text);
+        if !carries {
+            if !self.external_method_returns_borrow(&recv_ty, &f.field.text) {
+                return None;
+            }
+            // A `&T` result that is `Clone` is copied out by the ordinary
+            // path and holds no borrow.
+            if let Some(juxc_tycheck::Ty::User { name: result_ty, .. }) =
+                self.expr_types.get(&call.span)
+            {
+                if self.class_is_rust_clone(result_ty) {
+                    return None;
+                }
+            }
+        }
+        let hidden = format!("__jux_recv_{}", call.span.start);
+        // `Surface::canvas` takes `&mut self`; the binding has to allow it.
+        let exclusive = self.external_method_mutates_receiver(&recv_ty, &f.field.text);
+        self.w.push_str(if exclusive { "let mut " } else { "let " });
+        self.w.push_str(&hidden);
+        self.w.push_str(" = ");
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        self.emit_expr(&f.object);
+        self.emitting_format_arg = prev;
+        self.w.push_str(";
+");
+        self.w.emit_indent();
+        if let Some(scope) = self.local_types.last_mut() {
+            scope.insert(
+                hidden.clone(),
+                juxc_tycheck::Ty::User { name: recv_ty, generic_args: Vec::new() },
+            );
+        }
+        let mut new_callee = f.clone();
+        new_callee.object = Box::new(Self::temp_path(&hidden, expr_span_of(&f.object)));
+        let mut new_call = call.clone();
+        new_call.callee = Box::new(Expr::Field(new_callee));
+        let mut rewritten = var.clone();
+        let new_init = Expr::Call(new_call);
+        rewritten.init = Some(match asserted {
+            Some(span) => Expr::NotNullAssert(Box::new(new_init), span),
+            None => new_init,
+        });
+        Some(rewritten)
+    }
+
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
         let holds_concrete_polybase = var.ty.is_none()
             && matches!(&var.init, Some(Expr::NewObject(n))
@@ -2397,6 +2472,15 @@ impl RustEmitter {
             }
             self.w.push_str(";\n");
             self.ref_locals.insert(var.name.text.clone());
+            return;
+        }
+        // `var canvas = board.surface().canvas();` -- a borrow taken from a
+        // TEMPORARY. Rust drops the temporary at the end of the `let`, and the
+        // borrow with it, so the local is unusable. Binding the temporary to a
+        // hidden local of its own first gives the borrow something to live
+        // on, for exactly as long as the variable does.
+        if let Some(rewritten) = self.hoist_borrowed_receiver(var) {
+            self.emit_var_decl(&rewritten);
             return;
         }
         // Record the local's declared type in the backend's

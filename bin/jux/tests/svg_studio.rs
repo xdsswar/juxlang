@@ -77,3 +77,15 @@ fn svg_studio_rasterises_a_document_and_reads_it_back() {
 fn svg_chart_renders_a_generated_document() {
     assert_eq!(run_project("svg_chart"), ["wrote a 5-bar chart"]);
 }
+
+/// `examples/skia_java_style` is the same kind of drawing written the way a
+/// Java programmer would: `new Paint()`, `PaintStyle.Stroke`, integer
+/// coordinates, the surface in a field and the canvas in a variable. The
+/// pixel checks prove the drawing reached the board rather than a copy.
+#[test]
+fn skia_java_style_draws_on_the_shared_surface() {
+    assert_eq!(
+        run_project("skia_java_style"),
+        ["disc teal: true", "frame red: true", "background dark: true"],
+    );
+}

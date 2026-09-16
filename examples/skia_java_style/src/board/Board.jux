@@ -1,0 +1,37 @@
+// A drawing board, written the way a Java programmer would write it.
+package board;
+
+import rust.skia_safe.Surface;
+import rust.skia_safe.ISize;
+import rust.skia_safe.Image;
+import rust.skia_safe.EncodedImageFormat;
+import rust.std.write;
+
+/**
+ * A Skia raster surface held in an ordinary field.
+ *
+ * Skia's `Surface` is a reference-counted handle, so handing it out shares
+ * the same pixels -- exactly what a Java reference does. Whoever draws on the
+ * surface this returns draws on the board.
+ */
+public class Board {
+    private Surface surface;
+    private int width;
+    private int height;
+
+    public Board(int width, int height) {
+        this.width = width;
+        this.height = height;
+        surface = Surface.new_raster_n32_premul(new ISize(width, height))!!;
+    }
+
+    public Surface surface() { return surface; }
+
+    public Image snapshot() { return surface.image_snapshot(); }
+
+    /** Save what has been drawn as a PNG file. */
+    public void save(String path) {
+        var data = snapshot().encode_to_data(EncodedImageFormat.PNG)!!;
+        write(path, data.as_bytes());
+    }
+}

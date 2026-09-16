@@ -286,6 +286,38 @@ Called as `Pixmap.new(w, h)`, which yields a nullable the caller has to open. `n
 
 Rendered as a constructor instead, the `None` disappeared from the type: the call site believed it had a `Pixmap`, and the emitted Rust handed an `Option<Pixmap>` to something expecting the value.
 
+### G.5.4c. `Default` Is a Zero-Argument Constructor
+
+A type that implements `Default` gets a zero-argument constructor in its stub, marked `@RustDefault`, unless it already has one of its own:
+
+```jux
+public class Paint {
+    @RustDefault public Paint();                    // impl Default
+    public Paint(Color4f color, ColorSpace? space); // fn new(...)
+}
+```
+
+`new Paint()` is how a Java reader asks for a default object, and it is an ordinary overload to the checker. The backend lowers the marked constructor to `T::default()`, since the type's `new` takes arguments.
+
+### G.5.4d. The Handle-Alias Pattern
+
+A crate that wraps a C++ library usually publishes its types as aliases of a generic handle, with the methods written on the instantiation:
+
+```rust
+pub type Paint = Handle<SkPaint>;
+impl Handle<SkPaint> { pub fn set_color(...) { ... } }
+```
+
+Each such alias with methods becomes a class named after the alias, carrying the methods of that exact instantiation (and its `Default` / `Clone` facts). Instantiations are matched by resolved item id, never by the written path, since an alias and its impl may spell the same argument differently.
+
+Other public aliases are declared as Jux type aliases when they end in a primitive or in a type the stub declares: `pub type scalar = SkScalar;` with `SkScalar = f32` gives `public type scalar = SkScalar;` and `public type SkScalar = float;`, so a `scalar` parameter takes the conversions a `float` one does (§S.2.7). A rename on the way out (`pub use paint::Style as PaintStyle`), including one reached through a glob re-export, is declared the same way.
+
+### G.5.4e. Values That Borrow Their Receiver
+
+A method whose result borrows its receiver is marked on the stub: `@RustRefOut` for a reference (`-> &Canvas`), `@RustBorrowsSelf` for a value that carries the receiver's lifetime (`-> Option<Pixmap<'_>>`). Such a result is only valid while its receiver lives. Where the receiver is a temporary, `var x = a.b().c();` keeps the temporary alive for as long as `x` by binding it first; a receiver that is already a variable needs nothing. The value cannot be returned from a method or stored in a field, since Jux has no way to say how long it lives; hold the receiver instead.
+
+`Self` in a member signature is replaced by the owning type while the stub is generated. A stub file has no `impl` for `Self` to refer to.
+
 ### G.5.5. Free Functions
 
 A Rust free function (module-level, no associated type) maps to a Jux **free function** (§7.17), preserving the procedural style:

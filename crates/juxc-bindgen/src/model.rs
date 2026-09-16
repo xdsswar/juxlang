@@ -156,6 +156,10 @@ pub struct StubCtor {
     /// `throws E`, set when the Rust `new` returned `Result<Self, E>` (§G.5.4) —
     /// rendered as a `throws` clause so the call site unwraps the `Result`.
     pub throws: Option<JuxType>,
+    /// The zero-arg constructor a Rust `impl Default` implies. Rendered with
+    /// `@RustDefault` so the backend calls `T::default()` rather than a `new`
+    /// that takes arguments.
+    pub is_default: bool,
 }
 
 /// A method / free-function stub.
@@ -191,6 +195,10 @@ pub struct StubFn {
     /// (§6.5.1), so every call on one reaches through a `RefCell` guard, and a
     /// borrowed result has to be cloned out of it before the guard drops.
     pub returns_borrow: bool,
+    /// The returned value carries a lifetime tied to the receiver
+    /// (`-> Pixmap<'_>`): not a reference, but only valid while the receiver
+    /// is. Rendered as `@RustBorrowsSelf`.
+    pub carries_borrow: bool,
     /// The **real** fully-qualified Rust path of a free function
     /// (`humantime::parse_duration`), from the rustdoc summary. Rendered as a
     /// `@rust("…")` annotation so the backend lowers the import to
