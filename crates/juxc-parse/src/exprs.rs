@@ -1463,10 +1463,13 @@ impl<'a> Parser<'a> {
                 }
 
                 // Array forms — fall through to the `[ … ]` path.
+                // `new T?[n]` allocates an array whose ELEMENTS may be
+                // missing, which is how one is built: every slot starts empty.
+                let elem_nullable = self.eat(&TokenKind::Question);
                 let element_type = TypeRef {
                     name: element_name.clone(),
                     generic_args: Vec::new(),
-                    nullable: false,
+                    nullable: elem_nullable,
                     array_shape: None,
                     fn_shape: None,
                     ptr_depth: 0,

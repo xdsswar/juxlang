@@ -2014,6 +2014,21 @@ impl RustEmitter {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
+                            // C6: a by-`&mut` slot takes the PLACE. The
+                            // declaration side lowers such a parameter to
+                            // `&mut T`, and this loop is the only path a
+                            // static call takes, so without this the two
+                            // disagreed and every static method with a
+                            // mutated foreign parameter failed to compile.
+                            if self.arg_is_byref(call, i) {
+                                self.emit_byref_arg(arg);
+                                continue;
+                            }
+                            // An integer argument converts to the parameter's
+                            // width and sign, as on every other call path.
+                            if self.emit_int_width_converted_arg(call, i, arg) {
+                                continue;
+                            }
                             // Interface-typed param slot: wrap a class value in
                             // `Rc<dyn Trait>` / clone a dyn handle.
                             if let Some(pty) = self.callee_param_type(&call.callee, i) {

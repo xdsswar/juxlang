@@ -394,6 +394,17 @@ impl RustEmitter {
         // `array_shape` is the remaining (inner) dimensions — or `None`
         // (a scalar element) once the last dimension is consumed.
         if let Some(shape) = &ty.array_shape {
+            // `T[]?` -- the ARRAY is what may be missing, so the `Option`
+            // goes around the whole handle. (`T?[]` is the other type: the
+            // element is nullable, and that is the shape's own flag, applied
+            // to the element below.)
+            if ty.nullable {
+                let inner = juxc_ast::TypeRef { nullable: false, ..ty.clone() };
+                self.w.push_str("Option<");
+                self.emit_type_as_rust(&inner);
+                self.w.push('>');
+                return;
+            }
             // §6.5.2 - an array is a REFERENCE type, so each dimension is a
             // shared handle. `int[] b = a;` then aliases, an array passed to a
             // function is the caller's array, and `grid[1]` is the row rather
@@ -414,7 +425,8 @@ impl RustEmitter {
             let element_ty = juxc_ast::TypeRef {
                 name: ty.name.clone(),
                 generic_args: ty.generic_args.clone(),
-                nullable: ty.nullable,
+                // Only the innermost element takes the `?` of `T?[]`.
+                nullable: shape.peeled().is_none() && shape.elem_nullable,
                 array_shape: shape.peeled(),
                 fn_shape: ty.fn_shape.clone(),
                 ptr_depth: 0,

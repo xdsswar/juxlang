@@ -344,6 +344,22 @@ pub(crate) fn for_each_call(block: &Block, f: &mut dyn FnMut(&juxc_ast::CallExpr
                     for_each_call(fin, f);
                 }
             }
+            // A C-style `for` is where a loop body usually lives, and its
+            // calls were invisible here: every caller of this walk simply did
+            // not see them.
+            Stmt::ForC(fc) => {
+                if let Some(init) = fc.init.as_deref() {
+                    stmt(init, f);
+                }
+                if let Some(cond) = &fc.cond {
+                    expr(cond, f);
+                }
+                if let Some(upd) = fc.update.as_deref() {
+                    stmt(upd, f);
+                }
+                for_each_call(&fc.body, f);
+            }
+            Stmt::Labeled { stmt: inner, .. } => stmt(inner, f),
             _ => {}
         }
     }
@@ -3242,11 +3258,53 @@ impl crate::RustEmitter {
         collect_mutated_names(body, &mut mutated, &self.user_mut_methods);
         let mut out = HashSet::new();
         for (i, p) in params.iter().enumerate() {
-            if self.param_is_byref(p, &mutated, generic_names) {
-                out.insert(i);
+            if !self.param_is_byref(p, &mutated, generic_names) {
+                continue;
             }
+            // `mutated` is a NAME-keyed over-approximation: it says some
+            // method called on this name mutates SOMETHING. Confirm against
+            // the parameter's own type before widening the signature, or a
+            // read-only parameter is passed by exclusive reference because an
+            // unrelated type has a mutating method of the same name.
+            if !self.param_mutated_through_calls(body, &p.name.text, &p.ty) {
+                continue;
+            }
+            out.insert(i);
         }
         out
+    }
+
+    /// Does the body call a method on `name` that mutates a receiver of type
+    /// `ty`?
+    ///
+    /// Answered per method from the `@MutSelf` marker bindgen records, so it
+    /// tracks the library instead of a list of names. A parameter the body
+    /// only reads through is left by value.
+    fn param_mutated_through_calls(
+        &self,
+        body: &Block,
+        name: &str,
+        ty: &juxc_ast::TypeRef,
+    ) -> bool {
+        let Some(type_name) = ty.name.segments.last().map(|s| s.text.clone()) else {
+            return false;
+        };
+        let mut mutates = false;
+        crate::analysis::for_each_call(body, &mut |call| {
+            if mutates {
+                return;
+            }
+            let Expr::Field(f) = &*call.callee else {
+                return;
+            };
+            if lvalue_base_name(&f.object).as_deref() != Some(name) {
+                return;
+            }
+            if self.external_method_mutates_receiver(&type_name, &f.field.text) {
+                mutates = true;
+            }
+        });
+        mutates
     }
 
     /// Pre-pass: walk every compilation unit and record each

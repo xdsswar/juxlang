@@ -1181,8 +1181,23 @@ arrays silently are not would make ordinary lines of code do nothing at all,
 with no diagnostic. An array is the most primitive aggregate the language has,
 and it should not be the one that behaves differently.
 
-**`clone()` copies**, shallowly, as it does for a collection: a new array of
-the same length holding the same elements.
+**`clone()` copies**, shallowly, as it does for a collection: a new array of
+the same length holding the same elements.
+
+**A nullable array is not an array of nullables.** The `?` binds where it is
+written: before the brackets it is the ELEMENT's, after them it is the ARRAY's.
+
+```java
+String[]? names;      // there may be no array at all
+int?[] slots;         // an array whose every slot may be empty
+int?[]? maybeSlots;   // both
+```
+
+`new T?[n]` is how the second is built: every slot starts empty. The two are
+different types and neither converts to the other, because the questions they
+answer are different ones: whether there is an array, and whether there is a
+value in it.
+
 
 **Arrays live on the heap.** Java's do too, and it is what makes a reference to
 one meaningful. A `T[N]` in a declaration constrains the length; it does not

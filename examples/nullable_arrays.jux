@@ -1,0 +1,63 @@
+// A nullable array and an array of nullables are different types (§7.10, §6.5.2).
+//
+//   T[]?  the ARRAY may be missing      -> Option<array>
+//   T?[]  each ELEMENT may be missing   -> array of Option
+//   T?[]? both
+//
+// The `?` before the brackets belongs to the element, the one after belongs to
+// the array. They used to be recorded as the same flag, so `int[]?` quietly
+// became `int?[]`: a function that returns "no array at all" instead returned
+// an array of nothings.
+
+/** No array at all when asked not to give one. */
+public String[]? namesOrNothing(bool give) {
+    if (give) {
+        return new String[] { "ada", "grace" };
+    }
+    return null;
+}
+
+/** An array with holes in it: every slot starts missing. */
+public int?[] sparse() {
+    var slots = new int?[4];
+    slots[0] = 10;
+    slots[3] = 40;
+    return slots;
+}
+
+/** Both at once: the array may be missing, and so may each element. */
+public int?[]? sparseOrNothing(bool give) {
+    if (give) {
+        return sparse();
+    }
+    return null;
+}
+
+public void main() {
+    // ---- T[]? : the array itself ----------------------------------------
+    var some = namesOrNothing(true);
+    print(some == null);
+    print(some!!.length);
+    print(some!![1]);
+
+    var none = namesOrNothing(false);
+    print(none == null);
+
+    // ---- T?[] : the elements --------------------------------------------
+    var slots = sparse();
+    print(slots.length);
+    print(slots[0] == null);
+    print(slots[1] == null);
+    print(slots[0]!! + slots[3]!!);
+
+    // A hole reads as null, and the elvis operator fills it in.
+    var filled = slots[2] ?: -1;
+    print(filled);
+
+    // ---- T?[]? : both ----------------------------------------------------
+    var both = sparseOrNothing(true);
+    print(both == null);
+    print(both!!.length);
+    print(both!![1] == null);
+    print(sparseOrNothing(false) == null);
+}

@@ -616,7 +616,9 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         let element_ref = TypeRef {
             name: t.name.clone(),
             generic_args: t.generic_args.clone(),
-            nullable: t.nullable,
+            // The ELEMENT's nullability, not the array's: `t.nullable` here
+            // is `T[]?`, already applied around the whole array by the caller.
+            nullable: shape.peeled().is_none() && shape.elem_nullable,
             array_shape: shape.peeled(),
             fn_shape: t.fn_shape.clone(),
             ptr_depth: t.ptr_depth,

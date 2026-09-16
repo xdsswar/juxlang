@@ -132,9 +132,14 @@ impl<'a> Parser<'a> {
                 if elems.len() == 1 && elems[0].fn_shape.is_some() {
                     let mut inner = elems.into_iter().next()?;
                     let mut dims: Vec<ArrayDim> = Vec::new();
+                    let mut elem_nullable = false;
                     loop {
-                        if !inner.nullable && self.eat(&TokenKind::Question) {
-                            inner.nullable = true;
+                        if self.eat(&TokenKind::Question) {
+                            if dims.is_empty() {
+                                elem_nullable = true;
+                            } else {
+                                inner.nullable = true;
+                            }
                             continue;
                         }
                         if self.eat(&TokenKind::LBracket) {
@@ -150,8 +155,10 @@ impl<'a> Parser<'a> {
                         }
                         break;
                     }
-                    if !dims.is_empty() {
-                        inner.array_shape = Some(ArrayShape { dims });
+                    if dims.is_empty() {
+                        inner.nullable |= elem_nullable;
+                    } else {
+                        inner.array_shape = Some(ArrayShape { dims, elem_nullable });
                     }
                     inner.span = start.join(self.last_consumed_span());
                     return Some(inner);
@@ -177,9 +184,16 @@ impl<'a> Parser<'a> {
             // stub -- it is what a Rust `&[(u8, u8, u8)]` parameter becomes --
             // and without the bracket loop here the stub failed to parse.
             let mut dims: Vec<ArrayDim> = Vec::new();
+            let mut elem_nullable = false;
             loop {
-                if !t.nullable && self.eat(&TokenKind::Question) {
-                    t.nullable = true;
+                if self.eat(&TokenKind::Question) {
+                    // Before the brackets the `?` is the element's; after
+                    // them it is the array's.
+                    if dims.is_empty() {
+                        elem_nullable = true;
+                    } else {
+                        t.nullable = true;
+                    }
                     continue;
                 }
                 if self.eat(&TokenKind::LBracket) {
@@ -195,8 +209,11 @@ impl<'a> Parser<'a> {
                 }
                 break;
             }
-            if !dims.is_empty() {
-                t.array_shape = Some(ArrayShape { dims });
+            if dims.is_empty() {
+                // No brackets: the `?` was this type's own.
+                t.nullable |= elem_nullable;
+            } else {
+                t.array_shape = Some(ArrayShape { dims, elem_nullable });
             }
             t.span = start.join(self.last_consumed_span());
             return Some(t);
@@ -268,10 +285,18 @@ impl<'a> Parser<'a> {
         // `Option<&[u8]>` respectively). `TypeRef` flattens nullability
         // into one flag, so we OR it in wherever it appears.
         let mut nullable = false;
+        let mut elem_nullable = false;
         let mut dims: Vec<ArrayDim> = Vec::new();
         loop {
-            if !nullable && self.eat(&TokenKind::Question) {
-                nullable = true;
+            if self.eat(&TokenKind::Question) {
+                // `T?[]` marks the ELEMENT nullable, `T[]?` the ARRAY. The
+                // position is the whole difference between them, and it is
+                // lost the moment both write the same flag.
+                if dims.is_empty() {
+                    elem_nullable = true;
+                } else {
+                    nullable = true;
+                }
                 continue;
             }
             if self.eat(&TokenKind::LBracket) {
@@ -291,7 +316,13 @@ impl<'a> Parser<'a> {
         }
         // `Some` only when at least one dimension was read — keeps the
         // scalar case as `None` exactly as before.
-        let array_shape = if dims.is_empty() { None } else { Some(ArrayShape { dims }) };
+        let array_shape = if dims.is_empty() {
+            // No brackets: the `?` was this type's own.
+            nullable |= elem_nullable;
+            None
+        } else {
+            Some(ArrayShape { dims, elem_nullable })
+        };
 
         // Trailing raw-pointer markers `*` (§5.5 / §A.2.7), the OUTERMOST
         // modifier: `T*` → `*mut T`, `T**` → `*mut *mut T`. In type position a

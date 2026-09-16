@@ -4338,6 +4338,18 @@ impl RustEmitter {
     /// caller won't add a wrap and rustc will surface any real
     /// mismatch.
     pub(crate) fn assign_target_is_nullable(&self, target: &Expr) -> bool {
+        // An ELEMENT slot of a `T?[]`: the array holds `Option<T>`, so a
+        // non-null value stored into it needs the same lift a nullable field
+        // gets. Without it `xs[0] = 7` handed a bare value to an `Option`
+        // slot, which is the one way to build such an array.
+        if let Expr::Index(ix) = target {
+            if let Some(juxc_tycheck::Ty::Array { element, .. }) =
+                self.expr_types.get(&expr_span_of(&ix.array))
+            {
+                return matches!(**element, juxc_tycheck::Ty::Nullable(_));
+            }
+            return false;
+        }
         // Bare-Path target — a LOCAL with a `T?` declared type
         // (`maybe = a;` where `C? maybe`). The nullable-locals set is
         // the live source of truth (smart-cast narrowing removes a

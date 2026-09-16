@@ -23,7 +23,7 @@ public class Studio {
      * The buffer is tiny-skia's own: four bytes per pixel, premultiplied,
      * row-major, with no padding between rows.
      */
-    public static Histogram fold(final Pixmap canvas) {
+    public static Histogram fold(Pixmap canvas) {
         var pixels = canvas.data();
         var count = (int) (canvas.width() * canvas.height());
 

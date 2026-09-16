@@ -75,8 +75,7 @@ public void main() {
     if (data == null) {
         throw new IllegalStateException("Skia could not encode the drawing as PNG");
     }
-    var encoded = data!!;
-    var png = encoded.as_bytes();
+    var png = data!!.as_bytes();
     // Every PNG opens with the same eight-byte signature. Checking it is how
     // we know an encoder ran, rather than that a buffer exists.
     var signed = png[0] == 137 && png[1] == 80 && png[2] == 78 && png[3] == 71;

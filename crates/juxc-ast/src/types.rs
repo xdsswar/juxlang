@@ -223,6 +223,15 @@ pub struct ArrayShape {
     /// The dimensions, OUTERMOST first. Always non-empty for a real
     /// array shape (the parser never produces a zero-dimension shape).
     pub dims: Vec<ArrayDim>,
+    /// Whether the ELEMENT is nullable -- the `?` written BEFORE the
+    /// brackets, `T?[]`.
+    ///
+    /// [`TypeRef::nullable`] keeps its plain meaning: the value this type
+    /// describes may be missing, which for an array type is the `?` written
+    /// AFTER the brackets (`T[]?`). The two are different types -- `int[]?`
+    /// is a missing array, `int?[]` is an array of missing ints -- and with
+    /// one flag between them the outer spelling silently became the inner.
+    pub elem_nullable: bool,
 }
 
 impl ArrayShape {
@@ -230,7 +239,7 @@ impl ArrayShape {
     /// (`T[]` / `T[N]`) and what synthetic call sites (e.g. varargs)
     /// produce.
     pub fn single(d: ArrayDim) -> Self {
-        ArrayShape { dims: vec![d] }
+        ArrayShape { dims: vec![d], elem_nullable: false }
     }
 
     /// Number of dimensions (the array's rank). `int[]` → 1,
@@ -256,7 +265,9 @@ impl ArrayShape {
         if self.dims.len() <= 1 {
             None
         } else {
-            Some(ArrayShape { dims: self.dims[1..].to_vec() })
+            // Element nullability belongs to the innermost dimension, so it
+            // rides along until the last one is peeled.
+            Some(ArrayShape { dims: self.dims[1..].to_vec(), elem_nullable: self.elem_nullable })
         }
     }
 }
