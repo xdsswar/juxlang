@@ -26,6 +26,7 @@ import rust.skia_safe.Color4f;
 import rust.skia_safe.Rect;
 import rust.skia_safe.EncodedImageFormat;
 import rust.skia_safe.IPoint;
+import rust.std.write;
 
 import studio.Swatch;
 
@@ -76,6 +77,9 @@ public void main() {
         throw new IllegalStateException("Skia could not encode the drawing as PNG");
     }
     var png = data!!.as_bytes();
+    // Written under target/ so the picture can be looked at; the build
+    // output directory is ignored by git.
+    write("target/svg_studio.png", png);
     // Every PNG opens with the same eight-byte signature. Checking it is how
     // we know an encoder ran, rather than that a buffer exists.
     var signed = png[0] == 137 && png[1] == 80 && png[2] == 78 && png[3] == 71;

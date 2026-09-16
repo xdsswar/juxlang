@@ -2728,6 +2728,17 @@ impl crate::RustEmitter {
     /// Java-shaped program, but lending would take a shared borrow of the very
     /// cell the receiver holds exclusively and panic. Copying out matches what
     /// the program means and keeps the panic out of the language.
+    /// Whether the foreign function or method `callee` names declares a type
+    /// parameter called `name` of its own (`fn write<P, C>`), as opposed to
+    /// one it inherits from the type it is a method of.
+    fn callee_declares_type_param(&self, callee: &juxc_ast::Expr, name: &str) -> bool {
+        if let Some(m) = self.foreign_callee_method(callee) {
+            return m.generic_params.iter().any(|g| g.name.text == name);
+        }
+        self.foreign_free_callee(callee)
+            .is_some_and(|f| f.generic_params.iter().any(|g| g.name.text == name))
+    }
+
     pub(crate) fn foreign_arg_handle_lend(
         &self,
         callee: &juxc_ast::Expr,
@@ -2753,10 +2764,18 @@ impl crate::RustEmitter {
         // type at all -- a bare type parameter names none.
         let by_value = !(p.is_ref || p.ty.array_shape.is_some());
         if by_value {
+            let type_name = p.ty.name.segments.last()?.text.as_str();
             let names_a_foreign_type = self
-                .lookup_class_by_bare_or_fqn(p.ty.name.segments.last()?.text.as_str())
+                .lookup_class_by_bare_or_fqn(type_name)
                 .is_some_and(|c| c.is_external);
-            return names_a_foreign_type.then_some(".borrow().clone()");
+            // A type parameter of the CALLEE ITSELF is different from a
+            // container's element parameter. `fs::write<P, C: AsRef<[u8]>>`
+            // takes whatever satisfies its bound, and a Jux array handle
+            // satisfies none -- the crate wants the bytes. The element
+            // parameter of `Vec<T>::push` is bound by the receiver instead,
+            // and there the handle IS the element.
+            let callee_own_param = self.callee_declares_type_param(callee, type_name);
+            return (names_a_foreign_type || callee_own_param).then_some(".borrow().clone()");
         }
         let aliases_receiver = matches!(callee, juxc_ast::Expr::Field(f)
             if Self::receiver_place_key(&f.object).is_some()

@@ -29,6 +29,9 @@ public void main() {
     // ---- encode, and read the result back --------------------------------
     // `encode_png` returns a `Result` in Rust, so it is `throws` here and the
     // value arrives already opened.
+    // Written under target/ so the picture can be looked at; the build
+    // output directory is ignored by git.
+    canvas.save_png("target/raster_studio.png");
     var png = canvas.encode_png();
     print($"png bytes present: ${png.len() > 0}");
 
