@@ -1,0 +1,16 @@
+[package]
+name = "demo.svg_chart"
+version = "0.1.0"
+
+# Skia, the graphics engine behind Chrome, Android and Flutter, consumed in Jux
+# syntax.
+#
+# The dependency is named for the Rust crate (`skia_safe`) and `package` says
+# what to fetch, because `skia-safe` is not a spelling any `use` path can take.
+#
+# The feature set is exactly the one rust-skia publishes a prebuilt binary for
+# (`ganesh-gl-jpegd-jpege-pdf-svg-textlayout`), so building this downloads Skia
+# instead of compiling it: seconds rather than an hour, and no C++ toolchain.
+# `svg` brings Skia's SVG DOM, and `textlayout` comes with it.
+[dependencies]
+"rust.skia_safe" = { version = "0.153", package = "skia-safe", features = ["gl", "svg", "textlayout"] }

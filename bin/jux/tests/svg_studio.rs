@@ -21,6 +21,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn run() -> Vec<String> {
+    run_project("svg_studio")
+}
+
+fn run_project(project: &str) -> Vec<String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -28,10 +32,10 @@ fn run() -> Vec<String> {
         .to_path_buf();
 
     let output = Command::new(env!("CARGO_BIN_EXE_jux"))
-        .current_dir(root.join("examples").join("svg_studio"))
+        .current_dir(root.join("examples").join(project))
         .arg("run")
         .output()
-        .expect("spawning jux run for svg_studio");
+        .unwrap_or_else(|e| panic!("spawning jux run for {project}: {e}"));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -65,4 +69,11 @@ fn svg_studio_rasterises_a_document_and_reads_it_back() {
             "disc leads with: green",
         ],
     );
+}
+
+/// `examples/svg_chart` builds its SVG from data with string interpolation,
+/// the way a report or dashboard would, and hands it to the same renderer.
+#[test]
+fn svg_chart_renders_a_generated_document() {
+    assert_eq!(run_project("svg_chart"), ["wrote a 5-bar chart"]);
 }

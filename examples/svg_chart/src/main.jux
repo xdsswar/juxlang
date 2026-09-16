@@ -1,0 +1,50 @@
+// svg_chart: build an SVG document from data, then let Skia draw it.
+
+import rust.skia_safe.Surface;
+import rust.skia_safe.ISize;
+import rust.skia_safe.Dom;
+import rust.skia_safe.FontMgr;
+import rust.skia_safe.Size;
+import rust.skia_safe.EncodedImageFormat;
+import rust.std.write;
+
+/** One bar of the chart as an SVG element. */
+public String bar(int index, int value) {
+    var x = 20 + index * 45;
+    var h = value * 2;
+    var y = 180 - h;
+    return $"""<rect x="${x}" y="${y}" width="30" height="${h}" fill="#3ad1c4"/>""";
+}
+
+public void main() {
+    int[] sales = new int[] { 30, 55, 42, 80, 65 };
+
+    // Assemble the document piece by piece.
+    var body = "";
+    for (int i = 0; i < sales.length; i++) {
+        body = body + bar(i, sales[i]);
+    }
+    var svg = $"""<svg xmlns="http://www.w3.org/2000/svg" width="250" height="200">
+  <rect width="250" height="200" fill="#12141c"/>
+  ${body}
+  <line x1="10" y1="180" x2="240" y2="180" stroke="#f5f1e6" stroke-width="2"/>
+</svg>""";
+
+    // Render it.
+    var made = Surface.new_raster_n32_premul(new ISize(250, 200));
+    if (made == null) {
+        throw new IllegalStateException("no surface");
+    }
+    var surface = made!!;
+    Dom dom = Dom.from_str(svg, new FontMgr());
+    dom.set_container_size(new Size(250.0f, 200.0f));
+    dom.render(surface.canvas());
+
+    // Save it.
+    var data = surface.image_snapshot().encode_to_data(EncodedImageFormat.PNG);
+    if (data == null) {
+        throw new IllegalStateException("could not encode");
+    }
+    write("target/svg_chart.png", data!!.as_bytes());
+    print($"wrote a ${sales.length}-bar chart");
+}
