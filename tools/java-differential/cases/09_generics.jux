@@ -1,4 +1,4 @@
-public class Pair<A, B> {
+class Pair<A, B> {
     private A first;
     private B second;
     public Pair(A a, B b) { this.first = a; this.second = b; }
@@ -6,7 +6,7 @@ public class Pair<A, B> {
     public B getSecond() { return this.second; }
     public String show() { return "(" + this.first + ", " + this.second + ")"; }
 }
-public class Cell<T> {
+class Cell<T> {
     private T value;
     public Cell(T v) { this.value = v; }
     public T get() { return this.value; }

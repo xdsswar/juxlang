@@ -30,7 +30,7 @@ public annotation Cacheable {
 @Retention(BINARY)
 public annotation Internal { }
 
-public class UserController {
+class UserController {
 
     @Route(path = "/users")
     @Cacheable(ttlSeconds = 300, tags = {"user", "profile"})

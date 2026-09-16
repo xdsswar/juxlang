@@ -1,7 +1,7 @@
 // Stress test: records with methods and operator string +
 // boolean alias + record method-chain.
 
-public record Money(int cents, String currency) {
+record Money(int cents, String currency) {
     public bool isZero() {
         return this.cents == 0;
     }

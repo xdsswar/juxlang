@@ -1,0 +1,28 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+
+// Abstract sealed base. `permits` restricts inheritance to the
+// listed subclasses; tycheck enforces it.
+public abstract sealed class Shape implements Drawable
+    permits Circle, Square, Triangle
+{
+    public String label;
+    public Shape(String label) {
+        this.label = label;
+    }
+
+    public abstract double area();
+
+    // Default impl uses `area()` and the field — annotations are
+    // case-insensitive so either `@Override` or `@override` works.
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}

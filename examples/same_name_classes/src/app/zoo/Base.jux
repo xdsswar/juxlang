@@ -1,0 +1,15 @@
+package app.zoo;
+
+/** A polymorphic base, named like the one in `app.garage`. */
+
+public class Base {
+    public String name;
+
+    public Base(String name) {
+        this.name = name;
+    }
+
+    public String describe() {
+        return "animal " + name;
+    }
+}

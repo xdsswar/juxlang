@@ -1,0 +1,70 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A ring showing one value as a fraction of a budget.
+public class Gauge {
+    public String label;
+    public int percent;
+    public u32 color;
+
+    public Gauge(String label, int percent, u32 color) {
+        this.label = label;
+        this.percent = percent;
+        this.color = color;
+    }
+
+    public void draw(Canvas c, Rect r) {
+        // Reserve the label's line before sizing the ring, or a short panel
+        // draws the two on top of each other.
+        int avail = r.h - Font.H - 6;
+        int size = r.w < avail ? r.w : avail;
+        if (size < 24) { return; }
+        int cx = r.x + r.w / 2;
+        int cy = r.y + size / 2;
+        int outer = size / 2 - 2;
+        int inner = outer - 9;
+        if (inner < 2) { return; }
+
+        // Sweep the ring pixel by pixel, filling the arc up to `percent`.
+        // The angle comes from the quadrant rather than a trig call, so the
+        // whole widget stays in integer arithmetic.
+        for (int dy = -outer; dy <= outer; dy++) {
+            for (int dx = -outer; dx <= outer; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 > outer * outer || d2 < inner * inner) { continue; }
+                int frac = Gauge.fraction(dx, dy);
+                u32 tone = frac <= this.percent ? this.color : Theme.PANEL_HI;
+                c.px(cx + dx, cy + dy, tone);
+            }
+        }
+
+        var text = $"${this.percent}%";
+        Font.draw(c, text, cx - Font.width(text, 2) / 2, cy - Font.H, 2, Theme.TEXT);
+        Font.draw(c, this.label, cx - Font.width(this.label, 1) / 2, r.bottom() - Font.H, 1, Theme.MUTED);
+    }
+
+    // Where (dx, dy) falls on a 0..100 sweep starting at the top, clockwise.
+    // Integer only: the quadrant fixes the coarse position, and the ratio
+    // within it fixes the rest.
+    private static int fraction(int dx, int dy) {
+        int ax = dx < 0 ? -dx : dx;
+        int ay = dy < 0 ? -dy : dy;
+        int sum = ax + ay;
+        if (sum == 0) { return 0; }
+        // A Manhattan angle: exact on the axes and the diagonals, and smooth
+        // enough between them that a ring reads correctly.
+        int q = (ax * 100) / sum;
+        if (dx >= 0 && dy < 0) { return q / 4; }
+        if (dx >= 0 && dy >= 0) { return 25 + (100 - q) / 4; }
+        if (dx < 0 && dy >= 0) { return 50 + q / 4; }
+        return 75 + (100 - q) / 4;
+    }
+}

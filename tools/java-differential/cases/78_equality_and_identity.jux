@@ -2,19 +2,19 @@
 // overridden operators run on the runtime class, and a class without its
 // own equality compares by identity through any static type.
 
-public interface Shape { double area(); }
+interface Shape { double area(); }
 
-public class Node implements Shape {
+class Node implements Shape {
     public int id;
     public Node(int id) { this.id = id; }
     public double area() { return 0.0; }
 }
 
-public class Leaf extends Node {
+class Leaf extends Node {
     public Leaf(int id) { super(id); }
 }
 
-public class Money {
+class Money {
     public int cents;
     public Money(int c) { cents = c; }
     public bool operator==(Money o) { return cents == o.cents; }
@@ -22,11 +22,11 @@ public class Money {
     public String operator string() { return "$" + cents; }
 }
 
-public class Coin extends Money {
+class Coin extends Money {
     public Coin(int c) { super(c); }
 }
 
-public class Note extends Money {
+class Note extends Money {
     public Note(int c) { super(c); }
     public bool operator==(Money o) { return false; }
     public int operator hash() { return 7; }

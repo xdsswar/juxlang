@@ -1,0 +1,15 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+public final class FillTool extends Tool {
+    public FillTool() { super(0); }
+    @Override public String name() { return "Fill"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.floodFill(to.x, to.y, color);
+    }
+}

@@ -12,18 +12,18 @@
 // - P7: static observable properties fire class-scoped observers.
 package observable;
 
-public class Field {
+class Field {
     public int Value { get; set; } = 0;
 }
 
-public class Person {
+class Person {
     public String First { get; set; } = "";
     public String Last { get; set; } = "";
     // P1: computed — re-fires from First's and Last's setters.
     public String FullName { get -> First + "/" + Last; };
 }
 
-public class Probe {
+class Probe {
     private final observer<int> watch = (prop, old, now) -> {
         print("watch " + prop + " " + old + "->" + now);
     };
@@ -33,7 +33,7 @@ public class Probe {
     }
 }
 
-public class Mirror {
+class Mirror {
     public int Shown { get; set; } = 0;
 
     // P6: ctor bind on `this` — deferred to post-construction,
@@ -43,11 +43,11 @@ public class Mirror {
     }
 }
 
-public class Source {
+class Source {
     public int Value { get; set; } = 10;
 }
 
-public class Config {
+class Config {
     // P7: class-scoped observable property.
     public static int Level { get; set; } = 0;
 }

@@ -1,0 +1,70 @@
+// The numbers on the dashboard.
+//
+// Deterministic on purpose: the same `seed` always produces the same frame, so
+// a snapshot can be compared byte for byte in a test. Nothing here touches a
+// clock or a random source.
+package dash;
+
+import rust.std.*;
+
+// One named metric with a rolling history.
+//
+// The history is a `Vec<int>`, and a collection is a reference type, so
+// `series.history()` hands back the real series rather than a copy of it.
+
+public class Series {
+    public String name;
+    public String unit;
+    public u32 color;
+    private Vec<int> points;
+
+    public Series(String name, String unit, u32 color) {
+        this.name = name;
+        this.unit = unit;
+        this.color = color;
+        this.points = new Vec<int>();
+    }
+
+    public Vec<int> history() { return this.points; }
+
+    public void push(int v) { this.points.push(v); }
+
+    public int latest() {
+        int n = (int) this.points.len();
+        return n == 0 ? 0 : this.points[n - 1];
+    }
+
+    public int max() {
+        int m = 1;
+        for (var p : this.points) {
+            if (p > m) { m = p; }
+        }
+        return m;
+    }
+
+    public int min() {
+        int m = this.latest();
+        for (var p : this.points) {
+            if (p < m) { m = p; }
+        }
+        return m;
+    }
+
+    public int average() {
+        int n = (int) this.points.len();
+        if (n == 0) { return 0; }
+        int sum = 0;
+        for (var p : this.points) { sum = sum + p; }
+        return sum / n;
+    }
+
+    // Percent change from the first sample to the latest, which is what the
+    // little delta under each headline number reports.
+    public int trend() {
+        int n = (int) this.points.len();
+        if (n < 2) { return 0; }
+        int first = this.points[0];
+        if (first == 0) { return 0; }
+        return ((this.latest() - first) * 100) / first;
+    }
+}

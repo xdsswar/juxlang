@@ -1,4 +1,4 @@
-public class Money {
+class Money {
     private int cents;
     public Money(int cents) { this.cents = cents; }
     public int cents() { return this.cents; }
@@ -26,7 +26,7 @@ public class Money {
     }
 }
 
-public class Row {
+class Row {
     private Vec<int> slots;
     public Row() {
         this.slots = new Vec<int>();

@@ -4,7 +4,7 @@
 // RefCell panic.
 package stress01;
 
-public class Counter {
+class Counter {
     public int Value { get; set; } = 0;
 }
 

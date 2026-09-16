@@ -6,7 +6,7 @@
 // failure that caused it. On the normal path there is nothing to hide, and a
 // throwing `finally` simply throws.
 
-public class Resource {
+class Resource {
     public String name;
     public Resource(String name) { this.name = name; }
     public void close() {
@@ -14,7 +14,7 @@ public class Resource {
     }
 }
 
-public class Stats {
+class Stats {
     public static int cleanups = 0;
 }
 

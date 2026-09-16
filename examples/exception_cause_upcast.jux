@@ -5,7 +5,7 @@
 // constructors — the 2-arg `new AppError(msg, cause)` must resolve the 2-arg
 // ctor's param types for the coercion, not the 1-arg ctor's. Expected: nested.
 
-public class AppError extends Exception {
+class AppError extends Exception {
     public AppError(String m) { super(m); }
     public AppError(String m, Exception cause) { super(m, cause); }
 }

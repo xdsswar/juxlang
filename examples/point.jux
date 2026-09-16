@@ -10,7 +10,7 @@
 //   - `p.field` and `p.method(args)` from outside the class.
 //   - String interpolation inside print to render coordinates.
 
-public class Point {
+class Point {
     // Public fields here so the demo can read coordinates from
     // outside the class. The encapsulation example (private + getter)
     // lives in `examples/encapsulation.jux`.

@@ -1,4 +1,4 @@
-public class Ids {
+class Ids {
     private static int next = 0;
 
     public static int take() {
@@ -10,7 +10,7 @@ public class Ids {
     public static void reset() { Ids.next = 0; }
 }
 
-public class Node {
+class Node {
     private int id;
     private String tag;
     public Node(String tag) {

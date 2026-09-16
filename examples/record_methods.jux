@@ -3,7 +3,7 @@
 // when fields permit) AND can declare named methods that operate on
 // the header components.
 
-public record Money(int cents) {
+record Money(int cents) {
     public int doubled() {
         return this.cents * 2;
     }

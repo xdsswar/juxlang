@@ -13,7 +13,7 @@
 // binding is not rebinding it, which is what makes a guard followed by writes
 // to the guarded object work.
 
-public class Node {
+class Node {
     public int value;
     public Node? next;
     public Node(int value) {

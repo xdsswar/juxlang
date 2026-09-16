@@ -1,6 +1,6 @@
 // `final` means assign-once, in all three places it can appear.
 
-public class Settings {
+class Settings {
     public final int retries;
     public Settings() { this.retries = 3; }
     public void bump() { this.retries = 4; }

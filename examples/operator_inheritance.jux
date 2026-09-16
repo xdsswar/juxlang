@@ -8,7 +8,7 @@
 //   class.
 // - A generic class's `operator string` reaches its subclasses too.
 
-public class Money {
+class Money {
     public int cents;
     public Money(int c) { cents = c; }
     public bool operator==(Money o) { return cents == o.cents; }
@@ -18,24 +18,24 @@ public class Money {
     public Money operator+(Money o) { return new Money(cents + o.cents); }
 }
 
-public class Coin extends Money {
+class Coin extends Money {
     public Coin(int c) { super(c); }
 }
 
-public class Note extends Money {
+class Note extends Money {
     public Note(int c) { super(c); }
     public bool operator==(Money o) { return false; }
     public int operator hash() { return 7; }
     public String operator string() { return "note " + cents; }
 }
 
-public class Crate<T> {
+class Crate<T> {
     public T item;
     public Crate(T item) { this.item = item; }
     public String operator string() { return "crate of " + item; }
 }
 
-public class Labelled extends Crate<String> {
+class Labelled extends Crate<String> {
     public Labelled(String s) { super(s); }
 }
 

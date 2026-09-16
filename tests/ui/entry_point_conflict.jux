@@ -4,7 +4,7 @@
 
 print("this file is already the entry point");
 
-public class Runner {
+class Runner {
     public void main() {
         print("not an entry point, and not static either");
     }

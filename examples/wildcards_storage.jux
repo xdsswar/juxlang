@@ -21,16 +21,16 @@
 //      backend lifts to a synthetic function generic so it accepts any
 //      concrete subtype soundly. (See `wildcards.jux`.)
 
-public class Animal {
+class Animal {
     public String name;
     public Animal(String name) { this.name = name; }
 }
 
-public class Dog extends Animal {
+class Dog extends Animal {
     public Dog(String name) { super(name); }
 }
 
-public class Bag<T> {
+class Bag<T> {
     public T item;
     public Bag(T item) {
         this.item = item;
@@ -38,7 +38,7 @@ public class Bag<T> {
 }
 
 // Concrete-arg storage — the supported storage form.
-public class Holder {
+class Holder {
     public Bag<Dog> contents;
 
     public Holder(Bag<Dog> contents) {

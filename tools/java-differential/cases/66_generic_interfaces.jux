@@ -1,4 +1,4 @@
-public interface Container<T> {
+interface Container<T> {
     T get();
     String label();
 
@@ -7,14 +7,14 @@ public interface Container<T> {
     }
 }
 
-public class IntBox implements Container<int> {
+class IntBox implements Container<int> {
     private int v;
     public IntBox(int v) { this.v = v; }
     public int get() { return this.v; }
     public String label() { return "int-box"; }
 }
 
-public class Wrapper<T> implements Container<T> {
+class Wrapper<T> implements Container<T> {
     private T v;
     public Wrapper(T v) { this.v = v; }
     public T get() { return this.v; }

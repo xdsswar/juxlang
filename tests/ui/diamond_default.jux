@@ -1,15 +1,15 @@
 // Two interfaces, one method name, both with bodies. The class has to say
 // which it means -- neither the compiler nor the reader can guess.
 
-public interface Left {
+interface Left {
     default String tag() { return "left"; }
 }
 
-public interface Right {
+interface Right {
     default String tag() { return "right"; }
 }
 
-public class Both implements Left, Right {
+class Both implements Left, Right {
     public int id() { return 1; }
 }
 

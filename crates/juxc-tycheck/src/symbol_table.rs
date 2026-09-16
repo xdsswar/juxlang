@@ -1303,6 +1303,26 @@ fn insert_annotation(
         });
     }
 
+    // §A.12: annotation names are matched without case, so two declarations
+    // differing only in case cannot be told apart at a use site.
+    if let Some((existing, _)) = table
+        .annotations
+        .iter()
+        .find(|(other, _)| other.rsplit('.').next().is_some_and(|b| b.eq_ignore_ascii_case(&decl.name.text)))
+    {
+        let existing_bare = existing.rsplit('.').next().unwrap_or(existing).to_string();
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0307_DuplicateAnnotationName,
+                format!(
+                    "annotation `{}` cannot be told apart from `{existing_bare}`: annotation names are matched without case (§3.6)",
+                    decl.name.text,
+                ),
+            )
+            .with_span(decl.name.span)
+            .with_help("give one of them a different name"),
+        );
+    }
     table.annotations.insert(
         fqn,
         AnnotationSig {

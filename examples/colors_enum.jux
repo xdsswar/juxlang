@@ -8,9 +8,9 @@
 //   - `==` comparison via auto-derived PartialEq.
 //   - Print via auto-derived Display (variant name only).
 
-public enum Color { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 
-public enum Token {
+enum Token {
     Number(int),
     Word(String)
 }

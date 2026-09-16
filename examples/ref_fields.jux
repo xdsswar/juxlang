@@ -5,7 +5,7 @@ void retag(ref String tag) {
     tag = "shared-tag";
 }
 
-public class Doc {
+class Doc {
     public ref String title;
     public ref int views;
     public String plain;
@@ -17,7 +17,7 @@ public class Doc {
     }
 }
 
-public class Pair {
+class Pair {
     public ref int score = 100;
 }
 

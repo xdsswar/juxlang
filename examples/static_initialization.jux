@@ -12,20 +12,20 @@ public String note(String what) {
     return what;
 }
 
-public class Order {
+class Order {
     public static String first = note("first field");
     static { print("block runs between the fields"); }
     public static String second = note("second field");
     public static int uses = 0;
 }
 
-public class Settings {
+class Settings {
     public static String host = note("host initialized");
     public static String port = note("port initialized");
     public static String describe() { return host + ":" + port; }
 }
 
-public class Broken {
+class Broken {
     public static int limit = 10;
     static {
         if (limit > 5) {

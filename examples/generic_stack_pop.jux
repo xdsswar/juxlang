@@ -7,7 +7,7 @@ package generic_stack_pop;
 
 import rust.std.Vec;
 
-public class Stack<T> {
+class Stack<T> {
     private Vec<T> data = new Vec<T>();
     public void push(T v) { this.data.push(v); }
     // This `pop()` returns T directly. The inner `rust.std.Vec::pop()` is

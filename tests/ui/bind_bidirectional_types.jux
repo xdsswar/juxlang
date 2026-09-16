@@ -1,7 +1,7 @@
 // `bindBidirectional` keeps two properties equal, which only means something
 // when they hold the same kind of value.
 
-public class Reading {
+class Reading {
     public int Celsius { get; set; }
     public String Label { get; set; }
     public Reading() {

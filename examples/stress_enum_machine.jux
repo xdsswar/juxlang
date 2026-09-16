@@ -2,14 +2,14 @@
 // mutable static counter + bare-name field update + record returns +
 // string interp with method calls inside arm bodies.
 
-public enum Op {
+enum Op {
     Push(int),
     Pop,
     Add,
     Mul,
 }
 
-public class Calculator {
+class Calculator {
     public static int opsRun = 0;
 
     public String describe(Op op) {

@@ -1,0 +1,73 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+/// Hosts per region, as a labelled bar per key.
+///
+/// Reads its data straight out of a `Table<String, int>`: the keys carry the
+/// insertion order, and every value comes back through the table's nullable
+/// getter, so a key with no entry is skipped rather than drawn as a zero.
+public class RegionBreakdown implements Widget {
+    private Table<String, int> counts;
+
+    public RegionBreakdown(Table<String, int> counts) {
+        this.counts = counts;
+    }
+
+    public String title() { return "by region"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        var keys = this.counts.keys();
+        if (keys.len() == 0) {
+            text.draw(c, "NO HOSTS", x, y, t.inkDim());
+            return;
+        }
+
+        // Scale every bar against the busiest region, so the widest bar
+        // always reaches the panel edge whatever the absolute numbers are.
+        int peak = 1;
+        for (var k : keys) {
+            var n = this.counts.get(k);
+            if (n != null && n!! > peak) {
+                peak = n!!;
+            }
+        }
+
+        int rowHeight = 14;
+        int labelW = 76;
+        for (int i = 0; i < keys.len(); i++) {
+            int ry = y + i * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var key = keys[i];
+            var n = this.counts.get(key);
+            if (n == null) {
+                continue;
+            }
+            text.draw(c, key.toUpperCase(), x, ry + 1, t.ink());
+
+            int barW = w - labelW - 18;
+            int filled = barW * n!! / peak;
+            c.rect(x + labelW, ry + 1, barW, 7, t.grid());
+            c.rect(x + labelW, ry + 1, filled, 7, t.accent());
+            // Measured, not a fixed offset: a two-digit count drawn at
+            // `w - 10` runs into the panel border.
+            var count = "" + n!!;
+            text.draw(c, count, x + w - text.widthOf(count, 1), ry + 1, t.inkDim());
+        }
+    }
+}

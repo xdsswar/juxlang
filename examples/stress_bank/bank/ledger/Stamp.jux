@@ -1,0 +1,20 @@
+// bank.ledger — generic Ledger<T> wrapping a single value, plus a
+// stamping utility class. Exercises:
+//   - generic class with one type param
+//   - cross-package type as generic arg
+//   - interface (Audited) inherited via composition (the Ledger
+//     itself isn't Audited, but it stores Audited entries by id)
+//   - bare-name access to a final + a mutable static of the
+//     enclosing class
+
+package bank.ledger;
+
+public class Stamp {
+    public static int sequence = 0;
+    public static final String PREFIX = "STAMP";
+
+    public static String next() {
+        sequence = sequence + 1;
+        return $"${PREFIX}-${sequence}";
+    }
+}

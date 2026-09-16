@@ -20,25 +20,25 @@
 //      on null, and chains keep going (`a.peer!!.id = 99` writes
 //      through).
 
-public class Acc {
+class Acc {
     public int sum;
     public Acc() { this.sum = 0; }
     public int bump() { this.sum = this.sum + 1; return this.sum; }
     public void addTwice(int x) { this.sum = this.sum + x + x; }
 }
 
-public class Counter {
+class Counter {
     public int n;
     public Counter() { this.n = 0; }
     public void inc() { this.n = this.n + 1; }
 }
 
-public class Registry {
+class Registry {
     public static Counter global = new Counter();
     public static int snapshot() { return global.n; }
 }
 
-public class Node {
+class Node {
     public int id;
     public Node? peer;
     public Node(int id) { this.id = id; this.peer = null; }

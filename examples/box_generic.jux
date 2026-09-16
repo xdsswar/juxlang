@@ -8,7 +8,7 @@
 //   - Explicit instantiation via `new Box<int>(42)` (turbofish).
 //   - Implicit instantiation via `new Box(7)` (Rust inference).
 
-public class Box<T> {
+class Box<T> {
     private T value;
 
     public Box(T value) {

@@ -7,18 +7,18 @@
 // toString by construction; Jux had to be told that a generic record and a
 // generic enum have a string form at all, and that a formatted type parameter
 // on a METHOD needs the same bound a class's does.
-public record Cell<T>(T value) {
+record Cell<T>(T value) {
     public String show() { return "cell(" + this.value + ")"; }
 }
-public record Duo<A, B>(A left, B right) {
+record Duo<A, B>(A left, B right) {
     public String show() { return "pair(" + this.left + ", " + this.right + ")"; }
 }
-public class Wrap<T> {
+class Wrap<T> {
     private T v;
     public Wrap(T v) { this.v = v; }
     public String show() { return "wrap(" + this.v + ")"; }
 }
-public class Emitter {
+class Emitter {
     public <T> String mark(T x) { return "m:" + x; }
 }
 public void main() {

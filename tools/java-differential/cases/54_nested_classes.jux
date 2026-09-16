@@ -1,4 +1,4 @@
-public class Outer {
+class Outer {
     private int seed;
     public Outer(int seed) { this.seed = seed; }
 

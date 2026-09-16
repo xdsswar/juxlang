@@ -1,0 +1,13 @@
+package app.garage;
+
+public class Pen {
+    public class Gate {
+        public int width;
+
+        public Gate() {
+            this.width = 3;
+        }
+    }
+
+    public Gate gate = new Gate();
+}

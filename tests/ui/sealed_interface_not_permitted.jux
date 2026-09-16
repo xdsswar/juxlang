@@ -1,8 +1,8 @@
-public sealed interface Shape permits Circle, Square {}
-public record Circle(double r) implements Shape {}
-public record Square(double side) implements Shape {}
-public class Blob implements Shape {}
-public record Dot(int x) implements Shape {}
+sealed interface Shape permits Circle, Square {}
+record Circle(double r) implements Shape {}
+record Square(double side) implements Shape {}
+class Blob implements Shape {}
+record Dot(int x) implements Shape {}
 
 public String describe(Shape s) {
     return switch (s) {

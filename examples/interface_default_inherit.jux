@@ -13,7 +13,7 @@
 // `label()` default. `main` calls the default directly on the concrete
 // type, proving inherent-first resolution.
 
-public interface Holder<T> {
+interface Holder<T> {
     void put(T value);
 
     default String label() {
@@ -21,7 +21,7 @@ public interface Holder<T> {
     }
 }
 
-public class Box implements Holder<int> {
+class Box implements Holder<int> {
     public static int lastPut = 0;
 
     @override

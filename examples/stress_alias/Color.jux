@@ -1,0 +1,5 @@
+// shop.lib — defines a class + a record + an enum that the
+// consumer imports with various alias shapes.
+package shop.lib;
+
+public enum Color { Red, Green, Blue }

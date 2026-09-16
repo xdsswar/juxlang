@@ -3,7 +3,7 @@
 // aliased so both classes take the wrapper shape. Expect abc / abc.
 package stress14;
 
-public class Builder14 {
+class Builder14 {
     public String s = "";
     public Builder14 add(String p) {
         this.s = this.s + p;
@@ -12,7 +12,7 @@ public class Builder14 {
     public String get() { return this.s; }
 }
 
-public class Owner14 {
+class Owner14 {
     public Builder14 sb = new Builder14();
 }
 

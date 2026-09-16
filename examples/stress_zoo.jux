@@ -9,7 +9,7 @@ interface Tagged {
     }
 }
 
-public abstract class Animal implements Tagged {
+abstract class Animal implements Tagged {
     private String name;
     public static int liveCount = 0;
 
@@ -23,7 +23,7 @@ public abstract class Animal implements Tagged {
     public abstract String sound();
 }
 
-public abstract class Mammal extends Animal {
+abstract class Mammal extends Animal {
     private int legs;
     public Mammal(String name, int legs) {
         super(name);
@@ -32,7 +32,7 @@ public abstract class Mammal extends Animal {
     public int legs() { return this.legs; }
 }
 
-public final class Dog extends Mammal {
+final class Dog extends Mammal {
     public static int barkCount = 0;
     public Dog(String name) { super(name, 4); }
     public String sound() { return $"Woof!"; }
@@ -43,7 +43,7 @@ public final class Dog extends Mammal {
     }
 }
 
-public final class Bat extends Mammal {
+final class Bat extends Mammal {
     public Bat(String name) { super(name, 2); }
     public String sound() { return $"Screech!"; }
     public String tag() { return $"bat"; }

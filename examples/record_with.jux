@@ -1,10 +1,10 @@
 // §M.5 record with(...) — synthesized wither.
 package rwith;
 
-public record Vector3(double x, double y, double z) {}
+record Vector3(double x, double y, double z) {}
 
-public record Address(String city, String country) {}
-public record User(String name, Address addr) {}
+record Address(String city, String country) {}
+record User(String name, Address addr) {}
 
 public void main() {
     var v = new Vector3(1.0, 2.0, 3.0);

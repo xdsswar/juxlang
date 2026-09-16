@@ -1,7 +1,7 @@
 // `this` has no meaning without an instance, and a class member shaped like an
 // entry point has to be static to be one.
 
-public class Counter {
+class Counter {
     private int n;
     public Counter() { this.n = 0; }
 

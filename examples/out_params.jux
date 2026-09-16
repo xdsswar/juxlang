@@ -13,7 +13,7 @@
 
 package outparams;
 
-public class Parser {
+class Parser {
     // Returns whether `s` parsed; writes the parsed value through `result`.
     // Note `result` is assigned on BOTH paths, satisfying E0940.
     public bool tryParse(String s, out int result) {
@@ -27,7 +27,7 @@ public class Parser {
 }
 
 // A mutable holder, used to show an out-arg targeting an object field.
-public class Cell {
+class Cell {
     public int value;
     public Cell() { this.value = 0; }
 }

@@ -163,6 +163,96 @@ fn header_span(unit: &CompilationUnit) -> Span {
     Span::new(unit.span.start, unit.span.start)
 }
 
+
+/// §3.1: a file declares **at most one public type**, and that type's name is
+/// the file's name (`Animal.jux` holds `public class Animal`). A file that
+/// declares no public type — a file of functions, or one whose types are all
+/// package-private — may be named anything.
+///
+/// The rule is what makes a public type findable from its name alone, and it
+/// is checked here for the same reason the package rule is: the alternative is
+/// a reader searching the tree for where a name lives.
+pub fn check_public_type_file_names(units: &[CompilationUnit], sources: &[SourceFile]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for (idx, (unit, source)) in units.iter().zip(sources.iter()).enumerate() {
+        if unit.is_external {
+            continue;
+        }
+        let path = source.path();
+        // Generated units (the annotation registry, the stdlib snapshot) are
+        // not files a person names.
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if path.extension().and_then(|e| e.to_str()) != Some("jux") {
+            continue;
+        }
+        // A NESTED type is lifted to a top-level declaration named
+        // `Outer__Inner` by the parser (§M.9). It is not a type the file
+        // declares in its own right, and its name could never match a filename.
+        let lifted = |name: &str| name.contains("__");
+        let publics: Vec<(String, Span)> = unit
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                juxc_ast::TopLevelDecl::Class(c)
+                    if matches!(c.visibility, juxc_ast::Visibility::Public) && !lifted(&c.name.text) =>
+                {
+                    Some((c.name.text.clone(), c.name.span))
+                }
+                juxc_ast::TopLevelDecl::Interface(i)
+                    if matches!(i.visibility, juxc_ast::Visibility::Public) && !lifted(&i.name.text) =>
+                {
+                    Some((i.name.text.clone(), i.name.span))
+                }
+                juxc_ast::TopLevelDecl::Record(r)
+                    if matches!(r.visibility, juxc_ast::Visibility::Public) && !lifted(&r.name.text) =>
+                {
+                    Some((r.name.text.clone(), r.name.span))
+                }
+                juxc_ast::TopLevelDecl::Enum(e)
+                    if matches!(e.visibility, juxc_ast::Visibility::Public) && !lifted(&e.name.text) =>
+                {
+                    Some((e.name.text.clone(), e.name.span))
+                }
+                _ => None,
+            })
+            .collect();
+        if publics.is_empty() {
+            continue;
+        }
+        if publics.len() > 1 {
+            let names = publics.iter().map(|(n, _)| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+            out.push(
+                Diagnostic::error(
+                    Code::E0481_PublicTypeFileName,
+                    format!(
+                        "a file declares at most one public type, and this one declares {}: {names} (§3.1)",
+                        publics.len(),
+                    ),
+                )
+                .with_span(publics[1].1)
+                .with_file(idx)
+                .with_help("keep one public type and give it this file's name; the others drop `public` (package-private) or move to their own files"),
+            );
+            continue;
+        }
+        let (name, span) = &publics[0];
+        if name != stem {
+            out.push(
+                Diagnostic::error(
+                    Code::E0481_PublicTypeFileName,
+                    format!("public type `{name}` is declared in `{stem}.jux`: a public type lives in the file named after it (§3.1)"),
+                )
+                .with_span(*span)
+                .with_file(idx)
+                .with_help(format!("rename the file to `{name}.jux`, or drop `public` to make `{name}` package-private")),
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

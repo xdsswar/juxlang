@@ -1,0 +1,29 @@
+// The numbers on the dashboard.
+//
+// Deterministic on purpose: the same `seed` always produces the same frame, so
+// a snapshot can be compared byte for byte in a test. Nothing here touches a
+// clock or a random source.
+package dash;
+
+import rust.std.*;
+
+// One named metric with a rolling history.
+//
+// The history is a `Vec<int>`, and a collection is a reference type, so
+// `series.history()` hands back the real series rather than a copy of it.
+
+// A tiny reproducible generator, so the demo has plausible-looking data
+// without a dependency and without a clock.
+//
+// This is a linear congruential generator with the constants Numerical Recipes
+// uses. It is not for anything that matters; it is for making a chart wiggle.
+public class Noise {
+    private long state;
+
+    public Noise(long seed) { this.state = seed; }
+
+    public int next(int bound) {
+        this.state = (this.state * (long) 1664525 + (long) 1013904223) % (long) 2147483648;
+        return (int) (this.state % (long) bound);
+    }
+}

@@ -1,7 +1,7 @@
 // What may be thrown, and a catch clause that can never run because a broader
 // one above it already caught everything.
 
-public class NotAnError {
+class NotAnError {
     public int code() { return 1; }
 }
 

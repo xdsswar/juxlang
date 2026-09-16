@@ -11,7 +11,7 @@
 // §7.3.1, ERRATA E21). Java would run the base constructor before the derived
 // class's fields; Jux never lets a constructor see a field that is not set.
 
-public class Log {
+class Log {
     public static Vec<String> events = new Vec<String>();
 }
 
@@ -20,14 +20,14 @@ public String mark(String what) {
     return what;
 }
 
-public class Base {
+class Base {
     protected String note = mark("base-field");
     public Base() {
         mark("base-ctor");
     }
 }
 
-public class Derived extends Base {
+class Derived extends Base {
     private String own = mark("derived-field");
     public Derived() {
         super();

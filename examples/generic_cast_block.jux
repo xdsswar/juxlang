@@ -7,7 +7,7 @@ package gcb;
 
 import rust.std.Vec;
 
-public class L<T> {
+class L<T> {
     private Vec<T> d;
     public L() { this.d = new Vec<T>(); }
     public void add(T v) { this.d.push(v); }

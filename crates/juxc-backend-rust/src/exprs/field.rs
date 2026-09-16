@@ -320,6 +320,29 @@ impl RustEmitter {
         // A user type's own `length` member is not an array length: `length`
         // is an ordinary field name. Rewriting it made `box.length` (and a bare
         // `length` read inside the class) a call to a `len()` it does not have.
+        // §S.3.2 property forms: `s.byteLength` is the UTF-8 byte count,
+        // `s.charLength` the number of characters. Same lowering as the method
+        // spellings, which stay available.
+        if matches!(f.field.text.as_str(), "byteLength" | "charLength")
+            && matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String))
+        {
+            let needs_parens = receiver_needs_parens(&f.object);
+            if needs_parens {
+                self.w.push('(');
+            }
+            let prev = std::mem::replace(&mut self.emitting_method_receiver, true);
+            self.emit_expr(&f.object);
+            self.emitting_method_receiver = prev;
+            if needs_parens {
+                self.w.push(')');
+            }
+            self.w.push_str(if f.field.text == "byteLength" {
+                ".len() as isize"
+            } else {
+                ".chars().count() as isize"
+            });
+            return;
+        }
         if f.field.text == "length" && !self.receiver_declares_member(&f.object, "length") {
             // `xs.length` → `xs.len() as isize`. Wrap the receiver
             // in parens only when its shape might otherwise bind

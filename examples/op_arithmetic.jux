@@ -5,7 +5,7 @@
 // operands. The Rust `impl Add for Money` is still generated but the
 // call site bypasses it for the more ergonomic inherent-method form.
 
-public class Money {
+class Money {
     public int cents;
 
     public Money(int cents) {

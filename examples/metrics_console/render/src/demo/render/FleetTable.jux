@@ -1,0 +1,78 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+/// One host per row: name, a severity badge, and a proportional bar.
+///
+/// Every row is clickable. The widget registers the rectangle it drew under
+/// the action `host:<name>` and draws the selected and hovered rows
+/// differently; it does not know, and must not know, what selecting a host
+/// goes on to do.
+public class FleetTable implements Widget {
+    private Fleet fleet;
+    private HitMap hits;
+    private String? selected;
+    private String? hovered;
+
+    public FleetTable(Fleet fleet, HitMap hits, String? selected, String? hovered) {
+        this.fleet = fleet;
+        this.hits = hits;
+        this.selected = selected;
+        this.hovered = hovered;
+    }
+
+    public String title() { return "fleet"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        int row = 0;
+        int rowHeight = 12;
+        for (var host : this.fleet.all()) {
+            int ry = y + row * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var action = "host:" + host.name();
+            bool isSelected = this.selected != null && this.selected!! == host.name();
+            bool isWarm = this.hovered != null && this.hovered!! == action;
+
+            // The row band is drawn first so everything else sits on it.
+            if (isSelected || isWarm) {
+                c.rect(x - 4, ry - 2, w + 8, rowHeight,
+                       isSelected ? t.grid() : t.panel());
+            }
+
+            var level = host.severity();
+            c.rect(x, ry, 3, 8, level.colour());
+            text.draw(c, host.name().toUpperCase(), x + 8, ry,
+                      isSelected ? t.accent() : t.ink());
+            text.draw(c, level.badge(), x + 78, ry, level.colour());
+
+            // The bar is the host's current cpu reading against the row's
+            // remaining width.
+            int barX = x + 92;
+            int barW = w - 92;
+            if (barW > 4 && !host.cpu().isEmpty()) {
+                int pct = host.cpu().window().last();
+                int filled = barW * pct / 100;
+                c.rect(barX, ry + 1, barW, 6, t.grid());
+                c.rect(barX, ry + 1, filled, 6, level.colour());
+            }
+
+            this.hits.add(x - 4, ry - 2, w + 8, rowHeight, action);
+            row = row + 1;
+        }
+    }
+}

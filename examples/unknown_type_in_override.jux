@@ -5,11 +5,11 @@
 // is not in scope inside `IntHolder` — juxc rejects it with a clean E0417
 // instead of letting `T` leak into the emitted Rust as a rustc E0412.
 
-public interface Holder<T> {
+interface Holder<T> {
     void test(T t);
 }
 
-public class IntHolder implements Holder<int> {
+class IntHolder implements Holder<int> {
     @override
     public void test(T t) {}
 }

@@ -11,14 +11,14 @@
 //
 // Expected output: 5 / 0 / 9 / 1 / -1 / 1
 
-public class Counter {
+class Counter {
     public int n = 0;
     public int hit() { this.n = this.n + 1; return 9; }
 }
 
-public class Tail { public int v = 1; }
+class Tail { public int v = 1; }
 
-public class Node {
+class Node {
     public int calls = 0;
     public Tail? next;
     public Tail? step() { this.calls = this.calls + 1; return this.next; }

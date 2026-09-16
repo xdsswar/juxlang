@@ -1,0 +1,39 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A list of recent events, newest first.
+public class EventLog {
+    public Vec<String> events;
+
+    public EventLog(Vec<String> events) { this.events = events; }
+
+    public void draw(Canvas c, Rect r) {
+        int y = r.y;
+        int i = 0;
+        for (var e : this.events) {
+            if (y + Font.H > r.bottom()) { return; }
+            u32 tone = EventLog.tone(i);
+            c.fillRound(r.x, y + 1, 5, 5, 2, tone);
+            Font.draw(c, e, r.x + 12, y, 1, i == 0 ? Theme.TEXT : Theme.MUTED);
+            y = y + Font.H + 7;
+            i = i + 1;
+        }
+    }
+
+    private static u32 tone(int i) {
+        return switch (i % 4) {
+            case 0 -> Theme.CYAN;
+            case 1 -> Theme.VIOLET;
+            case 2 -> Theme.GREEN;
+            case _ -> Theme.AMBER;
+        };
+    }
+}

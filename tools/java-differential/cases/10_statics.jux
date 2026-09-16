@@ -1,4 +1,4 @@
-public class Counter {
+class Counter {
     public static int made = 0;
     public static const int LIMIT = 3;
     private int id;
@@ -8,7 +8,7 @@ public class Counter {
     }
     public int getId() { return this.id; }
 }
-public class Config {
+class Config {
     public static const String NAME = "jux";
     public static const String FULL = NAME + "-lang";
     public static const int DOUBLE = Counter.LIMIT * 2;

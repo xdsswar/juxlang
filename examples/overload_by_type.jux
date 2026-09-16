@@ -3,7 +3,7 @@
 // dispatch by argument type.
 package overloadtypes;
 
-public class Acc {
+class Acc {
     public String log = "";
     public void add(int x) { this.log = this.log + "i" + x + ";"; }
     public void add(double x) { this.log = this.log + "d" + x + ";"; }

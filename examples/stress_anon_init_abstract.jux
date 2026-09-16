@@ -1,6 +1,6 @@
 // Init blocks on an anonymous class extending an abstract class.
 
-public abstract class Widget {
+abstract class Widget {
     public abstract String render();
     public String tag() { return $"<widget>"; }
 }

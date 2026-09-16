@@ -52,6 +52,25 @@ impl RustEmitter {
     }
 
     fn emit_index_place(&mut self, i: &IndexExpr) {
+        // **`s.bytes()[i]`** (§S.3.2): the byte at a position. `bytes()` is an
+        // iterator, which has no index, so the indexed form reads the string's
+        // bytes directly.
+        if let Expr::Call(call) = &*i.array {
+            if let Expr::Field(f) = &*call.callee {
+                if f.field.text == "bytes"
+                    && call.args.is_empty()
+                    && matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String))
+                {
+                    self.emit_expr_with_parent_prec(&f.object, u8::MAX, false);
+                    self.w.push_str(".as_bytes()[(");
+                    let prev = std::mem::take(&mut self.emitting_lvalue);
+                    self.emit_expr(&i.index);
+                    self.emitting_lvalue = prev;
+                    self.w.push_str(") as usize]");
+                    return;
+                }
+            }
+        }
         // **`p[i]` on a raw pointer (§L.6.2)** is `*(p + i)`. Rust pointers
         // cannot be indexed, so it lowers to a dereference of the offset
         // pointer; as the target of an assignment the same place is written.

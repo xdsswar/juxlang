@@ -243,12 +243,12 @@ Jux strings expose **two** units of access — bytes and characters (Unicode sca
 ```jux
 var s = "héllo";
 
-s.length;                  // ERROR (E0510): pick `byteLength` or `charLength`
+s.length;                  // ERROR (E0479): pick `byteLength` or `charLength`
 
 s.byteLength;              // 6   (UTF-8 bytes)
 s.charLength;              // 5   (Unicode scalar values)
 
-s[0];                      // ERROR (E0511): pick `bytes()` or `chars()`
+s[0];                      // ERROR (E0480): pick `bytes()` or `chars()`
 
 s.bytes()[0];              // 104 (the byte 'h')
 s.chars().nth(0);          // 'h' (a char, i.e. a Unicode scalar)

@@ -1,0 +1,27 @@
+// The aggregation contract, and the handful of implementations a console
+// needs.
+//
+// `Aggregate<T>` is generic in the sample type and returns a `double`, so a
+// widget can ask "what number should I draw" without knowing whether it is
+// looking at percentages, byte counts, or request latencies. Each
+// implementation is a class rather than a lambda so it can carry a label --
+// the chart legend is the aggregate's own name.
+
+package demo.core;
+
+public interface Aggregate<T> {
+    /// A single number describing the window.
+    double over(Ring<T> window);
+
+    /// What to call this in a legend.
+    String label();
+
+    /// Formatted for display. A default, because most aggregates want the
+    /// same one and the ones that do not can say so.
+    default String render(Ring<T> window) {
+        if (window.isEmpty()) {
+            return this.label() + ": --";
+        }
+        return this.label() + ": " + Num.fixed1(this.over(window));
+    }
+}

@@ -5,7 +5,7 @@
 
 import rust.std.*;
 
-public class Box2 {
+class Box2 {
     public String s;
     public Box2(String s) { this.s = s; }
 }

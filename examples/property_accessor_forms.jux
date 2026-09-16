@@ -6,12 +6,12 @@
 // setter binds — and nothing paired a property with the interface method it
 // satisfies. Both were places the editor painted red on code that compiles.
 
-public interface Named {
+interface Named {
     String Name();
     default String greet() { return "hi " + this.Name(); }
 }
 
-public class Widget implements Named {
+class Widget implements Named {
     // 1. auto-property with an initializer
     public int Count { get; set; } = 0;
 

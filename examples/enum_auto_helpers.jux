@@ -9,14 +9,14 @@
 // (`fromName`, `fromOrdinal` and `cases()` from the same table are not in
 // Phase 1; `cases()` needs an `EnumCase<T>` type that does not exist yet.)
 
-public enum Tier { Bronze, Silver, Gold }
+enum Tier { Bronze, Silver, Gold }
 
-public enum Shape {
+enum Shape {
     Circle(double radius),
     Point;
 }
 
-public enum Loud {
+enum Loud {
     Alpha, Beta;
 
     // A user declaration of an auto-derived name replaces it.

@@ -3,7 +3,7 @@ package tof;
 
 import rust.std.Vec;
 
-public class Point {
+class Point {
     public int x;
     public Point(int x) { this.x = x; }
 }

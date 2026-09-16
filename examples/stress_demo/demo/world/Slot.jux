@@ -1,0 +1,31 @@
+// demo.world — generic registry + World container.
+//
+// Shows:
+//   - generic class with one type param (cross-package types)
+//   - auto-Some() wrap on nullable ctor arg
+//   - nullable + Elvis on stored value
+//   - cross-package mut method call propagation
+//   - bare-name compound-write to enclosing-class static
+//   - field initializer at declaration
+
+package demo.world;
+
+import demo.core.Vector2;
+import demo.entities.{ Player, Enemy, Pickup };
+
+// Generic single-slot registry — Jux doesn't have collections in
+// Phase 1, so we use one-slot generic boxes to demo the generic
+// pipeline.
+
+public class Slot<T> {
+    public static int created = 0;
+
+    public T value;
+    public String label;
+
+    public Slot(T value, String label) {
+        this.value = value;
+        this.label = label;
+        created = created + 1;
+    }
+}

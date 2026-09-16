@@ -2,7 +2,7 @@
 // requires a non-nullable field to be definitely assigned (E0600), and
 // Java silently defaults it to null. Same program, same output; the
 // nullability is written down instead of implied.
-public class Node {
+class Node {
     public int value;
     public Node? next;
     public Node(int v) { this.value = v; }

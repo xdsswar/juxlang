@@ -16,13 +16,13 @@
 //     `HashMap<String, int?>`) — non-null stores lift into `Some`,
 //     `null` stores stay allocation-free `None`.
 
-public class Box<T> {
+class Box<T> {
     public T v;
     public Box(T v) { this.v = v; }
     public T get() { return this.v; }
 }
 
-public class Holder {
+class Holder {
     public int? maybe;
     public Holder() { this.maybe = null; }
 }

@@ -1,8 +1,8 @@
-public struct Point {
+struct Point {
     public int x;
 }
 
-public struct Point3 extends Point {
+struct Point3 extends Point {
     public int z;
 }
 

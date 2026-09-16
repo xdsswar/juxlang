@@ -1,0 +1,33 @@
+// demo.entities — entity hierarchy with sealed base + concrete
+// subclasses + interface.
+//
+// Shows:
+//   - abstract class with protected/private fields + ctor
+//   - sealed permits clause + final subclasses
+//   - interface with abstract + default methods
+//   - bare-name access to enclosing-class static counter
+//   - cross-package record (Vector2) carried as instance state
+//   - inherited concrete method via auto-clone field read
+
+package demo.entities;
+
+import demo.core.Vector2;
+import demo.core.Color;
+
+// Lifecycle interface. Implementing classes whose `tick` body
+// writes to `this.field` now compose cleanly — interface methods
+// emit as `&mut self` and the trait-impl rollup uses an explicit
+// `ClassName::method(self)` call to bypass Rust's "exact receiver
+// match prefers trait" rule.
+
+public final class Pickup extends Entity {
+    private int value;
+
+    public Pickup(String name, Vector2 pos, int value) {
+        super(name, pos, 1);
+        this.value = value;
+    }
+
+    public String kind() { return $"Pickup"; }
+    public int value() { return this.value; }
+}

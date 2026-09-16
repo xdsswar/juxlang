@@ -27,7 +27,7 @@ public void bareMetalOnly() {
     writeRegister(0x4000_0000, 1);
 }
 
-public class Limits {
+class Limits {
     @cfg(pointer_width = "64")
     public static const int WORD_BITS = 64;
 

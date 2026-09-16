@@ -13,7 +13,7 @@
 //   - Reads of String fields auto-`.clone()` so `&self`-borrowed
 //     methods can return them and interpolation can format them.
 
-public class User {
+class User {
     // Public fields so the demo can format them from outside the
     // class. See `examples/encapsulation.jux` for the private-field +
     // getter idiom.

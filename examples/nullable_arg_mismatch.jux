@@ -2,7 +2,7 @@
 // parameter slot without an unwrap. juxc must reject this itself with [E0410]
 // rather than leak a rustc type error on the generated code.
 
-public class Animal {
+class Animal {
     public String name;
     public Animal(String name) { this.name = name; }
 }

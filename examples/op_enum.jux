@@ -7,7 +7,7 @@
 // that customizes the format. `Secret` deletes `operator string` so
 // it can't leak via `print` or `$"..."` interpolation.
 
-public enum Color {
+enum Color {
     Red,
     Green,
     Blue;
@@ -17,7 +17,7 @@ public enum Color {
     }
 }
 
-public enum Secret {
+enum Secret {
     Hidden;
 
     public String operator string() = delete;

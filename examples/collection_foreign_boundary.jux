@@ -14,7 +14,7 @@
 
 import rust.std.*;
 
-public class Canvas {
+class Canvas {
     public Vec<int> buf;
     public Canvas() {
         this.buf = new Vec<int>();

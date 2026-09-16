@@ -1,0 +1,16 @@
+// bank.money — Money record with operator overload + Currency
+// enum + a top-level const for the precision unit.
+//
+// Exercises:
+//   - record with methods + operator string
+//   - top-level `public const` (cross-package import target)
+//   - enum without payload (cross-package matchable type)
+//   - record method-chaining (.plus(...).times(2))
+
+package bank.money;
+
+public enum Currency {
+    USD,
+    EUR,
+    JPY,
+}

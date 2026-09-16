@@ -22,7 +22,7 @@ public annotation Tag {
 }
 
 /** The program's own registry: nothing to do with annotations. */
-public class Registry {
+class Registry {
     private Vec<String> log;
     public Registry() { this.log = new Vec<String>(); }
     public void handle(String req) { this.log.push(req); }
@@ -30,10 +30,10 @@ public class Registry {
 }
 
 @Tag(value = "hello")
-public class Marked { }
+class Marked { }
 
 @Tag(value = "world")
-public class AlsoMarked { }
+class AlsoMarked { }
 
 public int hammer(Registry r, int n) {
     for (int i = 0; i < n; i = i + 1) {

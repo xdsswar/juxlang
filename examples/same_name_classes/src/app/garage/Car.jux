@@ -1,0 +1,15 @@
+package app.garage;
+
+public class Car extends Base {
+    public String plate;
+
+    public Car(String plate) {
+        super(4);
+        this.plate = plate;
+    }
+
+    @Override
+    public String describe() {
+        return "car " + plate + " on " + wheels + " wheels";
+    }
+}

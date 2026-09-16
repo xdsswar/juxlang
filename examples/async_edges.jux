@@ -2,7 +2,7 @@
 // thread. S19: same-arity constructors select by argument type.
 package asyncedges;
 
-public class Point {
+class Point {
     public String tag;
     public Point(int v) { this.tag = "int:" + v; }
     public Point(String name) { this.tag = "str:" + name; }

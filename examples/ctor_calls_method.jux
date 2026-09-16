@@ -8,7 +8,7 @@
 // Java programmer writes.
 //
 // Expected output: 3 / 9 / 7 / 7
-public class Grid {
+class Grid {
     public int n;
     public Grid(int n) {
         this.n = n;
@@ -29,11 +29,11 @@ public void main() {
     c.show();
 }
 
-public class Base {
+class Base {
     public Base() { this.show(); }
     public void show() { print(-1); }
 }
-public class Child extends Base {
+class Child extends Base {
     public int v = 7;
     public Child() { }
     @Override

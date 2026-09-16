@@ -1,4 +1,4 @@
-public class Err extends Exception {
+class Err extends Exception {
     public Err(String m) { super(m); }
 }
 

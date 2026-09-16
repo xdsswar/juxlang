@@ -24,7 +24,7 @@ public T echo<T>(T value) {
 }
 
 // A generic method on a class.
-public class Wrapper {
+class Wrapper {
     public R wrap<R>(R item) {
         return item;
     }

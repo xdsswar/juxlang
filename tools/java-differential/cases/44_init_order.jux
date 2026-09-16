@@ -1,11 +1,11 @@
 // DIVERGES: ERRATA E21 runs every field initializer in the hierarchy before any constructor body; Java runs base-ctor before derived-field
-public class Base {
+class Base {
     protected String note = mark("base-field");
     public Base() {
         mark("base-ctor");
     }
 }
-public class Derived extends Base {
+class Derived extends Base {
     private String own = mark("derived-field");
     public Derived() {
         super();
@@ -13,7 +13,7 @@ public class Derived extends Base {
     }
     public String describe() { return this.note + "/" + this.own; }
 }
-public class Log {
+class Log {
     public static Vec<String> events = new Vec<String>();
 }
 public String mark(String what) {

@@ -8,7 +8,7 @@
 // synthesizes a PartialEq that bridges through `__op_cmp` — Rust
 // requires PartialEq for PartialOrd to compile.
 
-public class V {
+class V {
     public int x;
 
     public V(int x) {

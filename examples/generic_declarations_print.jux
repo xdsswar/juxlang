@@ -26,28 +26,28 @@
 //   m:7
 
 /// A generic RECORD whose method formats its component.
-public record Cell<T>(T value) {
+record Cell<T>(T value) {
     public String show() {
         return "cell(" + this.value + ")";
     }
 }
 
 /// Two parameters, both formatted.
-public record Duo<A, B>(A left, B right) {
+record Duo<A, B>(A left, B right) {
     public String show() {
         return "pair(" + this.left + ", " + this.right + ")";
     }
 }
 
 /// A generic ENUM with a payload.
-public enum Maybe<T> {
+enum Maybe<T> {
     None,
     Some(T value)
 }
 
 /// A generic class holding any of the above, and formatting it. This is the
 /// case that could not compile: the payload has to have a string form.
-public class Wrap<T> {
+class Wrap<T> {
     private T v;
 
     public Wrap(T v) {
@@ -59,7 +59,7 @@ public class Wrap<T> {
     }
 }
 
-public class Emitter {
+class Emitter {
     /// A generic METHOD, formatting its own type parameter.
     public <T> String mark(T x) {
         return "m:" + x;

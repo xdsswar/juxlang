@@ -1,0 +1,14 @@
+// demo.core — primitives shared by the game packages.
+//
+// Shows:
+//   - record + operator string + methods + static field
+//   - enum (no payload) used cross-package
+//   - top-level public const
+//   - operator overloading on a record
+//   - boolean alias
+
+package demo.core;
+
+public enum Color {
+    Red, Green, Blue, Yellow,
+}

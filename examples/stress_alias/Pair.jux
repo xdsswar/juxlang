@@ -1,0 +1,7 @@
+// shop.lib — defines a class + a record + an enum that the
+// consumer imports with various alias shapes.
+package shop.lib;
+
+public record Pair(int a, int b) {
+    public int sum() { return this.a + this.b; }
+}

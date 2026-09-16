@@ -11,7 +11,7 @@
 // methods that read them. Top-level code reaches the data through
 // the getter, never the field.
 
-public class Account {
+class Account {
     // `private` — `main` cannot read or assign `balance` directly.
     private int balance;
 

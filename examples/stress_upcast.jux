@@ -8,14 +8,14 @@
 //   3. Matching on the parent — `switch (r) { case Ok(var v) -> ... }`
 //      — with positional destructuring of the subclass's fields.
 
-public sealed class Result permits Ok, Err {}
+sealed class Result permits Ok, Err {}
 
-public final class Ok extends Result {
+final class Ok extends Result {
     public int value;
     public Ok(int value) { this.value = value; }
 }
 
-public final class Err extends Result {
+final class Err extends Result {
     public String message;
     public Err(String message) { this.message = message; }
 }

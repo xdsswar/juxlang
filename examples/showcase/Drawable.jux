@@ -1,0 +1,12 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+
+public interface Drawable {
+    public String describe();
+}

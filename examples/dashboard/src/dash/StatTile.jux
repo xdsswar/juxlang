@@ -1,0 +1,39 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A headline number with its label, unit, and change since the run began.
+public class StatTile {
+    public Series series;
+
+    public StatTile(Series series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        c.fillRound(r.x, r.y, r.w, r.h, 6, Theme.PANEL);
+        // A colored rule down the left edge ties the tile to its chart.
+        c.fillRect(r.x, r.y + 6, 3, r.h - 12, this.series.color);
+
+        int left = r.x + Theme.PAD;
+        Font.draw(c, this.series.name, left, r.y + Theme.PAD, 1, Theme.MUTED);
+
+        var value = "" + this.series.latest();
+        int vy = r.y + Theme.PAD + Font.H + 8;
+        int after = Font.draw(c, value, left, vy, 3, Theme.TEXT);
+        Font.draw(c, this.series.unit, after + 4, vy + 2 * Font.H, 1, Theme.MUTED);
+
+        // The delta, colored by direction. The arrows are glyphs the font has.
+        int t = this.series.trend();
+        var arrow = t >= 0 ? ">" : "<";
+        var sign = t >= 0 ? "+" : "";
+        var delta = $"${arrow} ${sign}${t}%";
+        u32 tone = t >= 0 ? Theme.GREEN : Theme.ROSE;
+        Font.drawRight(c, delta, r.right() - Theme.PAD, r.y + Theme.PAD, 1, tone);
+    }
+}

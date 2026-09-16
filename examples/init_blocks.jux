@@ -7,7 +7,7 @@
 // parameters. Derived-from-parameter setup belongs in the body; `init`
 // is for one-time setup and validation shared by all constructors.
 
-public class Counter {
+class Counter {
     public int count = 100;
     public String tag = "fresh";
     public int constructions;

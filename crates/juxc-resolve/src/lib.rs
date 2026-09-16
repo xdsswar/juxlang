@@ -78,16 +78,22 @@ pub struct ResolveResult {
 pub struct PackageExports {
     /// Dot-joined package FQN → set of top-level declared names in it.
     by_package: std::collections::HashMap<String, HashSet<String>>,
-    /// Workspace-wide class → member-name index (bare class name → its
-    /// own static/instance fields + methods). Mirrors the per-unit
+    /// Workspace-wide class → member-name index (fully-qualified class name
+    /// → its own static/instance fields + methods). Mirrors the per-unit
     /// [`Resolver::class_members`] but spans EVERY file, so a subclass
     /// whose parent lives in another file can still pre-declare the
     /// inherited member names into its body's scope (Java rule: `foo()`
     /// ≡ `this.foo()`). Without it a bare call to a cross-file inherited
     /// method fired a spurious E0301.
+    ///
+    /// The key carries the package because two packages may each declare a
+    /// class of the same bare name: `app.garage.Base` and `app.zoo.Base` are
+    /// different classes with different members.
     class_members: std::collections::HashMap<String, HashSet<String>>,
-    /// Workspace-wide class → direct `extends` parent (bare name), so the
-    /// inherited-member walk crosses file boundaries.
+    /// Workspace-wide class → direct `extends` parent, so the inherited-member
+    /// walk crosses file boundaries. The key is fully qualified like
+    /// [`Self::class_members`]; the value is the parent as written, which is
+    /// resolved against the subclass's own package.
     class_parents: std::collections::HashMap<String, String>,
 }
 
@@ -128,7 +134,20 @@ impl PackageExports {
                         .join(".")
                 })
                 .unwrap_or_default();
-            let names = by_package.entry(pkg).or_default();
+            // Two packages may each declare a class with the same bare name
+            // (`app.garage.Base` and `app.zoo.Base`). Keying the class index
+            // by bare name let the later one overwrite the earlier, and a
+            // subclass of the first then failed to see its own inherited
+            // members. The key is the fully-qualified name; the resolver
+            // narrows it back down against the package it is resolving.
+            let qualify = |name: &str| {
+                if pkg.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{pkg}.{name}")
+                }
+            };
+            let names = by_package.entry(pkg.clone()).or_default();
             // Workspace-wide class member/parent index for cross-file
             // inherited-member resolution (see the field docs).
             for item in &unit.items {
@@ -143,7 +162,7 @@ impl PackageExports {
                 }
                 if let TopLevelDecl::Class(d) = item {
                     class_interfaces.insert(
-                        d.name.text.clone(),
+                        qualify(&d.name.text),
                         d.implements
                             .iter()
                             .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
@@ -156,10 +175,10 @@ impl PackageExports {
                     for m in &d.methods {
                         members.insert(m.name.text.clone());
                     }
-                    class_members.insert(d.name.text.clone(), members);
+                    class_members.insert(qualify(&d.name.text), members);
                     if let Some(parent) = &d.extends {
                         if let Some(seg) = parent.name.segments.first() {
-                            class_parents.insert(d.name.text.clone(), seg.text.clone());
+                            class_parents.insert(qualify(&d.name.text), seg.text.clone());
                         }
                     }
                 }
@@ -210,6 +229,46 @@ impl PackageExports {
     }
 }
 
+/// Narrow a fully-qualified workspace index down to the bare names one unit
+/// sees. A bare `Base` inside `package app.garage` means `app.garage.Base`
+/// when that class exists, which is what keeps `app.zoo.Base` from answering
+/// for it. When no class of the name lives in this package, the entries from
+/// the other packages are folded together with `merge`: the resolver only
+/// answers "does this name exist", so a union there costs nothing but a
+/// missed typo, while dropping the name costs a spurious E0301.
+fn project_by_package<V: Clone>(
+    index: &std::collections::HashMap<String, V>,
+    pkg: &str,
+    mut merge: impl FnMut(&mut V, &V),
+) -> std::collections::HashMap<String, V> {
+    let mut by_bare: std::collections::HashMap<&str, Vec<&String>> =
+        std::collections::HashMap::new();
+    for fqn in index.keys() {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+        by_bare.entry(bare).or_default().push(fqn);
+    }
+    let mut out = std::collections::HashMap::new();
+    for (bare, mut candidates) in by_bare {
+        let own = if pkg.is_empty() {
+            bare.to_string()
+        } else {
+            format!("{pkg}.{bare}")
+        };
+        if let Some(v) = index.get(&own) {
+            out.insert(bare.to_string(), v.clone());
+            continue;
+        }
+        // Sorted so the fold is the same from run to run.
+        candidates.sort();
+        let mut value = index[candidates[0]].clone();
+        for fqn in &candidates[1..] {
+            merge(&mut value, &index[*fqn]);
+        }
+        out.insert(bare.to_string(), value);
+    }
+    out
+}
+
 /// Walk a compilation unit and resolve every name reference. Always
 /// returns a [`ResolveResult`]; never panics on user input.
 ///
@@ -249,13 +308,6 @@ pub fn resolve_with_exports_opts(
     // Imports first — they introduce names that top-level decls and
     // body expressions may both reference.
     r.collect_imports(unit, exports);
-    // Seed the workspace-wide class member/parent index so a subclass
-    // whose parent is declared in ANOTHER file can still pre-declare the
-    // inherited member names into its body's scope. `collect_top_level`
-    // re-inserts this unit's own classes over the top (identical data),
-    // leaving cross-file parents available for the inherited-member walk.
-    r.class_members = exports.class_members.clone();
-    r.class_parents = exports.class_parents.clone();
     // Same-package siblings are visible without an import (Java rule): seed
     // every top-level name declared anywhere in THIS unit's package into the
     // known set, so a cross-file `new Sibling()` / `Sibling x` resolves. The
@@ -273,6 +325,19 @@ pub fn resolve_with_exports_opts(
                 .join(".")
         })
         .unwrap_or_default();
+    // Seed the workspace-wide class member/parent index so a subclass
+    // whose parent is declared in ANOTHER file can still pre-declare the
+    // inherited member names into its body's scope. `collect_top_level`
+    // re-inserts this unit's own classes over the top (identical data),
+    // leaving cross-file parents available for the inherited-member walk.
+    //
+    // The workspace index is keyed by fully-qualified name; the resolver
+    // works in bare names, so the index is narrowed against this unit's
+    // package first (see `project_by_package`).
+    r.class_members = project_by_package(&exports.class_members, &pkg, |a, b| {
+        a.extend(b.iter().cloned());
+    });
+    r.class_parents = project_by_package(&exports.class_parents, &pkg, |_, _| {});
     if let Some(siblings) = exports.names_in(&pkg) {
         for name in siblings {
             r.imported_names.insert(name.clone());
@@ -1591,6 +1656,33 @@ mod tests {
                 public void d() { print($"${getName()}"); }
             }"#;
         assert_eq!(resolve_workspace_count(&[base, sub]), 0);
+    }
+
+    /// Two packages may each declare a `Base`. The workspace class index used
+    /// to key them by bare name, so whichever file came last owned the name
+    /// and a subclass of the other one lost its inherited members: `wheels`
+    /// inside `garage.Car` was reported as an unresolved name.
+    #[test]
+    fn same_bare_class_name_in_two_packages_keeps_its_own_members() {
+        let garage_base = r#"package garage;
+            public class Base {
+                public int wheels;
+                public Base(int wheels) { this.wheels = wheels; }
+            }"#;
+        let garage_car = r#"package garage;
+            public class Car extends Base {
+                public Car() { super(4); }
+                public String describe() { return $"car on ${wheels}"; }
+            }"#;
+        let zoo_base = r#"package zoo;
+            public class Base {
+                public int legs;
+                public Base(int legs) { this.legs = legs; }
+            }"#;
+        assert_eq!(
+            resolve_workspace_count(&[zoo_base, garage_base, garage_car]),
+            0
+        );
     }
 
     /// An unknown identifier emits exactly one E0301.

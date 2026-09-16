@@ -7,28 +7,28 @@
 // still calls the default. Both are legal Java-shaped inheritance, and both
 // used to have nothing to resolve `this.tag()` / `this.name()` against.
 
-public interface Tagged {
+interface Tagged {
     int id();
     default String tag() { return "t" + this.id(); }
 }
 
-public abstract class Base implements Tagged {
+abstract class Base implements Tagged {
     protected int n;
     public Base(int n) { this.n = n; }
     @Override public int id() { return this.n; }
     public String describe() { return this.tag(); }
 }
 
-public class Impl extends Base {
+class Impl extends Base {
     public Impl(int n) { super(n); }
 }
 
-public interface Named {
+interface Named {
     String kindOf();
     default String name() { return "<" + this.kindOf() + ">"; }
 }
 
-public abstract class Shape implements Named {
+abstract class Shape implements Named {
     protected int sides;
     public Shape(int sides) { this.sides = sides; }
     public String describe() { return this.name() + ":" + this.sides; }
@@ -36,12 +36,12 @@ public abstract class Shape implements Named {
 
 // `kindOf` is annotated `@Override` even though the interface it satisfies is
 // reached through `Shape`, not through this class's own `implements` clause.
-public class Tri extends Shape {
+class Tri extends Shape {
     public Tri() { super(3); }
     @Override public String kindOf() { return "tri"; }
 }
 
-public class Quad extends Shape {
+class Quad extends Shape {
     public Quad() { super(4); }
     @Override public String kindOf() { return "quad"; }
     @Override public String name() { return "[" + this.kindOf() + "]"; }

@@ -154,7 +154,7 @@ Profile defaults:
 - Source files are UTF-8 encoded with extension `.jux`.
 - Files contain a single package declaration at the top, followed by imports, followed by declarations.
 - The directory structure mirrors the package path (`com/example/foo/Bar.jux` declares `package com.example.foo`).
-- A file may contain multiple type declarations, but **at most one of them may be `public`** (Java's rule). The public type's name must match the filename: `Foo.jux` may contain `public class Foo` plus any number of package-private (no modifier) or `internal` types. Free functions, constants, and type aliases at the file's top level may be `public` without restriction; the rule applies only to type declarations (`class`, `interface`, `struct`, `record`, `enum`).
+- A file may contain multiple type declarations, but **at most one of them may be `public`** (Java's rule), and the public type's name must match the filename: `Foo.jux` may contain `public class Foo` plus any number of package-private (no modifier) or `internal` types. Breaking either half is `E0481`. Free functions, constants, and type aliases at the file's top level may be `public` without restriction; the rule applies only to type declarations (`class`, `interface`, `struct`, `record`, `enum`). **A file that declares no public type may be named anything** — a file of functions, or one whose types are all package-private, carries no name obligation.
 
 ### 3.2. Keywords (Reserved)
 

@@ -1,0 +1,33 @@
+// The responsive part.
+//
+// `Layout.of(w, h)` is the only place that decides where anything goes. It
+// picks a breakpoint from the width and returns a rectangle per region, so the
+// same widgets rearrange themselves as the window resizes and no widget has to
+// know it happened.
+package dash;
+
+import rust.std.*;
+
+// How much room there is to work with. Named rather than numeric so the
+// layout code reads as intent instead of arithmetic.
+
+public enum Breakpoint {
+    Compact,   // one column: stats stack, charts stack
+    Medium,    // two columns
+    Wide;      // the full three-region layout
+
+    // The width each breakpoint starts at.
+    public static Breakpoint forWidth(int w) {
+        if (w < 720) { return Breakpoint.Compact; }
+        if (w < 1080) { return Breakpoint.Medium; }
+        return Breakpoint.Wide;
+    }
+
+    public String label() {
+        return switch (this) {
+            case Breakpoint.Compact -> "COMPACT";
+            case Breakpoint.Medium -> "MEDIUM";
+            case Breakpoint.Wide -> "WIDE";
+        };
+    }
+}

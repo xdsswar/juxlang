@@ -18,9 +18,9 @@ fn workspace_root() -> PathBuf {
 
 const ANIMALS: &str = r#"package inv;
 
-public class Animal { public String name; public Animal(String name) { this.name = name; } }
-public class Dog extends Animal { public Dog(String name) { super(name); } }
-public class Box<T> {
+class Animal { public String name; public Animal(String name) { this.name = name; } }
+class Dog extends Animal { public Dog(String name) { super(name); } }
+class Box<T> {
     private T value;
     public Box(T value) { this.value = value; }
     public T get() { return this.value; }

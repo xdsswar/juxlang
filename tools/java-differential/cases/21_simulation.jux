@@ -1,4 +1,4 @@
-public class Account {
+class Account {
     private String owner;
     private int balance;
     public Account(String owner, int opening) {
@@ -14,7 +14,7 @@ public class Account {
     }
     public void deposit(int amount) { this.balance = this.balance + amount; }
 }
-public class Bank {
+class Bank {
     private Vec<Account> accounts;
     public Bank() { this.accounts = new Vec<Account>(); }
     public void open(Account a) { this.accounts.push(a); }

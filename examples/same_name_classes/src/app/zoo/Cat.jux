@@ -1,0 +1,21 @@
+package app.zoo;
+
+/** A polymorphic base, named like the one in `app.garage`. */
+
+public class Cat extends Base {
+    public int lives;
+
+    public Cat(String name) {
+        super(name);
+        this.lives = 9;
+    }
+
+    @Override
+    public String describe() {
+        return "cat " + name + " with " + lives + " lives";
+    }
+
+    public void loseLife() {
+        lives = lives - 1;
+    }
+}

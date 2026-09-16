@@ -20,7 +20,7 @@ public String show(int a, int b) { return "two:" + (a + b); }
 public int size(String s) { return s.length(); }
 public String size(int a, int b) { return "pair"; }
 
-public class Fmt {
+class Fmt {
     public String of(int v) { return "m-int:" + v; }
     public String of(String v) { return "m-string:" + v; }
 }

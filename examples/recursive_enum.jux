@@ -8,7 +8,7 @@
 // compile. Before the fix this leaked rustc E0072 with no Jux diagnostic.
 package recenum;
 
-public enum Expr {
+enum Expr {
     Num(int),
     Add(Expr, Expr),
     Mul(Expr, Expr)

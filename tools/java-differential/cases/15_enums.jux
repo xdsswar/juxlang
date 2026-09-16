@@ -1,4 +1,4 @@
-public enum Planet {
+enum Planet {
     MERCURY,
     VENUS,
     EARTH

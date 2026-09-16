@@ -17,14 +17,14 @@
 
 // A parser with a nested lexer. Both hold state the other needs, and neither
 // wants that state public: exactly the shape rule 1 exists for.
-public class Parser {
+class Parser {
     private String source;
     private int consumed = 0;
 
     public Parser(String source) { this.source = source; }
 
     // Nested, and reaching into its owner's privates.
-    public class Cursor {
+    class Cursor {
         private int position = 0;
 
         // Reads the owner's `private source` and `private consumed`.
@@ -51,12 +51,12 @@ public class Parser {
 
 // Two nested types under one owner are inside the same top-level body, so
 // they see each other too.
-public class Registry {
-    public class Entry {
+class Registry {
+    class Entry {
         private int weight = 4;
     }
 
-    public class Auditor {
+    class Auditor {
         public int weigh(Entry e) { return e.weight; }
     }
 
@@ -69,19 +69,19 @@ public class Registry {
 
 // Rule 2: `protected` reaches a same-package peer that is not a subclass.
 // Everything in a file without a `package` line shares the default package.
-public class Connection {
+class Connection {
     protected int timeout = 30;
     protected int budget() { return timeout * 2; }
 }
 
 // Not a subclass. Same package, so both members are reachable.
-public class Pool {
+class Pool {
     public int total(Connection c) { return c.timeout + c.budget(); }
 }
 
 // A subclass keeps the access it has always had, which is what `protected`
 // is for in the first place.
-public class RetryingConnection extends Connection {
+class RetryingConnection extends Connection {
     public int doubled() { return timeout + budget(); }
 }
 

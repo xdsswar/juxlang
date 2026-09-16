@@ -1,4 +1,4 @@
-public class Wrap<T> {
+class Wrap<T> {
     private T v;
     public Wrap(T v) { this.v = v; }
     public T get() { return this.v; }

@@ -1,4 +1,4 @@
-public class Box<T> {
+class Box<T> {
     private T v;
     public Box(T v) { this.v = v; }
     public T get() { return this.v; }

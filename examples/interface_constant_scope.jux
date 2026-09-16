@@ -10,7 +10,7 @@
 // depends on the position -- a concat operand wants the borrow, a returned
 // value wants the `String`.
 
-public interface Greeter {
+interface Greeter {
     String PREFIX = ">> ";
     int WIDTH = 3;
 
@@ -29,7 +29,7 @@ public interface Greeter {
     }
 }
 
-public class Person implements Greeter {
+class Person implements Greeter {
     private String who;
     public Person(String who) { this.who = who; }
     public String name() { return this.who; }

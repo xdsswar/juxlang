@@ -1,10 +1,10 @@
-public class Shape {
+class Shape {
     public String name() { return "shape"; }
     public int area() { return 0; }
     public String describe() { return this.name() + "=" + this.area(); }
 }
 
-public class Square extends Shape {
+class Square extends Shape {
     private int side;
     public Square(int side) { this.side = side; }
     @Override
@@ -13,7 +13,7 @@ public class Square extends Shape {
     public int area() { return this.side * this.side; }
 }
 
-public class Rect extends Shape {
+class Rect extends Shape {
     private int w;
     private int h;
     public Rect(int w, int h) { this.w = w; this.h = h; }

@@ -1,0 +1,37 @@
+// Rectangles, and the regions a click can land in.
+//
+// A widget draws into a rectangle and, where it is interactive, records the
+// rectangles it drew and what each one means. The console collects those
+// during a render and consults them on a click, which is why input handling
+// lives entirely in this package and the window front end only forwards
+// coordinates.
+//
+// The action is a string rather than an enum on purpose: a region's meaning
+// is data ("host:web-01"), not a fixed set, so a new interactive widget adds
+// no case to anything here.
+
+package demo.render;
+
+public class Rect {
+    private int x;
+    private int y;
+    private int w;
+    private int h;
+
+    public Rect(int x, int y, int w, int h) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+    }
+
+    public int x() { return this.x; }
+    public int y() { return this.y; }
+    public int width() { return this.w; }
+    public int height() { return this.h; }
+
+    public bool contains(int px, int py) {
+        return px >= this.x && px < this.x + this.w
+            && py >= this.y && py < this.y + this.h;
+    }
+}

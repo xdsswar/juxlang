@@ -1,4 +1,4 @@
-public class Acc {
+class Acc {
     public int total;
     public Acc(int total) { this.total = total; }
 }

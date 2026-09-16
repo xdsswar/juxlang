@@ -4,7 +4,7 @@
 // Expect 1 2 3 then 0 (snapshot semantics), and above all NO panic.
 package stress15;
 
-public class S15 {
+class S15 {
     public Vec<int> items = new Vec<int>();
     public Vec<int> getItems() { return this.items; }
     public void clearItems() { this.items.clear(); }

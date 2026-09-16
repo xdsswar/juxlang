@@ -1,0 +1,15 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+public final class LineTool extends Tool {
+    public LineTool(int radius) { super(radius); }
+    @Override public String name() { return "Line"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.line(from, to, this.radius, color);
+    }
+}

@@ -1,0 +1,15 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+public interface Paintable {
+    /// The tool's name, shown in the status line.
+    String name();
+    /// Apply the tool between two drag points.
+    void apply(Canvas c, Point from, Point to, u32 color);
+    /// Whether a drag paints continuously (brush) or only on release (shapes).
+    default bool continuous() { return true; }
+}

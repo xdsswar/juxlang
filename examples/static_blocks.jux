@@ -6,7 +6,7 @@
 // once-latch, so concurrent first-uses block on a single execution and a block
 // that reads its own statics during init sees the in-progress values.
 
-public class Settings {
+class Settings {
     public static int maxRetries;
     public static String mode;
 

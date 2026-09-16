@@ -1,0 +1,111 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+/// Every host with all three readings side by side.
+///
+/// The Hosts view exists to compare, so this trades the overview's compact
+/// row for three labelled bars and the numbers beside them. Rows are
+/// clickable on the same terms as `FleetTable`'s.
+public class HostTable implements Widget {
+    private Fleet fleet;
+    private HitMap hits;
+    private String? selected;
+    private String? hovered;
+
+    public HostTable(Fleet fleet, HitMap hits, String? selected, String? hovered) {
+        this.fleet = fleet;
+        this.hits = hits;
+        this.selected = selected;
+        this.hovered = hovered;
+    }
+
+    /// A row's height, and the panel chrome around the rows. Public so the
+    /// console can size the panel to the table instead of guessing.
+    public static int ROW_HEIGHT = 26;
+    public static int CHROME = 38;
+
+    /// The panel height this table wants for `rows` hosts.
+    public static int heightFor(int rows) {
+        return HostTable.CHROME + rows * HostTable.ROW_HEIGHT;
+    }
+
+    public String title() { return "hosts"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        int rowHeight = HostTable.ROW_HEIGHT;
+        int nameW = 96;
+        int regionW = 84;
+        int numberW = 44;
+
+        // Column captions, so the three bars are readable without a legend.
+        text.draw(c, "HOST", x, y, t.inkDim());
+        text.draw(c, "REGION", x + nameW, y, t.inkDim());
+        int barsX = x + nameW + regionW;
+        int barsW = w - nameW - regionW;
+        int laneW = barsW / 3;
+        text.draw(c, "CPU %", barsX, y, t.inkDim());
+        text.draw(c, "MEM %", barsX + laneW, y, t.inkDim());
+        text.draw(c, "P99 MS", barsX + laneW * 2, y, t.inkDim());
+
+        int row = 0;
+        for (var host : this.fleet.all()) {
+            int ry = y + 16 + row * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var action = "host:" + host.name();
+            bool isSelected = this.selected != null && this.selected!! == host.name();
+            bool isWarm = this.hovered != null && this.hovered!! == action;
+            if (isSelected || isWarm) {
+                c.rect(x - 4, ry - 4, w + 8, rowHeight - 2,
+                       isSelected ? t.grid() : t.panel());
+            }
+
+            var level = host.severity();
+            c.rect(x, ry + 1, 3, 9, level.colour());
+            text.draw(c, host.name().toUpperCase(), x + 8, ry + 2,
+                      isSelected ? t.accent() : t.ink());
+            text.draw(c, host.region().toUpperCase(), x + nameW, ry + 2, t.inkDim());
+
+            this.lane(c, t, text, barsX, ry, laneW - 8, numberW,
+                      host.cpu().window().last(), 100, level.colour());
+            this.lane(c, t, text, barsX + laneW, ry, laneW - 8, numberW,
+                      host.memory().window().last(), 100, level.colour());
+            this.lane(c, t, text, barsX + laneW * 2, ry, laneW - 8, numberW,
+                      host.latency().window().last(), 400, t.accent());
+
+            this.hits.add(x - 4, ry - 4, w + 8, rowHeight - 2, action);
+            row = row + 1;
+        }
+    }
+
+    /// One reading: a bar scaled to its own ceiling, and the value.
+    private void lane(Canvas c, Theme t, Text text, int x, int y, int w,
+                      int numberW, int value, int ceiling, int colour) {
+        int barW = w - numberW;
+        if (barW < 4) {
+            return;
+        }
+        int filled = barW * value / ceiling;
+        if (filled > barW) {
+            filled = barW;
+        }
+        c.rect(x, y + 2, barW, 7, t.grid());
+        c.rect(x, y + 2, filled, 7, colour);
+        text.draw(c, "" + value, x + barW + 6, y + 2, t.ink());
+    }
+}

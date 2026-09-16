@@ -1,4 +1,4 @@
-public class Counter {
+class Counter {
     public int n;
     public Counter(int n) { this.n = n; }
     public void bump() { this.n = this.n + 1; }

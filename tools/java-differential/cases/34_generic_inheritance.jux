@@ -1,16 +1,16 @@
-public class Store<T> {
+class Store<T> {
     protected T item;
     public Store(T item) { this.item = item; }
     public T get() { return this.item; }
     public String tag() { return "store:" + this.item; }
 }
-public class IntStore extends Store<int> {
+class IntStore extends Store<int> {
     public IntStore(int v) { super(v); }
     public int doubled() { return this.get() * 2; }
     @Override
     public String tag() { return "int:" + this.get(); }
 }
-public class Loud<T> extends Store<T> {
+class Loud<T> extends Store<T> {
     public Loud(T v) { super(v); }
     public String shout() { return "!" + this.get() + "!"; }
 }

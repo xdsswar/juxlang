@@ -1,0 +1,23 @@
+// bank.accounts — abstract Account + Checking/Savings concrete
+// classes. Exercises:
+//   - cross-package interface import (Audited)
+//   - abstract class with protected field + concrete subclasses
+//   - per-class mutable static counter via bare-name access
+//   - bare-name access to enclosing-class statics from a base ctor
+//   - cross-package record (Money) carried as a stored field
+
+package bank.accounts;
+
+import bank.money.Money;
+import bank.money.Currency;
+import bank.audit.Audited;
+
+public final class Checking extends Account {
+    public static final int OVERDRAFT_FEE_CENTS = 3500;
+
+    public Checking(String owner, Money initial) {
+        super(owner, initial);
+    }
+
+    public String kind() { return $"Checking"; }
+}

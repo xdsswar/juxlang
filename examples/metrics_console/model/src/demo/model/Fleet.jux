@@ -1,0 +1,60 @@
+// A machine the console is watching, and the fleet of them.
+
+package demo.model;
+
+import demo.core.Series;
+import demo.core.Ring;
+import demo.core.Table;
+import demo.core.Aggregate;
+
+/// One named reading over time. Generic in the sample type so a host can
+/// carry percentages, byte counts and latencies without three classes.
+
+/// Every host the console knows about, in the order they were added -- a
+/// dashboard that reorders its rows between frames is unreadable.
+public class Fleet {
+    private Table<String, Host> hosts;
+
+    public Fleet() {
+        this.hosts = new Table<String, Host>();
+    }
+
+    public void add(Host h) { this.hosts.put(h.name(), h); }
+    public int size() { return this.hosts.len(); }
+    public Vec<Host> all() { return this.hosts.values(); }
+    public Host? byName(String name) { return this.hosts.get(name); }
+
+    /// How many hosts are at or above a level -- the header's alert count.
+    public int countAtLeast(Severity level) {
+        int n = 0;
+        for (var h : this.hosts.values()) {
+            if (h.severity().atLeast(level)) {
+                n = n + 1;
+            }
+        }
+        return n;
+    }
+
+    /// How many hosts sit in each region, in the order the regions first
+    /// appeared. The value is read back through `Table.get`, which is
+    /// nullable -- a region with no hosts is absent, not zero.
+    public Table<String, int> byRegion() {
+        var counts = new Table<String, int>();
+        for (var h : this.hosts.values()) {
+            var seen = counts.get(h.region());
+            counts.put(h.region(), seen == null ? 1 : seen!! + 1);
+        }
+        return counts;
+    }
+
+    /// The worst level anything in the fleet is at.
+    public Severity worst() {
+        var worst = Severity.Ok;
+        for (var h : this.hosts.values()) {
+            if (h.severity().atLeast(worst)) {
+                worst = h.severity();
+            }
+        }
+        return worst;
+    }
+}

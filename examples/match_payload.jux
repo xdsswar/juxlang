@@ -2,7 +2,7 @@
 // payload-carrying enum. Exercises `var name` bind-patterns inside
 // variant patterns plus interpolation using bound names.
 
-public enum Token {
+enum Token {
     Number(int),
     Word(String),
     Stop

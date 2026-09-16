@@ -16,13 +16,13 @@
 // not `tripleIt.doubled(5)` — calling a static via an instance is
 // a compile error (E0427).
 
-public interface MathLike {
+interface MathLike {
     static int doubled(int n) { return n + n; }
     default int quadrupled(int n) { return MathLike.doubled(MathLike.doubled(n)); }
     int compute(int n);
 }
 
-public class TripleIt implements MathLike {
+class TripleIt implements MathLike {
     public int compute(int n) { return n * 3; }
 }
 

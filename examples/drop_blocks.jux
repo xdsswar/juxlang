@@ -7,7 +7,7 @@
 
 package drops;
 
-public class Resource {
+class Resource {
     public String name;
 
     public Resource(String name) {

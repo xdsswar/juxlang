@@ -1,0 +1,31 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+/// A generic LIFO stack with a bounded depth — the undo history.
+public class History<T> {
+    private Vec<T> items;
+    private int limit;
+
+    public History(int limit) {
+        this.items = new Vec<T>();
+        this.limit = limit;
+    }
+
+    public int depth() { return this.items.len(); }
+    public bool isEmpty() { return this.items.len() == 0; }
+
+    public void push(T value) {
+        if (this.items.len() >= this.limit) { this.items.remove(0); }
+        this.items.push(value);
+    }
+
+    /// The most recent entry, or null when there is nothing to undo.
+    public T? pop() {
+        if (this.items.len() == 0) { return null; }
+        return this.items.pop();
+    }
+}

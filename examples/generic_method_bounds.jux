@@ -5,11 +5,11 @@
 
 package bounds;
 
-public interface Shape {
+interface Shape {
     double area();
 }
 
-public class Circle implements Shape {
+class Circle implements Shape {
     public double r;
     public Circle(double r) { this.r = r; }
 
@@ -19,7 +19,7 @@ public class Circle implements Shape {
     }
 }
 
-public class Square implements Shape {
+class Square implements Shape {
     public double side;
     public Square(double side) { this.side = side; }
 
@@ -29,7 +29,7 @@ public class Square implements Shape {
     }
 }
 
-public class Measurer {
+class Measurer {
     public Measurer() {}
 
     // Method-level bounded generic: T must implement Shape, so the
@@ -40,7 +40,7 @@ public class Measurer {
 }
 
 // Class-level bounded generic.
-public class Holder<T extends Shape> {
+class Holder<T extends Shape> {
     public T item;
     public Holder(T item) { this.item = item; }
 

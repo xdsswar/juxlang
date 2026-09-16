@@ -1,0 +1,20 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+public record Rect(int x, int y, int w, int h) {
+    public int right() { return this.x + this.w; }
+    public int bottom() { return this.y + this.h; }
+
+    // The same rectangle inset on every side, for padding.
+    public Rect shrink(int by) {
+        return new Rect(this.x + by, this.y + by, this.w - 2 * by, this.h - 2 * by);
+    }
+}

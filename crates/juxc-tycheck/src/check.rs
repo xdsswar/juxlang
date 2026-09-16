@@ -4813,6 +4813,21 @@ impl<'a> Checker<'a> {
                 }
             }
 
+            Expr::Field(f) if f.field.text == "length"
+                && matches!(infer_expr(&f.object, &self.env, self.symbols), Ty::String) =>
+            {
+                self.check_expr(&f.object);
+                // §S.3.2: "length" of a string is ambiguous -- bytes or
+                // characters -- and guessing is where the bugs come from.
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0479_StringLengthAmbiguous,
+                        "a String has two lengths: its bytes and its characters",
+                    )
+                    .with_span(f.span)
+                    .with_help("write `s.byteLength` for the UTF-8 byte count, or `s.charLength` for the number of characters"),
+                );
+            }
             Expr::Field(f) => {
                 self.check_expr(&f.object);
                 self.check_nullable_receiver(f, false);
@@ -4822,6 +4837,18 @@ impl<'a> Checker<'a> {
             Expr::Index(i) => {
                 self.check_expr(&i.array);
                 self.check_expr(&i.index);
+                // §S.3.2: a byte index and a character index are different
+                // positions in a UTF-8 string, so `s[i]` says too little.
+                if matches!(infer_expr(&i.array, &self.env, self.symbols), Ty::String) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0480_StringIndexAmbiguous,
+                            "a String has no single index: bytes and characters are different positions in it",
+                        )
+                        .with_span(i.span)
+                        .with_help("index the bytes with `s.bytes()[i]`, or take a character with `s.chars().nth(i)`"),
+                    );
+                }
                 if !self.in_unsafe && self.expr_ptr_depth(&i.array) > 0 {
                     self.unsafe_pointer_op("indexing a raw pointer `p[i]`", i.span);
                 }

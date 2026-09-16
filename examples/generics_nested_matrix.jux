@@ -4,14 +4,14 @@
 
 import rust.std.*;
 
-public interface Id { int id(); }
-public interface Label { String label(); }
+interface Id { int id(); }
+interface Label { String label(); }
 
-public interface Source<T> {
+interface Source<T> {
     T take();
 }
 
-public class Item implements Id, Label {
+class Item implements Id, Label {
     private int n;
     public Item(int n) { this.n = n; }
     @Override public int id() { return this.n; }
@@ -20,7 +20,7 @@ public class Item implements Id, Label {
 
 // A generic class with an INTERSECTION bound that also implements a generic
 // interface, and holds a nested container of itself.
-public class Node<T extends Id & Label> implements Source<T> {
+class Node<T extends Id & Label> implements Source<T> {
     private T payload;
     private Vec<Node<T>> kids;
     public Node(T payload) {
@@ -40,7 +40,7 @@ public class Node<T extends Id & Label> implements Source<T> {
 // A subclass that PINS the generic parent's parameter. Its inherited
 // `Source<T>` arrives instantiated as `Source<Item>`, and the override names
 // the bound argument rather than the parameter.
-public class Tagged extends Node<Item> {
+class Tagged extends Node<Item> {
     public Tagged(Item payload) { super(payload); }
     @Override public Item take() { return super.take(); }
 }

@@ -1,6 +1,6 @@
 import rust.std.HashMap;
 
-public class Tally {
+class Tally {
     private HashMap<String, int> counts;
     public Tally() { this.counts = new HashMap<String, int>(); }
 

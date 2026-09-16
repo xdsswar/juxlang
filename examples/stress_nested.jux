@@ -2,7 +2,7 @@
 // (`Outer.Inner`), exactly as in Java -- the bare name is in scope only inside
 // the class that declares it.
 
-public class Outer {
+class Outer {
     public static int count = 0;
 
     public static class Inner {

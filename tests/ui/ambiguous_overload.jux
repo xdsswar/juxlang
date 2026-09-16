@@ -6,7 +6,7 @@ public void place(int row, long col) {
     print("long col");
 }
 
-public class Board {
+class Board {
     public void mark(long row, int col) {}
     public void mark(int row, long col) {}
 }

@@ -354,7 +354,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0308`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
 | `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
-| `E0307`  | Duplicate annotation name (case-insensitive collision) *(reserved)* | JUX-LANG-V1 §3.6 / Annotations §A.13 |
+| `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Entry file has both top-level statements and a `main` function | Entry Points §E.6     |
 | `E0321`  | Multiple functions carry `@entry` in the same binary *(reserved)* | Entry Points §E.6   |
 | `E0322`  | `@entry(convention = ...)` unsupported on current target *(reserved)* | Entry Points §E.6 |
@@ -429,6 +429,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
 | `E0475`  | Ambiguous overloaded call: several members apply and none is more specific | Type system §T.3.3 |
 | `E0478`  | Write through a `? extends` wildcard (read-only in `T`) | Type system §T.2.2 |
+| `E0479`  | `s.length` on a String: pick `byteLength` or `charLength` | Semantics §S.3.2 |
+| `E0481`  | A file's public type must be the only one and share the file's name | JUX-LANG-V1 §3.1 |
+| `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |

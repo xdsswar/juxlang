@@ -1,22 +1,22 @@
-public abstract class Shape {
+abstract class Shape {
     public abstract double area();
     public abstract String kind();
     public String label() { return this.kind() + "=" + this.area(); }
 }
-public class Sq extends Shape {
+class Sq extends Shape {
     private double s;
     public Sq(double s) { this.s = s; }
     public double area() { return this.s * this.s; }
     public String kind() { return "sq"; }
 }
-public class Tri extends Shape {
+class Tri extends Shape {
     private double b;
     private double h;
     public Tri(double b, double h) { this.b = b; this.h = h; }
     public double area() { return this.b * this.h / 2.0; }
     public String kind() { return "tri"; }
 }
-public class Holder<T extends Shape> {
+class Holder<T extends Shape> {
     private T item;
     public Holder(T item) { this.item = item; }
     public T get() { return this.item; }

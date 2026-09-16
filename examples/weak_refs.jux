@@ -8,7 +8,7 @@
 
 package weakrefs;
 
-public class Parent {
+class Parent {
     public String name;
 
     public Parent(String name) {
@@ -20,7 +20,7 @@ public class Parent {
     }
 }
 
-public class Child {
+class Child {
     public String label;
     // Back-reference to the owner. `weak` ⇒ no refcount contribution, so a
     // Parent ⇄ Child cycle does not leak. Defaults to null; wired by `attach`.

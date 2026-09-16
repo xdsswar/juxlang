@@ -1,4 +1,4 @@
-public record Vector3(double x, double y, double z) {
+record Vector3(double x, double y, double z) {
     public void nudge() { x = 1.0; }
 }
 

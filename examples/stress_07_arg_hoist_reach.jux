@@ -3,14 +3,14 @@
 // receiver (not a bare local). Expect 3 then 2.
 package stress07;
 
-public class Cell7 {
+class Cell7 {
     public int v = 0;
     public int bump() { this.v = this.v + 1; return this.v; }
     public void set(int x) { this.v = x; }
     public int get() { return this.v; }
 }
 
-public class Holder {
+class Holder {
     public Cell7 item = new Cell7();
 }
 

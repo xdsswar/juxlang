@@ -5,18 +5,18 @@
 // Only the four Rust cannot escape at all (`self`, `Self`, `crate`, `super`)
 // are reserved, and those get their own diagnostic.
 
-public class Match {
+class Match {
     public int loop;
     public Match(int loop) { this.loop = loop; }
     public int box() { return this.loop; }
     public String trait() { return "t"; }
 }
 
-public interface Union {
+interface Union {
     int mod();
 }
 
-public class Impl implements Union {
+class Impl implements Union {
     @Override public int mod() { return 9; }
 }
 

@@ -30,7 +30,7 @@ public annotation Service {
 public annotation Transactional { }
 
 @Service(name = "users")
-public class UserService {
+class UserService {
 
     // Every parameter supplied, including the array.
     @Cacheable(key = "user", ttlSeconds = 300, tags = {"user", "profile"})

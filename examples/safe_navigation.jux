@@ -26,14 +26,14 @@
 //   deep
 //   true
 
-public class Leaf {
+class Leaf {
     public String label = "x";
     public String? tag;
 
     public Leaf() {}
 }
 
-public class Tree {
+class Tree {
     public Leaf? leaf;
 
     public Tree() {}

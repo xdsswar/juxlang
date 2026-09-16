@@ -11,7 +11,7 @@ void three(int a, int b, int c) {
     print("three a=" + a + " b=" + b + " c=" + c);
 }
 
-public class Box {
+class Box {
     public int x;
     public int y;
     public Box(int x, int y) {

@@ -923,6 +923,13 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
     }
 
+    // §S.3.2: `s.bytes()[i]` is the byte at that position.
+    // (Handled with the field rules because both are String-surface forms.)
+    // §S.3.2: `s.byteLength` / `s.charLength` are PROPERTIES of a string, the
+    // explicit forms `s.length` refuses to guess between.
+    if matches!(object_ty, Ty::String) && matches!(field_name, "byteLength" | "charLength") {
+        return Ty::Primitive(Primitive::Int);
+    }
     // `.length` on any array → int.
     if let Ty::Array { .. } = &object_ty {
         if field_name == "length" {
@@ -1023,6 +1030,21 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// rejects duplicates with `E0402`, so today there's at most one
 /// candidate per name.
 fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // §S.3.2: `s.chars().nth(i)` finds a character or nothing.
+    if let Expr::Field(outer) = &*c.callee {
+        if outer.field.text == "nth" {
+            if let Expr::Call(inner) = &*outer.object {
+                if let Expr::Field(walk) = &*inner.callee {
+                    if walk.field.text == "chars"
+                        && inner.args.is_empty()
+                        && matches!(infer_expr(&walk.object, env, symbols), Ty::String)
+                    {
+                        return Ty::Nullable(Box::new(Ty::Primitive(Primitive::Char)));
+                    }
+                }
+            }
+        }
+    }
     // §K.11 static numeric built-ins on a primitive type NAME:
     // `double.fromBits(b)`, `float.fromBits(b)`, `char.fromCodePoint(cp)`.
     if let Some(ty) = primitive_static_call_type(c) {
@@ -1558,6 +1580,8 @@ fn infer_stdlib_method(
             "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
             // List<T> → T (element type)
             "get" | "first" | "last" | "pop" | "remove" | "set" => Some((**element).clone()),
+            //  may find nothing, so it is the element or null.
+            "nth" => Some(Ty::Nullable(Box::new((**element).clone()))),
             // List<T> → void (mutating ops, no useful return). Phase-1
             // doesn't have a Void Ty, so we use Unknown which the
             // surrounding stmt-level emit treats fine.

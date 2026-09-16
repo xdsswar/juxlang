@@ -64,23 +64,14 @@ public interface Iterator<T> {
     T? next();
 }
 "###),
-    ("concurrent/Atomics.jux", r###"/**
- * jux.std.concurrent - atomic integers + memory orderings (§S.6.2).
+    ("concurrent/MemoryOrder.jux", r###"/**
+ * jux.std.concurrent.MemoryOrder
  *
- * `AtomicInt` / `AtomicLong` are thread-safe shared counters with
- * C++20/Rust memory-ordering control. The no-order overloads use
- * SeqCst - the safe default; profile before opting down. Handles
- * have SHARE semantics: passing one into `spawn`/`Worker.spawn`
- * shares the same underlying cell (Arc-backed).
- *
- * **Implementation status.** Compiler primitives - lowered onto
- * `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc`.
- * Phase-1 defers `compareAndSwap` (its `CasResult<T>` type is not
- * yet specified) and `AtomicRef<T>`.
+ * Part of the atomics surface (§S.6.2): thread-safe shared state with
+ * C++20/Rust memory-ordering control. Handles SHARE the underlying cell,
+ * so passing one into `spawn` / `Worker.spawn` shares the same counter.
  */
 package jux.std.concurrent;
-
-import jux.std.exceptions.UnsupportedOperationException;
 
 public enum MemoryOrder {
     Relaxed,
@@ -89,6 +80,15 @@ public enum MemoryOrder {
     AcqRel,
     SeqCst;
 }
+"###),
+    ("concurrent/AtomicInt.jux", r###"/**
+ * jux.std.concurrent.AtomicInt
+ *
+ * Part of the atomics surface (§S.6.2): thread-safe shared state with
+ * C++20/Rust memory-ordering control. Handles SHARE the underlying cell,
+ * so passing one into `spawn` / `Worker.spawn` shares the same counter.
+ */
+package jux.std.concurrent;
 
 public class AtomicInt {
     /**
@@ -138,6 +138,15 @@ public class AtomicInt {
     /** Bitwise-XOR with an explicit ordering; returns the previous value. */
     public int fetchXor(int mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
 }
+"###),
+    ("concurrent/AtomicLong.jux", r###"/**
+ * jux.std.concurrent.AtomicLong
+ *
+ * Part of the atomics surface (§S.6.2): thread-safe shared state with
+ * C++20/Rust memory-ordering control. Handles SHARE the underlying cell,
+ * so passing one into `spawn` / `Worker.spawn` shares the same counter.
+ */
+package jux.std.concurrent;
 
 public class AtomicLong {
     /**

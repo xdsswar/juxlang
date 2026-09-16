@@ -4,7 +4,7 @@
 // declared type is what gives `obj.Name` its static type (§5.9.10 typeof,
 // §M.7/§P properties).
 
-public class Box {
+class Box {
     public String Name {
         get;
         set;

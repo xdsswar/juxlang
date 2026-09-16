@@ -3,7 +3,7 @@
 // with `switch (this)` and lower to inherent `&self` fns on the Rust
 // enum; constants become associated consts.
 
-public enum Shape {
+enum Shape {
     Circle(double),
     Rect(double, double),
     Point;

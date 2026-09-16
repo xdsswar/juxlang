@@ -27,7 +27,7 @@
 //   plain
 //   deep
 
-public class Leaf {
+class Leaf {
     public String? tag;
 
     public Leaf() {}

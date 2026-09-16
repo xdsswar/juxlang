@@ -12,22 +12,22 @@
 //!   - `null` into a nullable dyn slot
 //!   - downcast from a nullable-narrowed local   (`if (x != null) (Dog) x`)
 
-public interface Tagged {
+interface Tagged {
     String tag();
 }
 
-public abstract class Animal {
+abstract class Animal {
     public abstract String sound();
 }
 
-public class Dog extends Animal implements Tagged {
+class Dog extends Animal implements Tagged {
     public Dog() {}
     public String sound() { return "woof"; }
     public String tag() { return "dog-tag"; }
     public String fetch() { return "fetched"; }
 }
 
-public class Cat extends Animal {
+class Cat extends Animal {
     public Cat() {}
     public String sound() { return "meow"; }
 }
@@ -51,7 +51,7 @@ public void announce(Animal? a) {
 
 // Holds a nullable poly-base field; `get` returns the already-nullable field
 // (must flow through WITHOUT a second `Some(...)`).
-public class Shelter {
+class Shelter {
     public Animal? resident;
     public Shelter() {
         this.resident = new Cat();

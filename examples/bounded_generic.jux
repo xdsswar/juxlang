@@ -6,18 +6,18 @@
 // all its subclasses implement. Interfaces lower to traits
 // directly, so they appear as-is.
 
-public interface Speaks {
+interface Speaks {
     public String voice();
 }
 
-public class Animal {
+class Animal {
     public String name;
     public Animal(String name) {
         this.name = name;
     }
 }
 
-public class Dog extends Animal implements Speaks {
+class Dog extends Animal implements Speaks {
     public Dog(String name) {
         super(name);
     }
@@ -28,7 +28,7 @@ public class Dog extends Animal implements Speaks {
 
 // Only types that are BOTH an Animal AND implement Speaks may
 // instantiate this container. Dog satisfies both.
-public class Holder<T extends Animal & Speaks> {
+class Holder<T extends Animal & Speaks> {
     public T pet;
     public Holder(T pet) {
         this.pet = pet;

@@ -8,13 +8,13 @@
 // - A blank `static final` set once in a `static { }` block.
 // - A `when` guard that is a plain boolean name.
 
-public class Mask {
+class Mask {
     public int bits;
     public Mask(int bits) { this.bits = bits; }
     public Mask operator~() { return new Mask(~bits); }
 }
 
-public class Limits {
+class Limits {
     public static final int CAPACITY;
     static { CAPACITY = 64; }
 }

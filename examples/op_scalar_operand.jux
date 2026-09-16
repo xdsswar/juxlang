@@ -8,7 +8,7 @@
 // crate failed to build. Scaling a vector is the first thing anyone writes
 // with operator overloading.
 
-public class Vec2 {
+class Vec2 {
     public double x;
     public double y;
     public Vec2(double x, double y) { this.x = x; this.y = y; }
@@ -27,7 +27,7 @@ public class Vec2 {
 }
 
 // An integer-scaled counter, to pin a second operand type in the same program.
-public class Ticks {
+class Ticks {
     public int n;
     public Ticks(int n) { this.n = n; }
     public Ticks operator *(int k) { return new Ticks(this.n * k); }

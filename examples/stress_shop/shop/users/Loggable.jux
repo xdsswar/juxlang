@@ -1,0 +1,21 @@
+// shop.users — abstract user hierarchy + interface with default
+// method. Tests encapsulation (private/protected/public), 3-level
+// inheritance, interface + default method dispatch, bare-name
+// method calls inside default body.
+
+package shop.users;
+
+public interface Loggable {
+    // `displayName` is a default, and every user type overrides it:
+    // `Person` writes the real one, and `Customer`/`Staff` refine it
+    // further. A class override beats an interface default even when
+    // it is inherited rather than declared here, so the banner below
+    // prints the concrete name. The default body is the fallback for
+    // a Loggable that supplies nothing of its own.
+    default String displayName() {
+        return $"<user>";
+    }
+    default String banner() {
+        return $"[user: ${displayName()}]";
+    }
+}

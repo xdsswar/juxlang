@@ -3,7 +3,7 @@
 // only when there IS no other entry point -- otherwise it is an ordinary
 // method that happens to be called `main`.
 
-public class Runner {
+class Runner {
     public void main() {
         print("looks like an entry point");
     }

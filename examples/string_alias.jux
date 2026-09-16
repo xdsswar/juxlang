@@ -1,7 +1,7 @@
 // `String` and `string` are the SAME type (§5.5), as in C#. Either spelling
 // works in any type position, they interoperate freely, and `typeof` echoes
 // the canonical `String` whichever was written.
-public class Greeter {
+class Greeter {
     private string name;
     public Greeter(string name) { this.name = name; }
     public String greet(string suffix) { return "hi " + this.name + suffix; }

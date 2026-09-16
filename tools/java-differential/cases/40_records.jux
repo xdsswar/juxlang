@@ -1,7 +1,7 @@
-public record Point(int x, int y) {
+record Point(int x, int y) {
     public int sum() { return this.x + this.y; }
 }
-public record Line(Point from, Point to) {
+record Line(Point from, Point to) {
     public int span() { return this.to.x - this.from.x; }
 }
 public void main() {

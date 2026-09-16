@@ -11,7 +11,7 @@ import rust.std.HashMap;
 public int apply(String s, (String) -> int f) { return f(s); }
 public String transform(String s, (String) -> String f) { return f(s); }
 
-public interface Listener { void on(String s); }
+interface Listener { void on(String s); }
 
 public String rot(String s, int shift) {
     String out = "";
@@ -26,23 +26,23 @@ public int words(String line) {
     return parts.length;
 }
 
-public class Log {
+class Log {
     private String text = "";
     public void write(String s) { text += s; }
     public void writeNumber(int n) { this.text += n; }
     public String get() { return text; }
 }
 
-public record Money(double amount) {
+record Money(double amount) {
     public Money operator+(Money o) { return new Money(amount + o.amount); }
 }
 
-public class Box<A> {
+class Box<A> {
     public A value;
     public Box(A a) { value = a; }
 }
 
-public class Registry {
+class Registry {
     private HashMap<String, int> counts = new HashMap<String, int>();
     public void add(String k) { counts.insert(k, 1); }
     public int describe(int mode) {
@@ -53,11 +53,11 @@ public class Registry {
     }
 }
 
-public interface Priced { double price(); }
-public abstract class Item implements Priced {
+interface Priced { double price(); }
+abstract class Item implements Priced {
     public double doubled() { return price() * 2; }
 }
-public class Book extends Item { public double price() { return 12.5; } }
+class Book extends Item { public double price() { return 12.5; } }
 
 public void main() {
     print(apply("hello", x -> x.length()));

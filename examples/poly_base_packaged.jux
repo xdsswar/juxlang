@@ -9,14 +9,14 @@
 
 package poly;
 
-public class Container {
+class Container {
     protected int value;
     public Container(int v) { this.value = v; }
     public int get() { return this.value; }
     public String describe() { return "container"; }
 }
 
-public class Box extends Container {
+class Box extends Container {
     public Box(int v) { super(v); }
     @Override
     public String describe() { return "box of " + this.get(); }

@@ -1,4 +1,4 @@
-public class Cell<T> {
+class Cell<T> {
     private T v;
     public Cell(T v) { this.v = v; }
     public T get() { return this.v; }

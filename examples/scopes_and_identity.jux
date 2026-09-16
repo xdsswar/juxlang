@@ -24,7 +24,7 @@
 //   [[1, 2]]
 //   [[1, 2, 3]]
 
-public class Holder {
+class Holder {
     public int x = 1;
 
     public void shadow() {
@@ -41,7 +41,7 @@ public class Holder {
     }
 }
 
-public class Counter {
+class Counter {
     public int n;
     private () -> int peek;
 

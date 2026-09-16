@@ -60,7 +60,7 @@ public int firstPlusOne(int[] xs) {
     return xs[0] + 1;
 }
 
-public class Board {
+class Board {
     public HashMap<String, int> scores;
     public Vec<Vec<int>> rows;
 

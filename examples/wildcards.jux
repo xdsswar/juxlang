@@ -24,22 +24,22 @@
 // with the std trait of the same name in value position; resolving
 // that shadowing precisely is deferred to a later phase.
 
-public class Animal {
+class Animal {
     public String name;
     public Animal(String name) {
         this.name = name;
     }
 }
 
-public class Dog extends Animal {
+class Dog extends Animal {
     public Dog(String name) { super(name); }
 }
 
-public class Cat extends Animal {
+class Cat extends Animal {
     public Cat(String name) { super(name); }
 }
 
-public class Bag<T> {
+class Bag<T> {
     public T head;
     public Bag(T head) {
         this.head = head;

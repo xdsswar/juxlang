@@ -1,0 +1,34 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+public interface Widget {
+    /// What to draw inside the panel, in canvas coordinates.
+    void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h);
+
+    /// The panel's caption.
+    String title();
+
+    /// Panel chrome: fill, border, title, then the widget's own content
+    /// inset below the caption. A widget that wants the whole rectangle
+    /// overrides this; none here do.
+    default void render(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        c.rect(x, y, w, h, t.panel());
+        c.frame(x, y, w, h, t.grid());
+        text.draw(c, this.title().toUpperCase(), x + 6, y + 5, t.inkDim());
+        this.paint(c, t, text, x + 6, y + 16, w - 12, h - 22);
+    }
+}

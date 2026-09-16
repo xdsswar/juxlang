@@ -1,7 +1,7 @@
 public annotation Audited {}
 
 @Derive(Eq)
-public record Point(int x, int y) {}
+record Point(int x, int y) {}
 
 @Tset
 public void checksPoint() {}

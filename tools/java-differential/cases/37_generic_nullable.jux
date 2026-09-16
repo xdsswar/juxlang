@@ -1,4 +1,4 @@
-public class Slot<T> {
+class Slot<T> {
     private T? value;
     public Slot() {}
     public bool isEmpty() { return this.value == null; }
@@ -9,7 +9,7 @@ public class Slot<T> {
         return "has " + this.value!!;
     }
 }
-public class Item {
+class Item {
     public String name;
     public Item(String n) { this.name = n; }
 }

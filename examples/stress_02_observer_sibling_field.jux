@@ -3,7 +3,7 @@
 // holds a borrow of the inner cell. Expect: log [7, 9], no panic.
 package stress02;
 
-public class Model {
+class Model {
     public int Count { get; set; } = 0;
     public Vec<int> log = new Vec<int>();
 }

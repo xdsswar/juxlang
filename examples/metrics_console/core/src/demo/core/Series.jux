@@ -1,0 +1,33 @@
+// Generic containers the rest of the workspace is built on.
+//
+// `Ring<T>` is a fixed-capacity window: pushing past the capacity drops the
+// oldest sample, which is what a live metric wants and what makes the memory
+// bounded. `Series<T>` gives one a name and a unit so a widget can label it
+// without being told twice.
+
+package demo.core;
+
+public class Series<T> {
+    private String label;
+    private String unit;
+    private Ring<T> window;
+
+    public Series(String label, String unit, int capacity) {
+        this.label = label;
+        this.unit = unit;
+        this.window = new Ring<T>(capacity);
+    }
+
+    public String label() { return this.label; }
+    public String unit() { return this.unit; }
+    public Ring<T> window() { return this.window; }
+
+    public void record(T sample) { this.window.push(sample); }
+    public int count() { return this.window.len(); }
+    public bool isEmpty() { return this.window.isEmpty(); }
+    public T latest() { return this.window.last(); }
+
+    public String describe() {
+        return this.label + " (" + this.unit + ") x" + this.window.len();
+    }
+}

@@ -15,7 +15,7 @@
 //   [user: Bo (intern, mentored by Ada)]
 //   visitor logged in
 
-public interface Loggable {
+interface Loggable {
     // The fallback, for a Loggable that supplies nothing of its own.
     default String displayName() {
         return "<user>";
@@ -29,11 +29,11 @@ public interface Loggable {
 }
 
 /// Implements the interface and overrides nothing. Gets the defaults.
-public class Anonymous implements Loggable {}
+class Anonymous implements Loggable {}
 
 /// The override lives HERE, on an abstract class in the middle. Neither
 /// the interface nor the concrete leaf declares it.
-public abstract class Person implements Loggable {
+abstract class Person implements Loggable {
     protected String name;
 
     public Person(String name) {
@@ -50,7 +50,7 @@ public abstract class Person implements Loggable {
 
 /// Declares only `role`. Its `displayName` comes from `Person`, and that
 /// inherited one must still beat `Loggable`'s default.
-public class Staff extends Person {
+class Staff extends Person {
     public Staff(String name) {
         super(name);
     }
@@ -62,7 +62,7 @@ public class Staff extends Person {
 
 /// Three levels: the override is two hops up, and this class refines the
 /// virtual method the override calls.
-public class Intern extends Staff {
+class Intern extends Staff {
     private String mentor;
 
     public Intern(String name, String mentor) {
@@ -78,7 +78,7 @@ public class Intern extends Staff {
 
 /// An interface whose default calls another default, with no class in
 /// sight -- the path that must keep using Rust's own trait default.
-public interface Greeter {
+interface Greeter {
     default String who() {
         return "visitor";
     }
@@ -88,7 +88,7 @@ public interface Greeter {
     }
 }
 
-public class Door implements Greeter {}
+class Door implements Greeter {}
 
 public void main() {
     print(new Anonymous().banner());

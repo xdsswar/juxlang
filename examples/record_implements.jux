@@ -1,11 +1,11 @@
 // A record may implement an interface (grammar §A.2.5). Its components double
 // as the interface's accessors, and a record value flows into an
 // interface-typed slot like any other implementer.
-public interface Point { int x(); int y(); }
-public record Pt(int x, int y) implements Point {
+interface Point { int x(); int y(); }
+record Pt(int x, int y) implements Point {
     public int dist2() { return this.x * this.x + this.y * this.y; }
 }
-public record Named(String name, Pt at) {}
+record Named(String name, Pt at) {}
 void main() {
     Pt p = new Pt(3, 4);
     print(p.dist2());

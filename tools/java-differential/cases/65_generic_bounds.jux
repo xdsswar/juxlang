@@ -1,9 +1,9 @@
-public class Shape {
+class Shape {
     public String name() { return "shape"; }
     public int area() { return 0; }
 }
 
-public class Square extends Shape {
+class Square extends Shape {
     private int side;
     public Square(int side) { this.side = side; }
     @Override
@@ -24,7 +24,7 @@ public <T extends Shape> int totalOf(Vec<T> shapes) {
     return t;
 }
 
-public class Holder<T extends Shape> {
+class Holder<T extends Shape> {
     private T item;
     public Holder(T item) { this.item = item; }
     public String render() { return "held " + this.item.name(); }

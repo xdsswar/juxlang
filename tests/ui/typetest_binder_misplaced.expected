@@ -1,2 +1,2 @@
-typetest_binder_misplaced.jux:5:42: [W0470] warning: `Dog.name` replaces `Animal.name` without `@Override`
+typetest_binder_misplaced.jux:5:35: [W0470] warning: `Dog.name` replaces `Animal.name` without `@Override`
 typetest_binder_misplaced.jux:9:24: [E0441] error: the type-test binder `d` is only valid in an `if` condition (`if (x => T d)`); use the bare test `x => T` here

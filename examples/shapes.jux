@@ -10,12 +10,12 @@
 // inherent path. Trait-bound calls (later, once <T extends Shape> lands)
 // will go through the trait.
 
-public interface Shape {
+interface Shape {
     double area();
     String name();
 }
 
-public class Circle implements Shape {
+class Circle implements Shape {
     private double radius;
 
     public Circle(double radius) {
@@ -33,7 +33,7 @@ public class Circle implements Shape {
     }
 }
 
-public class Square implements Shape {
+class Square implements Shape {
     private double side;
 
     public Square(double side) {

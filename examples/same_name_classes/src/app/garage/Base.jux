@@ -1,0 +1,13 @@
+package app.garage;
+
+public class Base {
+    public int wheels;
+
+    public Base(int wheels) {
+        this.wheels = wheels;
+    }
+
+    public String describe() {
+        return wheels + " wheels";
+    }
+}

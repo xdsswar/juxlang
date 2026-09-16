@@ -171,7 +171,7 @@ fn stress_shop() {
 
 #[test]
 fn mf_alias() {
-    let got = run("mf_alias", &["examples/multifile/alias_app.jux", "examples/multifile/alias_lib.jux"]);
+    let got = run("mf_alias", &["examples/multifile/alias/app/alias_app.jux", "examples/multifile/alias/lib/alias_lib.jux", "examples/multifile/alias/lib/IntBox.jux", "examples/multifile/alias/lib/Pair.jux"]);
     assert_eq!(
         got,
         [
@@ -184,7 +184,7 @@ fn mf_alias() {
 
 #[test]
 fn mf_app() {
-    let got = run("mf_app", &["examples/multifile/app.jux", "examples/multifile/greeter.jux"]);
+    let got = run("mf_app", &["examples/multifile/app/main/app.jux", "examples/multifile/com/lib/Greeter.jux"]);
     assert_eq!(
         got,
         [
@@ -195,7 +195,7 @@ fn mf_app() {
 
 #[test]
 fn mf_foo() {
-    let got = run("mf_foo", &["examples/multifile/foo_app.jux", "examples/multifile/lib_foo.jux", "examples/multifile/lib_foo2.jux"]);
+    let got = run("mf_foo", &["examples/multifile/app/collide/foo_app.jux", "examples/multifile/lib/first/Foo.jux", "examples/multifile/lib/second/Foo.jux"]);
     assert_eq!(
         got,
         [
@@ -213,8 +213,9 @@ fn mf_polish() {
     // struct, its `Kind` trait, and the subclass named in the base package's
     // upcast impl were all emitted without saying which package they were in.
     let got = run("mf_polish", &[
-        "examples/multifile/polish_app.jux",
-        "examples/multifile/polish_lib.jux",
+        "examples/multifile/poll/app/polish_app.jux",
+        "examples/multifile/poll/app/Dog.jux",
+        "examples/multifile/poll/lib/Animal.jux",
     ]);
     assert_eq!(got, ["Animal Rex", "Animal Spot", "Woof, Fido"]);
 }

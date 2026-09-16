@@ -1,7 +1,7 @@
 // Two methods of a name are an overload group; two operators of a KIND are
 // not, because the operator IS the selector.
 
-public class Money {
+class Money {
     private int cents;
     public Money(int cents) { this.cents = cents; }
 

@@ -1,4 +1,4 @@
-public enum Pair2 {
+enum Pair2 {
     Two(String, int),
     None,
 }

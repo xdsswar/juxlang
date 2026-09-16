@@ -1,9 +1,9 @@
-public class Base {
+class Base {
     private void secret() {}
     public void shown() {}
 }
 
-public class Child extends Base {
+class Child extends Base {
     @Override
     public void secret() {}
 

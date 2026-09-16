@@ -3,7 +3,7 @@
 // mutate the stored list, not a getter-returned clone. Expect 2 / 3 4.
 package stress03;
 
-public class Store {
+class Store {
     public Vec<int> Items { get; set; } = new Vec<int>();
 }
 

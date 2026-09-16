@@ -7,10 +7,10 @@
 // - An integer literal takes the narrowest numeric parameter that fits.
 // - The same rules hold for instance and static methods.
 
-public class Animal { public String name() { return "animal"; } }
-public class Dog extends Animal { @Override public String name() { return "dog"; } }
+class Animal { public String name() { return "animal"; } }
+class Dog extends Animal { @Override public String name() { return "dog"; } }
 
-public class Vet {
+class Vet {
     public String treat(Animal a) { return "general care for a " + a.name(); }
     public String treat(Dog d) { return "canine care for a " + d.name(); }
     public static String file(Animal a) { return "filed as animal"; }

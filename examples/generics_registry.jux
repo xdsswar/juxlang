@@ -14,14 +14,14 @@ package gen;
 
 import rust.std.Vec;
 
-public interface Id { long id(); }
-public interface Named { String name(); }
-public interface Comparable<T> { int compareTo(T other); }
+interface Id { long id(); }
+interface Named { String name(); }
+interface Comparable<T> { int compareTo(T other); }
 
 // A self-referential (F-bounded) interface: an Entity is comparable to itself.
-public interface Entity<E extends Entity<E>> extends Id, Named, Comparable<E> {}
+interface Entity<E extends Entity<E>> extends Id, Named, Comparable<E> {}
 
-public class Registry<K extends Id & Named & Comparable<K>, V extends Container<? extends K>, int N> {
+class Registry<K extends Id & Named & Comparable<K>, V extends Container<? extends K>, int N> {
     private V backing;
     private static long instances = 0;
 
@@ -70,27 +70,27 @@ public class Registry<K extends Id & Named & Comparable<K>, V extends Container<
 
 // Supporting generic shapes ------------------------------------------------
 
-public class Box<T> {
+class Box<T> {
     private T inner;
     public Box(T inner) { this.inner = inner; }
     public T unwrap() { return this.inner; }
 }
 
-public class Pair<A, B> {
+class Pair<A, B> {
     public A first;
     public B second;
     public Pair(A first, B second) { this.first = first; this.second = second; }
 }
 
-public class Container<T> {
+class Container<T> {
     private T held;
     public Container(T held) { this.held = held; }
     public T peek() { return this.held; }
 }
 
-public interface Sink<T> { void accept(T value); }
+interface Sink<T> { void accept(T value); }
 
-public class MyList<T> {
+class MyList<T> {
     private Vec<T> data;                             // rust.std backing
     public MyList() { this.data = new Vec<T>(); }
     public void add(T v) { this.data.push(v); }
@@ -104,7 +104,7 @@ public class MyList<T> {
 // ---- Concrete types + driver (acceptance run) ----------------------------
 
 // A concrete F-bounded entity: User is comparable to User.
-public class User implements Entity<User> {
+class User implements Entity<User> {
     private long uid;
     private String uname;
     public User(long uid, String uname) { this.uid = uid; this.uname = uname; }
@@ -118,7 +118,7 @@ public class User implements Entity<User> {
 }
 
 // A concrete consumer for the `? super K` drain.
-public class PrintSink implements Sink<User> {
+class PrintSink implements Sink<User> {
     public void accept(User value) { print($"drained: ${value.name()}"); }
 }
 

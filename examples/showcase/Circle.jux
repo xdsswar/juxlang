@@ -1,0 +1,31 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+
+public final class Circle extends Shape {
+    public double radius;
+    public Circle(double radius) {
+        super("circle");
+        this.radius = radius;
+    }
+
+    @Override
+    public double area() {
+        return MathUtil.PI * this.radius * this.radius;
+    }
+
+    // Phase-1 lowering uses composition + Deref, so the parent's
+    // `describe()` calling `this.area()` would dispatch
+    // statically to `Shape::area()` (the abstract stub). We
+    // re-implement `describe()` per concrete class so each call
+    // hits the right area.
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}

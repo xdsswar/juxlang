@@ -10,7 +10,7 @@
 //
 // Expected output: 5 / 9 / 7 / 3 / 4 / 7 2 / 0
 
-public class Holder {
+class Holder {
     public int[] data = new int[2];
     public int[] get() { return this.data; }
 }

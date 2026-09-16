@@ -24,9 +24,9 @@ public String bucket(int? score) {
     };
 }
 
-public record Rule(String match, int loop) {}
+record Rule(String match, int loop) {}
 
-public enum Token { Word(String match), End }
+enum Token { Word(String match), End }
 
 public void main() {
     print(answer("yes"));

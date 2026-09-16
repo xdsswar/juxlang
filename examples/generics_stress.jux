@@ -8,13 +8,13 @@ package gen2;
 
 import rust.std.Vec;
 
-public interface Animal { String sound(); }
-public interface CanFly { int altitude(); }
-public interface Swing<T> { T swing(); }
+interface Animal { String sound(); }
+interface CanFly { int altitude(); }
+interface Swing<T> { T swing(); }
 
 // Multiple (intersection) bounds on T, AND `implements` a generic interface
 // instantiated with the class's own type param.
-public class Cage<T extends Animal & CanFly> implements Swing<T> {
+class Cage<T extends Animal & CanFly> implements Swing<T> {
     private T occupant;
     public Cage(T occupant) { this.occupant = occupant; }
     public T swing() { return this.occupant; }
@@ -24,12 +24,12 @@ public class Cage<T extends Animal & CanFly> implements Swing<T> {
 }
 
 // Generic class extending a generic class (inheritance + super).
-public class Box<T> {
+class Box<T> {
     protected T value;
     public Box(T value) { this.value = value; }
     public T get() { return this.value; }
 }
-public class NamedBox<T> extends Box<T> {
+class NamedBox<T> extends Box<T> {
     private String label;
     public NamedBox(String label, T value) { super(value); this.label = label; }
     public String label() { return this.label; }
@@ -37,7 +37,7 @@ public class NamedBox<T> extends Box<T> {
 
 // A small generic collection plus a generic free function with a producer
 // wildcard; T is inferred from the argument.
-public class MyList<T> {
+class MyList<T> {
     private Vec<T> data;
     public MyList() { this.data = new Vec<T>(); }
     public void add(T v) { this.data.push(v); }
@@ -46,7 +46,7 @@ public class MyList<T> {
 public <T> T firstOf(MyList<? extends T> xs) { return xs.get(0); }
 
 // Concrete type implementing two interfaces (satisfies the Cage bound).
-public class Bird implements Animal, CanFly {
+class Bird implements Animal, CanFly {
     public String sound() { return "tweet"; }
     public int altitude() { return 100; }
 }

@@ -10,12 +10,12 @@
 
 package nested;
 
-public class HttpServer {
-    public class Config {
+class HttpServer {
+    class Config {
         public int port = 8080;
         public String host = "localhost";
 
-        public class Tls {
+        class Tls {
             public bool enabled = true;
         }
 
@@ -35,12 +35,12 @@ public class HttpServer {
     }
 }
 
-public class Database {
-    public class Config {
+class Database {
+    class Config {
         public int poolSize = 4;
     }
 
-    public record Endpoint(String host, int port) {}
+    record Endpoint(String host, int port) {}
 }
 
 public void main() {

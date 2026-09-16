@@ -14,13 +14,13 @@
 import rust.std.*;
 
 // (1) Shadows `rust.std.Box`.
-public class Box<T> {
+class Box<T> {
     private T value;
     public Box(T value) { this.value = value; }
     public T get() { return this.value; }
 }
 
-public class Registry {
+class Registry {
     private HashMap<String, Vec<int>> table;
     internal int tag;
 
@@ -67,7 +67,7 @@ public class Registry {
 //     nowhere to keep the parent's fields, so this hierarchy takes the ordinary
 //     polymorphic-base representation instead — `sealed` still restricts who
 //     may extend, which is what it is for.
-public abstract sealed class Shape permits Circle, Square {
+abstract sealed class Shape permits Circle, Square {
     protected static int made = 0;
     public static final String KIND = "shape";
     protected final int id;
@@ -79,13 +79,13 @@ public abstract sealed class Shape permits Circle, Square {
     public final String tag() { return KIND + "#" + this.id; }
 }
 
-public final class Circle extends Shape {
+final class Circle extends Shape {
     private final int r;
     public Circle(int r) { super(1); this.r = r; }
     @Override public int area() { return 3 * this.r * this.r; }
 }
 
-public final class Square extends Shape {
+final class Square extends Shape {
     private final int s;
     public Square(int s) { super(2); this.s = s; }
     @Override public int area() { return this.s * this.s; }

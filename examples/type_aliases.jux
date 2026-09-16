@@ -11,7 +11,7 @@ public type UserId = int;
 // Generic alias: `Pair<A, B>` resolves to `Box1<A>` for the sake of
 // demonstrating substitution. (We'd alias to a real tuple once
 // records-with-records land.)
-public class Box1<T> {
+class Box1<T> {
     public T value;
     public Box1(T v) { this.value = v; }
     public T get() { return this.value; }

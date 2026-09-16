@@ -4,20 +4,20 @@
 // (`Rc<dyn ContainerKind<isize>>`), so the base-typed slot dispatches to the
 // subclass override, reads inherited fields, and downcasts back.
 
-public class Container<T> {
+class Container<T> {
     protected T value;
     public Container(T v) { this.value = v; }
     public T get() { return this.value; }
     public String describe() { return "container"; }
 }
 
-public class Box<T> extends Container<T> {
+class Box<T> extends Container<T> {
     public Box(T v) { super(v); }
     @Override public String describe() { return "box of " + this.get(); }
 }
 
 // A subclass that PINS the base's parameter — the base slot is the same type.
-public class IntCrate extends Container<int> {
+class IntCrate extends Container<int> {
     public IntCrate(int v) { super(v); }
     @Override public String describe() { return "crate of " + this.get(); }
 }

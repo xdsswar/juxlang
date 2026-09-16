@@ -21,7 +21,7 @@ import jux.std.exceptions.Exception;
  * Simple wrapper that the demo throws when an assertion doesn't
  * hold. Cleaner than littering `print` + `return` everywhere.
  */
-public class TestFailure extends Exception {
+class TestFailure extends Exception {
     public TestFailure(String message) { super(message); }
 }
 

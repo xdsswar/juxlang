@@ -1,0 +1,28 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+/// A sealed hierarchy WITH state on the base: `radius` and a shared id counter
+/// live here, and every subclass inherits them.
+public abstract sealed class Tool implements Paintable permits Brush, Eraser, LineTool, RectTool, FillTool {
+    protected static int made = 0;
+    public static final String FAMILY = "tool";
+    protected final int id;
+    protected int radius;
+
+    static { made = 0; }
+
+    public Tool(int radius) {
+        this.radius = radius;
+        made = made + 1;
+        this.id = made;
+    }
+
+    public int slot() { return this.id; }
+    public int nib() { return this.radius; }
+    public void widen(int by) { this.radius = this.radius + by; }
+    public final String tag() { return FAMILY + "#" + this.id; }
+}

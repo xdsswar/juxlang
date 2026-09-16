@@ -6,7 +6,7 @@
 // switch from `.` to `::` automatically: `Math.PI` becomes
 // `Math::PI`, `Math.max(a, b)` becomes `Math::max(a, b)`.
 
-public class Math {
+class Math {
     // Static `final` field → emits `pub const PI: f64 = 3.14159;`.
     public static final double PI = 3.14159;
 

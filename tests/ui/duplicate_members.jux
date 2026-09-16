@@ -2,12 +2,12 @@
 // two methods of a name are an overload group (T.3.1) unless their parameter
 // shapes match, which the free-function case covers.
 
-public class Config {
+class Config {
     private int retries;
     private String retries;
 }
 
-public enum Tier {
+enum Tier {
     Bronze,
     Silver,
     Bronze

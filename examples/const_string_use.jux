@@ -18,7 +18,7 @@
 //   greeting: hello, jux
 //   TOOL=juxc VERSION=0.0.1
 
-public class Brand {
+class Brand {
     public static const String NAME = "jux";
     public static const String SUFFIX = "-lang";
 
@@ -27,7 +27,7 @@ public class Brand {
     public static const String FULL = NAME + SUFFIX;
 }
 
-public class Tool {
+class Tool {
     public static const String NAME = "juxc";
     public static const String VERSION = "0.0.1";
 }

@@ -5,7 +5,7 @@
 // over a double, out-of-range String indexing, and a two-parameter function
 // field (which also type-checked only half the time).
 
-public class Member {
+class Member {
     private static int next = 1;
     private String memberId;
     public Member() {
@@ -15,14 +15,14 @@ public class Member {
     public String id() { return memberId; }
 }
 
-public interface Cmd { int id(); }
-public class Ins implements Cmd {
+interface Cmd { int id(); }
+class Ins implements Cmd {
     public int count;
     public Ins(int count) { this.count = count; }
     public int id() { return 1; }
 }
-public class Stop implements Cmd { public int id() { return 2; } }
-public class Noop implements Cmd { public int id() { return 3; } }
+class Stop implements Cmd { public int id() { return 2; } }
+class Noop implements Cmd { public int id() { return 3; } }
 
 public String describe(Cmd c) {
     switch (c) {
@@ -36,9 +36,9 @@ public String describe(Cmd c) {
     }
 }
 
-public abstract class Animal {}
-public class Dog extends Animal {}
-public class Cat extends Animal {}
+abstract class Animal {}
+class Dog extends Animal {}
+class Cat extends Animal {}
 public String kind(Animal a) {
     return switch (a) {
         case Dog d -> "dog";
@@ -47,21 +47,21 @@ public String kind(Animal a) {
     };
 }
 
-public interface Marker {}
-public class Tagged implements Marker { public int tag = 7; }
+interface Marker {}
+class Tagged implements Marker { public int tag = 7; }
 
-public class Pair<A, B> {
+class Pair<A, B> {
     public A first;
     public B second;
     public Pair(A a, B b) { this.first = a; this.second = b; }
 }
 public <K, V> String showPair(Pair<K, V> p) { return "<" + p.first + ", " + p.second + ">"; }
 
-public class Holder {
+class Holder {
     public (double) -> String render = x -> "value " + x;
 }
 
-public class Cache<K, V> {
+class Cache<K, V> {
     private (K, V) -> String cb;
     public Cache((K, V) -> String cb) { this.cb = cb; }
     public String fire(K k, V v) { return this.cb(k, v); }

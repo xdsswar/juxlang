@@ -1,8 +1,8 @@
-public interface Source<out T> {
+interface Source<out T> {
     T get();
 }
 
-public interface Sink<in T> {
+interface Sink<in T> {
     void put(T item);
 }
 

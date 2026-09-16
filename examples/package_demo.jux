@@ -15,7 +15,7 @@
 
 package com.example.demo;
 
-public class Greeter {
+class Greeter {
     public String name;
     public Greeter(String name) {
         this.name = name;

@@ -3,8 +3,8 @@
 // inherits the name, and a method can hand one out to code that only ever
 // writes `var`.
 
-public class Employee {
-    public enum Level { Junior, Senior }
+class Employee {
+    enum Level { Junior, Senior }
     protected Level level = Level.Junior;
 
     public int multiplier() {
@@ -15,12 +15,12 @@ public class Employee {
     }
 }
 
-public class Boss extends Employee {
+class Boss extends Employee {
     public Boss() { this.level = Level.Senior; }
     public Level rank() { return level; }
 }
 
-public class Roster {
+class Roster {
     public static class Stats {
         public int count = 0;
         public String label = "roster";

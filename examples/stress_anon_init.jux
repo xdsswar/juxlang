@@ -2,7 +2,7 @@
 // `{ … }` at body level — the only constructor hook anonymous
 // classes have).
 
-public interface test {
+interface test {
     void t();
 }
 

@@ -4,7 +4,7 @@
 // be silent-wrong). Expect: "fire: 0 -> 1", then 1.
 package stress04;
 
-public class M {
+class M {
     public int Count { get; set; } = 0;
 }
 

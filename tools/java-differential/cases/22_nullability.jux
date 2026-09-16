@@ -1,4 +1,4 @@
-public class Box {
+class Box {
     public String? label;
     public Box() {}
 }

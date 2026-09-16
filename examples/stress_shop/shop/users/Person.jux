@@ -1,0 +1,29 @@
+// shop.users — abstract user hierarchy + interface with default
+// method. Tests encapsulation (private/protected/public), 3-level
+// inheritance, interface + default method dispatch, bare-name
+// method calls inside default body.
+
+package shop.users;
+
+public abstract class Person implements Loggable {
+    protected String name;          // protected: subclasses can read directly
+    private int idNumber;            // private: only this class
+    public static int created = 0;
+
+    public Person(String name, int id) {
+        this.name = name;
+        this.idNumber = id;
+        created = created + 1;
+    }
+
+    public int id() { return this.idNumber; }
+    public String name() { return this.name; }
+
+    public abstract String role();
+
+    // Bare-name `role()` and `name()` resolve to `self.role()` /
+    // `self.name()` through the enclosing-class rule.
+    public String displayName() {
+        return $"${name()} (${role()})";
+    }
+}

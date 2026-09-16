@@ -1,7 +1,7 @@
 // An operator is part of a type's public surface, and the two ordering styles
 // cannot be mixed.
 
-public class Money {
+class Money {
     private int cents;
     public Money(int cents) { this.cents = cents; }
 

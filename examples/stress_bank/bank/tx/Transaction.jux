@@ -1,0 +1,18 @@
+// bank.tx — Transaction enum-with-payload + summarize helper.
+// Exercises:
+//   - enum with payload variants (records via tuple-style)
+//   - exhaustive switch + nested ternary in arm body
+//   - cross-package types in variant payloads (Money)
+//   - top-level static counter via a sibling class
+//   - bare-name compound-write inside class method
+
+package bank.tx;
+
+import bank.money.Money;
+
+public enum Transaction {
+    Deposit(String, Money),
+    Withdraw(String, Money),
+    Transfer(String, String, Money),   // from, to, amount
+    InterestAccrual(String, Money),
+}

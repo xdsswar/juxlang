@@ -5,7 +5,7 @@
 // read is now recognized as already-nullable, so it passes through unchanged.
 package nullable_generic_getter;
 
-public class Controller<K, T> {
+class Controller<K, T> {
     private K? k;
     private T? t;
     public K? getK() { return k; }          // bare nullable-field read

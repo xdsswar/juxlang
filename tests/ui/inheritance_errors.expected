@@ -1,3 +1,3 @@
-inheritance_errors.jux:12:28: [E0423] error: class `Wrong` cannot extend `Marker` because it is an interface (only classes are extensible)
+inheritance_errors.jux:12:21: [E0423] error: class `Wrong` cannot extend `Marker` because it is an interface (only classes are extensible)
 inheritance_errors.jux:25:12: [E0421] error: method `size` on `Derived` cannot override `Base::size` because the parent declares it `final`
 inheritance_errors.jux:25:12: [W0470] warning: `Derived.size` replaces `Base.size` without `@Override`

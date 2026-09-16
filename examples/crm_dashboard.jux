@@ -1,8 +1,8 @@
 import rust.std.Vec;
 
-public enum Status { Pending, Active, Done }
+enum Status { Pending, Active, Done }
 
-public class Todo {
+class Todo {
     public String title;
     public Status status;
     public Todo(String title){ this.title = title; this.status = Status.Pending; }

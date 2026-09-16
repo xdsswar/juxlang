@@ -47,7 +47,7 @@ public const int SUM = sumBelow(10);
 public const int BUCKETS = firstPowerOfTwoAbove(1000);
 public const int WIDTH = digits(1234567L);
 
-public class Table {
+class Table {
     public static final int CELLS = factorial(5);
     public static final bool LARGE = CELLS > 100;
 }

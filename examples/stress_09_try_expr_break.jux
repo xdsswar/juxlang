@@ -3,7 +3,7 @@
 // that breaks on the sentinel result. Expect 10 / 20 / done.
 package stress09;
 
-public class S9 {
+class S9 {
     public Vec<int> items = new Vec<int>();
 }
 

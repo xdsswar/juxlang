@@ -1,21 +1,21 @@
-public interface Source<T> {
+interface Source<T> {
     T produce();
     default String announce() { return "produced " + this.produce(); }
 }
-public interface Sink<T> {
+interface Sink<T> {
     void accept(T value);
 }
-public class IntSource implements Source<int> {
+class IntSource implements Source<int> {
     private int n;
     public IntSource(int n) { this.n = n; }
     public int produce() { return this.n; }
 }
-public class EchoSource<T> implements Source<T> {
+class EchoSource<T> implements Source<T> {
     private T v;
     public EchoSource(T v) { this.v = v; }
     public T produce() { return this.v; }
 }
-public class Collector<T> implements Sink<T> {
+class Collector<T> implements Sink<T> {
     private Vec<T> seen;
     public Collector() { this.seen = new Vec<T>(); }
     public void accept(T value) { this.seen.push(value); }

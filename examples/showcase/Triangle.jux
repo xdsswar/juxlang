@@ -1,0 +1,28 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+
+public final class Triangle extends Shape {
+    public double base;
+    public double height;
+    public Triangle(double base, double height) {
+        super("triangle");
+        this.base = base;
+        this.height = height;
+    }
+
+    @Override
+    public double area() {
+        return 0.5 * this.base * this.height;
+    }
+
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}

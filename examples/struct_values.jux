@@ -9,34 +9,34 @@
 // - A struct stored inside an object or an array element is changed in place
 //   by a field write or a mutating method.
 
-public interface Shape { double area(); }
+interface Shape { double area(); }
 
-public struct Point {
+struct Point {
     public double x;
     public double y;
     public double lengthSquared() { return x * x + y * y; }
     public void scale(double k) { x = x * k; y = y * k; }
 }
 
-public struct Cell {
+struct Cell {
     public int row;
     public int col;
 }
 
-public struct Rect implements Shape {
+struct Rect implements Shape {
     public double w;
     public double h;
     public double area() { return w * h; }
     public void grow() { w = w + 1.0; }
 }
 
-public struct Particle {
+struct Particle {
     public Point pos;
     public String name;
     public Particle(String name, Point pos) { this.name = name; this.pos = pos; }
 }
 
-public class Room {
+class Room {
     public Rect floor = new Rect(2.0, 3.0);
     public void extend() { floor.grow(); }
 }

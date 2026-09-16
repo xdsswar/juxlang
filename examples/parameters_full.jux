@@ -11,7 +11,7 @@
  */
 package params.demo;
 
-public class Counter {
+class Counter {
     public int value;
     public Counter(int v) { this.value = v; }
     public int read() { return this.value; }

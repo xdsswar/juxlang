@@ -190,8 +190,10 @@ fn jux_test_ignore_and_typed_assert_throws() {
         &root.join("jux.toml"),
         "[package]\nname = \"com.test.parse\"\nversion = \"0.1.0\"\n",
     );
+    // One public type per file, each named after it (3.1). `parse.jux` keeps
+    // the free function, which puts no constraint on the file name.
     write(
-        &root.join("src/com/test/parse/parse.jux"),
+        &root.join("src/com/test/parse/ParseError.jux"),
         r#"package com.test.parse;
 
 public class ParseError extends RuntimeException {
@@ -202,12 +204,22 @@ public class ParseError extends RuntimeException {
         this.column = column;
     }
 }
+"#,
+    );
+    write(
+        &root.join("src/com/test/parse/TrailingOperator.jux"),
+        r#"package com.test.parse;
 
 public class TrailingOperator extends ParseError {
     public TrailingOperator(int column) {
         super("trailing operator", column);
     }
 }
+"#,
+    );
+    write(
+        &root.join("src/com/test/parse/parse.jux"),
+        r#"package com.test.parse;
 
 public int parse(String text) {
     if (text.endsWith("+")) {

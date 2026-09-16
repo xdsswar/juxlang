@@ -13,7 +13,7 @@
 // So the point of this example is as much what it does NOT print as what it
 // does: its stderr has to be empty.
 
-public class Retry extends RuntimeException {
+class Retry extends RuntimeException {
     public int attempt;
     public Retry(String msg, int attempt) { super(msg); this.attempt = attempt; }
 }

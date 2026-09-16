@@ -16,7 +16,7 @@
 //   6. Inherited exception members work through user subclasses
 //      (`e.message` field and Java-style `e.getMessage()`).
 
-public class NotFound extends Exception {
+class NotFound extends Exception {
     public NotFound(String m) { super(m); }
 }
 

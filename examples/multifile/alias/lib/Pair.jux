@@ -1,0 +1,19 @@
+// Library unit declaring a class plus a type alias to it.
+//
+// The alias `BoxedInt` resolves to `IntBox<int>`. A consumer in
+// another package can `import alias.lib.BoxedInt;` and just write
+// `new BoxedInt(42)` — tycheck expands the alias to the underlying
+// class and the backend lowers it as a Rust `type` alias.
+
+package alias.lib;
+
+// Generic alias also defined here so the consumer can use it
+// across the package boundary.
+public class Pair<A, B> {
+    public A first;
+    public B second;
+    public Pair(A first, B second) {
+        this.first = first;
+        this.second = second;
+    }
+}

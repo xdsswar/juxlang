@@ -11,18 +11,18 @@
 // directly callable on T because the class bound uses an empty marker
 // trait. Interface-bound methods (`greet()`) are callable.
 
-public class Animal {
+class Animal {
     private String kind;
     public Animal(String kind) {
         this.kind = kind;
     }
 }
 
-public interface Greeter {
+interface Greeter {
     String greet();
 }
 
-public class Polite extends Animal implements Greeter {
+class Polite extends Animal implements Greeter {
     public Polite(String kind) {
         super(kind);
     }
@@ -31,7 +31,7 @@ public class Polite extends Animal implements Greeter {
     }
 }
 
-public class Box<T extends Animal & Greeter> {
+class Box<T extends Animal & Greeter> {
     private T item;
 
     public Box(T item) {

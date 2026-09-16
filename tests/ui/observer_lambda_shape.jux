@@ -2,7 +2,7 @@
 // parameters, `(old, now)`, or `(ref prop, old, now)`. Four is not one of
 // them, and the property would have nothing to pass.
 
-public class Sensor {
+class Sensor {
     public int Reading { get; set; }
 
     public observer<int> onChange = (a, b, c, d) -> {

@@ -1,4 +1,4 @@
-public class Holder {
+class Holder {
     public String name = null;
     public Holder() {}
 }

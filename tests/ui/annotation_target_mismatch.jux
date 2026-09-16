@@ -5,6 +5,6 @@ public annotation Route {
 }
 
 @Route(path = "/")
-public class Api { }
+class Api { }
 
 public void main() { }

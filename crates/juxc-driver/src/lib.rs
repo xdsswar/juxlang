@@ -315,6 +315,8 @@ where
     // path under `src/`. Catching a stale layout here turns what would be a
     // cryptic post-codegen `rustc` E0432 into a precise Jux E0301.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    // §3.1: one public type per file, named like the file.
+    diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
 
     // Profile rule (§18.1.11): the `jux-core` profile has no async runtime, so
     // an `async` declaration is E0701.
@@ -405,6 +407,8 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    // §3.1: one public type per file, named like the file.
+    diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain
@@ -542,6 +546,8 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise
     // E0301 in the editor too, pointing at the offending `package` line.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    // §3.1: one public type per file, named like the file.
+    diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
 
     // Profile rule (§18.1.11): surface `async`-in-core (E0701) in the editor.
     diagnostics.extend(juxc_tycheck::check_async_profile(&units, profile));

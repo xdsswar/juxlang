@@ -1,0 +1,11 @@
+// shop.money — Money record with operator overloads and an
+// internal precision constant. Tests records + operators +
+// final statics + interpolation inside operator body.
+
+package shop.money;
+
+// Records can't yet carry static fields (parser gap), so the
+// precision constant lives as a top-level constant. Imported
+// across packages by FQN.
+
+public const int CENTS_PER_UNIT = 100;

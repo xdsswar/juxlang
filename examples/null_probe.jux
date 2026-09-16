@@ -11,7 +11,7 @@
 //       - non-null value assigned to `T?` field
 //       - non-null value passed as ctor arg for a `T?` field
 
-public class User {
+class User {
     public String name;
     public String? nickname;  // nullable field
     public User(String name, String? nickname) {

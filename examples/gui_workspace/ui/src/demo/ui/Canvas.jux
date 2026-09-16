@@ -1,0 +1,68 @@
+// demo.ui -- a tiny software-rendering widget toolkit.
+//
+// Everything here is pure: it paints 0x00RRGGBB pixels into a fixed u32 buffer
+// and hit-tests mouse coordinates. It has no idea a window exists, which is the
+// whole point of splitting it into its own workspace package -- the `app`
+// package owns the desktop window (minifb) and merely *uses* these widgets.
+//
+// The widgets live in the `demo.ui` package so they are reachable by their
+// fully-qualified name (`import demo.ui.Canvas;`) from the sibling `app`
+// package. The library crate root (src/lib.jux) stays package-less.
+package demo.ui;
+
+// An ARGB software canvas backed by a flat row-major u32 pixel buffer.
+//
+// The buffer is a dynamic `u32[]` allocated at runtime with `new u32[w * h]`,
+// so it lives on the HEAP (a `Vec<u32>`) and can be any size the caller picks
+// without overflowing the stack -- a full-window framebuffer is fine.
+
+public class Canvas {
+    public u32[] buf;   // w*h pixels, 0x00RRGGBB, row-major (heap)
+    public int w;
+    public int h;
+
+    public Canvas(int w, int h) {
+        this.w = w;
+        this.h = h;
+        this.buf = new u32[w * h];
+    }
+
+    public int width() {
+        return this.w;
+    }
+
+    public int height() {
+        return this.h;
+    }
+
+    // Paint the whole surface one color.
+    public void clear(u32 color) {
+        var n = this.w * this.h;
+        for (int i = 0; i < n; i++) {
+            this.buf[i] = color;
+        }
+    }
+
+    // Fill an axis-aligned rectangle, clipped to the canvas bounds.
+    public void fillRect(int x, int y, int rw, int rh, u32 color) {
+        for (int yy = y; yy < y + rh; yy++) {
+            if (yy < 0 || yy >= this.h) {
+                continue;
+            }
+            for (int xx = x; xx < x + rw; xx++) {
+                if (xx < 0 || xx >= this.w) {
+                    continue;
+                }
+                this.buf[yy * this.w + xx] = color;
+            }
+        }
+    }
+
+    // A 1px-thick rectangle outline.
+    public void strokeRect(int x, int y, int rw, int rh, u32 color) {
+        this.fillRect(x, y, rw, 1, color);
+        this.fillRect(x, y + rh - 1, rw, 1, color);
+        this.fillRect(x, y, 1, rh, color);
+        this.fillRect(x + rw - 1, y, 1, rh, color);
+    }
+}

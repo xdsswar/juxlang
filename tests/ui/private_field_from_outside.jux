@@ -1,4 +1,4 @@
-public class Secret {
+class Secret {
     private int hidden = 1;
     public Secret() {}
 }

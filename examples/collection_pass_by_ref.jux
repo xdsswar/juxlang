@@ -21,7 +21,7 @@
 import rust.std.Vec;
 
 // A plain user class so the object-sharing property is observable.
-public class Acc {
+class Acc {
     public int bal;
     public Acc(int b) { this.bal = b; }
     public void deposit(int d) { this.bal = this.bal + d; }

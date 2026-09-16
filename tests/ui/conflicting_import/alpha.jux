@@ -1,5 +1,5 @@
 package alpha;
 
-public class Widget {
+class Widget {
     public int size() { return 1; }
 }

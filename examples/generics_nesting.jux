@@ -34,7 +34,7 @@
 //   sq=9.0
 //   tri=12.0
 
-public class Cell<T> {
+class Cell<T> {
     private T value;
 
     public Cell(T v) {
@@ -54,7 +54,7 @@ public class Cell<T> {
     }
 }
 
-public class Pair<A, B> {
+class Pair<A, B> {
     private A a;
     private B b;
 
@@ -70,7 +70,7 @@ public class Pair<A, B> {
 
 /// A nullable payload, read back through `!!`. The `!!` is what the
 /// Display-bound scan used to look straight past.
-public class Slot<T> {
+class Slot<T> {
     private T? value;
 
     public Slot() {}
@@ -91,7 +91,7 @@ public class Slot<T> {
     }
 }
 
-public class Store<T> {
+class Store<T> {
     protected T item;
 
     public Store(T item) {
@@ -109,13 +109,13 @@ public class Store<T> {
 
 /// A subclass makes `Store` polymorphic, so a `Store`-typed value becomes a
 /// trait object -- the shape that could not be a type argument.
-public class Loud<T> extends Store<T> {
+class Loud<T> extends Store<T> {
     public Loud(T v) {
         super(v);
     }
 }
 
-public abstract class Shape {
+abstract class Shape {
     public abstract double area();
     public abstract String kind();
 
@@ -124,7 +124,7 @@ public abstract class Shape {
     }
 }
 
-public class Sq extends Shape {
+class Sq extends Shape {
     private double s;
 
     public Sq(double s) {
@@ -140,7 +140,7 @@ public class Sq extends Shape {
     }
 }
 
-public class Tri extends Shape {
+class Tri extends Shape {
     private double b;
     private double h;
 

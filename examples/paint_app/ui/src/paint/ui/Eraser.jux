@@ -1,0 +1,15 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+public final class Eraser extends Tool {
+    private u32 paper;
+    public Eraser(int radius, u32 paper) { super(radius); this.paper = paper; }
+    @Override public String name() { return "Eraser"; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.line(from, to, this.radius + 2, this.paper);
+    }
+}

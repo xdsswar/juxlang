@@ -11,13 +11,13 @@
 //   - @Cfg(pred)  — the declaration exists only in builds the
 //                   predicate holds for (conditional compilation).
 
-public class Animal {
+class Animal {
     public String name;
     public Animal(String name) { this.name = name; }
     public String speak() { return "generic noise"; }
 }
 
-public class Dog extends Animal {
+class Dog extends Animal {
     public Dog(String name) { super(name); }
 
     @Override

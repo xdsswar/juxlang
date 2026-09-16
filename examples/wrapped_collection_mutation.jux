@@ -6,7 +6,7 @@
 // argument that re-enters the same object must be evaluated BEFORE that borrow
 // — otherwise `RefCell` panics `already borrowed` at runtime.
 
-public class Bag {
+class Bag {
     public Vec<int> items;
     public HashMap<String, int> seen;
     public int counter;

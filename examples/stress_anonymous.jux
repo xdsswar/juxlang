@@ -1,13 +1,13 @@
 // Anonymous-class stress test — spec §1379 anonymous form.
 
-public interface Initializable {
+interface Initializable {
     void initialize(int location);
     default String describe() {
         return $"<initializable>";
     }
 }
 
-public interface Renderer {
+interface Renderer {
     String render(int width);
     String banner();
     default String paint() {

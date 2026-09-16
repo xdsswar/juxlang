@@ -1,7 +1,7 @@
 // Static field initializers and static blocks run once, in textual order, on
 // the first use of the class, whichever kind of use comes first.
 
-public class Log {
+class Log {
     public static Vec<String> events = new Vec<String>();
 }
 
@@ -10,20 +10,20 @@ public String mark(String what) {
     return what;
 }
 
-public class Order {
+class Order {
     public static String first = mark("first field");
     static { mark("block"); }
     public static String second = mark("second field");
     public static int uses = 0;
 }
 
-public class Settings {
+class Settings {
     public static String host = mark("host");
     public static String port = mark("port");
     public static String describe() { return host + ":" + port; }
 }
 
-public class Counter {
+class Counter {
     public static int made = 0;
     static { mark("counter block"); }
     public Counter() { made = made + 1; }

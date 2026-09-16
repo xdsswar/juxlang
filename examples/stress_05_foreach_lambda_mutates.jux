@@ -4,7 +4,7 @@
 // higher-order twin. Expect total 6, audit size 3, no panic.
 package stress05;
 
-public class Sums {
+class Sums {
     public Vec<int> items = new Vec<int>();
     public int total = 0;
     public Vec<int> audit = new Vec<int>();

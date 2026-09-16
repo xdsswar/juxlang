@@ -10,7 +10,7 @@ interface Payable {
     }
 }
 
-public abstract class Person implements Payable {
+abstract class Person implements Payable {
     public static int instanceCount = 0;
     private String name;
 
@@ -27,7 +27,7 @@ public abstract class Person implements Payable {
     public abstract String role();
 }
 
-public final class Employee extends Person {
+final class Employee extends Person {
     // Final static constant on a subclass (alongside Person's
     // mutable static).
     public static final double TAX_RATE = 0.30;
@@ -47,7 +47,7 @@ public final class Employee extends Person {
     }
 }
 
-public final class Contractor extends Person {
+final class Contractor extends Person {
     private int hourlyRate;
     private int hoursPerMonth;
 

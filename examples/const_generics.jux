@@ -22,7 +22,7 @@
 // The spec's headline shape: a fixed-capacity container whose storage
 // lives entirely on the stack — `T[N]` lowers to Rust `[T; N]`, no
 // heap allocation.
-public class Ring<T, int N> {
+class Ring<T, int N> {
     public T[N] storage;
     public int head;
 
@@ -37,7 +37,7 @@ public class Ring<T, int N> {
 }
 
 // A const param alongside ordinary code — `N` reads as an int value.
-public class Buf<int N> {
+class Buf<int N> {
     public int[N] data;
 
     public Buf() {
@@ -49,7 +49,7 @@ public class Buf<int N> {
 }
 
 // A bool const parameter.
-public class Flag<bool B> {
+class Flag<bool B> {
     public Flag() { }
     public bool enabled() { return B; }
 }

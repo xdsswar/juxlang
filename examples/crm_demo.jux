@@ -5,20 +5,20 @@
 // ============================================================================
 import rust.std.Vec;
 
-public enum Priority { Low, Medium, High }
-public enum Status { Pending, Active, Done }
+enum Priority { Low, Medium, High }
+enum Status { Pending, Active, Done }
 
-public interface Named { String label(); }
+interface Named { String label(); }
 
 // A generic wrapper — `Box<T>` holds any T.
-public class Box<T> {
+class Box<T> {
     public T value;
     public Box(T value){ this.value = value; }
     public T get(){ return this.value; }
 }
 
 // Fluent builder transitions via `return this`.
-public class Todo implements Named {
+class Todo implements Named {
     public String title;
     public Priority priority;
     public Status status;

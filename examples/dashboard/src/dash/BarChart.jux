@@ -1,0 +1,46 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A horizontal bar per series, scaled against the largest of them.
+public class BarChart {
+    public Vec<Series> series;
+
+    public BarChart(Vec<Series> series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        int n = (int) this.series.len();
+        if (n == 0) { return; }
+
+        int peak = 1;
+        for (var s : this.series) {
+            if (s.latest() > peak) { peak = s.latest(); }
+        }
+
+        int row = r.h / n;
+        int barH = row - 8 < 6 ? 6 : row - 8;
+        int labelW = 62;
+        int i = 0;
+        for (var s : this.series) {
+            int y = r.y + i * row;
+            Font.draw(c, s.name, r.x, y + (barH - Font.H) / 2, 1, Theme.MUTED);
+            int trackX = r.x + labelW;
+            int trackW = r.w - labelW - 40;
+            if (trackW > 0) {
+                c.fillRound(trackX, y, trackW, barH, barH / 2, Theme.PANEL_HI);
+                int fill = (s.latest() * trackW) / peak;
+                if (fill < barH) { fill = barH; }
+                c.fillRound(trackX, y, fill, barH, barH / 2, s.color);
+            }
+            Font.drawRight(c, "" + s.latest(), r.right(), y + (barH - Font.H) / 2, 1, Theme.TEXT);
+            i = i + 1;
+        }
+    }
+}

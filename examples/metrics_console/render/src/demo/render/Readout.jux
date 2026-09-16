@@ -1,0 +1,109 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+/// A single number, large, over a bar and the window it came from.
+///
+/// The ceiling is the readout's own, not an assumed 100: a latency in
+/// milliseconds graded as a percentage is CRITICAL from 92ms up, which is
+/// how `155.0` came to be painted in alarm red.
+public class Readout implements Widget {
+    private String label;
+    private Ring<int> window;
+    private Aggregate<int> summary;
+    private int ceiling;
+
+    public Readout(String label, Ring<int> window, Aggregate<int> summary) {
+        this.label = label;
+        this.window = window;
+        this.summary = summary;
+        this.ceiling = 100;
+    }
+
+    /// A readout whose numbers are not percentages.
+    public Readout(String label, Ring<int> window, Aggregate<int> summary, int ceiling) {
+        this.label = label;
+        this.window = window;
+        this.summary = summary;
+        this.ceiling = ceiling;
+    }
+
+    public String title() { return this.label; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        if (this.window.isEmpty()) {
+            text.draw(c, "--", x, y, t.inkDim());
+            return;
+        }
+        // The number is the AGGREGATE's answer, not the last sample --
+        // otherwise all three readouts show the same figure and the
+        // `Aggregate` contract does no work.
+        double value = this.summary.over(this.window);
+        int scaled = (int) (value * 100.0 / (double) this.ceiling);
+        var level = Severity.forPercent(scaled);
+
+        text.drawScaled(c, Num.fixed1(value), x, y, level.colour(), 3);
+        text.draw(c, this.summary.render(this.window).toUpperCase(),
+                  x, y + 26, t.inkDim());
+
+        // A bar against the ceiling, so the number has a scale to be read
+        // against rather than standing alone.
+        int barY = y + 38;
+        if (barY + 6 > y + h) {
+            return;
+        }
+        int filled = w * scaled / 100;
+        if (filled > w) {
+            filled = w;
+        }
+        if (filled < 1) {
+            filled = 1;
+        }
+        c.rect(x, barY, w, 5, t.grid());
+        c.rect(x, barY, filled, 5, level.colour());
+
+        // Whatever height is left goes to the window itself, drawn faintly:
+        // the figure above is one number out of these.
+        int trendY = barY + 12;
+        int trendH = y + h - trendY;
+        if (trendH < 12) {
+            return;
+        }
+        var samples = this.window.snapshot();
+        int count = samples.len();
+        if (count == 0) {
+            return;
+        }
+        int slot = w / count;
+        if (slot < 1) {
+            slot = 1;
+        }
+        int baseline = trendY + trendH - 1;
+        c.hline(x, baseline, w, t.grid());
+        for (int i = 0; i < count; i++) {
+            int v = samples[i] * 100 / this.ceiling;
+            int height = v * (trendH - 2) / 100;
+            if (height > trendH - 2) {
+                height = trendH - 2;
+            }
+            if (height < 1) {
+                height = 1;
+            }
+            c.column(x + i * slot, baseline - 1, height, slot - 1 < 1 ? 1 : slot - 1,
+                     t.grid());
+        }
+    }
+}

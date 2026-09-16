@@ -1,7 +1,7 @@
 // Modifier pairs that contradict each other. `abstract` says there is no
 // body to inherit; `final` says the body cannot be replaced.
 
-public abstract class Shape {
+abstract class Shape {
     public abstract final int area();
     public static abstract int sides();
     private abstract void hidden();

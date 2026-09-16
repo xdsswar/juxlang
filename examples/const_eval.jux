@@ -17,7 +17,7 @@ int doubled(int x) {
 const int SIZE = 32;
 const int CACHE = doubled(1024);     // folds to 2048
 
-public class Ring<T, int N> {
+class Ring<T, int N> {
     public T[N] storage;
     public Ring(T fill) {
         this.storage = new T[N];

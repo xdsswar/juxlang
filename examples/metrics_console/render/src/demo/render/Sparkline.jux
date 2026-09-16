@@ -1,0 +1,76 @@
+// The widgets, and the contract they share.
+//
+// A `Widget` knows how to draw itself into a rectangle. The interface carries
+// the frame-and-title chrome as a default method, so a widget implements the
+// part that differs and inherits the part that does not -- which is why every
+// panel on the console lines up without any of them agreeing to.
+
+package demo.render;
+
+import demo.core.Ring;
+import demo.core.Aggregate;
+import demo.core.Num;
+import demo.core.Table;
+import demo.model.Host;
+import demo.model.Fleet;
+import demo.model.Severity;
+
+/// A run of samples as columns, most recent at the right.
+public class Sparkline implements Widget {
+    private String label;
+    private Ring<int> window;
+    private int ceiling;
+
+    public Sparkline(String label, Ring<int> window, int ceiling) {
+        this.label = label;
+        this.window = window;
+        this.ceiling = ceiling;
+    }
+
+    public String title() { return this.label; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        // A baseline and a midline: enough grid to read a height against,
+        // not enough to compete with the data.
+        int baseline = y + h - 1;
+        c.hline(x, baseline, w, t.grid());
+        c.hline(x, y + h / 2, w, t.grid());
+
+        var samples = this.window.snapshot();
+        if (samples.len() == 0) {
+            text.draw(c, "NO DATA", x, y + h / 2 - 3, t.inkDim());
+            return;
+        }
+
+        // Spread the window across the panel rather than assuming a fixed
+        // column width: a 24-sample window in a 500px panel drew a fifth of
+        // it and left the rest blank.
+        int count = samples.len();
+        int slot = w / count;
+        if (slot < 2) {
+            slot = 2;
+        }
+        if (slot > 24) {
+            slot = 24;
+        }
+        int startX = x + w - count * slot;
+        if (startX < x) {
+            startX = x;
+        }
+        for (int i = 0; i < count; i++) {
+            int v = samples[i];
+            int scaled = v * (h - 2) / this.ceiling;
+            if (scaled > h - 2) {
+                scaled = h - 2;
+            }
+            if (scaled < 1) {
+                scaled = 1;
+            }
+            // Colour against THIS chart's ceiling, not against 100: a
+            // latency in milliseconds is not a percentage, and grading it as
+            // one painted every bar critical.
+            var level = Severity.forPercent(v * 100 / this.ceiling);
+            c.column(startX + i * slot, baseline - 1, scaled, slot - 1, level.colour());
+        }
+    }
+}

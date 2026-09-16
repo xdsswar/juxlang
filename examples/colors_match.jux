@@ -1,7 +1,7 @@
 // Pattern matching vehicle — statement-form `switch` on a unit-variant
 // enum, exercising unit-variant patterns + `default` arm + block body.
 
-public enum Color { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 
 public void describe(Color c) {
     switch (c) {

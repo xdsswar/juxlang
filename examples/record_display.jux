@@ -2,8 +2,8 @@
 // impl from the backend so `$"$r"` and `print(r)` render the spec-exact
 // `Name(field: value, …)` format.
 
-public record Point(int x, int y) {}
-public record User(String name, int age) {}
+record Point(int x, int y) {}
+record User(String name, int age) {}
 
 public void main() {
     var p = new Point(3, 4);

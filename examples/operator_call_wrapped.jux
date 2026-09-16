@@ -4,7 +4,7 @@
 // `let mut` at the call site the binding emitter never produced (E0596).
 // Expected output: 5 / 8.
 
-public class Counter {
+class Counter {
     public int n;
     public Counter() { this.n = 0; }
     public int operator()(int by) { this.n = this.n + by; return this.n; }

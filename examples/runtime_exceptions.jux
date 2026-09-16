@@ -11,9 +11,9 @@
 // the ordinary subtype rules, applied to exceptions the program never threw
 // by hand.
 
-public class Animal { public String name() { return "animal"; } }
-public class Dog extends Animal { @Override public String name() { return "dog"; } }
-public class Cat extends Animal { @Override public String name() { return "cat"; } }
+class Animal { public String name() { return "animal"; } }
+class Dog extends Animal { @Override public String name() { return "dog"; } }
+class Cat extends Animal { @Override public String name() { return "cat"; } }
 
 public String forcedUnwrap() {
     String? missing = null;

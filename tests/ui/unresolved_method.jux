@@ -1,4 +1,4 @@
-public class Box {
+class Box {
     public int size() { return 1; }
     public Box() {}
 }

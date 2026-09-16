@@ -3,7 +3,7 @@ public String show(double v) { return "double:" + v; }
 public String show(String v) { return "string:" + v; }
 public String show(int a, int b) { return "two:" + (a + b); }
 
-public class Fmt {
+class Fmt {
     public String of(int v) { return "m-int:" + v; }
     public String of(String v) { return "m-string:" + v; }
     public String of(int a, String b) { return "m-both:" + a + b; }

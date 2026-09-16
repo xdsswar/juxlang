@@ -6,7 +6,7 @@
 // `annotation` used to be here. It is implemented now (§A.2), so it moved to
 // `examples/annotations_user.jux`, where it is exercised rather than refused.
 
-public class Reg {
+class Reg {
     public volatile int status;
     public Reg() { this.status = 0; }
 }

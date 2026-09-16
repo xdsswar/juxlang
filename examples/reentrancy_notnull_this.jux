@@ -7,7 +7,7 @@
 // `RefCell already borrowed`. The receiver must be hoisted into a temp so the
 // read-borrow drops before the call. Correct output: `count=1`.
 
-public class Outer {
+class Outer {
     public int count;
     public Inner? inner;
     public Outer() { this.count = 0; this.inner = null; }
@@ -19,7 +19,7 @@ public class Outer {
     }
 }
 
-public class Inner {
+class Inner {
     public int value;
     public Outer back;
     public Inner(Outer o) { this.value = 0; this.back = o; }

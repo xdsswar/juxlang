@@ -1,0 +1,25 @@
+// demo.core — primitives shared by the game packages.
+//
+// Shows:
+//   - record + operator string + methods + static field
+//   - enum (no payload) used cross-package
+//   - top-level public const
+//   - operator overloading on a record
+//   - boolean alias
+
+package demo.core;
+
+// Helper class so cross-package calls have somewhere to dispatch.
+public class ColorCodes {
+    public static int requested = 0;
+
+    public static String code(Color c) {
+        requested = requested + 1;
+        return switch (c) {
+            case Color.Red    -> $"#FF0000";
+            case Color.Green  -> $"#00FF00";
+            case Color.Blue   -> $"#0000FF";
+            case Color.Yellow -> $"#FFFF00";
+        };
+    }
+}

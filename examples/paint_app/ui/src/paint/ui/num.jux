@@ -1,0 +1,12 @@
+// paint.ui — the drawing surface and the text renderer.
+package paint.ui;
+
+import rust.std.*;
+
+/// A point on the canvas. A `record` because it is a value with no identity.
+
+/// Absolute value — `int` is signed and platform-sized.
+public int abs(int v) {
+    if (v < 0) { return 0 - v; }
+    return v;
+}

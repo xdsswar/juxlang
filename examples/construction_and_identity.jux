@@ -14,7 +14,7 @@ public String note(String what) {
     return what;
 }
 
-public class Base {
+class Base {
     protected String tag = note("base field");
     public Base() {
         print("base body");
@@ -23,7 +23,7 @@ public class Base {
     public void hook() { print("base hook"); }
 }
 
-public class Child extends Base {
+class Child extends Base {
     private String own = note("child field");
     init { print("child init"); }
     public Child() { print("child body"); }
@@ -31,22 +31,22 @@ public class Child extends Base {
     public void hook() { print("child hook sees " + own); }
 }
 
-public class Quiet extends Base {
+class Quiet extends Base {
     private int n = 7;
     @Override
     public void hook() { print("quiet hook sees " + n); }
 }
 
-public enum Reply { Ok(int status, String body), Moved(String location) }
+enum Reply { Ok(int status, String body), Moved(String location) }
 
 public void show(Reply r) { print(r); }
 
-public class Conn {
+class Conn {
     public int port;
     public Conn(int port) { this.port = port; }
 }
 
-public class AppError extends Exception {
+class AppError extends Exception {
     public AppError(String m) { super(m); }
 }
 

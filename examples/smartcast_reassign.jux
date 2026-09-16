@@ -8,8 +8,8 @@
 //     introduces a FRESH name `d`; reassigning `a` afterwards does not invalidate
 //     `d` (§T.6.3). Correct output: `woof`.
 
-public class Animal { public Animal() {} }
-public class Dog extends Animal {
+class Animal { public Animal() {} }
+class Dog extends Animal {
     public Dog() {}
     public void bark() { print("woof"); }
 }

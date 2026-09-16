@@ -1,6 +1,6 @@
-public class Animal { public Animal() {} }
-public class Rock { public Rock() {} }
-public class Pen<T extends Animal> {
+class Animal { public Animal() {} }
+class Rock { public Rock() {} }
+class Pen<T extends Animal> {
     private T held;
     public Pen(T held) { this.held = held; }
 }

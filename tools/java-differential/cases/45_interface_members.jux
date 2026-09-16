@@ -1,20 +1,20 @@
-public interface Greeter {
+interface Greeter {
     static const String PREFIX = ">> ";
     String name();
     default String greet() { return PREFIX + this.name(); }
     default String shout() { return this.greet() + "!"; }
 }
-public interface Aged {
+interface Aged {
     default int age() { return 0; }
     default String label() { return "aged " + this.age(); }
 }
-public class Person implements Greeter, Aged {
+class Person implements Greeter, Aged {
     private String n;
     public Person(String n) { this.n = n; }
     public String name() { return this.n; }
     public int age() { return 41; }
 }
-public class Anon implements Greeter, Aged {
+class Anon implements Greeter, Aged {
     public Anon() {}
     public String name() { return "anon"; }
 }

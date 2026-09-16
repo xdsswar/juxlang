@@ -17,7 +17,7 @@
 // portable workaround).
 public const int CENTS_PER_UNIT = 100;
 
-public record Money(int cents, String currency) {
+record Money(int cents, String currency) {
     public bool isZero() {
         return this.cents == 0;
     }
@@ -38,7 +38,7 @@ public record Money(int cents, String currency) {
 }
 
 // Generic class with two type params.
-public class Pair<A, B> {
+class Pair<A, B> {
     public A first;
     public B second;
 
@@ -53,7 +53,7 @@ public class Pair<A, B> {
 }
 
 // Sealed hierarchy + bare-name compound write to a base-class static.
-public sealed class Shape permits Circle, Square, Triangle {
+sealed class Shape permits Circle, Square, Triangle {
     public static int allocated = 0;
 
     public Shape() {
@@ -65,7 +65,7 @@ public sealed class Shape permits Circle, Square, Triangle {
     }
 }
 
-public final class Circle extends Shape {
+final class Circle extends Shape {
     public double radius;
     public Circle(double r) { this.radius = r; }
     @Override
@@ -74,7 +74,7 @@ public final class Circle extends Shape {
     }
 }
 
-public final class Square extends Shape {
+final class Square extends Shape {
     public double side;
     public Square(double s) { this.side = s; }
     @Override
@@ -83,7 +83,7 @@ public final class Square extends Shape {
     }
 }
 
-public final class Triangle extends Shape {
+final class Triangle extends Shape {
     public double base;
     public double height;
     public Triangle(double b, double h) {
@@ -99,14 +99,14 @@ public final class Triangle extends Shape {
 // Interface with a default method + a class that exercises
 // nullable Elvis fallback with an inline literal (avoids the
 // const-fallback-as-`&str` coercion gap).
-public interface Named {
+interface Named {
     default String describe() {
         return $"<named:${nameOrDefault()}>";
     }
     String nameOrDefault();
 }
 
-public class Tag implements Named {
+class Tag implements Named {
     public static int produced = 0;
     private String? slot;
 
@@ -124,7 +124,7 @@ public class Tag implements Named {
 }
 
 // Higher-order: lambda + method reference + accumulator.
-public class Stats {
+class Stats {
     public static int callCount = 0;
 
     public static double sumOfSquares(int n, (int) -> double f) {

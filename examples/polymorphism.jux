@@ -3,7 +3,7 @@
 // runs is chosen at run time (lowered to `Rc<dyn AnimalKind>`). This is the
 // open-hierarchy counterpart to sealed-class `match` dispatch.
 
-public abstract class Animal {
+abstract class Animal {
     private String name;
     public Animal(String name) { this.name = name; }
 
@@ -19,19 +19,19 @@ public abstract class Animal {
 }
 
 // Mid-hierarchy: provides a concrete `sound` and a new virtual method `legs`.
-public abstract class Mammal extends Animal {
+abstract class Mammal extends Animal {
     public Mammal(String name) { super(name); }
     public String sound() { return $"some mammal noise"; }
     public int legs() { return 4; }
 }
 
-public class Dog extends Mammal {
+class Dog extends Mammal {
     public Dog(String name) { super(name); }
     @Override
     public String sound() { return $"Woof"; }
 }
 
-public class Bat extends Mammal {
+class Bat extends Mammal {
     public Bat(String name) { super(name); }
     @Override
     public int legs() { return 2; }                       // overrides Mammal.legs

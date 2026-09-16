@@ -3,7 +3,7 @@
 // branches of `?:`, an `if` or `else if` built from such a chain, and the
 // code after a guard clause that tests several names at once.
 
-public class Item {
+class Item {
     public String name;
     public int qty;
     public Item(String name, int qty) { this.name = name; this.qty = qty; }

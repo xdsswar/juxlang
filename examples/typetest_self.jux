@@ -4,9 +4,9 @@
 // value itself. Subtype downcasts and negative tests still work alongside it.
 // Expected output: meow / cat meow / not a dog / true.
 
-public abstract class Animal { public abstract String sound(); }
-public class Cat extends Animal { public Cat() {} public String sound() { return "meow"; } }
-public class Dog extends Animal { public Dog() {} public String sound() { return "woof"; } }
+abstract class Animal { public abstract String sound(); }
+class Cat extends Animal { public Cat() {} public String sound() { return "meow"; } }
+class Dog extends Animal { public Dog() {} public String sound() { return "woof"; } }
 
 public void main() {
     Animal z = new Cat();

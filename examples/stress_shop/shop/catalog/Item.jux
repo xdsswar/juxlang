@@ -1,0 +1,13 @@
+// shop.catalog — item taxonomy as an enum with payloads.
+// Tests enums + payload patterns + cross-package types in
+// variant payloads (Money from shop.money).
+
+package shop.catalog;
+
+import shop.money.Money;
+
+public enum Item {
+    Book(String, Money),
+    Apparel(String, Money, String),    // title, price, size
+    Subscription(String, Money, int),  // name, monthlyPrice, months
+}

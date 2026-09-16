@@ -20,7 +20,7 @@ public void twice(String a, String b) {
     print($"${a}|${b}");
 }
 
-public class Tag {
+class Tag {
     public String label;
 
     public Tag(String label) {

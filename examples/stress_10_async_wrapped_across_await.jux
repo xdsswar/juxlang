@@ -3,7 +3,7 @@
 // await. Expect 3.
 package stress10;
 
-public class Counter10 {
+class Counter10 {
     public int n = 0;
     public void inc() { this.n = this.n + 1; }
     public void add(int k) { this.n = this.n + k; }

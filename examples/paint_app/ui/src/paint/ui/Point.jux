@@ -1,0 +1,14 @@
+// paint.ui — the drawing surface and the text renderer.
+package paint.ui;
+
+import rust.std.*;
+
+/// A point on the canvas. A `record` because it is a value with no identity.
+
+public record Point(int x, int y) {
+    public int manhattanTo(Point other) {
+        int dx = this.x - other.x;
+        int dy = this.y - other.y;
+        return abs(dx) + abs(dy);
+    }
+}

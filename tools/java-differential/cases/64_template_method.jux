@@ -1,4 +1,4 @@
-public interface Report {
+interface Report {
     String title();
     int rows();
 
@@ -11,28 +11,28 @@ public interface Report {
     }
 }
 
-public class Sales implements Report {
+class Sales implements Report {
     public String title() { return "sales"; }
     public int rows() { return 12; }
 }
 
-public class Empty implements Report {
+class Empty implements Report {
     public String title() { return "empty"; }
     public int rows() { return 0; }
     public String render() { return "no data for " + this.title(); }
 }
 
-public class Base {
+class Base {
     public String step() { return "base-step"; }
     public String run() { return "run:" + this.step(); }
 }
 
-public class Mid extends Base {
+class Mid extends Base {
     @Override
     public String step() { return "mid-step"; }
 }
 
-public class Leaf extends Mid {
+class Leaf extends Mid {
     @Override
     public String step() { return "leaf-step(" + super.step() + ")"; }
 }

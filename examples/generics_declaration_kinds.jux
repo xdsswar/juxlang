@@ -13,14 +13,14 @@
 
 import rust.std.*;
 
-public interface Keyed<K> { K key(); }
-public interface Labelled<L> {
+interface Keyed<K> { K key(); }
+interface Labelled<L> {
     L label();
     default String describeLabel() { return "L=" + this.label(); }
 }
 
 // Two generic interfaces on one class, each fed by a different parameter.
-public class Pair<A, B> implements Keyed<A>, Labelled<B> {
+class Pair<A, B> implements Keyed<A>, Labelled<B> {
     private A a;
     private B b;
     public Pair(A a, B b) { this.a = a; this.b = b; }
@@ -29,17 +29,17 @@ public class Pair<A, B> implements Keyed<A>, Labelled<B> {
 }
 
 // A record implementing a generic interface with a concrete argument.
-public record Tag(String name, int weight) implements Keyed<String> {
+record Tag(String name, int weight) implements Keyed<String> {
     @Override public String key() { return this.name; }
 }
 
 // A generic record.
-public record Cell<T>(T value) {
+record Cell<T>(T value) {
     public String show() { return "cell(" + this.value + ")"; }
 }
 
 // An enum implementing a generic interface.
-public enum Level implements Keyed<String> {
+enum Level implements Keyed<String> {
     Low,
     High;
 
@@ -52,8 +52,8 @@ public enum Level implements Keyed<String> {
 }
 
 // An F-bounded parameter: the bound mentions the parameter itself.
-public interface Ranked<T> { int compareRank(T other); }
-public class Best<T extends Ranked<T>> {
+interface Ranked<T> { int compareRank(T other); }
+class Best<T extends Ranked<T>> {
     private Vec<T> items;
     public Best() { this.items = new Vec<T>(); }
     public void offer(T v) { this.items.push(v); }
@@ -63,14 +63,14 @@ public class Best<T extends Ranked<T>> {
         return n;
     }
 }
-public class Score implements Ranked<Score> {
+class Score implements Ranked<Score> {
     public int v;
     public Score(int v) { this.v = v; }
     @Override public int compareRank(Score other) { return this.v - other.v; }
 }
 
 // Three levels of container nesting, plus a nullable generic inside one.
-public class Deep<T> {
+class Deep<T> {
     private HashMap<String, Vec<Vec<T>>> grid;
     public Deep() { this.grid = new HashMap<String, Vec<Vec<T>>>(); }
     public void seed(String k) {
@@ -89,7 +89,7 @@ public class Deep<T> {
 }
 
 // A generic method alongside a concrete overload of the same name.
-public class Show {
+class Show {
     public <T> String render(T v) { return "T:" + v; }
     public String render(String s) { return "S:" + s; }
 }

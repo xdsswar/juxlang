@@ -2,7 +2,7 @@
 // a field, keep using it, then rethrow it. Expect: x / outer: x / x.
 package stress08;
 
-public class Keeper {
+class Keeper {
     public Exception? last;
 }
 

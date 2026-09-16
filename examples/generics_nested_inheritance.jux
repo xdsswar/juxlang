@@ -13,21 +13,21 @@
 
 import rust.std.*;
 
-public interface Store<T> {
+interface Store<T> {
     T load();
     void save(T v);
     default String describe() { return "store of " + this.load(); }
 }
 
-public interface Countable { int count(); }
+interface Countable { int count(); }
 
 // An interface that extends a GENERIC one with a concrete argument.
-public interface TextStore extends Store<String> {
+interface TextStore extends Store<String> {
     default String shout() { return this.load() + "!"; }
 }
 
 // A generic abstract class implementing a generic interface, leaving `load` open.
-public abstract class BaseStore<T> implements Store<T>, Countable {
+abstract class BaseStore<T> implements Store<T>, Countable {
     protected Vec<T> items;
     public BaseStore() { this.items = new Vec<T>(); }
     @Override public void save(T v) { this.items.push(v); }
@@ -37,12 +37,12 @@ public abstract class BaseStore<T> implements Store<T>, Countable {
 }
 
 // Pins T, and implements the interface that extends `Store<String>`.
-public class Notes extends BaseStore<String> implements TextStore {
+class Notes extends BaseStore<String> implements TextStore {
     @Override public String load() { return this.items.len() > 0 ? this.items[0] : "-"; }
 }
 
 // Nested generics everywhere.
-public class Index<K, V> {
+class Index<K, V> {
     private HashMap<K, Vec<V>> buckets;
     public Index() { this.buckets = new HashMap<K, Vec<V>>(); }
     public void add(K k, V v) {
@@ -59,14 +59,14 @@ public class Index<K, V> {
 }
 
 // A generic base whose method a subclass overrides.
-public class Holder<T> {
+class Holder<T> {
     protected T value;
     public Holder(T value) { this.value = value; }
     public T get() { return this.value; }
     public String show() { return "H(" + this.get() + ")"; }
 }
 
-public class LoudHolder<T> extends Holder<T> {
+class LoudHolder<T> extends Holder<T> {
     public LoudHolder(T value) { super(value); }
     @Override public String show() { return super.show() + "!"; }
 }

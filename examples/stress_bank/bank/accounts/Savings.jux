@@ -1,0 +1,32 @@
+// bank.accounts — abstract Account + Checking/Savings concrete
+// classes. Exercises:
+//   - cross-package interface import (Audited)
+//   - abstract class with protected field + concrete subclasses
+//   - per-class mutable static counter via bare-name access
+//   - bare-name access to enclosing-class statics from a base ctor
+//   - cross-package record (Money) carried as a stored field
+
+package bank.accounts;
+
+import bank.money.Money;
+import bank.money.Currency;
+import bank.audit.Audited;
+
+public final class Savings extends Account {
+    public static int interestRunsTotal = 0;
+
+    private int aprBps;  // basis points (100 = 1%)
+
+    public Savings(String owner, Money initial, int aprBps) {
+        super(owner, initial);
+        this.aprBps = aprBps;
+    }
+
+    public String kind() { return $"Savings"; }
+
+    public Money accruedInterest() {
+        // Bare-name compound-write on enclosing-class static.
+        interestRunsTotal = interestRunsTotal + 1;
+        return new Money(this.balance.cents * this.aprBps / 10000, this.balance.currency);
+    }
+}

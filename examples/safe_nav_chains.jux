@@ -6,16 +6,16 @@
 // two levels deep with both non-null and nullable leaves. The `??` supplies a
 // default at each end. Expected output: 200 / -1 / 5 / -1 / 7 / 7 / -2.
 
-public class Engine { public int hp; public Engine(int hp) { this.hp = hp; } }
-public class Car { public Engine? engine; public Car(Engine? e) { this.engine = e; } }
+class Engine { public int hp; public Engine(int hp) { this.hp = hp; } }
+class Car { public Engine? engine; public Car(Engine? e) { this.engine = e; } }
 
-public class Leaf { public int v; public Leaf(int v) { this.v = v; } public int get() { return this.v; } }
-public class Mid { public Leaf? leaf; public Mid(Leaf? l) { this.leaf = l; } public Leaf? getLeaf() { return this.leaf; } }
-public class Top { public Mid? mid; public Top(Mid? m) { this.mid = m; } public Mid? getMid() { return this.mid; } }
+class Leaf { public int v; public Leaf(int v) { this.v = v; } public int get() { return this.v; } }
+class Mid { public Leaf? leaf; public Mid(Leaf? l) { this.leaf = l; } public Leaf? getLeaf() { return this.leaf; } }
+class Top { public Mid? mid; public Top(Mid? m) { this.mid = m; } public Mid? getMid() { return this.mid; } }
 
-public class NC { public int? v; public NC(int? v) { this.v = v; } }
-public class NB { public NC? c; public NB(NC? c) { this.c = c; } }
-public class NA { public NB? b; public NA(NB? b) { this.b = b; } }
+class NC { public int? v; public NC(int? v) { this.v = v; } }
+class NB { public NC? c; public NB(NC? c) { this.c = c; } }
+class NA { public NB? b; public NA(NB? b) { this.b = b; } }
 
 public void main() {
     // (1) ?.field on a wrapped class.

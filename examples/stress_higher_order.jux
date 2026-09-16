@@ -1,7 +1,7 @@
 // Stress test: lambdas + method references + higher-order callees +
 // loops + mutable static counter incremented inside a lambda.
 
-public class Tracker {
+class Tracker {
     public static int calls = 0;
 
     public static int bump(int x) {

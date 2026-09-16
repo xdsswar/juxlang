@@ -1,10 +1,10 @@
 // A switch over a sealed set that leaves a case out, and a cast between types
 // with no relationship.
 
-public enum Tier { Bronze, Silver, Gold }
+enum Tier { Bronze, Silver, Gold }
 
-public class Cat { public int lives() { return 9; } }
-public class Rock { public int mass() { return 3; } }
+class Cat { public int lives() { return 9; } }
+class Rock { public int mass() { return 3; } }
 
 public String describe(Tier t) {
     return switch (t) {

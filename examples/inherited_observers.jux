@@ -3,16 +3,16 @@
 // like its own — and sets through a base-typed reference fire too.
 package inhobs;
 
-public class Base {
+class Base {
     public int Score { get; set; } = 0;
     public String Tag { get; set; } = "none";
 }
 
-public class Child extends Base {
+class Child extends Base {
     public int Own { get; set; } = 5;
 }
 
-public class GrandChild extends Child {
+class GrandChild extends Child {
 }
 
 public void main() {

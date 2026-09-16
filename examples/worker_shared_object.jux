@@ -15,14 +15,14 @@
 
 import rust.std.*;
 
-public class Stats {
+class Stats {
     private Vec<int> seen;
     public Stats() { this.seen = new Vec<int>(); }
     public void record() { this.seen.push(1); }
     public int total() { return this.seen.len(); }
 }
 
-public class Registry {
+class Registry {
     private Stats stats;
     private Vec<String> log;
     public Registry(Stats stats) {

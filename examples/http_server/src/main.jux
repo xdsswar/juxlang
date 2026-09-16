@@ -20,88 +20,14 @@ import jux.meta.Registry;
 import jux.std.meta.AnnotatedItem;
 
 /** Marks a handler method, and says what it answers. */
+
 @Retention(RUNTIME)
 public annotation Route {
     String path();
     String method() default "GET";
 }
 
-/**
- * The handlers.
- *
- * Each one is an ordinary method. No base class, no registration call, no
- * interface to implement: the annotation is the whole declaration.
- */
-public class Api {
 
-    /** Requests served so far, so the demo has some state to show. */
-    private int served = 0;
-
-    @Route(path = "/")
-    public String index() {
-        return "jux http demo\n\n"
-             + "  GET /health    liveness\n"
-             + "  GET /routes    the routing table, read from the registry\n"
-             + "  GET /stats     requests served\n"
-             + "  GET /shutdown  stop the server\n";
-    }
-
-    @Route(path = "/health")
-    public String health() {
-        return "ok\n";
-    }
-
-    /**
-     * The routing table, printed from the same registry the router uses. Note
-     * that `method` shows up even where it was never written: a default is
-     * recorded too, so a reader never has to know which arguments were spelled
-     * out.
-     */
-    @Route(path = "/routes")
-    public String routes() {
-        var out = "";
-        for (var r : Registry.annotated("Route")) {
-            out = out + r.getOr("method", "GET") + " " + r.getOr("path", "/")
-                + "  -> " + r.owner() + "." + r.target() + "\n";
-        }
-        return out;
-    }
-
-    @Route(path = "/stats")
-    public String stats() {
-        return "served " + this.served + "\n";
-    }
-
-    @Route(path = "/shutdown", method = "POST")
-    public String shutdown() {
-        return "bye\n";
-    }
-
-    /** Count one request. */
-    public void count() {
-        this.served = this.served + 1;
-    }
-
-    /**
-     * Turn the name the registry recorded into the call.
-     *
-     * This switch is the honest cost of having no reflection: the registry
-     * says WHICH method answers a path, and one arm per handler says how to
-     * reach it. In exchange the program carries no metadata at runtime, and a
-     * handler that is deleted stops compiling here instead of failing on the
-     * first request that reaches it.
-     */
-    public String? dispatch(String target) {
-        switch (target) {
-            case "index"    -> { return this.index(); }
-            case "health"   -> { return this.health(); }
-            case "routes"   -> { return this.routes(); }
-            case "stats"    -> { return this.stats(); }
-            case "shutdown" -> { return this.shutdown(); }
-            default         -> { return null; }
-        }
-    }
-}
 
 /** The handler whose `@Route` path matches `url`, or null. */
 public AnnotatedItem? routeFor(String url) {

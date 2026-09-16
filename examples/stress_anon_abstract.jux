@@ -2,7 +2,7 @@
 // concrete subclass at the use site, embedding the parent as
 // __parent and routing inherited methods through Rust's Deref.
 
-public abstract class Drawable {
+abstract class Drawable {
     private String label;
 
     public Drawable(String label) {

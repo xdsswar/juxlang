@@ -1,27 +1,27 @@
 // The `extends` / `implements` clauses naming the wrong kind of thing, and a
 // `final` method overridden anyway.
 
-public interface Marker {
+interface Marker {
     int id();
 }
 
-public final class Sealed {
+final class Sealed {
     public final int size() { return 1; }
 }
 
-public class Wrong extends Marker {
+class Wrong extends Marker {
     public int id() { return 1; }
 }
 
-public class AlsoWrong implements Sealed {
+class AlsoWrong implements Sealed {
     public int size() { return 2; }
 }
 
-public class Base {
+class Base {
     public final int size() { return 1; }
 }
 
-public class Derived extends Base {
+class Derived extends Base {
     public int size() { return 2; }
 }
 

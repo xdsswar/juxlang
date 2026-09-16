@@ -4,7 +4,7 @@ public annotation Route {
     String method() default "GET";
 }
 
-public class Api {
+class Api {
     @Route(method = "POST")
     public void create() { }
 }

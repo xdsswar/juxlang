@@ -1,0 +1,21 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+
+public final class RectTool extends Tool {
+    public RectTool(int radius) { super(radius); }
+    @Override public String name() { return "Rect"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        int x = from.x;
+        if (to.x < x) { x = to.x; }
+        int y = from.y;
+        if (to.y < y) { y = to.y; }
+        int w = abs(to.x - from.x);
+        int h = abs(to.y - from.y);
+        c.strokeRect(x, y, w, h, color);
+    }
+}

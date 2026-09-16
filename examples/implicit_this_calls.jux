@@ -3,19 +3,19 @@
 // field of function type can be called by its bare name, and the result's
 // members can be read directly (`peek().text`).
 
-public class Counter { public int v = 0; }
+class Counter { public int v = 0; }
 
-public class Tok {
+class Tok {
     public String text;
     public Tok(String t) { this.text = t; }
 }
 
-public record Event(String topic, int day) {}
+record Event(String topic, int day) {}
 
-public class Member { public String name() { return "member"; } }
-public class Premium extends Member { @Override public String name() { return "premium"; } }
+class Member { public String name() { return "member"; } }
+class Premium extends Member { @Override public String name() { return "premium"; } }
 
-public class Club {
+class Club {
     private Vec<Member> members = new Vec<Member>();
     private Vec<Event> events = new Vec<Event>();
     private Tok tok = new Tok("first-token");

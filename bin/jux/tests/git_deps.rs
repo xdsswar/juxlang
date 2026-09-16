@@ -76,7 +76,7 @@ fn git_dependency_full_lifecycle() {
     );
     write(&lib.join("src").join("lib.jux"), "// com.test.greeter\n");
     write(
-        &lib.join("src/com/test/greeter/greeter.jux"),
+        &lib.join("src/com/test/greeter/Greeter.jux"),
         "package com.test.greeter;\n\npublic class Greeter {\n    public String greet(String who) {\n        return \"Hello, \" + who + \"!\";\n    }\n}\n",
     );
     git(&lib, &["init", "-q"]);
@@ -104,7 +104,7 @@ fn git_dependency_full_lifecycle() {
 
     // 2. Upstream moves; the cached checkout is the pin — no change.
     let greeter_v2 = "package com.test.greeter;\n\npublic class Greeter {\n    public String greet(String who) {\n        return \"Howdy, \" + who + \"!\";\n    }\n}\n";
-    write(&lib.join("src/com/test/greeter/greeter.jux"), greeter_v2);
+    write(&lib.join("src/com/test/greeter/Greeter.jux"), greeter_v2);
     git(&lib, &["add", "-A"]);
     git(&lib, &["commit", "-q", "-m", "v2"]);
     let (ok, stdout, stderr) = jux(&app, &home, &["run"]);

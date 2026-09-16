@@ -1,0 +1,32 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A titled surface. Everything else sits on one of these.
+public class Panel {
+    public String title;
+
+    public Panel(String title) { this.title = title; }
+
+    // Draw the surface and its heading, then return the region left over for
+    // the caller to draw into.
+    public Rect draw(Canvas c, Rect r) {
+        c.fillRound(r.x, r.y, r.w, r.h, 6, Theme.PANEL);
+        // A one-pixel top highlight lifts the card off the page without
+        // putting a border around the whole thing.
+        c.fillRect(r.x + 6, r.y, r.w - 12, 1, Theme.PANEL_HI);
+        Font.draw(c, this.title, r.x + Theme.PAD, r.y + Theme.PAD, 1, Theme.MUTED);
+        return new Rect(
+            r.x + Theme.PAD,
+            r.y + Theme.PAD + Font.H + 10,
+            r.w - 2 * Theme.PAD,
+            r.h - (Theme.PAD + Font.H + 10) - Theme.PAD);
+    }
+}

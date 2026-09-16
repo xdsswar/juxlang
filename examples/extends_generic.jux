@@ -4,7 +4,7 @@
 // and `name()` as `Ty::Param("T")`; with it, they read as `int` or
 // `String` depending on what the child bound T to.
 
-public class Container<T> {
+class Container<T> {
     public T tag;
 
     public Container(T tag) {
@@ -16,13 +16,13 @@ public class Container<T> {
     }
 }
 
-public class IntBox extends Container<int> {
+class IntBox extends Container<int> {
     public IntBox(int n) {
         super(n);
     }
 }
 
-public class Label extends Container<String> {
+class Label extends Container<String> {
     public Label(String s) {
         super(s);
     }

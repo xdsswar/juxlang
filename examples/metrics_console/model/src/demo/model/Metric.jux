@@ -1,0 +1,34 @@
+// A machine the console is watching, and the fleet of them.
+
+package demo.model;
+
+import demo.core.Series;
+import demo.core.Ring;
+import demo.core.Table;
+import demo.core.Aggregate;
+
+/// One named reading over time. Generic in the sample type so a host can
+/// carry percentages, byte counts and latencies without three classes.
+
+public class Metric<T> {
+    private Series<T> series;
+    private Aggregate<T> summary;
+
+    public Metric(String label, String unit, int window, Aggregate<T> summary) {
+        this.series = new Series<T>(label, unit, window);
+        this.summary = summary;
+    }
+
+    public String label() { return this.series.label(); }
+    public String unit() { return this.series.unit(); }
+    public Series<T> series() { return this.series; }
+    public Ring<T> window() { return this.series.window(); }
+    public void record(T sample) { this.series.record(sample); }
+    public bool isEmpty() { return this.series.isEmpty(); }
+
+    /// The one number this metric reports, per its own aggregate.
+    public double summary() { return this.summary.over(this.series.window()); }
+
+    /// The legend line: what the aggregate calls itself, and its value.
+    public String legend() { return this.summary.render(this.series.window()); }
+}

@@ -1,5 +1,5 @@
 package beta;
 
-public class Widget {
+class Widget {
     public int size() { return 2; }
 }

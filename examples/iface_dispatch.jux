@@ -4,19 +4,19 @@
 // `Shape`-typed value (`Rc<dyn Shape>` under the hood), so the override that
 // runs is selected at run time by the value's concrete type.
 
-public interface Shape {
+interface Shape {
     double area();
     String name();
 }
 
-public class Circle implements Shape {
+class Circle implements Shape {
     private double radius;
     public Circle(double radius) { this.radius = radius; }
     public double area() { return 3.14 * this.radius * this.radius; }
     public String name() { return $"Circle"; }
 }
 
-public class Square implements Shape {
+class Square implements Shape {
     private double side;
     public Square(double side) { this.side = side; }
     public double area() { return this.side * this.side; }
@@ -35,7 +35,7 @@ public Shape make(int kind) {
 }
 
 // Interface-typed field stored in a class.
-public class Scene {
+class Scene {
     private Shape first;
     public Scene(Shape first) { this.first = first; }
     public String headline() { return this.first.name(); }

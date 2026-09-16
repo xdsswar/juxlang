@@ -1,4 +1,4 @@
-public class AppError extends Exception {
+class AppError extends Exception {
     public AppError(String m) { super(m); }
 }
 public int risky(int n) throws AppError {

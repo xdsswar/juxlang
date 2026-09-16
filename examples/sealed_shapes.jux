@@ -8,20 +8,20 @@
 // `final class Frozen` similarly forbids any subclass — adding
 // `class Sub extends Frozen` would fire E0420_FinalClassExtended.
 
-public sealed class Shape permits Circle, Square {
+sealed class Shape permits Circle, Square {
     public String describe() {
         return "a shape";
     }
 }
 
-public class Circle extends Shape {
+class Circle extends Shape {
     public int radius;
     public Circle(int radius) {
         this.radius = radius;
     }
 }
 
-public class Square extends Shape {
+class Square extends Shape {
     public int side;
     public Square(int side) {
         this.side = side;

@@ -7,7 +7,7 @@
 // compiler emits `E0931` if you skip the hash. The hash body here is
 // intentionally trivial (zero); a real impl would mix in `this.value`.
 
-public class Path {
+class Path {
     public String value;
 
     public Path(String v) {

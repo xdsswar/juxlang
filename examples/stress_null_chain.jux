@@ -1,7 +1,7 @@
 // Stress test: nullable types + Elvis operator + bare-name static
 // read inside a method + interpolation with method calls.
 
-public class Config {
+class Config {
     public static String defaultHost = "localhost";
 
     private String? host;

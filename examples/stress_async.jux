@@ -36,7 +36,7 @@ public async String greet_async(String who) {
 // Async method on a class.
 // ============================================================================
 
-public class Loader {
+class Loader {
     public String name;
 
     public Loader(String name) {

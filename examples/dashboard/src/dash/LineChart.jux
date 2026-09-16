@@ -1,0 +1,72 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+
+// A filled line chart. The fill is what makes it read as a volume rather than
+// a squiggle, and it costs one extra vertical run per column.
+public class LineChart {
+    public Series series;
+
+    public LineChart(Series series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        var pts = this.series.history();
+        int n = (int) pts.len();
+        if (n < 2 || r.w < 4 || r.h < 4) { return; }
+
+        int hi = this.series.max();
+        int lo = this.series.min();
+        // A series that barely moves would otherwise be drawn glued to the
+        // bottom of its panel, which reads as "no data" rather than "steady".
+        // Padding the range keeps a flat line in the middle where it belongs.
+        int span = hi - lo;
+        if (span < 4) {
+            int pad = 4 - span;
+            lo = lo - pad;
+            hi = hi + pad;
+            span = hi - lo;
+        }
+
+        // Horizontal guides, so the eye has something to measure against.
+        for (int g = 1; g < 4; g++) {
+            int gy = r.y + (r.h * g) / 4;
+            for (int gx = r.x; gx < r.right(); gx = gx + 3) {
+                c.px(gx, gy, Theme.STROKE);
+            }
+        }
+
+        int prevX = 0;
+        int prevY = 0;
+        for (int i = 0; i < n; i++) {
+            int px = r.x + (i * (r.w - 1)) / (n - 1);
+            int py = r.bottom() - 1 - ((pts[i] - lo) * (r.h - 2)) / span;
+            if (i > 0) {
+                // Fill and stroke the SEGMENT, not just the sample. Filling
+                // only at the sampled columns leaves the area striped, because
+                // the samples are several pixels apart; walking the segment
+                // interpolates the gap and the fill reads as one shape.
+                int dx = px - prevX;
+                for (int sx = prevX; sx <= px; sx++) {
+                    int sy = dx == 0 ? py : prevY + ((sx - prevX) * (py - prevY)) / dx;
+                    for (int fy = sy; fy < r.bottom(); fy++) {
+                        c.blend(sx, fy, this.series.color, 30);
+                    }
+                }
+                c.thickLine(prevX, prevY, px, py, 2, this.series.color);
+            }
+            prevX = px;
+            prevY = py;
+        }
+
+        // A dot on the newest sample, ringed so it reads against the fill.
+        c.fillRound(prevX - 3, prevY - 3, 7, 7, 3, Theme.TEXT);
+        c.fillRound(prevX - 2, prevY - 2, 5, 5, 2, this.series.color);
+    }
+}

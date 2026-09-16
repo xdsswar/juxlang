@@ -11,9 +11,9 @@
 //   - v.x / v.y / v.z field access through the existing emit_field path.
 //   - == comparison between record instances.
 
-public record Vector3(double x, double y, double z) {}
+record Vector3(double x, double y, double z) {}
 
-public record Greeting(String name, int age) {}
+record Greeting(String name, int age) {}
 
 public void main() {
     var v = new Vector3(1.0, 2.0, 3.0);

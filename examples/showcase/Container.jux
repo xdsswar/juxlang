@@ -1,0 +1,20 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+
+// Generic container for any kind of shape. Cross-package use:
+// `import showcase.shapes.Container;` from app.jux.
+public class Container<T> {
+    public T value;
+    public Container(T value) {
+        this.value = value;
+    }
+    public T get() {
+        return this.value;
+    }
+}

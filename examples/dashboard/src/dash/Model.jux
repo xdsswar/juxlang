@@ -1,0 +1,76 @@
+// The numbers on the dashboard.
+//
+// Deterministic on purpose: the same `seed` always produces the same frame, so
+// a snapshot can be compared byte for byte in a test. Nothing here touches a
+// clock or a random source.
+package dash;
+
+import rust.std.*;
+
+// One named metric with a rolling history.
+//
+// The history is a `Vec<int>`, and a collection is a reference type, so
+// `series.history()` hands back the real series rather than a copy of it.
+
+// Everything the dashboard draws, built once.
+public class Model {
+    public Vec<Series> series;
+    public Vec<String> events;
+    public int tick;
+
+    public Model(long seed) {
+        this.tick = 0;
+        this.series = new Vec<Series>();
+        this.events = new Vec<String>();
+
+        var rng = new Noise(seed);
+        var names = new Vec<Series>();
+        names.push(new Series("REQUESTS", "/S", Theme.CYAN));
+        names.push(new Series("LATENCY", "MS", Theme.VIOLET));
+        names.push(new Series("ERRORS", "/MIN", Theme.ROSE));
+        names.push(new Series("THROUGHPUT", "MB/S", Theme.GREEN));
+
+        // Each series walks from its own base so the four charts do not look
+        // like copies of one another.
+        var bases = new Vec<int>();
+        bases.push(420); bases.push(90); bases.push(28); bases.push(140);
+
+        int si = 0;
+        for (var s : names) {
+            int level = bases[si];
+            for (int i = 0; i < 48; i++) {
+                int drift = rng.next(21) - 10;
+                level = level + (level * drift) / 100;
+                if (level < 1) { level = 1; }
+                s.push(level);
+            }
+            this.series.push(s);
+            si = si + 1;
+        }
+
+        this.events.push("DEPLOY 14.2.1 ROLLED OUT");
+        this.events.push("CACHE WARMED IN 2.4S");
+        this.events.push("REGION EU-WEST FAILED OVER");
+        this.events.push("AUTOSCALE 6 > 9 NODES");
+        this.events.push("NIGHTLY BACKUP OK");
+    }
+
+    // Advance every series by one sample. The window loop calls this; the
+    // snapshot path does not, so a snapshot is always the same frame.
+    public void step() {
+        this.tick = this.tick + 1;
+        var rng = new Noise((long) (this.tick * 7919 + 13));
+        for (var s : this.series) {
+            int level = s.latest();
+            int drift = rng.next(19) - 9;
+            level = level + (level * drift) / 100;
+            if (level < 1) { level = 1; }
+            s.push(level);
+            // Keep the history bounded, or the chart would compress forever.
+            var h = s.history();
+            if ((int) h.len() > 64) {
+                h.remove(0);
+            }
+        }
+    }
+}

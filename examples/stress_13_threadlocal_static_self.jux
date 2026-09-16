@@ -3,7 +3,7 @@
 // field — nested `.with` access + RefCell discipline. Expect 1 then 5.
 package stress13;
 
-public class Reg {
+class Reg {
     public static Reg? global;
     public Vec<int> kids = new Vec<int>();
     public int tag = 5;

@@ -1,0 +1,40 @@
+// demo.entities — entity hierarchy with sealed base + concrete
+// subclasses + interface.
+//
+// Shows:
+//   - abstract class with protected/private fields + ctor
+//   - sealed permits clause + final subclasses
+//   - interface with abstract + default methods
+//   - bare-name access to enclosing-class static counter
+//   - cross-package record (Vector2) carried as instance state
+//   - inherited concrete method via auto-clone field read
+
+package demo.entities;
+
+import demo.core.Vector2;
+import demo.core.Color;
+
+// Lifecycle interface. Implementing classes whose `tick` body
+// writes to `this.field` now compose cleanly — interface methods
+// emit as `&mut self` and the trait-impl rollup uses an explicit
+// `ClassName::method(self)` call to bypass Rust's "exact receiver
+// match prefers trait" rule.
+
+public final class Enemy extends Entity implements Tickable {
+    public static int totalAttacks = 0;
+
+    private int damage;
+
+    public Enemy(String name, Vector2 pos, int damage) {
+        super(name, pos, 30);
+        this.damage = damage;
+    }
+
+    public String kind() { return $"Enemy"; }
+    public int damage() { return this.damage; }
+
+    public void tick(int dt) {
+        // Each tick the enemy "attacks" once.
+        totalAttacks = totalAttacks + 1;
+    }
+}

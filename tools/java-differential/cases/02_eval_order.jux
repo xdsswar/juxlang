@@ -1,4 +1,4 @@
-public class Box {
+class Box {
     public static int n = 0;
 }
 public int bump(int by) {
