@@ -86,6 +86,11 @@ fn svg_chart_renders_a_generated_document() {
 fn skia_java_style_draws_on_the_shared_surface() {
     assert_eq!(
         run_project("skia_java_style"),
-        ["disc teal: true", "frame red: true", "background dark: true"],
+        [
+            "disc teal: true",
+            "frame red: true",
+            "background dark: true",
+            "outline style: true",
+        ],
     );
 }

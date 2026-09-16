@@ -44,4 +44,6 @@ public void main() {
     print($"disc teal: ${disc.g() > 150 && disc.r() < 120}");
     print($"frame red: ${edge.r() > 200 && edge.g() < 150}");
     print($"background dark: ${inside.r() < 60 && inside.g() < 60}");
+    // The style set earlier reads back as the same enum constant.
+    print($"outline style: ${outline.style() == PaintStyle.Stroke}");
 }
