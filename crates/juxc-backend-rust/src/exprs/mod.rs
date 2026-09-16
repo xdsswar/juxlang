@@ -884,6 +884,29 @@ impl RustEmitter {
                     return;
                 }
             }
+            // An integer argument converts to the parameter's width and sign,
+            // as it does on every other call path. A foreign constructor takes
+            // sized ints (`ISize::new(i32, i32)`) and Jux counts in `int`.
+            if let Some(pty) = ctor_param_types.get(i) {
+                if !juxc_tycheck::infer::untyped_int_literal(arg) {
+                    if let (Some(target), Some(source)) =
+                        (this.type_ref_primitive(pty), this.operand_primitive(arg))
+                    {
+                        use juxc_tycheck::ty::integer_bits;
+                        let target_rust = crate::exprs::rust_primitive_name(target);
+                        if integer_bits(target).is_some()
+                            && integer_bits(source).is_some()
+                            && crate::exprs::rust_primitive_name(source) != target_rust
+                        {
+                            this.w.push('(');
+                            this.emit_expr(arg);
+                            this.w.push_str(") as ");
+                            this.w.push_str(target_rust);
+                            return;
+                        }
+                    }
+                }
+            }
             let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false)
                 || ctor_param_is_foreign_slice.get(i).copied().unwrap_or(false);
             if by_ref {

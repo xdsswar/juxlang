@@ -1,0 +1,48 @@
+// What a single rendered pixel is.
+package studio;
+
+import rust.skia_safe.Color;
+
+/**
+ * One sampled colour, taken apart.
+ *
+ * A `struct`, because a colour is a value: copying one and changing the copy
+ * must not touch the original (ERRATA E20). Skia hands back its own `Color`
+ * type; this is that colour in plain numbers.
+ */
+struct Swatch {
+    public int red;
+    public int green;
+    public int blue;
+
+    /** Read a Skia colour into plain channel values. */
+    public static Swatch of(Color color) {
+        return new Swatch((int) color.r(), (int) color.g(), (int) color.b());
+    }
+
+    /** The near-black the document paints behind everything. */
+    public bool isDark() {
+        return red < 60 && green < 60 && blue < 70;
+    }
+
+    /** The disc's teal: green and blue well above red. */
+    public bool isTeal() {
+        return green > 150 && blue > 150 && red < 120;
+    }
+
+    /** The bar's off-white. */
+    public bool isPale() {
+        return red > 200 && green > 200 && blue > 190;
+    }
+
+    /** Which channel leads, for a one-word description. */
+    public String dominant() {
+        if (red >= green && red >= blue) {
+            return "red";
+        }
+        if (green >= blue) {
+            return "green";
+        }
+        return "blue";
+    }
+}

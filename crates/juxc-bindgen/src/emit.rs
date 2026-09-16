@@ -42,6 +42,9 @@ pub fn render(file: &StubFile) -> String {
                 out.push('\n');
             }
             StubItem::Const(c) => render_const(&mut out, c),
+            StubItem::Alias(a) => {
+                let _ = writeln!(out, "public type {} = {};\n", a.name, a.target);
+            }
         }
     }
 

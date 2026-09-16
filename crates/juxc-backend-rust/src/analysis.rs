@@ -3012,11 +3012,37 @@ impl crate::RustEmitter {
     /// Everything the call site needs to know about the real Rust signature --
     /// which parameters borrow, whether the return borrows -- comes from here,
     /// so the receiver-resolution rules live in one place.
+    /// The NAME of the type a foreign method returns, when `callee` names
+    /// one. Used to resolve a chained call's receiver from the stub rather
+    /// than from the inference map, which does not record every intermediate.
+    fn foreign_call_return_type_name(&self, callee: &juxc_ast::Expr) -> Option<String> {
+        let m = self.foreign_callee_method(callee)?;
+        match &m.return_type {
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => {
+                t.name.segments.last().map(|s| s.text.clone())
+            }
+            juxc_ast::ReturnType::Void => None,
+        }
+    }
+
     fn foreign_callee_method(
         &self,
         callee: &juxc_ast::Expr,
     ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
         let juxc_ast::Expr::Field(f) = callee else { return None };
+        // A CHAINED call: `surface.canvas().draw_rect(...)`. The receiver is a
+        // call whose type the inference map does not carry, but the stub
+        // declares what the inner method returns, and that is the type the
+        // outer method is looked up on.
+        if let juxc_ast::Expr::Call(inner) = &*f.object {
+            if let Some(ty) = self.foreign_call_return_type_name(&inner.callee) {
+                if let Some(fqn) = self.resolve_bare_class_fqn(&ty) {
+                    if let Some(m) = self.external_type_method(&fqn, f.field.text.as_str()) {
+                        return Some(m);
+                    }
+                }
+            }
+        }
         // A `String` receiver is its own `Ty`, not a `Ty::User`, so it never
         // matched the value branch below -- and `String`'s scanned methods take
         // `&str` all over (`push_str` above all). The argument arrived owned

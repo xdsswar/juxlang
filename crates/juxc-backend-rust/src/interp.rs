@@ -37,27 +37,29 @@ impl RustEmitter {
             )
         });
         if !has_interp {
-            // Fast path: concatenate every literal chunk into a single
-            // Rust string literal, then call `.to_string()` on it. We
-            // still run each chunk through `emit_interp_literal_chunk`
-            // so `{` / `}` brace-doubling happens for symmetry — Rust
-            // string literals don't *need* that, but emitting the
-            // exact bytes the user wrote (after `{{` collapse) is
-            // surprising; keeping `{{` literal in the emitted source
-            // would be wrong, so we undouble below. (Cleaner: emit a
-            // raw Rust string literal directly from the literal text,
-            // since no `{}` parsing happens.)
+            // Fast path: concatenate every literal chunk into a single Rust
+            // string literal, then call `.to_string()` on it. No `{` / `}`
+            // doubling, because with no placeholders there is no format parser
+            // to fool -- but the chunk still has to be ESCAPED for the literal
+            // it is being written into. A triple-quoted string may hold a bare
+            // `"` (that is what the form is for), and pushing it verbatim
+            // ended the Rust literal early: an SVG document in a `$"""…"""`
+            // came out as a page of rustc syntax errors.
             self.w.push('"');
             for seg in &s.segments {
                 if let juxc_ast::InterpSegment::Literal(text) = seg {
-                    // Push the literal verbatim — no `{`/`}` doubling
-                    // because there's no format parser to fool. The
-                    // lexer already preserved Rust-compatible escape
-                    // shapes (`\\`, `\"`, `\n`, …).
-                    self.w.push_str(text);
+                    for ch in text.chars() {
+                        self.push_escaped_for_rust(ch, /*format_string=*/ false);
+                    }
                 }
             }
-            self.w.push_str("\".to_string()");
+            self.w.push('"');
+            // Same two exemptions a plain string literal gets: a `const` can
+            // not run `.to_string()` (its type is `&'static str`), and a
+            // format argument borrows through `Display` and needs no alloc.
+            if !self.emitting_const_context && !self.emitting_format_arg {
+                self.w.push_str(".to_string()");
+            }
             return;
         }
         self.w.push_str("format!(\"");

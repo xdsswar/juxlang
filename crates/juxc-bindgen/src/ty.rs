@@ -98,6 +98,11 @@ impl fmt::Display for JuxType {
                 Ok(())
             }
             JuxType::Param(s) => f.write_str(s),
+            // A function type has to be grouped before the `?`, or the
+            // question mark reads as part of its RETURN type:
+            // `(A) -> void?` is a function returning a nullable void,
+            // which is not what an `Option<fn(A)>` is.
+            JuxType::Nullable(t) if matches!(**t, JuxType::Fn { .. }) => write!(f, "({t})?"),
             JuxType::Nullable(t) => write!(f, "{t}?"),
             JuxType::Array { elem, size } => match size {
                 Some(n) => write!(f, "{elem}[{n}]"),

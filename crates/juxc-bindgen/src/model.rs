@@ -55,6 +55,18 @@ pub enum StubItem {
     Type(StubType),
     Function(StubFn),
     Const(StubConst),
+    /// A `pub use Target as Name` rename, surfaced as a Jux type alias. The
+    /// crate's public name for a type is the one its own signatures use, so
+    /// the stub has to declare it even though the type is emitted under the
+    /// name it was defined with.
+    Alias(StubAlias),
+}
+
+/// A type alias stub: `public type Name = Target;`.
+#[derive(Debug, Clone)]
+pub struct StubAlias {
+    pub name: String,
+    pub target: String,
 }
 
 /// A class / interface / struct / record / enum stub.

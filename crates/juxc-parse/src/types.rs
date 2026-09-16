@@ -123,6 +123,39 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::RParen, "')' to close tuple type");
             if elems.len() < 2 {
+                // `((A) -> R)?` — parentheses around a FUNCTION type are not
+                // decoration: they say the `?` (or a `[]`) applies to the
+                // function, not to its return type. `(A) -> R?` is a function
+                // returning a nullable; `((A) -> R)?` is a nullable function,
+                // which is what a Rust `Option<fn(A) -> R>` is. Any other
+                // single type in parentheses really does mean nothing extra.
+                if elems.len() == 1 && elems[0].fn_shape.is_some() {
+                    let mut inner = elems.into_iter().next()?;
+                    let mut dims: Vec<ArrayDim> = Vec::new();
+                    loop {
+                        if !inner.nullable && self.eat(&TokenKind::Question) {
+                            inner.nullable = true;
+                            continue;
+                        }
+                        if self.eat(&TokenKind::LBracket) {
+                            let dim = if self.eat(&TokenKind::RBracket) {
+                                ArrayDim::Dynamic
+                            } else {
+                                let size = self.parse_expr()?;
+                                self.expect(&TokenKind::RBracket, "']' to close array size");
+                                ArrayDim::Fixed(Box::new(size))
+                            };
+                            dims.push(dim);
+                            continue;
+                        }
+                        break;
+                    }
+                    if !dims.is_empty() {
+                        inner.array_shape = Some(ArrayShape { dims });
+                    }
+                    inner.span = start.join(self.last_consumed_span());
+                    return Some(inner);
+                }
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,

@@ -1,0 +1,102 @@
+// svg_studio: Skia, from Jux.
+//
+// Skia is the graphics engine behind Chrome, Android and Flutter. This program
+// hands it an SVG document, rasterises it onto a surface, draws over the
+// result with Skia's own vector API, encodes the whole thing as PNG, and then
+// reads individual pixels back to check what was actually drawn.
+//
+// The calls are Skia's, spelled as the Rust binding spells them (`from_str`,
+// `set_container_size`, `image_snapshot`, `encode_to_data`): the library is
+// not wrapped, it is used. That is what `rust.<crate>` is for.
+//
+// A Skia `Canvas` belongs to the surface it draws into -- in Rust it is a
+// borrow that lives only as long as the call that took it -- so every drawing
+// call here is its own statement. Jux borrows are statement-scoped, which is
+// exactly the lifetime Skia wants.
+//
+//     jux run
+
+import rust.skia_safe.Surface;
+import rust.skia_safe.ISize;
+import rust.skia_safe.Dom;
+import rust.skia_safe.FontMgr;
+import rust.skia_safe.Size;
+import rust.skia_safe.Paint;
+import rust.skia_safe.Color4f;
+import rust.skia_safe.Rect;
+import rust.skia_safe.EncodedImageFormat;
+import rust.skia_safe.IPoint;
+
+import studio.Swatch;
+
+/** The document to render. No gradients and no text, so it rasterises identically everywhere. */
+const String LOGO = $"""
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">
+  <rect x="0" y="0" width="200" height="120" fill="#12141c"/>
+  <circle cx="60" cy="60" r="38" fill="#3ad1c4"/>
+  <polygon points="110,22 176,60 110,98" fill="#ff6a6a"/>
+  <rect x="96" y="54" width="86" height="12" fill="#f5f1e6"/>
+</svg>
+""";
+
+public void main() {
+    // ---- a surface to draw on --------------------------------------------
+    // Allocating can fail, so Skia returns an Option and Jux sees a nullable.
+    var made = Surface.new_raster_n32_premul(new ISize(200, 120));
+    if (made == null) {
+        throw new IllegalStateException("Skia could not allocate a 200x120 surface");
+    }
+    var surface = made!!;
+    print($"surface ${surface.width()}x${surface.height()}");
+
+    // ---- render the SVG ---------------------------------------------------
+    // Skia parses the document into a DOM, which is told how big a box it is
+    // drawn into and then renders itself onto the canvas.
+    Dom dom = Dom.from_str(LOGO, new FontMgr());
+    dom.set_container_size(new Size(200.0f, 120.0f));
+    dom.render(surface.canvas());
+    print("svg rendered");
+
+    // ---- draw over it with Skia's own API ---------------------------------
+    // A stroked frame, drawn by the same engine that just rendered the
+    // document. Nothing about the canvas remembers where its pixels came from.
+    var frame = new Paint(new Color4f(1.0f, 0.42f, 0.42f, 0.85f), null);
+    frame.set_anti_alias(true);
+    frame.set_stroke(true);
+    frame.set_stroke_width(4.0f);
+    surface.canvas().draw_rect(Rect.from_xywh(8.0f, 8.0f, 184.0f, 104.0f), frame);
+    print("frame stroked");
+
+    // ---- encode -----------------------------------------------------------
+    var shot = surface.image_snapshot();
+    print($"snapshot ${shot.width()}x${shot.height()}");
+
+    var data = shot.encode_to_data(EncodedImageFormat.PNG);
+    if (data == null) {
+        throw new IllegalStateException("Skia could not encode the drawing as PNG");
+    }
+    var encoded = data!!;
+    var png = encoded.as_bytes();
+    // Every PNG opens with the same eight-byte signature. Checking it is how
+    // we know an encoder ran, rather than that a buffer exists.
+    var signed = png[0] == 137 && png[1] == 80 && png[2] == 78 && png[3] == 71;
+    print($"png bytes: ${png.length > 0}");
+    print($"png signature: ${signed}");
+
+    // ---- read the pixels back --------------------------------------------
+    // The background, the disc and the bar are at known places in the
+    // document, so their colours say the SVG was really rasterised.
+    var pixels = shot.peek_pixels();
+    if (pixels == null) {
+        throw new IllegalStateException("Skia surface has no readable pixels");
+    }
+    var map = pixels!!;
+    var background = Swatch.of(map.get_color(new IPoint(4, 4)));
+    var disc = Swatch.of(map.get_color(new IPoint(60, 60)));
+    var bar = Swatch.of(map.get_color(new IPoint(140, 60)));
+
+    print($"background dark: ${background.isDark()}");
+    print($"disc is teal: ${disc.isTeal()}");
+    print($"bar is pale: ${bar.isPale()}");
+    print($"disc leads with: ${disc.dominant()}");
+}

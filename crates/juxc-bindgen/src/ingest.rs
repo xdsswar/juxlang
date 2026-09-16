@@ -13,7 +13,8 @@ use rustdoc_types::{
 };
 
 use crate::model::{
-    StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubParam, StubType, StubVariant,
+    StubAlias, StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubParam, StubType,
+    StubVariant,
     TypeKind, Vis,
 };
 use crate::naming::method_name;
@@ -200,6 +201,97 @@ fn type_shape_key(t: &Type) -> Option<String> {
     }
 }
 
+/// A key for one INSTANTIATION of a generic type: `Handle<SkPaint>` and
+/// `Handle<SkCanvas>` are different types with different methods, so unlike
+/// [`type_shape_key`] (which answers "what does this deref to?") the generic
+/// arguments are part of the answer.
+fn type_instance_key(t: &Type) -> Option<String> {
+    let Type::ResolvedPath(p) = t else {
+        return None;
+    };
+    // Keyed by resolved ID, never by the written path: an alias may write
+    // `Handle<skia_bindings::SkPaint>` where the impl writes `Handle<SkPaint>`,
+    // and those are the same type spelled two ways. The id is the identity.
+    let mut key = p.id.0.to_string();
+    if let Some(GenericArgs::AngleBracketed { args, .. }) = p.args.as_deref() {
+        let rendered: Vec<String> = args
+            .iter()
+            .filter_map(|a| match a {
+                GenericArg::Type(Type::ResolvedPath(q)) => Some(q.id.0.to_string()),
+                GenericArg::Type(Type::Primitive(prim)) => Some(prim.clone()),
+                _ => None,
+            })
+            .collect();
+        if !rendered.is_empty() {
+            key.push('<');
+            key.push_str(&rendered.join(","));
+            key.push('>');
+        }
+    }
+    Some(key)
+}
+
+/// Inherent impl blocks grouped by the exact instantiation they are written
+/// for, so `impl Handle<SkPaint>` can be found from `type Paint =
+/// Handle<SkPaint>`.
+fn inherent_impls_by_instance(
+    krate: &Crate,
+) -> std::collections::HashMap<String, Vec<rustdoc_types::Id>> {
+    let mut out: std::collections::HashMap<String, Vec<rustdoc_types::Id>> =
+        std::collections::HashMap::new();
+    for item in krate.index.values() {
+        let ItemEnum::Impl(im) = &item.inner else {
+            continue;
+        };
+        if im.trait_.is_some() {
+            continue;
+        }
+        let Some(key) = type_instance_key(&im.for_) else {
+            continue;
+        };
+        out.entry(key).or_default().push(item.id);
+    }
+    out
+}
+
+/// A public `type Alias = Generic<Arg>` that has methods written for exactly
+/// that instantiation becomes a class of its own.
+///
+/// The alias is the name the library means people to use, and it is a real
+/// Rust path, so the emitted code can name it directly. Its own type
+/// parameters are not substituted: an alias that still takes parameters is
+/// left alone, since the methods would then belong to no single instantiation.
+fn build_handle_alias(
+    krate: &Crate,
+    name: &str,
+    alias: &rustdoc_types::TypeAlias,
+    item: &Item,
+    public: &PublicPaths,
+    by_instance: &std::collections::HashMap<String, Vec<rustdoc_types::Id>>,
+) -> Option<StubType> {
+    if !alias.generics.params.is_empty() {
+        return None;
+    }
+    let key = type_instance_key(&alias.type_)?;
+    // A bare name is an ordinary alias to a type that already exists in the
+    // stub under its own name; only an instantiation needs a class built.
+    if !key.contains('<') {
+        return None;
+    }
+    let impls = by_instance.get(&key)?;
+    let (ctors, mut methods) = collect_inherent_members(krate, impls, name);
+    dedup_methods_by_name(&mut methods);
+    if ctors.is_empty() && methods.is_empty() {
+        return None;
+    }
+    let mut st = StubType::new(TypeKind::Class, name);
+    st.constructors = ctors;
+    st.methods = methods;
+    st.doc = first_doc_line(item);
+    st.rust_path = real_rust_path(krate, item, public);
+    Some(st)
+}
+
 fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
@@ -211,6 +303,8 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
     // cache keyed by its identity would hand the next crate this one's
     // answers.
     let public = PublicPaths::of(krate);
+    // Inherent impls keyed by instantiation, for the handle-alias pattern.
+    let by_instance = inherent_impls_by_instance(krate);
 
     let mut collected: Vec<(u32, String, StubItem)> = Vec::new();
 
@@ -234,6 +328,13 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                     name.clone(),
                     StubItem::Type(build_enum(krate, name, e, item, &public)),
                 ));
+            }
+            ItemEnum::TypeAlias(alias) if is_public(&item.visibility) => {
+                if let Some(st) =
+                    build_handle_alias(krate, name, alias, item, &public, &by_instance)
+                {
+                    collected.push((item.id.0, name.clone(), StubItem::Type(st)));
+                }
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
                 collected.push((
@@ -321,7 +422,7 @@ fn stub_item_path(item: &StubItem) -> &str {
     match item {
         StubItem::Type(t) => t.rust_path.as_deref().unwrap_or(""),
         StubItem::Function(f) => f.rust_path.as_deref().unwrap_or(""),
-        StubItem::Const(_) => "",
+        StubItem::Const(_) | StubItem::Alias(_) => "",
     }
 }
 
@@ -441,6 +542,7 @@ fn build_enum(
     dedup_methods_by_name(&mut methods);
     st.constructors = ctors;
     st.methods = methods;
+    let has_members = !st.methods.is_empty() || !st.constructors.is_empty();
 
     for vid in &e.variants {
         let Some(vitem) = krate.index.get(vid) else {
@@ -476,6 +578,14 @@ fn build_enum(
             payload,
             discriminant,
         });
+    }
+    // A Jux enum body cannot be empty (§A.2.5), so an enum whose variants did
+    // not survive mapping is spelled as a class: an opaque handle carrying its
+    // methods, which is all any call site does with it. Emitted as an enum it
+    // was a parse error, and a stub that does not parse takes its whole crate
+    // surface down with it (G.12).
+    if st.variants.is_empty() && has_members {
+        st.kind = TypeKind::Class;
     }
     st
 }
@@ -523,6 +633,47 @@ fn build_trait(
 fn dedup_methods_by_name(methods: &mut Vec<StubFn>) {
     let mut seen: HashSet<String> = HashSet::new();
     methods.retain(|m| seen.insert(m.name.clone()));
+}
+
+/// Replace every `Self` in a mapped type with the type it stands for.
+///
+/// `Self` is written inside an `impl`; a stub file has no impl, so the name
+/// has to be resolved while the owner is still known. It nests
+/// (`Self?`, `Vec<Self>`, `(Self) -> Self`), so the walk is recursive.
+fn substitute_self(ty: &JuxType, owner: &str) -> JuxType {
+    match ty {
+        JuxType::User { name, args } if name == "Self" && args.is_empty() => JuxType::user(owner),
+        JuxType::User { name, args } => JuxType::User {
+            name: name.clone(),
+            args: args.iter().map(|a| substitute_self(a, owner)).collect(),
+        },
+        JuxType::Nullable(inner) => JuxType::Nullable(Box::new(substitute_self(inner, owner))),
+        JuxType::Array { elem, size } => JuxType::Array {
+            elem: Box::new(substitute_self(elem, owner)),
+            size: *size,
+        },
+        JuxType::Tuple(items) => {
+            JuxType::Tuple(items.iter().map(|t| substitute_self(t, owner)).collect())
+        }
+        JuxType::Fn { params, ret, is_async } => JuxType::Fn {
+            params: params.iter().map(|t| substitute_self(t, owner)).collect(),
+            ret: Box::new(substitute_self(ret, owner)),
+            is_async: *is_async,
+        },
+        JuxType::RawPtr(inner) => JuxType::RawPtr(Box::new(substitute_self(inner, owner))),
+        other => other.clone(),
+    }
+}
+
+/// Apply [`substitute_self`] across a method's whole signature.
+fn substitute_self_in_fn(f: &mut StubFn, owner: &str) {
+    f.ret = substitute_self(&f.ret, owner);
+    if let Some(t) = &f.throws {
+        f.throws = Some(substitute_self(t, owner));
+    }
+    for p in &mut f.params {
+        p.ty = substitute_self(&p.ty, owner);
+    }
 }
 
 /// Collect constructors and methods from a type's **inherent** impl blocks.
@@ -583,6 +734,15 @@ fn collect_inherent_members(
                 methods.push(sf);
             }
         }
+    }
+    // `Self` is the type these members were written for.
+    for c in &mut ctors {
+        for p in &mut c.params {
+            p.ty = substitute_self(&p.ty, type_name);
+        }
+    }
+    for m in &mut methods {
+        substitute_self_in_fn(m, type_name);
     }
     (ctors, methods)
 }
@@ -1125,11 +1285,13 @@ pub fn map_type(t: &Type) -> JuxType {
         // the foreign API (§G.3 closures). A bare `impl Fn*` param accepts a
         // bare Rust closure, which the backend emits for foreign fn-typed
         // params. A non-Fn `impl Trait` keeps its first-trait name.
-        Type::ImplTrait(bounds) => fn_trait_to_jux(bounds).unwrap_or_else(|| {
-            first_trait_in_bounds(bounds)
-                .map(JuxType::user)
-                .unwrap_or_else(|| JuxType::Unknown("Object".into()))
-        }),
+        Type::ImplTrait(bounds) => fn_trait_to_jux(bounds)
+            .or_else(|| conversion_bound_target(bounds))
+            .unwrap_or_else(|| {
+                first_trait_in_bounds(bounds)
+                    .map(JuxType::user)
+                    .unwrap_or_else(|| JuxType::Unknown("Object".into()))
+            }),
         Type::DynTrait(dt) => dt
             .traits
             .first()
@@ -1229,6 +1391,31 @@ fn collect_type_args(args: &Option<Box<GenericArgs>>) -> Vec<JuxType> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The type behind a CONVERSION bound: the `T` of `impl Into<T>`,
+/// `impl AsRef<T>`, `impl Borrow<T>`.
+///
+/// Such a bound does not name a type the caller can hold. It says "anything
+/// that converts to T", and what the call site actually passes is a T (or
+/// something Rust converts for it). Surfaced as the trait's own name instead,
+/// every one of these parameters read `Into` / `AsRef`, which no Jux value can
+/// ever be. A crate that wraps a C++ library is written almost entirely in
+/// this style, so the whole surface was unusable.
+fn conversion_bound_target(bounds: &[GenericBound]) -> Option<JuxType> {
+    for b in bounds {
+        let GenericBound::TraitBound { trait_, .. } = b else {
+            continue;
+        };
+        if !matches!(last_segment(&trait_.path), "Into" | "AsRef" | "Borrow" | "AsMut") {
+            continue;
+        }
+        let args = collect_type_args(&trait_.args);
+        if let Some(target) = args.into_iter().next() {
+            return Some(target);
+        }
+    }
+    None
 }
 
 /// Name of the first trait bound in an `impl Trait` bound list.
@@ -1455,6 +1642,10 @@ pub fn rewrite_reexported_paths(
     // re-exports only: a deeper one would need the module path to rebuild,
     // and crates re-export their surface at the root.
     let mut exported: HashMap<String, String> = HashMap::new();
+    // Every root re-export, paired as (defining name, published name). The
+    // path rewrite below uses the ones that point OUTSIDE this crate; the
+    // alias pass at the end uses the ones that RENAME.
+    let mut renames: Vec<(String, String)> = Vec::new();
     if let Some(root) = krate.index.get(&krate.root) {
         if let ItemEnum::Module(m) = &root.inner {
             for id in &m.items {
@@ -1465,20 +1656,42 @@ pub fn rewrite_reexported_paths(
                     continue;
                 };
                 let Some(target) = u.id else { continue };
+                // A re-export may point at another re-export
+                // (`pub use paint::Style as PaintStyle` where `paint::Style`
+                // is itself `pub use sb::SkPaint_Style as Style`). Follow the
+                // chain to the name the type is actually declared under.
+                let mut cursor = target;
+                let mut defining = None;
+                for _ in 0..4 {
+                    match krate.index.get(&cursor) {
+                        Some(t) => match &t.inner {
+                            ItemEnum::Use(next) => match next.id {
+                                Some(id) => cursor = id,
+                                None => {
+                                    defining = t.name.clone();
+                                    break;
+                                }
+                            },
+                            _ => {
+                                defining = t.name.clone();
+                                break;
+                            }
+                        },
+                        None => {
+                            defining =
+                                krate.paths.get(&cursor).and_then(|s| s.path.last().cloned());
+                            break;
+                        }
+                    }
+                }
+                let Some(defining) = defining else { continue };
+                renames.push((defining.clone(), u.name.clone()));
                 if krate.index.contains_key(&target) {
                     continue; // defined here; its own path is already right
                 }
-                let Some(summary) = krate.paths.get(&target) else {
-                    continue;
-                };
-                if let Some(defining) = summary.path.last() {
-                    exported.insert(defining.clone(), u.name.clone());
-                }
+                exported.insert(defining, u.name.clone());
             }
         }
-    }
-    if exported.is_empty() {
-        return Ok(());
     }
 
     let host = host_crate.replace('-', "_");
@@ -1494,6 +1707,9 @@ pub fn rewrite_reexported_paths(
     };
 
     for item in &mut stub.items {
+        if exported.is_empty() {
+            break;
+        }
         match item {
             StubItem::Type(t) => {
                 let name = t.name.clone();
@@ -1503,9 +1719,33 @@ pub fn rewrite_reexported_paths(
                 let name = f.name.clone();
                 retarget(&mut f.rust_path, &name);
             }
-            StubItem::Const(_) => {}
+            StubItem::Const(_) | StubItem::Alias(_) => {}
         }
     }
+
+    // A rename on the way out (`pub use paint::Style as PaintStyle`) is part of
+    // the public surface: the crate's own signatures use the public name. The
+    // type keeps the name it was defined with, and the rename is declared as
+    // the alias it is, so both spellings resolve.
+    let declared: std::collections::HashSet<&str> = stub
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            StubItem::Type(t) => Some(t.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut aliases: Vec<StubAlias> = renames
+        .into_iter()
+        .filter(|(defining, exported)| exported != defining && declared.contains(defining.as_str()))
+        .map(|(defining, exported)| StubAlias { name: exported, target: defining })
+        .collect();
+    aliases.sort_by(|a, b| a.name.cmp(&b.name));
+    aliases.dedup_by(|a, b| a.name == b.name);
+    // A rename that collides with a type of that name already in the stub is
+    // dropped: the type wins, and declaring both would be a duplicate.
+    aliases.retain(|a| !declared.contains(a.name.as_str()));
+    stub.items.extend(aliases.into_iter().map(StubItem::Alias));
     Ok(())
 }
 
@@ -1568,20 +1808,43 @@ fn published_names(krate: &Crate, child: &Item) -> Vec<(Id, String)> {
     match &child.inner {
         ItemEnum::Use(u) if u.is_glob => {
             let Some(id) = u.id else { return Vec::new() };
-            let Some(target_mod) = krate.index.get(&id) else {
-                return Vec::new();
-            };
-            let ItemEnum::Module(m) = &target_mod.inner else {
-                return Vec::new();
-            };
-            m.items
-                .iter()
-                .filter_map(|inner_id| krate.index.get(inner_id))
-                .filter_map(|inner| match &inner.inner {
-                    ItemEnum::Use(u) if !u.is_glob => u.id.map(|id| (id, u.name.clone())),
-                    _ => named_item(inner),
-                })
-                .collect()
+            // Globs nest: a crate root says `pub use core::*` and that module
+            // says `pub use rect::*`. Stopping at the first level left the
+            // types below it with no public path at all, so the emitted `use`
+            // named the private module they are defined in.
+            let mut out = Vec::new();
+            let mut seen: HashSet<Id> = HashSet::new();
+            let mut stack = vec![(id, 0usize)];
+            while let Some((module_id, depth)) = stack.pop() {
+                if depth > 3 || !seen.insert(module_id) {
+                    continue;
+                }
+                let Some(target_mod) = krate.index.get(&module_id) else {
+                    continue;
+                };
+                let ItemEnum::Module(m) = &target_mod.inner else {
+                    continue;
+                };
+                for inner_id in &m.items {
+                    let Some(inner) = krate.index.get(inner_id) else {
+                        continue;
+                    };
+                    match &inner.inner {
+                        ItemEnum::Use(u) if u.is_glob => {
+                            if let Some(next) = u.id {
+                                stack.push((next, depth + 1));
+                            }
+                        }
+                        ItemEnum::Use(u) => {
+                            if let Some(id) = u.id {
+                                out.push((id, u.name.clone()));
+                            }
+                        }
+                        _ => out.extend(named_item(inner)),
+                    }
+                }
+            }
+            out
         }
         ItemEnum::Use(u) => u.id.map(|id| (id, u.name.clone())).into_iter().collect(),
         _ => named_item(child).into_iter().collect(),

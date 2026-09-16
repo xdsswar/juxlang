@@ -439,7 +439,7 @@ impl RustEmitter {
                 if let Some(idx) = self.current_unit_idx {
                     if let Some(ctx) = self.symbols.units.get(idx) {
                         if let Some(fqn) = ctx.unqualified.get(bare.as_str()) {
-                            if self.symbols.enums.contains_key(fqn) {
+                            if self.enum_fqn_behind(fqn).is_some() {
                                 self.w.push_str(bare);
                                 self.w.push_str("::");
                                 self.w.push_str(&to_rust_ident(&f.field.text));
@@ -2492,6 +2492,33 @@ impl RustEmitter {
     /// It matters because a collection is a reference type (§6.5.1): every
     /// call on one reaches through a `RefCell` guard, and a result that
     /// borrows from that guard cannot outlive it.
+    /// The enum `fqn` names, following type aliases.
+    ///
+    /// A crate's public name for a type is often an alias for it: skia-safe
+    /// publishes `EncodedImageFormat` for `skia_bindings::SkEncodedImageFormat`.
+    /// `Alias.Variant` has to reach the enum the alias stands for, or the
+    /// variant is emitted as a field read on a type name.
+    pub(crate) fn enum_fqn_behind(&self, fqn: &str) -> Option<String> {
+        if self.symbols.enums.contains_key(fqn) {
+            return Some(fqn.to_string());
+        }
+        let mut cursor = fqn.to_string();
+        for _ in 0..4 {
+            let alias = self.symbols.aliases.get(&cursor)?;
+            let target = alias.target.name.segments.last()?.text.clone();
+            let resolved = if self.symbols.enums.contains_key(&target) {
+                target.clone()
+            } else {
+                self.resolve_bare_type_fqn(&target)?
+            };
+            if self.symbols.enums.contains_key(&resolved) {
+                return Some(resolved);
+            }
+            cursor = resolved;
+        }
+        None
+    }
+
     pub(crate) fn external_method_returns_borrow(&self, type_name: &str, method: &str) -> bool {
         let class = self.symbols.classes.get(type_name).or_else(|| {
             self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))

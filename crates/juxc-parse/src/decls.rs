@@ -26,6 +26,43 @@ use crate::Parser;
 /// Kept beside [`Parser::parse_member_name`], which must accept exactly this
 /// set: the lookahead decides which parser runs, and disagreeing with it turns
 /// a valid declaration into a cascade of errors about the next one.
+impl Parser<'_> {
+    /// True when the `operator` keyword at `idx` begins an operator
+    /// DECLARATION rather than naming an ordinary member.
+    ///
+    /// An operator declaration always names the operator it overloads
+    /// (`operator+`, `operator==`, `operator[]`), so a `(` straight after the
+    /// keyword cannot be one: it is a method whose NAME is `operator`, which
+    /// Rust libraries do have. Read as a declaration it was a parse error, and
+    /// a stub that does not parse takes its whole crate surface with it.
+    pub(crate) fn operator_kw_starts_decl(&self, idx: Option<usize>) -> bool {
+        let Some(j) = idx else { return false };
+        if !matches!(
+            self.tokens.get(j).map(|t| &t.kind),
+            Some(TokenKind::Kw(Keyword::Operator))
+        ) {
+            return false;
+        }
+        if !matches!(
+            self.tokens.get(j + 1).map(|t| &t.kind),
+            Some(TokenKind::LParen)
+        ) {
+            return true;
+        }
+        // `operator()` -- the CALL operator -- is the one declaration whose
+        // name IS a parenthesis pair, so it is told from a method called
+        // `operator` by what follows it: `operator()(int x)` declares the
+        // operator, `operator()` on its own is a method taking nothing.
+        matches!(
+            self.tokens.get(j + 2).map(|t| &t.kind),
+            Some(TokenKind::RParen)
+        ) && matches!(
+            self.tokens.get(j + 3).map(|t| &t.kind),
+            Some(TokenKind::LParen)
+        )
+    }
+}
+
 fn kind_can_be_member_name(kind: &TokenKind) -> bool {
     matches!(
         kind,
@@ -299,10 +336,7 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Ident(_)) => Some(i + 1),
                     _ => None,
                 };
-                matches!(
-                    after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
-                    Some(TokenKind::Kw(Keyword::Operator)),
-                )
+                self.operator_kw_starts_decl(after_type)
             };
             if lookahead_is_operator {
                 if let Some(op) = self.parse_operator_decl(member_vis) {
@@ -1789,7 +1823,9 @@ impl<'a> Parser<'a> {
                 let after_member_name: Option<&TokenKind> =
                     after_type_skipped.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
                 match next_kind {
-                    Some(TokenKind::Kw(Keyword::Operator)) => {
+                    Some(TokenKind::Kw(Keyword::Operator))
+                        if self.operator_kw_starts_decl(after_type) =>
+                    {
                         if let Some(op) = self.parse_operator_decl(member_vis) {
                             operators.push(op);
                         }
@@ -1946,10 +1982,7 @@ impl<'a> Parser<'a> {
                         Some(TokenKind::Ident(_)) => Some(i + 1),
                         _ => None,
                     };
-                    matches!(
-                        after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
-                        Some(TokenKind::Kw(Keyword::Operator)),
-                    )
+                    self.operator_kw_starts_decl(after_type)
                 };
                 if is_operator {
                     if let Some(op) = self.parse_operator_decl(member_vis) {
