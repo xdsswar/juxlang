@@ -379,6 +379,27 @@ impl RustEmitter {
         !declared_in_jux
     }
 
+    /// Whether a foreign call hands back an array that BORROWS its receiver.
+    ///
+    /// `Pixmap.data()` is `-> &[u8]` in Rust, and bindgen records that as
+    /// `@RustRefOut ubyte[]`. A Jux array is an owned handle, so the borrowed
+    /// slice has to be copied out: without it the emitted crate built a handle
+    /// over a `&[u8]` and rustc rejected every later use of it, a leak for a
+    /// call that type-checked perfectly in Jux.
+    ///
+    /// Discovered from the marker, like every other borrow fact (§G.3.4).
+    pub(crate) fn call_yields_borrowed_array(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        match self.receiver_ty_of(&f.object) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                self.external_method_returns_borrow(&name, &f.field.text)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn call_is_foreign_result(&self, call: &CallExpr) -> bool {
         match &*call.callee {
             // Free function `f(args)` — exact key, else last-segment match for an
@@ -2810,6 +2831,38 @@ impl RustEmitter {
     /// both produce identical values. The by-ref `&` prefix is NOT
     /// emitted here — it stays at the call slot (a hoisted temp is
     /// borrowed at the call, `x.m(&__jux_arg0)`).
+    /// Emit argument `i` converted to the parameter's integer type, and say
+    /// whether that happened.
+    ///
+    /// The checker has already accepted the pair; this is the narrowing or
+    /// sign change the emitted Rust needs to say out loud. An untyped literal
+    /// needs nothing -- Rust infers it at the slot.
+    fn emit_int_width_converted_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) -> bool {
+        if juxc_tycheck::infer::untyped_int_literal(arg) {
+            return false;
+        }
+        let target = self
+            .callee_param_type(&call.callee, i)
+            .as_ref()
+            .and_then(|t| self.type_ref_primitive(t));
+        let (Some(target), Some(source)) = (target, self.operand_primitive(arg)) else {
+            return false;
+        };
+        use juxc_tycheck::ty::integer_bits;
+        let target_rust = crate::exprs::rust_primitive_name(target);
+        if integer_bits(target).is_none()
+            || integer_bits(source).is_none()
+            || crate::exprs::rust_primitive_name(source) == target_rust
+        {
+            return false;
+        }
+        self.w.push('(');
+        self.emit_expr(arg);
+        self.w.push_str(") as ");
+        self.w.push_str(target_rust);
+        true
+    }
+
     fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
         // **A `&mut` slot takes the PLACE, never a copy.** The value-position
         // auto-clone exists so an argument is not moved out of its binding;
@@ -2830,6 +2883,12 @@ impl RustEmitter {
         // coercion / share-clone. `emit_expr` handles the `Expr::Out` shape.
         if matches!(arg, Expr::Out(..)) {
             self.emit_expr(arg);
+            return;
+        }
+        // An integer argument for an integer parameter of another width or
+        // sign converts. Most calls into a crate need it: Jux counts in `int`
+        // (`isize`) and a graphics API takes `u8` and `u32`.
+        if self.emit_int_width_converted_arg(call, i, arg) {
             return;
         }
         // **Foreign slot: lend the interior (§6.5.1).** A crate wants the
@@ -5668,25 +5727,8 @@ impl RustEmitter {
         // sign converts: `xs.remove(i)` with a Jux `int` (`isize`) index into
         // Rust's `usize` slot. The checker has accepted the pair; an untyped
         // literal needs nothing, Rust infers it.
-        if !juxc_tycheck::infer::untyped_int_literal(arg) {
-            let target = self
-                .callee_param_type(&call.callee, i)
-                .as_ref()
-                .and_then(|t| self.type_ref_primitive(t));
-            if let (Some(target), Some(source)) = (target, self.operand_primitive(arg)) {
-                use juxc_tycheck::ty::integer_bits;
-                let target_rust = crate::exprs::rust_primitive_name(target);
-                if integer_bits(target).is_some()
-                    && integer_bits(source).is_some()
-                    && crate::exprs::rust_primitive_name(source) != target_rust
-                {
-                    self.w.push('(');
-                    self.emit_expr(arg);
-                    self.w.push_str(") as ");
-                    self.w.push_str(target_rust);
-                    return;
-                }
-            }
+        if self.emit_int_width_converted_arg(call, i, arg) {
+            return;
         }
         // **Foreign slot: lend the interior (§6.5.1).** A crate wants the
         // sequence, never the handle. Emitted as a method RECEIVER so the

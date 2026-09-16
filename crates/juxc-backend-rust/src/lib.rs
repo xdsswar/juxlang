@@ -7167,6 +7167,17 @@ pub struct RegistryDep {
     /// stays the default; the other two are what let a project bind a crate
     /// that is not on crates.io at all.
     pub source: CrateSource,
+    /// `package = "tiny-skia"` — the published name, when it differs from the
+    /// name the crate is imported under. A Rust crate is always referred to by
+    /// an identifier, so `tiny-skia` is `tiny_skia` in `use` and in a Jux
+    /// `import rust.tiny_skia.…`; the registry still knows it by the hyphen.
+    /// `None` when the two agree.
+    pub package: Option<String>,
+    /// `features = [...]` the depending package asks this crate to turn on
+    /// (§B.8.2). Empty means "whatever the crate defaults to".
+    pub features: Vec<String>,
+    /// False when the manifest said `default-features = false`.
+    pub default_features: bool,
 }
 
 /// Where a bound Rust crate is fetched from, mirroring Cargo's own three
@@ -7192,30 +7203,84 @@ pub enum CrateSource {
 /// spelling (`serde_json = "1.0"`) because that is what a person would have
 /// written; the others need the table form to carry their source.
 pub(crate) fn registry_dep_line(d: &RegistryDep) -> String {
-    registry_dep_line_for(&d.crate_name, &d.version, &d.source)
+    registry_dep_line_with(
+        &d.crate_name,
+        &d.version,
+        &d.source,
+        d.package.as_deref(),
+        &d.features,
+        d.default_features,
+    )
 }
 
 /// [`registry_dep_line`] from the parts, for callers that have a source but
 /// no [`RegistryDep`] -- notably the throwaway Cargo project rustdoc runs in,
 /// which must name the same crate the emitted one does.
 pub fn registry_dep_line_for(crate_name: &str, version: &str, source: &CrateSource) -> String {
-    match source {
-        CrateSource::Registry => {
-            format!("{crate_name} = \"{}\"\n", escape_toml(version))
-        }
-        CrateSource::Path(path) => format!(
-            "{crate_name} = {{ path = \"{}\" }}\n",
-            escape_toml(path),
-        ),
-        CrateSource::Git { url, pin } => {
-            let mut line = format!("{crate_name} = {{ git = \"{}\"", escape_toml(url));
-            if let Some((key, value)) = pin {
-                line.push_str(&format!(", {key} = \"{}\"", escape_toml(value)));
+    registry_dep_line_with(crate_name, version, source, None, &[], true)
+}
+
+/// [`registry_dep_line_for`] with the two keys that make a crate reachable
+/// under a different name than it publishes under, and with a feature set.
+///
+/// `package` is Cargo's own rename key: `tiny-skia` publishes with a hyphen,
+/// which no Rust `use` path can spell, so the dependency is named `tiny_skia`
+/// and carries `package = "tiny-skia"`. `features` / `default_features` pass
+/// through unchanged (§B.8.2) -- a crate whose useful half is behind a feature
+/// (`skia_safe`'s `svg`) is unusable without them.
+pub fn registry_dep_line_with(
+    crate_name: &str,
+    version: &str,
+    source: &CrateSource,
+    package: Option<&str>,
+    features: &[String],
+    default_features: bool,
+) -> String {
+    // The short form stays for the plain case, because that is what a person
+    // would have written by hand.
+    let plain = package.is_none() && features.is_empty() && default_features;
+    if plain {
+        return match source {
+            CrateSource::Registry => format!("{crate_name} = \"{}\"\n", escape_toml(version)),
+            CrateSource::Path(path) => {
+                format!("{crate_name} = {{ path = \"{}\" }}\n", escape_toml(path))
             }
-            line.push_str(" }\n");
-            line
+            CrateSource::Git { url, pin } => {
+                let mut line = format!("{crate_name} = {{ git = \"{}\"", escape_toml(url));
+                if let Some((key, value)) = pin {
+                    line.push_str(&format!(", {key} = \"{}\"", escape_toml(value)));
+                }
+                line.push_str(" }\n");
+                line
+            }
+        };
+    }
+    let mut parts: Vec<String> = Vec::new();
+    match source {
+        CrateSource::Registry => parts.push(format!("version = \"{}\"", escape_toml(version))),
+        CrateSource::Path(path) => parts.push(format!("path = \"{}\"", escape_toml(path))),
+        CrateSource::Git { url, pin } => {
+            parts.push(format!("git = \"{}\"", escape_toml(url)));
+            if let Some((key, value)) = pin {
+                parts.push(format!("{key} = \"{}\"", escape_toml(value)));
+            }
         }
     }
+    if let Some(pkg) = package {
+        parts.push(format!("package = \"{}\"", escape_toml(pkg)));
+    }
+    if !features.is_empty() {
+        let list = features
+            .iter()
+            .map(|f| format!("\"{}\"", escape_toml(f)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("features = [{list}]"));
+    }
+    if !default_features {
+        parts.push("default-features = false".to_string());
+    }
+    format!("{crate_name} = {{ {} }}\n", parts.join(", "))
 }
 
 /// Build the `Cargo.toml` for an emitted crate of a given [`CrateTarget`],

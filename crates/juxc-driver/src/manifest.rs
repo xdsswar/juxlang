@@ -238,6 +238,12 @@ pub struct Dependency {
     /// `default-features = false` turns this `false`: the dependency's
     /// `default` set is not requested by this package (§B.8.2).
     pub default_features: bool,
+    /// `package = "tiny-skia"` — the name the dependency is published under,
+    /// when it differs from the name it is imported under (§B.5.6). A Rust
+    /// crate is reached through an identifier, and `tiny-skia` is not one, so
+    /// the dependency is written `"rust.tiny_skia"` and points at the
+    /// published `tiny-skia` with this key. `None` when the two agree.
+    pub package: Option<String>,
 }
 
 /// The ref a `git` dependency pins to — `branch` (moves), `tag`
@@ -369,6 +375,8 @@ struct RawDependencyTable {
     branch: Option<String>,
     tag: Option<String>,
     rev: Option<String>,
+    /// `package = "…"` — Cargo's rename key (§B.5.6).
+    package: Option<String>,
 }
 
 /// Top-level serde shape: the `[package]`, `[lib]`, `[[bin]]`,
@@ -560,6 +568,7 @@ impl Manifest {
                         git_ref: None,
                         features: Vec::new(),
                         default_features: true,
+                        package: None,
                     }
                 }
                 RawDependency::Version(v) => Dependency {
@@ -570,6 +579,7 @@ impl Manifest {
                     git_ref: None,
                     features: Vec::new(),
                     default_features: true,
+                    package: None,
                 },
                 RawDependency::Detailed(t) => {
                     // Ref keys are mutually exclusive per §B.2.2; the
@@ -595,6 +605,7 @@ impl Manifest {
                         git_ref,
                         features: t.features,
                         default_features: t.default_features.unwrap_or(true),
+                        package: t.package,
                     }
                 }
             })

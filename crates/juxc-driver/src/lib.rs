@@ -1151,6 +1151,9 @@ fn collect_registry_deps(manifest: &Manifest) -> Vec<juxc_backend_rust::Registry
                 crate_name: crate_name.to_string(),
                 version: dep.version.clone().unwrap_or_else(|| "*".to_string()),
                 source: crate::stubs::crate_source_of(dep),
+                package: dep.package.clone(),
+                features: dep.features.clone(),
+                default_features: dep.default_features,
             })
         })
         .collect()

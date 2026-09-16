@@ -138,12 +138,34 @@ impl<'a> Parser<'a> {
             }
             let end = self.last_consumed_span();
             let mut t = TypeRef::tuple(elems, start.join(end));
-            // Optional `?` — a nullable tuple `(A, B)?` lowers to
-            // `Option<(A, B)>`.
-            if self.eat(&TokenKind::Question) {
-                t.nullable = true;
-                t.span = start.join(self.last_consumed_span());
+            // Suffixes bind to a tuple exactly as they do to a named type: `?`
+            // makes it nullable, and each `[…]` adds an array dimension.
+            // `(ubyte, ubyte, ubyte)[]` is an ordinary shape in a generated
+            // stub -- it is what a Rust `&[(u8, u8, u8)]` parameter becomes --
+            // and without the bracket loop here the stub failed to parse.
+            let mut dims: Vec<ArrayDim> = Vec::new();
+            loop {
+                if !t.nullable && self.eat(&TokenKind::Question) {
+                    t.nullable = true;
+                    continue;
+                }
+                if self.eat(&TokenKind::LBracket) {
+                    let dim = if self.eat(&TokenKind::RBracket) {
+                        ArrayDim::Dynamic
+                    } else {
+                        let size = self.parse_expr()?;
+                        self.expect(&TokenKind::RBracket, "']' to close array size");
+                        ArrayDim::Fixed(Box::new(size))
+                    };
+                    dims.push(dim);
+                    continue;
+                }
+                break;
             }
+            if !dims.is_empty() {
+                t.array_shape = Some(ArrayShape { dims });
+            }
+            t.span = start.join(self.last_consumed_span());
             return Some(t);
         }
         // `void` is normally a return-only keyword, but `void*` (a pointer to an

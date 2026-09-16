@@ -1287,6 +1287,9 @@ impl RustEmitter {
                 // a fallible constructor (`try_with_capacity`) wraps the value
                 // rather than the `Result`.
                 let array = self.call_yields_bare_array(c);
+                // `-> &[T]` (recorded as `@RustRefOut`) has to be copied out
+                // before it becomes an owned handle.
+                let borrowed = array && self.call_yields_borrowed_array(c);
                 let wrap = self.call_returns_foreign_collection(c) || array;
                 if wrap {
                     self.w.push_str("crate::jux_arr(");
@@ -1302,6 +1305,9 @@ impl RustEmitter {
                         .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
                 } else {
                     self.emit_call(c);
+                }
+                if borrowed {
+                    self.w.push_str(".to_vec()");
                 }
                 if wrap {
                     self.w.push(')');

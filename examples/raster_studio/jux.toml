@@ -1,0 +1,15 @@
+[package]
+name = "demo.raster_studio"
+version = "0.1.0"
+
+# Three real crates.io crates, consumed in Jux syntax. `rust.<crate>` generates
+# a `.jux.d` stub from the crate's rustdoc JSON (which is what type-checks) and
+# links the crate into the emitted binary.
+#
+# `tiny-skia` publishes with a hyphen, which no `use` path can spell, so the
+# dependency is named for the Rust crate (`tiny_skia`) and `package` says what
+# to fetch. That is Cargo's own rename key.
+[dependencies]
+"rust.tiny_skia" = { version = "0.11", package = "tiny-skia" }
+"rust.image" = { version = "0.25", default-features = false, features = ["png"] }
+"rust.rayon" = "1.10"

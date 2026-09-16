@@ -2806,7 +2806,46 @@ impl crate::RustEmitter {
         callee: &juxc_ast::Expr,
         arg_idx: usize,
     ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
-        self.foreign_callee_method(callee)?.params.get(arg_idx)
+        if let Some(m) = self.foreign_callee_method(callee) {
+            return m.params.get(arg_idx);
+        }
+        // A foreign FREE function borrows exactly as a foreign method does:
+        // `image::load_from_memory(buffer: &[u8])` reads as `ubyte[] buffer`
+        // in the stub, because a shared `&` has no Jux spelling (§G.3.4).
+        // Without this the call handed over an owned `Vec` and rustc rejected
+        // it -- a leak for a call that type-checked.
+        self.foreign_free_callee(callee)?.params.get(arg_idx)
+    }
+
+    /// The signature of the foreign free function `callee` names, if it names
+    /// one.
+    ///
+    /// A foreign function is keyed by its full `rust.<crate>.<fn>` path, so a
+    /// bare call finds it by last segment. A USER function of the same name
+    /// shadows it and borrows nothing -- the same precedence the `Result`
+    /// unwrap uses.
+    fn foreign_free_callee(
+        &self,
+        callee: &juxc_ast::Expr,
+    ) -> Option<&juxc_tycheck::symbol_table::FunctionSig> {
+        let juxc_ast::Expr::Path(qn) = callee else {
+            return None;
+        };
+        let bare = qn.segments.last()?.text.as_str();
+        let is_foreign =
+            |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+        let mut found = None;
+        for (k, sig) in &self.symbols.functions {
+            if k.rsplit('.').next() != Some(bare) {
+                continue;
+            }
+            if is_foreign(k) {
+                found = Some(sig);
+            } else {
+                return None; // the user's own function wins
+            }
+        }
+        found
     }
 
     /// Does this path name a top-level `String` CONSTANT?
@@ -3469,8 +3508,17 @@ impl crate::RustEmitter {
                 let method = f.field.text.as_str();
                 // Static `ClassName.method(...)`: receiver is a class name.
                 if let juxc_ast::Expr::Path(qn) = &*f.object {
-                    if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
-                        let bare = class_fqn.rsplit('.').next().unwrap_or(&class_fqn);
+                    // The map is keyed by the BARE class name, which is what
+                    // the declaration side used. Full resolution is tried
+                    // first, but its failure must not change the answer: a
+                    // class reached through an import from another package
+                    // resolved at the declaration and not here, so the
+                    // signature took `&mut` while the call passed by value.
+                    let bare = self
+                        .path_resolves_to_class_in_emit(qn)
+                        .map(|fqn| fqn.rsplit('.').next().unwrap_or(&fqn).to_string())
+                        .or_else(|| qn.segments.last().map(|s| s.text.clone()));
+                    if let Some(bare) = bare {
                         return self
                             .byref_params
                             .get(&format!("m::{bare}::{method}"))

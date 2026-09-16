@@ -1,0 +1,109 @@
+// The drawing itself: a chart-like scene built from tiny-skia primitives.
+package studio;
+
+import rust.tiny_skia.Pixmap;
+import rust.tiny_skia.Paint;
+import rust.tiny_skia.PathBuilder;
+import rust.tiny_skia.Color;
+import rust.tiny_skia.Rect;
+import rust.tiny_skia.Transform;
+import rust.tiny_skia.FillRule;
+import rust.tiny_skia.Stroke;
+
+/**
+ * A fixed scene drawn at a requested size.
+ *
+ * The scene is deliberately made of the four things a real drawing is made of:
+ * a filled background, axis-aligned rectangles, a closed path filled with a
+ * non-zero rule, and a stroked polyline. Each exercises a different tiny-skia
+ * entry point, and all of them go through the same `Pixmap`.
+ */
+public class Scene {
+    private int width;
+    private int height;
+
+    public Scene(int width, int height) {
+        this.width = width;
+        this.height = height;
+    }
+
+    /** Draw the scene and hand back the finished pixel buffer. */
+    public Pixmap render() {
+        // `Pixmap.new` is fallible in Rust (a zero or overflowing size has no
+        // buffer), so Jux sees it as a nullable static, not a constructor.
+        var pixmap = Pixmap.new((u32) this.width, (u32) this.height);
+        if (pixmap == null) {
+            throw new IllegalStateException($"cannot allocate a ${this.width}x${this.height} canvas");
+        }
+        var canvas = pixmap!!;
+
+        canvas.fill(Color.from_rgba8(18, 20, 28, 255));
+        this.drawBars(canvas);
+        this.drawWedge(canvas);
+        this.drawTrend(canvas);
+        return canvas;
+    }
+
+    /** Five bars of rising height, each a filled rectangle. */
+    private void drawBars(Pixmap canvas) {
+        var paint = new Paint();
+        paint.anti_alias = false;
+
+        var barWidth = 18.0f;
+        var gap = 10.0f;
+        for (int i = 0; i < 5; i++) {
+            var barHeight = 16.0f + (i * 22.0f);
+            var x = 16.0f + (i * (barWidth + gap));
+            var y = this.height - 20.0f - barHeight;
+            var rect = Rect.from_xywh(x, y, barWidth, barHeight);
+            if (rect == null) {
+                continue;
+            }
+            // A ramp from teal to amber across the five bars.
+            paint.set_color_rgba8(60 + (i * 40), 180 - (i * 20), 200 - (i * 34), 255);
+            canvas.fill_rect(rect!!, paint, Transform.identity(), null);
+        }
+    }
+
+    /** A closed triangle, filled through a path rather than a rectangle. */
+    private void drawWedge(Pixmap canvas) {
+        var builder = new PathBuilder();
+        builder.move_to(150.0f, 30.0f);
+        builder.line_to(215.0f, 96.0f);
+        builder.line_to(150.0f, 96.0f);
+        builder.close();
+
+        var path = builder.finish();
+        if (path == null) {
+            return;
+        }
+        var paint = new Paint();
+        paint.anti_alias = true;
+        paint.set_color_rgba8(235, 96, 110, 220);
+        // Rotated about its own corner, so the transform is visible in the
+        // output rather than being an identity that proves nothing.
+        canvas.fill_path(path!!, paint, FillRule.Winding, Transform.from_rotate_at(-8.0f, 150.0f, 96.0f), null);
+    }
+
+    /** A stroked polyline over the bars. */
+    private void drawTrend(Pixmap canvas) {
+        var builder = new PathBuilder();
+        builder.move_to(20.0f, 120.0f);
+        builder.line_to(58.0f, 104.0f);
+        builder.line_to(96.0f, 74.0f);
+        builder.line_to(134.0f, 66.0f);
+        builder.line_to(172.0f, 40.0f);
+
+        var path = builder.finish();
+        if (path == null) {
+            return;
+        }
+        var paint = new Paint();
+        paint.anti_alias = true;
+        paint.set_color_rgba8(250, 250, 240, 255);
+
+        var stroke = new Stroke();
+        stroke.width = 2.5f;
+        canvas.stroke_path(path!!, paint, stroke, Transform.identity(), null);
+    }
+}

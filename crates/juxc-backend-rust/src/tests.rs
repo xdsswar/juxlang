@@ -4765,6 +4765,9 @@ fn cargo_toml_registry_dep_is_linked() {
         crate_name: "minifb".to_string(),
         version: "0.27".to_string(),
         source: CrateSource::Registry,
+        package: None,
+        features: Vec::new(),
+        default_features: true,
     }];
     let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &reg, false);
     // The foreign `rust.minifb` dep becomes a version line under [dependencies].
@@ -4785,6 +4788,9 @@ fn cargo_toml_path_dep_names_the_local_crate() {
         crate_name: "mylocal".to_string(),
         version: "*".to_string(),
         source: CrateSource::Path("/home/me/crates/mylocal".to_string()),
+        package: None,
+        features: Vec::new(),
+        default_features: true,
     }];
     let toml = cargo_toml_for_target(&target, false, &CargoMeta::default(), &[], &reg, false);
     assert!(
@@ -4807,6 +4813,9 @@ fn cargo_toml_git_dep_carries_its_pin() {
                 url: "https://github.com/u/pinned".to_string(),
                 pin: Some(("tag".to_string(), "v1.2".to_string())),
             },
+            package: None,
+            features: Vec::new(),
+            default_features: true,
         },
         RegistryDep {
             crate_name: "floating".to_string(),
@@ -4815,6 +4824,9 @@ fn cargo_toml_git_dep_carries_its_pin() {
                 url: "https://github.com/u/floating".to_string(),
                 pin: None,
             },
+            package: None,
+            features: Vec::new(),
+            default_features: true,
         },
     ];
     let toml = cargo_toml_for_target(&target, false, &CargoMeta::default(), &[], &reg, false);

@@ -110,7 +110,7 @@ fn render_type(out: &mut String, t: &StubType) {
     let _ = writeln!(out, "public {keyword} {}{generics}{implements} {{", t.name);
 
     if t.kind == TypeKind::Enum {
-        render_variants(out, &t.variants);
+        render_variants(out, &t.variants, !t.methods.is_empty());
         if !t.methods.is_empty() {
             out.push('\n');
         }
@@ -131,7 +131,7 @@ fn render_type(out: &mut String, t: &StubType) {
 }
 
 /// Render enum variants on one line: `A, B(int), C = 3` — no `case` keyword.
-fn render_variants(out: &mut String, variants: &[StubVariant]) {
+fn render_variants(out: &mut String, variants: &[StubVariant], has_members: bool) {
     if variants.is_empty() {
         out.push_str("    // (variants not represented)\n");
         return;
@@ -155,7 +155,10 @@ fn render_variants(out: &mut String, variants: &[StubVariant]) {
             s
         })
         .collect();
-    let _ = writeln!(out, "    {}", rendered.join(", "));
+    // A Jux enum body separates its variants from its members with `;`
+    // (§A.2.5). Without it the first method read as another variant.
+    let terminator = if has_members { ";" } else { "" };
+    let _ = writeln!(out, "    {}{terminator}", rendered.join(", "));
 }
 
 fn render_field(out: &mut String, f: &StubField) {

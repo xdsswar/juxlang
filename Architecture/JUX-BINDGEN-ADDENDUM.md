@@ -273,6 +273,19 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
+### G.5.4b. A `new` That Can Return Nothing
+
+A Rust `new` returning `Option<Self>` is **not** a constructor. A Jux constructor always produces the object (§7.3.1), and unlike the `Result` case (§G.5.4) there is no error value to throw, so the only faithful surface is a static method that returns `Self?`, carrying the Rust name verbatim:
+
+```jux
+// Rust: fn new(width: u32, height: u32) -> Option<Pixmap>
+public static Self? new(u32 width, u32 height);
+```
+
+Called as `Pixmap.new(w, h)`, which yields a nullable the caller has to open. `new` is a Jux keyword, but a name in member position is read as a name, so the verbatim spelling stands (§G.5.0).
+
+Rendered as a constructor instead, the `None` disappeared from the type: the call site believed it had a `Pixmap`, and the emitted Rust handed an `Option<Pixmap>` to something expecting the value.
+
 ### G.5.5. Free Functions
 
 A Rust free function (module-level, no associated type) maps to a Jux **free function** (§7.17), preserving the procedural style:

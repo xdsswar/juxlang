@@ -1,0 +1,44 @@
+// What a rendered canvas adds up to.
+package studio;
+
+/**
+ * Per-channel totals over an RGBA canvas.
+ *
+ * A `struct`, not a class, and for a reason the compiler enforces: it is
+ * produced on a worker thread and handed back to the caller. A class is a
+ * shared reference (§6.5.1) and cannot cross a thread boundary; a struct is a
+ * value, so it can (ERRATA E20).
+ */
+struct Histogram {
+    public long red;
+    public long green;
+    public long blue;
+    public long opaque;
+    public long transparent;
+
+    /** Which channel the drawing leans on. */
+    public String dominantChannel() {
+        if (red >= green && red >= blue) {
+            return "red";
+        }
+        if (green >= blue) {
+            return "green";
+        }
+        return "blue";
+    }
+
+    /**
+     * Mean luminance over every pixel counted, in 0..255, rounded down.
+     *
+     * The weights are the usual Rec. 601 ones, kept in integer form so the
+     * answer does not depend on floating-point rounding.
+     */
+    public long meanLuminance() {
+        var counted = opaque + transparent;
+        if (counted == 0) {
+            return 0;
+        }
+        var weighted = (red * 299) + (green * 587) + (blue * 114);
+        return weighted / (counted * 1000);
+    }
+}

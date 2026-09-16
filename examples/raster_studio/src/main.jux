@@ -1,0 +1,58 @@
+// raster_studio: three real crates.io crates, driven from Jux.
+//
+//   tiny-skia  draws a vector scene into an RGBA pixel buffer
+//   image      decodes the PNG that came out of it
+//   rayon      renders two sizes at once, on two threads
+//
+// Nothing here is a Jux-shaped wrapper around the crates: the calls are the
+// crates' own, spelled as Rust spells them (`from_xywh`, `fill_path`,
+// `load_from_memory`), which is the point of `rust.<crate>`. The Jux side is
+// only the part a person would write anyway: the scene, the fold, the report.
+//
+// Everything printed is derived from the pixels, so the output describes the
+// drawing exactly and changes the moment the rendering does.
+//
+//     jux run
+
+import rust.image.load_from_memory;
+import rust.rayon.join;
+
+import studio.Scene;
+import studio.Studio;
+
+public void main() {
+    // ---- draw -------------------------------------------------------------
+    var scene = new Scene(240, 160);
+    var canvas = scene.render();
+    print($"canvas ${canvas.width()}x${canvas.height()}");
+
+    // ---- encode, and read the result back --------------------------------
+    // `encode_png` returns a `Result` in Rust, so it is `throws` here and the
+    // value arrives already opened.
+    var png = canvas.encode_png();
+    print($"png bytes present: ${png.len() > 0}");
+
+    // The PNG one crate produced, decoded by an unrelated one: the real test
+    // that the bytes mean what they claim.
+    var decoded = load_from_memory(png);
+    print($"decoded ${decoded.width()}x${decoded.height()}");
+
+    // ---- describe what was drawn -----------------------------------------
+    var full = Studio.fold(canvas);
+    print($"opaque pixels: ${full.opaque}");
+    print($"transparent pixels: ${full.transparent}");
+    print($"dominant channel: ${full.dominantChannel()}");
+    print($"mean luminance: ${full.meanLuminance()}");
+
+    // ---- two renders at once ---------------------------------------------
+    // `rayon.join` runs both closures on separate threads and hands back both
+    // results. Each one draws its own canvas and returns a `struct`, so
+    // nothing is shared and nothing needs locking.
+    var both = join(
+        () -> Studio.analyse(120, 80),
+        () -> Studio.analyse(60, 40));
+
+    print($"half-size opaque: ${both.0.opaque}");
+    print($"quarter-size opaque: ${both.1.opaque}");
+    print($"same drawing, same channel: ${both.0.dominantChannel() == both.1.dominantChannel()}");
+}

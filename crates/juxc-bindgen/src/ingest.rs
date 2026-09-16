@@ -432,6 +432,15 @@ fn build_enum(
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item, public);
     st.implements = implemented_trait_names(krate, item.id, &e.impls);
+    st.is_clone = implements_trait(krate, &e.impls, "Clone");
+    // An enum carries behaviour in its inherent impls exactly as a struct
+    // does, and a Jux enum can hold methods too (§7.7). Keeping only the
+    // variants described `image::DynamicImage` as a bare tag union, so
+    // `decoded.width()` was an unknown method on a type that plainly has one.
+    let (ctors, mut methods) = collect_inherent_members(krate, &e.impls, name);
+    dedup_methods_by_name(&mut methods);
+    st.constructors = ctors;
+    st.methods = methods;
 
     for vid in &e.variants {
         let Some(vitem) = krate.index.get(vid) else {
@@ -551,10 +560,17 @@ fn collect_inherent_members(
             };
 
             let has_self = has_self_receiver(f);
-            if mname == "new" && !has_self {
+            // A `new() -> Option<Self>` is not a constructor. A Jux
+            // constructor always produces the object, and there is no error
+            // value here to throw either, so the only faithful surface is a
+            // static that returns `Self?` (§G.5.5). Rendered as a ctor, the
+            // `None` case disappeared and the emitted Rust handed an
+            // `Option<Pixmap>` to something expecting a `Pixmap`.
+            let (ret, throws) = map_return(krate, &f.sig.output);
+            let fallible_new = matches!(ret, JuxType::Nullable(_));
+            if mname == "new" && !has_self && !fallible_new {
                 // A `new() -> Result<Self, E>` surfaces as a `throws E` ctor so
                 // the call site unwraps the `Result` (§G.5.4).
-                let (_ret, throws) = map_return(krate, &f.sig.output);
                 ctors.push(StubCtor {
                     visibility: Vis::Public,
                     name: type_name.to_string(),
@@ -772,8 +788,69 @@ fn map_return(krate: &Crate, output: &Option<Type>) -> (JuxType, Option<JuxType>
                 .or_else(|| Some(JuxType::user("Error")));
             (ok, err)
         }
+        // A crate's OWN alias for `Result` is still a `Result`:
+        // `pub type ImageResult<T> = Result<T, ImageError>` hides the
+        // fallibility behind a name, and `resolved_name` cannot see through it
+        // (the alias IS the resolved item). Unfollowed, every fallible call in
+        // `image` returned a raw `Result` object Jux has no syntax to open.
+        Some(Type::ResolvedPath(p)) => {
+            if let Some((ok, err)) = result_behind_alias(krate, p) {
+                return (ok, Some(err));
+            }
+            (map_type(&Type::ResolvedPath(p.clone())), None)
+        }
         Some(t) => (map_type(t), None),
     }
+}
+
+/// The `(ok, error)` pair behind a crate-local alias for `Result`, if `p`
+/// names one.
+///
+/// The alias's own type parameters are substituted with the arguments written
+/// at the use site, so `ImageResult<DynamicImage>` yields `DynamicImage` and
+/// `ImageError`. Only one level is followed: an alias of an alias is rare, and
+/// each extra level is another place to get the substitution wrong.
+fn result_behind_alias(krate: &Crate, p: &rustdoc_types::Path) -> Option<(JuxType, JuxType)> {
+    let item = krate.index.get(&p.id)?;
+    let ItemEnum::TypeAlias(alias) = &item.inner else {
+        return None;
+    };
+    let Type::ResolvedPath(target) = &alias.type_ else {
+        return None;
+    };
+    if resolved_name(krate, target) != "Result" {
+        return None;
+    }
+
+    // The alias's parameters, in order, bound to the arguments written here.
+    let params: Vec<&str> = alias
+        .generics
+        .params
+        .iter()
+        .map(|gp| gp.name.as_str())
+        .collect();
+    let supplied = collect_type_args(&p.args);
+    let resolve = |t: &JuxType| -> JuxType {
+        if let JuxType::Param(name) = t {
+            if let Some(i) = params.iter().position(|pn| pn == name) {
+                if let Some(actual) = supplied.get(i) {
+                    return actual.clone();
+                }
+            }
+        }
+        t.clone()
+    };
+
+    let args = collect_type_args(&target.args);
+    let ok = args.first().map(&resolve).unwrap_or(JuxType::Void);
+    // Same rule as a written `Result`: an error with no name to write becomes
+    // the opaque `Error`, because `throws` names a type.
+    let err = args
+        .get(1)
+        .map(&resolve)
+        .filter(|t| matches!(t, JuxType::User { .. } | JuxType::Param(_)))
+        .unwrap_or_else(|| JuxType::user("Error"));
+    Some((ok, err))
 }
 
 /// What a written path RESOLVES to, by its final segment.
@@ -1359,6 +1436,117 @@ fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
         }
     }
     out
+}
+
+/// Point every re-exported item at the crate that re-exports it.
+///
+/// Only the bound crate is linked, so a type defined in one of ITS
+/// dependencies has to be named through it: `tiny_skia::PathBuilder`, never
+/// `tiny_skia_path::PathBuilder`, which the emitted crate cannot resolve
+/// (`unresolved import` from rustc, for a stub that type-checked). The
+/// re-export names are read from the host crate's root module.
+pub fn rewrite_reexported_paths(
+    stub: &mut StubFile,
+    host_crate: &str,
+    host_json: &str,
+) -> Result<(), serde_json::Error> {
+    let krate: Crate = serde_json::from_str(host_json)?;
+    // Defining name -> the name the host publishes it under. Root-level
+    // re-exports only: a deeper one would need the module path to rebuild,
+    // and crates re-export their surface at the root.
+    let mut exported: HashMap<String, String> = HashMap::new();
+    if let Some(root) = krate.index.get(&krate.root) {
+        if let ItemEnum::Module(m) = &root.inner {
+            for id in &m.items {
+                let Some(item) = krate.index.get(id) else {
+                    continue;
+                };
+                let ItemEnum::Use(u) = &item.inner else {
+                    continue;
+                };
+                let Some(target) = u.id else { continue };
+                if krate.index.contains_key(&target) {
+                    continue; // defined here; its own path is already right
+                }
+                let Some(summary) = krate.paths.get(&target) else {
+                    continue;
+                };
+                if let Some(defining) = summary.path.last() {
+                    exported.insert(defining.clone(), u.name.clone());
+                }
+            }
+        }
+    }
+    if exported.is_empty() {
+        return Ok(());
+    }
+
+    let host = host_crate.replace('-', "_");
+    let retarget = |path: &mut Option<String>, name: &str| {
+        let Some(current) = path.as_deref() else { return };
+        // Already reached through the host crate: nothing to do.
+        if current.split("::").next() == Some(host.as_str()) {
+            return;
+        }
+        if let Some(exported_as) = exported.get(name) {
+            *path = Some(format!("{host}::{exported_as}"));
+        }
+    };
+
+    for item in &mut stub.items {
+        match item {
+            StubItem::Type(t) => {
+                let name = t.name.clone();
+                retarget(&mut t.rust_path, &name);
+            }
+            StubItem::Function(f) => {
+                let name = f.name.clone();
+                retarget(&mut f.rust_path, &name);
+            }
+            StubItem::Const(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// The crates whose types a crate re-exports as part of its own public API.
+///
+/// `tiny-skia` is largely `pub use tiny_skia_path::{Path, PathBuilder, Rect,
+/// Transform, Stroke, ...}`. Those names are its public surface, but their
+/// DEFINITIONS live in another crate's rustdoc JSON, so ingesting this crate
+/// alone produced a stub whose own method signatures named types the stub
+/// never declared: `Pixmap.fill_path(&Path ...)` with no `Path` anywhere.
+///
+/// The answer is read out of the JSON rather than listed anywhere: a `pub use`
+/// whose target id is absent from this crate's index points into another
+/// crate, and `paths` says which. The caller documents those crates too and
+/// merges them in.
+pub fn reexported_crate_names(json: &str) -> Result<Vec<String>, serde_json::Error> {
+    let krate: Crate = serde_json::from_str(json)?;
+    let mut names: Vec<String> = Vec::new();
+    for item in krate.index.values() {
+        let ItemEnum::Use(u) = &item.inner else {
+            continue;
+        };
+        let Some(id) = u.id else { continue };
+        if krate.index.contains_key(&id) {
+            continue; // resolved in this crate -- nothing external about it
+        }
+        let Some(summary) = krate.paths.get(&id) else {
+            continue;
+        };
+        // crate_id 0 is this crate itself.
+        if summary.crate_id == 0 {
+            continue;
+        }
+        if let Some(ext) = krate.external_crates.get(&summary.crate_id) {
+            if !names.contains(&ext.name) {
+                names.push(ext.name.clone());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// The names `child` publishes into its parent module, as `(id, name)` pairs.

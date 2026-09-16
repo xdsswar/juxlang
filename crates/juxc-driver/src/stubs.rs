@@ -576,9 +576,10 @@ pub fn resolve_crate_stub(
     project_root: &Path,
     kind: &str,
     crate_name: &str,
-    version: Option<&str>,
-    source: &juxc_backend_rust::CrateSource,
+    dep: &crate::manifest::Dependency,
 ) -> anyhow::Result<PathBuf> {
+    let version = dep.version.as_deref();
+    let source = &crate_source_of(dep);
     let cache = crate_stub_cache_path(project_root, kind, crate_name);
     if cache.is_file() {
         // Vendored c/cpp stubs are authored by hand and carry no version marker,
@@ -597,11 +598,40 @@ pub fn resolve_crate_stub(
         );
     }
 
-    let json = run_cargo_rustdoc_json(crate_name, version, source)?;
+    let json = run_cargo_rustdoc_json(crate_name, version, source, dep)?;
     let package = format!("rust.{crate_name}");
-    let body = generate_stub_from_rustdoc_json(&json, &package).map_err(|e| {
+    // A crate's public API may be DEFINED in its own dependencies and
+    // re-exported: `tiny-skia` is `pub use tiny_skia_path::{Path, Rect,
+    // Transform, ...}`. Those crates are documented too and merged in, or the
+    // stub names types it never declares -- `fill_path(&Path ...)` with no
+    // `Path` in the file. Which crates those are is read out of the JSON.
+    let mut jsons: Vec<(String, String)> = vec![(crate_name.to_string(), json)];
+    for extra in juxc_bindgen::ingest::reexported_crate_names(&jsons[0].1).unwrap_or_default() {
+        // The crate is already in the throwaway project's dependency graph (it
+        // is a dependency of the one just documented), so this is one more
+        // `-p` in the same place. Failure is not fatal: the stub is then
+        // simply missing those types, as it was before.
+        match rustdoc_json_for_package(crate_name, &extra) {
+            Ok(text) => jsons.push((extra, text)),
+            Err(e) => eprintln!(
+                "juxc: note: `{crate_name}` re-exports from `{extra}`, whose API could not be read ({e}); the stub will not describe those types"
+            ),
+        }
+    }
+    let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
+    let mut stub_file = juxc_bindgen::ingest::generate_merged(&refs, &package).map_err(|e| {
         anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}")
     })?;
+    // Only the bound crate is linked, so anything merged in from a crate it
+    // re-exports has to be named through it.
+    if jsons.len() > 1 {
+        let _ = juxc_bindgen::ingest::rewrite_reexported_paths(
+            &mut stub_file,
+            crate_name,
+            &jsons[0].1,
+        );
+    }
+    let body = juxc_bindgen::render_stub(&stub_file);
     // Prepend the cache-version marker so a future toolchain can detect a stale
     // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
     let stub = format!("{}{body}", crate_cache_header_for(source));
@@ -637,6 +667,7 @@ fn run_cargo_rustdoc_json(
     crate_name: &str,
     version: Option<&str>,
     source: &juxc_backend_rust::CrateSource,
+    dep: &crate::manifest::Dependency,
 ) -> anyhow::Result<String> {
     let work = rustdoc_gen_dir(crate_name)
         .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
@@ -647,10 +678,13 @@ fn run_cargo_rustdoc_json(
     // The SAME dependency line the emitted crate gets, so the stub
     // describes the crate the build links rather than a same-named
     // crates.io release that happens to exist.
-    let dep_line = juxc_backend_rust::registry_dep_line_for(
+    let dep_line = juxc_backend_rust::registry_dep_line_with(
         crate_name,
         version.unwrap_or("*"),
         source,
+        dep.package.as_deref(),
+        &dep.features,
+        dep.default_features,
     );
     let cargo_toml = format!(
         "[package]\nname = \"__juxc_doc_{sanitized}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
@@ -659,6 +693,61 @@ fn run_cargo_rustdoc_json(
     std::fs::write(work.join("Cargo.toml"), cargo_toml)?;
     std::fs::write(work.join("src").join("lib.rs"), "")?;
 
+    rustdoc_json_in(&work, dep.package.as_deref().unwrap_or(crate_name), crate_name)
+}
+
+/// Document one more package in the throwaway project already built for
+/// `host_crate`. This is how a crate's re-export sources are read.
+fn rustdoc_json_for_package(host_crate: &str, crate_name: &str) -> anyhow::Result<String> {
+    let work = rustdoc_gen_dir(host_crate)
+        .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
+    // rustdoc names a crate by its LIB TARGET (`tiny_skia_path`); cargo's `-p`
+    // wants the PACKAGE (`tiny-skia-path`). The two differ by more than
+    // punctuation often enough that cargo is asked rather than guessed at.
+    let package = package_owning_crate(&work, crate_name)
+        .unwrap_or_else(|| crate_name.to_string());
+    rustdoc_json_in(&work, &package, crate_name)
+}
+
+/// The package in `work`'s dependency graph whose library target is
+/// `crate_name`, per `cargo metadata`. `None` when cargo cannot be run, the
+/// output does not parse, or nothing in the graph builds that crate.
+fn package_owning_crate(work: &Path, crate_name: &str) -> Option<String> {
+    let out = Command::new("cargo")
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .current_dir(work)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    for pkg in meta.get("packages")?.as_array()? {
+        let name = pkg.get("name")?.as_str()?;
+        for target in pkg.get("targets")?.as_array()? {
+            let is_lib = target
+                .get("kind")
+                .and_then(|k| k.as_array())
+                .is_some_and(|kinds| {
+                    kinds.iter().any(|k| {
+                        matches!(k.as_str(), Some("lib" | "rlib" | "dylib" | "proc-macro"))
+                    })
+                });
+            if is_lib && target.get("name").and_then(|n| n.as_str()) == Some(crate_name) {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Run `cargo +nightly rustdoc -p <package>` in `work` and read the JSON back.
+/// `crate_name` names the FILE rustdoc writes (the lib target, hyphens folded
+/// to underscores), which is not always the package name.
+fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Result<String> {
+    let sanitized = crate_name.replace('-', "_");
     // Pin the target directory instead of letting cargo choose it. A user
     // with CARGO_TARGET_DIR set in their environment -- a common way to share
     // one build cache across projects -- would otherwise have the JSON written
@@ -671,13 +760,13 @@ fn run_cargo_rustdoc_json(
         .arg("--target-dir")
         .arg(&doc_target)
         .arg("-p")
-        .arg(crate_name)
+        .arg(package)
         .arg("--")
         .arg("-Z")
         .arg("unstable-options")
         .arg("--output-format")
         .arg("json")
-        .current_dir(&work)
+        .current_dir(work)
         .output()
         .map_err(|e| {
             anyhow::anyhow!(
@@ -700,7 +789,7 @@ fn run_cargo_rustdoc_json(
             );
         }
         anyhow::bail!(
-            "`cargo +nightly rustdoc --output-format json` failed for `{crate_name}`:\n{stderr}"
+            "`cargo +nightly rustdoc --output-format json` failed for `{package}`:\n{stderr}"
         );
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
@@ -708,7 +797,7 @@ fn run_cargo_rustdoc_json(
     let json_path = doc_target.join("doc").join(&json_name);
     std::fs::read_to_string(&json_path).map_err(|e| {
         anyhow::anyhow!(
-            "rustdoc reported success but wrote no JSON for `{crate_name}` \
+            "rustdoc reported success but wrote no JSON for `{package}` \
              (looked at {}): {e}.\n\
              This usually means the nightly toolchain is missing its docs \
              component:\n    rustup component add rust-docs-json --toolchain nightly",
@@ -747,6 +836,7 @@ mod tests {
             git_ref: None,
             features: Vec::new(),
             default_features: true,
+            package: None,
         };
         assert_eq!(crate_source_of(&registry), CrateSource::Registry);
 
@@ -758,6 +848,7 @@ mod tests {
             git_ref: Some(crate::manifest::GitRef::Tag("v1".to_string())),
             features: Vec::new(),
             default_features: true,
+            package: None,
         };
         assert_eq!(
             crate_source_of(&git),
@@ -776,6 +867,7 @@ mod tests {
             git_ref: None,
             features: Vec::new(),
             default_features: true,
+            package: None,
         };
         assert!(matches!(crate_source_of(&both), CrateSource::Path(_)));
     }
@@ -897,8 +989,17 @@ mod tests {
         )
         .unwrap();
 
-        let got = resolve_crate_stub(&dir, "rust", "serde_json", None, &source)
-            .expect("cache hit");
+        let dep = crate::manifest::Dependency {
+            name: "rust.serde_json".into(),
+            path: None,
+            version: None,
+            git: None,
+            git_ref: None,
+            features: Vec::new(),
+            default_features: true,
+            package: None,
+        };
+        let got = resolve_crate_stub(&dir, "rust", "serde_json", &dep).expect("cache hit");
         assert_eq!(got, cached);
         let _ = std::fs::remove_dir_all(&dir);
     }
