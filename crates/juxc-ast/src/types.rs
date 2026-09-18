@@ -135,9 +135,13 @@ impl TypeRef {
             return None;
         }
         let text = self.name.segments[0].text.as_str();
+        // A digit run, optionally negative (`-5` for a `<long N>`), `true` /
+        // `false`, or a char literal (`'x'` for a `<char C>`).
+        let digits = text.strip_prefix('-').unwrap_or(text);
         let is_literal = text == "true"
             || text == "false"
-            || (!text.is_empty() && text.chars().all(|c| c.is_ascii_digit() || c == '_'));
+            || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '_'))
+            || (text.len() >= 3 && text.starts_with('\'') && text.ends_with('\''));
         is_literal.then_some(text)
     }
 }

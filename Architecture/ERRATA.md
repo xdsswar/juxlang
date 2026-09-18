@@ -962,6 +962,44 @@ right side of a direct `x = e;` still reads the refined `x`.
 
 **Spec status:** §T.6.5 states the rule.
 
+---
+
+## E42. Sharing a `T[N]` array with a `T[]` slot
+
+**Conflict.** JUX-LANG-V1 §5.5 says `T[N]` passes wherever `T[]` is expected,
+and §6.5.2 says an array is a reference: the function receives the caller's
+array. The two lower to different storage (a fixed Rust array and a vector),
+so the same array under both types cannot exist, and a copy would make the
+callee's writes vanish without a word. Every such call failed in rustc.
+
+**Resolution.** A local declared `T[N]` that is handed to a `T[]` slot is
+stored as a `T[]` is, keeping its `T[N]` type: §6.5.2 already says `T[N]`
+constrains the length, not the storage. Where no single storage serves, the
+program is told (`E0468`): one local handed to both a `T[]` and a `T[N]` slot,
+or a fixed-size parameter or field handed to a `T[]` slot.
+
+**Spec status:** §5.5 states the rule; E0468 is in the catalog.
+
+---
+
+## E43. A field-initializer lambda that uses its own object
+
+**Conflict.** JUX-OBSERVABLE-PROPERTIES-ADDENDUM §P.2.3 shows an observer
+field whose lambda writes one of the object's own properties
+(`nameObs = (old, now) -> { Label.Text = now; }`), and LANG-V1 §7.9 lets a
+lambda capture `this`. A field initializer runs while the object is being
+built, before the shared handle such a capture needs exists, and the Phase 1
+lowering had no way to capture it: the program reached rustc.
+
+**Resolution.** Phase-1 restriction, now diagnosed: a field-initializer
+lambda that uses `this`, or a bare instance field, property or method of its
+class, is `E0981`. Lambdas written in constructors and methods capture `this`
+as before. Lifting the restriction needs the object's handle to exist before
+its fields are initialized (a cyclic construction).
+
+**Spec status:** the catalog has E0981; §P.2.3 describes the intended
+behaviour and stands.
+
 
 ---
 

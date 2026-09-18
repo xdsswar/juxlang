@@ -464,6 +464,10 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |
 | `E0466`  | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default) | §M.14.5 |
 | `E0467`  | A defaulted parameter precedes a non-defaulted parameter | §M.14.4 |
+| `E0461`  | `sizeof` of a generic type written without its type arguments | JUX-LANG-V1 §5.9.4 |
+| `E0462`  | `sizeof` of a type with a wildcard (`?`) argument | JUX-LANG-V1 §5.9.4 |
+| `E0463`  | `sizeof(void)` | JUX-LANG-V1 §5.9.4 |
+| `E0468`  | A `T[N]` array cannot be shared with a `T[]` slot here: one local handed to both a `T[]` and a `T[N]` slot, or a fixed-size parameter or field handed to a `T[]` slot | JUX-LANG-V1 §5.5 / ERRATA E42 |
 | `E0470`  | Annotation applied outside its `@Target` set | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter   | Annotations §A.13              |
@@ -617,7 +621,8 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0973`  | Direct assignment to a bound property *(reserved)*          | Properties §P.4.2              |
 | `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
 | `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
-| `E0980`  | Method reference is ambiguous *(reserved)*                  | Missing-defs §M.8.3            |
+| `E0981`  | A field-initializer lambda uses the object it belongs to (`this` or a bare instance member); not supported in this phase | ERRATA E43 |
+| `E0980`  | Method reference is ambiguous: several overloads (or constructors) and no expected function type picks exactly one | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |
 | `E0993`  | Local classes not supported                                 | Missing-defs §M.9.2            |

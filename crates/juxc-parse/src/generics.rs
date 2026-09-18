@@ -85,16 +85,21 @@ impl<'a> Parser<'a> {
                     self.tokens.get(self.pos + 1).map(|t| &t.kind),
                 ) {
                     if crate::exprs::is_known_primitive_type_name(first) {
-                        // Phase-1 core supports `int` and `bool` value
-                        // types; the rest (`long`, `char`, …) parse but
-                        // get a clean E0445 (deferred, not a rustc leak).
-                        if first != "int" && first != "bool" {
+                        // A const parameter holds an integer of any width,
+                        // a `bool` or a `char` (T.11.3), which is also what a
+                        // Rust const generic can hold. A float or a `String`
+                        // has no such form: clean E0445, not a rustc leak.
+                        let holds = !matches!(
+                            first.as_str(),
+                            "float" | "double" | "f32" | "f64" | "String" | "string"
+                        );
+                        if !holds {
                             self.diagnostics.push(
                                 juxc_diagnostics::Diagnostic::error(
                                     juxc_diagnostics::code::Code::E0445_ConstGenericUnsupported,
                                     format!(
-                                        "const-generic parameters of type `{first}` are not \
-                                         supported in this phase -- only `int` and `bool` are",
+                                        "a const-generic parameter holds an integer, a `bool` or a \
+                                         `char`; `{first}` is none of these",
                                     ),
                                 )
                                 .with_span(start),
@@ -198,27 +203,23 @@ impl<'a> Parser<'a> {
             let span = start.join(end);
             return Some(GenericArg::Type(synthetic_const_arg_type_ref(&raw, span)));
         }
-        // A leading `-` would be a negative const arg — `<int N>` lowers
-        // to Rust `const N: usize`, so negatives are out of the Phase-1
-        // subset. Catch it here (it could never parse as a type anyway).
-        if matches!(self.peek(), TokenKind::Minus) {
-            self.diagnostics.push(
-                juxc_diagnostics::Diagnostic::error(
-                    juxc_diagnostics::code::Code::E0445_ConstGenericUnsupported,
-                    "negative const-generic arguments are not supported in this phase",
-                )
-                .with_span(start),
-            );
-            // Consume `-` and a following literal so the arg list can
-            // recover at the `,` / `>`.
+        // A char argument for a `<char C>` parameter: `Sep<','>`.
+        if let TokenKind::Char(c) = self.peek() {
+            let raw = format!("'{c}'");
             self.advance();
-            if matches!(self.peek(), TokenKind::Int(_)) {
-                self.advance();
-            }
-            return Some(GenericArg::Type(synthetic_const_arg_type_ref(
-                "0",
-                start.join(self.last_consumed_span()),
-            )));
+            let end = self.last_consumed_span();
+            return Some(GenericArg::Type(synthetic_const_arg_type_ref(&raw, start.join(end))));
+        }
+        // A negative argument, `-5`, for a signed parameter (`<long N>`).
+        // Whether the parameter can hold it is the checker's question.
+        if matches!(self.peek(), TokenKind::Minus)
+            && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Int(_)))
+        {
+            self.advance(); // `-`
+            let TokenKind::Int(raw) = self.peek().clone() else { unreachable!() };
+            self.advance();
+            let end = self.last_consumed_span();
+            return Some(GenericArg::Type(synthetic_const_arg_type_ref(&format!("-{raw}"), start.join(end))));
         }
         if self.eat(&TokenKind::Question) {
             // Bounded wildcard: `? extends T` or `? super T`. Bare

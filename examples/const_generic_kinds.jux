@@ -1,0 +1,39 @@
+// Const generics of every kind a constant can have (JUX-TYPE-SYSTEM-ADDENDUM
+// §T.11.3): any integer width, `bool` and `char`. Only an `int` sizes an
+// array; the others are compile-time values the code reads.
+
+class Offset<long N> {
+    public long apply(long v) { return v + N; }
+}
+
+class Separator<char C> {
+    public String join(String a, String b) { return a + C + b; }
+}
+
+class Switch<bool ON> {
+    public String state() { return ON ? "on" : "off"; }
+}
+
+class Small<byte K> {
+    public int twice() { return K * 2; }
+}
+
+class Ring<int N> {
+    private int[N] slots;
+    public Ring() { slots = new int[N]; }
+    public int capacity() { return slots.length; }
+}
+
+<long N> long scaled(long v) { return v * N; }
+
+public void main() {
+    print(new Offset<-5>().apply(10));
+    print(new Offset<1000000000000>().apply(1));
+    print(new Separator<','>().join("a", "b"));
+    print(new Separator<'-'>().join("x", "y"));
+    print(new Switch<true>().state());
+    print(new Switch<false>().state());
+    print(new Small<7>().twice());
+    print(new Ring<4>().capacity());
+    print(scaled<3>(14));
+}

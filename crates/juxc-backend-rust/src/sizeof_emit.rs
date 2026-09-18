@@ -34,6 +34,14 @@ impl RustEmitter {
     ///    yet is the value form (§5.9.2); see [`Self::dotted_sizeof_is_value`].
     /// 5. Anything else (compound expression) → value.
     pub(crate) fn emit_sizeof(&mut self, s: &SizeOfExpr) {
+        // A type-only operand (`sizeof(Vec<int>)`, `sizeof(int[])`): the size
+        // of a value of that type as Jux stores it.
+        if let Some(t) = &s.type_operand {
+            self.w.push_str("std::mem::size_of::<");
+            self.emit_value_type_as_rust(t);
+            self.w.push_str(">()");
+            return;
+        }
         // Single-segment Path uses the existing rules 1-3 dispatch.
         if let Expr::Path(qn) = &*s.operand {
             self.emit_sizeof_path(qn);

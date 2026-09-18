@@ -588,6 +588,13 @@ class Palette {
 
 `T[]` and `T[N]` are interchangeable when passing a fixed-size array to a function expecting a runtime-sized one — the size information is simply not preserved. Going the other way requires a check.
 
+The array handed over is the same array, not a copy (§6.5.2): what the function writes into it, the caller sees. A local declared `T[N]` that the program hands to a `T[]` slot (an argument, a `T[]` variable, a return) is stored the way a `T[]` is, which the language allows because `T[N]` constrains the length rather than the storage; its type stays `T[N]`. Two things cannot be shared that way, and each is `E0468`:
+
+- the same `T[N]` local handed to a `T[]` slot and also to a `T[N]` parameter (the two need different storage for one array);
+- a `T[N]` parameter or field handed to a `T[]` slot (its storage is fixed where it was declared).
+
+Declare the value `T[]` when it has to go both ways, or pass `a.clone()` where a copy is what you mean.
+
 A `new T[n]` expression whose value is not going into a slot declared `T[N]` produces the runtime-sized form. It is what Java's array expression means, and it is the only reading that makes the sentence above true: a value that is only ever a fixed array cannot be handed to a `T[]` parameter without copying it, and copying it would break the reference semantics of 6.5.2. The stack form is what an explicit `T[N]` slot asks for, and it stays exactly that.
 
 **What a new array holds.** `new T[n]` has `n` elements before the program writes any of them, so each starts at the *default value* of `T`:

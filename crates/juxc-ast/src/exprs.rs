@@ -520,6 +520,11 @@ pub struct IndexExpr {
 pub struct SizeOfExpr {
     /// The operand. Could be a type (Path) or a value-expression.
     pub operand: Box<Expr>,
+    /// The operand when it can only be a TYPE: `sizeof(Vec<int>)`,
+    /// `sizeof(int[])`, `sizeof(void)` (§5.9.4). Those do not parse as
+    /// expressions, so the parser reads them as a type; `operand` then holds
+    /// the type's name as a placeholder for passes that only walk values.
+    pub type_operand: Option<crate::TypeRef>,
     /// Span covering `sizeof(...)` whole.
     pub span: Span,
 }

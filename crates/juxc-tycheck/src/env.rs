@@ -41,6 +41,12 @@ pub struct TypeEnv {
     /// lowers `void` to `Unknown`, so this is how `void*` stays distinct from
     /// a typed pointer (§L.6.1a).
     void_bases: Vec<HashSet<String>>,
+    /// The names in the matching scope that were DECLARED with a fixed-size
+    /// array type (`int[3] a`, `int[N] xs`), and whether each is a parameter.
+    /// `Ty` says `T[N]` for a `var a = new int[3]` too, but only a declared
+    /// `T[N]` has fixed storage, which is what JUX-LANG-V1 §5.5 cares about
+    /// when the array is handed to a `T[]` slot (E0468).
+    fixed_arrays: Vec<HashMap<String, bool>>,
     /// Name of the class whose method body we're currently inside —
     /// `None` at top level, `Some("Foo")` while walking `class Foo`'s
     /// method bodies. Drives `Expr::This` inference. Stored as the
@@ -81,6 +87,7 @@ impl TypeEnv {
             scopes: vec![HashMap::new()],
             ptr_depths: vec![HashMap::new()],
             void_bases: vec![HashSet::new()],
+            fixed_arrays: vec![HashMap::new()],
             current_class: None,
             generic_params: HashSet::new(),
             generic_bounds: HashMap::new(),
@@ -97,6 +104,7 @@ impl TypeEnv {
         self.scopes.push(HashMap::new());
         self.ptr_depths.push(HashMap::new());
         self.void_bases.push(HashSet::new());
+        self.fixed_arrays.push(HashMap::new());
     }
 
     /// Pop the innermost scope. Silently does nothing when only the
@@ -107,6 +115,7 @@ impl TypeEnv {
             self.scopes.pop();
             self.ptr_depths.pop();
             self.void_bases.pop();
+            self.fixed_arrays.pop();
         }
     }
 
@@ -126,6 +135,28 @@ impl TypeEnv {
         if let Some(top) = self.void_bases.last_mut() {
             top.remove(name);
         }
+        if let Some(top) = self.fixed_arrays.last_mut() {
+            top.remove(name);
+        }
+    }
+
+    /// Record that `name`, just declared in the innermost scope, was declared
+    /// with a fixed-size array type; `is_param` tells a parameter from a local.
+    pub fn declare_fixed_array(&mut self, name: &str, is_param: bool) {
+        if let Some(top) = self.fixed_arrays.last_mut() {
+            top.insert(name.to_string(), is_param);
+        }
+    }
+
+    /// For the binding `name` resolves to: `Some(is_param)` when it was
+    /// declared `T[N]`, `None` otherwise.
+    pub fn fixed_array(&self, name: &str) -> Option<bool> {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return self.fixed_arrays.get(i).and_then(|f| f.get(name)).copied();
+            }
+        }
+        None
     }
 
     /// Record that `name`, just declared in the innermost scope, is a pointer

@@ -180,19 +180,7 @@ impl RustEmitter {
         // manual `impl Debug` stub after the struct that prints the class
         // name — satisfying the marker-trait `Debug` supertrait bound
         // without requiring Debug on the stored closure.
-        let has_fn_field = class_decl.fields.iter().any(|f| {
-            f.ty.as_ref().map(|t| t.closure_shape().is_some()).unwrap_or(false)
-                // §P.2: `observer<T>` fields lower to `Rc<dyn Fn(…)>` —
-                // same no-Debug shape as fn-typed fields.
-                || f.ty
-                    .as_ref()
-                    .map(|t| {
-                        t.fn_shape.is_none()
-                            && t.name.segments.len() == 1
-                            && t.name.segments[0].text == "observer"
-                    })
-                    .unwrap_or(false)
-        });
+        let has_fn_field = class_decl.fields.iter().any(|f| f.ty.as_ref().is_some_and(type_holds_closure));
         // A `@layout(c)` value struct (§L.1.2) gets a C-compatible layout and is
         // `Copy` (its fields are primitives / pointers / other `@layout(c)`
         // structs), giving Jux's "copied on assignment" value semantics.
@@ -969,15 +957,7 @@ impl RustEmitter {
         // (§P.2) — both lower to `Rc<dyn Fn(…)>`, which has no Debug;
         // those classes get a manual name-printing impl after the
         // struct instead.
-        let inner_has_fn_field = class_decl.fields.iter().any(|f| {
-            f.ty.as_ref()
-                .map(|t| {
-                    t.closure_shape().is_some()
-                        || (t.name.segments.len() == 1
-                            && t.name.segments[0].text == "observer")
-                })
-                .unwrap_or(false)
-        });
+        let inner_has_fn_field = class_decl.fields.iter().any(|f| f.ty.as_ref().is_some_and(type_holds_closure));
         // `Clone` is dropped from the inner when a non-`std`-foreign field may
         // not be `Clone` (e.g. `minifb::Window`). The wrapper newtype still
         // clones — it shares the instance by reference through its `Rc`, which
@@ -6881,4 +6861,18 @@ fn package_of(fqn: &str) -> String {
         Some(i) => fqn[..i].to_string(),
         None => String::new(),
     }
+}
+
+/// Whether a value of type `t` holds a closure (`Rc<dyn Fn(…)>`) anywhere:
+/// the type itself, an `observer<T>` (§P.2, the same closure shape), or a
+/// type argument of a collection (`Vec<(T) -> void> listeners`). A closure
+/// has no `Debug`, so a class with such a field cannot derive it and gets
+/// the name-printing impl instead.
+pub(crate) fn type_holds_closure(t: &juxc_ast::TypeRef) -> bool {
+    t.closure_shape().is_some()
+        || (t.fn_shape.is_none() && t.name.segments.len() == 1 && t.name.segments[0].text == "observer")
+        || t.generic_args.iter().any(|a| match a {
+            juxc_ast::GenericArg::Type(inner) => type_holds_closure(inner),
+            juxc_ast::GenericArg::Wildcard(_) => false,
+        })
 }

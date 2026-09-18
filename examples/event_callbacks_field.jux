@@ -1,0 +1,30 @@
+// A class field holding a collection of callbacks (`Vec<(String) -> void>`).
+// A function value has no printable form of its own, so the class prints by
+// identity, and the field is otherwise an ordinary collection (hunt r11).
+
+class EventBus {
+    private Vec<(String) -> void> listeners = new Vec<(String) -> void>();
+    private int sent = 0;
+
+    public void on((String) -> void listener) { listeners.push(listener); }
+
+    public void emit(String event) {
+        sent++;
+        for (var listener : listeners) {
+            listener(event);
+        }
+    }
+
+    public int sentCount() { return sent; }
+    public int listenerCount() { return listeners.len(); }
+}
+
+public void main() {
+    var bus = new EventBus();
+    bus.on((e) -> print($"first saw ${e}"));
+    bus.on((e) -> print($"second saw ${e.to_uppercase()}"));
+    bus.emit("start");
+    bus.emit("stop");
+    print(bus.sentCount());
+    print(bus.listenerCount());
+}

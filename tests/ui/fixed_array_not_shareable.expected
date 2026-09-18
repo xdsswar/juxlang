@@ -1,0 +1,2 @@
+fixed_array_not_shareable.jux:3:45: [E0468] error: parameter `xs` is a fixed-size array (`int[N]`) and cannot be handed to a runtime-sized array slot as the same array (JUX-LANG-V1 §5.5)
+fixed_array_not_shareable.jux:8:16: [E0468] error: `a` is handed to a runtime-sized array slot and also to a fixed-size one here: one array cannot be stored both ways (JUX-LANG-V1 §5.5)

@@ -1056,6 +1056,12 @@ impl<'a> Parser<'a> {
                     };
                     let receiver = match &expr {
                         Expr::Path(qn) => qn.clone(),
+                        // `this::greet`: a bound reference to one of this
+                        // object's own methods (Missing-defs §M.8.2).
+                        Expr::This(span) => juxc_ast::QualifiedName {
+                            segments: vec![juxc_ast::Ident { text: "this".to_string(), span: *span }],
+                            span: *span,
+                        },
                         _ => {
                             // Synthesize an empty qualified-name
                             // and rely on the diagnostic for the
@@ -1065,7 +1071,7 @@ impl<'a> Parser<'a> {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0200_UnexpectedToken,
-                                    "left-hand side of `::` must be a type name",
+                                    "left-hand side of `::` must be a type name or a variable",
                                 )
                                 .with_span(expr_span(&expr)),
                             );
@@ -1568,11 +1574,16 @@ impl<'a> Parser<'a> {
                 let start = self.peek_span();
                 self.advance(); // 'sizeof'
                 self.expect(&TokenKind::LParen, "'(' after `sizeof`");
-                let operand = self.parse_expr()?;
+                let type_operand = self.try_sizeof_type_operand();
+                let operand = match &type_operand {
+                    Some(t) => Expr::Path(t.name.clone()),
+                    None => self.parse_expr()?,
+                };
                 self.expect(&TokenKind::RParen, "')' to close `sizeof`");
                 let end = self.last_consumed_span();
                 Some(Expr::SizeOf(SizeOfExpr {
                     operand: Box::new(operand),
+                    type_operand,
                     span: start.join(end),
                 }))
             }
@@ -1640,6 +1651,49 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// A `sizeof` operand that can only be a type (§5.9.4): `void`, or a type
+    /// with generic arguments, an array shape or a `?` (`Vec<int>`, `int[]`,
+    /// `String?`), none of which reads as an expression. Anything else is
+    /// left to the expression parser, which the §5.9.3 rule disambiguates
+    /// later. Speculative: on no match nothing is consumed and no diagnostic
+    /// is left behind.
+    fn try_sizeof_type_operand(&mut self) -> Option<juxc_ast::TypeRef> {
+        if matches!(self.peek(), TokenKind::Kw(Keyword::Void))
+            && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::RParen))
+        {
+            let span = self.peek_span();
+            self.advance();
+            return Some(juxc_ast::TypeRef {
+                name: juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: "void".into(), span }],
+                    span,
+                },
+                generic_args: Vec::new(),
+                nullable: false,
+                array_shape: None,
+                fn_shape: None,
+                ptr_depth: 0,
+                span,
+            });
+        }
+        if !matches!(self.peek(), TokenKind::Ident(_)) {
+            return None;
+        }
+        let before = self.pos;
+        let diagnostics_before = self.diagnostics.len();
+        let pending_before = self.pending_gt;
+        if let Some(t) = self.parse_type_ref() {
+            let only_a_type = !t.generic_args.is_empty() || t.array_shape.is_some() || t.nullable;
+            if only_a_type && self.at(&TokenKind::RParen) {
+                return Some(t);
+            }
+        }
+        self.pos = before;
+        self.diagnostics.truncate(diagnostics_before);
+        self.pending_gt = pending_before;
+        None
     }
 
     /// Per §A.2.9 `arg-list = argument ( ',' argument )*`, where

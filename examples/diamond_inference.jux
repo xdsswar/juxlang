@@ -1,0 +1,60 @@
+// The diamond `new T<>()` (LANG-V1 §7.8): the type arguments come from the
+// slot the new value flows into, the way Java's diamond takes them from its
+// target type. Every slot kind is covered: a local, a field initializer, an
+// assignment, a return, and an argument, plus a user generic class and a
+// nested generic.
+
+class Box<T> {
+    private T? item;
+    public Box() { item = null; }
+    public void put(T t) { item = t; }
+    public T get() { return item!!; }
+}
+
+class Registry {
+    // A field initializer.
+    private HashMap<String, Vec<int>> groups = new HashMap<>();
+
+    public void add(String key, int value) {
+        if (!groups.contains_key(key)) {
+            // An argument whose parameter type is `Vec<int>`.
+            groups.insert(key, new Vec<>());
+        }
+    }
+
+    public int size() { return groups.len(); }
+}
+
+Vec<String> names() {
+    Vec<String> out = new Vec<>();
+    out.push("ann");
+    out.push("bob");
+    return out;
+}
+
+// A return.
+Vec<int> fresh() { return new Vec<>(); }
+
+int count(Vec<int> xs) { return xs.len(); }
+
+public void main() {
+    Box<String> box = new Box<>();
+    box.put("hi");
+    print(box.get());
+
+    // An assignment to a declared-but-unset local.
+    Vec<int> v;
+    v = new Vec<>();
+    v.push(3);
+    v.push(4);
+    print(v.len());
+
+    print(names().len());
+    print(fresh().len());
+    print(count(new Vec<>()));
+
+    var registry = new Registry();
+    registry.add("x", 1);
+    registry.add("y", 2);
+    print(registry.size());
+}

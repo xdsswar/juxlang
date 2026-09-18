@@ -1,0 +1,2 @@
+closure_vs_fn_pointer.jux:5:5: [E0410] error: type mismatch in declaration of `pointer`: expected fn(int) -> int, found (int) -> int
+closure_vs_fn_pointer.jux:7:5: [E0410] error: type mismatch in declaration of `back`: expected (int) -> int, found fn(int) -> int

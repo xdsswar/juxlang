@@ -473,12 +473,15 @@ fn const_generic_arg_in_type_position_parses() {
     assert_eq!(t.const_literal_text(), Some("4"));
 }
 
-/// A const param of an unsupported value type (`<long N>`) parses but
-/// fires the Phase-1 E0445 diagnostic.
+/// Every integer width, `bool` and `char` make a const parameter (T.11.3);
+/// a type no constant is a const parameter of (`<double D>`) still parses
+/// but fires E0445.
 #[test]
-fn const_generic_param_long_is_diagnosed() {
-    let (ast, n_errors) = parse_with_errors("public class L<long N> { }");
-    assert!(n_errors >= 1, "expected E0445 for <long N>");
+fn const_generic_param_double_is_diagnosed() {
+    let (_, long_errors) = parse_with_errors("public class L<long N> { }");
+    assert_eq!(long_errors, 0, "<long N> is a valid const parameter");
+    let (ast, n_errors) = parse_with_errors("public class L<double N> { }");
+    assert!(n_errors >= 1, "expected E0445 for <double N>");
     // The AST is still well-formed — the param is present.
     let TopLevelDecl::Class(c) = &ast.items[0] else { panic!() };
     assert_eq!(c.generic_params.len(), 1);

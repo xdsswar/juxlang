@@ -261,6 +261,16 @@ impl RustEmitter {
         // generic param `N` folds to the `Generic` defer → `None` → emits `N`
         // (forwarded const-generic arg); a real type name isn't a const → `None`
         // → falls through to the normal type path.
+        // A negative const argument (`Offset<-5>`) needs braces in Rust type
+        // argument position; every other literal is written as it stands.
+        if let Some(lit) = ty.const_literal_text() {
+            if lit.starts_with('-') {
+                self.w.push_str("{ ");
+                self.w.push_str(lit);
+                self.w.push_str(" }");
+                return;
+            }
+        }
         if ty.fn_shape.is_none()
             && ty.array_shape.is_none()
             && !ty.nullable
@@ -364,6 +374,11 @@ impl RustEmitter {
                 self.emit_type_as_rust(p);
             }
             self.w.push_str(") -> ");
+            // `() async -> R` (LANG-V1 §10.1.5): calling it starts work that
+            // is awaited later, so the call returns a boxed future of `R`.
+            if fn_shape.is_async {
+                self.w.push_str("std::pin::Pin<Box<dyn std::future::Future<Output = ");
+            }
             // `(int) -> void` returns Rust unit — `void` is a return-
             // slot keyword, not a type name `emit_type_as_rust` knows.
             let returns_void = fn_shape.return_type.array_shape.is_none()
@@ -380,6 +395,9 @@ impl RustEmitter {
                 self.w.push_str("()");
             } else {
                 self.emit_type_as_rust(&fn_shape.return_type);
+            }
+            if fn_shape.is_async {
+                self.w.push_str(">>>");
             }
             self.w.push('>');
             return;
@@ -907,10 +925,14 @@ impl RustEmitter {
             .and_then(|t| t.name.segments.last())
             .map(|s| s.text.as_str())
             .unwrap_or("int");
-        // Only `int` and `bool` survive the parser's E0445 gate; the
-        // fallback keeps emission total if that ever changes.
-        self.w
-            .push_str(if value_ty == "bool" { "bool" } else { "usize" });
+        // `int` is a `usize`: it sizes arrays, and a Rust array length is one
+        // (a bare read casts it back, see `const_int_params`). Every other
+        // kind is its own Rust type -- `long` an `i64`, `char` a `char`.
+        let rust = match value_ty {
+            "int" => "usize",
+            _ => p.const_ty.as_ref().and_then(jux_primitive_to_rust).unwrap_or("usize"),
+        };
+        self.w.push_str(rust);
     }
 
     /// Emit a generic-parameter list as a declaration site — `<T, U>`,

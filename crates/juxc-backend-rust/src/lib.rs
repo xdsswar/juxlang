@@ -1119,6 +1119,13 @@ struct RustEmitter {
     /// read and clones only at the reads listed here — the same choice a Rust
     /// programmer makes by hand.
     pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
+    /// `T[N]` local declarations (by span) whose value flows into a
+    /// runtime-sized `T[]` slot later in their block, with, per dimension
+    /// (outermost first), whether that slot makes it runtime-sized. Such a
+    /// local is STORED as the runtime-sized handle so both names share one
+    /// array (LANG-V1 §5.5, §6.5.2); its static type is still `T[N]`. Filled
+    /// by `emit_block_contents`, consumed by `emit_var_decl`.
+    pub(crate) fixed_array_dynamic_decls: std::collections::HashMap<juxc_source::Span, Vec<bool>>,
     /// Per lambda span, the captured bindings the body reads again after the
     /// capture, with one read's span each (`crate::lastuse::captures_read_again`).
     /// The lambda clones those before its `move` closure takes them.
@@ -3210,13 +3217,15 @@ fn compute_interface_forced_classes(units: &[juxc_ast::CompilationUnit]) -> Hash
 /// `emit_const_generic_param_decl`). `bool` const params need no cast and
 /// are excluded.
 pub(crate) fn collect_const_int_params(params: &[juxc_ast::TypeParam]) -> HashSet<String> {
+    // Only `int` lowers to a `usize` that a read casts back to `isize`; the
+    // other kinds are declared as their own Rust type and read as they are.
     params
         .iter()
         .filter(|p| {
             p.const_ty
                 .as_ref()
                 .and_then(|t| t.name.segments.last())
-                .map(|s| s.text != "bool")
+                .map(|s| s.text == "int")
                 .unwrap_or(false)
         })
         .map(|p| p.name.text.clone())
@@ -4261,6 +4270,11 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("/// A Jux array: a shared, interior-mutable sequence.\n");
+        w.push_str("/// An async lambda's body, boxed as the future an `() async -> R`\n");
+        w.push_str("/// value produces when called (LANG-V1 §10.1.5).\n");
+        w.push_str("pub fn jux_async<F: std::future::Future + 'static>(f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>> {\n");
+        w.push_str("    Box::pin(f)\n");
+        w.push_str("}\n");
         w.push_str("pub type JuxArr<T> = std::rc::Rc<JuxCell<T>>;\n");
         w.push_str("/// Build a [`JuxArr`] - the constructor an alias cannot provide.\n");
         w.push_str("pub fn jux_arr<T>(v: T) -> JuxArr<T> {\n");
@@ -5097,6 +5111,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
+            fixed_array_dynamic_decls: std::collections::HashMap::new(),
             captures_read_again: std::collections::HashMap::new(),
             sync_classes: std::collections::HashSet::new(),
             sync_class_fqns: std::collections::HashSet::new(),

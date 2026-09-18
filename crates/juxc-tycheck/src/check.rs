@@ -351,6 +351,10 @@ pub(crate) struct Checker<'a> {
     /// outside a function body, and also inside constructor bodies
     /// (constructors don't `return value;`).
     pub(crate) current_return: Option<Ty>,
+    /// Per `T[N]` local, where it was first handed to a runtime-sized `T[]`
+    /// slot and where to a fixed `T[N]` one. Both at once is E0468
+    /// (JUX-LANG-V1 §5.5); decided when the local's block ends.
+    pub(crate) fixed_array_slot_uses: std::collections::HashMap<String, (Option<Span>, Option<Span>)>,
     /// Raw-pointer depth of the enclosing function's declared return type
     /// (`int*` is 1), for the pointer check on `return` (§L.6.1a).
     pub(crate) current_return_ptr: u8,
@@ -542,6 +546,7 @@ impl<'a> Checker<'a> {
             symbols,
             diagnostics,
             current_return: None,
+            fixed_array_slot_uses: std::collections::HashMap::new(),
             current_return_ptr: 0,
             current_return_void: false,
             expr_types: HashMap::new(),
@@ -1228,6 +1233,7 @@ impl<'a> Checker<'a> {
                 let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
                 self.env.declare(&param.name.text, ty);
                 self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+                self.note_fixed_array_decl(&param.name.text, &param.ty, true);
                 if crate::infer::type_ref_is_void_pointer(&param.ty) {
                     self.env.declare_void_base(&param.name.text);
                 }
@@ -2003,6 +2009,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -2520,6 +2527,29 @@ impl<'a> Checker<'a> {
                         && t.name.segments[0].text == "observer"
                 })
                 .unwrap_or(false);
+            // A field whose initializer is a lambda (an observer, or any
+            // function-typed field) runs before the object exists, so the
+            // lambda cannot reach it yet (E0981, see `lambda_uses_this`).
+            if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
+                if !field.is_static {
+                    if let Some(span) = lambda_uses_this(l, class) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0981_FieldLambdaUsesThis,
+                                format!(
+                                    "the lambda that initializes `{}` uses this object, which does not exist yet \
+                                     while its fields are being initialized; this is not supported in this phase",
+                                    field.name.text,
+                                ),
+                            )
+                            .with_span(span)
+                            .with_help(
+                                "make the lambda independent of the object, or store what it needs in a separate object it can capture",
+                            ),
+                        );
+                    }
+                }
+            }
             if is_observer {
                 if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
                     if !matches!(l.params.len(), 0 | 2 | 3) {
@@ -2761,6 +2791,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -2835,6 +2866,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -3445,6 +3477,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -4168,6 +4201,279 @@ impl<'a> Checker<'a> {
             self.check_stmt(stmt);
         }
         self.assigned_in_block = saved;
+        // A `T[N]` local this block declared, handed both to a `T[]` slot and
+        // to a `T[N]` one: the two need different storage for one array.
+        for stmt in &block.statements {
+            let Stmt::VarDecl(v) = stmt else { continue };
+            if let Some((Some(_), Some(fixed_at))) = self.fixed_array_slot_uses.remove(&v.name.text) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0468_FixedArrayNotShareable,
+                        format!(
+                            "`{}` is handed to a runtime-sized array slot and also to a fixed-size one here: one array cannot be stored both ways (JUX-LANG-V1 §5.5)",
+                            v.name.text,
+                        ),
+                    )
+                    .with_span(fixed_at)
+                    .with_help(format!(
+                        "declare `{}` with a runtime-sized type (`[]`), or pass `{}.clone()` where a copy is meant",
+                        v.name.text, v.name.text,
+                    )),
+                );
+            }
+        }
+    }
+
+    /// A method reference (Missing-defs §M.8). The receiver is a VALUE
+    /// (`alice::greet`, bound: `this` is captured) when it names a binding in
+    /// scope, and a TYPE otherwise (`User::greet` unbound or static,
+    /// `User::new` a constructor). When the member is overloaded, the
+    /// expected function type picks one (`slot`, the parameter types of the
+    /// slot the reference flows into); none or several fitting is `E0980`
+    /// (§M.8.3). The pick is recorded in `method_selections` under the
+    /// reference's span, where the backend reads it.
+    fn check_method_ref(&mut self, m: &juxc_ast::MethodRefExpr, slot: Option<Vec<Ty>>) {
+        let member = m.member.text.as_str();
+        // A value receiver: a single name bound in scope (`this` included).
+        let bound_class = if m.receiver.segments.len() == 1 {
+            match self.env.lookup(&m.receiver.segments[0].text) {
+                Some(Ty::User { name, .. }) => Some(name.clone()),
+                Some(_) => return,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let class = match &bound_class {
+            Some(c) => c.clone(),
+            None => crate::infer::resolve_class_name(&m.receiver, &self.env, self.symbols),
+        };
+        let Some((class_fqn, class_sig)) = self.symbols.resolve_class(&class) else {
+            // An interface, record or foreign type: not checked here.
+            return;
+        };
+        let class_fqn = class_fqn.clone();
+        // Each candidate's parameter types AS A FUNCTION VALUE: a bound or
+        // static method takes its own parameters, an unbound instance method
+        // takes the receiver first, a constructor takes the constructor's.
+        let receiver_ty = Ty::User { name: class_fqn.clone(), generic_args: Vec::new() };
+        let candidates: Vec<Vec<Ty>> = if member == "new" {
+            if bound_class.is_some() {
+                return;
+            }
+            class_sig
+                .constructors
+                .iter()
+                .map(|c| c.params.iter().map(|p| lower_member_type(&p.ty, &class_fqn, self.symbols)).collect())
+                .collect()
+        } else {
+            let group = self.symbols.merged_method_overloads(&class_fqn, member);
+            group
+                .iter()
+                .map(|sig| {
+                    let own: Vec<Ty> =
+                        sig.params.iter().map(|p| lower_member_type(&p.ty, &class_fqn, self.symbols)).collect();
+                    if bound_class.is_none() && !sig.is_static {
+                        std::iter::once(receiver_ty.clone()).chain(own).collect()
+                    } else {
+                        own
+                    }
+                })
+                .collect()
+        };
+        if candidates.is_empty() {
+            if member != "new" {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0413_UnresolvedMethod,
+                        format!("no method `{member}` on `{}` to reference", class_fqn.rsplit('.').next().unwrap_or(&class_fqn)),
+                    )
+                    .with_span(m.member.span),
+                );
+            }
+            return;
+        }
+        // Constructors are picked in `ctor_selections`, methods in
+        // `method_selections`, as for a call.
+        let is_ctor = member == "new";
+        if candidates.len() == 1 {
+            if is_ctor {
+                self.ctor_selections.insert(m.span, 0);
+            } else {
+                self.method_selections.insert(m.span, 0);
+            }
+            return;
+        }
+        let shown = format!("{}::{member}", m.receiver.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."));
+        let Some(slot) = slot else {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0980_AmbiguousMethodRef,
+                    format!("`{shown}` names {} overloads, and nothing here says which one (§M.8.3)", candidates.len()),
+                )
+                .with_span(m.span)
+                .with_help("give the reference a function type (`(int) -> Pt f = Pt::new;`), or write a lambda"),
+            );
+            return;
+        };
+        let fitting: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, params)| {
+                params.len() == slot.len()
+                    && params.iter().zip(slot.iter()).all(|(p, s)| compatible(p, s, self.symbols))
+            })
+            .map(|(k, _)| k)
+            .collect();
+        match fitting.as_slice() {
+            [k] => {
+                if is_ctor {
+                    self.ctor_selections.insert(m.span, *k);
+                } else {
+                    self.method_selections.insert(m.span, *k);
+                }
+            }
+            [] => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0980_AmbiguousMethodRef,
+                    format!(
+                        "no overload of `{shown}` takes ({})",
+                        slot.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "),
+                    ),
+                )
+                .with_span(m.span),
+            ),
+            _ => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0980_AmbiguousMethodRef,
+                    format!("more than one overload of `{shown}` fits here (§M.8.3)"),
+                )
+                .with_span(m.span)
+                .with_help("write a lambda that calls the one you mean"),
+            ),
+        }
+    }
+
+    /// `sizeof(T)` for a type the operand can only be (§5.9.4): `void` is
+    /// `E0463`, a wildcard argument `E0462`, and a generic type written
+    /// without its arguments (`Vec`, a user `Box`) `E0461`.
+    fn check_sizeof_type(&mut self, t: &juxc_ast::TypeRef, span: Span) {
+        if t.name.segments.len() == 1 && t.name.segments[0].text == "void" && t.array_shape.is_none() {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0463_SizeofVoid, "`sizeof(void)`: `void` has no values, so it has no size (§5.9.4)")
+                    .with_span(span),
+            );
+            return;
+        }
+        fn has_wildcard(t: &juxc_ast::TypeRef) -> bool {
+            t.generic_args.iter().any(|a| match a {
+                juxc_ast::GenericArg::Wildcard(_) => true,
+                juxc_ast::GenericArg::Type(inner) => has_wildcard(inner),
+            })
+        }
+        if has_wildcard(t) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0462_SizeofWildcard,
+                    "`sizeof` of a wildcard type: `?` stands for some type, and no size belongs to it (§5.9.4)",
+                )
+                .with_span(span)
+                .with_help("name the type argument"),
+            );
+            return;
+        }
+        let ty = ty_from_ref(t, &self.env, self.symbols);
+        if let Ty::User { name, generic_args } = &ty {
+            let declared = self
+                .symbols
+                .resolve_class(name)
+                .map(|(_, c)| c.generic_params.iter().filter(|p| !p.is_const()).count())
+                .unwrap_or(0);
+            if declared > 0 && generic_args.is_empty() && t.generic_args.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0461_SizeofUnboundGeneric,
+                        format!("`sizeof({name})`: `{name}` is generic, and its size depends on its type arguments (§5.9.4)"),
+                    )
+                    .with_span(span)
+                    .with_help(format!("write the arguments, `sizeof({name}<...>)`")),
+                );
+            }
+        }
+    }
+
+    /// Record `name` as declared with a fixed-size array type when `ty` has a
+    /// fixed dimension (see [`TypeEnv::declare_fixed_array`]).
+    fn note_fixed_array_decl(&mut self, name: &str, ty: &juxc_ast::TypeRef, is_param: bool) {
+        let fixed = ty
+            .array_shape
+            .as_ref()
+            .is_some_and(|shape| shape.dims.iter().any(|d| matches!(d, juxc_ast::ArrayDim::Fixed(_))));
+        if fixed && ty.ptr_depth == 0 {
+            self.env.declare_fixed_array(name, is_param);
+            if !is_param {
+                self.fixed_array_slot_uses.remove(name);
+            }
+        }
+    }
+
+    /// `value` flows into an array slot whose outermost dimension is
+    /// runtime-sized (`slot_dynamic`) or fixed. A declared-`T[N]` local is
+    /// noted for the end-of-block check; a declared-`T[N]` parameter or field
+    /// going into a runtime-sized slot is E0468 at once, since its storage
+    /// was fixed where it was declared (JUX-LANG-V1 §5.5, ERRATA E42).
+    fn note_array_slot(&mut self, value: &Expr, slot_dynamic: bool, span: Span) {
+        let (what, param) = match value {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                match self.env.fixed_array(name) {
+                    Some(false) => {
+                        let entry = self.fixed_array_slot_uses.entry(name.to_string()).or_default();
+                        if slot_dynamic {
+                            entry.0.get_or_insert(span);
+                        } else {
+                            entry.1.get_or_insert(span);
+                        }
+                        return;
+                    }
+                    Some(true) => (format!("parameter `{name}`"), true),
+                    None => return,
+                }
+            }
+            Expr::Field(f) => {
+                let Ty::User { name: class, .. } = infer_expr(&f.object, &self.env, self.symbols) else {
+                    return;
+                };
+                let fixed = self.symbols.lookup_field(&class, &f.field.text).is_some_and(|(fs, _)| {
+                    fs.ty.array_shape.as_ref().is_some_and(|shape| {
+                        shape.dims.iter().any(|d| matches!(d, juxc_ast::ArrayDim::Fixed(_)))
+                    })
+                });
+                if !fixed {
+                    return;
+                }
+                (format!("field `{}`", f.field.text), false)
+            }
+            _ => return,
+        };
+        if !slot_dynamic {
+            return;
+        }
+        let ty = infer_expr(value, &self.env, self.symbols);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0468_FixedArrayNotShareable,
+                format!(
+                    "{what} is a fixed-size array (`{ty}`) and cannot be handed to a runtime-sized array slot as the same array (JUX-LANG-V1 §5.5)"
+                ),
+            )
+            .with_span(span)
+            .with_help(if param {
+                "declare the parameter with a runtime-sized type (`[]`), or pass a copy with `.clone()`"
+            } else {
+                "declare the field with a runtime-sized type (`[]`), or pass a copy with `.clone()`"
+            }),
+        );
     }
 
     /// E0418 (§7.10): `recv.member` where `recv` is `T?` and no test has
@@ -4460,6 +4766,12 @@ impl<'a> Checker<'a> {
                 // emits a broken slot type.
                 if let Some(t) = &v.ty {
                     self.check_local_type_known(t);
+                    if let (Some(shape), Some(init)) = (t.array_shape.as_ref(), v.init.as_ref()) {
+                        if let Some(outer) = shape.dims.first() {
+                            let slot_dynamic = matches!(outer, juxc_ast::ArrayDim::Dynamic);
+                            self.note_array_slot(init, slot_dynamic, expr_span(init));
+                        }
+                    }
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
                     self.check_fixed_array_size_in_type(t);
@@ -4472,7 +4784,7 @@ impl<'a> Checker<'a> {
                 let declared =
                     v.ty.as_ref()
                         .map(|t| ty_from_ref(t, &self.env, self.symbols));
-                if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_))) = (&declared, &v.init) {
+                if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&declared, &v.init) {
                     self.lambda_slot_params = Some(params.clone());
                 }
                 let inferred = v.init.as_ref().map(|e| {
@@ -4523,16 +4835,18 @@ impl<'a> Checker<'a> {
                                 .with_help("a function has no identity and no string form to hold (§T.1.2); give the slot the function's own type"),
                             );
                         } else if !compatible(d, i, self.symbols) {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0410_TypeMismatch,
-                                    format!(
-                                        "type mismatch in declaration of `{}`: expected {}, found {}",
-                                        v.name.text, d, i,
-                                    ),
-                                )
-                                .with_span(v.span),
-                            );
+                            let mut diag = Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!(
+                                    "type mismatch in declaration of `{}`: expected {}, found {}",
+                                    v.name.text, d, i,
+                                ),
+                            )
+                            .with_span(v.span);
+                            if let Some(help) = fn_kind_mismatch_help(d, i) {
+                                diag = diag.with_help(help);
+                            }
+                            self.diagnostics.push(diag);
                         }
                         d.clone()
                     }
@@ -4570,6 +4884,9 @@ impl<'a> Checker<'a> {
                     (None, None) => false,
                 };
                 self.env.declare(&v.name.text, final_ty);
+                if let Some(t) = &v.ty {
+                    self.note_fixed_array_decl(&v.name.text, t, false);
+                }
                 self.env.declare_pointer(&v.name.text, ptr_depth);
                 if void_base {
                     self.env.declare_void_base(&v.name.text);
@@ -4765,6 +5082,16 @@ impl<'a> Checker<'a> {
                 // mutably borrow `self` to walk the expression below
                 // without a borrow conflict on `current_return`.
                 let expected = self.current_return.clone();
+                // An array returned where the function returns `T[]` or `T[N]`.
+                if let (Some(Ty::Array { kind, .. }), Some(e)) = (&expected, opt) {
+                    self.note_array_slot(e, *kind == crate::ty::ArrayKind::Dynamic, expr_span(e));
+                }
+                // A returned lambda or method reference takes the function
+                // type the method returns, as one stored into a typed local
+                // does (`return this::greet;` picks the overload, §M.8.3).
+                if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&expected, opt) {
+                    self.lambda_slot_params = Some(params.clone());
+                }
                 match (&expected, opt) {
                     // Bare `return;` inside a void function — fine.
                     (Some(t), None) if t.is_void() => {}
@@ -5887,7 +6214,28 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            Expr::SizeOf(s) => self.check_expr(&s.operand),
+            Expr::SizeOf(s) => match &s.type_operand {
+                Some(t) => self.check_sizeof_type(t, s.span),
+                None => {
+                    self.check_expr(&s.operand);
+                    // A bare type name (`sizeof(Box)`, §5.9.3 rule 2) that is
+                    // not a binding: the unbound-generic rule applies to it too.
+                    if let Expr::Path(qn) = s.operand.as_ref() {
+                        if qn.segments.len() == 1 && self.env.lookup(&qn.segments[0].text).is_none() {
+                            let t = juxc_ast::TypeRef {
+                                name: qn.clone(),
+                                generic_args: Vec::new(),
+                                nullable: false,
+                                array_shape: None,
+                                fn_shape: None,
+                                ptr_depth: 0,
+                                span: qn.span,
+                            };
+                            self.check_sizeof_type(&t, s.span);
+                        }
+                    }
+                }
+            },
 
             Expr::InterpString(s) => {
                 for seg in &s.segments {
@@ -6138,12 +6486,9 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
-            Expr::MethodRef(_) => {
-                // No sub-expressions to walk; method existence
-                // verification lives in a future tycheck pass
-                // (overload resolution / method-table lookup).
-                // Untyped today — backend emits the closure
-                // adapter and Rust catches missing members.
+            Expr::MethodRef(m) => {
+                let slot = self.lambda_slot_params.take();
+                self.check_method_ref(m, slot);
             }
             Expr::Ternary(t) => {
                 self.check_expr(&t.condition);
@@ -7708,10 +8053,15 @@ impl<'a> Checker<'a> {
     fn declare_const_generic_params(&mut self, params: &[TypeParam]) {
         for p in params {
             let Some(cty) = &p.const_ty else { continue };
-            let value_ty = match cty.name.segments.last().map(|s| s.text.as_str()) {
-                Some("bool") => Ty::Primitive(Primitive::Bool),
-                _ => Ty::Primitive(Primitive::Int),
-            };
+            // `<int N>` reads as an `int`, `<long N>` as a `long`, `<char C>`
+            // as a `char`, `<bool B>` as a `bool` (T.11.3).
+            let value_ty = cty
+                .name
+                .segments
+                .last()
+                .and_then(|s| crate::ty::primitive_from_name(&s.text))
+                .map(Ty::Primitive)
+                .unwrap_or(Ty::Primitive(Primitive::Int));
             self.env.declare(&p.name.text, value_ty);
             self.const_param_names.insert(p.name.text.clone());
         }
@@ -7832,6 +8182,30 @@ impl<'a> Checker<'a> {
             // FIXED array type. At a `new` site it heaps (`vec![..; N + 1]`),
             // so there's nothing to reject.
             Err(crate::const_eval::ConstEvalError::Generic) => {
+                // A const parameter sizes an array only when it is an `int` or
+                // a `uint` (a Rust array length is a `usize`, T.11.3).
+                if let Expr::Path(qn) = size {
+                    if qn.segments.len() == 1 {
+                        let name = qn.segments[0].text.as_str();
+                        if let Some(Ty::Primitive(kind)) = self.env.lookup(name) {
+                            if self.const_param_names.contains(name)
+                                && !matches!(kind, Primitive::Int | Primitive::Uint)
+                            {
+                                let kind = crate::ty::primitive_name(*kind);
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0445_ConstGenericUnsupported,
+                                        format!(
+                                            "`{name}` is a `{kind}` const parameter, and an array size is an `int`: declare it `<int {name}>` to size an array with it"
+                                        ),
+                                    )
+                                    .with_span(at(size)),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                }
                 if !heapable && !matches!(size, Expr::Path(qn) if qn.segments.len() == 1) {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -8722,20 +9096,12 @@ impl<'a> Checker<'a> {
                 // Const slot + literal: the literal's kind must match
                 // the param's value type (`true` can't bind `<int N>`).
                 (Some(cty), Some(lit)) => {
-                    let param_is_bool = cty
-                        .name
-                        .segments
-                        .last()
-                        .map(|s| s.text == "bool")
-                        .unwrap_or(false);
-                    let lit_is_bool = lit == "true" || lit == "false";
-                    if param_is_bool != lit_is_bool {
+                    if let Some(why) = const_arg_mismatch(cty, lit) {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0445_ConstGenericUnsupported,
                                 format!(
-                                    "const-generic argument `{lit}` doesn't match the declared \
-                                     value type of `{}`",
+                                    "const-generic argument `{lit}` doesn't fit `{}`: {why}",
                                     param.name.text,
                                 ),
                             )
@@ -11023,6 +11389,19 @@ impl<'a> Checker<'a> {
         subst_args: &[Ty],
     ) {
         self.check_wildcard_receiver_write(callee_name, params, subst_params, subst_args, call_span);
+        // An array argument handed to an array parameter (JUX-LANG-V1 §5.5).
+        for (i, arg) in args.iter().enumerate() {
+            if arg_names.get(i).is_some_and(|n| n.is_some()) {
+                continue;
+            }
+            let Some(param) = params.get(i) else { break };
+            if let Some(shape) = param.ty.array_shape.as_ref() {
+                if let Some(outer) = shape.dims.first() {
+                    let slot_dynamic = matches!(outer, juxc_ast::ArrayDim::Dynamic);
+                    self.note_array_slot(arg, slot_dynamic, expr_span(arg));
+                }
+            }
+        }
         // ---- variadic callee (§7.2 / §E.1.2.1) ----
         //
         // The last parameter being `T...` switches the mapping:
@@ -11202,7 +11581,7 @@ impl<'a> Checker<'a> {
             // String), exactly as a lambda stored into a typed local does. Only
             // a fully concrete slot is used: a `T` still to be inferred from
             // the call says nothing yet.
-            if let (Expr::Lambda(_), Some(param)) = (arg, arg_to_param[i].and_then(|j| params.get(j))) {
+            if let (Expr::Lambda(_) | Expr::MethodRef(_), Some(param)) = (arg, arg_to_param[i].and_then(|j| params.get(j))) {
                 let slot_raw = match declaring_class {
                     Some(class) => lower_member_type(&param.ty, class, self.symbols),
                     None => ty_from_ref(&param.ty, &self.env, self.symbols),
@@ -11294,6 +11673,9 @@ impl<'a> Checker<'a> {
                 )
                 // A literal argument has no span of its own; the call does.
                 .with_span([expr_span(arg), call_span].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(call_span));
+                if let Some(help) = fn_kind_mismatch_help(&expected, &found) {
+                    diag = diag.with_help(help);
+                }
                 // A nullable `T?` flowing into a non-nullable slot is the #1
                 // foreign-boundary mistake (e.g. a `WindowOptions?` field
                 // passed to `new Window(.., WindowOptions)`). Point the user at
@@ -12365,6 +12747,17 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
                 if a1.is_empty() || a2.is_empty() {
                     return true;
                 }
+                // **Diamond (§7.8, Grammar §A.2.6).** `new Vec<>()` and a bare
+                // `new Vec()` infer nothing from an empty argument list, so
+                // every argument comes back unknown -- one per declared
+                // parameter, a foreign type's defaulted ones included (`Vec`
+                // has an allocator parameter the program never writes). The
+                // slot the value flows into supplies the arguments, exactly
+                // as Java's diamond takes them from the target type, so an
+                // all-unknown side matches whatever the other side names.
+                if a2.iter().all(Ty::is_unknown) || a1.iter().all(Ty::is_unknown) {
+                    return true;
+                }
                 if a1.len() != a2.len() {
                     return false;
                 }
@@ -12389,6 +12782,112 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
             is_subtype(found, expected, symbols)
         }
         _ => false,
+    }
+}
+
+/// Where a field-initializer lambda uses the object it belongs to: a bare
+/// name that is one of the class's own instance fields, properties or
+/// methods and not a parameter or local of the lambda. (An explicit `this`
+/// there is already the resolver's E0301, one diagnostic per mistake.)
+/// Those initializers run while the object is being built (before the handle
+/// a capture would need exists), which the backend cannot lower yet (E0981).
+fn lambda_uses_this(l: &juxc_ast::LambdaExpr, class: &juxc_ast::ClassDecl) -> Option<Span> {
+    let mut members: std::collections::HashSet<&str> = class
+        .fields
+        .iter()
+        .filter(|f| !f.is_static)
+        .map(|f| f.name.text.as_str())
+        .collect();
+    members.extend(class.properties.iter().filter(|p| !p.is_static).map(|p| p.name.text.as_str()));
+    members.extend(
+        class
+            .methods
+            .iter()
+            .filter(|m| !m.modifiers.contains(&juxc_ast::FnModifier::Static))
+            .map(|m| m.name.text.as_str()),
+    );
+    let mut own: std::collections::HashSet<String> = l.params.iter().map(|p| p.name.text.clone()).collect();
+    let body = match &l.body {
+        juxc_ast::LambdaBody::Block(b) => (**b).clone(),
+        juxc_ast::LambdaBody::Expr(e) => Block {
+            statements: vec![Stmt::Expr((**e).clone())],
+            span: Span::DUMMY,
+        },
+    };
+    juxc_ast::visit::for_each_node(&body, &mut |n| {
+        if let juxc_ast::visit::Node::Stmt(Stmt::VarDecl(v)) = n {
+            own.insert(v.name.text.clone());
+        }
+    });
+    let mut found = None;
+    juxc_ast::visit::for_each_expr(&body, &mut |e| {
+        if found.is_some() {
+            return;
+        }
+        match e {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if members.contains(name) && !own.contains(name) {
+                    found = Some(qn.span);
+                }
+            }
+            _ => {}
+        }
+    });
+    found
+}
+
+/// The help for a function value where a function POINTER is expected, or
+/// the reverse (Layout-ABI §L.6.4). The two look alike and are not
+/// interchangeable: `(A) -> R` is a closure that may capture, `fn(A) -> R`
+/// the address of a C-callable function with no environment.
+fn fn_kind_mismatch_help(expected: &Ty, found: &Ty) -> Option<&'static str> {
+    match (expected, found) {
+        (Ty::FnPtr { .. }, Ty::Fn { .. }) => Some(
+            "`fn(...) -> R` is a function pointer, for C code; a lambda or a `(...) -> R` value is a closure and \
+             does not convert. Pass a named function, or declare the slot `(...) -> R`",
+        ),
+        (Ty::Fn { .. }, Ty::FnPtr { .. }) => Some(
+            "a `fn(...)` pointer is not a closure value; wrap it in a lambda, `(x) -> p(x)`, to store it as `(...) -> R`",
+        ),
+        _ => None,
+    }
+}
+
+/// Why the literal `lit` cannot be the argument of a const parameter of
+/// kind `cty` (T.11.3), or `None` when it can. An integer kind takes an
+/// integer literal that fits it; `int` and `uint` take no negative value,
+/// since they size arrays and lower to an unsigned `usize`. `bool` takes
+/// `true`/`false`, `char` a char literal.
+fn const_arg_mismatch(cty: &juxc_ast::TypeRef, lit: &str) -> Option<String> {
+    let kind = cty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("int");
+    let is_bool = lit == "true" || lit == "false";
+    let is_char = lit.starts_with('\'');
+    match kind {
+        "bool" => (!is_bool).then(|| "it is a `bool` parameter".to_string()),
+        "char" => (!is_char).then(|| "it is a `char` parameter; give a char literal like `'x'`".to_string()),
+        _ => {
+            if is_bool || is_char {
+                return Some(format!("it is an `{kind}` parameter; give an integer"));
+            }
+            let p = crate::ty::primitive_from_name(kind)?;
+            let bits = crate::ty::integer_bits(p)?;
+            let v = lit.replace('_', "").parse::<i128>().ok()?;
+            let sizes_arrays = matches!(p, Primitive::Int | Primitive::Uint);
+            let (lo, hi): (i128, i128) = match p {
+                Primitive::Int => (0, (1i128 << 63) - 1),
+                Primitive::Uint => (0, (1i128 << 64) - 1),
+                _ if crate::ty::is_unsigned_primitive(p) => (0, (1i128 << bits) - 1),
+                _ => (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1),
+            };
+            if (lo..=hi).contains(&v) {
+                None
+            } else if v < 0 && sizes_arrays {
+                Some(format!("an `{kind}` const parameter is a size, and a size is never negative"))
+            } else {
+                Some(format!("it is outside `{kind}` ({lo} to {hi})"))
+            }
+        }
     }
 }
 

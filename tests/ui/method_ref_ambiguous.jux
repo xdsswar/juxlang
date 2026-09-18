@@ -1,0 +1,10 @@
+class Greeter {
+    public String greet(String other) { return other; }
+    public String greet(String other, int times) { return other; }
+}
+
+public void main() {
+    var g = new Greeter();
+    var f = g::greet;
+    (int) -> String h = g::greet;
+}

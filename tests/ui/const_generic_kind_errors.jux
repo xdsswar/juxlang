@@ -1,0 +1,14 @@
+class Ratio<double D> {}
+class Buffer<long N> {
+    public int[] make() { return new int[N]; }
+}
+class Sized<int N> {}
+class Tiny<byte K> {}
+class Letter<char C> {}
+
+public void main() {
+    var a = new Sized<-1>();
+    var b = new Tiny<300>();
+    var c = new Sized<'x'>();
+    var d = new Letter<5>();
+}

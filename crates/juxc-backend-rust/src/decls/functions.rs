@@ -1083,6 +1083,8 @@ impl RustEmitter {
         // rewrite and emitted a plain `c.timeout` against a newtype. Moving
         // either method above the other made it compile again.
         self.local_types.push(std::collections::HashMap::new());
+        // A `T[N]` local the body hands to a `T[]` slot is stored runtime-sized.
+        self.note_fixed_array_escapes(&body.statements);
         // FnMut / mutable-capture closures: a local that is captured by a closure
         // AND reassigned must lower to an `Rc<RefCell<T>>` shared cell. Compute
         // the set for this body and register it in `ref_locals` (so reads/writes

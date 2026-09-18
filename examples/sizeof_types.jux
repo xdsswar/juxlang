@@ -1,0 +1,18 @@
+// `sizeof` of a type that only reads as a type (JUX-LANG-V1 §5.9.4): a
+// generic type with its arguments, an array type, a nullable type. Class,
+// collection and array values are references (§6.5), so their size is a
+// handle's, the same whatever they hold.
+
+class Box<T> {
+    private T? value;
+    public Box() { value = null; }
+}
+
+public void main() {
+    print(sizeof(Vec<int>) == sizeof(Vec<String>));
+    print(sizeof(int[]) == sizeof(String[]));
+    print(sizeof(Box<int>) == sizeof(Box<String>));
+    print(sizeof(int?) >= sizeof(int));
+    print(sizeof(i32));
+    print(sizeof(long));
+}
