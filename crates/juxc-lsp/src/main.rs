@@ -10,13 +10,33 @@
 //! for anything but JSON-RPC frames — logging goes to stderr.
 
 mod analysis;
+mod calls;
+mod capabilities;
+mod code_action;
+mod completion;
+mod definition;
 mod diagnostics;
 mod doc;
+mod hover;
+mod imports;
+mod inlay;
 mod intel;
 mod position;
+mod references;
+mod roots;
 mod scope;
+mod semtok;
 mod server;
+mod symbols;
+mod sync;
+mod text;
 mod workspace;
+mod xref;
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod server_tests;
 
 use server::Backend;
 use tower_lsp::{LspService, Server};

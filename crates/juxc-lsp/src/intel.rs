@@ -23,6 +23,7 @@ use juxc_ast::{ArrayDim, GenericArg, ReturnType, TypeParam, TypeRef, Visibility,
 use juxc_tycheck::symbol_table::{
     ClassSig, EnumSig, FieldSig, FunctionSig, InterfaceSig, MethodSig, ParamSig, RecordSig,
 };
+use juxc_source::Span;
 use juxc_tycheck::{SymbolTable, Ty};
 
 /// A resolved symbol whose declaration signature we can render for hover.
@@ -786,4 +787,39 @@ fn lookup_by_bare<'a, V>(
         return Some((k, v));
     }
     map.iter().find(|(k, _)| bare_of(k) == bare)
+}
+
+/// The source span of `member` inside the type stored under key `owner` —
+/// where `completionItem/resolve` reads the doc comment from.
+pub(crate) fn member_decl_span(symbols: &SymbolTable, owner: &str, member: &str) -> Option<Span> {
+    if let Some(c) = symbols.classes.get(owner) {
+        if let Some(m) = c.methods.get(member) {
+            return Some(m.span);
+        }
+        if let Some(f) = c.fields.get(member) {
+            return Some(f.span);
+        }
+    }
+    if let Some(i) = symbols.interfaces.get(owner) {
+        if let Some(m) = i.methods.get(member) {
+            return Some(m.span);
+        }
+        if let Some(f) = i.fields.get(member) {
+            return Some(f.span);
+        }
+    }
+    if let Some(r) = symbols.records.get(owner) {
+        if let Some(m) = r.methods.get(member) {
+            return Some(m.span);
+        }
+    }
+    if let Some(e) = symbols.enums.get(owner) {
+        if let Some(v) = e.variants.get(member) {
+            return Some(v.span);
+        }
+        if let Some(m) = e.methods.get(member) {
+            return Some(m.span);
+        }
+    }
+    None
 }
