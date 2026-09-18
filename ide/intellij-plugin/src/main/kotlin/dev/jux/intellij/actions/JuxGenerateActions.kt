@@ -39,7 +39,13 @@ abstract class JuxGenerateAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val type = enclosingType(e) ?: return
         val className = type.name ?: return
-        val fields = instanceFields(type)
+        val offered = instanceFields(type)
+        // Java's Generate asks which fields take part, all preselected.
+        val fields = if (choosesFields && offered.isNotEmpty()) {
+            JuxMemberChooser.chooseFields(project, className, offered, chooserTitle) ?: return
+        } else {
+            offered
+        }
         val text = build(type, className, fields) ?: return
         WriteCommandAction.runWriteCommandAction(project, "Generate", null, {
             val doc = editor.document
@@ -49,6 +55,12 @@ abstract class JuxGenerateAction : AnAction() {
             PsiDocumentManager.getInstance(project).commitDocument(doc)
         })
     }
+
+    /** Whether the user picks the fields in a chooser first, as in Java. */
+    protected open val choosesFields: Boolean = false
+
+    /** The chooser's title, when [choosesFields]. */
+    protected open val chooserTitle: String = "Select Fields"
 
     /** Whether this action applies to [type]; every type body by default. */
     protected open fun isAvailableFor(type: JuxTypeDeclaration): Boolean = true
@@ -164,6 +176,8 @@ internal fun declaredOperators(type: JuxTypeDeclaration): Set<String> {
  */
 class JuxGenerateEqualsAndHashAction : JuxGenerateAction() {
     override val includeComputed: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields for operator== and hash"
 
     override fun isAvailableFor(type: JuxTypeDeclaration): Boolean =
         type.node.elementType === JuxElementTypes.CLASS_DECLARATION &&
@@ -201,6 +215,9 @@ class JuxGenerateEqualsAndHashAction : JuxGenerateAction() {
  * but may want its own text, so it gets the action too.
  */
 class JuxGenerateOperatorStringAction : JuxGenerateAction() {
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields for operator string"
+
     override fun isAvailableFor(type: JuxTypeDeclaration): Boolean =
         type.node.elementType in STRINGABLE && "string" !in declaredOperators(type)
 
@@ -220,6 +237,10 @@ class JuxGenerateOperatorStringAction : JuxGenerateAction() {
 
 /** Generate `public ClassName(T f, …) { this.f = f; … }` from the fields. */
 class JuxGenerateConstructorAction : JuxGenerateAction() {
+    override val includeComputed: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Choose Fields to Initialize by Constructor"
+
     override fun build(className: String, fields: List<JuxField>): String? {
         val params = fields.joinToString(", ") { "${it.type} ${it.name}" }
         val assigns = fields.joinToString("\n") { "        this.${it.name} = ${it.name};" }
@@ -231,6 +252,8 @@ class JuxGenerateConstructorAction : JuxGenerateAction() {
 /** Generate a getter for each field: `public T name() { return name; }`. */
 class JuxGenerateGettersAction : JuxGenerateAction() {
     override val includeProperties: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields to Generate Getters"
 
     override fun build(className: String, fields: List<JuxField>): String? {
         if (fields.isEmpty()) return null
@@ -243,6 +266,8 @@ class JuxGenerateGettersAction : JuxGenerateAction() {
 /** Generate a setter for each field: `public void setName(T value) { name = value; }`. */
 class JuxGenerateSettersAction : JuxGenerateAction() {
     override val includeProperties: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields to Generate Setters"
 
     override fun build(className: String, fields: List<JuxField>): String? {
         if (fields.isEmpty()) return null
