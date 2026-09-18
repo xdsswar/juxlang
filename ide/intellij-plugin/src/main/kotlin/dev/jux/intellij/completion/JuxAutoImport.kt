@@ -54,12 +54,46 @@ object JuxAutoImport {
      */
     fun addImport(project: Project, document: Document, file: JuxFile, fqn: String, simpleName: String) {
         if (importAlreadyPresent(file, fqn, simpleName)) return
+        if (collapseIntoWildcard(project, document, file, fqn)) return
         val offset = importInsertOffset(file)
         val nl = if (offset == 0) "" else "\n"
         // A blank line after the package block reads better when we're the
         // first import; otherwise just append on its own line.
         document.insertString(offset, "${nl}import $fqn;")
         PsiDocumentManager.getInstance(project).commitDocument(document)
+    }
+
+    /**
+     * The Imports tab's wildcard threshold (Code Style | Jux): when this import
+     * would make it that many single-name imports from one package, they all
+     * become `import pkg.*;` instead. True when that happened (the name is now
+     * imported); false when the threshold is off or not reached.
+     */
+    private fun collapseIntoWildcard(project: Project, document: Document, file: JuxFile, fqn: String): Boolean {
+        val threshold = dev.jux.intellij.format.JuxCodeStyleSettings.of(file).NAMES_COUNT_TO_USE_WILDCARD
+        val pkg = fqn.substringBeforeLast('.', "")
+        if (threshold <= 0 || pkg.isEmpty()) return false
+        val single = Regex("""^import\s+${Regex.escape(pkg)}\.\w+\s*;$""")
+        val same = file.children.filter { it.elementType === E.IMPORT_STATEMENT && single.matches(it.text.trim()) }
+        if (same.size + 1 < threshold) return false
+        // Back to front: the first import's line becomes the wildcard, the
+        // others go with the line break in front of them.
+        for (imp in same.drop(1).asReversed()) {
+            val start = imp.textRange.startOffset
+            var from = start
+            while (from > 0 && document.charsSequence[from - 1].let { it == ' ' || it == '\t' }) from--
+            if (from > 0 && document.charsSequence[from - 1] == '\n') from--
+            document.deleteString(from, imp.textRange.endOffset)
+        }
+        val first = same.firstOrNull()
+        if (first != null) {
+            document.replaceString(first.textRange.startOffset, first.textRange.endOffset, "import $pkg.*;")
+        } else {
+            val offset = importInsertOffset(file)
+            document.insertString(offset, "${if (offset == 0) "" else "\n"}import $pkg.*;")
+        }
+        PsiDocumentManager.getInstance(project).commitDocument(document)
+        return true
     }
 
     /** True when [simpleName] (from [fqn]) is already imported by [file]. */

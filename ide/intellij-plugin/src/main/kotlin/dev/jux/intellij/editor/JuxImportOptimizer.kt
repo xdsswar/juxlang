@@ -50,7 +50,8 @@ class JuxImportOptimizer : ImportOptimizer {
             }
         }
 
-        val newBlock = layout(kept)
+        val style = dev.jux.intellij.format.JuxCodeStyleSettings.of(file)
+        val newBlock = layout(collapseToWildcards(kept, style.NAMES_COUNT_TO_USE_WILDCARD), style)
 
         // The contiguous span the imports occupy, plus a guard that nothing but
         // whitespace lives between them (so comments are never swallowed).
@@ -81,24 +82,43 @@ class JuxImportOptimizer : ImportOptimizer {
     }
 
     /**
-     * Group, sort and join the surviving import lines. Groups are separated by
-     * one blank line; empty groups leave no trace.
+     * Group, sort and join the surviving import lines, in the groups of the
+     * Imports tab (Code Style | Jux), separated by a blank line when it says
+     * so; empty groups leave no trace.
      */
-    private fun layout(lines: List<Pair<String, String>>): String =
-        lines
-            .groupBy { (_, text) -> groupOf(text) }
+    private fun layout(lines: List<Pair<String, String>>, style: dev.jux.intellij.format.JuxCodeStyleSettings): String {
+        val groups = style.layoutGroups()
+        val separator = if (style.BLANK_LINE_BETWEEN_IMPORT_GROUPS) "\n\n" else "\n"
+        return lines
+            .groupBy { (_, text) -> groupOf(text, groups) }
             .toSortedMap()
             .values
-            .joinToString("\n\n") { group -> group.sortedBy { it.first }.joinToString("\n") { it.second } }
+            .joinToString(separator) { group -> group.sortedBy { it.first }.joinToString("\n") { it.second } }
+    }
 
-    /** 0: bound crates, 1: the Jux library, 2: everything else (the project). */
-    private fun groupOf(importText: String): Int {
+    /** The layout group an import line belongs to. */
+    private fun groupOf(importText: String, groups: List<List<String>>): Int {
         val path = importText.removePrefix("import").trim()
-        return when {
-            path.startsWith("rust.") || path.startsWith("c.") || path.startsWith("cpp.") -> 0
-            path.startsWith("jux.") -> 1
-            else -> 2
-        }
+        return dev.jux.intellij.format.JuxCodeStyleSettings.groupIndex(groups, path)
+    }
+
+    /**
+     * Java's "class count to use import with '*'": when [threshold] or more
+     * names come from one package through plain single-name imports, they
+     * become one `import pkg.*;`. Aliased imports keep their alias, and
+     * `0` turns this off.
+     */
+    private fun collapseToWildcards(lines: List<Pair<String, String>>, threshold: Int): List<Pair<String, String>> {
+        if (threshold <= 0) return lines
+        val single = Regex("""^import\s+([\w.]+)\.(\w+)\s*;$""")
+        val byPackage = lines.mapNotNull { line -> single.matchEntire(line.second.trim())?.let { it.groupValues[1] to line } }
+            .groupBy({ it.first }, { it.second })
+        val collapse = byPackage.filter { it.value.size >= threshold }
+        if (collapse.isEmpty()) return lines
+        val dropped = collapse.values.flatten().toSet()
+        val wildcards = collapse.keys.filter { pkg -> lines.none { it.second.trim() == "import $pkg.*;" } }
+            .map { pkg -> "$pkg.*" to "import $pkg.*;" }
+        return lines.filter { it !in dropped } + wildcards
     }
 
     /** True if only whitespace separates the two (sibling) elements. */

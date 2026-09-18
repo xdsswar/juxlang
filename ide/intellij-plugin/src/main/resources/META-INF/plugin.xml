@@ -400,10 +400,18 @@
          its initializer has side effects; parenthesizes when substituting. -->
     <inlineActionHandler
         implementation="dev.jux.intellij.refactoring.JuxInlineVariableHandler"/>
+    <!-- Inline Method (Ctrl+Alt+N on a method): every call becomes the body. -->
+    <inlineActionHandler
+        implementation="dev.jux.intellij.refactoring.JuxInlineMethodHandler"/>
     <!-- Safe Delete: usages come from the same reference search as Find Usages,
          so the conflicts dialog lists exactly what Alt+F7 would have shown. -->
     <refactoring.safeDeleteProcessor
         implementation="dev.jux.intellij.refactoring.JuxSafeDeleteProcessor"/>
+    <!-- Move Class (F6 on a top-level type): package line, imports and
+         referencing files follow the type (spec 3.1: one <Name>.jux). -->
+    <refactoring.moveHandler
+        id="jux.moveClass" order="first"
+        implementation="dev.jux.intellij.refactoring.JuxMoveClassHandler"/>
 
     <!-- Type Hierarchy (Ctrl+H): supertypes, subtypes, or both, over the same
          JuxTypeIndex / JuxSubtypes indexes that drive the gutter icons. -->
@@ -789,6 +797,14 @@
   </projectListeners>
 
   <actions>
+    <!-- Refactor > Extract/Introduce > Parameter Object, for Jux files only:
+         the platform's item is wired to Java's class model. -->
+    <action id="Jux.IntroduceParameterObject"
+            class="dev.jux.intellij.refactoring.JuxIntroduceParameterObjectAction"
+            text="Parameter Object..."
+            description="Group parameters of a Jux method into a record">
+      <add-to-group group-id="IntroduceActionsGroup" anchor="last"/>
+    </action>
     <!-- A single "Jux File" entry under New, anchored before the generic
          "New File". Its dialog offers the class/interface/enum/record/
          annotation kinds, each with an icon — the Kotlin-plugin idiom. -->

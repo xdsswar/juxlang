@@ -29,6 +29,28 @@ class JuxLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
 
     override fun getIndentOptionsEditor(): IndentOptionsEditor = SmartIndentOptionsEditor()
 
+    /** Jux's own settings (the Imports tab), stored beside the common ones. */
+    override fun createCustomSettings(settings: com.intellij.psi.codeStyle.CodeStyleSettings): com.intellij.psi.codeStyle.CustomCodeStyleSettings =
+        JuxCodeStyleSettings(settings)
+
+    /**
+     * The page: the standard tabs (indents, spaces, wrapping, blank lines) plus
+     * an Imports tab, as Java's page has.
+     */
+    override fun createConfigurable(
+        baseSettings: com.intellij.psi.codeStyle.CodeStyleSettings,
+        modelSettings: com.intellij.psi.codeStyle.CodeStyleSettings,
+    ): com.intellij.psi.codeStyle.CodeStyleConfigurable =
+        object : com.intellij.application.options.CodeStyleAbstractConfigurable(baseSettings, modelSettings, configurableDisplayName) {
+            override fun createPanel(settings: com.intellij.psi.codeStyle.CodeStyleSettings): com.intellij.application.options.CodeStyleAbstractPanel =
+                object : com.intellij.application.options.TabbedLanguageCodeStylePanel(JuxLanguage, currentSettings, settings) {
+                    override fun initTabs(settings: com.intellij.psi.codeStyle.CodeStyleSettings) {
+                        super.initTabs(settings)
+                        addTab(JuxImportsCodeStylePanel(settings))
+                    }
+                }
+        }
+
     override fun customizeSettings(consumer: CodeStyleSettingsCustomizable, settingsType: SettingsType) {
         when (settingsType) {
             SettingsType.SPACING_SETTINGS -> consumer.showStandardOptions(
