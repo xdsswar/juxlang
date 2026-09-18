@@ -83,6 +83,14 @@ fun PsiBuilder.parseExpression(): PsiBuilder.Marker? {
     return parseAssignment()
 }
 
+/**
+ * A switch-case guard (`case 1 when urgent -> ...`). A guard is a boolean, so
+ * it is never a lambda: the `->` after it is the ARM's arrow. Parsed through
+ * [parseExpression], `urgent -> "one"` read as a lambda and the arm lost its
+ * arrow, which is how a guarded case came out as a parse error.
+ */
+fun PsiBuilder.parseGuardExpression(): PsiBuilder.Marker? = parseTernary()
+
 private fun PsiBuilder.parseAssignment(): PsiBuilder.Marker? {
     val left = parseTernary() ?: return null
     if (atAny(ASSIGN_OPS)) {

@@ -261,6 +261,7 @@
     "Console",
     "Error",
     "Exception",
+    "ExceptionInInitializerError",
     "File",
     "FileNotFoundException",
     "HashMap",

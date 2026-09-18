@@ -330,7 +330,7 @@ private fun PsiBuilder.parseSwitchCase() {
             parsePattern()
             // `,`-separated case lists and `|` or-patterns (`case A | B ->`).
             while (at(T.COMMA) || at(T.PIPE)) { advanceLexer(); parsePattern() }
-            if (at(T.WHEN_KW)) { val g = mark(); advanceLexer(); parseExpression(); g.done(E.PATTERN_GUARD) }
+            if (at(T.WHEN_KW)) { val g = mark(); advanceLexer(); parseGuardExpression(); g.done(E.PATTERN_GUARD) }
         }
         at(T.DEFAULT_KW) -> advanceLexer()
         else -> { m.drop(); return }

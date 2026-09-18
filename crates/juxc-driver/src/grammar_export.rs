@@ -44,7 +44,17 @@ pub fn embedded_stdlib_type_names() -> Vec<String> {
             // Top-level declarations only: nested types are indented.
             let Some(rest) = line.strip_prefix("public ") else { continue };
             let mut words = rest.split_whitespace();
-            let Some(kind) = words.next() else { continue };
+            // Modifiers come before the kind: `public final class`,
+            // `public abstract class`, `public sealed interface`. Reading the
+            // first word as the kind skipped every one of those, so the IDE
+            // flagged `ExceptionInInitializerError` (a `final` class) as
+            // unresolved while the compiler accepted it.
+            let Some(kind) = words
+                .by_ref()
+                .find(|w| !matches!(*w, "final" | "abstract" | "sealed" | "const" | "static"))
+            else {
+                continue;
+            };
             if !matches!(kind, "class" | "interface" | "record" | "enum" | "struct") {
                 continue;
             }
@@ -93,7 +103,7 @@ mod tests {
         // facade (`Collection`/`List`/`Map`/`Set`) is gone -- Jux uses Rust's
         // std, and `Iterable`/`Iterator` are the for-each protocol, not a
         // facade.
-        for expected in ["Option", "Result", "Instant", "AtomicInt", "Iterable"] {
+        for expected in ["Option", "Result", "Instant", "AtomicInt", "Iterable", "ExceptionInInitializerError"] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "embedded stdlib scan missed `{expected}`: {names:?}",
