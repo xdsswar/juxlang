@@ -11421,6 +11421,17 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
                 if a1.is_empty() || a2.is_empty() {
                     return true;
                 }
+                // **Diamond (§7.8, Grammar §A.2.6).** `new Vec<>()` and a bare
+                // `new Vec()` infer nothing from an empty argument list, so
+                // every argument comes back unknown -- one per declared
+                // parameter, a foreign type's defaulted ones included (`Vec`
+                // has an allocator parameter the program never writes). The
+                // slot the value flows into supplies the arguments, exactly
+                // as Java's diamond takes them from the target type, so an
+                // all-unknown side matches whatever the other side names.
+                if a2.iter().all(Ty::is_unknown) || a1.iter().all(Ty::is_unknown) {
+                    return true;
+                }
                 if a1.len() != a2.len() {
                     return false;
                 }
