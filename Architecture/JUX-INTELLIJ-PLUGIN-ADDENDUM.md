@@ -17,7 +17,7 @@
 
 ---
 
-## Current State (2026-09-15)
+## Current State (2026-09-18)
 
 > **Read this first.** The phased plan in §I.1 to §I.10 was written before
 > the plugin existed. It proposed a TextMate-highlighted file type with no PSI,
@@ -74,25 +74,32 @@
   The toolchain's `.jux.d`
   stubs (standard library and bound Rust crates) are indexed as an external
   library.
+- **Project model (§I.4).** Jux Sources Root and Jux Test Sources Root
+  kinds with **Mark Directory as** actions, persisted through a JPS
+  serializer; `JuxPackageResolver` as the one package-inference
+  implementation (marked roots, then the nearest `jux.toml`, then a
+  template-only fallback); a notification offering to mark `src/` and `test/`
+  when a `jux.toml` project opens; the New Project wizard marks `src/` as a
+  Jux Sources Root; the package-mismatch inspection with its three fixes; and
+  Flatten Packages in the Project view for a Jux root.
 - **Build.** IntelliJ Platform Gradle Plugin 2.x against
   `intellijIdea("2026.1.3")`, JDK 21 toolchain, `sinceBuild` 242, no
   `untilBuild` cap. Plugin id `dev.jux.lang`, version 0.0.8 at the time of
   writing.
 
+Refactor | Move Class, Change Signature and Extract Method are built as
+well, with the rest of Java's refactoring set (see `plugin.xml` and
+`refactoring/`).
+
 ### Still open
 
-None of these are in the plugin today:
-
-- Source-root kinds (Jux Sources Root, Jux Test Sources Root) and the
-  "Mark Directory as" actions (§I.4).
-- The package-mismatch inspection and its quick-fixes (§I.4).
-- Project View "Package View" mode (§I.4).
-- Refactor → Move Class.
-- Refactor → Change Signature.
-- Refactor → Extract Method.
-- A `juxc-lsp` binary bundled inside the plugin; the server is still found on
-  the machine (§I.6).
-- JetBrains Marketplace publishing (§I.9).
+- **`juxc-lsp` does not read `jux.sourceRoots` yet.** The plugin sends the
+  roots (§I.4, "Coordination with `juxc-lsp`"); the server side is pending.
+- **Per-platform distributions with a bundled `juxc-lsp`.** The build can
+  bundle one binary (§I.9); publishing one plugin build per platform is not
+  set up.
+- **Marketplace publishing** is configured (§I.9) but needs the publisher
+  account and its secrets.
 - A debugger (out of scope, as before).
 
 ---
@@ -269,7 +276,7 @@ The plugin uses the **IntelliJ Platform Gradle Plugin** (`org.jetbrains.intellij
 
 ### Compatibility target
 
-Minimum platform version: **2024.1** (sinceBuild `241`). This is the first release with stable Platform Gradle Plugin 2.x and a stable native LSP API in IntelliJ Ultimate. The plugin should compile against the latest stable release at the time of each marketplace push.
+Minimum platform version: **2024.2** (sinceBuild `242`, `pluginSinceBuild` in `gradle.properties`). It is the first IDE on JBR 21, which the plugin's Java 21 bytecode requires; 2024.1 runs on JBR 17 and cannot load it. There is no `untilBuild` cap. The plugin compiles against the latest stable release at the time of each marketplace push (`platformVersion`). The plugin id is `dev.jux.lang`, not the `dev.jux.intellij` of the skeleton above.
 
 ---
 
@@ -306,7 +313,7 @@ The plugin treats `.jux` files exactly the way the IntelliJ Java plugin treats `
 
 ### Source-root kinds
 
-The plugin registers three source-root kinds via the platform's `ModuleSourceRootEditHandler` and `JpsModuleSourceRootType` extension points:
+The plugin registers two source-root kinds of its own (`JuxSourceRootType`) and reuses the platform's resources root. Each has a `ModuleSourceRootEditHandler` (the `projectStructure.sourceRootEditHandler` extension point) for its folder icon and Project Structure presentation, and a JPS serializer (`JuxJpsModelSerializerExtension`, loaded through `<jps.plugin/>` and `META-INF/services`) so a marked root is saved in the module file under the ids `jux-source` and `jux-test-source`:
 
 | Kind                       | Icon overlay | Purpose                                                              |
 |----------------------------|--------------|----------------------------------------------------------------------|
@@ -314,46 +321,47 @@ The plugin registers three source-root kinds via the platform's `ModuleSourceRoo
 | **Jux Test Sources Root**  | green folder | Test `.jux` source — same package semantics, separate classpath bucket for the build |
 | **Resources Root**         | reused from platform | Non-source data files bundled with the module                   |
 
-The user marks a directory by right-clicking in the Project View → **Mark Directory as → Jux Sources Root** (or Test Sources Root). The plugin's `MarkRootActionBase` subclasses surface the actions in the same submenu IntelliJ already uses for Java/Kotlin source roots.
+The user marks a directory by right-clicking in the Project View → **Mark Directory as → Jux Sources Root** (or Jux Test Sources Root). The actions are `MarkSourceRootAction` subclasses in the platform's `MarkRootGroup`, the submenu Java and Kotlin roots use. The New Project wizard marks the `src/` it creates as a Jux Sources Root.
 
-Auto-detection: when the plugin first opens a project containing a `jux.toml` and a `src/` directory, it offers to mark `src/` as Jux Sources Root and `test/` as Jux Test Sources Root via a non-modal notification (per the layout in `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.1). The user can accept, dismiss, or configure manually.
+Auto-detection: when the plugin opens a project containing a `jux.toml` whose `src/` or `test/` is not yet a Jux root, it offers to mark `src/` as Jux Sources Root and `test/` as Jux Test Sources Root via a non-modal notification (per the layout in `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.1). The user can accept, choose **Don't ask again** for the project, or configure manually. Marking is optional: the manifest rule below already infers every package correctly, and the marks add the folder colors, test scoping, and the roots the language server is told about.
 
 ### Package inference algorithm
 
 Given a `.jux` file at absolute path `P`, the inferred package name is computed as follows:
 
-1. Walk upward from `P` to find the nearest directory `R` marked as **Jux Sources Root** or **Jux Test Sources Root**. If none exists, the file is not part of any module and `${PACKAGE}` resolves to the empty string.
+1. Walk upward from `P` to find the nearest directory `R` marked as **Jux Sources Root** or **Jux Test Sources Root**. If none exists, use the nearest `jux.toml` (see "Defaults when no source root is marked"). If there is none either, the file has no package root and `${PACKAGE}` resolves to the empty string.
 2. Let `rel` be the path of `P`'s parent directory relative to `R`.
 3. If `rel` is empty (the file sits directly inside the source root), `${PACKAGE}` is the empty string. The template MUST omit the `package` line in that case.
 4. Otherwise, replace path separators (`/` or `\`) with `.` to produce the dotted package name. Example: `src/com/example/foo/Bar.jux` under source root `src/` → `${PACKAGE} = "com.example.foo"`.
 
-This algorithm is implemented in a single utility, `JuxPackageResolver.inferPackage(VirtualFile): String?`, and is the canonical source for:
+This algorithm is implemented in a single utility, `JuxPackageResolver` (`inferPackage`, `rootFor`, `expectedPackages`), and is the canonical source for:
 
 - The `${PACKAGE}` template variable in §I.5.
 - The package-mismatch inspection (below).
 - The Move Class refactoring's target-package computation (§I.7 tier 2).
-- The Find Usages "scope" hint sent to the LSP.
+- The Project View's flattened packages (below).
+- The `jux.sourceRoots` list sent to the LSP.
 
 ### Package-mismatch inspection
 
-A `LocalInspectionTool` named `JuxPackageMismatchInspection` compares the `package` declaration at the top of an opened file (extracted via a 5-line regex — no PSI required) against `JuxPackageResolver.inferPackage(file)`. On mismatch, the editor underlines the package identifier with a warning:
+A `LocalInspectionTool` named `JuxPackageMismatchInspection` compares the `package` declaration at the top of an opened file against the package its location implies. It checks only a location the Jux layout vouches for: a marked Jux root, or the `src/` and `test/` of a `jux.toml` project. A file under neither takes its package from its declaration, exactly as `juxc` treats a file outside a `src/` root (§B.1.1), and is never flagged. In a test root the production package plus `.test` is accepted too, the §B.1.2 convention. On mismatch, the editor underlines the package name with a warning:
 
 > Package name `com.wrong.pkg` does not correspond to the file location. Expected `com.example.foo`.
 
 Two quick-fixes attach:
 
-1. **Rename package to `com.example.foo`** — edits the `package` line in place.
-2. **Move file to `com/example/foo/`** — moves the file on disk (and is recursive across project-wide imports once the Move Class refactoring lands in phase 3; in phase 2 it does a plain text rewrite).
+1. **Set package name to `com.example.foo`**, which edits the `package` line in place (or removes it for a file directly in the root, which must have none).
+2. **Move file to `com/wrong/pkg/`**, which moves the file to the directory its declared package names, under the same root. The declared package does not change, so no import anywhere needs rewriting. The fix is not offered when a file of the same name is already there.
 
 If the file has no `package` declaration at all but its location implies one, the inspection offers a single quick-fix: **Add `package com.example.foo;`**.
 
 ### Project View — Package View mode
 
-Phase 2 adds a `TreeStructureProvider` that, when the user toggles the Project View's "Compact Middle Packages" / "Flatten Packages" options, behaves identically to the Java plugin: a single-child chain of directories `com/example/foo/` collapses to a single node labelled `com.example.foo` with the contained files as direct children.
+Two Project View options give Jux the Java plugin's package view. **Compact Middle Packages** (the platform's compact-directories option) collapses a single-child chain of directories `com/example/foo/` into one node for any directory, so it applies to Jux with no extra code. **Flatten Packages** relies on Java's package model, so `JuxPackageTreeStructureProvider` supplies it for a Jux root: with the option on, the root lists one node per package that holds files, labelled with the dotted name (`com.example.foo`) and listing that package's files. Packages with no files are left out, as Java does, unless **Hide Empty Middle Packages** is off.
 
 ### Coordination with `juxc-lsp`
 
-The LSP server learns about source roots via a custom `workspace/configuration` request keyed `jux.sourceRoots`. On project open, the plugin pushes the user's source-root configuration into the server so cross-file features (Find Usages, completion, auto-import) operate against the correct file set. The protocol-level definition of this custom message is OUT of scope for the LSP addendum (`JUX-LSP-SERVER-ADDENDUM.md`) and IS in scope for this plugin's bring-up; if a second editor needs the same configuration channel, it gets promoted to the LSP addendum.
+The LSP server learns about source roots via a custom `workspace/configuration` request keyed `jux.sourceRoots`. The value is a list of `{ "path": <absolute path>, "kind": "sources" | "tests", "origin": "marked" | "manifest" }`, one per package root: every marked Jux root, and for each `jux.toml` its `src/` (or its own directory when it has no `src/`) and `test/`. The plugin answers the request with that list, passes the same list at start-up as the initialization option `{ "jux": { "sourceRoots": [...] } }`, and sends `workspace/didChangeConfiguration` with it whenever roots are marked or unmarked. Both clients do this: the native LSP client through `JuxLspDescriptor`, LSP4IJ through `JuxLsp4ijLanguageClient`. **Pending on the server:** `juxc-lsp` does not read the list yet. The protocol-level definition of this custom message is OUT of scope for the LSP addendum (`JUX-LSP-SERVER-ADDENDUM.md`) and IS in scope for this plugin's bring-up; if a second editor needs the same configuration channel, it gets promoted to the LSP addendum.
 
 ### Defaults when no source root is marked
 
@@ -365,7 +373,7 @@ If the user never marks a source root, the plugin falls back to **the project's 
 
 ### Template files
 
-Each template lives in `resources/fileTemplates/internal/` and uses IntelliJ's Apache-Velocity-derived template language. The `.ft` extension marks the file as a template; the prefix before `.ft` is the suggested filename pattern.
+Each template lives in `resources/fileTemplates/internal/` and uses IntelliJ's Apache-Velocity-derived template language. The `.ft` extension marks the file as a template; the prefix before `.ft` is the suggested filename pattern. Every template begins with `#parse("Jux File Header.jux")`, a license-comment include from `resources/fileTemplates/includes/` that the user can edit under **Settings | Editor | File and Code Templates**; the listings below omit that line. There is also a `Jux Struct.jux.ft` template (`public struct ${NAME} { }`), and the New Jux File dialog offers all seven kinds.
 
 #### `Jux File.jux.ft`
 
@@ -577,7 +585,11 @@ A full PSI implementation duplicates the Rust front end's grammar in BNF and its
 
 ### Marketplace
 
-The plugin ships through the **JetBrains Marketplace** under the publisher `XTREME SOFTWARE SOLUTIONS` (publisher account to be reserved). Marketplace verification requires a `pluginIcon.svg`, a description, and screenshots. The CI workflow that runs `./gradlew publishPlugin` reads the token from a secret.
+The plugin ships through the **JetBrains Marketplace** under the publisher `XTREME SOFTWARE SOLUTIONS` (publisher account to be reserved). Marketplace verification requires a `pluginIcon.svg`, a description, and screenshots. `./gradlew publishPlugin` reads everything secret from the environment of whoever runs it, and nothing secret is in the repository: `PUBLISH_TOKEN` for the Marketplace, and `CERTIFICATE_CHAIN`, `PRIVATE_KEY` and `PRIVATE_KEY_PASSWORD` for `signPlugin`.
+
+### Bundled language server
+
+A build can carry a `juxc-lsp` binary: `./gradlew buildPlugin -PjuxBundleLsp=<path to juxc-lsp>` (or `JUX_BUNDLE_LSP=<path>`) copies it into the plugin's `bin/` directory. It is off by default. The toolchain lookup tries the bundled binary last, after the configured toolchain, `$JUX_HOME`, `PATH` and the usual install locations, so an installed toolchain, whose server matches its own compiler, always wins. The binary is native code, so a bundled build is a build for one platform (see §I.11).
 
 ### Versioning
 
@@ -585,7 +597,7 @@ Plugin version mirrors the `juxc` toolchain minor version. `juxc 0.4.0` → plug
 
 ### Pre-release channel
 
-Pre-release builds (`0.4.0-rc.1`, `0.4.0-rc.2`, …) ship on the marketplace's `beta` channel; stable releases go to `default`. Users who opt into beta in `Settings → Plugins → ⚙ → Manage Plugin Repositories` get pre-releases automatically.
+Pre-release builds (`0.4.0-rc.1`, `0.4.0-rc.2`, …) ship on the marketplace's `beta` channel; stable releases go to `default`. The build picks the channel from `pluginVersion`: a version with a `-` suffix publishes to `beta`, any other to `default`. Users who opt into beta in `Settings → Plugins → ⚙ → Manage Plugin Repositories` get pre-releases automatically.
 
 ---
 
