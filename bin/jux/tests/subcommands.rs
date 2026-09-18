@@ -170,3 +170,61 @@ fn jux_run_without_file_says_not_yet_implemented() {
         "expected project-mode or NYI banner on stderr, got:\n{stderr}",
     );
 }
+
+/// Two programs with the same name, built at the same time into one shared
+/// `CARGO_TARGET_DIR`, each run their OWN binary.
+///
+/// Cargo copies every build's executable to `<target>/debug/<bin>`, so two
+/// programs both named `Main` wrote the same file, and cargo's lock covers the
+/// build but not the run that follows. Run concurrently, one program printed
+/// the other's output in every round. The shared target dir now gets a
+/// per-program `[[bin]]` name, published back as `Main` in each emit dir.
+#[test]
+fn same_named_programs_sharing_a_target_dir_run_their_own_binary() {
+    let root = workspace_root();
+    let base = root.join("target").join("it-shared-target-same-name");
+    let shared = base.join("shared-target");
+    let programs: Vec<(PathBuf, String)> = ["a", "b"]
+        .iter()
+        .map(|who| {
+            let dir = base.join(who);
+            std::fs::create_dir_all(&dir).expect("creating program dir");
+            let greeting = format!("I am {who}");
+            std::fs::write(
+                dir.join("Main.jux"),
+                format!("public void main() {{\n    print(\"{greeting}\");\n}}\n"),
+            )
+            .expect("writing Main.jux");
+            (dir, greeting)
+        })
+        .collect();
+
+    // Three rounds: before the fix the first one already failed.
+    for round in 0..3 {
+        let handles: Vec<_> = programs
+            .iter()
+            .cloned()
+            .map(|(dir, greeting)| {
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    let output = Command::new(jux_binary())
+                        .arg("run")
+                        .arg("--emit-dir")
+                        .arg(dir.join("emit"))
+                        .arg(dir.join("Main.jux"))
+                        .env("CARGO_TARGET_DIR", &shared)
+                        .output()
+                        .expect("spawn jux");
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    (greeting, stdout, stderr, output.status.success())
+                })
+            })
+            .collect();
+        for handle in handles {
+            let (greeting, stdout, stderr, ok) = handle.join().expect("runner thread");
+            assert!(ok, "round {round}: jux failed\nstderr:\n{stderr}");
+            assert_eq!(stdout, greeting, "round {round}: ran another program's binary");
+        }
+    }
+}
