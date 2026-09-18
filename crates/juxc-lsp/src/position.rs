@@ -1,69 +1,67 @@
 //! Position translation between Jux byte offsets and LSP positions.
 //!
-//! `juxc-source::Span` stores **UTF-8 byte offsets** (§L.8). LSP `Position`s
-//! are line + **UTF-16 code unit** column by default. Every position-bearing
-//! message must be translated across this boundary; these helpers are the one
-//! place that conversion lives.
+//! `juxc-source::Span` stores **UTF-8 byte offsets** (§L.8). An LSP `Position`
+//! is a zero-based line plus a column whose unit the client and server
+//! negotiate at `initialize` (`general.positionEncodings`): UTF-8 bytes when
+//! the client offers them, else the protocol default of UTF-16 code units.
+//! Every position-bearing message crosses this boundary through the helpers
+//! here, which take the negotiated [`PositionEncoding`] explicitly.
 //!
-//! The skeleton advertises the default UTF-16 encoding (broadest editor
-//! compatibility). Negotiating UTF-8 to skip the per-line scan is a later
-//! optimization noted in §L.8.
+//! The per-line arithmetic itself lives in `juxc_source::position` (the spec
+//! puts it there, beside `Span`); this module only finds the line in the rope.
 
+use juxc_source::position::{byte_to_col, col_to_byte};
+pub use juxc_source::position::PositionEncoding;
 use juxc_source::Span;
 use ropey::Rope;
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp::lsp_types::{Position, PositionEncodingKind, Range};
 
-/// Convert a UTF-8 byte offset into an LSP [`Position`] (UTF-16 columns).
+/// The LSP name of `enc`, as advertised in `ServerCapabilities`.
+pub fn encoding_kind(enc: PositionEncoding) -> PositionEncodingKind {
+    match enc {
+        PositionEncoding::Utf8 => PositionEncodingKind::UTF8,
+        PositionEncoding::Utf16 => PositionEncodingKind::UTF16,
+    }
+}
+
+/// Pick the encoding from the client's offered list (§L.8): UTF-8 when the
+/// client accepts it, since it is what spans already store; UTF-16 otherwise,
+/// which every client understands whether or not it negotiates.
+pub fn negotiate(offered: Option<&[PositionEncodingKind]>) -> PositionEncoding {
+    match offered {
+        Some(list) if list.contains(&PositionEncodingKind::UTF8) => PositionEncoding::Utf8,
+        _ => PositionEncoding::Utf16,
+    }
+}
+
+/// Convert a UTF-8 byte offset into an LSP [`Position`] in encoding `enc`.
 ///
 /// Offsets past EOF clamp to the document end so a stale request can never
-/// panic. The UTF-16 column is computed by summing `len_utf16()` over the
-/// characters from the line start up to `offset`.
-pub fn offset_to_position(rope: &Rope, offset: usize) -> Position {
+/// panic.
+pub fn offset_to_position(rope: &Rope, offset: usize, enc: PositionEncoding) -> Position {
     let offset = offset.min(rope.len_bytes());
     let line = rope.byte_to_line(offset);
     let line_start = rope.line_to_byte(line);
-
-    let start_char = rope.byte_to_char(line_start);
-    let end_char = rope.byte_to_char(offset);
-    let mut col16: u32 = 0;
-    for ch in rope.slice(start_char..end_char).chars() {
-        col16 += ch.len_utf16() as u32;
-    }
-    Position::new(line as u32, col16)
+    let col = byte_to_col(rope.line(line).chars(), offset - line_start, enc);
+    Position::new(line as u32, col)
 }
 
-/// Convert an LSP [`Position`] back into a UTF-8 byte offset.
+/// Convert an LSP [`Position`] in encoding `enc` back into a UTF-8 byte offset.
 ///
-/// Used by request handlers (hover, completion) to locate the cursor in the
-/// byte-indexed AST/type maps. Out-of-range lines/columns clamp to the nearest
-/// valid offset rather than panicking.
-pub fn position_to_offset(rope: &Rope, pos: Position) -> usize {
+/// Out-of-range lines and columns clamp to the nearest valid offset; a column
+/// inside a character lands on the character's start.
+pub fn position_to_offset(rope: &Rope, pos: Position, enc: PositionEncoding) -> usize {
     let last_line = rope.len_lines().saturating_sub(1);
     let line = (pos.line as usize).min(last_line);
     let line_start = rope.line_to_byte(line);
-    let start_char = rope.byte_to_char(line_start);
-
-    let mut remaining = pos.character;
-    let mut byte = line_start;
-    for ch in rope.slice(start_char..).chars() {
-        if remaining == 0 || ch == '\n' {
-            break;
-        }
-        let w = ch.len_utf16() as u32;
-        if w > remaining {
-            break;
-        }
-        remaining -= w;
-        byte += ch.len_utf8();
-    }
-    byte
+    line_start + col_to_byte(rope.line(line).chars(), pos.character, enc)
 }
 
-/// Convert a Jux [`Span`] into an LSP [`Range`].
-pub fn span_to_range(rope: &Rope, span: Span) -> Range {
+/// Convert a Jux [`Span`] into an LSP [`Range`] in encoding `enc`.
+pub fn span_to_range(rope: &Rope, span: Span, enc: PositionEncoding) -> Range {
     Range::new(
-        offset_to_position(rope, span.start as usize),
-        offset_to_position(rope, span.end as usize),
+        offset_to_position(rope, span.start as usize, enc),
+        offset_to_position(rope, span.end as usize, enc),
     )
 }
 
@@ -71,25 +69,27 @@ pub fn span_to_range(rope: &Rope, span: Span) -> Range {
 mod tests {
     use super::*;
 
-    /// Every offset in a document must survive the round trip.
-    ///
-    /// This module is the single boundary between Jux's UTF-8 byte offsets and
-    /// LSP's UTF-16 columns, and it had no tests at all — so every squiggle in
-    /// the editor rested on code nothing checked. An off-by-one here does not
-    /// crash; it silently underlines the wrong character, which is the kind of
-    /// wrongness a user learns to distrust the whole tool for.
+    const U16: PositionEncoding = PositionEncoding::Utf16;
+    const U8: PositionEncoding = PositionEncoding::Utf8;
+
+    /// Every offset in a document must survive the round trip, in both
+    /// encodings. This module is the boundary between Jux's byte offsets and
+    /// the editor's columns; an off-by-one here does not crash, it silently
+    /// underlines the wrong character.
     fn round_trips(text: &str) {
         let rope = Rope::from_str(text);
-        for offset in 0..=text.len() {
-            if !text.is_char_boundary(offset) {
-                continue;
+        for enc in [U16, U8] {
+            for offset in 0..=text.len() {
+                if !text.is_char_boundary(offset) {
+                    continue;
+                }
+                let pos = offset_to_position(&rope, offset, enc);
+                assert_eq!(
+                    position_to_offset(&rope, pos, enc),
+                    offset,
+                    "{enc:?}: offset {offset} of {text:?} did not round-trip (via {pos:?})",
+                );
             }
-            let pos = offset_to_position(&rope, offset);
-            assert_eq!(
-                position_to_offset(&rope, pos),
-                offset,
-                "offset {offset} of {text:?} did not round-trip (via {pos:?})",
-            );
         }
     }
 
@@ -105,7 +105,7 @@ mod tests {
         round_trips("var s = \"caf\u{e9} \u{6f22}\u{5b57}\";\nvar t = 1;\n");
     }
 
-    /// An emoji is a SURROGATE PAIR in UTF-16 — two units for one character —
+    /// An emoji is a SURROGATE PAIR in UTF-16, two units for one character,
     /// which is the case that breaks naive column arithmetic.
     #[test]
     fn astral_plane_round_trips() {
@@ -119,35 +119,36 @@ mod tests {
         round_trips("\n");
     }
 
-    /// Columns are UTF-16 units, not characters and not bytes.
+    /// Columns are the negotiated unit: UTF-16 units by default, bytes once
+    /// the client accepts UTF-8.
     #[test]
-    fn columns_are_utf16_units() {
-        let text = "\u{1F600}x";
-        let rope = Rope::from_str(text);
+    fn columns_follow_the_negotiated_encoding() {
+        let rope = Rope::from_str("\u{1F600}x");
         // The emoji is 4 UTF-8 bytes and 2 UTF-16 units.
-        let after_emoji = offset_to_position(&rope, 4);
-        assert_eq!(after_emoji, Position::new(0, 2));
-        let after_x = offset_to_position(&rope, 5);
-        assert_eq!(after_x, Position::new(0, 3));
+        assert_eq!(offset_to_position(&rope, 4, U16), Position::new(0, 2));
+        assert_eq!(offset_to_position(&rope, 5, U16), Position::new(0, 3));
+        assert_eq!(offset_to_position(&rope, 4, U8), Position::new(0, 4));
+        assert_eq!(position_to_offset(&rope, Position::new(0, 4), U8), 4);
     }
 
-    /// A stale request must clamp, never panic — the editor can ask about a
+    /// A stale request must clamp, never panic: the editor can ask about a
     /// position from a document version the server has already replaced.
     #[test]
     fn out_of_range_clamps_instead_of_panicking() {
         let rope = Rope::from_str("abc\n");
-        assert_eq!(offset_to_position(&rope, 9_999).line, 1);
-        assert_eq!(position_to_offset(&rope, Position::new(99, 99)), rope.len_bytes());
-        assert_eq!(position_to_offset(&rope, Position::new(0, 99)), 3);
+        assert_eq!(offset_to_position(&rope, 9_999, U16).line, 1);
+        assert_eq!(position_to_offset(&rope, Position::new(99, 99), U16), rope.len_bytes());
+        assert_eq!(position_to_offset(&rope, Position::new(0, 99), U16), 3);
+        assert_eq!(position_to_offset(&rope, Position::new(0, 99), U8), 3);
     }
 
-    /// A column landing INSIDE a surrogate pair cannot be represented; it must
-    /// clamp to the character start rather than split the character.
+    /// A column landing INSIDE a character cannot be represented; it clamps to
+    /// the character start rather than splitting it.
     #[test]
-    fn a_column_inside_a_surrogate_pair_clamps() {
+    fn a_column_inside_a_character_clamps() {
         let rope = Rope::from_str("\u{1F600}x");
-        // Column 1 is halfway through the emoji's two UTF-16 units.
-        assert_eq!(position_to_offset(&rope, Position::new(0, 1)), 0);
+        assert_eq!(position_to_offset(&rope, Position::new(0, 1), U16), 0);
+        assert_eq!(position_to_offset(&rope, Position::new(0, 3), U8), 0);
     }
 
     #[test]
@@ -156,8 +157,21 @@ mod tests {
         let rope = Rope::from_str(text);
         let start = text.find("name").unwrap();
         let span = Span::new(start as u32, (start + 4) as u32);
-        let range = span_to_range(&rope, span);
+        let range = span_to_range(&rope, span, U16);
         assert_eq!(range.start, Position::new(0, 4));
         assert_eq!(range.end, Position::new(0, 8));
+    }
+
+    /// UTF-8 is chosen only when the client offers it; anything else is
+    /// UTF-16, the one encoding every client speaks.
+    #[test]
+    fn negotiation_prefers_utf8_only_when_offered() {
+        assert_eq!(negotiate(None), U16);
+        assert_eq!(negotiate(Some(&[PositionEncodingKind::UTF16])), U16);
+        assert_eq!(
+            negotiate(Some(&[PositionEncodingKind::UTF16, PositionEncodingKind::UTF8])),
+            U8,
+        );
+        assert_eq!(negotiate(Some(&[PositionEncodingKind::UTF32])), U16);
     }
 }

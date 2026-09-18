@@ -27,6 +27,8 @@ use ropey::Rope;
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
 use crate::diagnostics::to_lsp;
+use crate::position::PositionEncoding;
+use crate::roots::SourceRoots;
 use crate::workspace::scan_jux_files;
 
 /// Everything one analysis pass produces.
@@ -52,6 +54,15 @@ pub struct Analysis {
     /// stdlib paths (which aren't real files) are kept in place so indices stay
     /// aligned; the handler simply can't open them.
     pub source_paths: std::sync::Arc<Vec<PathBuf>>,
+    /// The open document's index in the analysed source list: the `file` its
+    /// spans and expression types carry. `None` only when the document could
+    /// not be matched to a source (it is always analysed, so in practice set).
+    pub open_file: Option<u32>,
+    /// The text of every analysed source, parallel to [`Self::source_paths`]:
+    /// `Some` for the project's own `.jux` files, `None` for the embedded
+    /// standard library (synthetic paths) and generated `.jux.d` stubs. What
+    /// references and rename scan, so they read exactly the checked text.
+    pub source_texts: std::sync::Arc<Vec<Option<std::sync::Arc<str>>>>,
 }
 
 /// Analyse the open document at `uri` (current text `rope`) **in the context
@@ -109,6 +120,32 @@ fn project_scope(ide_root: &Path, file: Option<&Path>) -> Option<PathBuf> {
 }
 
 pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
+    analyze_workspace_in(
+        root,
+        uri,
+        rope,
+        &SourceRoots::default(),
+        &HashMap::new(),
+        PositionEncoding::Utf16,
+    )
+}
+
+/// [`analyze_workspace`] with the editor's source roots, the live text of the
+/// other open buffers, and the negotiated position encoding.
+///
+/// A file under a root is analysed with the files of its root group
+/// ([`SourceRoots::compilation_set`]); any other file keeps the manifest-based
+/// scope. A file in `overrides` is analysed from that text instead of the
+/// disk, so an unsaved edit in another buffer is what the symbol table (and
+/// every cross-file range built from it) reflects.
+pub fn analyze_workspace_in(
+    root: &Path,
+    uri: &Url,
+    rope: &Rope,
+    roots: &SourceRoots,
+    overrides: &HashMap<PathBuf, String>,
+    enc: PositionEncoding,
+) -> Analysis {
     // The open document's filesystem path (used to override its on-disk text).
     let open_path: Option<PathBuf> = uri.to_file_path().ok();
 
@@ -124,18 +161,25 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
     // functions in one flat namespace and reported each of them as declared
     // more than once -- on files the CLI compiles cleanly.
     let scope = project_scope(root, open_path.as_deref());
-    let scanned: Vec<PathBuf> = match &scope {
-        Some(dir) => scan_jux_files(dir),
+    // The editor's source roots, when the file sits under one, name the
+    // compilation set outright (§I.4).
+    let from_roots = open_path.as_deref().and_then(|p| roots.compilation_set(p));
+    let scanned: Vec<PathBuf> = match (from_roots, &scope) {
+        (Some(files), _) => files,
+        (None, Some(dir)) => scan_jux_files(dir),
         // No manifest governs this file, so it is a program on its own —
         // which is exactly how `juxc <file>` treats it.
-        None => open_path.clone().into_iter().collect(),
+        (None, None) => open_path.clone().into_iter().collect(),
     };
     for path in scanned {
         if open_path.as_deref() == Some(path.as_path()) {
             sources.push(SourceFile::new(path, rope.to_string()));
             saw_open = true;
         } else {
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let text = match overrides.get(&path) {
+                Some(live) => live.clone(),
+                None => std::fs::read_to_string(&path).unwrap_or_default(),
+            };
             sources.push(SourceFile::new(path, text));
         }
     }
@@ -155,20 +199,25 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
     let facts = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root))
         .map(|m| juxc_driver::project::cfg_facts_for(&m, false))
         .unwrap_or_default();
-    analyze_sources(uri, rope, sources, &facts)
+    analyze_sources(uri, rope, sources, &facts, enc)
 }
 
 /// Single-file fallback used when there's no workspace root (untitled buffers,
 /// loose files opened outside any project). Behaves like the legacy path: the
 /// open document plus the auto-loaded stdlib.
 pub fn analyze_single(uri: &Url, rope: &Rope) -> Analysis {
+    analyze_single_in(uri, rope, PositionEncoding::Utf16)
+}
+
+/// [`analyze_single`] with the negotiated position encoding.
+pub fn analyze_single_in(uri: &Url, rope: &Rope, enc: PositionEncoding) -> Analysis {
     let path = uri
         .to_file_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| uri.to_string());
     let source = SourceFile::new(path, rope.to_string());
     // No project → default `full` profile (no profile-specific restrictions).
-    analyze_sources(uri, rope, vec![source], &juxc_driver::CfgFacts::default())
+    analyze_sources(uri, rope, vec![source], &juxc_driver::CfgFacts::default(), enc)
 }
 
 /// Shared core: feed `sources` (the user units; stdlib is auto-prepended) to
@@ -179,6 +228,7 @@ fn analyze_sources(
     open_rope: &Rope,
     sources: Vec<SourceFile>,
     facts: &juxc_driver::CfgFacts,
+    enc: PositionEncoding,
 ) -> Analysis {
     let result = juxc_driver::check_workspace_cfg(sources, facts);
 
@@ -197,18 +247,42 @@ fn analyze_sources(
     // against that file's text. The open document reuses the live rope (so a
     // span lands on the unsaved edit); other files build a rope from the
     // SourceFile contents we just checked.
-    for d in &result.diagnostics {
-        let Some(idx) = d.file else { continue };
-        let Some(src) = result.sources.get(idx) else { continue };
-        let Some(url) = source_url(src, open_uri) else { continue };
+    // A label can point into another file than its diagnostic ("first
+    // declared here"); this finds that file's URI and text by span index.
+    let file_of = |idx: u32| -> Option<(Url, Rope)> {
+        let src = result.sources.get(idx as usize)?;
+        let url = source_url(src, open_uri)?;
         let rope = if &url == open_uri {
             open_rope.clone()
         } else {
             Rope::from_str(src.contents())
         };
-        let lsp = to_lsp(&rope, &url, d);
+        Some((url, rope))
+    };
+    for d in &result.diagnostics {
+        let Some(idx) = d.file else { continue };
+        let Some((url, rope)) = file_of(idx as u32) else { continue };
+        let lsp = to_lsp(&rope, &url, d, enc, &file_of);
         by_uri.entry(url).or_default().push(lsp);
     }
+
+    // The open document's own index: the source whose URI is the editor's.
+    let open_file = result
+        .sources
+        .iter()
+        .position(|src| source_url(src, open_uri).as_ref() == Some(open_uri))
+        .map(|i| i as u32);
+    // The project's own `.jux` files keep their text for cross-file features;
+    // the standard library (synthetic paths) and `.jux.d` stubs do not.
+    let source_texts: Vec<Option<std::sync::Arc<str>>> = result
+        .sources
+        .iter()
+        .map(|src| {
+            let is_project_source = src.path().extension().is_some_and(|e| e == "jux")
+                && source_url(src, open_uri).is_some();
+            is_project_source.then(|| std::sync::Arc::from(src.contents()))
+        })
+        .collect();
 
     let expr_types: Vec<(Span, Ty)> = result.expr_types.into_iter().collect();
     let mut type_names = Vec::new();
@@ -222,6 +296,8 @@ fn analyze_sources(
         type_names,
         symbols: std::sync::Arc::new(result.symbols),
         source_paths: std::sync::Arc::new(source_paths),
+        open_file,
+        source_texts: std::sync::Arc::new(source_texts),
     }
 }
 

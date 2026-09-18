@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use juxc_source::SourceFile;
 use juxc_tycheck::SymbolTable;
@@ -29,6 +30,15 @@ pub struct Workspace {
     /// every candidate so the code action can offer each `import` choice.
     /// No-package (bare-FQN) types don't appear — there's nothing to import.
     pub type_packages: HashMap<String, Vec<String>>,
+    /// The merged symbol table of the last whole-project pass, for
+    /// `workspace/symbol` when no document is open to ask. `None` until the
+    /// first index.
+    pub symbols: Option<Arc<SymbolTable>>,
+    /// Paths parallel to [`Self::symbols`]' unit indices.
+    pub source_paths: Arc<Vec<PathBuf>>,
+    /// Project file texts parallel to [`Self::source_paths`] (`None` for the
+    /// standard library and generated stubs).
+    pub source_texts: Arc<Vec<Option<Arc<str>>>>,
 }
 
 /// The result of one workspace scan.
@@ -38,6 +48,12 @@ pub struct WorkspaceIndex {
     pub member_names: Vec<String>,
     /// Bare type name → declaring package(s). See [`Workspace::type_packages`].
     pub type_packages: HashMap<String, Vec<String>>,
+    /// The merged symbol table the names came from. See [`Workspace::symbols`].
+    pub symbols: Option<Arc<SymbolTable>>,
+    /// See [`Workspace::source_paths`].
+    pub source_paths: Arc<Vec<PathBuf>>,
+    /// See [`Workspace::source_texts`].
+    pub source_texts: Arc<Vec<Option<Arc<str>>>>,
 }
 
 /// Recursively collect `.jux` files under `root`, skipping build output and
@@ -135,7 +151,20 @@ pub fn index_workspace(root: &Path, overrides: &HashMap<PathBuf, String>) -> Wor
     // `check_workspace` merges every unit (plus the auto-loaded stdlib) into
     // one symbol table — exactly the cross-module view completion needs.
     let result = juxc_driver::check_workspace(sources);
-    collect_index(&result.symbols)
+    let mut index = collect_index(&result.symbols);
+    index.source_paths = Arc::new(result.sources.iter().map(|s| s.path().to_path_buf()).collect());
+    index.source_texts = Arc::new(
+        result
+            .sources
+            .iter()
+            .map(|s| {
+                let project = s.path().extension().is_some_and(|e| e == "jux") && s.path().is_absolute();
+                project.then(|| Arc::from(s.contents()))
+            })
+            .collect(),
+    );
+    index.symbols = Some(Arc::new(result.symbols));
+    index
 }
 
 /// Collect type names and member (function/method/field/variant) names from a
@@ -226,5 +255,5 @@ fn collect_index(symbols: &SymbolTable) -> WorkspaceIndex {
     for pkgs in type_packages.values_mut() {
         pkgs.sort();
     }
-    WorkspaceIndex { type_names: types, member_names: members, type_packages }
+    WorkspaceIndex { type_names: types, member_names: members, type_packages, ..Default::default() }
 }
