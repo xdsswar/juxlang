@@ -1,0 +1,5 @@
+void f(bool ready) {
+    <spot>if</spot> (ready) {
+        print("go");
+    }
+}

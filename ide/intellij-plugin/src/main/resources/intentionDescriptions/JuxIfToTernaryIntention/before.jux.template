@@ -1,0 +1,7 @@
+int f(bool c) {
+    <spot>if</spot> (c) {
+        return 1;
+    } else {
+        return 2;
+    }
+}

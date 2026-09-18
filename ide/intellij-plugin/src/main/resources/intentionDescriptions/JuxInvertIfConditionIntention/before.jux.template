@@ -1,0 +1,7 @@
+void f(int a, int b) {
+    <spot>if</spot> (a == b) {
+        print("same");
+    } else {
+        print("different");
+    }
+}

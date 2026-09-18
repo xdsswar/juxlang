@@ -1,0 +1,3 @@
+String f(String name) {
+    return <spot>$"Hello, ${name}!"</spot>;
+}

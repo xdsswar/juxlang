@@ -1,0 +1,5 @@
+void f(bool a, bool b) {
+    <spot>if</spot> (a &amp;&amp; b) {
+        print("both");
+    }
+}

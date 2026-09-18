@@ -1,0 +1,9 @@
+void f(bool a, bool b) {
+    if (a) {
+        print(1);
+    } <spot>else</spot> {
+        if (b) {
+            print(2);
+        }
+    }
+}
