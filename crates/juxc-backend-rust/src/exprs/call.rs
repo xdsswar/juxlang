@@ -664,6 +664,11 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // §O.2.7: `x.operator hash()` / `x.operator string()`.
+        if juxc_tycheck::infer::named_operator_call_type(call).is_some() {
+            self.emit_named_operator_call(call);
+            return;
+        }
         // §K.11 static numeric built-ins on a primitive type name. The name is
         // a keyword, so no local or class can shadow it.
         if juxc_tycheck::infer::primitive_static_call_type(call).is_some() {
@@ -2846,6 +2851,87 @@ impl RustEmitter {
     /// both produce identical values. The by-ref `&` prefix is NOT
     /// emitted here — it stays at the call slot (a hoisted temp is
     /// borrowed at the call, `x.m(&__jux_arg0)`).
+    /// Lower `x.operator hash()` / `x.operator string()` (§O.2.7).
+    ///
+    /// A type that declares the operator gets its own: `x.__op_hash()`, so
+    /// the value is exactly the one its author computes. Every other value --
+    /// a `String`, a number, a struct or record with a derived hash, a class
+    /// hashed by identity -- goes through the runtime's `jux_hash`, which
+    /// feeds Rust's `Hash` to a fixed-key hasher, so the same value hashes the
+    /// same way on every run. `operator string` is the text interpolation
+    /// would produce.
+    fn emit_named_operator_call(&mut self, call: &CallExpr) {
+        let Expr::Field(f) = &*call.callee else { return };
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        if f.field.text == "operator hash" {
+            // Which hash the value gets: its own operator, the bit hash a
+            // float needs (it has no Rust `Hash`; Java's `Double.hashCode`
+            // hashes the bits too), or the built-in one.
+            // A `T?` receiver hashes as its `T` does, so look through the
+            // nullable (`operand_primitive` and the operator lookup do not).
+            let inner = match self.expr_recorded_ty(&f.object) {
+                Some(juxc_tycheck::Ty::Nullable(inner)) => Some(*inner),
+                other => other,
+            };
+            let declared = inner
+                .as_ref()
+                .is_some_and(|ty| self.ty_declares_operator(ty, juxc_ast::OperatorKind::Hash));
+            let primitive = self.operand_primitive(&f.object).or(match inner {
+                Some(juxc_tycheck::Ty::Primitive(p)) => Some(p),
+                _ => None,
+            });
+            let float = match primitive {
+                Some(juxc_tycheck::Primitive::Float | juxc_tycheck::Primitive::F32) => Some("crate::jux_hash_f32"),
+                Some(juxc_tycheck::Primitive::Double | juxc_tycheck::Primitive::F64) => Some("crate::jux_hash_f64"),
+                _ => None,
+            };
+            if self.expression_is_already_nullable(&f.object) {
+                // A null hashes to 0, and a present value exactly as it would
+                // bare, so `int? a = 5` hashes like `5` (the two are `==`).
+                self.w.push_str("match &(");
+                self.emit_expr(&f.object);
+                self.w.push_str(") { Some(__jux_v) => ");
+                if declared {
+                    self.w.push_str("__jux_v.__op_hash()");
+                } else if let Some(helper) = float {
+                    self.w.push_str(helper);
+                    self.w.push_str("(*__jux_v)");
+                } else {
+                    self.w.push_str("crate::jux_hash(__jux_v)");
+                }
+                self.w.push_str(", None => 0 }");
+            } else if declared {
+                self.emitting_method_receiver = true;
+                self.emit_expr(&f.object);
+                self.emitting_method_receiver = false;
+                self.w.push_str(".__op_hash()");
+            } else if juxc_tycheck::infer::untyped_int_literal(&f.object) {
+                // A bare `5` is an `int`; left untyped, Rust would hash it as
+                // an `i32` and `5.operator hash()` would not match an `int`
+                // holding 5.
+                let bare = matches!(&*f.object, Expr::Literal(_));
+                self.w.push_str(if bare { "crate::jux_hash(&" } else { "crate::jux_hash(&(" });
+                self.emit_expr(&f.object);
+                self.w.push_str(if bare { "_isize)" } else { " as isize))" });
+            } else {
+                self.w.push_str(float.unwrap_or("crate::jux_hash"));
+                self.w.push_str(if float.is_some() { "(" } else { "(&(" });
+                self.emitting_method_receiver = true;
+                self.emit_expr(&f.object);
+                self.emitting_method_receiver = false;
+                self.w.push_str(if float.is_some() { ")" } else { "))" });
+            }
+        } else {
+            // Exactly the text `${x}` produces: the same renderer, so a null
+            // prints `null` and a float keeps its `.0`.
+            self.w.push_str("format!(\"{}\", ");
+            self.emitting_format_arg = true;
+            self.emit_format_arg(&f.object);
+            self.w.push(')');
+        }
+        self.emitting_format_arg = prev;
+    }
+
     /// Emit argument `i` converted to the parameter's integer type, and say
     /// whether that happened.
     ///

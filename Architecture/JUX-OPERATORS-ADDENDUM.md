@@ -116,6 +116,20 @@ If a class defines `operator==`, the compiler **requires** it to also define `op
 
 Records/structs/enums never trigger this — auto-derivation produces a consistent pair.
 
+**Invoking a named operator.** An `operator hash` or `operator string` is called by spelling the operator, as the member it is: `x.operator hash()` and `x.operator string()`. Every value has both. A type that declares the operator gets its own; any other value gets the built-in one: a primitive or `String` hashes its value, a float hashes its bits (with `-0.0` and `0.0` alike, since they are `==`), a record, struct or enum hashes its fields as its derived `==` compares them, and a class with no `operator==` hashes its identity. A `T?` that holds a value hashes as that `T` does, and a null hashes to `0`. `x.operator string()` is the text string interpolation produces for `x`, so a null gives `"null"`.
+
+The form exists so an `operator hash` can combine its fields' hashes. Combine with the wrapping operators (§S.2.1), since a hash is expected to overflow:
+
+```jux
+public int operator hash() {
+    int result = name.operator hash();
+    result = 31 *% result +% age.operator hash();
+    return result;
+}
+```
+
+There is no `x.hash()` method: operators are not magic-name methods (§O.2.2), and a class may declare a method called `hash` that means something else.
+
 ### O.2.8. Operator Visibility
 
 An operator declaration must be `public`. `private`, `protected`, `internal` and
@@ -304,7 +318,7 @@ public class Path {
     public String value;
 
     public bool operator==(Path other) { return value == other.value; }
-    public int operator hash() { return value.hash(); }
+    public int operator hash() { return value.operator hash(); }
     public String operator string() { return value; }
 }
 ```

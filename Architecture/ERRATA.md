@@ -521,7 +521,10 @@ that every Jux type can satisfy every bound the compiler adds on its own --
 `Clone` and `Debug` are universal and every type has a string form -- which
 removes the failure mode for the bounds that exist today. `Eq + Hash` and
 `Ord` on a user type that defines no `operator==` / `<=>` remain reachable,
-and want a diagnostic of their own.
+and want a diagnostic of their own. So does `Hash` on a parameter a body
+hashes with `.operator hash()` (§O.2.7) when the type argument is `float` or
+`double`: every other type hashes (a class by identity), but Rust gives floats
+no `Hash`. The `PartialEq` a compared parameter acquires is always met.
 
 **Spec status:** §T.2.1 states the satisfiability guarantee. No code is
 allocated for the residual case.
@@ -733,6 +736,22 @@ implementation raises under another number.
   reserved rows.
 
 **Spec status:** the catalog and the addenda are corrected.
+
+---
+
+## E26. How a program calls `operator hash`
+
+**Conflict.** JUX-OPERATORS-ADDENDUM §O.4.2 wrote `value.hash()` to hash a
+field, while the §O.8.3 `Path` example and the Map/Set description wrote
+`key.operator hash()`. Neither was implemented, so an `operator hash` over a
+`String` field could not be written at all, and the IDE's "Generate operator==
+and hash" had nothing it could emit.
+
+**Resolution.** `x.operator hash()` and `x.operator string()`, for every value
+(§O.2.7). `value.hash()` contradicts §O.2.2, which says operators are not
+magic-name methods, and would collide with a user method named `hash`.
+
+**Spec status:** §O.2.7 states the rule; the §O.4.2 example is corrected.
 
 ---
 

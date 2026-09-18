@@ -505,6 +505,7 @@ impl RustEmitter {
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
+        self.collect_equality_bound_params(class_decl);
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
@@ -731,41 +732,48 @@ impl RustEmitter {
         }
         let address = self.class_identity_address(&class_decl.name.text, false);
         self.emit_jux_identity_impl(&class_decl.name.text, &class_decl.generic_params, address);
-        if class_decl.generic_params.is_empty() {
-            for op in &class_decl.operators {
-                self.emit_operator_trait_impl(&class_decl.name.text, op);
+        // A generic class gets the equality, hash and ordering bridges, with
+        // its parameters bounded as its inherent impl is (§T.2.1). Arithmetic
+        // bridges stay non-generic; `operator string` is bridged above.
+        let generic = !class_decl.generic_params.is_empty();
+        self.op_impl_class = generic.then(|| class_decl.clone());
+        for op in &class_decl.operators {
+            if generic && !Self::bridged_for_generic_class(op.kind) {
+                continue;
             }
-            let has_eq = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Eq);
-            let has_hash = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Hash);
-            let has_cmp = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::Cmp);
-            // Spec §O.2.1: `<=>` auto-derives `<`, `<=`, `>`, `>=` but
-            // NOT `==`. Rust's PartialOrd requires PartialEq, so when
-            // the user defined `<=>` alone, we synthesize a PartialEq
-            // bridging through `__op_cmp` ("a == b iff cmp(a, b) == 0").
-            // When the user also defined `operator==`, their own
-            // PartialEq impl is the one emitted by `emit_operator_trait_impl`
-            // — we leave that path alone and skip the synthesized form.
-            if has_cmp && !has_eq {
-                self.emit_partial_eq_from_cmp(&class_decl.name.text, "other.clone()");
-            }
-            // Per spec §O.2.7 the user MUST define `operator hash` if
-            // they define `operator==`. When both are present we
-            // additionally emit `impl Eq for Class {}` — the marker
-            // trait that signals reflexive equality and unlocks
-            // `HashMap`/`HashSet` key usage on top of the Hash impl.
-            if has_eq && has_hash {
-                self.emit_eq_marker(&class_decl.name.text);
-            }
+            self.emit_operator_trait_impl(&class_decl.name.text, op);
         }
+        let has_eq = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Eq);
+        let has_hash = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Hash);
+        let has_cmp = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Cmp);
+        // Spec §O.2.1: `<=>` auto-derives `<`, `<=`, `>`, `>=` but
+        // NOT `==`. Rust's PartialOrd requires PartialEq, so when
+        // the user defined `<=>` alone, we synthesize a PartialEq
+        // bridging through `__op_cmp` ("a == b iff cmp(a, b) == 0").
+        // When the user also defined `operator==`, their own
+        // PartialEq impl is the one emitted by `emit_operator_trait_impl`
+        // — we leave that path alone and skip the synthesized form.
+        if has_cmp && !has_eq {
+            self.emit_partial_eq_from_cmp(&class_decl.name.text, "other.clone()");
+        }
+        // Per spec §O.2.7 the user MUST define `operator hash` if
+        // they define `operator==`. When both are present we
+        // additionally emit `impl Eq for Class {}` — the marker
+        // trait that signals reflexive equality and unlocks
+        // `HashMap`/`HashSet` key usage on top of the Hash impl.
+        if has_eq && has_hash {
+            self.emit_eq_marker(&class_decl.name.text);
+        }
+        self.op_impl_class = None;
 
         // For each `implements I`, emit a trait-impl block that
         // **delegates** to the inherent methods on this class. The
@@ -1134,6 +1142,7 @@ impl RustEmitter {
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
+        self.collect_equality_bound_params(class_decl);
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
@@ -1407,21 +1416,25 @@ impl RustEmitter {
         if !self.class_chain_declares_equality(class_decl) {
             self.emit_identity_eq_hash(name, &class_decl.generic_params);
         }
-        if class_decl.generic_params.is_empty() {
-            for op in &effective_ops {
-                self.emit_operator_trait_impl(name, op);
+        let generic = !class_decl.generic_params.is_empty();
+        self.op_impl_class = generic.then(|| class_decl.clone());
+        for op in &effective_ops {
+            if generic && !Self::bridged_for_generic_class(op.kind) {
+                continue;
             }
-            let has_eq = effective_ops.iter().any(|o| o.kind == OperatorKind::Eq);
-            let has_hash = effective_ops.iter().any(|o| o.kind == OperatorKind::Hash);
-            let cmp = effective_ops.iter().find(|o| o.kind == OperatorKind::Cmp);
-            if let (Some(cmp), false) = (cmp, has_eq) {
-                let arg = self.operator_other_arg(cmp);
-                self.emit_partial_eq_from_cmp(name, arg);
-            }
-            if has_eq && has_hash {
-                self.emit_eq_marker(name);
-            }
+            self.emit_operator_trait_impl(name, op);
         }
+        let has_eq = effective_ops.iter().any(|o| o.kind == OperatorKind::Eq);
+        let has_hash = effective_ops.iter().any(|o| o.kind == OperatorKind::Hash);
+        let cmp = effective_ops.iter().find(|o| o.kind == OperatorKind::Cmp);
+        if let (Some(cmp), false) = (cmp, has_eq) {
+            let arg = self.operator_other_arg(cmp);
+            self.emit_partial_eq_from_cmp(name, arg);
+        }
+        if has_eq && has_hash {
+            self.emit_eq_marker(name);
+        }
+        self.op_impl_class = None;
         self.emit_class_trait_impls(class_decl);
         self.emit_class_marker_trait(class_decl);
         // Generic-class static methods → module-scope free functions
@@ -2076,6 +2089,8 @@ impl RustEmitter {
         // this one — every impl header collects before it emits.
         self.hash_key_params.clear();
         self.ord_key_params.clear();
+        self.eq_bound_params.clear();
+        self.hashed_params.clear();
         if params.is_empty() {
             return;
         }
@@ -2121,6 +2136,107 @@ impl RustEmitter {
         }
         self.hash_key_params = hash;
         self.ord_key_params = ord;
+    }
+
+    /// The operators whose Rust trait bridge a GENERIC class gets: equality,
+    /// hash and ordering. `operator string` is bridged on its own path, and
+    /// the arithmetic bridges are still non-generic only.
+    pub(crate) fn bridged_for_generic_class(kind: OperatorKind) -> bool {
+        matches!(kind, OperatorKind::Eq | OperatorKind::Hash | OperatorKind::Cmp)
+    }
+
+    /// Record which of the class's type parameters its bodies compare with
+    /// `==` / `!=` (they need `PartialEq`) and hash with `.operator hash()`
+    /// (they need `Hash`), per JUX-TYPE-SYSTEM-ADDENDUM §T.2.1.
+    ///
+    /// Every Jux type satisfies both where it matters: a class without
+    /// `operator==` compares and hashes by identity, a record or enum derives
+    /// them, and a primitive has them built in. The one exception is a float
+    /// type argument to a HASHED parameter, which Rust gives no `Hash`; that is
+    /// the E16 residual. Call after [`Self::collect_key_bound_params`], which
+    /// clears both sets.
+    pub(crate) fn collect_equality_bound_params(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        if class_decl.generic_params.is_empty() {
+            return;
+        }
+        let params: HashSet<&str> = class_decl
+            .generic_params
+            .iter()
+            .filter(|p| !p.is_const())
+            .map(|p| p.name.text.as_str())
+            .collect();
+        // Fields whose type is a bare parameter: a field read carries no
+        // recorded type of its own, so `item == other.item` is recognized by
+        // the field's declared type.
+        let param_fields: std::collections::HashMap<&str, &str> = class_decl
+            .fields
+            .iter()
+            .filter_map(|f| {
+                let ty = f.ty.as_ref()?;
+                let bare = ty.array_shape.is_none()
+                    && ty.generic_args.is_empty()
+                    && ty.fn_shape.is_none()
+                    && ty.name.segments.len() == 1;
+                let name = ty.name.segments.first()?.text.as_str();
+                (bare && params.contains(name)).then_some((f.name.text.as_str(), name))
+            })
+            .chain(class_decl.properties.iter().filter_map(|p| {
+                let ty = &p.ty;
+                let bare = ty.array_shape.is_none() && ty.generic_args.is_empty() && ty.name.segments.len() == 1;
+                let name = ty.name.segments.first()?.text.as_str();
+                (bare && params.contains(name)).then_some((p.name.text.as_str(), name))
+            }))
+            .collect();
+        // The parameter `e`'s value has, when it has one.
+        let param_of = |e: &juxc_ast::Expr| -> Option<String> {
+            let recorded = match self.expr_types.get(&crate::exprs::expr_span_of(e)) {
+                Some(juxc_tycheck::Ty::Param(n)) => Some(n.clone()),
+                Some(juxc_tycheck::Ty::Nullable(inner)) => match &**inner {
+                    juxc_tycheck::Ty::Param(n) => Some(n.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(n) = recorded.filter(|n| params.contains(n.as_str())) {
+                return Some(n);
+            }
+            let field = match e {
+                juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => qn.segments[0].text.as_str(),
+                juxc_ast::Expr::Field(f) => f.field.text.as_str(),
+                _ => return None,
+            };
+            param_fields.get(field).map(|p| p.to_string())
+        };
+        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
+        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
+        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
+        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
+        blocks.extend(class_decl.init_blocks.iter());
+        let mut eq = HashSet::new();
+        let mut hashed = HashSet::new();
+        for block in blocks {
+            juxc_ast::visit::for_each_expr(block, &mut |e| match e {
+                juxc_ast::Expr::Binary(b)
+                    if matches!(b.op, juxc_ast::BinaryOp::Eq | juxc_ast::BinaryOp::NotEq) =>
+                {
+                    if let Some(p) = param_of(&b.left).or_else(|| param_of(&b.right)) {
+                        eq.insert(p);
+                    }
+                }
+                juxc_ast::Expr::Call(c) => {
+                    if let juxc_ast::Expr::Field(f) = &*c.callee {
+                        if f.field.text == "operator hash" {
+                            if let Some(p) = param_of(&f.object) {
+                                hashed.insert(p);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            });
+        }
+        self.eq_bound_params = eq;
+        self.hashed_params = hashed;
     }
 
     /// Every type a class mentions in a storage or signature position — field
@@ -4380,6 +4496,7 @@ impl RustEmitter {
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
+        self.collect_equality_bound_params(class_decl);
         let params = class_decl.generic_params.clone();
         self.emit_generic_params_with_clone_bound_plus_display(&params, &displayed, &defaulted);
     }

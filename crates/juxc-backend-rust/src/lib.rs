@@ -1130,6 +1130,18 @@ struct RustEmitter {
     /// Populated per declaration by `collect_key_bound_params`.
     pub(crate) hash_key_params: std::collections::HashSet<String>,
     pub(crate) ord_key_params: std::collections::HashSet<String>,
+    /// Type-parameter names of the class being emitted whose values are
+    /// compared with `==` / `!=` (need `PartialEq`), and whose values are
+    /// hashed with `.operator hash()` (need `Hash`). JUX-TYPE-SYSTEM-ADDENDUM
+    /// §T.2.1. Populated by `collect_equality_bound_params`, cleared with the
+    /// key bounds.
+    pub(crate) eq_bound_params: std::collections::HashSet<String>,
+    /// The generic class whose operator trait bridges are being emitted, so
+    /// each `impl PartialEq for …` carries its parameters and the same bounds
+    /// as the inherent impl that defines `__op_eq` and friends. `None` for a
+    /// non-generic declaration. See `emit_operator_impl_head`.
+    pub(crate) op_impl_class: Option<juxc_ast::ClassDecl>,
+    pub(crate) hashed_params: std::collections::HashSet<String>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -4450,6 +4462,27 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for ::std::boxed::Box<T> {\n");
         w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
         w.push_str("}\n\n");
+        // `x.operator hash()` for a value with no operator of its own (§O.2.7):
+        // Rust's `Hash`, through a hasher with fixed keys, so a value hashes
+        // the same way on every run.
+        w.push_str(concat!(
+            "pub fn jux_hash<T: ::std::hash::Hash + ?Sized>(v: &T) -> isize {\n",
+            "    use ::std::hash::Hasher;\n",
+            "    let mut h = ::std::collections::hash_map::DefaultHasher::new();\n",
+            "    v.hash(&mut h);\n",
+            "    h.finish() as isize\n",
+            "}\n",
+            // A float hashes its bits. `-0.0 == 0.0` in Jux, so the two must
+            // hash alike; every NaN is one NaN.
+            "pub fn jux_hash_f64(v: f64) -> isize {\n",
+            "    let v = if v == 0.0 { 0.0 } else if v.is_nan() { f64::NAN } else { v };\n",
+            "    jux_hash(&v.to_bits())\n",
+            "}\n",
+            "pub fn jux_hash_f32(v: f32) -> isize {\n",
+            "    let v = if v == 0.0 { 0.0 } else if v.is_nan() { f32::NAN } else { v };\n",
+            "    jux_hash(&v.to_bits())\n",
+            "}\n",
+        ));
         // Character-indexed `String` access (CORE-LIB K.7): an index outside
         // the string throws a catchable `IndexOutOfBoundsException` with the
         // JDK's message, where a bare `chars().nth(i).unwrap()` panicked with
@@ -4939,6 +4972,9 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             sync_class_fqns: std::collections::HashSet::new(),
             hash_key_params: std::collections::HashSet::new(),
             ord_key_params: std::collections::HashSet::new(),
+            eq_bound_params: std::collections::HashSet::new(),
+            op_impl_class: None,
+            hashed_params: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),

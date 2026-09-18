@@ -3697,29 +3697,27 @@ fn unmapped_operator_emits_inherent_method_only() {
     );
 }
 
-/// Generic classes skip operator trait impls (bound propagation isn't
-/// wired yet) but still emit the inherent `__op_*` methods.
+/// A generic class gets its `==` bridge, with the parameters bounded as the
+/// inherent impl is: `T` is compared, so it carries `PartialEq` (§T.2.1).
 #[test]
-fn generic_class_skips_operator_trait_impl() {
+fn generic_class_bridges_operator_eq_with_inferred_bounds() {
     let rust = emit(
         r#"
         public class Box<T> {
             public T value;
             public Box(T value) { this.value = value; }
-            public bool operator==(Box<T> other) { return true; }
+            public bool operator==(Box<T> other) { return value == other.value; }
         }
         public void main() {}
         "#,
     );
-    // Inherent method stays.
     assert!(
         rust.contains("pub fn __op_eq"),
         "missing inherent __op_eq on generic class: {rust}",
     );
-    // No PartialEq impl — generic-class trait impls deferred.
     assert!(
-        !rust.contains("impl PartialEq for Box"),
-        "should NOT emit PartialEq impl for generic class yet: {rust}",
+        rust.contains("impl<T: Clone + std::fmt::Debug + 'static + std::cmp::PartialEq> PartialEq for Box<T> {"),
+        "generic class should bridge PartialEq with T: PartialEq: {rust}",
     );
 }
 

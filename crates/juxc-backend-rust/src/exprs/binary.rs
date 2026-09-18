@@ -1391,10 +1391,14 @@ impl RustEmitter {
         e: &juxc_ast::Expr,
         kind: OperatorKind,
     ) -> bool {
-        // Span-keyed first; bare locals fall back to the name-keyed
-        // map (call CALLEES aren't walked by the checker, so their
-        // Path spans often have no expr_types entry).
-        let ty = self.expr_types.get(&expr_span_of(e)).cloned().or_else(|| {
+        self.expr_recorded_ty(e).is_some_and(|ty| self.ty_declares_operator(&ty, kind))
+    }
+
+    /// The checker's type for `e`. Span-keyed first; bare locals fall back to
+    /// the name-keyed map (call CALLEES aren't walked by the checker, so their
+    /// Path spans often have no expr_types entry).
+    pub(crate) fn expr_recorded_ty(&self, e: &juxc_ast::Expr) -> Option<Ty> {
+        self.expr_types.get(&expr_span_of(e)).cloned().or_else(|| {
             if let juxc_ast::Expr::Path(qn) = e {
                 if qn.segments.len() == 1 {
                     return self
@@ -1405,11 +1409,15 @@ impl RustEmitter {
                 }
             }
             None
-        });
-        let Some(Ty::User { name, .. }) = ty else {
+        })
+    }
+
+    /// True when `ty` is a user class or record declaring (and not deleting)
+    /// the given operator.
+    pub(crate) fn ty_declares_operator(&self, ty: &Ty, kind: OperatorKind) -> bool {
+        let Ty::User { name, .. } = ty else {
             return false;
         };
-        let name = &name;
         if let Some(class) = self.symbols.classes.get(name) {
             if class.operators.get(&kind).is_some_and(|o| !o.is_deleted) {
                 return true;

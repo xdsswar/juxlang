@@ -142,6 +142,8 @@ A Jux type parameter carries the bounds the program writes. The lowering needs a
 | formatted (`$"${x}"`, `print(x)`, `"…" + x`) | `Display` | Jux renders with `Display`; without it the value falls back to `Debug` and a `String` prints with quotes. |
 | a `HashMap` / `HashSet` key | `Eq + Hash` | Rust puts those on the container's methods, so a class merely HOLDING a `HashMap<K, V>` fails at the first lookup. |
 | a `BTreeMap` / `BTreeSet` key | `Ord` | Same rule, ordered containers. |
+| compared with `==` / `!=` | `PartialEq` | Every type has `==` (§T.1.3), but Rust asks the parameter to say so. |
+| hashed with `.operator hash()` | `Hash` | The same, for the hash every value has (`JUX-OPERATORS-ADDENDUM.md` §O.2.7). |
 | the element of a fixed array field (`T[N]`) | `Default` | Constructing one lowers to `array::from_fn(|_| Default::default())`. |
 | the element of a `new T[n]` anywhere in the declaration | `Default` | Every element starts at `T`'s default value (`JUX-LANG-V1.md` §5.5). |
 

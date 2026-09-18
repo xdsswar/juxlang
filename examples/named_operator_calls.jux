@@ -1,0 +1,98 @@
+// Calling a value's named operators (JUX-OPERATORS-ADDENDUM §O.2.7).
+//
+// `x.operator hash()` and `x.operator string()` work on every value: a type
+// that declares the operator gets its own, anything else the built-in one.
+// That is what lets an `operator hash` combine the hashes of its fields, the
+// job Java's `Objects.hash` does. Hashes are combined with the wrapping
+// operators, since a hash is expected to overflow.
+
+class Person {
+    private String name;
+    private int age;
+    private double score;
+    private bool active;
+
+    public Person(String name, int age, double score, bool active) {
+        this.name = name;
+        this.age = age;
+        this.score = score;
+        this.active = active;
+    }
+
+    public bool operator==(Person other) {
+        return name == other.name && age == other.age && score == other.score && active == other.active;
+    }
+
+    public int operator hash() {
+        int result = name.operator hash();
+        result = 31 *% result +% age.operator hash();
+        result = 31 *% result +% score.operator hash();
+        result = 31 *% result +% active.operator hash();
+        return result;
+    }
+
+    public String operator string() {
+        return $"Person(${name}, ${age})";
+    }
+}
+
+// A generic class compares and hashes its type parameters the same way. The
+// compiler bounds `A` and `B` by that use (JUX-TYPE-SYSTEM-ADDENDUM §T.2.1).
+class Pair<A, B> {
+    private A first;
+    private B second;
+
+    public Pair(A first, B second) {
+        this.first = first;
+        this.second = second;
+    }
+
+    public bool operator==(Pair<A, B> other) {
+        return first == other.first && second == other.second;
+    }
+
+    public int operator hash() {
+        return 31 *% first.operator hash() +% second.operator hash();
+    }
+}
+
+public void main() {
+    var ann = new Person("ann", 30, 1.5, true);
+    var twin = new Person("ann", 30, 1.5, true);
+    var bob = new Person("bob", 30, 1.5, true);
+
+    // Equal values hash alike; that is the contract `operator hash` keeps.
+    print(ann == twin);
+    print(ann.operator hash() == twin.operator hash());
+    print(ann.operator hash() == bob.operator hash());
+
+    // The built-in hash is stable: the same value, the same hash.
+    print("jux".operator hash() == "jux".operator hash());
+    print(42.operator hash() == 42.operator hash());
+
+    // `0.0 == -0.0`, so they must hash alike too.
+    double zero = 0.0;
+    double negative = -0.0;
+    print(zero == negative);
+    print(zero.operator hash() == negative.operator hash());
+
+    // A `T?` holding a value hashes as the `T`; a null hashes to 0.
+    int? maybe = 42;
+    int? nothing = null;
+    print(maybe.operator hash() == 42.operator hash());
+    print(nothing.operator hash());
+
+    // `operator string` is the text interpolation produces.
+    print(ann.operator string());
+    print(ann.operator string() == $"${ann}");
+    String? missing = null;
+    print(missing.operator string());
+
+    // Equal pairs are one set element.
+    var seen = new HashSet<Pair<String, int>>();
+    seen.insert(new Pair<String, int>("a", 1));
+    seen.insert(new Pair<String, int>("a", 1));
+    seen.insert(new Pair<String, int>("b", 2));
+    print(seen.len());
+    print(seen.contains(new Pair<String, int>("b", 2)));
+}

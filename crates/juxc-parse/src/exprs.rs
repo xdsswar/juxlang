@@ -965,6 +965,22 @@ impl<'a> Parser<'a> {
                         };
                         self.advance(); // consume the int literal
                         juxc_ast::Ident { text, span }
+                    } else if self.at_named_operator_call() {
+                        // `x.operator hash()` / `x.operator string()` (§O.2.7):
+                        // invoking one of a value's named operators directly.
+                        // Kept as a member named `operator hash`, which no
+                        // identifier can spell, so it can never collide with a
+                        // real member -- and a Rust member that is literally
+                        // called `operator` (`x.operator()`) still parses as one.
+                        let start = self.peek_span();
+                        self.advance(); // `operator`
+                        let op = self.peek_span();
+                        let text = match self.peek() {
+                            TokenKind::Ident(name) => format!("operator {name}"),
+                            _ => unreachable!("checked by at_named_operator_call"),
+                        };
+                        self.advance();
+                        juxc_ast::Ident { text, span: start.join(op) }
                     } else {
                         // A keyword after `.` is a member name, not a keyword
                         // (`opts.default()`, `v.type()`): member position is

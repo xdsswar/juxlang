@@ -8305,6 +8305,13 @@ impl<'a> Checker<'a> {
 
             Expr::Field(field) => {
                 let method_name = field.field.text.as_str();
+                // `x.operator hash()` / `x.operator string()` (§O.2.7): every
+                // value has both, as its own operator or the built-in one, so
+                // there is no method to look up. Only the receiver is checked.
+                if crate::infer::named_operator_call_type(c).is_some() {
+                    self.check_expr(&field.object);
+                    return;
+                }
                 // `weakField.get()` (§6.5): a zero-arg `.get()` on a weak-field
                 // access is the valid weak→strong promotion (typed `T?` by
                 // `infer`). It has no backing method, so accept it here — check

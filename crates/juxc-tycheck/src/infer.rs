@@ -1029,7 +1029,28 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// name) lands in a later phase — the symbol-table builder still
 /// rejects duplicates with `E0402`, so today there's at most one
 /// candidate per name.
+/// The type of an explicit named-operator call, `x.operator hash()` or
+/// `x.operator string()` (§O.2.7), or `None` for any other call. The parser
+/// keeps the operator as a member named `operator <name>`.
+pub fn named_operator_call_type(c: &CallExpr) -> Option<Ty> {
+    let Expr::Field(f) = &*c.callee else { return None };
+    if !c.args.is_empty() {
+        return None;
+    }
+    match f.field.text.as_str() {
+        "operator hash" => Some(Ty::Primitive(Primitive::Int)),
+        "operator string" => Some(Ty::String),
+        _ => None,
+    }
+}
+
 fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // §O.2.7: `x.operator hash()` is an `int` and `x.operator string()` a
+    // `String`, for every receiver -- a user type's own operator, or the one
+    // every value has.
+    if let Some(ty) = named_operator_call_type(c) {
+        return ty;
+    }
     // §S.3.2: `s.chars().nth(i)` finds a character or nothing.
     if let Expr::Field(outer) = &*c.callee {
         if outer.field.text == "nth" {

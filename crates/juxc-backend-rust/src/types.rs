@@ -1231,6 +1231,14 @@ impl RustEmitter {
             if self.ord_key_params.contains(&p.name.text) {
                 self.w.push_str(" + std::cmp::Ord");
             }
+            // Compared with `==` / hashed with `.operator hash()` in a body
+            // (§T.2.1). A map key already carries both through `Eq + Hash`.
+            if self.eq_bound_params.contains(&p.name.text) && !self.hash_key_params.contains(&p.name.text) {
+                self.w.push_str(" + std::cmp::PartialEq");
+            }
+            if self.hashed_params.contains(&p.name.text) && !self.hash_key_params.contains(&p.name.text) {
+                self.w.push_str(" + std::hash::Hash");
+            }
             if default_params.contains(&p.name.text) {
                 self.w.push_str(" + Default");
             }

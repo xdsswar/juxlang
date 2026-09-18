@@ -295,6 +295,16 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos).map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
     }
 
+    /// Whether the next tokens are `operator <name> (` for one of the NAMED
+    /// operators (§O.2.7): `hash` or `string`. A bare `operator (` is a Rust
+    /// member literally called `operator` and is left to the member path.
+    pub(crate) fn at_named_operator_call(&self) -> bool {
+        let kind = |n: usize| self.tokens.get(self.pos + n).map(|t| &t.kind);
+        matches!(kind(0), Some(TokenKind::Kw(juxc_lex::Keyword::Operator)))
+            && matches!(kind(1), Some(TokenKind::Ident(name)) if name == "hash" || name == "string")
+            && matches!(kind(2), Some(TokenKind::LParen))
+    }
+
     /// Span of the current token. Useful for diagnostics anchored at the
     /// failure site.
     pub(crate) fn peek_span(&self) -> Span {

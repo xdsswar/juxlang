@@ -221,9 +221,7 @@ impl RustEmitter {
 
     /// `impl PartialEq for Class { fn eq(...) { self.__op_eq(other.clone()) } }`.
     fn emit_partial_eq_wrapper(&mut self, class_name: &str, arg: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl PartialEq for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("PartialEq", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn eq(&self, other: &Self) -> bool {");
@@ -582,9 +580,7 @@ impl RustEmitter {
 
     /// `impl Display for Class { fn fmt(...) { f.write_str(&self.__op_string()) } }`.
     fn emit_display_wrapper(&mut self, class_name: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl std::fmt::Display for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("std::fmt::Display", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
@@ -604,9 +600,7 @@ impl RustEmitter {
     /// user's body stays in a "return a value" shape and the bridging
     /// happens in the wrapper.
     fn emit_hash_wrapper(&mut self, class_name: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl std::hash::Hash for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("std::hash::Hash", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line(
@@ -634,9 +628,7 @@ impl RustEmitter {
     /// Rust's default `PartialOrd::lt/le/gt/ge` which all dispatch
     /// through `partial_cmp`.
     fn emit_partial_ord_wrapper(&mut self, class_name: &str, arg: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl PartialOrd for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("PartialOrd", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line(
@@ -664,9 +656,7 @@ impl RustEmitter {
     /// The class-level emitter (`emit_class_decl`) calls this when it
     /// sees `Cmp` without `Eq` after the per-operator trait loop runs.
     pub(super) fn emit_partial_eq_from_cmp(&mut self, class_name: &str, arg: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl PartialEq for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("PartialEq", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn eq(&self, other: &Self) -> bool {");
@@ -685,11 +675,31 @@ impl RustEmitter {
     /// the user has signalled full-equality + hashing intent so the
     /// class can serve as a `HashMap` / `HashSet` key.
     pub(super) fn emit_eq_marker(&mut self, class_name: &str) {
-        self.w.emit_indent();
-        self.w.push_str("impl Eq for ");
-        self.w.push_str(class_name);
+        self.emit_operator_impl_head("Eq", class_name);
         self.w.push_str(" {}\n");
         self.w.newline();
+    }
+
+    /// `impl<T: …> Trait for Class<T>`, up to (not including) the ` {`.
+    ///
+    /// For a generic class ([`Self::op_impl_class`] set) the parameters carry
+    /// exactly the inherent impl's bounds, since the bridge calls the
+    /// `__op_*` methods that impl defines: a weaker list would leave them
+    /// uncallable. A non-generic class reads `impl Trait for Class`.
+    fn emit_operator_impl_head(&mut self, trait_path: &str, class_name: &str) {
+        self.w.emit_indent();
+        self.w.push_str("impl");
+        let generic = self.op_impl_class.clone();
+        if let Some(decl) = &generic {
+            self.emit_class_impl_generic_params(decl);
+        }
+        self.w.push(' ');
+        self.w.push_str(trait_path);
+        self.w.push_str(" for ");
+        self.w.push_str(class_name);
+        if let Some(decl) = &generic {
+            self.emit_generic_params_as_args(&decl.generic_params);
+        }
     }
 
     /// True when an operator's operand type is the receiver's own type, so the
