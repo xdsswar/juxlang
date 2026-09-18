@@ -98,8 +98,11 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
             val fixes =
                 if (decl is JuxLocalVariable || decl is JuxFieldDeclaration) {
                     arrayOf<LocalQuickFix>(RemoveDeclarationFix(kind.lowercase()))
+                } else if (decl is JuxParameter && RemoveUnusedParameterFix.callSites(decl) != null) {
+                    // Only for a private method: every caller is in this file.
+                    arrayOf<LocalQuickFix>(RemoveUnusedParameterFix())
                 } else {
-                    LocalQuickFix.EMPTY_ARRAY // removing a param changes the signature
+                    LocalQuickFix.EMPTY_ARRAY // removing a param changes a signature others call
                 }
             problems.add(
                 manager.createProblemDescriptor(

@@ -11,6 +11,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import dev.jux.intellij.codeInsight.JuxOverrideMembers
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxTypeDeclaration
+import dev.jux.intellij.quickfix.JuxMakeClassAbstractFix
 import dev.jux.intellij.resolve.JuxHierarchy
 
 /**
@@ -52,13 +53,18 @@ class JuxAbstractNotImplementedInspection : LocalInspectionTool() {
                 .distinct()
                 .sorted()
                 .joinToString(", ")
+            // Java's pair: implement the methods, or pass the obligation on by
+            // making the class abstract (only a `class` can be abstract).
+            val fixes = ArrayList<com.intellij.codeInspection.LocalQuickFix>()
+            fixes.add(ImplementMethodsFix())
+            if (JuxHierarchy.isClass(type)) fixes.add(JuxMakeClassAbstractFix(type))
             problems.add(
                 manager.createProblemDescriptor(
                     target,
                     "Class '$name' doesn't implement abstract method(s): $list (E0429)",
-                    ImplementMethodsFix(),
-                    ProblemHighlightType.ERROR,
                     isOnTheFly,
+                    fixes.toTypedArray(),
+                    ProblemHighlightType.ERROR,
                 ),
             )
         }

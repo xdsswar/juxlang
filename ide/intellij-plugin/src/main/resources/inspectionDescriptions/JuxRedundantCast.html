@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports a cast to the type the value already has, such as <code>(int) count</code> where
+<code>count</code> is an <code>int</code>.
+<!-- tooltip end -->
+<p>Only casts where both types are known exactly are reported: a plain primitive or non-generic class,
+from a suffix-free literal, a name declared with a written type, or another cast. Pointer, nullable,
+array and generic casts are left to the compiler.</p>
+<p>Quick-fix: remove the cast.</p>
+</body>
+</html>

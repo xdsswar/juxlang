@@ -716,6 +716,112 @@
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxInheritedTypeParamInspection"/>
 
+    <!-- Java's everyday inspections, at Java's default levels. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxEmptyCatchBlock"
+        displayName="Empty 'catch' block"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxEmptyCatchBlockInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxRedundantCast"
+        displayName="Redundant cast"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxRedundantCastInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxConstantCondition"
+        displayName="Constant condition"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxConstantConditionInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxRedundantElse"
+        displayName="Redundant 'else'"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="INFORMATION"
+        implementationClass="dev.jux.intellij.inspections.JuxRedundantElseInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxPointlessBooleanExpression"
+        displayName="Pointless boolean expression"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxPointlessBooleanExpressionInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxUnusedPrivateMember"
+        displayName="Unused private method, constructor or static field"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxUnusedPrivateMemberInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxDuplicateCondition"
+        displayName="Duplicate condition in 'if' statement"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxDuplicateConditionInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxSelfAssignment"
+        displayName="Variable is assigned to itself"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxSelfAssignmentInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxEmptyStatementBody"
+        displayName="Statement with empty body"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxEmptyStatementBodyInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxMissingReturn"
+        displayName="Missing return statement"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxMissingReturnInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxAbstractMethodInClass"
+        displayName="Abstract method in non-abstract class"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxAbstractMethodInClassInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxUnhandledException"
+        displayName="Unhandled checked exception"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxUnhandledExceptionInspection"/>
+
+    <!-- "Create method from usage" on `receiver.name(...)` when the receiver's
+         class has no such method (the language server draws the error). -->
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.quickfix.JuxCreateMethodFromUsageIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+
     <!-- Java-style Implement Methods (Ctrl+I) / Override Methods (Ctrl+O),
          backed by the same engine as Alt+Insert -> Override/Implement. These
          EPs feed the platform's ImplementMethods/OverrideMethods actions

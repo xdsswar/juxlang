@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports a <code>private</code> method, constructor or <code>static</code> field that nothing in the file
+uses. <code>private</code> is scoped to the file, so the file holds every possible use.
+<!-- tooltip end -->
+<p>A member counts as used whenever its name appears anywhere else in the file, interpolated strings
+included. <code>@override</code> methods, operators, <code>main</code>, private constructors with no
+parameters, and enum constructors are not reported. Private instance fields are covered by the
+unused-symbol inspection.</p>
+<p>Quick-fix: safe delete.</p>
+</body>
+</html>

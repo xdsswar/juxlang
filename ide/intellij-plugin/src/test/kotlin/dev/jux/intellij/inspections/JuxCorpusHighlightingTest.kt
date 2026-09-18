@@ -53,6 +53,18 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
             JuxUnresolvedReferenceInspection(),
             JuxUnusedImportInspection(),
             JuxUnusedLocalSymbolInspection(),
+            JuxEmptyCatchBlockInspection(),
+            JuxRedundantCastInspection(),
+            JuxConstantConditionInspection(),
+            JuxRedundantElseInspection(),
+            JuxPointlessBooleanExpressionInspection(),
+            JuxUnusedPrivateMemberInspection(),
+            JuxDuplicateConditionInspection(),
+            JuxSelfAssignmentInspection(),
+            JuxEmptyStatementBodyInspection(),
+            JuxMissingReturnInspection(),
+            JuxAbstractMethodInClassInspection(),
+            JuxUnhandledExceptionInspection(),
         )
     }
 

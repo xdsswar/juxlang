@@ -1,0 +1,9 @@
+<html>
+<body>
+Reports a variable assigned to itself, such as <code>x = x;</code>, usually a constructor that meant
+<code>this.x = x</code>.
+<!-- tooltip end -->
+<p>Properties are not reported: assigning one runs its setter, which may do something.</p>
+<p>Quick-fix: remove the assignment.</p>
+</body>
+</html>
