@@ -2385,6 +2385,13 @@ impl crate::RustEmitter {
                         if let Some(field) = class.fields.get(name) {
                             return field.ty.nullable;
                         }
+                        // An implicit-`this` PROPERTY read (`${Weight}`) goes
+                        // through the getter, which returns `Option` for an
+                        // auto-property with no initializer (§M.7.3.1).
+                        // Without this it rendered as `Some(2)`.
+                        if let Some(prop) = class.properties.get(name) {
+                            return prop.ty.nullable;
+                        }
                         // The resolved parent first: the written name is looked up again in
                         // the unit being emitted, where it can mean a different class.
                         cursor = class.extends_fqn.clone().or_else(|| {
