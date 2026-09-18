@@ -1,0 +1,1 @@
+expression_body_on_void.jux:1:26: [E0262] error: `log` returns nothing, so it has no expression body: write `{ … }` instead of `= …;`

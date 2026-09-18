@@ -1,0 +1,37 @@
+// Expression-bodied functions and methods (Grammar §A.2.4): `= expression;`
+// is shorthand for `{ return expression; }`, for any function that returns a
+// value. A `void` function takes a block (E0262).
+
+int twice(int x) = x * 2;
+
+String greet(String name) = $"Hello, ${name}!";
+
+bool isEven(int n) = n % 2 == 0;
+
+class Rectangle {
+    private double width;
+    private double height;
+
+    public Rectangle(double width, double height) {
+        this.width = width;
+        this.height = height;
+    }
+
+    public double area() = width * height;
+
+    public double perimeter() = 2.0 * (width + height);
+
+    public bool isSquare() = width == height;
+}
+
+public void main() {
+    print(twice(21));
+    print(greet("Jux"));
+    print(isEven(4));
+    print(isEven(7));
+
+    var r = new Rectangle(3.0, 4.0);
+    print(r.area());
+    print(r.perimeter());
+    print(r.isSquare());
+}

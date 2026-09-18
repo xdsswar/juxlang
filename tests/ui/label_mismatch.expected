@@ -1,0 +1,3 @@
+label_mismatch.jux:3:9: [E0241] error: `continue section;` needs a loop, and `section` labels a block: use `break section;` to leave it
+label_mismatch.jux:6:9: [E0241] error: `break nowhere;` names no enclosing statement: there is no `nowhere:` around it
+label_mismatch.jux:10:13: [E0241] error: `break outer;` would have to leave the lambda it is written in, and a jump cannot: `outer:` is outside the closure

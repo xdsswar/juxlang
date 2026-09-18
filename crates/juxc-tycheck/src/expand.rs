@@ -48,6 +48,29 @@ pub fn apply_call_expansions(
     if plans.is_empty() {
         return;
     }
+    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false });
+}
+
+/// Rename the positional component reads the parser writes for a record
+/// destructuring (`__jux_component_N`, see `juxc_ast::record_destructure_temp`)
+/// to the component names the checker resolved.
+/// `components` is [`crate::TypeCheckResult::component_names`], keyed by the
+/// field identifier's span. The destructuring temporaries also lose their
+/// written type here (see the `Stmt::VarDecl` arm of the walker).
+pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap<Span, String>) {
+    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true });
+}
+
+/// What one walk over the AST applies: call-sugar plans keyed by call span,
+/// and component renames keyed by field-identifier span. Either may be empty.
+pub(crate) struct Rewrites<'a> {
+    plans: &'a HashMap<Span, Vec<ArgSource>>,
+    components: &'a HashMap<Span, String>,
+    /// Whether this walk also finishes record-destructuring temporaries.
+    destructuring: bool,
+}
+
+fn rewrite_units(units: &mut [CompilationUnit], plans: &Rewrites<'_>) {
     for unit in units {
         for item in &mut unit.items {
             expand_top_level(item, plans);
@@ -55,7 +78,7 @@ pub fn apply_call_expansions(
     }
 }
 
-fn expand_top_level(item: &mut TopLevelDecl, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_top_level(item: &mut TopLevelDecl, plans: &Rewrites<'_>) {
     match item {
         TopLevelDecl::Function(f) => expand_fn(f, plans),
         TopLevelDecl::Class(c) => {
@@ -131,7 +154,7 @@ fn expand_top_level(item: &mut TopLevelDecl, plans: &HashMap<Span, Vec<ArgSource
     }
 }
 
-fn expand_fn(f: &mut FnDecl, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_fn(f: &mut FnDecl, plans: &Rewrites<'_>) {
     // Param defaults can contain sugar calls of their own.
     for p in &mut f.params {
         if let Some(d) = &mut p.default {
@@ -143,13 +166,13 @@ fn expand_fn(f: &mut FnDecl, plans: &HashMap<Span, Vec<ArgSource>>) {
     }
 }
 
-fn expand_block(block: &mut Block, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_block(block: &mut Block, plans: &Rewrites<'_>) {
     for stmt in &mut block.statements {
         expand_stmt(stmt, plans);
     }
 }
 
-fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_stmt(stmt: &mut Stmt, plans: &Rewrites<'_>) {
     match stmt {
         Stmt::Expr(e) => expand_expr(e, plans),
         Stmt::Return(e, _) => {
@@ -158,6 +181,13 @@ fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
             }
         }
         Stmt::VarDecl(v) => {
+            // A record-destructuring temporary: its written type was only the
+            // pattern's record NAME, checked already. Left in place a generic
+            // record would be emitted raw (`Box` for `Box<String>`), so the
+            // initializer's type carries it from here on.
+            if plans.destructuring && juxc_ast::record_destructure_arity(&v.name.text).is_some() {
+                v.ty = None;
+            }
             if let Some(init) = &mut v.init {
                 expand_expr(init, plans);
             }
@@ -214,7 +244,7 @@ fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
     }
 }
 
-fn expand_if(i: &mut juxc_ast::IfStmt, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_if(i: &mut juxc_ast::IfStmt, plans: &Rewrites<'_>) {
     expand_expr(&mut i.condition, plans);
     expand_block(&mut i.then_block, plans);
     if let Some(else_branch) = &mut i.else_branch {
@@ -225,7 +255,7 @@ fn expand_if(i: &mut juxc_ast::IfStmt, plans: &HashMap<Span, Vec<ArgSource>>) {
     }
 }
 
-fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
+fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
     match expr {
         // `typeof(expr)` (§5.9.10) — recurse into the operand.
         Expr::TypeOf(inner, _) => expand_expr(inner, plans),
@@ -235,7 +265,7 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
             // Apply this call's plan FIRST (it re-orders/splices the
             // argument vector), then recurse into the result so
             // spliced defaults containing sugar calls expand too.
-            if let Some(plan) = plans.get(&c.span) {
+            if let Some(plan) = plans.plans.get(&c.span) {
                 c.eval_order = splice_args(&mut c.args, &mut c.arg_names, plan);
             }
             expand_expr(&mut c.callee, plans);
@@ -244,7 +274,7 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
             }
         }
         Expr::NewObject(n) => {
-            if let Some(plan) = plans.get(&n.span) {
+            if let Some(plan) = plans.plans.get(&n.span) {
                 // Constructors share the §S.1.4 lexical-order contract;
                 // `NewObjectExpr` carries its own `eval_order`.
                 n.eval_order = splice_args(&mut n.args, &mut n.arg_names, plan);
@@ -290,7 +320,12 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
             expand_expr(&mut i.array, plans);
             expand_expr(&mut i.index, plans);
         }
-        Expr::Field(f) => expand_expr(&mut f.object, plans),
+        Expr::Field(f) => {
+            if let Some(name) = plans.components.get(&f.field.span) {
+                f.field.text = name.clone();
+            }
+            expand_expr(&mut f.object, plans)
+        }
         // `++place` / `place++` — recurse into the place so any
         // call-sugar (named/default args) inside an index/receiver
         // expands (`arr[make(x: 1)]++`).

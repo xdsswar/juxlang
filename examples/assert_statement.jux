@@ -1,0 +1,29 @@
+// The `assert` statement (JUX-SEMANTICS-ADDENDUM §S.7.2): `assert cond;` and
+// `assert cond : message;` are the Java spelling of the built-in
+// `assert(cond)` / `assert(cond, message)`. A false condition stops the
+// program with the message; every assertion below holds.
+
+int clamp(int value, int low, int high) {
+    assert low <= high : "the range must not be empty";
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
+
+public void main() {
+    int count = 3;
+    assert count > 0;
+    assert count == 3 : "count starts at three";
+    assert (count % 2) == 1 : "count is odd";
+    assert(count < 10);
+    assert(count < 10, "the call form still works");
+
+    print(clamp(15, 0, 10));
+    print(clamp(-4, 0, 10));
+    print(clamp(6, 0, 10));
+    print("every assertion held");
+}

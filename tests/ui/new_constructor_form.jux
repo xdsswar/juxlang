@@ -1,0 +1,11 @@
+class Account {
+    public int balance;
+
+    public new(int balance) {
+        this.balance = balance;
+    }
+}
+
+public void main() {
+    print(new Account(10).balance);
+}

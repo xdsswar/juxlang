@@ -1,0 +1,25 @@
+// `typeof` on a literal (JUX-LANG-V1 §5.9.10): the literal's own type, the
+// one its spelling fixes. It used to print `<unknown>`, because a literal
+// carries no position of its own for the compiler to record a type under.
+
+public void main() {
+    print(typeof(42));
+    print(typeof(42L));
+    print(typeof(2.5));
+    print(typeof(2.5f));
+    print(typeof("text"));
+    print(typeof('c'));
+    print(typeof(true));
+    print(typeof(-7));
+    // A nested type prints the way the program spells it.
+    print(typeof(new Shelf.Slot(3)));
+}
+
+class Shelf {
+    public static class Slot {
+        public int index;
+        public Slot(int index) {
+            this.index = index;
+        }
+    }
+}

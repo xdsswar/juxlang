@@ -1,0 +1,4 @@
+destructuring_pattern.jux:11:5: [E0271] error: `var Square(...)` needs a value that is always a `Square`, and this one is a `Shape`: the pattern could fail to match, and a declaration has nowhere to go if it does
+destructuring_pattern.jux:13:5: [E0271] error: `var Point(...)` needs a value that is always a `Point`, and this one is a `Point?`: the pattern could fail to match, and a declaration has nowhere to go if it does
+destructuring_pattern.jux:14:5: [E0439] error: `Point` has 2 components, and this pattern gives 3
+destructuring_pattern.jux:15:5: [E0439] error: `var Plain(...)` takes a record apart, and `Plain` is not a record

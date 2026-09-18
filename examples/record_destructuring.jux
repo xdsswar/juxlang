@@ -1,0 +1,40 @@
+// Record destructuring in a declaration (JUX-LANG-V1 §5.4).
+//
+// `var Point(x, y) = p;` binds one local per component, in component order.
+// A binder may be a name, `var name` (as in a `case` pattern), or `_` to skip
+// a component; `final var` makes every binder final. The value must always be
+// the record: a supertype or a nullable is E0271, tested first with `switch`.
+
+record Point(int x, int y) {}
+
+record Labeled<T>(T value, String label) {}
+
+record Order(String item, int quantity, double price) {}
+
+Point midpoint(Point a, Point b) {
+    var Point(ax, ay) = a;
+    var Point(bx, by) = b;
+    return new Point((ax + bx) / 2, (ay + by) / 2);
+}
+
+public void main() {
+    var origin = new Point(0, 0);
+    var Point(x, y) = origin;
+    print($"origin at ${x}, ${y}");
+
+    var Point(mx, my) = midpoint(new Point(2, 4), new Point(8, 10));
+    print($"midpoint ${mx}, ${my}");
+
+    // `_` skips a component; `var name` reads like a switch pattern.
+    final var Order(item, _, var price) = new Order("lamp", 3, 19.5);
+    print($"${item} costs ${price}");
+
+    // A generic record keeps its type argument.
+    var Labeled(value, label) = new Labeled<String>("blue", "color");
+    print($"${label} = ${value}");
+
+    // The source value is still there afterwards.
+    var Point(ox, oy) = origin;
+    print(origin);
+    print(ox + oy);
+}

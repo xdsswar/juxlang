@@ -1,0 +1,16 @@
+record Point(int x, int y) {}
+
+sealed interface Shape permits Square {}
+
+record Square(double side) implements Shape {}
+
+class Plain {}
+
+public void main() {
+    Shape shape = new Square(2.0);
+    var Square(side) = shape;
+    Point? maybe = null;
+    var Point(mx, my) = maybe;
+    var Point(a, b, c) = new Point(1, 2);
+    var Plain(p) = new Plain();
+}

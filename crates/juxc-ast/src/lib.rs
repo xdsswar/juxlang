@@ -68,4 +68,7 @@ pub use stmts::{
     AssignStmt, Block, CatchClause, DoWhileStmt, ElseBranch, ForCStmt, ForEachStmt, IfCfgStmt, IfStmt,
     Stmt, TryStmt, VarDecl, WhileStmt,
 };
-pub use types::{ArrayDim, ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound, TUPLE_SENTINEL};
+pub use types::{
+    record_component_index, record_component_marker, record_destructure_arity, record_destructure_temp,
+    ArrayDim, ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound, TUPLE_SENTINEL,
+};

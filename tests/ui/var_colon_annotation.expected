@@ -1,0 +1,1 @@
+var_colon_annotation.jux:2:14: [E0144] error: Jux puts the type before the name, not after a `:`: write `int count = …;`, or `var count = …;`

@@ -309,7 +309,7 @@ impl fmt::Display for Ty {
                     }
                     return f.write_str(")");
                 }
-                f.write_str(name)?;
+                f.write_str(&nested_type_spelling(name))?;
                 if !generic_args.is_empty() {
                     f.write_str("<")?;
                     for (i, arg) in generic_args.iter().enumerate() {
@@ -365,6 +365,35 @@ impl fmt::Display for Ty {
             Ty::Unknown => f.write_str("<unknown>"),
         }
     }
+}
+
+/// A type name as the program spells it. A nested type is stored under the
+/// internal name `Outer__Inner` (the flat name the backend emits), but the
+/// program writes `Outer.Inner`, and that is what every diagnostic and
+/// `typeof` must show. Only a `__` BETWEEN two name characters is a nesting
+/// separator; a leading `__` (the compiler's own `__jux_*` names) is kept.
+pub fn nested_type_spelling(name: &str) -> std::borrow::Cow<'_, str> {
+    if !name.contains("__") {
+        return std::borrow::Cow::Borrowed(name);
+    }
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = String::with_capacity(name.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let separates = chars[i] == '_'
+            && chars.get(i + 1) == Some(&'_')
+            && i > 0
+            && chars[i - 1].is_alphanumeric()
+            && chars.get(i + 2).is_some_and(|c| c.is_alphanumeric());
+        if separates {
+            out.push('.');
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// The source-level spelling of a primitive. Used by [`Ty::Display`] and

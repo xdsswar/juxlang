@@ -1,0 +1,53 @@
+// Labeled blocks and the empty statement (Grammar §A.2.8).
+//
+// `name: { ... }` is a block that `break name;` leaves, from anywhere inside
+// it, including from inside a loop. `continue` needs a loop, so aiming it at a
+// labeled block is E0241, as is naming a label that isn't there. A lone `;` is
+// the empty statement: a loop whose condition does all the work has it as its
+// body.
+
+class Tape {
+    public static int position = 0;
+
+    public static bool advance() {
+        position = position + 1;
+        return position < 4;
+    }
+}
+
+int firstNegative(int[] values) {
+    int found = -1;
+    search: {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] < 0) {
+                found = i;
+                break search;
+            }
+        }
+        print("no negative value");
+    }
+    return found;
+}
+
+public void main() {
+    int[] mixed = {4, 7, -2, 9};
+    int[] positive = {1, 2, 3};
+    print(firstNegative(mixed));
+    print(firstNegative(positive));
+
+    validate: {
+        int age = 17;
+        if (age < 18) {
+            print("too young");
+            break validate;
+        }
+        print("welcome");
+    }
+
+    // The empty statement as a loop body.
+    while (Tape.advance());
+    print(Tape.position);
+
+    // Stray semicolons between statements are harmless.
+    print("done");;
+}

@@ -445,6 +445,7 @@ where
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
 
     // `.jux.d` declaration stubs are trusted, signature-only views of foreign
     // APIs — never validated. Drop any diagnostic they produced so the build
@@ -527,6 +528,7 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
     // Trusted foreign-API stubs are never validated — drop their diagnostics.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
     let has_errors = diagnostics
@@ -674,6 +676,7 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
 
     // Trusted foreign-API stubs are never validated (see
     // `stubs::drop_external_diagnostics`): the LSP must not surface false errors

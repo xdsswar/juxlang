@@ -1,0 +1,3 @@
+unknown_local_type.jux:2:5: [E0417] error: unknown type `Zork`: no class, record, enum, interface or primitive of that name is visible here
+unknown_local_type.jux:3:5: [E0417] error: unknown type `Strng`: no class, record, enum, interface or primitive of that name is visible here -- did you mean `String`?
+unknown_local_type.jux:4:9: [E0417] error: unknown type `Widgt`: no class, record, enum, interface or primitive of that name is visible here

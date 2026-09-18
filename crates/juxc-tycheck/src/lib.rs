@@ -210,6 +210,10 @@ pub struct TypeCheckResult {
     /// [`expand::apply_call_expansions`] to rewrite the AST into
     /// plain positional calls before the backend runs.
     pub call_expansions: HashMap<Span, Vec<ArgSource>>,
+    /// Record-destructuring component reads resolved to their names, keyed by
+    /// the field identifier's span. The driver hands these to
+    /// [`expand::apply_component_names`] before the backend runs.
+    pub component_names: HashMap<Span, String>,
 }
 
 impl TypeCheckResult {
@@ -295,6 +299,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_function_selections = std::collections::HashMap::new();
     let mut all_typed_assert_throws = std::collections::HashMap::new();
     let mut all_record_patterns = std::collections::HashMap::new();
+    let mut all_component_names = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
@@ -314,6 +319,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             function_selections,
             typed_assert_throws,
             record_patterns,
+            component_names,
         ) = checker.into_maps();
         all_expr_types.extend(expr_types);
         all_call_expansions.extend(call_expansions);
@@ -322,6 +328,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         all_function_selections.extend(function_selections);
         all_typed_assert_throws.extend(typed_assert_throws);
         all_record_patterns.extend(record_patterns);
+        all_component_names.extend(component_names);
         for d in &mut tc.diagnostics[before..] {
             d.file = Some(idx);
         }
@@ -340,6 +347,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         symbols,
         expr_types: all_expr_types,
         call_expansions: all_call_expansions,
+        component_names: all_component_names,
     }
 }
 

@@ -908,6 +908,10 @@ impl RustEmitter {
             // locals end with it. The same shape as `unsafe`, without the
             // keyword and without changing what is permitted inside.
             Stmt::Block(block) => {
+                // `name: { … }` (§A.2.8) parks its label like a labeled loop;
+                // Rust spells a labeled block `'name: { … }`, and `break name;`
+                // inside it becomes `break 'name;`.
+                self.emit_pending_loop_label();
                 self.w.push_str("{\n");
                 self.w.indent_inc();
                 self.emit_block_contents(block);

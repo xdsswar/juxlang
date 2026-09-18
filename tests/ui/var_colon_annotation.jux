@@ -1,0 +1,4 @@
+public void main() {
+    var count: int = 5;
+    print(count);
+}

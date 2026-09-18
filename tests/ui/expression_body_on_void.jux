@@ -1,0 +1,5 @@
+void log(String message) = print(message);
+
+public void main() {
+    log("hi");
+}

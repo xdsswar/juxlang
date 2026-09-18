@@ -316,6 +316,7 @@ fn resolve_member_deps(
     members: &BTreeMap<String, Manifest>,
     emit_root: &Path,
 ) -> Result<(Vec<SourceFile>, Vec<PathDep>)> {
+    check_module_cycles(m, members)?;
     let mut dep_sources: Vec<SourceFile> = Vec::new();
     let mut path_deps: Vec<PathDep> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -526,31 +527,93 @@ fn topo_order(members: &BTreeMap<String, Manifest>) -> Result<Vec<String>> {
     }
     let mut order = Vec::new();
     let mut visited: HashMap<String, u8> = HashMap::new(); // 0=unseen,1=on-stack,2=done
+    let mut chain: Vec<String> = Vec::new();
     fn visit(
         name: &str,
         deps: &HashMap<String, Vec<String>>,
         visited: &mut HashMap<String, u8>,
+        chain: &mut Vec<String>,
         order: &mut Vec<String>,
     ) -> Result<()> {
         match visited.get(name).copied().unwrap_or(0) {
             2 => return Ok(()),
-            1 => anyhow::bail!("dependency cycle detected involving `{name}` (E0302)"),
+            1 => return Err(module_cycle_error(chain, name)),
             _ => {}
         }
         visited.insert(name.to_string(), 1);
+        chain.push(name.to_string());
         if let Some(edges) = deps.get(name) {
             for e in edges {
-                visit(e, deps, visited, order)?;
+                visit(e, deps, visited, chain, order)?;
             }
         }
+        chain.pop();
         visited.insert(name.to_string(), 2);
         order.push(name.to_string());
         Ok(())
     }
     for name in members.keys() {
-        visit(name, &deps, &mut visited, &mut order)?;
+        visit(name, &deps, &mut visited, &mut chain, &mut order)?;
     }
     Ok(order)
+}
+
+/// The E0308 error for a module dependency cycle (§B.4.6): `chain` is the
+/// path of modules being resolved, and `back_to` the one it reached again.
+/// Names the whole circle, `a -> b -> a`, since the fix is to break one of
+/// its edges.
+fn module_cycle_error(chain: &[String], back_to: &str) -> anyhow::Error {
+    let start = chain.iter().position(|n| n == back_to).unwrap_or(0);
+    let mut circle: Vec<String> = chain[start..].iter().map(|n| format!("`{n}`")).collect();
+    circle.push(format!("`{back_to}`"));
+    anyhow::anyhow!(
+        "[{}] modules depend on each other in a circle: {}. A module is built after the modules \
+         it depends on, so a circle has none to build first; move what they share into a module \
+         both can depend on",
+        juxc_diagnostics::code::Code::E0308_ModuleDependencyCycle.as_str(),
+        circle.join(" -> "),
+    )
+}
+
+/// Refuse a dependency cycle among the Jux modules reachable from `root`
+/// through `path` dependencies (E0308), before anything is loaded. Without
+/// this, a cycle between two standalone projects loaded the root's own
+/// sources back in as a dependency and reported the first duplicate
+/// declaration (`main is declared more than once`), not the cycle.
+fn check_module_cycles(root: &Manifest, members: &BTreeMap<String, Manifest>) -> Result<()> {
+    fn visit(
+        m: &Manifest,
+        members: &BTreeMap<String, Manifest>,
+        chain: &mut Vec<String>,
+        done: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let name = m.package.name.clone();
+        if chain.contains(&name) {
+            return Err(module_cycle_error(chain, &name));
+        }
+        if done.contains(&name) {
+            return Ok(());
+        }
+        chain.push(name.clone());
+        for dep in &m.dependencies {
+            // Only Jux modules reached by path can close a circle here; a
+            // foreign crate is not a Jux module, and a git dependency is a
+            // published revision, which cannot depend on this working copy.
+            let Some(path) = &dep.path else { continue };
+            if crate::stubs::foreign_dep_kind(&dep.name).is_some() {
+                continue;
+            }
+            if let Some(member) = members.get(&dep.name) {
+                visit(member, members, chain, done)?;
+            } else if let Some(loaded) = Manifest::load(path) {
+                visit(&loaded, members, chain, done)?;
+            }
+        }
+        chain.pop();
+        done.insert(name);
+        Ok(())
+    }
+    visit(root, members, &mut Vec::new(), &mut BTreeSet::new())
 }
 
 /// Load the `.jux` sources for a `[lib]` target: every `.jux` under the

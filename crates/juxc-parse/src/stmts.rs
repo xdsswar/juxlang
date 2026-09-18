@@ -21,6 +21,11 @@ impl<'a> Parser<'a> {
 
         let mut statements = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // An empty statement between statements (`f();;`) runs nothing
+            // and needs no node.
+            if self.eat(&TokenKind::Semicolon) {
+                continue;
+            }
             if let Some(stmt) = self.parse_stmt() {
                 statements.push(stmt);
                 // A desugaring statement (tuple destructure) may have
@@ -142,6 +147,9 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Final) || self.at_kw(Keyword::Const) {
             self.advance(); // 'final' | 'const'
             if self.at_kw(Keyword::Var) {
+                if self.at_record_destructure() {
+                    return self.parse_var_record_destructure(true);
+                }
                 return self.parse_var_decl_with(true).map(Stmt::VarDecl);
             }
             // Otherwise the declaration must take the typed form
@@ -159,10 +167,11 @@ impl<'a> Parser<'a> {
             vd.is_ref = true;
             return Some(Stmt::VarDecl(vd));
         }
-        // **Labeled loop** (§A.2.8): `name: while/do/for …`. Two-token
-        // lookahead — a bare identifier followed by `:` followed by a
-        // loop keyword. Anything else (e.g. `Type name = …;` locals,
-        // ternary arms) never has this shape at statement start.
+        // **Labeled loop or block** (§A.2.8): `name: while/do/for …` or
+        // `name: { … }`, which `break name;` leaves. Two-token lookahead: a
+        // bare identifier followed by `:` followed by a loop keyword or `{`.
+        // Anything else (e.g. `Type name = …;` locals, ternary arms) never
+        // has this shape at statement start.
         if matches!(self.peek(), TokenKind::Ident(_))
             && matches!(
                 self.tokens.get(self.pos + 1).map(|t| &t.kind),
@@ -172,7 +181,8 @@ impl<'a> Parser<'a> {
                 self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 Some(TokenKind::Kw(Keyword::While))
                     | Some(TokenKind::Kw(Keyword::Do))
-                    | Some(TokenKind::Kw(Keyword::For)),
+                    | Some(TokenKind::Kw(Keyword::For))
+                    | Some(TokenKind::LBrace),
             )
         {
             let label = self.parse_ident()?;
@@ -196,6 +206,9 @@ impl<'a> Parser<'a> {
                 Some(TokenKind::LParen)
             ) {
                 return self.parse_var_tuple_destructure();
+            }
+            if self.at_record_destructure() {
+                return self.parse_var_record_destructure(false);
             }
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
@@ -379,6 +392,20 @@ impl<'a> Parser<'a> {
             // through the `;` so parsing resumes cleanly with no cascade.
             return None;
         }
+        // The empty statement `;` (§A.2.8): nothing to run. It comes back as
+        // an empty block so a braceless body (`while (next());`) still has
+        // one; `parse_block` drops the ones that sit between statements.
+        if self.at(&TokenKind::Semicolon) {
+            let span = self.peek_span();
+            self.advance(); // ';'
+            return Some(Stmt::Block(Block { statements: Vec::new(), span }));
+        }
+        // `assert cond;` / `assert cond : message;` (§S.7.2): the statement
+        // spelling of the built-in, parsed into the same call as
+        // `assert(cond)` / `assert(cond, message)`.
+        if self.at_assert_statement() {
+            return self.parse_assert_stmt();
+        }
         // Typed local declaration: `Type name [= expr] ;` per §A.2.8's
         // alternative form. Detected by a 3-token lookahead so we don't
         // wrongly consume the leading identifier of an expression
@@ -431,6 +458,51 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::Semicolon, "';' after expression statement");
         Some(Stmt::Expr(expr))
+    }
+
+    /// True at `assert` used as a STATEMENT (§S.7.2): `assert cond;` or
+    /// `assert cond : message;`. The call spelling `assert(cond);` and
+    /// `assert(cond, message);` stays an ordinary call, recognized by its
+    /// parenthesized argument list running straight into the `;`. A
+    /// parenthesized condition followed by `: message`, or by more of an
+    /// expression (`assert (a) && b;`), is the statement form.
+    fn at_assert_statement(&self) -> bool {
+        if !matches!(self.peek(), TokenKind::Ident(n) if n == "assert") {
+            return false;
+        }
+        match self.tokens.get(self.pos + 1).map(|t| &t.kind) {
+            // `assert = …`, `assert.x`, `assert;`: a name, not the built-in.
+            Some(TokenKind::Eq) | Some(TokenKind::Dot) | Some(TokenKind::Semicolon)
+            | Some(TokenKind::ColonColon) | None => false,
+            Some(TokenKind::LParen) => !matches!(
+                self.skip_balanced_parens(self.pos + 1).and_then(|i| self.tokens.get(i)).map(|t| &t.kind),
+                Some(TokenKind::Semicolon),
+            ),
+            _ => true,
+        }
+    }
+
+    /// `assert cond [: message];`, parsed into the call `assert(cond[, message])`
+    /// so the checker and backend see one form.
+    fn parse_assert_stmt(&mut self) -> Option<Stmt> {
+        let callee_span = self.peek_span();
+        let callee = self.parse_ident()?; // `assert`
+        let condition = self.parse_expr()?;
+        let mut args = vec![condition];
+        if self.eat(&TokenKind::Colon) {
+            args.push(self.parse_expr()?);
+        }
+        self.expect(&TokenKind::Semicolon, "';' after `assert` statement");
+        let span = callee_span.join(self.last_consumed_span());
+        let arg_names = vec![None; args.len()];
+        Some(Stmt::Expr(Expr::Call(juxc_ast::CallExpr {
+            callee: Box::new(Expr::Path(juxc_ast::QualifiedName { segments: vec![callee], span: callee_span })),
+            explicit_generic_args: Vec::new(),
+            args,
+            arg_names,
+            eval_order: Vec::new(),
+            span,
+        })))
     }
 
     /// Build the desugared `target += 1` / `target -= 1` assignment for
@@ -806,6 +878,99 @@ impl<'a> Parser<'a> {
     /// [`crate::Parser::pending_stmts`] (drained by `parse_block`).
     /// `_` binders skip their element. Nested patterns are a Phase-1
     /// diagnostic.
+    /// At `var Name(` or `var a.b.Name(`: a record-destructuring local
+    /// (§5.4). `var name = …` never has `(` after the name.
+    fn at_record_destructure(&self) -> bool {
+        let mut i = self.pos + 1; // past `var`
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        i += 1;
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot))
+            && matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+        {
+            i += 2;
+        }
+        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
+    }
+
+    /// `[final] var Pt(a, b) = p;` (§5.4, Grammar §A.2.8 `record-pattern`).
+    ///
+    /// Desugars at parse time, like the tuple form, into a temporary typed
+    /// with the record and one `var` per binder reading its component by
+    /// POSITION (see `juxc_ast::record_destructure_temp` for why positions,
+    /// and for how the checker and driver turn them into names). A binder is
+    /// a name, `var name`, or `_` to skip a component; nested patterns are
+    /// not supported yet.
+    fn parse_var_record_destructure(&mut self, is_final: bool) -> Option<Stmt> {
+        let start = self.peek_span();
+        self.advance(); // 'var'
+        let record = self.parse_type_ref()?;
+        self.expect(&TokenKind::LParen, "'(' to open the record pattern");
+        let mut binders: Vec<juxc_ast::Ident> = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                // `var x` is accepted for symmetry with `case Pt(var x, …)`.
+                self.eat_kw(Keyword::Var);
+                if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LParen)) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "nested record patterns aren't supported in a declaration yet -- destructure the outer record first, then the component",
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                    return None;
+                }
+                binders.push(self.parse_ident()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&TokenKind::RParen, "')' to close the record pattern");
+        self.expect(&TokenKind::Eq, "'=' in record destructuring");
+        let init = self.parse_expr();
+        self.expect(&TokenKind::Semicolon, "';' after record destructuring");
+        let span = start.join(self.last_consumed_span());
+
+        let tmp_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, binders.len());
+        self.tuple_tmp_counter += 1;
+        for (i, binder) in binders.iter().enumerate() {
+            if binder.text == "_" {
+                continue;
+            }
+            // The component READ gets the binder's span, which is also what
+            // the checker keys the position-to-name rewrite on; the temporary
+            // gets the statement's.
+            let read = Expr::Field(juxc_ast::FieldExpr {
+                object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: tmp_name.clone(), span: start }],
+                    span: start,
+                })),
+                field: juxc_ast::Ident { text: juxc_ast::record_component_marker(i), span: binder.span },
+                safe: false,
+                span: binder.span,
+            });
+            self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                name: binder.clone(),
+                ty: None,
+                init: Some(read),
+                is_final,
+                is_ref: false,
+                span: binder.span,
+            }));
+        }
+        Some(Stmt::VarDecl(VarDecl {
+            name: juxc_ast::Ident { text: tmp_name, span: start },
+            ty: Some(record),
+            init,
+            is_final: true,
+            is_ref: false,
+            span,
+        }))
+    }
+
     fn parse_var_tuple_destructure(&mut self) -> Option<Stmt> {
         let start = self.peek_span();
         self.advance(); // 'var'
@@ -899,6 +1064,30 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         self.advance(); // 'var'
         let name = self.parse_ident()?;
+        // `var x: int = 5;` (E0144): the Kotlin/TypeScript annotation. Say so
+        // once, read the type so the rest of the line parses, and carry on as
+        // plain `var` (JUX-LANG-V1 §5.6).
+        if self.at(&TokenKind::Colon) {
+            let colon = self.peek_span();
+            self.advance(); // ':'
+            let ty = self.parse_type_ref();
+            let written = ty
+                .as_ref()
+                .map(|t| t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+                .unwrap_or_default();
+            let fix = if written.is_empty() {
+                "write the type first, `int x = 5;`, or leave it to `var x = 5;`".to_string()
+            } else {
+                format!("write `{written} {} = …;`, or `var {} = …;`", name.text, name.text)
+            };
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0144_ColonTypeAnnotation,
+                    format!("Jux puts the type before the name, not after a `:`: {fix}"),
+                )
+                .with_span(colon.join(self.last_consumed_span())),
+            );
+        }
         self.expect(&TokenKind::Eq, "'=' in `var` declaration");
         let init = self.parse_expr();
         self.expect(&TokenKind::Semicolon, "';' after `var` declaration");
@@ -975,37 +1164,42 @@ impl<'a> Parser<'a> {
         if self.at_fn_pointer_type(i) {
             return self.skip_one_type(i + 1);
         }
-        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
-            let mut j = self.skip_balanced_parens(i)?;
+        let mut j = if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            let after = self.skip_balanced_parens(i)?;
+            let mut j = after;
             if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
                 j += 1;
             }
             if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Throws))) {
                 j = self.skip_type_list(j + 1)?;
             }
-            if !matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow)) {
-                // A parenthesized group with no `->` is a tuple type; it is
-                // reserved syntax with no meaning yet, so stop here.
+            if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+                return self.skip_one_type(j + 1);
+            }
+            // No `->`: a tuple type `(A, B, ...)` (§A.2.7), two or more types
+            // exactly filling the parentheses. It takes the same `?`, array
+            // and pointer suffixes as a named type, below.
+            if !self.is_tuple_type_group(i, after) {
                 return None;
             }
-            return self.skip_one_type(j + 1);
-        }
-        // `void` is a keyword, and a legitimate return type.
-        let mut j = match self.tokens.get(i).map(|t| &t.kind) {
-            Some(TokenKind::Kw(Keyword::Void)) => i + 1,
-            Some(TokenKind::Ident(_)) => {
-                let mut j = i + 1;
-                while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Dot))
-                    && matches!(self.tokens.get(j + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
-                {
-                    j += 2;
+            after
+        } else {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::Kw(Keyword::Void)) => i + 1,
+                Some(TokenKind::Ident(_)) => {
+                    let mut j = i + 1;
+                    while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Dot))
+                        && matches!(self.tokens.get(j + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+                    {
+                        j += 2;
+                    }
+                    if let Some(next) = self.skip_type_args(j) {
+                        j = next;
+                    }
+                    j
                 }
-                if let Some(next) = self.skip_type_args(j) {
-                    j = next;
-                }
-                j
+                _ => return None,
             }
-            _ => return None,
         };
         if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Question)) {
             j += 1;
@@ -1027,6 +1221,26 @@ impl<'a> Parser<'a> {
             j += 1;
         }
         Some(j)
+    }
+
+    /// True when the parenthesized group opening at `open` (and ending just
+    /// before `after`) is a tuple type: two or more types separated by commas
+    /// that fill it exactly. `(a, b)` of plain names passes too, which is fine:
+    /// the callers only ask once they have seen a binding name after it.
+    fn is_tuple_type_group(&self, open: usize, after: usize) -> bool {
+        let mut j = open + 1;
+        let mut types = 0usize;
+        loop {
+            let Some(next) = self.skip_one_type(j) else { return false };
+            types += 1;
+            j = next;
+            if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Comma)) {
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        types >= 2 && j + 1 == after
     }
 
     /// Non-consuming scan of a comma-separated type list at `i`.
@@ -1104,7 +1318,19 @@ impl<'a> Parser<'a> {
         // the statement starts with `(`, which otherwise reads as a
         // parenthesized expression or a lambda.
         if self.at(&TokenKind::LParen) {
-            return self.looks_like_fn_type_local();
+            if self.looks_like_fn_type_local() {
+                return true;
+            }
+            // A TUPLE-typed local, `(int, int) t = (1, 2);` (§A.2.7): the type,
+            // then a binding name, then `=` or `;`. A tuple literal or a
+            // parenthesized expression is never followed by a bare name.
+            return self.skip_one_type(self.pos).is_some_and(|after| {
+                matches!(self.tokens.get(after).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+                    && matches!(
+                        self.tokens.get(after + 1).map(|t| &t.kind),
+                        Some(TokenKind::Eq) | Some(TokenKind::Semicolon),
+                    )
+            });
         }
         // `void* p = …;` / `void** pp;` — a raw pointer to an untyped C region
         // (§L.7). `void` is a keyword (not an `Ident`) and a bare `void` is never

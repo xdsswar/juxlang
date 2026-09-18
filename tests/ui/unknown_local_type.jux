@@ -1,0 +1,5 @@
+public void main() {
+    Zork thing = 5;
+    Strng name = "Ada";
+    Vec<Widgt> parts = new Vec<Widgt>();
+}

@@ -290,6 +290,22 @@ impl<'a> Parser<'a> {
             // first identifier IS the class name, not a return type.
             let is_ctor = match (self.peek(), self.tokens.get(self.pos + 1).map(|t| &t.kind)) {
                 (TokenKind::Ident(text), Some(TokenKind::LParen)) => text == &name.text,
+                // `new(...)`, the constructor spelling JUX-LANG-V1 §7.3 dropped.
+                // Said once (E0263) and read as the constructor it means, so
+                // the rest of the class still checks.
+                (TokenKind::Kw(Keyword::New), Some(TokenKind::LParen)) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0263_NewConstructorForm,
+                            format!(
+                                "a constructor is declared with its class name, `{}(...)`, not `new(...)`: `new` is only the operator that calls it",
+                                name.text,
+                            ),
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                    true
+                }
                 _ => false,
             };
             if is_ctor {
@@ -1632,8 +1648,11 @@ impl<'a> Parser<'a> {
         visibility: Visibility,
     ) -> Option<ConstructorDecl> {
         let start = self.peek_span();
-        // Consume the class-name identifier (matches the surrounding class).
-        self.parse_ident()?;
+        // Consume the class-name identifier (matches the surrounding class),
+        // or the `new` of the dropped spelling, already reported as E0263.
+        if !self.eat_kw(Keyword::New) {
+            self.parse_ident()?;
+        }
         self.expect(&TokenKind::LParen, "'(' to start constructor parameter list");
         // Constructor parameters reject the `final` binding mode (§A.2.4).
         let params = self.parse_param_list_with(/*allow_final=*/ false);
@@ -2180,6 +2199,29 @@ impl<'a> Parser<'a> {
         let body = if self.eat(&TokenKind::Semicolon) {
             // Abstract or native — no body.
             None
+        } else if self.at(&TokenKind::Eq) {
+            // `int twice(int x) = x * 2;` (§A.2.4): shorthand for a block that
+            // returns the one expression, and built as exactly that, so every
+            // later phase sees an ordinary `{ return x * 2; }`. Only a
+            // function with a value has one: a `void` body is a block (E0262).
+            let eq = self.peek_span();
+            self.advance(); // '='
+            let value = self.parse_expr();
+            self.expect(&TokenKind::Semicolon, "';' after an expression body");
+            let span = eq.join(self.last_consumed_span());
+            if matches!(return_type, ReturnType::Void) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0262_ExpressionBodyOnVoid,
+                        format!(
+                            "`{}` returns nothing, so it has no expression body: write `{{ … }}` instead of `= …;`",
+                            name.text,
+                        ),
+                    )
+                    .with_span(eq),
+                );
+            }
+            Some(juxc_ast::Block { statements: value.map(|v| juxc_ast::Stmt::Return(Some(v), span)).into_iter().collect(), span })
         } else {
             Some(self.parse_block())
         };
