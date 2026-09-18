@@ -184,9 +184,13 @@ object JuxTypeIndex {
                 val psi = manager.findFile(vf) ?: continue
                 typesIn(psi).firstOrNull { it.name == name }?.let { return it }
             }
+            // A populated index that knows no such type is the answer: `int`
+            // and `String` are asked about constantly, and falling through to
+            // the project-wide map rebuilt it on every keystroke.
+            if (JuxDeclarationIndex.hasData(project)) return null
         }
-        // No index (or nothing in it): the project-wide map, which is still
-        // cheaper than the scan this replaced.
+        // No index yet: the project-wide map, which is still cheaper than the
+        // scan this replaced.
         return typesByName(project)[name]?.firstOrNull()
     }
 
@@ -261,7 +265,8 @@ object JuxTypeIndex {
                 val psi = manager.findFile(vf) ?: continue
                 out.addAll(typesIn(psi).filter { it.name == name })
             }
-            if (out.isNotEmpty()) return out
+            // Trusted even when empty; see findType(project, name).
+            return out
         }
         return typesByName(project)[name].orEmpty()
     }
@@ -313,6 +318,47 @@ object JuxTypeIndex {
             val psi = manager.findFile(vf) ?: continue
             for (decl in typesIn(psi)) {
                 action(decl)
+            }
+        }
+    }
+
+    /**
+     * Visits the types in [scope] whose name passes [nameMatches], reading
+     * only the files the name index says declare such a name.
+     *
+     * This is what completion calls on every popup: [forEachType] would touch
+     * every Jux file in the project and its libraries, while the index narrows
+     * the walk to the handful of files declaring a name that matches what has
+     * been typed. A fixture whose index holds nothing yet falls back to the
+     * full walk, filtered the same way.
+     */
+    inline fun forEachTypeMatching(
+        project: Project,
+        scope: GlobalSearchScope,
+        crossinline nameMatches: (String) -> Boolean,
+        action: (JuxTypeDeclaration) -> Unit,
+    ) {
+        if (DumbService.isDumb(project)) return
+        if (!JuxDeclarationIndex.hasData(project)) {
+            forEachType(project, scope) { decl -> if (decl.name?.let(nameMatches) == true) action(decl) }
+            return
+        }
+        val names = ArrayList<String>()
+        com.intellij.util.indexing.FileBasedIndex.getInstance().processAllKeys(
+            JuxDeclarationIndex.NAME,
+            { key -> if (nameMatches(key)) names.add(key); true },
+            scope,
+            null,
+        )
+        val manager = PsiManager.getInstance(project)
+        val seen = HashSet<JuxTypeDeclaration>()
+        for (name in names) {
+            com.intellij.openapi.progress.ProgressManager.checkCanceled()
+            for (vf in JuxDeclarationIndex.containingFiles(name, project, scope)) {
+                val psi = manager.findFile(vf) ?: continue
+                for (decl in typesIn(psi)) {
+                    if (decl.name == name && seen.add(decl)) action(decl)
+                }
             }
         }
     }

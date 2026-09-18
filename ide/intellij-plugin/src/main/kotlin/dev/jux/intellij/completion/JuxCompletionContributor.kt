@@ -5,7 +5,8 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
-import com.intellij.codeInsight.completion.PrioritizedLookupElement
+import com.intellij.codeInsight.completion.CompletionUtil
+import com.intellij.codeInsight.completion.PrefixMatcher
 import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
@@ -26,17 +27,16 @@ import dev.jux.intellij.psi.JuxPropertyDeclaration
 import javax.swing.Icon
 
 /**
- * **Fallback** IDE-side completion: contextual keywords plus the declarations
- * *visible from the caret* — for IDEs running without any LSP client (no
- * native LSP module and no LSP4IJ).
+ * Jux code completion, owned by the plugin whether or not `juxc-lsp` runs
+ * (the LSP clients' own completion is switched off): contextual keywords, the
+ * declarations *visible from the caret*, a receiver's members after `.`, name
+ * suggestions for a new declaration, and smart completion
+ * (`CompletionType.SMART`) of only what fits the expected type.
  *
- * When `juxc-lsp` IS serving the project (native client or LSP4IJ), this
- * contributor bails out entirely: the server's completions are scope-aware
- * (locals, parameters, visibility-filtered members, ranked), and merging this
- * flat list on top would duplicate labels and push the good items down.
- *
- * Relevance contract (most relevant on top, least below — enforced through
- * [PrioritizedLookupElement] tiers, see the `P_*` constants):
+ * Order is decided by [JuxCompletionRanking]'s sorter, as Java's is: prefix
+ * quality, then the expected type at the caret, then locality, usage
+ * statistics, accessibility and deprecation. The `P_*` tiers below are its
+ * last resort, and describe the locality order:
  *
  *  1. locals declared before the caret + enclosing parameters (and the
  *     implicit `value` in a setter body),
@@ -51,12 +51,12 @@ import javax.swing.Icon
  *
  * Nothing else is offered: locals of OTHER methods and members of OTHER
  * classes are unreachable from the caret and would only be noise. After a
- * `.` the receiver's members belong to `juxc-lsp`; the single exception is the
- * §P property surface (`.observers` + its ops, `bind`/`unbind`/
- * `bindBidirectional`), which the plugin owns structurally.
+ * `.` the receiver's members come from the type engine, together with the §P
+ * property surface (`.observers` + its ops, `bind`/`unbind`/
+ * `bindBidirectional`).
  */
 class JuxCompletionContributor : CompletionContributor() {
-    private companion object {
+    internal companion object {
         // Relevance tiers (higher floats to the top of the lookup).
         const val P_LOCAL = 100.0
         const val P_PARAM = 90.0
@@ -93,13 +93,29 @@ class JuxCompletionContributor : CompletionContributor() {
                 override fun addCompletions(
                     parameters: CompletionParameters,
                     context: ProcessingContext,
-                    result: CompletionResultSet,
+                    rawResult: CompletionResultSet,
                 ) {
                     // A comment is prose. Nothing below belongs there, and this
                     // has to come first — the interpolation-hole and property
                     // surfaces below run even under an active LSP, so a guard
                     // placed after them would still pop a list inside `// …`.
                     if (isInsideComment(parameters.position)) return
+
+                    // Every item below is ordered by the Jux sorter (prefix
+                    // quality, expected type, locality, statistics,
+                    // accessibility, deprecation, then the old tiers), not by
+                    // the order it happens to be added in.
+                    val result = rawResult.withRelevanceSorter(
+                        JuxCompletionRanking.sorter(parameters, rawResult.prefixMatcher),
+                    )
+
+                    // `Vec<String> |`, `HttpClient |`: the caret names a new
+                    // declaration, so only names fit there, as in Java.
+                    if (JuxNameSuggestions.isDeclarationName(parameters.position)) {
+                        JuxNameSuggestions.suggest(parameters.position).forEach { result.addElement(it) }
+                        result.stopHere()
+                        return
+                    }
 
                     // Inside a `$"…${ ⟨caret⟩ }…"` interpolation hole the LSP is
                     // blind — the whole literal is one opaque string token to it,
@@ -140,7 +156,7 @@ class JuxCompletionContributor : CompletionContributor() {
                     // in-file-resolvable type — see JuxTypeInference). The §P
                     // property surface was already added above.
                     if (afterDot) {
-                        addMemberCompletion(parameters, result)
+                        addMemberCompletion(parameters, result::addElement)
                         return
                     }
 
@@ -164,9 +180,10 @@ class JuxCompletionContributor : CompletionContributor() {
                         // Java does, on top of any import the item adds.
                         addVisibleDeclarations(
                             parameters,
-                            result,
+                            result::addElement,
                             typesOnly = true,
                             constructorCall = isAfterNew(parameters),
+                            matcher = result.prefixMatcher,
                         )
                         return
                     }
@@ -174,21 +191,54 @@ class JuxCompletionContributor : CompletionContributor() {
                     // Tier 3: only the keywords the grammar accepts here.
                     val keywords = JuxKeywordContext.keywordsFor(parameters.position)
                     for (kw in keywords) {
-                        result.addElement(
-                            ranked(LookupElementBuilder.create(kw).bold(), P_KEYWORD),
-                        )
+                        result.addElement(keyword(kw))
                     }
                     // `for await (…)` (§18.6) — a two-word statement opener, so
                     // it can't ride the curated single-word sets (same reason
                     // OBSERVER joins them as a raw extra in JuxKeywordContext).
                     if (keywords === JuxKeywordContext.STATEMENT) {
-                        result.addElement(
-                            ranked(LookupElementBuilder.create("for await").bold(), P_KEYWORD),
-                        )
+                        result.addElement(keyword("for await"))
                     }
 
                     // Tiers 1, 2, 4: declarations visible from the caret only.
-                    addVisibleDeclarations(parameters, result, typesOnly = false)
+                    addVisibleDeclarations(parameters, result::addElement, typesOnly = false, matcher = result.prefixMatcher)
+                }
+            },
+        )
+
+        // Smart completion (Ctrl+Shift+Space): only what fits the type the
+        // caret wants, as Java's smart completion offers.
+        extend(
+            CompletionType.SMART,
+            PlatformPatterns.psiElement().withLanguage(JuxLanguage),
+            object : CompletionProvider<CompletionParameters>() {
+                override fun addCompletions(
+                    parameters: CompletionParameters,
+                    context: ProcessingContext,
+                    rawResult: CompletionResultSet,
+                ) {
+                    if (isInsideComment(parameters.position) || isInsideStringLiteral(parameters.position)) return
+                    val expected = JuxCompletionRanking.expectedTypes(parameters)
+                    if (expected.isEmpty()) return
+                    val result = rawResult.withRelevanceSorter(
+                        JuxCompletionRanking.sorter(parameters, rawResult.prefixMatcher),
+                    )
+                    // Values already in reach whose type fits: locals,
+                    // parameters, members, and a receiver's members after `.`.
+                    val sink: (LookupElement) -> Unit = { item ->
+                        val type = JuxCompletionRanking.typeOf(item)
+                        if (type !is dev.jux.intellij.resolve.JuxType.Static &&
+                            JuxCompletionRanking.bestFit(type, expected) == 0
+                        ) {
+                            result.addElement(item)
+                        }
+                    }
+                    if (isAfterDot(parameters)) {
+                        addEngineMemberCompletion(parameters, sink)
+                        return
+                    }
+                    addVisibleDeclarations(parameters, sink, typesOnly = false, includeTypes = false)
+                    JuxSmartCompletion.addTypeFitting(parameters, expected, result::addElement)
                 }
             },
         )
@@ -204,14 +254,16 @@ class JuxCompletionContributor : CompletionContributor() {
      */
     private fun addVisibleDeclarations(
         parameters: CompletionParameters,
-        result: CompletionResultSet,
+        sink: (LookupElement) -> Unit,
         typesOnly: Boolean = false,
         constructorCall: Boolean = false,
+        includeTypes: Boolean = true,
+        matcher: PrefixMatcher? = null,
     ) {
         val offset = parameters.offset
         val seen = HashSet<String>()
         fun add(element: LookupElement, name: String) {
-            if (seen.add(name)) result.addElement(if (constructorCall) constructorCall(element) else element)
+            if (seen.add(name)) sink(if (constructorCall) constructorCall(element) else element)
         }
 
         // Value-position tiers (locals, params, members, setter `value`) — skipped
@@ -220,7 +272,8 @@ class JuxCompletionContributor : CompletionContributor() {
         while (scope != null && scope !is JuxFile) {
             when (scope.elementType) {
                 E.CODE_BLOCK ->
-                    // Locals are visible only after their declaration.
+                    // Locals are visible only after their declaration. The
+                    // sorter puts the nearest one first.
                     for (child in scope.children) {
                         if (child.elementType !== E.LOCAL_VARIABLE) continue
                         if (child.textOffset >= offset) continue
@@ -263,25 +316,29 @@ class JuxCompletionContributor : CompletionContributor() {
                             JuxObservableProps.SETTER_VALUE,
                         )
                     }
-                E.CLASS_BODY ->
+                E.CLASS_BODY -> {
                     // The whole member surface, INHERITED included: `shared` and
                     // `this.shared` are the same reference, and only the second
                     // used to complete — the walk read this body's own children
                     // and stopped. Visibility still applies; a `private` member
-                    // of an ancestor is not in scope here.
-                    for (m in enclosingMembers(scope, from = scope.parent)) {
+                    // of an ancestor is not in scope here. The class's own
+                    // members rank above what it inherits.
+                    val owner = scope.parent
+                    for (m in enclosingMembers(scope, from = owner)) {
                         val named = m as? JuxNamedElement ?: continue
                         val name = named.name ?: continue
+                        val kind = memberKind(m, owner)
                         when (m.elementType) {
                             E.FIELD_DECLARATION, E.CONST_DECLARATION ->
-                                add(declaration(named, name, AllIcons.Nodes.Field, P_MEMBER), name)
+                                add(declaration(named, name, AllIcons.Nodes.Field, P_MEMBER, kind), name)
                             E.PROPERTY_DECLARATION ->
-                                add(declaration(named, name, AllIcons.Nodes.Property, P_MEMBER), name)
+                                add(declaration(named, name, AllIcons.Nodes.Property, P_MEMBER, kind), name)
                             E.METHOD_DECLARATION ->
-                                add(method(named, name), name)
+                                add(method(named, name, kind = kind), name)
                             else -> {}
                         }
                     }
+                }
                 else -> {}
             }
             scope = scope.parent
@@ -290,16 +347,19 @@ class JuxCompletionContributor : CompletionContributor() {
         // Type parameters of every enclosing declaration — `T` is a legal type
         // inside `class Box<T>`, and inside a generic method's body. Offered
         // even in a type-only position, which is where they are most used.
-        var typeScope: PsiElement? = parameters.position.parent
-        while (typeScope != null && typeScope !is JuxFile) {
-            for (tp in typeParameters(typeScope)) {
-                val name = (tp as? JuxNamedElement)?.name ?: continue
-                add(declaration(tp, name, AllIcons.Nodes.Class, P_TYPE), name)
+        if (includeTypes) {
+            var typeScope: PsiElement? = parameters.position.parent
+            while (typeScope != null && typeScope !is JuxFile) {
+                for (tp in typeParameters(typeScope)) {
+                    val name = (tp as? JuxNamedElement)?.name ?: continue
+                    add(declaration(tp, name, AllIcons.Nodes.Class, P_TYPE), name)
+                }
+                typeScope = typeScope.parent
             }
-            typeScope = typeScope.parent
         }
 
-        // Tier 4: file-level type names (`Model m = new Model();`) — no import.
+        // Tier 4: file-level declarations — the file's free functions, and its
+        // type names (`Model m = new Model();`), no import needed.
         val file = parameters.originalFile
         // A native fn is only callable in an unsafe context (E0506 elsewhere):
         // an `unsafe { }` block, or the body of a function declared `unsafe`
@@ -327,24 +387,29 @@ class JuxCompletionContributor : CompletionContributor() {
                         if (fn.elementType !== E.METHOD_DECLARATION) continue
                         val named = fn as? JuxNamedElement ?: continue
                         val name = named.name ?: continue
-                        add(method(named, name), name)
+                        add(method(named, name, kind = JuxCompletionRanking.Kind.TOP_LEVEL), name)
                     }
                 }
                 continue
             }
             val named = decl as? JuxNamedElement ?: continue
             val name = named.name ?: continue
-            if (decl.elementType in TYPE_DECLS) {
+            if (decl.elementType === E.METHOD_DECLARATION && !typesOnly) {
+                // A free function of this file, `main` excluded: nothing calls
+                // the entry point.
+                if (name != "main") add(method(named, name, kind = JuxCompletionRanking.Kind.TOP_LEVEL), name)
+            } else if (includeTypes && decl.elementType in TYPE_DECLS) {
                 add(declaration(named, name, AllIcons.Nodes.Class, P_TYPE), name)
             }
         }
+        if (!includeTypes) return
 
-        // Tier 4b/4c: types from OTHER files — the project's own, then the
-        // toolchain's. Auto-import on accept. This is what lets cross-file and
-        // standard-library types show up without the LSP; the descending
-        // priorities keep in-file names on top, then the user's other files,
-        // then the generated `.jux.d` stubs (`JuxLibraryRootsProvider` puts the
-        // installed toolchain's std and bound crates into `allScope`).
+        // Tier 4b/4c: types from OTHER files — the project's own, then its
+        // dependencies' and the toolchain's. Auto-import on accept. This is
+        // what lets cross-file and library types show up without the LSP;
+        // the sorter keeps in-file names on top, then the user's other files,
+        // then the dependency packages and the generated `.jux.d` stubs
+        // (`JuxLibraryRootsProvider` puts them all into `allScope`).
         val project = parameters.position.project
         // The project type index reads FileTypeIndex, which throws
         // IndexNotReadyException during indexing (dumb mode). Completion can fire
@@ -352,9 +417,12 @@ class JuxCompletionContributor : CompletionContributor() {
         // walk rather than abort the whole popup; in-file names above still show.
         if (com.intellij.openapi.project.DumbService.isDumb(project)) return
         val curPkg = dev.jux.intellij.completion.JuxAutoImport.packageOfFile(file)
-        dev.jux.intellij.resolve.JuxTypeIndex.forEachType(
+        // Only the files declaring a name that matches what was typed are read
+        // (the name index narrows them), so the popup never walks the project.
+        dev.jux.intellij.resolve.JuxTypeIndex.forEachTypeMatching(
             project,
             com.intellij.psi.search.GlobalSearchScope.allScope(project),
+            { matcher == null || matcher.prefixMatches(it) },
         ) { type ->
             val name = type.name
             if (name != null && name !in seen) {
@@ -365,9 +433,9 @@ class JuxCompletionContributor : CompletionContributor() {
                 // writing — and wrote an `import` for it. A modifier the editor
                 // ignores is a comment.
                 if (!dev.jux.intellij.resolve.JuxHierarchy.typeVisibleFrom(type, curPkg)) {
-                    return@forEachType
+                    return@forEachTypeMatching
                 }
-                var b = LookupElementBuilder.create(name).withIcon(AllIcons.Nodes.Class)
+                var b = LookupElementBuilder.create(type, name).withIcon(AllIcons.Nodes.Class)
                 if (pkg.isNotEmpty()) b = b.withTailText("  ($pkg)", true)
                 // Import only when it lives in a different, named package.
                 if (pkg.isNotEmpty() && pkg != curPkg) {
@@ -375,37 +443,83 @@ class JuxCompletionContributor : CompletionContributor() {
                         dev.jux.intellij.completion.JuxAutoImport.handler("$pkg.$name", name),
                     )
                 }
-                // A stub declares a foreign API rather than user code, and
-                // its file says so: the compiler writes every one as `.jux.d`.
-                val fromStub = type.containingFile?.name?.endsWith(".jux.d") == true
-                add(ranked(b, if (fromStub) P_TYPE_LIBRARY else P_TYPE_PROJECT), name)
+                // A stub declares a foreign API and a dependency is someone
+                // else's code: both rank below the user's own types.
+                val fromLibrary = JuxCompletionRanking.isLibrary(type)
+                add(ranked(b, if (fromLibrary) P_TYPE_LIBRARY else P_TYPE_PROJECT), name)
             }
         }
     }
 
-    /** A non-method declaration lookup: icon + declared-type hint + tier. */
-    private fun declaration(decl: PsiElement, name: String, icon: Icon, priority: Double): LookupElement {
+    /**
+     * How near a member of the class the caret is in sits: declared by that
+     * class itself, or inherited from a supertype.
+     */
+    private fun memberKind(member: PsiElement, owner: PsiElement?): JuxCompletionRanking.Kind {
+        val declaredIn = PsiTreeUtil.getParentOfType(member, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
+        return if (owner == null || declaredIn == null || declaredIn == owner) JuxCompletionRanking.Kind.MEMBER
+        else JuxCompletionRanking.Kind.INHERITED
+    }
+
+    /**
+     * A non-method declaration lookup: icon, declared-type hint, and the
+     * declaration itself as the lookup object, so the sorter can read its type
+     * and where it lives.
+     */
+    private fun declaration(
+        decl: PsiElement,
+        name: String,
+        icon: Icon,
+        priority: Double,
+        kind: JuxCompletionRanking.Kind? = null,
+    ): LookupElement {
         // For an auto-property the type hint reflects the EFFECTIVE type — an
         // uninitialized auto-property is implicitly nullable (§M.7.3.1), so the
         // popup shows `int?`, not `int`. Other declarations keep their declared type.
         val typeText = (decl as? JuxPropertyDeclaration)?.effectiveTypeText()
             ?: decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
-        var builder = LookupElementBuilder.create(name).withIcon(icon)
+            ?: inferredTypeText(decl)
+        var builder = LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(decl), name).withIcon(icon)
         if (typeText != null) builder = builder.withTypeText(typeText, true)
-        return ranked(builder, priority)
+        if (JuxCompletionRanking.isDeprecated(decl)) builder = builder.strikeout()
+        return ranked(builder, priority, kind)
     }
 
-    /** A method lookup: parens inserted on selection, caret between them. */
-    private fun method(decl: JuxNamedElement, name: String, presentedReturnType: String? = null): LookupElement {
+    /** A `var` local's inferred type, for the type column, when the engine knows it. */
+    private fun inferredTypeText(decl: PsiElement): String? {
+        if (decl.elementType !== E.LOCAL_VARIABLE) return null
+        val t = dev.jux.intellij.resolve.JuxTypeEngine.declaredType(decl)
+        return t.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()
+    }
+
+    /**
+     * A method lookup, shaped the way Java shows one: the return type in the
+     * type column, the parameter list as tail text, and on accept `()` with
+     * the caret inside when it takes arguments, after it when it takes none.
+     */
+    private fun method(
+        decl: JuxNamedElement,
+        name: String,
+        presentedReturnType: String? = null,
+        kind: JuxCompletionRanking.Kind? = null,
+        returnType: dev.jux.intellij.resolve.JuxType? = null,
+    ): LookupElement {
         val params = (decl as PsiElement).node.findChildByType(E.PARAMETER_LIST)?.text ?: "()"
-        val returnType = presentedReturnType ?: decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
-        var builder = LookupElementBuilder.create(name)
+        val typeText = presentedReturnType ?: decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+        var builder = LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(decl as PsiElement), name)
             .withIcon(AllIcons.Nodes.Method)
             .withTailText(params.replace(Regex("\\s+"), " "), true)
-            .withInsertHandler(ParenthesesInsertHandler.getInstance(params != "()"))
-        if (returnType != null) builder = builder.withTypeText(returnType, true)
-        return ranked(builder, P_MEMBER)
+            .withInsertHandler(ParenthesesInsertHandler.getInstance(dev.jux.intellij.resolve.JuxHierarchy.arity(decl) > 0))
+        if (typeText != null) builder = builder.withTypeText(typeText, true)
+        if (JuxCompletionRanking.isDeprecated(decl)) builder = builder.strikeout()
+        val element = ranked(builder, P_MEMBER, kind)
+        if (returnType != null) element.putUserData(JuxCompletionRanking.TYPE, returnType)
+        return element
     }
+
+    /** A keyword: bold, ranked by the sorter below the names that match as well. */
+    private fun keyword(word: String): LookupElement =
+        ranked(LookupElementBuilder.create(word).bold(), P_KEYWORD)
 
     /**
      * Every member reachable unqualified from inside a class body: the class's
@@ -538,8 +652,8 @@ class JuxCompletionContributor : CompletionContributor() {
      * is running — it knows inferred types, not just declared ones — which is
      * why this stands down entirely while a server is attached.
      */
-    private fun addMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
-        if (addEngineMemberCompletion(parameters, result)) return
+    private fun addMemberCompletion(parameters: CompletionParameters, sink: (LookupElement) -> Unit) {
+        if (addEngineMemberCompletion(parameters, sink)) return
         val expression = receiverExpressionBeforeDot(parameters) ?: return
         val target = dev.jux.intellij.resolve.JuxTypeInference
             .resolveReceiverExpression(expression, parameters.position) ?: return
@@ -562,19 +676,21 @@ class JuxCompletionContributor : CompletionContributor() {
             // receiver (`obj.`) → instance members only.
             if (target.isStatic != isStatic) continue
             if (!seen.add(name)) continue
+            val kind = memberKind(m, target.type)
             when (m.elementType) {
-                E.METHOD_DECLARATION -> result.addElement(method(named, name))
-                E.FIELD_DECLARATION, E.CONST_DECLARATION, E.RECORD_COMPONENT ->
-                    result.addElement(declaration(m, name, AllIcons.Nodes.Field, P_MEMBER))
-                E.PROPERTY_DECLARATION ->
-                    result.addElement(declaration(m, name, AllIcons.Nodes.Property, P_MEMBER))
+                E.METHOD_DECLARATION -> sink(method(named, name, kind = kind))
+                E.FIELD_DECLARATION, E.CONST_DECLARATION ->
+                    sink(declaration(m, name, AllIcons.Nodes.Field, P_MEMBER, kind))
+                E.PROPERTY_DECLARATION, E.RECORD_COMPONENT ->
+                    sink(declaration(m, name, AllIcons.Nodes.Property, P_MEMBER, kind))
                 E.ENUM_CONSTANT ->
-                    result.addElement(
+                    sink(
                         ranked(
-                            LookupElementBuilder.create(name)
+                            LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(m), name)
                                 .withIcon(AllIcons.Nodes.Enum)
                                 .withTypeText(target.type.name, true),
                             P_MEMBER,
+                            kind,
                         ),
                     )
             }
@@ -587,22 +703,40 @@ class JuxCompletionContributor : CompletionContributor() {
      * type parameter's bound, with each member's type shown as the receiver
      * sees it (`Box<Truck>.get()` reads `Truck`, not `T`). Reports whether the
      * qualifier had a type at all; when it did not, the caller falls back.
+     *
+     * Project types and the `.jux.d` stubs of the standard library, bound
+     * crates and dependency packages all come through here alike. After a
+     * type name only its statics are offered (an enum's variants among them),
+     * after a value only its instance members plus the two named operators
+     * every value has (`operator hash()`, `operator string()`). The receiver
+     * type's own members rank above what it inherits, and every item carries
+     * its type so the sorter can put what fits the caret first.
      */
-    private fun addEngineMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet): Boolean {
+    private fun addEngineMemberCompletion(parameters: CompletionParameters, sink: (LookupElement) -> Unit): Boolean {
         val access = parameters.position.parent ?: return false
         if (access.elementType !== E.FIELD_ACCESS_EXPRESSION) return false
         val qualifier = dev.jux.intellij.resolve.JuxTypeEngine.firstExpressionChild(access) ?: return false
         val qualifierType = dev.jux.intellij.resolve.JuxTypeEngine.typeOf(qualifier)
-        dev.jux.intellij.resolve.JuxTypeEngine.classOf(qualifierType) ?: return false
+        if (qualifierType is dev.jux.intellij.resolve.JuxType.Unknown) return false
         val static = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType) is
             dev.jux.intellij.resolve.JuxType.Static
+        if (!static) addNamedOperators(qualifierType, sink)
+        val receiverClass = dev.jux.intellij.resolve.JuxTypeEngine.classOf(qualifierType) ?: return true
         val from = PsiTreeUtil.getParentOfType(parameters.position, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
         val seen = HashSet<String>()
+        // A second Ctrl+Space also lists what the caret cannot reach, as Java
+        // does, marked so the sorter sinks it below everything reachable.
+        val showInaccessible = parameters.invocationCount >= 2
         for (member in dev.jux.intellij.resolve.JuxTypeEngine.membersOf(qualifierType)) {
             val m = member.element
             val named = m as? JuxNamedElement ?: continue
             val name = named.name ?: continue
-            if (!dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(m, from)) continue
+            val visible = dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(m, from)
+            if (!visible && !showInaccessible) continue
+            val emit: (LookupElement) -> Unit = if (visible) sink else { item ->
+                item.putUserData(JuxCompletionRanking.INACCESSIBLE, true)
+                sink(item)
+            }
             if (dev.jux.intellij.resolve.JuxTypeEngine.isStaticMember(m) != static) continue
             val key = if (m.elementType === E.METHOD_DECLARATION) {
                 "$name/${dev.jux.intellij.resolve.JuxHierarchy.arity(m)}"
@@ -610,31 +744,75 @@ class JuxCompletionContributor : CompletionContributor() {
                 name
             }
             if (!seen.add(key)) continue
+            val kind = if (member.owner.decl == receiverClass.decl) JuxCompletionRanking.Kind.MEMBER
+            else JuxCompletionRanking.Kind.INHERITED
             when (m.elementType) {
                 E.METHOD_DECLARATION -> {
                     val returnType = dev.jux.intellij.resolve.JuxTypeEngine.returnType(member)
-                    result.addElement(method(named, name, returnType.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()))
+                    val known = returnType.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }
+                    emit(method(named, name, known?.presentable(), kind, known))
                 }
                 E.FIELD_DECLARATION, E.CONST_DECLARATION, E.RECORD_COMPONENT, E.PROPERTY_DECLARATION -> {
                     val type = dev.jux.intellij.resolve.JuxTypeEngine.memberType(member)
-                    val icon = if (m.elementType === E.PROPERTY_DECLARATION) AllIcons.Nodes.Property else AllIcons.Nodes.Field
-                    var b = LookupElementBuilder.create(name).withIcon(icon)
+                    // A record's components read as properties (`p.x`), so
+                    // they show as properties, as a declared property does.
+                    val icon = if (m.elementType === E.PROPERTY_DECLARATION || m.elementType === E.RECORD_COMPONENT) {
+                        AllIcons.Nodes.Property
+                    } else {
+                        AllIcons.Nodes.Field
+                    }
+                    var b = LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(m), name).withIcon(icon)
                     val text = type.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()
                         ?: m.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
                     if (text != null) b = b.withTypeText(text, true)
-                    result.addElement(ranked(b, P_MEMBER))
+                    if (JuxCompletionRanking.isDeprecated(m)) b = b.strikeout()
+                    val element = ranked(b, P_MEMBER, kind)
+                    if (type !is dev.jux.intellij.resolve.JuxType.Unknown) element.putUserData(JuxCompletionRanking.TYPE, type)
+                    emit(element)
                 }
-                E.ENUM_CONSTANT -> result.addElement(
+                E.ENUM_CONSTANT -> emit(
                     ranked(
-                        LookupElementBuilder.create(name)
+                        LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(m), name)
                             .withIcon(AllIcons.Nodes.Enum)
                             .withTypeText(member.owner.decl.name, true),
                         P_MEMBER,
+                        kind,
                     ),
                 )
             }
         }
         return true
+    }
+
+    /**
+     * `x.operator string()` and `x.operator hash()`: the two named operators
+     * every value can be asked for (Operators addendum, "Invoking a named
+     * operator"). A type's own `operator` declaration or the built-in one
+     * answers; either way the call is spelled the same.
+     *
+     * `operator hash` is left out where the language has none (E0933): an
+     * array, and a generic library container such as `Vec<T>` or
+     * `HashMap<K, V>`, whose contents can change under a shared handle. They
+     * rank below the type's own members, as Java ranks `Object`'s.
+     */
+    private fun addNamedOperators(receiver: dev.jux.intellij.resolve.JuxType, sink: (LookupElement) -> Unit) {
+        val bare = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(receiver)
+        val container = bare is dev.jux.intellij.resolve.JuxType.ArrayType ||
+            (bare is dev.jux.intellij.resolve.JuxType.ClassType && bare.args.isNotEmpty() &&
+                JuxCompletionRanking.isLibrary(bare.decl))
+        val ops = if (container) listOf("string" to "String") else listOf("string" to "String", "hash" to "int")
+        for ((op, result) in ops) {
+            val builder = LookupElementBuilder.create("operator $op")
+                .withLookupStrings(listOf("operator $op", op))
+                .withPresentableText("operator $op")
+                .withIcon(AllIcons.Nodes.Method)
+                .withTailText("()", true)
+                .withTypeText(result, true)
+                .withInsertHandler(ParenthesesInsertHandler.getInstance(false))
+            val element = ranked(builder, P_MEMBER, JuxCompletionRanking.Kind.UNIVERSAL)
+            element.putUserData(JuxCompletionRanking.TYPE, dev.jux.intellij.resolve.JuxType.Primitive(result))
+            sink(element)
+        }
     }
 
     // ---- §P property surface after `.` ----------------------------------------
@@ -740,10 +918,10 @@ class JuxCompletionContributor : CompletionContributor() {
             // member/declaration items would be filtered out entirely.
             val res = result.withPrefixMatcher(identifierPrefix(text, parameters.offset))
             if (isAfterDot(parameters)) {
-                addMemberCompletion(parameters, res)
+                addMemberCompletion(parameters, res::addElement)
                 addPropertySurface(parameters, res)
             } else {
-                addVisibleDeclarations(parameters, res)
+                addVisibleDeclarations(parameters, res::addElement, matcher = res.prefixMatcher)
             }
         }
         return true
@@ -895,8 +1073,34 @@ class JuxCompletionContributor : CompletionContributor() {
 
     // ---- shared plumbing --------------------------------------------------------
 
-    private fun ranked(builder: LookupElementBuilder, priority: Double): LookupElement =
-        PrioritizedLookupElement.withPriority(builder, priority)
+    /**
+     * Tag an item with its tier and kind for [JuxCompletionRanking]'s sorter.
+     *
+     * The tier used to be a [com.intellij.codeInsight.completion.PrioritizedLookupElement]
+     * priority, but the platform weighs that FIRST, above prefix quality and
+     * everything else, so no smarter rule could ever reorder the list. It is
+     * now the sorter's last resort. The kind defaults from the tier.
+     */
+    private fun ranked(
+        builder: LookupElementBuilder,
+        priority: Double,
+        kind: JuxCompletionRanking.Kind? = null,
+    ): LookupElement {
+        builder.putUserData(JuxCompletionRanking.TIER, priority)
+        builder.putUserData(JuxCompletionRanking.KIND, kind ?: kindForTier(priority))
+        return builder
+    }
+
+    private fun kindForTier(priority: Double): JuxCompletionRanking.Kind = when (priority) {
+        P_LOCAL -> JuxCompletionRanking.Kind.LOCAL
+        P_PARAM -> JuxCompletionRanking.Kind.PARAM
+        P_MEMBER -> JuxCompletionRanking.Kind.MEMBER
+        P_KEYWORD -> JuxCompletionRanking.Kind.KEYWORD
+        P_TYPE -> JuxCompletionRanking.Kind.TYPE_FILE
+        P_TYPE_PROJECT -> JuxCompletionRanking.Kind.TYPE_PROJECT
+        P_TYPE_LIBRARY -> JuxCompletionRanking.Kind.TYPE_LIBRARY
+        else -> JuxCompletionRanking.Kind.OTHER
+    }
 
     private fun firstIdentifierText(scope: PsiElement): String? {
         var c: PsiElement? = scope.firstChild

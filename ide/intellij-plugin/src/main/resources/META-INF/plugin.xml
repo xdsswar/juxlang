@@ -256,6 +256,11 @@
     <completion.contributor
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
+    <!-- Usage statistics for completion ordering: what the user picks in a
+         kind of position floats up there next time, as in Java. -->
+    <completion.statistician
+        language="Jux"
+        implementationClass="dev.jux.intellij.completion.JuxCompletionStatistician"/>
 
     <!-- Postfix templates (`expr.if`, `expr.var`, ...). A separate extension
          point from completion, so these keep working while juxc-lsp serves
