@@ -1645,7 +1645,84 @@ impl RustEmitter {
     /// is on a record / enum / unknown type, or arity can't be
     /// looked up), we default to the **zero-arg instance** shape;
     /// Rust will surface any real mismatch.
+    /// The class of a BOUND method reference's receiver (`alice::greet`,
+    /// `this::greet`, Missing-defs §M.8.2), or `None` when the receiver
+    /// names a type. A receiver is a value when it is `this`, a parameter,
+    /// or a local in scope.
+    fn method_ref_bound_class(&self, m: &juxc_ast::MethodRefExpr) -> Option<String> {
+        if m.receiver.segments.len() != 1 {
+            return None;
+        }
+        let name = m.receiver.segments[0].text.as_str();
+        if name == "this" {
+            return self.enclosing_class.clone();
+        }
+        let local = self.local_types.iter().rev().find_map(|scope| scope.get(name));
+        let ty = local.or_else(|| {
+            self.current_fn_params
+                .contains(name)
+                .then(|| self.expr_types.get(&m.receiver.span))
+                .flatten()
+        });
+        match ty {
+            Some(Ty::User { name, .. }) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// `alice::greet` becomes a closure over a handle to `alice`:
+    ///
+    /// ```text
+    /// { let recv = alice.clone(); Rc::new(move |a0: String| recv.greet(a0)) }
+    /// ```
+    ///
+    /// The receiver is captured when the reference is made, as a lambda
+    /// capture is (JUX-LANG-V1 §7.9); for a class it is the shared handle, so
+    /// later changes to the object are seen through the reference.
+    fn emit_bound_method_ref(&mut self, m: &juxc_ast::MethodRefExpr, class: &str) {
+        let member = m.member.text.as_str();
+        let group = self.symbols.merged_method_overloads(class, member);
+        let k = self.symbols.method_selections.get(&m.span).copied().unwrap_or(0);
+        let params: Vec<juxc_ast::TypeRef> = group
+            .get(k)
+            .or_else(|| group.first())
+            .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+            .unwrap_or_default();
+        self.w.push_str("{ let recv = ");
+        let receiver = if m.receiver.segments[0].text == "this" {
+            Expr::This(m.receiver.span)
+        } else {
+            Expr::Path(m.receiver.clone())
+        };
+        self.emit_expr(&receiver);
+        self.w.push_str(".clone(); std::rc::Rc::new(move |");
+        for (i, ty) in params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&format!("a{i}: "));
+            self.emit_value_type_as_rust(ty);
+        }
+        self.w.push_str("| recv.");
+        self.w.push_str(&to_rust_ident(member));
+        if k > 0 {
+            self.w.push_str(&format!("__ov{k}"));
+        }
+        self.w.push('(');
+        for i in 0..params.len() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&format!("a{i}"));
+        }
+        self.w.push_str(")) }");
+    }
+
     pub(crate) fn emit_method_ref(&mut self, m: &juxc_ast::MethodRefExpr) {
+        if let Some(class) = self.method_ref_bound_class(m) {
+            self.emit_bound_method_ref(m, &class);
+            return;
+        }
         let receiver_name = m
             .receiver
             .segments
@@ -1665,7 +1742,10 @@ impl RustEmitter {
                     self.resolve_bare_type_fqn(receiver_name)
                         .and_then(|fqn| self.symbols.classes.get(&fqn))
                 })
-                .and_then(|c| c.constructors.first())
+                .and_then(|c| {
+                    let k = self.symbols.ctor_selections.get(&m.span).copied().unwrap_or(0);
+                    c.constructors.get(k).or_else(|| c.constructors.first())
+                })
                 .map(|c| {
                     c.params
                         .iter()
@@ -1717,7 +1797,14 @@ impl RustEmitter {
                     self.w.push_str(&to_rust_ident(&seg.text));
                 }
             }
-            self.w.push_str("::new(");
+            self.w.push_str("::new");
+            // Overloaded constructor K is `new__K` (see `ctor_overload_suffix`).
+            if let Some(&k) = self.symbols.ctor_selections.get(&m.span) {
+                if k > 0 {
+                    self.w.push_str(&format!("__{k}"));
+                }
+            }
+            self.w.push('(');
             for i in 0..ctor_params.len() {
                 if i > 0 {
                     self.w.push_str(", ");

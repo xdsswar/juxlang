@@ -1,0 +1,53 @@
+// Method references (Missing-defs §M.8): a bound `object::method`, a
+// `this::method` inside the class, overloads picked by the function type the
+// reference flows into, and overloaded constructors through `Type::new`.
+
+class Greeter {
+    private String who;
+
+    public Greeter(String who) { this.who = who; }
+
+    public String greet(String other) { return who + " greets " + other; }
+
+    public String greet(String other, int times) { return who + " greets " + other + " x" + times; }
+
+    // `this::greet` is bound to this object; the return type picks the
+    // one-argument overload.
+    public (String) -> String greeter() { return this::greet; }
+}
+
+class Point {
+    public int x;
+    public int y;
+
+    public Point() { this(0, 0); }
+
+    public Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+String apply((String) -> String f, String value) { return f(value); }
+
+public void main() {
+    var ann = new Greeter("ann");
+
+    // The slot's function type picks the overload.
+    (String) -> String once = ann::greet;
+    (String, int) -> String many = ann::greet;
+    print(once("bob"));
+    print(many("bob", 3));
+
+    // An argument's parameter type picks it too.
+    print(apply(ann::greet, "cy"));
+    print(ann.greeter()("dee"));
+
+    // Overloaded constructors, one per function type.
+    () -> Point origin = Point::new;
+    (int, int) -> Point at = Point::new;
+    print(origin().x);
+    var p = at(4, 7);
+    print(p.x + p.y);
+    print(at(1, 2).y);
+}

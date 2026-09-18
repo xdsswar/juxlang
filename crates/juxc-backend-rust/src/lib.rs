@@ -3193,13 +3193,15 @@ fn compute_interface_forced_classes(units: &[juxc_ast::CompilationUnit]) -> Hash
 /// `emit_const_generic_param_decl`). `bool` const params need no cast and
 /// are excluded.
 pub(crate) fn collect_const_int_params(params: &[juxc_ast::TypeParam]) -> HashSet<String> {
+    // Only `int` lowers to a `usize` that a read casts back to `isize`; the
+    // other kinds are declared as their own Rust type and read as they are.
     params
         .iter()
         .filter(|p| {
             p.const_ty
                 .as_ref()
                 .and_then(|t| t.name.segments.last())
-                .map(|s| s.text != "bool")
+                .map(|s| s.text == "int")
                 .unwrap_or(false)
         })
         .map(|p| p.name.text.clone())

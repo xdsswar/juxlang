@@ -376,7 +376,23 @@ pub enum Code {
     /// can store runtime-sized from the start. Raised for one local handed to
     /// both a `T[]` and a `T[N]` slot, and for a fixed-size parameter or field
     /// handed to a `T[]` slot. Declare it `T[]`, or pass `a.clone()`.
+    /// E0461 — `sizeof` of a **generic type written without its arguments**
+    /// (`sizeof(Vec)`, a user `Box`): its size depends on the arguments
+    /// (JUX-LANG-V1 §5.9.4).
+    E0461_SizeofUnboundGeneric,
+    /// E0462 — `sizeof` of a type with a **wildcard** argument
+    /// (`sizeof(Vec<?>)`): `?` stands for some type, so no size belongs to it
+    /// (§5.9.4).
+    E0462_SizeofWildcard,
+    /// E0463 — **`sizeof(void)`**: `void` has no values and no size (§5.9.4).
+    E0463_SizeofVoid,
     E0468_FixedArrayNotShareable,
+    /// E0980 — An **ambiguous method reference** (Missing-defs §M.8.3):
+    /// `Type::member` names several overloads (or constructors), and the
+    /// expected function type at the use site picks none or more than one --
+    /// or there is no expected type at all. Give the reference a function
+    /// type, or write a lambda.
+    E0980_AmbiguousMethodRef,
     /// E0213 — A **single-element tuple** `(e,)`. Grammar §A.4.1 reserves
     /// the form: a tuple has two or more elements (§5.3), and a trailing
     /// comma after ONE expression would otherwise read as plain grouping
@@ -940,7 +956,11 @@ impl Code {
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
+            Code::E0461_SizeofUnboundGeneric     => "E0461",
+            Code::E0462_SizeofWildcard           => "E0462",
+            Code::E0463_SizeofVoid               => "E0463",
             Code::E0468_FixedArrayNotShareable   => "E0468",
+            Code::E0980_AmbiguousMethodRef       => "E0980",
             Code::E0213_SingleElementTuple       => "E0213",
             Code::E0260_IfExprMissingElse        => "E0260",
             Code::W0720_ReturnInFinally          => "W0720",

@@ -1,0 +1,6 @@
+const_generic_kind_errors.jux:1:13: [E0445] error: a const-generic parameter holds an integer, a `bool` or a `char`; `double` is none of these
+const_generic_kind_errors.jux:3:42: [E0445] error: `N` is a `long` const parameter, and an array size is an `int`: declare it `<int N>` to size an array with it
+const_generic_kind_errors.jux:10:23: [E0445] error: const-generic argument `-1` doesn't fit `N`: an `int` const parameter is a size, and a size is never negative
+const_generic_kind_errors.jux:11:22: [E0445] error: const-generic argument `300` doesn't fit `K`: it is outside `byte` (-128 to 127)
+const_generic_kind_errors.jux:12:23: [E0445] error: const-generic argument `'x'` doesn't fit `N`: it is an `int` parameter; give an integer
+const_generic_kind_errors.jux:13:24: [E0445] error: const-generic argument `5` doesn't fit `C`: it is a `char` parameter; give a char literal like `'x'`

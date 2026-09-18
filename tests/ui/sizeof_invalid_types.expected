@@ -1,0 +1,3 @@
+sizeof_invalid_types.jux:7:11: [E0463] error: `sizeof(void)`: `void` has no values, so it has no size (§5.9.4)
+sizeof_invalid_types.jux:8:11: [E0462] error: `sizeof` of a wildcard type: `?` stands for some type, and no size belongs to it (§5.9.4)
+sizeof_invalid_types.jux:9:11: [E0461] error: `sizeof(Box)`: `Box` is generic, and its size depends on its type arguments (§5.9.4)

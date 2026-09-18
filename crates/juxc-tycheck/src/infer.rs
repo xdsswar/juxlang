@@ -1090,6 +1090,13 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         if let Ty::FnPtr { return_type, .. } = callee_ty {
             return *return_type;
         }
+        // A call through a function VALUE (a lambda or method reference in a
+        // local, parameter or field, JUX-LANG-V1 §7.9) produces the function
+        // type's result. Without it `f().x` had no type, and a class result's
+        // field read skipped the handle deref.
+        if let Ty::Fn { return_type, is_async: false, .. } = &callee_ty {
+            return (**return_type).clone();
+        }
         if matches!(callee_ty, Ty::User { .. }) {
             if let Some(ret) =
                 lookup_user_operator_return_type(&callee_ty, OperatorKind::Call, env, symbols)

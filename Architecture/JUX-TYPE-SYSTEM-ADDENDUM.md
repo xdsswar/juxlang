@@ -921,6 +921,10 @@ var rb = new RingBuffer<float, 256>();
 
 The compiler evaluates `N` at compile time and instantiates the type with a fixed-size array.
 
+**What a const parameter can hold.** Any integer type (`byte` through `ulong`, and the width-explicit `i8` to `u64`), `bool` or `char`. A floating-point type or `String` cannot be a const parameter (`E0445`). Inside the declaration the parameter reads as a value of its own type: `N` of `<long N>` is a `long`. The argument must be a constant of that kind and fit it: `new Offset<-5>()` for a `<long N>`, `new Sep<','>()` for a `<char C>`.
+
+**Only `int` and `uint` size arrays.** A Rust array length is a `usize`, which an `int` or `uint` parameter lowers to; `T[N]` or `new T[N]` with a `long`, `char` or `bool` parameter is `E0445`. For the same reason an `int` const argument is never negative.
+
 ### T.11.4. Const Evaluation in MIR
 
 Const evaluation runs in compiler phase 16 (per `JUX-COMPILER-PIPELINE-ADDENDUM.md`). The compiler maintains a **const-eval interpreter** that walks MIR with concrete values, reducing every operation to a result value. Limits (iteration count, recursion depth, total operation count) are enforced; exceeding them emits `E0840`.

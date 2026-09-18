@@ -1,0 +1,2 @@
+method_ref_ambiguous.jux:8:13: [E0980] error: `g::greet` names 2 overloads, and nothing here says which one (§M.8.3)
+method_ref_ambiguous.jux:9:25: [E0980] error: no overload of `g::greet` takes (int)
