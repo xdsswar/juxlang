@@ -1,0 +1,4 @@
+smart_cast_limits.jux:6:12: [W0457] warning: field `next` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)
+smart_cast_limits.jux:11:17: [E0710] error: `throw` requires an `Exception` (or subclass), found String
+smart_cast_limits.jux:19:18: [E0418] error: `cur` may be null here (its type is `Node?`), so `.v` has no value to reach
+smart_cast_limits.jux:28:15: [E0413] error: no method `bark` on type `Animal`

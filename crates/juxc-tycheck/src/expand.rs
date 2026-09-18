@@ -330,6 +330,7 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
         }
         Expr::Await(e, _) => expand_expr(e, plans),
         Expr::NotNullAssert(e, _) => expand_expr(e, plans),
+        Expr::Throw(e, _) => expand_expr(e, plans),
         Expr::TupleLit(elems, _) => {
             for e in elems {
                 expand_expr(e, plans);

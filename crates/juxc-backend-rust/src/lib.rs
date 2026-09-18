@@ -823,6 +823,10 @@ struct RustEmitter {
     /// around exactly that operand, so the test itself still sees the
     /// `Option`.
     pub(crate) expr_narrowed: Vec<String>,
+    /// Names a `while` condition proved non-null for the body being emitted
+    /// (§T.6.5). They are also in `expr_narrowed`, so reads emit the value;
+    /// each leaves both lists at the first statement that assigns it.
+    pub(crate) loop_narrowed: Vec<String>,
     /// `var` locals initialized by `new Base(...)` of a polymorphic base
     /// class. Written without a type, such a local holds the CONCRETE
     /// object, where a local declared `Base b = ...` holds the
@@ -1873,6 +1877,7 @@ pub(crate) fn compute_aliased_classes(
             }
             Expr::Await(inner, _) => walk_expr(inner, aliased, mark),
             Expr::NotNullAssert(inner, _) => walk_expr(inner, aliased, mark),
+            Expr::Throw(inner, _) => walk_expr(inner, aliased, mark),
             Expr::Lambda(l) => {
                 // A class captured by a lambda IS an alias: the closure
                 // holds its own handle to the object, mutations through
@@ -3750,6 +3755,7 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         }
         Expr::Await(inner, _) => cast_targets_expr(inner, out),
         Expr::NotNullAssert(inner, _) => cast_targets_expr(inner, out),
+        Expr::Throw(inner, _) => cast_targets_expr(inner, out),
         Expr::Lambda(l) => match &l.body {
             juxc_ast::LambdaBody::Expr(b) => cast_targets_expr(b, out),
             juxc_ast::LambdaBody::Block(blk) => cast_targets_block(blk, out),
@@ -5041,6 +5047,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             expr_narrowed: Vec::new(),
+            loop_narrowed: Vec::new(),
             concrete_polybase_locals: HashSet::new(),
             enclosing_record: None,
             ref_locals: HashSet::new(),

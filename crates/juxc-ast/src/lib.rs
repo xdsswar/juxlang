@@ -57,7 +57,7 @@ pub use desugar::{
     setter_method_name as desugar_static_setter_name,
 };
 pub use exprs::{
-    AnonymousBody, BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
+    assert_condition, AnonymousBody, BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
     IncDecExpr, IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
     MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     TernaryExpr, TypeTestExpr, UnaryExpr, UnaryOp,

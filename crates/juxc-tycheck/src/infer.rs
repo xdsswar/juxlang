@@ -630,6 +630,9 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::Await(inner, _) => infer_expr(inner, env, symbols),
         // `expr!!` asserts non-null: the result type is the operand's
         // type with the nullable layer peeled (conversion table T? -> T).
+        // `throw e` as the fallback of `?:` (Â§T.6.2) never produces a value;
+        // `Unknown` fits any slot, so the `?:` keeps its left side's type.
+        Expr::Throw(..) => Ty::Unknown,
         Expr::NotNullAssert(inner, _) => match infer_expr(inner, env, symbols) {
             Ty::Nullable(t) => *t,
             other => other,

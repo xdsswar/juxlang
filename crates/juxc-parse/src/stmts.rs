@@ -1328,11 +1328,12 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         self.advance(); // 'if'
         self.expect(&TokenKind::LParen, "'(' after `if`");
-        let condition = self.parse_expr()?;
+        let mut condition = self.parse_expr()?;
         self.expect(&TokenKind::RParen, "')' after `if` condition");
         // §A.2.8: an `if` body is a `statement` — a brace block OR a
         // single braceless statement (`if (c) return;`).
         let then_block = self.parse_block_or_stmt();
+        smart_cast_bare_type_test(&mut condition, &then_block);
 
         // Optional else clause. After `else` we either nest another `if`
         // (else-if chain) or parse a block / single statement.
@@ -1393,4 +1394,40 @@ pub(crate) fn compound_assign_op(kind: &TokenKind) -> Option<BinaryOp> {
         TokenKind::GtGtEq    => BinaryOp::Shr,
         _ => return None,
     })
+}
+
+/// `if (a => Dog) a.bark();` (Type system §T.6.2): a bare type test on a
+/// local narrows it in the then-branch, as `if (a => Dog a)` would. The
+/// branch sees `a` as a `Dog` because it IS that form: the binder shadows the
+/// outer `a`, and the checker and backend treat it like any binder.
+///
+/// Skipped when the branch assigns `a` (`a = new Cat();` must still reach the
+/// outer variable, whose type allows it; T.6.3 ends a refinement at an
+/// assignment anyway), and when the tested value is anything but a bare name.
+fn smart_cast_bare_type_test(condition: &mut juxc_ast::Expr, then_block: &juxc_ast::Block) {
+    let juxc_ast::Expr::TypeTest(t) = condition else { return };
+    if t.binder.is_some() {
+        return;
+    }
+    let juxc_ast::Expr::Path(qn) = t.value.as_ref() else { return };
+    if qn.segments.len() != 1 {
+        return;
+    }
+    let name = qn.segments[0].clone();
+    let mut assigned = false;
+    juxc_ast::visit::for_each_node(then_block, &mut |node| {
+        let target = match node {
+            juxc_ast::visit::Node::Stmt(juxc_ast::Stmt::Assign(a)) => Some(&a.target),
+            juxc_ast::visit::Node::Expr(juxc_ast::Expr::IncDec(i)) => Some(i.target.as_ref()),
+            _ => None,
+        };
+        if let Some(juxc_ast::Expr::Path(p)) = target {
+            if p.segments.len() == 1 && p.segments[0].text == name.text {
+                assigned = true;
+            }
+        }
+    });
+    if !assigned {
+        t.binder = Some(name);
+    }
 }

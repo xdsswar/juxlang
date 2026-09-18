@@ -1387,6 +1387,14 @@ impl RustEmitter {
             // non-nullable operand makes the assert a no-op — emit the
             // operand bare rather than a broken `.unwrap_or_else` on a
             // non-Option value.
+            // `x ?: throw E` (§T.6.2): the fallback throws, as a `throw`
+            // statement does, and `panic_any` has type `!`, so it fits the
+            // `unwrap_or_else(|| ...)` closure the `?:` lowering puts it in.
+            Expr::Throw(inner, _) => {
+                self.w.push_str("std::panic::panic_any(");
+                self.emit_expr(inner);
+                self.w.push(')');
+            }
             Expr::NotNullAssert(inner, _) => {
                 // `x!!` where a null test already unwrapped `x`: the read
                 // is the value itself, so there is nothing left to assert.
@@ -2909,6 +2917,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Out(_, s) => *s,
         Expr::TypeOf(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::Throw(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

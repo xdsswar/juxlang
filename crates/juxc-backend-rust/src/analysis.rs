@@ -963,6 +963,7 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         }
         Expr::Cast(c) => collect_mutating_calls(&c.value, out, user_mut),
         Expr::NotNullAssert(inner, _) => collect_mutating_calls(inner, out, user_mut),
+        Expr::Throw(inner, _) => collect_mutating_calls(inner, out, user_mut),
         Expr::TypeTest(t) => collect_mutating_calls(&t.value, out, user_mut),
         Expr::Index(idx) => {
             collect_mutating_calls(&idx.array, out, user_mut);
@@ -1124,6 +1125,7 @@ fn expr_contains_await(e: &Expr) -> bool {
                 || t.catches.iter().any(|c| block_contains_await(&c.body))
         }
         Expr::NotNullAssert(inner, _) => expr_contains_await(inner),
+        Expr::Throw(inner, _) => expr_contains_await(inner),
         Expr::Call(c) => {
             expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)
         }

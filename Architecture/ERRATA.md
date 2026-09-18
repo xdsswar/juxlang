@@ -816,6 +816,22 @@ properties through `this`.
 
 ---
 
+## E36. A `while` condition's null test and the loop body
+
+**Conflict.** JUX-TYPE-SYSTEM-ADDENDUM §T.6.2 lists the `if` forms of null-test
+refinement and §T.6.5 covers refinements made before a loop, but nothing said
+whether `while (x != null)` refines `x` in its own body. The linked-list walk,
+`while (cur != null) { use(cur.v); cur = cur.next; }`, was rejected with E0418
+on every read of `cur`.
+
+**Resolution.** The condition refines the body until the first statement that
+assigns the name (§T.6.3 already ends a refinement at an assignment); the
+right side of a direct `x = e;` still reads the refined `x`.
+
+**Spec status:** §T.6.5 states the rule.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

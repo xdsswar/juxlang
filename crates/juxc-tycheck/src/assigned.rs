@@ -29,6 +29,25 @@ pub fn names_assigned_in(block: &Block) -> HashSet<String> {
     out
 }
 
+/// Every name REBOUND by `stmt`, including in blocks nested inside it. The
+/// statement-level twin of [`names_assigned_in`]: a `while` condition's
+/// refinement ends at the first body statement this reports the name for
+/// (Type system §T.6.5).
+pub fn names_assigned_in_stmt(stmt: &Stmt) -> HashSet<String> {
+    let mut out = HashSet::new();
+    walk_stmt(stmt, &mut out);
+    out
+}
+
+/// The name `stmt` rebinds when it is a plain `x = e;` (or `x op= e;`), the
+/// one statement shape whose right side still reads the refined `x`.
+pub fn direct_assign_target(stmt: &Stmt) -> Option<String> {
+    match stmt {
+        Stmt::Assign(a) => place_base(&a.target),
+        _ => None,
+    }
+}
+
 fn walk_block(block: &Block, out: &mut HashSet<String>) {
     for stmt in &block.statements {
         walk_stmt(stmt, out);

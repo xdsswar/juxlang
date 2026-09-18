@@ -443,6 +443,13 @@ pub(crate) struct Checker<'a> {
     /// True while the receiver of an `I.super.m()` call is being checked, so
     /// `check_field_access` accepts `I.super` there and nowhere else (§T.8.3).
     pub(crate) in_interface_super_call: bool,
+    /// Names a `while` condition refined for the loop body being checked, with
+    /// their declared (nullable) types (§T.6.5). A name leaves the list at the
+    /// first body statement that assigns it.
+    pub(crate) loop_narrowed: Vec<(String, Ty)>,
+    /// Set while checking a direct `x = e;` that ends a loop refinement of
+    /// `x`: the assignment's target has the declared `T?` type.
+    pub(crate) loop_assign_widen: Option<(String, Ty)>,
     /// True while we're inside an **async context** — the body of an
     /// `async` function/method, or an async lambda. Drives the
     /// `E0700_AwaitRequiresAsyncContext` check: `await` is only legal when
@@ -541,6 +548,8 @@ impl<'a> Checker<'a> {
             in_foreach_iter: false,
             in_static: false,
             in_interface_super_call: false,
+            loop_narrowed: Vec::new(),
+            loop_assign_widen: None,
             in_async: false,
             in_future_slot: false,
             in_unsafe: false,
@@ -4062,7 +4071,37 @@ impl<'a> Checker<'a> {
 
     /// Walk one statement, emitting diagnostics where types disagree.
     /// (see `match_null_test` below for the null-test shapes)
+    /// Check one statement, ending `while`-condition refinements it assigns
+    /// (§T.6.5): before it when it assigns inside a nested statement, and
+    /// after it when it is the direct `x = e;` whose `e` still reads `x`.
     fn check_stmt(&mut self, stmt: &Stmt) {
+        if self.loop_narrowed.is_empty() {
+            self.check_stmt_inner(stmt);
+            return;
+        }
+        let assigned = crate::assigned::names_assigned_in_stmt(stmt);
+        let direct = crate::assigned::direct_assign_target(stmt);
+        let mut after: Vec<(String, Ty)> = Vec::new();
+        let mut kept: Vec<(String, Ty)> = Vec::new();
+        for (name, declared) in std::mem::take(&mut self.loop_narrowed) {
+            if !assigned.contains(&name) {
+                kept.push((name, declared));
+            } else if direct.as_deref() == Some(name.as_str()) {
+                after.push((name, declared));
+            } else {
+                self.env.declare(&name, declared);
+            }
+        }
+        self.loop_narrowed = kept;
+        let prev = std::mem::replace(&mut self.loop_assign_widen, after.first().cloned());
+        self.check_stmt_inner(stmt);
+        self.loop_assign_widen = prev;
+        for (name, declared) in after {
+            self.env.declare(&name, declared);
+        }
+    }
+
+    fn check_stmt_inner(&mut self, stmt: &Stmt) {
         match stmt {
             // `if cfg` is resolved to its branch before this phase runs (the driver's
             // cfg pass); a unit that skipped that pass has nothing to say here.
@@ -4310,7 +4349,14 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                let target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                let mut target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                // `cur = cur.next;` ending a `while` refinement (§T.6.5): the
+                // slot is the declared `T?`, whatever `cur` read as above.
+                if let (Some((name, declared)), Expr::Path(qn)) = (&self.loop_assign_widen, &a.target) {
+                    if qn.segments.len() == 1 && qn.segments[0].text == *name {
+                        target_ty = declared.clone();
+                    }
+                }
                 // What actually gets STORED. For a plain `=` that is the
                 // value; for a compound assignment it is the result of
                 // `target op value`, which is a different type whenever the
@@ -4495,8 +4541,18 @@ impl<'a> Checker<'a> {
                         .with_span(expr_span(&w.condition)),
                     );
                 }
+                // `while (x != null)` refines `x` in the body (§T.6.5).
+                let nothing_assigned = std::collections::HashSet::new();
+                let narrowed = self.narrowings(&w.condition, true, &nothing_assigned);
                 self.env.push_scope();
+                let prev_loop = self.loop_narrowed.clone();
+                for (name, ty) in &narrowed {
+                    let declared = self.env.lookup(name).cloned().unwrap_or_else(|| Ty::nullable(ty.clone()));
+                    self.env.declare(name, ty.clone());
+                    self.loop_narrowed.push((name.clone(), declared));
+                }
                 self.check_block(&w.body);
+                self.loop_narrowed = prev_loop;
                 self.env.pop_scope();
             }
 
@@ -4673,6 +4729,16 @@ impl<'a> Checker<'a> {
 
             Stmt::Expr(e) => {
                 self.check_expr(e);
+                // `assert(x != null);` (§T.6.2): the rest of the block runs only
+                // when the condition held, so the names it proves non-null are
+                // declared non-null in the enclosing scope, as a guard clause's
+                // are.
+                if let Some(cond) = juxc_ast::assert_condition(e) {
+                    let nothing_assigned = std::collections::HashSet::new();
+                    for (name, ty) in self.narrowings(cond, true, &nothing_assigned) {
+                        self.env.declare(&name, ty);
+                    }
+                }
             }
 
             Stmt::SuperCall(args, span) => self.check_super_call(args, *span),
@@ -4978,6 +5044,9 @@ impl<'a> Checker<'a> {
             // `typeof(expr)` (§5.9.10) — the operand is type-checked
             // (undefined names etc. still report) but never evaluated.
             Expr::TypeOf(inner, _) => self.check_expr(inner),
+            // `x ?: throw E` (§T.6.2): the thrown value is checked exactly as a
+            // `throw` statement's is (E0710, checked raises).
+            Expr::Throw(inner, span) => self.check_stmt_inner(&Stmt::Throw((**inner).clone(), *span)),
             // `out <place>` (§M.4) — recurse into the place so an undefined
             // variable etc. is still reported. The place/agreement rules are in
             // `check_call_args`; a bare `out` outside a call is meaningless but
@@ -11114,6 +11183,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::Throw(_, s) => *s,
         Expr::IncDec(i) => i.span,
     }
 }
