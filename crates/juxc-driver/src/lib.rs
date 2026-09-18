@@ -86,6 +86,118 @@ fn cargo_target_dir(crate_dir: &Path) -> PathBuf {
     }
 }
 
+/// True when [`cargo_target_dir`] is shared with other programs: a
+/// `CARGO_TARGET_DIR` that is not this crate's own `target/`.
+///
+/// Sharing is what makes a corpus cheap (the dependency tree compiles once),
+/// and it is common among Rust users who set the variable globally. It has one
+/// cost: cargo copies every build's executable to `<target>/<profile>/<bin>`,
+/// so two programs with the same `[[bin]]` name write the same file. Cargo's
+/// lock covers the build and not the run after it, so when two such programs
+/// were built at once, each could start the other's binary.
+fn target_dir_is_shared(crate_dir: &Path) -> bool {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(d) if !d.is_empty() => {
+            let canonical = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            canonical(Path::new(&d)) != canonical(&crate_dir.join("target"))
+        }
+        _ => false,
+    }
+}
+
+/// The `[[bin]]` name cargo builds for a program the user named `name`.
+///
+/// `name` itself when the target dir is the crate's own. In a shared one, the
+/// name gets a suffix identifying the PROGRAM: `Main` becomes `Main-3fa2c1d0`.
+/// [`publish_binary`] then copies the result back under `name`, so what the
+/// user sees is still what they asked for.
+///
+/// The identity is the program's source files, read from the `// JUX:file:…`
+/// markers the backend puts in the emitted Rust and made absolute. That keeps
+/// the suffix the same for one program wherever it is emitted and whichever
+/// directory it was named from (so the lowering stays deterministic, and cargo
+/// keeps reusing its cache across edits), and different for two programs that
+/// merely share a file name. A crate with no markers falls back to its emit
+/// directory, which is distinct per program too.
+fn cargo_bin_name(crate_: &RustCrate, crate_dir: &Path, name: &str) -> String {
+    if !target_dir_is_shared(crate_dir) {
+        return name.to_string();
+    }
+    let mut files: Vec<String> = crate_
+        .sources
+        .iter()
+        .flat_map(|(_, text)| text.lines())
+        .filter_map(|line| line.trim_start().strip_prefix("// JUX:"))
+        .filter_map(|marker| {
+            // `path:line:col`, where the path itself may hold a drive colon.
+            let mut parts = marker.rsplitn(3, ':');
+            let (_col, _line) = (parts.next()?, parts.next()?);
+            parts.next().map(str::to_string)
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    let identity = if files.is_empty() {
+        fs::canonicalize(crate_dir)
+            .unwrap_or_else(|_| crate_dir.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        files
+            .iter()
+            .map(|f| {
+                fs::canonicalize(f)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| f.clone())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!("{name}-{:08x}", content_hash(&identity) as u32)
+}
+
+/// `cargo_toml` with its `[[bin]] name` changed from `name` to `bin`. The
+/// package keeps `name`: only the executable's file name has to be unique.
+fn with_bin_name(cargo_toml: String, name: &str, bin: &str) -> String {
+    if name == bin {
+        return cargo_toml;
+    }
+    let from = format!("[[bin]]\nname = \"{name}\"");
+    debug_assert!(cargo_toml.contains(&from), "no [[bin]] named {name} in the emitted Cargo.toml");
+    cargo_toml.replacen(&from, &format!("[[bin]]\nname = \"{bin}\""), 1)
+}
+
+/// Copy a uniquely named binary built in a shared target dir to
+/// `<crate_dir>/target/[<triple>/]<profile>/<name><exe>`, and return that path.
+///
+/// Each program's emit dir is its own, so this copy cannot be overwritten by
+/// another program's build the way the shared `<target>/<profile>/<name>` was.
+/// Written to a temporary file and renamed into place, and skipped when the
+/// copy already matches, so an unchanged program is not rewritten every run.
+fn publish_binary(built: &Path, crate_dir: &Path, profile_dir: &str, name: &str) -> Result<PathBuf> {
+    let mut dir = crate_dir.join("target");
+    if let Some(triple) = cross_target() {
+        dir = dir.join(triple);
+    }
+    let dir = dir.join(profile_dir);
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dest = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    let fresh = |p: &Path| fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
+    let (built_meta, dest_meta) = (fresh(built), fresh(&dest));
+    let up_to_date = match (built_meta, dest_meta) {
+        (Some((len, Some(built_at))), Some((dest_len, Some(dest_at)))) => len == dest_len && dest_at >= built_at,
+        _ => false,
+    };
+    if !up_to_date {
+        let staging = dir.join(format!("{name}.publishing{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(built, &staging)
+            .with_context(|| format!("copying {} to {}", built.display(), staging.display()))?;
+        fs::rename(&staging, &dest)
+            .with_context(|| format!("moving {} into place", dest.display()))?;
+    }
+    Ok(dest)
+}
+
 /// The cross-compilation target triple, when one was requested.
 ///
 /// Carried in the `JUX_TARGET` environment variable (set by the `jux`
@@ -662,7 +774,8 @@ pub fn build_with_manifest(
     manifest: Option<&Manifest>,
 ) -> Result<BuildArtifact> {
     let written_rs = write_crate_with_manifest(crate_, crate_dir, crate_name, manifest)?;
-    cargo_build(crate_dir, crate_name, release, &written_rs)
+    let bin = cargo_bin_name(crate_, crate_dir, crate_name);
+    cargo_build(crate_dir, crate_name, &bin, release, &written_rs)
 }
 
 /// Write the emitted crate to disk -- sources, `Cargo.toml`, any build script
@@ -705,8 +818,11 @@ pub fn write_crate_with_manifest(
     let cargo_meta = manifest
         .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
-    let cargo_toml =
-        juxc_backend_rust::cargo_toml_for_with_meta(crate_name, true, &cargo_meta);
+    let cargo_toml = with_bin_name(
+        juxc_backend_rust::cargo_toml_for_with_meta(crate_name, true, &cargo_meta),
+        crate_name,
+        &cargo_bin_name(crate_, crate_dir, crate_name),
+    );
     fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
         .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
 
@@ -778,6 +894,7 @@ pub fn write_crate_with_manifest(
 fn cargo_build(
     crate_dir: &Path,
     crate_name: &str,
+    bin: &str,
     release: bool,
     written_rs: &[std::path::PathBuf],
 ) -> Result<BuildArtifact> {
@@ -822,9 +939,12 @@ fn cargo_build(
     if let Some(triple) = cross_target() {
         out_dir = out_dir.join(triple);
     }
-    let binary_path = out_dir
+    let mut binary_path = out_dir
         .join(profile_dir)
-        .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
+        .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+    if bin != crate_name {
+        binary_path = publish_binary(&binary_path, crate_dir, profile_dir, crate_name)?;
+    }
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
 }
@@ -990,6 +1110,12 @@ pub fn build_emitted_crate(
         &registry_deps,
         in_workspace,
     );
+    let cargo_toml = match target {
+        juxc_backend_rust::CrateTarget::Bin { name } => {
+            with_bin_name(cargo_toml, name, &cargo_bin_name(crate_, crate_dir, name))
+        }
+        juxc_backend_rust::CrateTarget::Lib { .. } => cargo_toml,
+    };
     // Only rewrite Cargo.toml when it actually changed — an identical rewrite
     // would bump its mtime and make cargo re-fingerprint the whole package.
     write_if_changed(&crate_dir.join("Cargo.toml"), &cargo_toml)
@@ -1111,7 +1237,13 @@ pub fn build_emitted_crate(
     let out_dir = out_dir.join(profile_dir);
     let binary_path = match target {
         juxc_backend_rust::CrateTarget::Bin { name } => {
-            out_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+            let bin = cargo_bin_name(crate_, crate_dir, name);
+            let built = out_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+            if &bin == name {
+                built
+            } else {
+                publish_binary(&built, crate_dir, profile_dir, name)?
+            }
         }
         juxc_backend_rust::CrateTarget::Lib { name, .. } => {
             // Best-effort: the rlib Cargo produces is `lib<name>.rlib`.

@@ -324,6 +324,25 @@ impl crate::RustEmitter {
         self.symbols.classes.get(&fqn)
     }
 
+    /// A field of class `name` or of one of its ancestors, with the class that
+    /// declares it, resolving a bare `name` in the unit being emitted first
+    /// (see [`Self::lookup_class_by_bare_or_fqn`]).
+    ///
+    /// `SymbolTable::lookup_field` is keyed by FQN. The backend mostly holds
+    /// bare names (`receiver_class_bare`, `enclosing_class`), which match the
+    /// key only for a class in the default package: inside `package zoo;` the
+    /// key is `zoo.Animal`, the bare lookup missed, and a field read through
+    /// an `Animal` reference fell back to a direct struct access on the
+    /// `Rc<dyn AnimalKind>` handle.
+    pub(crate) fn lookup_field_by_bare_or_fqn(
+        &self,
+        name: &str,
+        field: &str,
+    ) -> Option<(&juxc_tycheck::symbol_table::FieldSig, &str)> {
+        let fqn = self.resolve_bare_class_fqn(name)?;
+        self.symbols.lookup_field(&fqn, field)
+    }
+
     /// Bare-or-FQN sibling of [`Self::lookup_class_by_bare_or_fqn`] for
     /// interfaces — same current-unit package-context resolution (unit
     /// `unqualified` map, then current package, then a deterministic

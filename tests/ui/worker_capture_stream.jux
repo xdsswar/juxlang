@@ -1,0 +1,11 @@
+// A stream is task-local (§18.6.1): E0702.
+public async void main() {
+    var numbers = Stream.generate(async () -> {
+        return null;
+    });
+    var t = Worker.spawn(() -> {
+        var mine = numbers;
+        return 1;
+    });
+    print(await t);
+}

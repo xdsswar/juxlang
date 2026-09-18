@@ -1,0 +1,6 @@
+// A function value is a single-threaded shared reference: E0702 (§18.2).
+public async void main() {
+    (int) -> int inc = (x) -> x + 1;
+    var t = Worker.spawn(() -> inc(1));
+    print(await t);
+}

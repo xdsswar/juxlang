@@ -1499,7 +1499,57 @@ impl RustEmitter {
                     // worker only wants the VALUE, so read it out of the cell
                     // before the closure and hand over the plain value.
                     let mut cell_rebinds: Vec<String> = Vec::new();
+                    // A captured collection or array is a `Rc<JuxCell<…>>`
+                    // handle, which cannot go to another thread. The worker
+                    // takes its captures by value (§18.2), so it gets a copy
+                    // of the contents, read out here and re-wrapped inside
+                    // the closure. The checker has already refused elements
+                    // that could not come along (E0702).
+                    let mut detached: Vec<(String, bool)> = Vec::new();
+                    // A method's closure reaching `this` takes a clone of the
+                    // handle, which the worker pass has made atomic.
+                    let capture_this = matches!(call.args.first(), Some(Expr::Lambda(l)) if self.lambda_captures_this(l));
                     if let Some(Expr::Lambda(l)) = call.args.first() {
+                        // The checked type of each bare name the closure reads.
+                        let mut use_types: std::collections::HashMap<String, juxc_tycheck::Ty> =
+                            std::collections::HashMap::new();
+                        let mut record = |e: &Expr| {
+                            if let Expr::Path(qn) = e {
+                                if qn.segments.len() == 1 {
+                                    if let Some(t) = self.expr_types.get(&qn.span) {
+                                        use_types.entry(qn.segments[0].text.clone()).or_insert_with(|| t.clone());
+                                    }
+                                }
+                            }
+                        };
+                        match &l.body {
+                            juxc_ast::LambdaBody::Expr(e) => crate::worker::walk_expr(e, &mut record),
+                            juxc_ast::LambdaBody::Block(b) => {
+                                for st in &b.statements {
+                                    crate::worker::walk_stmt(st, &mut record);
+                                }
+                                // A name the closure declares for itself is not a
+                                // capture: it does not exist at the spawn point.
+                                juxc_ast::visit::for_each_node(b, &mut |n| {
+                                    if let juxc_ast::visit::Node::Stmt(st) = n {
+                                        match st {
+                                            juxc_ast::Stmt::VarDecl(v) => {
+                                                use_types.remove(&v.name.text);
+                                            }
+                                            juxc_ast::Stmt::ForEach(f) => {
+                                                use_types.remove(&f.var_name.text);
+                                            }
+                                            juxc_ast::Stmt::Try(t) => {
+                                                for c in &t.catches {
+                                                    use_types.remove(&c.name.text);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                });
+                            }
+                        }
                         let mut names: Vec<String> = Vec::new();
                         crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
                             if !names.iter().any(|x| x == n) {
@@ -1511,20 +1561,30 @@ impl RustEmitter {
                                 cell_rebinds.push(name);
                                 continue;
                             }
+                            // A parameter typed as an array or a collection is
+                            // not in `local_types` (only class and generic params
+                            // are); the checker's type at the use site says it.
                             let known = self
                                 .local_types
                                 .iter()
                                 .rev()
-                                .find_map(|s| s.get(&name).cloned());
+                                .find_map(|s| s.get(&name).cloned())
+                                .or_else(|| use_types.get(&name).cloned());
                             if let Some(ty) = known {
-                                if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
+                                if let Some(nullable) = self.worker_collection_capture(&ty) {
+                                    detached.push((name, nullable));
+                                } else if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
                                     rebinds.push(name);
                                 }
                             }
                         }
                     }
                     self.w.push_str("crate::Worker::spawn(");
-                    if !rebinds.is_empty() || !cell_rebinds.is_empty() {
+                    let braced = !rebinds.is_empty()
+                        || !cell_rebinds.is_empty()
+                        || !detached.is_empty()
+                        || capture_this;
+                    if braced {
                         self.w.push_str("{ ");
                         for name in &rebinds {
                             self.w.push_str("let ");
@@ -1540,7 +1600,25 @@ impl RustEmitter {
                             self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(".borrow().clone(); ");
                         }
+                        for (name, nullable) in &detached {
+                            let id = to_rust_ident(name);
+                            if *nullable {
+                                self.w.push_str(&format!("let {id} = {id}.as_ref().map(|v| v.borrow().clone()); "));
+                            } else {
+                                self.w.push_str(&format!("let {id} = {id}.borrow().clone(); "));
+                            }
+                        }
+                        if capture_this {
+                            let outer = self.this_alias.as_deref().unwrap_or("self").to_string();
+                            self.w.push_str(&format!("let __jux_this = {outer}.clone(); "));
+                        }
                     }
+                    self.worker_attach = detached;
+                    let prev_this = if capture_this {
+                        self.this_alias.replace("__jux_this".to_string())
+                    } else {
+                        self.this_alias.clone()
+                    };
                     // Inside the closure the rebound name is a plain value, not
                     // a cell, so reads must not go through `.borrow()` again.
                     for name in &cell_rebinds {
@@ -1562,7 +1640,9 @@ impl RustEmitter {
                     for name in &cell_rebinds {
                         self.ref_locals.insert(name.clone());
                     }
-                    if !rebinds.is_empty() || !cell_rebinds.is_empty() {
+                    self.worker_attach.clear();
+                    self.this_alias = prev_this;
+                    if braced {
                         self.w.push_str(" }");
                     }
                     self.emitting_format_arg = prev;
@@ -5741,6 +5821,30 @@ impl RustEmitter {
 
     /// The type of a receiver expression, from the two places the emitter
     /// records it: a declared local, else the span-keyed inference map.
+    /// `Some(nullable)` when a `Worker.spawn` capture of type `ty` is a
+    /// collection or array HANDLE, which crosses as a copy of its contents;
+    /// `None` for everything else. An array that is already a plain or an
+    /// atomic value here (inside a worker-shared class, or of exceptions)
+    /// needs nothing.
+    pub(crate) fn worker_collection_capture(&self, ty: &juxc_tycheck::Ty) -> Option<bool> {
+        let (inner, nullable) = match ty {
+            juxc_tycheck::Ty::Nullable(t) => (&**t, true),
+            t => (t, false),
+        };
+        let handle = match inner {
+            juxc_tycheck::Ty::Array { element, .. } => {
+                let element_name = match &**element {
+                    juxc_tycheck::Ty::User { name, .. } => name.as_str(),
+                    _ => "",
+                };
+                self.arrays_are_handles_here() && !self.array_handle_is_sync(element_name)
+            }
+            juxc_tycheck::Ty::User { name, .. } => self.collection_name_is_handle(name),
+            _ => false,
+        };
+        handle.then_some(nullable)
+    }
+
     pub(crate) fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
         match receiver {
             Expr::Path(qn) if qn.segments.len() == 1 => self

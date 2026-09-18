@@ -1,0 +1,1 @@
+worker_capture_stream.jux:7:20: [E0702] error: `numbers` cannot be captured by a `Worker.spawn` closure: it is a stream, which is task-local (§18.6.1); send its elements through a `Channel` instead

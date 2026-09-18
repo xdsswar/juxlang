@@ -1,0 +1,59 @@
+// Fields read and written through a base-class reference, inside a package.
+//
+// A value typed as a polymorphic base is reached through its `Kind` trait, so
+// `a.legs` reads through a generated accessor rather than the struct. That
+// lookup was done by the class's bare name, which only matched a class in the
+// default package: under `package zoo;` every read through an `Animal`
+// reference failed to compile. The same program without the package line
+// always worked, which is what this example pins.
+package zoo;
+
+abstract class Animal {
+    public String name;
+    public int legs;
+
+    public Animal(String name, int legs) {
+        this.name = name;
+        this.legs = legs;
+    }
+
+    public abstract String sound();
+}
+
+class Dog extends Animal {
+    public Dog(String name) { super(name, 4); }
+    public String sound() { return "woof"; }
+}
+
+class Bird extends Animal {
+    public Bird(String name) { super(name, 2); }
+    public String sound() { return "tweet"; }
+}
+
+int twice(int n) { return n * 2; }
+String shout(String s) { return s + "!"; }
+
+public void main() {
+    Animal a = new Dog("rex");
+
+    // Reads: bare, as call arguments, in interpolation.
+    print(a.legs);
+    print(twice(a.legs));
+    print(shout(a.name));
+    print($"${a.name} says ${a.sound()} on ${a.legs} legs");
+
+    // Writes: plain and compound, through the base reference.
+    a.name = "max";
+    a.legs += 1;
+    print($"${a.name} ${a.legs}");
+
+    // The same accessors dispatch on the runtime class.
+    var pets = new Vec<Animal>();
+    pets.push(a);
+    pets.push(new Bird("tweety"));
+    int total = 0;
+    for (var p : pets) {
+        total += p.legs;
+    }
+    print(total);
+}

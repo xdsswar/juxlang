@@ -1,0 +1,1 @@
+worker_capture_interface.jux:10:32: [E0702] error: `s` cannot be captured by a `Worker.spawn` closure: an interface handle (`Shape`) is a single-threaded shared reference; capture the concrete class instead

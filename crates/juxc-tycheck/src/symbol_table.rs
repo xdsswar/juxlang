@@ -374,29 +374,93 @@ impl SymbolTable {
         let mut fields: Vec<(&String, &FieldSig)> = class.fields.iter().collect();
         fields.sort_by(|a, b| a.0.cmp(b.0));
         for (name, f) in fields {
-            let head =
-                f.ty.name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .unwrap_or("");
             let why = if f.is_weak {
                 "a weak reference"
-            } else if f.ty.closure_shape().is_some() {
-                "a function value"
-            } else if self.interfaces.contains_key(head)
-                || self
-                    .interfaces
-                    .keys()
-                    .any(|k| k.rsplit('.').next().unwrap_or(k) == head)
-            {
-                "an interface handle, which is a single-threaded shared reference"
+            } else if let Some(why) = self.typeref_share_blocker(&f.ty) {
+                why
             } else {
                 continue;
             };
             return Some(format!("`{bare}.{name}` holds {why}"));
         }
         None
+    }
+
+    /// What in the declared type `ty` cannot cross a worker boundary
+    /// (§18.2), or `None` when nothing does.
+    ///
+    /// A function value and an interface handle are single-threaded shared
+    /// references, and a stream is task-local by definition (§18.6.1). The
+    /// walk goes into type arguments, since a `Vec<(int) -> int>` carries its
+    /// closures along with it just as a bare `(int) -> int` would.
+    pub fn typeref_share_blocker(&self, ty: &TypeRef) -> Option<&'static str> {
+        if ty.closure_shape().is_some() {
+            return Some("a function value, which is a single-threaded shared reference");
+        }
+        let head = ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        if self.is_interface_name(head) {
+            return Some("an interface handle, which is a single-threaded shared reference");
+        }
+        if self.is_builtin_stream(head) {
+            return Some("a stream, which is task-local (§18.6.1)");
+        }
+        ty.generic_args
+            .iter()
+            .filter_map(|a| a.as_type())
+            .find_map(|t| self.typeref_share_blocker(t))
+    }
+
+    /// Whether `name` (bare or fully qualified) is a declared interface.
+    pub fn is_interface_name(&self, name: &str) -> bool {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        self.interfaces.contains_key(name)
+            || self
+                .interfaces
+                .keys()
+                .any(|k| k.rsplit('.').next().unwrap_or(k) == bare)
+    }
+
+    /// Whether `name` is the built-in `Stream<T>` (§18.6.1), rather than a
+    /// class of that name the program declares for itself.
+    pub fn is_builtin_stream(&self, name: &str) -> bool {
+        name.rsplit('.').next() == Some("Stream")
+            && !self.resolve_class(name).is_some_and(|(_, c)| !c.is_external)
+    }
+
+    /// Whether `name` is a foreign collection: a type bindgen marked with both
+    /// `@RustCollection` (it implements `Extend` or `FromIterator`) and
+    /// `@RustClone`. Such a value is a §6.5.1 shared handle, the same test the
+    /// backend applies when it chooses the handle representation.
+    pub fn is_rust_collection(&self, name: &str) -> bool {
+        if name.rsplit('.').next() == Some("String") {
+            return false;
+        }
+        let Some((_, sig)) = self.resolve_class(name) else {
+            return false;
+        };
+        let marked = |marker: &str| {
+            sig.annotations.iter().any(|a| {
+                a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case(marker)
+            })
+        };
+        sig.is_external && marked("RustCollection") && marked("RustClone")
+    }
+
+    /// Resolve a record by exact FQN key or by a unique bare-name suffix, the
+    /// same rule as [`Self::resolve_class`].
+    pub fn resolve_record(&self, name: &str) -> Option<(&String, &RecordSig)> {
+        if let Some(kv) = self.records.get_key_value(name) {
+            return Some(kv);
+        }
+        if name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{name}");
+        let mut hits = self.records.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some(kv), None) => Some(kv),
+            _ => None,
+        }
     }
 
     /// Resolve a class by **exact FQN key** or by a unique bare-name suffix.

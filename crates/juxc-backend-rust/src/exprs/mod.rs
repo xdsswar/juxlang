@@ -1982,7 +1982,37 @@ impl RustEmitter {
         }
     }
 
+    /// An expression-bodied worker closure whose captures are re-wrapped
+    /// first: `{ let v = crate::jux_arr(v); let value = v.borrow().len(); value }`.
+    ///
+    /// The result is bound before the block ends because a block's tail
+    /// expression keeps its temporaries (here the `borrow()` guard) alive past
+    /// the block's own locals, and `v` would then be dropped while still
+    /// borrowed (rustc E0597).
+    fn emit_attached_expr_body(&mut self, prelude: &str, e: &Expr) {
+        self.w.push_str("{ ");
+        self.w.push_str(prelude);
+        self.w.push_str("let value = ");
+        self.emit_expr(e);
+        self.w.push_str("; value }");
+    }
+
     pub(crate) fn emit_bare_move_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
+        // A `Worker.spawn` capture that crossed as a plain copy of a
+        // collection is a handle again inside the worker, so the body's reads
+        // and writes are the ones it would make anywhere else.
+        let attach = std::mem::take(&mut self.worker_attach);
+        let prelude: String = attach
+            .iter()
+            .map(|(name, nullable)| {
+                let id = to_rust_ident(name);
+                if *nullable {
+                    format!("let {id} = {id}.map(crate::jux_arr); ")
+                } else {
+                    format!("let {id} = crate::jux_arr({id}); ")
+                }
+            })
+            .collect();
         self.w.push_str("move ");
         self.w.push('|');
         for (i, p) in l.params.iter().enumerate() {
@@ -2003,16 +2033,20 @@ impl RustEmitter {
         if l.is_async {
             self.w.push_str("futures::executor::block_on(async move ");
             match &l.body {
-                juxc_ast::LambdaBody::Expr(e) => {
+                juxc_ast::LambdaBody::Expr(e) if prelude.is_empty() => {
                     self.w.push_str("{ ");
                     self.emit_expr(e);
                     self.w.push_str(" }");
                 }
+                juxc_ast::LambdaBody::Expr(e) => self.emit_attached_expr_body(&prelude, e),
                 juxc_ast::LambdaBody::Block(b) => {
                     let prev_lam = self.in_lambda_body;
                     self.in_lambda_body = true;
                     self.w.push_str("{\n");
                     self.w.indent_inc();
+                    if !prelude.is_empty() {
+                        self.w.line(prelude.trim_end());
+                    }
                     for stmt in &b.statements {
                         self.emit_stmt(stmt);
                     }
@@ -2027,7 +2061,8 @@ impl RustEmitter {
             return;
         }
         match &l.body {
-            juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+            juxc_ast::LambdaBody::Expr(e) if prelude.is_empty() => self.emit_expr(e),
+            juxc_ast::LambdaBody::Expr(e) => self.emit_attached_expr_body(&prelude, e),
             juxc_ast::LambdaBody::Block(b) => {
                 // S9: see `emit_lambda` — lambda-body tries type
                 // their return channels by inference.
@@ -2035,6 +2070,9 @@ impl RustEmitter {
                 self.in_lambda_body = true;
                 self.w.push_str("{\n");
                 self.w.indent_inc();
+                if !prelude.is_empty() {
+                    self.w.line(prelude.trim_end());
+                }
                 for stmt in &b.statements {
                     self.emit_stmt(stmt);
                 }

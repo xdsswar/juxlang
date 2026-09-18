@@ -511,7 +511,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0700`  | `await` requires async context                              | Async §18.1.2                 |
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
-| `E0702`  | Class object captured by a `Worker.spawn` closure (Phase-1 objects are `!Send`) | Async §18.2 |
+| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections | Async §18.2 / ERRATA E27 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
 | `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |

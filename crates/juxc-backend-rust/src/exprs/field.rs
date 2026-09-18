@@ -159,9 +159,7 @@ impl RustEmitter {
         if !is_call_callee && !self.emitting_lvalue && !matches!(&*f.object, Expr::This(_)) {
             if let Some(bare) = self.receiver_class_bare(&f.object) {
                 if self.is_poly_base_class(&bare) {
-                    let accessor_ok = self
-                        .symbols
-                        .lookup_field(&bare, &f.field.text)
+                    let accessor_ok = self.lookup_field_by_bare_or_fqn(&bare, &f.field.text)
                         .map(|(fsig, _)| {
                             // Non-private fields get a `__get_`/`__set_` accessor
                             // on the `Kind` trait (see the field-hook gate in

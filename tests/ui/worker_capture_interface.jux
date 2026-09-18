@@ -1,0 +1,12 @@
+// An interface handle cannot cross to a worker: E0702 (§18.2).
+interface Shape { double area(); }
+class Square implements Shape {
+    public double side;
+    public Square(double side) { this.side = side; }
+    public double area() { return side * side; }
+}
+public async void main() {
+    Shape s = new Square(2.0);
+    var t = Worker.spawn(() -> s.area());
+    print(await t);
+}

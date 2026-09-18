@@ -1,0 +1,1 @@
+worker_capture_function_value.jux:4:32: [E0702] error: `inc` cannot be captured by a `Worker.spawn` closure: it is a function value, which is a single-threaded shared reference; call it before spawning and capture the result, or write the work inside the worker closure
