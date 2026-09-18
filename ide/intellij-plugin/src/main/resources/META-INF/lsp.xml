@@ -9,4 +9,10 @@
     <platform.lsp.serverSupportProvider
         implementation="dev.jux.intellij.lsp.JuxLspServerSupportProvider"/>
   </extensions>
+
+  <!-- Push jux.sourceRoots to the running server when roots are (un)marked (§I.4). -->
+  <projectListeners>
+    <listener class="dev.jux.intellij.lsp.JuxLspRootsListener"
+              topic="com.intellij.openapi.roots.ModuleRootListener"/>
+  </projectListeners>
 </idea-plugin>

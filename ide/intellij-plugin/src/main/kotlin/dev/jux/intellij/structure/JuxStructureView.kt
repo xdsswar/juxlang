@@ -64,10 +64,12 @@ private class JuxStructureViewElement(private val element: NavigatablePsiElement
     override fun getPresentation(): ItemPresentation {
         val text = when {
             element is JuxFile -> element.name
-            // Constructors carry no IDENTIFIER name node (`new(...)`, or the
-            // name doubles as the type) — present them as `new(...)`.
+            // A constructor reads as its type's name, as Java's does; a
+            // `new(...)` constructor has no name of its own to show.
             element.elementType === E.CONSTRUCTOR_DECLARATION ->
-                (element as? PsiNamedElement)?.name ?: "new(...)"
+                (element as? PsiNamedElement)?.name ?: enclosingTypeName(element) ?: "new(...)"
+            // An operator reads as itself: `operator==`, `operator hash`.
+            element.elementType === E.OPERATOR_DECLARATION -> operatorLabel(element)
             element is PsiNamedElement -> element.name ?: "<anonymous>"
             else -> element.text
         }
@@ -111,11 +113,49 @@ private class JuxStructureViewElement(private val element: NavigatablePsiElement
             E.ENUM_CONSTANT, E.TYPE_ALIAS_DECLARATION,
         )
 
+        /** Declarations a constructor can belong to. */
+        val TYPE_DECLARATIONS = setOf(
+            E.CLASS_DECLARATION, E.STRUCT_DECLARATION, E.ENUM_DECLARATION, E.RECORD_DECLARATION,
+        )
+
         /** Containers whose interiors are bodies, not structure. */
         val NO_DESCEND = setOf(
             E.CODE_BLOCK, E.INIT_BLOCK, E.STATIC_BLOCK, E.DROP_BLOCK,
             E.PARAMETER_LIST,
         )
+    }
+
+    /** The name of the type [e] is declared in, if any. */
+    private fun enclosingTypeName(e: PsiElement): String? {
+        var p = e.parent
+        while (p != null && p !is JuxFile) {
+            if (p.elementType in TYPE_DECLARATIONS) return (p as? PsiNamedElement)?.name
+            p = p.parent
+        }
+        return null
+    }
+
+    /**
+     * `operator` followed by what it overloads: a symbol hugs the keyword
+     * (`operator==`, `operator[]`), a named operator takes a space
+     * (`operator hash`, `operator string`).
+     */
+    private fun operatorLabel(e: PsiElement): String {
+        var leaf = e.node.findChildByType(dev.jux.intellij.highlight.JuxTokenTypes.OPERATOR_KW)?.treeNext
+        while (leaf != null && leaf.psi is com.intellij.psi.PsiWhiteSpace) leaf = leaf.treeNext
+        val symbol = StringBuilder()
+        // `[]`, `[]=` and `()` are several tokens; stop at the parameter list.
+        while (leaf != null && leaf.elementType !== E.PARAMETER_LIST && leaf.psi !is com.intellij.psi.PsiWhiteSpace) {
+            symbol.append(leaf.text)
+            leaf = leaf.treeNext
+            if (symbol.firstOrNull()?.isLetter() == true) break
+        }
+        val text = symbol.toString()
+        return when {
+            text.isEmpty() -> "operator"
+            text.first().isLetter() -> "operator $text"
+            else -> "operator$text"
+        }
     }
 
     private fun iconFor(e: PsiElement): Icon? = when (e.elementType) {

@@ -18,4 +18,10 @@
                      serverId="juxLanguageServer"
                      languageId="jux"/>
   </extensions>
+
+  <!-- Re-send jux.sourceRoots when roots are (un)marked (§I.4). -->
+  <projectListeners>
+    <listener class="dev.jux.intellij.lsp4ij.JuxLsp4ijRootsListener"
+              topic="com.intellij.openapi.roots.ModuleRootListener"/>
+  </projectListeners>
 </idea-plugin>

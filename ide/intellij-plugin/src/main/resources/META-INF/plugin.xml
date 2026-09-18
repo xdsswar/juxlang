@@ -716,6 +716,16 @@
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxInheritedTypeParamInspection"/>
 
+    <!-- §I.4: the package line must match the file's location under its root. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxPackageMismatch"
+        displayName="Package name does not match the file location"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxPackageMismatchInspection"/>
+
     <!-- Java's everyday inspections, at Java's default levels. -->
     <localInspection
         language="Jux"
@@ -888,6 +898,19 @@
     <!-- Auto-create a Run config for each binary module's main entry point
          (from jux.toml [[bin]] / src/main.jux), so "Run" is always available. -->
     <postStartupActivity implementation="dev.jux.intellij.run.JuxRunConfigStartup"/>
+
+    <!-- §I.4 project model: the Jux Sources / Jux Test Sources root kinds.
+         <jps.plugin/> makes the project model load the serializer named in
+         META-INF/services/org.jetbrains.jps.model.serialization.JpsModelSerializerExtension,
+         so a marked root survives a restart. -->
+    <jps.plugin/>
+    <projectStructure.sourceRootEditHandler implementation="dev.jux.intellij.project.JuxSourceRootEditHandler"/>
+    <projectStructure.sourceRootEditHandler implementation="dev.jux.intellij.project.JuxTestSourceRootEditHandler"/>
+    <!-- Offer to mark src/ and test/ when a jux.toml project opens. -->
+    <notificationGroup id="Jux Project" displayType="BALLOON"/>
+    <postStartupActivity implementation="dev.jux.intellij.project.JuxSourceRootDetectorStartup"/>
+    <!-- Project view: Flatten Packages shows a Jux root as dotted package nodes. -->
+    <treeStructureProvider implementation="dev.jux.intellij.project.JuxPackageTreeStructureProvider"/>
   </extensions>
 
   <!-- Re-discover dependencies when jux.toml changes: restart the serving
@@ -903,6 +926,12 @@
   </projectListeners>
 
   <actions>
+    <!-- Project view: Mark Directory as | Jux Sources Root / Jux Test Sources Root (§I.4). -->
+    <group id="Jux.MarkRootGroup">
+      <action id="Jux.MarkSourcesRoot" class="dev.jux.intellij.project.JuxMarkSourcesRootAction"/>
+      <action id="Jux.MarkTestSourcesRoot" class="dev.jux.intellij.project.JuxMarkTestSourcesRootAction"/>
+      <add-to-group group-id="MarkRootGroup" anchor="first"/>
+    </group>
     <!-- Refactor > Extract/Introduce > Parameter Object, for Jux files only:
          the platform's item is wired to Java's class model. -->
     <action id="Jux.IntroduceParameterObject"

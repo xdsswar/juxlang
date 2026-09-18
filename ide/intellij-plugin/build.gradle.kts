@@ -140,6 +140,20 @@ intellijPlatform {
             untilBuild = provider { null }
         }
     }
+    // Marketplace release (§I.9). Nothing secret lives in the repository: the
+    // token and the signing material come from the environment of whoever
+    // publishes, and `publishPlugin` fails with a clear message without them.
+    // A version with a pre-release suffix (`0.4.0-rc.1`) goes to the `beta`
+    // channel; a plain version goes to `default`.
+    signing {
+        certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("PRIVATE_KEY")
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+        channels = providers.gradleProperty("pluginVersion").map { v -> listOf(if ('-' in v) "beta" else "default") }
+    }
     pluginVerification {
         // Fail ONLY on real compatibility problems (unresolved classes/
         // methods/fields → runtime linkage errors). Internal-API usage stays a
@@ -155,6 +169,30 @@ intellijPlatform {
         // stops with "No IDE selected for verification".
         ides {
             recommended()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Optional: ship a `juxc-lsp` binary inside the plugin (§I.6, §I.9).
+//
+// Off by default. Pass `-PjuxBundleLsp=<path to juxc-lsp[.exe]>` (or set
+// `JUX_BUNDLE_LSP`) and `prepareSandbox`, and so `buildPlugin`, copy it into
+// the plugin's `bin/` directory. `JuxToolchain` looks there last, after the
+// configured toolchain, `$JUX_HOME`, `PATH` and the usual install locations,
+// so an installed toolchain always wins. The binary is native code: a bundled
+// build is a build for one platform.
+// ---------------------------------------------------------------------------
+val bundledLsp = providers.gradleProperty("juxBundleLsp").orElse(providers.environmentVariable("JUX_BUNDLE_LSP"))
+
+tasks.named<org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask>("prepareSandbox") {
+    if (bundledLsp.isPresent) {
+        val binary = file(bundledLsp.get())
+        require(binary.isFile) { "juxBundleLsp: no file at $binary" }
+        from(binary) {
+            into(pluginName.map { "$it/bin" })
+            // Whatever the input is called, the plugin looks for `juxc-lsp[.exe]`.
+            rename { if (it.endsWith(".exe")) "juxc-lsp.exe" else "juxc-lsp" }
         }
     }
 }

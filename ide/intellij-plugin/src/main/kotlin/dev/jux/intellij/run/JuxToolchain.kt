@@ -14,7 +14,10 @@ import java.io.File
  *  3. `$JUX_HOME/bin/<tool>[.exe]`, then `$JUX_HOME/<tool>[.exe]`.
  *  4. Each directory on the system `PATH`.
  *  5. Common install locations (`~/.jux`, `~/.cargo/bin`, `/usr/local/bin`, …).
- *  6. The bare command name (so the OS still resolves it on `PATH`).
+ *  6. A copy bundled in the plugin's own `bin/` (§I.9: a build made with
+ *     `-PjuxBundleLsp=<path>` ships `juxc-lsp` there). Last, so an installed
+ *     toolchain, whose server matches its own compiler, always wins.
+ *  7. The bare command name (so the OS still resolves it on `PATH`).
  *
  * So a user only needs ONE of: a configured path, `$JUX_HOME`, the tools on
  * `PATH`, or a standard install — and every IDE feature finds them. Every
@@ -88,8 +91,22 @@ object JuxToolchain {
         for (dir in commonDirs()) {
             inDir(dir, exe)?.let { return it }
         }
+        // 6. Bundled with the plugin.
+        bundledDir()?.let { dir -> inDirFlat(dir, exe)?.let { return it } }
         return null
     }
+
+    /** The plugin's own `bin/` directory, where a bundled `juxc-lsp` lives, if installed. */
+    private fun bundledDir(): File? = try {
+        com.intellij.ide.plugins.PluginManagerCore
+            .getPlugin(com.intellij.openapi.extensions.PluginId.getId(PLUGIN_ID))
+            ?.pluginPath?.resolve("bin")?.toFile()
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** This plugin's id, as `plugin.xml` declares it. */
+    private const val PLUGIN_ID = "dev.jux.lang"
 
     /** Look for `exe` under `root/bin/`, then directly under `root/`. */
     private fun inDir(root: File, exe: String): String? =

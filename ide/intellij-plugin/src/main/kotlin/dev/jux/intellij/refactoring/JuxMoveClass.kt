@@ -4,9 +4,7 @@ import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiDocumentManager
@@ -252,12 +250,16 @@ class JuxMoveClass(val type: JuxTypeDeclaration, val targetPackage: String) {
      * The directory of [targetPackage] under the source root of [file],
      * created when missing.
      */
+    /**
+     * The target package's directory, under the same package root the file is
+     * in now ([JuxPackageResolver], §I.4). With no root at all (a loose file),
+     * the package directories are made next to the file.
+     */
     private fun targetDirectory(project: Project, file: PsiFile): VirtualFile? {
         val vf = file.virtualFile ?: return null
-        val index = ProjectFileIndex.getInstance(project)
-        val root = index.getSourceRootForFile(vf) ?: index.getContentRootForFile(vf) ?: vf.parent ?: return null
-        if (targetPackage.isEmpty()) return root
-        return VfsUtil.createDirectoryIfMissing(root, targetPackage.replace('.', '/'))
+        val root = JuxPackageResolver.rootFor(vf, project)
+            ?: JuxPackageResolver.Root(vf.parent ?: return null, JuxPackageResolver.Kind.FALLBACK)
+        return JuxPackageResolver.directoryFor(root, targetPackage, create = true)
     }
 
     companion object {
