@@ -796,6 +796,26 @@ is `E0489`.
 
 ---
 
+## E33. Modifiers on records and enums
+
+**Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and
+interfaces and gave records and enums no modifiers at all, while JUX-LANG-V1
+writes `public final record Circle(...)` (§7.5) and `public sealed enum
+HttpResponse` (§7.7.1), and JUX-CORE-LIB-ADDENDUM writes `sealed enum
+Option<T> permits Some, None`. The parser rejected all three, and `const
+class`, which §7.3.1 defines as a synonym for `final class`.
+
+**Resolution.** A modifier that restates what the type already is, is
+accepted and changes nothing: `final` or `const` on a record, `sealed` or
+`final` on an enum. `const class` is `final class`. A modifier that
+contradicts the type is an error: `abstract` on a record or an enum, `sealed`
+on a record. An enum's `permits` list may name only its own variants, and all
+of them, or it is `E0490`.
+
+**Spec status:** Grammar §A.2.5 states the rule; `E0490` is in the catalog.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

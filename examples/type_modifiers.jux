@@ -1,0 +1,42 @@
+// Modifiers on records, enums and classes (Grammar §A.2.5, ERRATA E33).
+//
+// A record is final and an enum is sealed whether or not the source says so,
+// so `final record` and `sealed enum` restate it and change nothing. `const
+// class` is `final class` spelled another way (JUX-LANG-V1 §7.3.1). An enum's
+// `permits` list may restate its variants, as the core library's `Option`
+// does.
+
+interface Shape {}
+
+final record Circle(double radius) implements Shape {}
+const record Square(double side) implements Shape {}
+
+sealed enum Response {
+    Ok(int status),
+    Redirect(String location);
+}
+
+sealed enum Signal permits Red, Amber, Green {
+    Red, Amber, Green
+}
+
+const class Config {
+    public int retries = 3;
+}
+
+class Shapes {
+    // The same modifiers on nested types.
+    public static final record Point(int x, int y) {}
+    public sealed enum Corner { TopLeft, BottomRight }
+}
+
+public void main() {
+    print(new Circle(2.0));
+    print(new Square(1.5));
+    print(Response.Ok(200));
+    print(Response.Redirect("/home"));
+    print(Signal.Amber.ordinal());
+    print(new Config().retries);
+    print(new Shapes.Point(1, 2).x);
+    print(Shapes.Corner.BottomRight);
+}

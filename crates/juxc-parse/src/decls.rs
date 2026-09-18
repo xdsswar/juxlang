@@ -232,6 +232,7 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Kw(Keyword::Abstract))
                         | Some(TokenKind::Kw(Keyword::Final))
                         | Some(TokenKind::Kw(Keyword::Sealed))
+                        | Some(TokenKind::Kw(Keyword::Const))
                 ) {
                     probe += 1;
                 }
@@ -245,9 +246,21 @@ impl<'a> Parser<'a> {
                 );
                 if is_nested_keyword {
                     let _ = self.eat_kw(Keyword::Static);
-                    let is_abstract = self.eat_kw(Keyword::Abstract);
-                    let is_final = self.eat_kw(Keyword::Final);
-                    let is_sealed = self.eat_kw(Keyword::Sealed);
+                    // The modifiers in any order; `const` on a type is `final`
+                    // (JUX-LANG-V1 §7.3.1). A record is final and an enum
+                    // sealed already, so saying so again is accepted.
+                    let (mut is_abstract, mut is_final, mut is_sealed) = (false, false, false);
+                    loop {
+                        if self.eat_kw(Keyword::Abstract) {
+                            is_abstract = true;
+                        } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                            is_final = true;
+                        } else if self.eat_kw(Keyword::Sealed) {
+                            is_sealed = true;
+                        } else {
+                            break;
+                        }
+                    }
                     let nested = match self.peek() {
                         TokenKind::Kw(Keyword::Class) => self
                             .parse_class_decl(
@@ -1929,6 +1942,9 @@ impl<'a> Parser<'a> {
         // `( 'implements' type-list )?` (§A.2.5). An enum is implicitly final
         // and has no `extends`, so interfaces are its only supertypes.
         let implements = self.parse_implements_clause();
+        // `sealed enum Option<T> permits Some, None` restates the variants;
+        // the checker holds it to exactly them (E0490).
+        let permits = self.parse_permits_clause();
         self.expect(&TokenKind::LBrace, "'{' to start enum body");
 
         let mut variants = Vec::new();
@@ -2027,6 +2043,7 @@ impl<'a> Parser<'a> {
             name,
             generic_params,
             implements,
+            permits,
             variants,
             operators,
             methods,

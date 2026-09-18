@@ -351,6 +351,12 @@ pub struct EnumDecl {
     /// implicitly final — so this is its whole supertype list. Same shape as
     /// [`RecordDecl::implements`].
     pub implements: Vec<TypeRef>,
+    /// The `permits A, B` list of a `sealed enum` (JUX-CORE-LIB-ADDENDUM
+    /// writes `sealed enum Option<T> permits Some, None`). An enum is sealed
+    /// by default (JUX-LANG-V1 §7.7.6), so the list only restates the
+    /// variants; the checker requires it to name exactly them (E0490).
+    /// Empty when no `permits` clause was written.
+    pub permits: Vec<Ident>,
     /// Variant declarations in source order. Order determines auto-
     /// derived ordinal values when those land.
     pub variants: Vec<EnumVariant>,

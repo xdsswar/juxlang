@@ -1048,6 +1048,35 @@ impl<'a> Checker<'a> {
     /// the body's scope. Deleted operators have no body and are
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        // `sealed enum X permits A, B` (ERRATA E33): an enum is sealed by
+        // default, so the list may only restate its variants, all of them.
+        if !enum_decl.permits.is_empty() {
+            let variants: Vec<&str> = enum_decl.variants.iter().map(|v| v.name.text.as_str()).collect();
+            let listed: Vec<&str> = enum_decl.permits.iter().map(|p| p.text.as_str()).collect();
+            let strangers: Vec<&str> = listed.iter().copied().filter(|p| !variants.contains(p)).collect();
+            let missing: Vec<&str> = variants.iter().copied().filter(|v| !listed.contains(v)).collect();
+            if !strangers.is_empty() || !missing.is_empty() {
+                let mut why = Vec::new();
+                if !strangers.is_empty() {
+                    why.push(format!("`{}` is not a variant", strangers.join("`, `")));
+                }
+                if !missing.is_empty() {
+                    why.push(format!("variant `{}` is left out", missing.join("`, `")));
+                }
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0490_EnumPermitsMismatch,
+                        format!(
+                            "the `permits` list of enum `{}` must name exactly its variants: {}. An enum is \
+                             sealed already, so the list can be dropped",
+                            enum_decl.name.text,
+                            why.join("; "),
+                        ),
+                    )
+                    .with_span(enum_decl.permits[0].span.join(enum_decl.permits[enum_decl.permits.len() - 1].span)),
+                );
+            }
+        }
         // `@layout(c [, repr = "i32"])` makes a C-compatible enum: a plain
         // integer with one discriminant per variant (Layout-ABI §L.1.3). Such
         // an enum may NOT carry a payload — a C enum is just an integer, it has
