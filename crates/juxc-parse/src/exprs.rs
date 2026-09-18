@@ -1604,6 +1604,18 @@ impl<'a> Parser<'a> {
                     }
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close tuple literal");
+                    // `(e,)`: reserved (§A.4.1). One element is grouping, and
+                    // the comma would otherwise be dropped without a word.
+                    if elems.len() == 1 {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0213_SingleElementTuple,
+                                "single-element tuples are not in Jux v1: remove the trailing comma, or use a record",
+                            )
+                            .with_span(start.join(end)),
+                        );
+                        return elems.pop();
+                    }
                     return Some(Expr::TupleLit(elems, start.join(end)));
                 }
                 self.expect(&TokenKind::RParen, "')' to close parenthesized expression");

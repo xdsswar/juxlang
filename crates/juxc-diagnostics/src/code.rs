@@ -369,6 +369,11 @@ pub enum Code {
     /// follow it (§7.2, Entry Points §E.1.2.1). Move the `T...` to
     /// the end of the parameter list.
     E0212_VarargsNotLast,
+    /// E0213 — A **single-element tuple** `(e,)`. Grammar §A.4.1 reserves
+    /// the form: a tuple has two or more elements (§5.3), and a trailing
+    /// comma after ONE expression would otherwise read as plain grouping
+    /// that silently drops the comma. Remove the comma, or use a record.
+    E0213_SingleElementTuple,
     /// E0450 — An **ambiguous overload**: more than one candidate
     /// (constructor today; methods when §T.3 lands) can accept the
     /// call's argument count, and the Phase-1 arity-based selector
@@ -915,6 +920,7 @@ impl Code {
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
+            Code::E0213_SingleElementTuple       => "E0213",
             Code::E0260_IfExprMissingElse        => "E0260",
             Code::W0720_ReturnInFinally          => "W0720",
             Code::E0721_MultiCatchRelated        => "E0721",

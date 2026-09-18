@@ -1,0 +1,1 @@
+single_element_tuple.jux:3:15: [E0213] error: single-element tuples are not in Jux v1: remove the trailing comma, or use a record

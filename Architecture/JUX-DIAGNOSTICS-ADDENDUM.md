@@ -336,6 +336,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
+| `E0213`  | Single-element tuple `(e,)`: reserved in v1 | Grammar §A.4.1 |
 | `E0220`  | Sealed type with `permits` clause needed *(reserved)* | Grammar §A.2.5                 |
 | `E0240`  | `try` block without `catch` or `finally` *(reserved)* | Grammar §A.2.8                 |
 | `E0241`  | Label-targeted `break`/`continue` mismatched *(reserved)* | Grammar §A.2.8              |
