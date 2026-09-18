@@ -400,6 +400,9 @@
          its initializer has side effects; parenthesizes when substituting. -->
     <inlineActionHandler
         implementation="dev.jux.intellij.refactoring.JuxInlineVariableHandler"/>
+    <!-- Inline Method (Ctrl+Alt+N on a method): every call becomes the body. -->
+    <inlineActionHandler
+        implementation="dev.jux.intellij.refactoring.JuxInlineMethodHandler"/>
     <!-- Safe Delete: usages come from the same reference search as Find Usages,
          so the conflicts dialog lists exactly what Alt+F7 would have shown. -->
     <refactoring.safeDeleteProcessor

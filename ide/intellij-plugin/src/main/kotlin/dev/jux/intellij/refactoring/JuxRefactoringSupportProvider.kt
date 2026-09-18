@@ -34,6 +34,11 @@ class JuxRefactoringSupportProvider : RefactoringSupportProvider() {
 
     override fun getIntroduceConstantHandler(): RefactoringActionHandler = JuxIntroduceConstantHandler()
 
+    override fun getExtractMethodHandler(): RefactoringActionHandler = JuxExtractMethodHandler()
+
+    override fun getChangeSignatureHandler(): com.intellij.refactoring.changeSignature.ChangeSignatureHandler =
+        JuxChangeSignatureHandler()
+
     /**
      * In-place rename (type the new name in the editor, no dialog) for the
      * bindings whose every use is in the same file by construction. A member or
