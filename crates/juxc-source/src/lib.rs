@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod position;
+
 /// A loaded `.jux` source file, with its path and UTF-8 contents.
 ///
 /// Construct with [`SourceFile::new`]. Once built, a `SourceFile` is
