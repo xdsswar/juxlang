@@ -422,6 +422,96 @@
     <statementUpDownMover
         implementation="dev.jux.intellij.editor.JuxStatementMover"/>
 
+    <!-- Alt+Enter intentions, the everyday set Java's editor offers: invert
+         and flip, split and join declarations, braces, interpolation, ?: and
+         if/else, nested ifs, var and explicit types. -->
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxInvertIfConditionIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxFlipBinaryIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxSplitDeclarationIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxJoinDeclarationIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxAddBracesIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxRemoveBracesIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxConcatToInterpolationIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxInterpolationToConcatIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxTernaryToIfIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxIfToTernaryIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxMergeNestedIfsIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxSplitAndIntoIfsIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxVarToExplicitTypeIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxExplicitTypeToVarIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxMergeElseIfIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+
+    <!-- Join Lines (Ctrl+Shift+J): declaration + assignment, adjacent string
+         literals, nested ifs. -->
+    <joinLinesHandler implementation="dev.jux.intellij.editor.JuxJoinLinesHandler"/>
+
+    <!-- Unwrap/Remove (Ctrl+Shift+Delete): if, else, loops, try, catch,
+         finally, braces, lambda. -->
+    <lang.unwrapDescriptor
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxUnwrapDescriptor"/>
+
+
     <!-- The breadcrumb trail under the editor (`Parser > Cursor > advance()`).
          Declarations only: including blocks turns the trail into `if > for > if`
          and pushes the enclosing class off the left edge. -->

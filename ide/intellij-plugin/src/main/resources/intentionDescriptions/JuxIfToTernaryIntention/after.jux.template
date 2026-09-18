@@ -1,0 +1,3 @@
+int f(bool c) {
+    <spot>return c ? 1 : 2;</spot>
+}

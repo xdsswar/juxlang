@@ -1,0 +1,3 @@
+bool f(int a, int b) {
+    return a <spot>&lt;</spot> b;
+}

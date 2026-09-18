@@ -1,0 +1,3 @@
+void f() {
+    <spot>int count = 5;</spot>
+}
