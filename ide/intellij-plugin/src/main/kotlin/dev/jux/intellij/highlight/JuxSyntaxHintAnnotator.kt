@@ -90,7 +90,10 @@ class JuxSyntaxHintAnnotator : Annotator {
         val left = binary.firstChild ?: return
         if (left.elementType !== E.REFERENCE_EXPRESSION && left.elementType !== E.PARENTHESIZED_EXPRESSION) return
         val typeAfter = binary.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim() ?: return
-        if (typeAfter.firstOrNull()?.isLowerCase() != true || typeAfter in JuxKeywords.PRIMITIVES) return
+        // A lowercase built-in type (`int`, `any`) is a real type test.
+        if (typeAfter.firstOrNull()?.isLowerCase() != true || typeAfter in JuxKeywords.PRIMITIVES ||
+            typeAfter in JuxKeywords.BUILTINS
+        ) return
         holder.newAnnotation(HighlightSeverity.ERROR, "Lambdas use '->'; '=>' is the type-test operator")
             .range(arrow.psi)
             .withFix(ReplaceFix(arrow.startOffset, arrow.startOffset + 2, "->", "Replace '=>' with '->'"))

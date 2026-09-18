@@ -96,6 +96,9 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "Error", "RuntimeException", "NullPointerException", "IndexOutOfBoundsException", "IllegalArgumentException",
     "IllegalStateException", "UnsupportedOperationException", "ArithmeticException", "NoSuchElementException", "ClassCastException",
     "IOException", "FileNotFoundException",
+    // The opaque top type (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Not lexed as a
+    // primitive: `@cfg(any(...))` and `Task.any` keep the plain name.
+    "any",
 ];
 
 /// The full token alphabet, ready to serialize to `jux-tokens.json`.
