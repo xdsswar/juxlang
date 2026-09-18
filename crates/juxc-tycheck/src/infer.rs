@@ -834,6 +834,11 @@ fn nullable_if_safe(safe: bool, ty: Ty) -> Ty {
 }
 
 fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // `I.super` (§T.8.3) is the receiver of `I.super.m()`: `this`, seen as
+    // the interface `I` it implements.
+    if let Some((_, ty)) = interface_super_receiver(f, env, symbols) {
+        return ty;
+    }
     // `ClassName.STATIC_FIELD` — when the receiver is a bare or
     // multi-segment path that resolves to a class FQN, look the
     // field up as a static member rather than as an instance field.
@@ -1860,6 +1865,49 @@ pub(crate) fn path_resolves_to_class(
         return Some(joined);
     }
     None
+}
+
+/// `I.super` (Type system §T.8.3): the receiver of `I.super.m()`. Returns the
+/// interface's FQN and its type as the enclosing class implements it, with the
+/// class's type arguments (`implements Holder<int>` gives `Holder<int>`), or
+/// `None` when `f` is not `I.super` for an interface `I`.
+///
+/// This only recognizes the shape. Whether it is legal where it appears (a
+/// direct superinterface, an instance context, a call receiver) is the
+/// checker's question.
+pub(crate) fn interface_super_receiver(
+    f: &FieldExpr,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<(String, Ty)> {
+    if f.field.text != "super" {
+        return None;
+    }
+    let Expr::Path(qn) = f.object.as_ref() else {
+        return None;
+    };
+    let iface = path_resolves_to_interface(qn, env, symbols)?;
+    let written = direct_superinterface(env, symbols, &iface);
+    let ty = written
+        .map(|(class, t)| lower_member_type(&t, &class, symbols))
+        .unwrap_or_else(|| Ty::User { name: iface.clone(), generic_args: Vec::new() });
+    Some((iface, ty))
+}
+
+/// The enclosing class's own `implements` entry that names `iface`, with the
+/// class FQN, or `None` when the class does not list it directly (§T.8.3: a
+/// superclass's or a superinterface's interfaces do not count).
+pub(crate) fn direct_superinterface(
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+    iface: &str,
+) -> Option<(String, TypeRef)> {
+    let class = env.current_class.as_deref()?;
+    let sig = symbols.classes.get(class)?;
+    sig.implements
+        .iter()
+        .find(|t| path_resolves_to_interface(&t.name, env, symbols).as_deref() == Some(iface))
+        .map(|t| (class.to_string(), t.clone()))
 }
 
 /// Mirror of [`path_resolves_to_class`] for interfaces. Recognizes

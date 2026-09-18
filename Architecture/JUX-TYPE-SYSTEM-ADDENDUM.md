@@ -738,7 +738,7 @@ public class C implements A, B {
 }
 ```
 
-The `Type.super.method()` syntax is allowed only inside the overriding class for an inherited default method.
+The `Type.super.method()` syntax is allowed only inside the overriding class for an inherited default method. Precisely: `I.super.m(args)` is legal in an instance method (or a lambda inside one) of a class that lists `I` in its own `implements` clause, and `m` must be a method `I` declares with a default body. It runs `I`'s default body on `this`, even when the class or a superclass overrides `m`. `I.super` is only a call receiver: it is not a value. Anywhere else, including a static method, a constructor or `init` block (where `this` is still being built), a class that reaches `I` only through a superclass or another interface, and `I.super` used as a value, is `E0482`. Naming a method that `I` declares without a default body is `E0483`.
 
 ### T.8.4. Interaction with Generics
 

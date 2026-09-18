@@ -816,6 +816,38 @@ impl RustEmitter {
                 return;
             }
         }
+        // `I.super.m(args)` (§T.8.3): `I`'s default body, run on `this` even
+        // when the class overrides `m`. The trait keeps it as
+        // `__jux_default_<m>`; `<Self as I>` names the one trait among several
+        // that may all have an `m`.
+        if let Some((iface, method)) = crate::analysis::interface_super_call(call) {
+            let written = self
+                .enclosing_class
+                .clone()
+                .and_then(|c| self.class_ast_named(&c))
+                .and_then(|c| {
+                    c.implements
+                        .iter()
+                        .find(|t| t.name.segments.last().is_some_and(|s| s.text == iface))
+                        .cloned()
+                });
+            let alias = self.this_alias.as_deref().unwrap_or("self").to_string();
+            self.w.push_str("<Self as ");
+            match &written {
+                Some(t) => self.emit_type_as_rust(t),
+                None => self.w.push_str(&to_rust_ident(iface)),
+            }
+            self.w.push_str(">::__jux_default_");
+            self.w.push_str(method);
+            self.w.push('(');
+            self.w.push_str(&alias);
+            for arg in &call.args {
+                self.w.push_str(", ");
+                self.emit_expr(arg);
+            }
+            self.w.push(')');
+            return;
+        }
         // `super.method(args)` (§6.9.4) — a STATIC call to the nearest
         // concrete ancestor's version of `method`, bypassing virtual dispatch
         // for this one call. We emit `<self>.__jux_super_<method>(args)`, a

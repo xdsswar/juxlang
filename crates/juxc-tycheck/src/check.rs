@@ -436,6 +436,9 @@ pub(crate) struct Checker<'a> {
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
     pub(crate) in_static: bool,
+    /// True while the receiver of an `I.super.m()` call is being checked, so
+    /// `check_field_access` accepts `I.super` there and nowhere else (§T.8.3).
+    pub(crate) in_interface_super_call: bool,
     /// True while we're inside an **async context** — the body of an
     /// `async` function/method, or an async lambda. Drives the
     /// `E0700_AwaitRequiresAsyncContext` check: `await` is only legal when
@@ -531,6 +534,7 @@ impl<'a> Checker<'a> {
             lambda_slot_params: None,
             in_foreach_iter: false,
             in_static: false,
+            in_interface_super_call: false,
             in_async: false,
             in_future_slot: false,
             in_unsafe: false,
@@ -6482,7 +6486,63 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// `I.super.m(...)` (§T.8.3): legal only in an instance context of a class
+    /// that lists `I` in its own `implements` clause (`E0482`), and only for a
+    /// method `I` declares with a default body (`E0483`). A method `I` does not
+    /// declare at all is left to the ordinary member lookup, which says so.
+    fn check_interface_super_call(&mut self, iface: &str, method: &str, c: &CallExpr) {
+        let bare = iface.rsplit('.').next().unwrap_or(iface);
+        let misplaced = if self.env.current_class.is_none() {
+            Some(format!("`{bare}.super.{method}()` calls a default method on `this`, so it belongs in a class that implements `{bare}`"))
+        } else if self.in_static {
+            Some(format!("`{bare}.super.{method}()` needs `this`, and a `static` method has none"))
+        } else if self.current_ctor.is_some() || self.in_init_block {
+            Some(format!("`{bare}.super.{method}()` belongs in an instance method: a constructor or `init` block is still building `this`"))
+        } else if crate::infer::direct_superinterface(&self.env, self.symbols, iface).is_none() {
+            let class = self.env.current_class.as_deref().unwrap_or("");
+            let class = class.rsplit('.').next().unwrap_or(class);
+            Some(format!("`{class}` does not implement `{bare}` directly, so `{bare}.super` names no default of its own: add `{bare}` to its `implements` clause"))
+        } else {
+            None
+        };
+        if let Some(message) = misplaced {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0482_InterfaceSuperMisplaced, format!("{message} (§T.8.3)"))
+                    .with_span(c.span),
+            );
+            return;
+        }
+        let declared = self.symbols.interfaces.get(iface).and_then(|i| i.methods.get(method));
+        if let Some(sig) = declared {
+            if sig.is_abstract {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0483_InterfaceSuperNoDefault,
+                        format!("`{bare}.{method}` has no default body, so `{bare}.super.{method}()` has nothing to call (§T.8.3)"),
+                    )
+                    .with_span(c.span),
+                );
+            }
+        }
+    }
+
     fn check_field_access(&mut self, f: &FieldExpr) {
+        // `I.super` (§T.8.3) is a call receiver and nothing else. Its call
+        // was validated by `check_interface_super_call`; used as a value it
+        // has no meaning.
+        if let Some((iface, _)) = crate::infer::interface_super_receiver(f, &self.env, self.symbols) {
+            if !self.in_interface_super_call {
+                let bare = iface.rsplit('.').next().unwrap_or(&iface);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0482_InterfaceSuperMisplaced,
+                        format!("`{bare}.super` is not a value: it only calls one of `{bare}`'s default methods, as `{bare}.super.m(...)` (§T.8.3)"),
+                    )
+                    .with_span(f.span),
+                );
+            }
+            return;
+        }
         // `ClassName.STATIC_FIELD` — recognize the static-access
         // shape before treating the receiver as a value. Visibility
         // applies the same as for instance fields; reading an
@@ -8885,8 +8945,23 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
+                // `I.super.m(...)` (§T.8.3): check where it is written and that
+                // `m` has a default to run, then let the ordinary interface-method
+                // path check the arguments against `I`'s signature.
+                let super_call = match field.object.as_ref() {
+                    Expr::Field(recv) => {
+                        crate::infer::interface_super_receiver(recv, &self.env, self.symbols)
+                            .map(|(iface, _)| iface)
+                    }
+                    _ => None,
+                };
+                if let Some(iface) = &super_call {
+                    self.check_interface_super_call(iface, method_name, c);
+                }
                 // Walk the receiver sub-expression first.
+                self.in_interface_super_call = super_call.is_some();
                 self.check_expr(&field.object);
+                self.in_interface_super_call = false;
                 let receiver_ty = infer_expr(&field.object, &self.env, self.symbols);
                 // A NULLABLE receiver is checked against the type it wraps.
                 // `?.` and `!!` both reach the same members, so the member

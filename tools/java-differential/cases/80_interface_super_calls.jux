@@ -1,0 +1,56 @@
+// Calling one interface's default method by name (Type system §T.8.3).
+//
+// When two interfaces both supply a default `move`, the class has to
+// override it (E0431), and `Walker.super.move()` is how the override reaches
+// a particular default. The call runs that interface's body on `this`, even
+// though the class itself overrides `move`.
+
+interface Walker {
+    default String move() { return "walking"; }
+    default String describe(String who) { return $"${who} walks"; }
+}
+
+interface Swimmer {
+    default String move() { return "swimming"; }
+}
+
+// A generic interface: the class's type argument (`int`) carries through.
+interface Picker<T> {
+    default T pick(T first, T second) { return first; }
+}
+
+class Penguin implements Walker, Swimmer, Picker<int> {
+    @Override
+    public String move() {
+        return Walker.super.move() + " and " + Swimmer.super.move();
+    }
+
+    @Override
+    public String describe(String who) {
+        return "Penguin: " + Walker.super.describe(who);
+    }
+
+    // Arguments are the default's own parameters, passed in any order.
+    @Override
+    public int pick(int first, int second) {
+        return Picker.super.pick(second, first);
+    }
+
+    // A lambda inside an instance method still has `this`.
+    public String later() {
+        var go = () -> Swimmer.super.move();
+        return go();
+    }
+}
+
+public void main() {
+    var p = new Penguin();
+    print(p.move());
+    print(p.describe("Pingu"));
+    print(p.pick(1, 2));
+    print(p.later());
+
+    // Through the interface, the override is what runs.
+    Walker w = p;
+    print(w.move());
+}

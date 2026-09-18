@@ -530,6 +530,14 @@ pub enum Code {
     /// E0481 -- A file's public type does not match its name, or a file
     /// declares more than one public type (JUX-LANG-V1 §3.1).
     E0481_PublicTypeFileName,
+    /// E0482 -- `I.super.m()` where it has no meaning: outside an instance
+    /// member, in a class that does not list `I` in its own `implements`
+    /// clause, or `I.super` used as a value rather than a call receiver
+    /// (Type system §T.8.3).
+    E0482_InterfaceSuperMisplaced,
+    /// E0483 -- `I.super.m()` names a method that `I` declares without a
+    /// default body, so there is nothing to call (Type system §T.8.3).
+    E0483_InterfaceSuperNoDefault,
     /// E0489 -- An `any` used for something other than `===`, the `=>` type
     /// test or its text: a member, a call, an operator, indexing, `==`, a hash
     /// (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Test it with `=>` first.
@@ -965,6 +973,8 @@ impl Code {
             Code::E0478_WildcardIsReadOnly       => "E0478",
             Code::E0307_DuplicateAnnotationName  => "E0307",
             Code::E0481_PublicTypeFileName       => "E0481",
+            Code::E0482_InterfaceSuperMisplaced  => "E0482",
+            Code::E0483_InterfaceSuperNoDefault  => "E0483",
             Code::E0489_AnyHasNoOperation        => "E0489",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",

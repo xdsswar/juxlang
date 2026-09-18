@@ -227,6 +227,7 @@ pub fn lower_workspace_with_entry(
     // ctor across ALL units, so a call in `app.jux` to `fill` declared
     // in `util.jux` emits `&mut <arg>` matching the `&mut T` signature.
     e.populate_byref_params(units);
+    e.populate_interface_super_calls(units);
     // C6: methods containing a self-aliasing byref call become
     // receiver-mutating (write-back assigns `self.field`); register
     // them so they emit `&mut self` and their callers promote the
@@ -426,6 +427,7 @@ pub fn lower_workspace_test(
     }
     // C6 pre-pass (see lower_workspace_with_entry).
     e.populate_byref_params(units);
+    e.populate_interface_super_calls(units);
     e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
@@ -675,6 +677,12 @@ struct RustEmitter {
     /// `None` outside an interface default-method body. Set in
     /// `emit_interface_decl` only.
     pub(crate) enclosing_interface: Option<String>,
+    /// `(interface, method)` pairs some class calls as `I.super.m()` (Type
+    /// system §T.8.3), by the interface's bare name. Only these defaults get
+    /// a `__jux_default_<m>` twin in their trait, the one body an overriding
+    /// class can still reach; every other trait emits as before. Filled by
+    /// `populate_interface_super_calls` before any declaration is emitted.
+    pub(crate) interface_super_calls: std::collections::HashSet<(String, String)>,
     /// Names of user-defined methods whose bodies write to `this.field`
     /// — i.e. methods that the backend emits with `&mut self`. Computed
     /// in a single pre-pass over the compilation unit before any
@@ -5016,6 +5024,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             enclosing_class: None,
             current_fn_params: std::collections::HashSet::new(),
             enclosing_interface: None,
+            interface_super_calls: std::collections::HashSet::new(),
             user_mut_methods: extern_mut_methods.clone(),
             extern_mut_methods,
             byref_params: std::collections::HashMap::new(),
