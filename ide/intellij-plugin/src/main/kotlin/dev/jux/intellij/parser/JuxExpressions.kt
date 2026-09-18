@@ -466,7 +466,18 @@ private fun PsiBuilder.parseArgumentList() {
             } else if (!at(T.RPAREN) && JUX_EXPR_START.contains(tokenType)) {
                 // `add(1 2)`: a missing comma, not a missing `)`.
                 errorHere("',' or ')' expected")
+                // Every pass must consume something. A token that can start
+                // an expression but that the expression parser then refuses
+                // used to loop here forever, allocating a marker per pass
+                // until the IDE ran out of memory (completion's dummy
+                // identifier produced one inside `async_lambdas.jux`).
+                val before = currentOffset
                 parseArgument()
+                if (currentOffset == before) {
+                    val bad = mark()
+                    advanceLexer()
+                    bad.error("Unexpected token in the argument list")
+                }
             } else {
                 break
             }

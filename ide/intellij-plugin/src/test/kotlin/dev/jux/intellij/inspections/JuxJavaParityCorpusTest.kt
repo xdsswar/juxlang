@@ -55,6 +55,9 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         "numeric_literals_and_promotion.jux:JuxConstantCondition:44",
         "numeric_literals_and_promotion.jux:JuxConstantCondition:46",
         "numeric_literals_and_promotion.jux:JuxConstantCondition:49",
+        // `while (Tape.advance());`: the empty statement as a loop body is
+        // what the example demonstrates (Grammar §A.2.8).
+        "labeled_blocks.jux:JuxEmptyStatementBody:48",
     )
 
     fun testCorpusHasNoFindings() {

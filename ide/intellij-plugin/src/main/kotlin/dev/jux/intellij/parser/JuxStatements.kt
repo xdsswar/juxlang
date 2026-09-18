@@ -460,18 +460,21 @@ private fun PsiBuilder.parsePattern() {
 
 /**
  * `assert` as a statement (S.7.2): followed by a condition that is not a
- * parenthesized call argument list, or by `(…)` and then `: message`. A plain
- * `assert(x);` stays the built-in call it always was.
+ * parenthesized call argument list, or by `(…)` and then more of an
+ * expression or `: message`. A plain `assert(x);` stays the built-in call.
  */
 private fun PsiBuilder.atAssertStatement(): Boolean {
     if (!atContextualKw("assert")) return false
     if (lookAhead(1) !== T.LPAREN) return lookAhead(1) !== T.SEMICOLON && lookAhead(1) !== T.DOT
+    // `assert(x);` / `assert(x, "why");` is the built-in call: `;` follows
+    // its `)`. Anything else continues an expression that merely starts with
+    // parentheses, `assert (a % 2) == 1 : "odd";`, so it is the statement.
     val probe = mark()
     advanceLexer()
     skipMatched(T.LPAREN, T.RPAREN)
-    val withMessage = at(T.COLON)
+    val statement = !at(T.SEMICOLON) && !eof()
     probe.rollbackTo()
-    return withMessage
+    return statement
 }
 
 private fun PsiBuilder.atContextualKw(text: String): Boolean =
