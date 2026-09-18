@@ -444,6 +444,23 @@ object JuxTypeEngine {
         return out
     }
 
+    /**
+     * Every member of [t] named [name], same-arity overloads included.
+     *
+     * [membersOf] keeps one method per name and arity, which is right for a
+     * completion list but wrong where overloads matter: Jux overloads on
+     * parameter types, so `print(int)` and `print(String)` are both real, and
+     * a caller that must not guess between them (parameter hints) needs both.
+     */
+    fun membersOfAllOverloads(t: JuxType, name: String): List<PsiElement> {
+        val ct = classOf(t) ?: return emptyList()
+        val out = ArrayList<PsiElement>()
+        for (owner in typeAndSupertypes(ct)) {
+            JuxHierarchy.allMembersDeclaredIn(owner.decl).filterTo(out) { (it as? JuxNamedElement)?.name == name }
+        }
+        return out
+    }
+
     /** Whether a member is reached through the type rather than an instance. */
     fun isStaticMember(m: PsiElement): Boolean =
         m.elementType === E.ENUM_CONSTANT || JuxHierarchy.hasModifier(m, "static") ||

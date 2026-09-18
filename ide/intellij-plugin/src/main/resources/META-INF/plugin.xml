@@ -326,6 +326,16 @@
     <codeInsight.parameterNameHints
         language="Jux"
         implementationClass="dev.jux.intellij.hints.JuxInlayHintsProvider"/>
+    <!-- The inferred type of a `var` local, after its name (`var n: int = …`). -->
+    <codeInsight.declarativeInlayProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.hints.JuxVarTypeHintsProvider"
+        isEnabledByDefault="true"
+        group="TYPES_GROUP"
+        providerId="jux.var.types"
+        bundle="messages.JuxInlayBundle"
+        nameKey="jux.var.types.name"
+        descriptionKey="jux.var.types.description"/>
 
     <!-- Parameter Info (Ctrl+P): the signature of the call the caret is inside,
          active parameter in bold. Jux overloads on parameter TYPES, so every
