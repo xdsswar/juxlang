@@ -1,0 +1,13 @@
+// E0410: what converts to `any` and what an `any` converts to (§T.1.2).
+// A nullable needs `any?`, a function value does not convert, and an `any`
+// goes back to a concrete type only through `=>`.
+int twice(int n) { return n * 2; }
+
+public void main() {
+    String? missing = null;
+    any fromMissing = missing;
+    any fromLambda = () -> 5;
+    any value = 5;
+    int back = value;
+    print(twice(value));
+}

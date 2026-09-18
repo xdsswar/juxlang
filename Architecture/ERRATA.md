@@ -755,6 +755,23 @@ magic-name methods, and would collide with a user method named `hash`.
 
 ---
 
+## E27. Which values an `any` holds, and what it prints
+
+**Conflict.** JUX-TYPE-SYSTEM-ADDENDUM §T.1.2 describes `===` on an `any`
+holding a value type ("primitive equality for value types"), while §T.3.6 let
+only reference types convert to `any`. Neither said whether an `any` has a
+string form, though every other Jux type has one (JUX-OPERATORS-ADDENDUM
+§O.7.1).
+
+**Resolution.** Every value converts except a nullable one (it needs `any?`)
+and a function value, which has neither an identity nor a string form. An
+`any` prints as the value it holds. Everything but `===`, `=>` and the text
+is `E0489`.
+
+**Spec status:** §T.1.2 states the rules; §T.3.6 is corrected.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

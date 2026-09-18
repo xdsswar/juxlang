@@ -4222,6 +4222,17 @@ impl RustEmitter {
     /// no upcast meaning. Shared by the general store path and the
     /// wrapper-field store-through path so both apply the same coercion.
     fn assign_iface_coercion_tref(&self, target: &Expr, value: &Expr) -> Option<juxc_ast::TypeRef> {
+        // An `any` / `any?` target (§T.1.2) boxes the value, whatever it is.
+        let any_slot = match self.expr_recorded_ty(target) {
+            Some(juxc_tycheck::Ty::Any) => Some(false),
+            Some(juxc_tycheck::Ty::Nullable(inner)) if matches!(*inner, juxc_tycheck::Ty::Any) => Some(true),
+            _ => None,
+        };
+        if let Some(nullable) = any_slot {
+            let mut tref = crate::analysis::synth_iface_type_ref("any", crate::exprs::expr_span_of(target));
+            tref.nullable = nullable;
+            return Some(tref);
+        }
         let ty = self
             .expr_types
             .get(&crate::exprs::expr_span_of(target))
@@ -4542,6 +4553,10 @@ impl RustEmitter {
         self.w.push_str("let Some(");
         self.w.push_str(&to_rust_ident(&binder.text));
         self.w.push_str(") = ");
+        if self.expr_is_any(&t.value) {
+            self.emit_any_type_test_get(&t.value, &t.ty);
+            return;
+        }
         let src = self.cast_source_bare(&t.value);
         // A dynamic-dispatch source narrows via its runtime hook — UNLESS the
         // target is the value's own static type (`if (z => Animal za)` where `z`

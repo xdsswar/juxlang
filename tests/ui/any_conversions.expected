@@ -1,0 +1,4 @@
+any_conversions.jux:8:5: [E0410] error: type mismatch in declaration of `fromMissing`: expected any, found String?
+any_conversions.jux:9:5: [E0410] error: type mismatch in declaration of `fromLambda`: a function value does not convert to `any`
+any_conversions.jux:11:5: [E0410] error: type mismatch in declaration of `back`: expected int, found any
+any_conversions.jux:12:17: [E0410] error: argument 1 to `twice`: expected int, found any

@@ -124,6 +124,12 @@ pub enum Ty {
     /// inner is caught by the nullable-primitive pre-pass in
     /// `crate::nullable_check`.
     Nullable(Box<Ty>),
+    /// `any` (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2): the opaque type every value
+    /// converts to. It has no members; the only operations are `===` and the
+    /// `=>` type test, plus its string form. Distinct from [`Ty::Unknown`],
+    /// which means "inference gave up" and is accepted everywhere; `any` is a
+    /// real type the checker holds a program to.
+    Any,
     /// Inference failed for this position. Phase D may flag this; Phase
     /// C is silent.
     Unknown,
@@ -259,6 +265,11 @@ impl Ty {
         )
     }
 
+    /// True iff this is the `any` type (§T.1.2).
+    pub fn is_any(&self) -> bool {
+        matches!(self, Ty::Any)
+    }
+
     /// True iff inference returned `Unknown` for this expression.
     /// Phase D uses this to decide whether to emit a "cannot determine
     /// type" diagnostic.
@@ -350,6 +361,7 @@ impl fmt::Display for Ty {
             }
             Ty::Void => f.write_str("void"),
             Ty::Nullable(inner) => write!(f, "{inner}?"),
+            Ty::Any => f.write_str("any"),
             Ty::Unknown => f.write_str("<unknown>"),
         }
     }
@@ -691,6 +703,11 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         if env.generic_params.contains(name) {
             return Ty::Param(name.to_string());
         }
+        // `any` (§T.1.2) is a built-in type name, like `String`. A program
+        // may still declare its own `any`, and then the name means that.
+        if name == "any" && !symbols.classes.keys().chain(symbols.records.keys()).any(|k| k.rsplit('.').next() == Some("any")) {
+            return Ty::Any;
+        }
     }
 
     // 5. User-defined type — single-segment name. Three paths,
@@ -1029,7 +1046,7 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
             return_ptr_depth: *return_ptr_depth,
         },
         Ty::Nullable(inner) => Ty::Nullable(Box::new(substitute_inner(inner, params, args))),
-        Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Unknown => ty.clone(),
+        Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Any | Ty::Unknown => ty.clone(),
     }
 }
 

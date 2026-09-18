@@ -3127,6 +3127,60 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// E0489 when `receiver` is an `any` (§T.1.2), which has no members and
+    /// no operators: `what` finishes the sentence ("has no field `x`").
+    /// Returns whether it fired, so a caller can skip the member lookup that
+    /// would otherwise report the same thing a second, vaguer way.
+    fn check_any_receiver(&mut self, receiver: &Expr, what: &str, span: Span) -> bool {
+        if !matches!(infer_expr(receiver, &self.env, self.symbols), Ty::Any) {
+            return false;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0489_AnyHasNoOperation, format!("an `any` {what}"))
+                .with_span(span)
+                .with_help("test it with `=>` first and use the value as what it is: `if (v => Dog d) { d.bark(); }` (§T.1.2)"),
+        );
+        true
+    }
+
+    /// E0489 for a binary operator with an `any` operand (§T.1.2). What is
+    /// left of an `any` is `===` / `!==` and its text, so `"x" + v` (a
+    /// String on the other side makes `+` concatenation) is fine; `==` gets
+    /// its own hint, since `===` is what the program can say instead.
+    fn check_any_binary(&mut self, b: &juxc_ast::BinaryExpr) {
+        if matches!(b.op, BinaryOp::RefEq | BinaryOp::RefNeq) {
+            return;
+        }
+        let left = infer_expr(&b.left, &self.env, self.symbols);
+        let right = infer_expr(&b.right, &self.env, self.symbols);
+        if !left.is_any() && !right.is_any() {
+            return;
+        }
+        if b.op == BinaryOp::Add && (left.is_string() || right.is_string()) {
+            return;
+        }
+        let span = [b.span, expr_span(&b.left), expr_span(&b.right)]
+            .into_iter()
+            .find(|sp| *sp != Span::DUMMY)
+            .unwrap_or(b.span);
+        let (message, help) = if matches!(b.op, BinaryOp::Eq | BinaryOp::NotEq) {
+            (
+                format!("an `any` has no `{}`", b.op.as_rust_str()),
+                "`===` / `!==` compare an `any`: the same object for a class, array or collection, an equal value otherwise (§T.1.2)",
+            )
+        } else {
+            (
+                format!("an `any` has no operator `{}`", b.op.as_rust_str()),
+                "test it with `=>` first and use the value as what it is: `if (v => int n) { n + 1 }` (§T.1.2)",
+            )
+        };
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0489_AnyHasNoOperation, message)
+                .with_span(span)
+                .with_help(help),
+        );
+    }
+
     /// True iff a reference cast / type-test from `src_ty` to `target_ty`
     /// could ever succeed: they're in a subtype relationship (either
     /// direction), the target is `any`, the source isn't a concrete user type
@@ -3920,6 +3974,18 @@ impl<'a> Checker<'a> {
                         }
                         if ptr_null_ok {
                             // Accepted as a null pointer; no mismatch to report.
+                        } else if v.init.as_ref().is_some_and(|init| function_into_any(d, init)) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!(
+                                        "type mismatch in declaration of `{}`: a function value does not convert to `any`",
+                                        v.name.text,
+                                    ),
+                                )
+                                .with_span(v.span)
+                                .with_help("a function has no identity and no string form to hold (§T.1.2); give the slot the function's own type"),
+                            );
                         } else if !compatible(d, i, self.symbols) {
                             self.diagnostics.push(
                                 Diagnostic::error(
@@ -3975,6 +4041,13 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Assign(a) => {
+                // `v += 1` on an `any` (§T.1.2): it has no operators.
+                if let Some(op) = a.op {
+                    if self.check_any_receiver(&a.target, &format!("has no operator `{}=`", op.as_rust_str()), a.span) {
+                        self.check_expr(&a.value);
+                        return;
+                    }
+                }
                 // `p += n` / `p -= n`: the step must be an integer (§L.6.1a).
                 if matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
                     && self.expr_ptr_depth(&a.target) > 0
@@ -4286,6 +4359,7 @@ impl<'a> Checker<'a> {
                 self.check_expr(&f.iter);
                 self.in_foreach_iter = prev_fe;
                 let iter_ty = infer_expr(&f.iter, &self.env, self.symbols);
+                self.check_any_receiver(&f.iter, "cannot be iterated", f.span);
                 // §18.6.3 async streams: `for await` is only legal in an
                 // async context (it awaits `next()` per element), and the
                 // iterable must be a Stream<T> — in both directions
@@ -4830,6 +4904,10 @@ impl<'a> Checker<'a> {
             }
             Expr::Field(f) => {
                 self.check_expr(&f.object);
+                // `v.x` on an `any` (§T.1.2): it has no fields.
+                if self.check_any_receiver(&f.object, &format!("has no field `{}`", f.field.text), f.span) {
+                    return;
+                }
                 self.check_nullable_receiver(f, false);
                 self.check_field_access(f);
             }
@@ -4837,6 +4915,7 @@ impl<'a> Checker<'a> {
             Expr::Index(i) => {
                 self.check_expr(&i.array);
                 self.check_expr(&i.index);
+                self.check_any_receiver(&i.array, "cannot be indexed", i.span);
                 // §S.3.2: a byte index and a character index are different
                 // positions in a UTF-8 string, so `s[i]` says too little.
                 if matches!(infer_expr(&i.array, &self.env, self.symbols), Ty::String) {
@@ -4962,6 +5041,7 @@ impl<'a> Checker<'a> {
 
             Expr::Unary(u) => {
                 self.check_expr(&u.operand);
+                self.check_any_receiver(&u.operand, "has no operators", u.span);
                 // §A.2.9 — the raw-pointer operators `*p` (deref) and `&x`
                 // (address-of) are `unsafe`-only. Outside an `unsafe` context
                 // they trip E0506 (same rule as calling an `unsafe` fn).
@@ -5012,6 +5092,7 @@ impl<'a> Checker<'a> {
                 self.check_numeric_operands(b);
                 self.check_comparison_chain(b);
                 self.check_pointer_operators(b);
+                self.check_any_binary(b);
                 if !self.in_unsafe
                     && matches!(b.op, juxc_ast::BinaryOp::Add | juxc_ast::BinaryOp::Sub)
                     && (self.expr_ptr_depth(&b.left) > 0 || self.expr_ptr_depth(&b.right) > 0)
@@ -5135,6 +5216,23 @@ impl<'a> Checker<'a> {
                 // the guard and body instead of none.
                 let scrutinee_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
                 let product = self.is_product_ty(&scrutinee_ty);
+                // An `any` is matched by what it holds: `case int n ->`,
+                // `case Dog d ->`, `default ->` (§T.1.2). A value pattern would
+                // compare, and an `any` has no `==`.
+                if scrutinee_ty.is_any() {
+                    for arm in &s.arms {
+                        if !matches!(arm.pattern, Pattern::TypeBind { .. } | Pattern::Wildcard(_) | Pattern::Bind(_)) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0489_AnyHasNoOperation,
+                                    "an `any` is matched by type, not by value",
+                                )
+                                .with_span(arm.pattern.span())
+                                .with_help("write a type pattern, `case int n ->` or `case Dog d ->`, and test the value inside it (§T.1.2)"),
+                            );
+                        }
+                    }
+                }
                 for arm in &s.arms {
                     let destructures = product
                         || matches!(&arm.pattern, Pattern::Tuple(..))
@@ -5359,6 +5457,9 @@ impl<'a> Checker<'a> {
             //      inference gap must never manufacture a type error).
             Expr::IncDec(i) => {
                 self.check_expr(&i.target);
+                if self.check_any_receiver(&i.target, "has no operators", i.span) {
+                    return;
+                }
                 if !self.in_unsafe && self.expr_ptr_depth(&i.target) > 0 {
                     self.unsafe_pointer_op("stepping a raw pointer with `++` / `--`", i.span);
                 }
@@ -8310,6 +8411,17 @@ impl<'a> Checker<'a> {
                 // there is no method to look up. Only the receiver is checked.
                 if crate::infer::named_operator_call_type(c).is_some() {
                     self.check_expr(&field.object);
+                    if method_name == "operator hash" {
+                        self.check_any_receiver(&field.object, "has no hash", c.span);
+                    }
+                    return;
+                }
+                // `v.foo()` on an `any` (§T.1.2): it has no methods.
+                if self.check_any_receiver(&field.object, &format!("has no method `{method_name}`"), c.span) {
+                    self.check_expr(&field.object);
+                    for a in &c.args {
+                        self.check_expr(a);
+                    }
                     return;
                 }
                 // `weakField.get()` (§6.5): a zero-arg `.get()` on a weak-field
@@ -9616,7 +9728,7 @@ impl<'a> Checker<'a> {
             }
             let expected = lower(&params[i], self);
             let found = infer_expr(arg, &self.env, self.symbols);
-            if !compatible(&expected, &found, self.symbols) {
+            if !compatible(&expected, &found, self.symbols) || function_into_any(&expected, arg) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0410_TypeMismatch,
@@ -10922,6 +11034,18 @@ fn target_kind_noun(kind: &str) -> &'static str {
     }
 }
 
+/// True when a lambda or a method reference flows into an `any` / `any?`
+/// slot. A function value has no identity and no string form, so it does not
+/// convert (§T.1.2). Checked apart from [`compatible`] because a lambda's type
+/// comes from its slot and infers as unknown on its own.
+fn function_into_any(expected: &Ty, value: &Expr) -> bool {
+    let slot = match expected {
+        Ty::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+    matches!(slot, Ty::Any) && matches!(value, Expr::Lambda(_) | Expr::MethodRef(_))
+}
+
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
@@ -10950,6 +11074,12 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     // Exact match.
     if expected == found {
         return true;
+    }
+    // `any` (§T.1.2 / §T.3.6): every value converts, except a nullable one
+    // (that needs `any?`, handled by the nullable arm below) and a function
+    // value, which has no identity and no string form.
+    if matches!(expected, Ty::Any) {
+        return !matches!(found, Ty::Nullable(_) | Ty::Fn { .. } | Ty::FnPtr { .. } | Ty::Void);
     }
     // `null` into a function-pointer slot: the pointer's own default, the way
     // a raw pointer takes it (§L.6.4).

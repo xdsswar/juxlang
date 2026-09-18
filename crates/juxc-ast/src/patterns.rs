@@ -139,4 +139,20 @@ pub enum Pattern {
         /// Span covering `Type ident`.
         span: Span,
     },
+}
+
+impl Pattern {
+    /// The source span the whole pattern covers.
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard(span)
+            | Pattern::Literal(_, span)
+            | Pattern::Tuple(_, span)
+            | Pattern::Or(_, span)
+            | Pattern::EnumVariant { span, .. }
+            | Pattern::Range { span, .. }
+            | Pattern::TypeBind { span, .. } => *span,
+            Pattern::Bind(ident) => ident.span,
+        }
+    }
 }

@@ -525,6 +525,10 @@ pub enum Code {
     /// E0481 -- A file's public type does not match its name, or a file
     /// declares more than one public type (JUX-LANG-V1 §3.1).
     E0481_PublicTypeFileName,
+    /// E0489 -- An `any` used for something other than `===`, the `=>` type
+    /// test or its text: a member, a call, an operator, indexing, `==`, a hash
+    /// (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Test it with `=>` first.
+    E0489_AnyHasNoOperation,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -947,6 +951,7 @@ impl Code {
             Code::E0478_WildcardIsReadOnly       => "E0478",
             Code::E0307_DuplicateAnnotationName  => "E0307",
             Code::E0481_PublicTypeFileName       => "E0481",
+            Code::E0489_AnyHasNoOperation        => "E0489",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",
