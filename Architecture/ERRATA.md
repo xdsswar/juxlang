@@ -796,6 +796,23 @@ is `E0489`.
 
 ---
 
+## E38. There is no `module.jux`
+
+**Conflict.** JUX-LANG-V1 §4.3 and JUX-BUILD-SYSTEM-ADDENDUM §B.3 specified a
+`module.jux` declaration file beside `jux.toml`, with its own `version`,
+`requires` and `feature` statements, each of which had to agree with the
+manifest. Two files described one module, and nothing implemented the second.
+
+**Resolution.** Owner ruling, 2026-09-18: `jux.toml` is the only manifest.
+Dependencies, features, version and binaries live there; a symbol consumers
+must not see is declared `internal`. `W0210` (an empty module declaration) is
+withdrawn with the file.
+
+**Spec status:** §4.3 and §B.3 are rewritten; the bindgen and LSP addenda
+point at `jux.toml`.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

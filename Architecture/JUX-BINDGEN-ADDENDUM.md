@@ -634,7 +634,7 @@ Because stubs have no bodies, the borrow checker never analyzes foreign code —
 
 ### G.9.4. Where Stubs Are Found
 
-The resolver discovers `.jux.d` files through the `requires` entries of `module.jux` (§4.3) and the dependency table of `jux.toml` (§G.11). A `requires rust.serde_json` directive points the resolver at `serde_json.jux.d`; a `requires c.sqlite3` points it at `sqlite3.jux.d`. Stubs not named by a `requires`/dependency are not loaded (they cost nothing if unused — §2.5).
+The resolver discovers `.jux.d` files through the dependency table of `jux.toml` (§G.11). A `rust.serde_json` dependency points the resolver at `serde_json.jux.d`; a `c.sqlite3` dependency points it at `sqlite3.jux.d`. Stubs not named by a dependency are not loaded (they cost nothing if unused — §2.5).
 
 ---
 

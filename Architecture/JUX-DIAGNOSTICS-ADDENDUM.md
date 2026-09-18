@@ -594,7 +594,6 @@ code, and all of `E0506`–`E0510` are emitted today.
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
 | `W0001`  | Doc comment in non-attaching position *(reserved)*          | Grammar §A.1.2                 |
-| `W0210`  | Module declares no exported symbols *(reserved)*            | Build system §B.3.4            |
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation | Missing-defs §M.3 / Operators §O.9 |
 | `W0241`  | Unknown annotation: neither built in nor declared (often a misspelling) | Annotations §A.12 |
 | `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |

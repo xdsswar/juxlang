@@ -349,25 +349,19 @@ import com.example.math.{Point, distance, Vector};   // grouped (extension over 
 
 ### 4.3. Modules
 
-A module is a unit of compilation and distribution, similar to a Cargo crate or a JPMS module. Modules are declared via a `module.jux` file at the root of the source tree:
+A module is a unit of compilation and distribution, similar to a Cargo crate. A module is declared by its `jux.toml` manifest (JUX-BUILD-SYSTEM-ADDENDUM §B.2). There is no separate module-declaration file: the manifest names the module and its version and lists its dependencies, features and binaries.
 
-```java
-module com.mylang.json {
-    version "1.0.0";
+```toml
+[package]
+name = "com.mylang.json"
+version = "1.0.0"
 
-    exports com.mylang.json;              // public to consumers
-    exports com.mylang.json.parser;
-    // com.mylang.json.internal is NOT exported — internal to this module
-
-    requires std.io;                      // dependencies on other modules
-    requires com.mylang.collections version ">=2.0";
-
-    requires rust.serde_json;             // Rust crate dependency
-    requires c.sqlite3 lib "sqlite3";     // C library dependency
-}
+[dependencies]
+"com.mylang.collections" = ">=2.0"
+"rust.serde_json" = "1"                  # a Rust crate, consumed as-is
 ```
 
-If no `module.jux` is present, the project is treated as a single-module application with all `public` symbols exported.
+Every `public` symbol is part of the module's API. A symbol that only the module itself should see is declared `internal` (§4.4).
 
 ### 4.4. Visibility and Scope Resolution
 
@@ -3210,7 +3204,7 @@ Records auto-derive `==` and `hashCode` from fields, so `Complex.operator==` her
 
 ### 7.15. Top-Level Statements
 
-The file conventionally named `main.jux` (configurable in `module.jux`) may contain top-level statements that execute at program start:
+The file conventionally named `main.jux` (configurable in `jux.toml`) may contain top-level statements that execute at program start:
 
 ```java
 // File: main.jux
@@ -4630,7 +4624,7 @@ The framework provides assertions for common cases (`assertEqual`, `assertNotEqu
 - Borrow inference (initial heuristic version, including the §6.9 inheritance rules)
 - Destructors / `drop` blocks
 - C FFI: `@extern` and `@export`
-- Module system and `module.jux`
+- Module system (`jux.toml` manifests)
 - Build tool (`jux` command)
 - Basic LSP
 

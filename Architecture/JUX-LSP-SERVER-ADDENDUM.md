@@ -29,7 +29,7 @@ Consequences:
 What `juxc-lsp` explicitly **does not** do:
 
 - It does not invoke `rustc` or shell out to the lowering pass. Diagnostics come from `juxc-tycheck`, not from compile errors in emitted Rust. (Lowering-stage errors are a separate, deferred feature — see §L.10.)
-- It does not maintain its own on-disk index. Cross-file information is rebuilt from the in-memory `DashMap<Url, Document>` plus the project's `module.jux` graph.
+- It does not maintain its own on-disk index. Cross-file information is rebuilt from the in-memory `DashMap<Url, Document>` plus the project's `jux.toml` manifests.
 - It does not implement code formatting itself. `textDocument/formatting` delegates to the `juxc fmt` binary (see §L.5, phase 3).
 
 ---
@@ -172,7 +172,7 @@ Full lex → parse → tycheck pass on the opened document. Cache the resulting 
 
 1. Apply the edit to the document's `Rope`.
 2. Invalidate the cached AST + tycheck context for this document.
-3. Invalidate caches for **every document that transitively imports this one** (per the `package`/`import` graph built from `module.jux`).
+3. Invalidate caches for **every document that transitively imports this one** (per the `package`/`import` graph).
 4. Re-run analysis on the changed document only. Diagnostics for transitively-affected documents are recomputed lazily — when the editor next requests them or when the document is opened.
 
 ### On `didSave`
