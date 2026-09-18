@@ -421,6 +421,10 @@
     <codeInsight.gotoSuper
         language="Jux"
         implementationClass="dev.jux.intellij.codeInsight.JuxGotoSuperHandler"/>
+    <!-- Keyword highlight-usages: exit points, break-outs, exceptions,
+         overriding methods (Java's handlers). -->
+    <highlightUsagesHandlerFactory
+        implementation="dev.jux.intellij.codeInsight.highlighting.JuxHighlightUsagesHandlerFactory"/>
 
     <!-- Complete Current Statement (Ctrl+Shift+Enter): close open brackets,
          give a header its `{ }`, or terminate the statement — then move on. -->
