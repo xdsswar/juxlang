@@ -3695,6 +3695,41 @@ fn unmapped_operator_emits_inherent_method_only() {
     );
 }
 
+/// A static interface method's own type parameters carry the baseline
+/// bounds its body relies on: returning `u` clones it. Written bare, the
+/// emitted `fn Maker_same<U>(u: U) -> U { u.clone() }` failed in rustc.
+#[test]
+fn static_interface_method_type_params_get_baseline_bounds() {
+    let rust = emit(
+        r#"
+        interface Maker<T> {
+            static <U> U same(U u) { return u; }
+        }
+        public void main() { print(Maker.same(3)); }
+        "#,
+    );
+    assert!(
+        rust.contains("fn Maker_same<U: Clone + std::fmt::Debug + 'static>(u: U) -> U {"),
+        "bounded static method: {rust}",
+    );
+}
+
+/// A function's own type parameter compared with `==` acquires `PartialEq`,
+/// and one hashed with `.operator hash()` acquires `Hash` (§T.2.1), the way a
+/// class's parameters do.
+#[test]
+fn generic_function_params_get_equality_and_hash_bounds() {
+    let rust = emit(
+        r#"
+        <K> bool same(K a, K b) { return a == b; }
+        <K> int hashOf(K a) { return a.operator hash(); }
+        public void main() { print(same(1, 1)); print(hashOf(2)); }
+        "#,
+    );
+    assert!(rust.contains("K: Clone + std::fmt::Debug + 'static + std::cmp::PartialEq"), "PartialEq: {rust}");
+    assert!(rust.contains("K: Clone + std::fmt::Debug + 'static + std::hash::Hash"), "Hash: {rust}");
+}
+
 /// A generic class gets its `==` bridge, with the parameters bounded as the
 /// inherent impl is: `T` is compared, so it carries `PartialEq` (§T.2.1).
 #[test]

@@ -2213,6 +2213,59 @@ impl RustEmitter {
                 (bare && params.contains(name)).then_some((p.name.text.as_str(), name))
             }))
             .collect();
+        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
+        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
+        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
+        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
+        blocks.extend(class_decl.init_blocks.iter());
+        let (eq, hashed) = self.equality_bound_params(&params, &param_fields, &blocks);
+        self.eq_bound_params = eq;
+        self.hashed_params = hashed;
+    }
+
+    /// [`Self::collect_equality_bound_params`] for a function or method's OWN
+    /// type parameters (`<K> bool same(K a, K b) { return a == b; }`): its
+    /// parameters play the part a class's fields do. Replaces the sets, so
+    /// the caller clears them once the signature is written.
+    pub(crate) fn collect_fn_equality_bound_params(&mut self, fn_decl: &juxc_ast::FnDecl) {
+        let params: HashSet<&str> = fn_decl
+            .generic_params
+            .iter()
+            .filter(|p| !p.is_const())
+            .map(|p| p.name.text.as_str())
+            .collect();
+        let param_fields: std::collections::HashMap<&str, &str> = fn_decl
+            .params
+            .iter()
+            .filter_map(|p| {
+                let ty = &p.ty;
+                let bare = ty.array_shape.is_none()
+                    && ty.generic_args.is_empty()
+                    && ty.fn_shape.is_none()
+                    && ty.name.segments.len() == 1;
+                let name = ty.name.segments.first()?.text.as_str();
+                (bare && params.contains(name)).then_some((p.name.text.as_str(), name))
+            })
+            .collect();
+        let blocks: Vec<&juxc_ast::Block> = fn_decl.body.iter().collect();
+        let (eq, hashed) = self.equality_bound_params(&params, &param_fields, &blocks);
+        self.eq_bound_params = eq;
+        self.hashed_params = hashed;
+    }
+
+    /// The core of the `PartialEq` / `Hash` inference (§T.2.1): which of
+    /// `params` the `blocks` compare with `==` / `!=` and hash with
+    /// `.operator hash()`. `named` maps a field or parameter name to the type
+    /// parameter it is declared as, for reads that carry no recorded type.
+    fn equality_bound_params(
+        &self,
+        params: &HashSet<&str>,
+        param_fields: &std::collections::HashMap<&str, &str>,
+        blocks: &[&juxc_ast::Block],
+    ) -> (HashSet<String>, HashSet<String>) {
+        if params.is_empty() {
+            return (HashSet::new(), HashSet::new());
+        }
         // The parameter `e`'s value has, when it has one.
         let param_of = |e: &juxc_ast::Expr| -> Option<String> {
             let recorded = match self.expr_types.get(&crate::exprs::expr_span_of(e)) {
@@ -2233,17 +2286,17 @@ impl RustEmitter {
             };
             param_fields.get(field).map(|p| p.to_string())
         };
-        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
-        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
-        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
-        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
-        blocks.extend(class_decl.init_blocks.iter());
         let mut eq = HashSet::new();
         let mut hashed = HashSet::new();
+        // `x == null` is a null test (it lowers to `is_none()`), not a value
+        // comparison, so it asks nothing of `x`'s type.
+        let is_null = |e: &juxc_ast::Expr| matches!(e, juxc_ast::Expr::Literal(juxc_ast::Literal::Null));
         for block in blocks {
             juxc_ast::visit::for_each_expr(block, &mut |e| match e {
                 juxc_ast::Expr::Binary(b)
-                    if matches!(b.op, juxc_ast::BinaryOp::Eq | juxc_ast::BinaryOp::NotEq) =>
+                    if matches!(b.op, juxc_ast::BinaryOp::Eq | juxc_ast::BinaryOp::NotEq)
+                        && !is_null(&b.left)
+                        && !is_null(&b.right) =>
                 {
                     if let Some(p) = param_of(&b.left).or_else(|| param_of(&b.right)) {
                         eq.insert(p);
@@ -2261,8 +2314,7 @@ impl RustEmitter {
                 _ => {}
             });
         }
-        self.eq_bound_params = eq;
-        self.hashed_params = hashed;
+        (eq, hashed)
     }
 
     /// Every type a class mentions in a storage or signature position — field
