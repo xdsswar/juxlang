@@ -7,6 +7,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import dev.jux.intellij.JuxFileType
+import dev.jux.intellij.project.JuxSourceRootsConfig
 import dev.jux.intellij.run.JuxLspCommandLine
 
 /**
@@ -58,6 +59,20 @@ class JuxLspDescriptor(project: Project) : ProjectWideLspServerDescriptor(projec
     override fun isSupportedFile(file: VirtualFile): Boolean = file.fileType == JuxFileType
 
     override fun createCommandLine(): GeneralCommandLine = JuxLspCommandLine.create()
+
+    /**
+     * The package roots (§I.4), for a server that reads them at start-up:
+     * `{ "jux": { "sourceRoots": [...] } }`. See [JuxSourceRootsConfig].
+     */
+    override fun createInitializationOptions(): Any =
+        mapOf("jux" to mapOf("sourceRoots" to JuxSourceRootsConfig.compute(project)))
+
+    /**
+     * The same roots, answering the server's `workspace/configuration` request
+     * for `jux.sourceRoots` (or the whole `jux` section).
+     */
+    override fun getWorkspaceConfiguration(item: org.eclipse.lsp4j.ConfigurationItem): Any? =
+        JuxSourceRootsConfig.answer(project, item.section) ?: super.getWorkspaceConfiguration(item)
 
     /**
      * The hybrid engine's division of labour. The plugin owns everything that
