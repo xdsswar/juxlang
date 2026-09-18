@@ -1,0 +1,61 @@
+// A traffic-light and order-lifecycle state machine: enums, switch
+// expressions and statements, transitions guarded by events, and a history.
+
+enum Light { Red, Green, Yellow }
+
+Light next(Light l) {
+    return switch (l) {
+        case Red -> Light.Green;
+        case Green -> Light.Yellow;
+        case Yellow -> Light.Red;
+    };
+}
+
+int seconds(Light l) {
+    switch (l) {
+        case Red -> { return 30; }
+        case Green -> { return 25; }
+        default -> { return 5; }
+    }
+}
+
+enum Order { Created, Paid, Shipped, Delivered, Cancelled }
+
+Order apply(Order o, String event) {
+    if (event == "cancel") {
+        return (o == Order.Shipped || o == Order.Delivered) ? o : Order.Cancelled;
+    }
+    return switch (o) {
+        case Created -> event == "pay" ? Order.Paid : o;
+        case Paid -> event == "ship" ? Order.Shipped : o;
+        case Shipped -> event == "deliver" ? Order.Delivered : o;
+        default -> o;
+    };
+}
+
+public void main() {
+    Light l = Light.Red;
+    int elapsed = 0;
+    for (int i = 0; i < 7; i++) {
+        elapsed = elapsed + seconds(l);
+        print(l + " for " + seconds(l));
+        l = next(l);
+    }
+    print("elapsed " + elapsed);
+
+    String[] events = {"pay", "deliver", "ship", "cancel", "deliver", "pay"};
+    Order o = Order.Created;
+    var history = new Vec<String>();
+    for (var e : events) {
+        Order before = o;
+        o = apply(o, e);
+        history.push(before + " --" + e + "--> " + o);
+    }
+    for (var h : history) {
+        print(h);
+    }
+
+    Order other = apply(apply(Order.Created, "pay"), "cancel");
+    print(other);
+    print(other == Order.Cancelled);
+}

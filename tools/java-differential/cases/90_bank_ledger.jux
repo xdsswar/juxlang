@@ -1,0 +1,114 @@
+// A small bank: accounts behind an interface, an abstract base, a checked
+// exception hierarchy, a ledger of transfers, and a map from id to account.
+
+interface Account {
+    String id();
+    double balance();
+    void deposit(double amount);
+    void withdraw(double amount) throws BankError;
+}
+
+class BankError extends Exception {
+    public BankError(String message) { super(message); }
+}
+
+class InsufficientFunds extends BankError {
+    public InsufficientFunds(String id, double wanted) {
+        super("insufficient funds in " + id + ": wanted " + wanted);
+    }
+}
+
+class UnknownAccount extends BankError {
+    public UnknownAccount(String id) { super("no account " + id); }
+}
+
+abstract class BaseAccount implements Account {
+    protected String accountId;
+    protected double funds;
+
+    public BaseAccount(String accountId, double opening) {
+        this.accountId = accountId;
+        this.funds = opening;
+    }
+
+    public String id() { return accountId; }
+    public double balance() { return funds; }
+    public void deposit(double amount) { funds = funds + amount; }
+
+    // The limit below zero this kind of account allows.
+    public abstract double overdraft();
+
+    public void withdraw(double amount) throws BankError {
+        if (funds - amount < -overdraft()) {
+            throw new InsufficientFunds(accountId, amount);
+        }
+        funds = funds - amount;
+    }
+}
+
+class Savings extends BaseAccount {
+    public Savings(String id, double opening) { super(id, opening); }
+    public double overdraft() { return 0.0; }
+    public void addInterest(double rate) { funds = funds + funds * rate; }
+}
+
+class Checking extends BaseAccount {
+    public Checking(String id, double opening) { super(id, opening); }
+    public double overdraft() { return 100.0; }
+}
+
+class Bank {
+    private HashMap<String, Account> accounts = new HashMap<String, Account>();
+    private Vec<String> ledger = new Vec<String>();
+
+    public void open(Account a) {
+        accounts.insert(a.id(), a);
+        ledger.push("open " + a.id() + " " + a.balance());
+    }
+
+    public Account find(String id) throws BankError {
+        if (!accounts.contains_key(id)) {
+            throw new UnknownAccount(id);
+        }
+        return accounts.get(id)!!;
+    }
+
+    public void transfer(String from, String to, double amount) {
+        try {
+            Account a = find(from);
+            Account b = find(to);
+            a.withdraw(amount);
+            b.deposit(amount);
+            ledger.push("ok " + from + "->" + to + " " + amount);
+        } catch (InsufficientFunds e) {
+            ledger.push("refused: " + e.getMessage());
+        } catch (BankError e) {
+            ledger.push("error: " + e.getMessage());
+        }
+    }
+
+    public void report() {
+        for (var line : ledger) {
+            print(line);
+        }
+    }
+}
+
+public void main() {
+    var bank = new Bank();
+    var s = new Savings("S1", 500.0);
+    var c = new Checking("C1", 50.0);
+    bank.open(s);
+    bank.open(c);
+
+    bank.transfer("S1", "C1", 200.0);
+    bank.transfer("C1", "S1", 300.0);
+    bank.transfer("C1", "S1", 100.0);
+    bank.transfer("S1", "X9", 10.0);
+    bank.transfer("S1", "C1", 400.0);
+
+    s.addInterest(0.5);
+    bank.report();
+    print("S1 " + s.balance());
+    print("C1 " + c.balance());
+}

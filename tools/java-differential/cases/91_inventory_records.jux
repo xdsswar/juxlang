@@ -1,0 +1,59 @@
+// Records as values in collections: totals, filtering, record equality and
+// text, a "with"-style update by building a new record, and a tally map.
+
+record Item(String sku, String name, int qty, double price) {}
+
+double total(Vec<Item> items) {
+    double sum = 0.0;
+    for (var it : items) {
+        sum = sum + it.qty * it.price;
+    }
+    return sum;
+}
+
+Vec<Item> lowStock(Vec<Item> items, int limit) {
+    var out = new Vec<Item>();
+    for (var it : items) {
+        if (it.qty < limit) { out.push(it); }
+    }
+    return out;
+}
+
+Item restock(Item it, int more) {
+    return new Item(it.sku, it.name, it.qty + more, it.price);
+}
+
+public void main() {
+    var items = new Vec<Item>();
+    items.push(new Item("A1", "bolt", 120, 0.25));
+    items.push(new Item("B2", "nut", 8, 0.1));
+    items.push(new Item("C3", "gear", 3, 12.5));
+    items.push(new Item("D4", "belt", 15, 7.75));
+
+    print(total(items));
+    var low = lowStock(items, 10);
+    print(low.len());
+    for (var it : low) {
+        print(it.name + " x" + it.qty);
+    }
+
+    var gear = items[2];
+    var more = restock(gear, 7);
+    print(gear.qty + " -> " + more.qty);
+    print(gear == new Item("C3", "gear", 3, 12.5));
+    print(gear == more);
+    items[2] = more;
+    print(total(items));
+
+    // Tally items per price band, read back in a fixed order.
+    var bands = new HashMap<String, int>();
+    for (var it : items) {
+        String band = it.price < 1.0 ? "cheap" : (it.price < 10.0 ? "mid" : "dear");
+        if (bands.contains_key(band)) {
+            bands.insert(band, bands.get(band)!! + 1);
+        } else {
+            bands.insert(band, 1);
+        }
+    }
+    print("cheap=" + bands.get("cheap")!! + " mid=" + bands.get("mid")!! + " dear=" + bands.get("dear")!!);
+}
