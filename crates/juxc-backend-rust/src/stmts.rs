@@ -2938,7 +2938,7 @@ impl RustEmitter {
         } else {
             self.receiver_class_bare(&tf.object)?
         };
-        let (fsig, _) = self.symbols.lookup_field(&bare, &tf.field.text)?;
+        let (fsig, _) = self.lookup_field_by_bare_or_fqn(&bare, &tf.field.text)?;
         fsig.ty.array_shape.clone()
     }
 
@@ -3622,8 +3622,7 @@ impl RustEmitter {
                 if let Some(bare) = self.receiver_class_bare(&tf.object) {
                     if self.is_poly_base_class(&bare) {
                         let field_info =
-                            self.symbols
-                                .lookup_field(&bare, &tf.field.text)
+                            self.lookup_field_by_bare_or_fqn(&bare, &tf.field.text)
                                 .map(|(fsig, _)| {
                                     (
                                         matches!(
