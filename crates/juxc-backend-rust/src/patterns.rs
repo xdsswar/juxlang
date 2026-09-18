@@ -592,14 +592,16 @@ impl RustEmitter {
                 self.w.push_str(&to_rust_ident(&name.text));
             }
             juxc_ast::Pattern::Range { start, end, inclusive, .. } => {
-                // Rust supports `start..=end` and `start..end` in
-                // match patterns as long as both endpoints are
-                // literals. Emit the captured literals through the
-                // regular literal-pattern path so the produced
-                // Rust matches `0..=10` exactly.
-                self.emit_literal(start);
+                // Rust has every form the Jux pattern does: `0..10`, `0..=9`,
+                // `100..`, `..0`, `..=0`. The endpoints go through the literal
+                // path, so the Rust reads exactly as the Jux was written.
+                if let Some(start) = start {
+                    self.emit_literal(start);
+                }
                 self.w.push_str(if *inclusive { "..=" } else { ".." });
-                self.emit_literal(end);
+                if let Some(end) = end {
+                    self.emit_literal(end);
+                }
             }
             juxc_ast::Pattern::TypeBind { type_name, binder, .. } => {
                 // `case Type ident ->` — shorthand for

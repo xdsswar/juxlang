@@ -1,0 +1,82 @@
+// Range patterns in `switch` (JUX-MISSING-DEFS-ADDENDUM §M.6.4), open ones
+// included, and how they make a `switch` over an integer exhaustive
+// (JUX-TYPE-SYSTEM-ADDENDUM §T.5.2).
+//
+// `a..b` is `a` up to but not including `b`, `a..=b` includes `b`, `a..` is
+// `a` or more, `..b` is below `b`, and `..=b` is `b` or less. When the arms
+// cover the type's whole range, as they do in `size` and `sign`, no `default`
+// is needed.
+
+String size(int n) {
+    return switch (n) {
+        case ..0 -> "negative";
+        case 0..10 -> "small";
+        case 10..=99 -> "medium";
+        case 100.. -> "large";
+    };
+}
+
+String sign(long n) {
+    return switch (n) {
+        case ..=-1 -> "minus";
+        case 0 -> "zero";
+        case 1.. -> "plus";
+    };
+}
+
+// A `byte` has only 256 values, and two ranges cover them.
+String half(byte b) {
+    return switch (b) {
+        case -128..0 -> "lower half";
+        case 0..=127 -> "upper half";
+    };
+}
+
+// Several patterns in one arm, ranges among them.
+String bucket(int score) {
+    return switch (score) {
+        case 0, 100 -> "an edge";
+        case 1..50, 90..100 -> "near an edge";
+        default -> "in the middle";
+    };
+}
+
+// `char` and floating-point ranges work too; their values cannot all be
+// listed, so these switches end with `default`.
+String letter(char c) {
+    return switch (c) {
+        case 'a'..='z' -> "lower";
+        case 'A'..='Z' -> "upper";
+        default -> "other";
+    };
+}
+
+String weather(double celsius) {
+    return switch (celsius) {
+        case ..0.0 -> "freezing";
+        case 0.0..25.0 -> "mild";
+        default -> "hot";
+    };
+}
+
+public void main() {
+    print(size(-7));
+    print(size(0));
+    print(size(9));
+    print(size(42));
+    print(size(1000));
+    print(sign(-5));
+    print(sign(0));
+    print(sign(12));
+    print(half(-3));
+    print(half(3));
+    print(bucket(0));
+    print(bucket(95));
+    print(bucket(60));
+    print(letter('q'));
+    print(letter('Q'));
+    print(letter('7'));
+    print(weather(-4.5));
+    print(weather(18.0));
+    print(weather(31.0));
+}

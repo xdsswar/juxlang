@@ -588,6 +588,185 @@ impl Checker<'_> {
     }
 }
 
+impl Checker<'_> {
+    /// Exhaustiveness for a `switch` over a primitive or a `String` (§T.5.2),
+    /// or a nullable one. Returns `false` when `scrutinee` is not such a type,
+    /// so the caller's enum and sealed checks run instead.
+    ///
+    /// - An integer is one interval, the type's own range. Literal and range
+    ///   patterns carve it, and the lowest value left is the witness.
+    /// - A `bool` needs `true` and `false`.
+    /// - `char`, `float`, `double` and `String` cannot be listed: only an arm
+    ///   matching everything completes the switch.
+    /// - A `T?` adds `null` to whichever of those `T` is.
+    ///
+    /// A guarded arm covers nothing (§T.5.6), and a catch-all arm (`default`,
+    /// `_`, `var x`) covers everything.
+    pub(crate) fn check_scalar_switch_exhaustive(&mut self, s: &SwitchExpr, scrutinee: &Ty) -> bool {
+        let (nullable, inner) = match scrutinee {
+            Ty::Nullable(inner) => (true, inner.as_ref()),
+            other => (false, other),
+        };
+        let kind = match inner {
+            Ty::Primitive(Primitive::Bool) => ScalarKind::Bool,
+            Ty::Primitive(p) => match integer_range(*p) {
+                Some((lo, hi)) => ScalarKind::Integer { lo, hi },
+                None => ScalarKind::Unlisted,
+            },
+            Ty::String => ScalarKind::Unlisted,
+            _ => return false,
+        };
+        let arms: Vec<&Pattern> = s.arms.iter().filter(|a| a.guard.is_none()).map(|a| &a.pattern).collect();
+        if arms.iter().any(|p| scalar_catchall(p)) {
+            return true;
+        }
+        let mut covers_null = false;
+        let mut covered: Vec<(i128, i128)> = Vec::new();
+        let (mut has_true, mut has_false) = (false, false);
+        for pattern in &arms {
+            collect_scalar_coverage(pattern, &mut covers_null, &mut covered, &mut has_true, &mut has_false);
+        }
+        let witness = if nullable && !covers_null {
+            Some("null".to_string())
+        } else {
+            match kind {
+                ScalarKind::Bool => match (has_true, has_false) {
+                    (true, true) => None,
+                    (false, _) => Some("true".to_string()),
+                    (true, false) => Some("false".to_string()),
+                },
+                ScalarKind::Integer { lo, hi } => lowest_uncovered(lo, hi, &mut covered).map(|v| v.to_string()),
+                ScalarKind::Unlisted => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0440_NotExhaustive,
+                            format!(
+                                "non-exhaustive `switch` on `{scrutinee}`: its values cannot all be listed, \
+                                 so it needs a `default ->` arm (§T.5.2)"
+                            ),
+                        )
+                        .with_span(s.span),
+                    );
+                    return true;
+                }
+            }
+        };
+        if let Some(shown) = witness {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0440_NotExhaustive,
+                    format!(
+                        "non-exhaustive `switch` on `{scrutinee}`: no arm matches `{shown}`; add a \
+                         `case` for it, or a `default ->` arm (§T.5.2)"
+                    ),
+                )
+                .with_span(s.span),
+            );
+        }
+        true
+    }
+}
+
+/// What a primitive scrutinee's value set looks like for §T.5.2.
+enum ScalarKind {
+    Bool,
+    /// Every integer in `[lo, hi]`.
+    Integer { lo: i128, hi: i128 },
+    /// Too many values to list: `char`, floats, `String`.
+    Unlisted,
+}
+
+/// The range of an integer primitive, or `None` for a non-integer. `int` and
+/// `uint` are pointer-sized, which is 64 bits on every target Jux builds for.
+fn integer_range(p: Primitive) -> Option<(i128, i128)> {
+    let bits = crate::ty::integer_bits(p)?;
+    Some(if crate::ty::is_unsigned_primitive(p) {
+        (0, (1i128 << bits) - 1)
+    } else {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    })
+}
+
+/// An arm that matches every value of a scalar, `null` included.
+fn scalar_catchall(p: &Pattern) -> bool {
+    match p {
+        Pattern::Wildcard(_) | Pattern::Bind(_) => true,
+        Pattern::Or(alts, _) => alts.iter().any(scalar_catchall),
+        _ => false,
+    }
+}
+
+/// The value of an integer literal as written, with a `uL` literal's bits read
+/// as the unsigned value they are.
+fn int_literal_value(lit: &juxc_ast::IntLit) -> i128 {
+    if lit.kind == Some(juxc_ast::IntKind::ULong) {
+        i128::from(lit.value as u64)
+    } else {
+        i128::from(lit.value)
+    }
+}
+
+/// Record what `p` covers of a scalar: `null`, `true`/`false`, and integer
+/// intervals (inclusive at both ends). An open bound stretches to the widest
+/// integer; the type's own range clips it later.
+fn collect_scalar_coverage(
+    p: &Pattern,
+    null: &mut bool,
+    ints: &mut Vec<(i128, i128)>,
+    has_true: &mut bool,
+    has_false: &mut bool,
+) {
+    match p {
+        Pattern::Literal(Literal::Null, _) => *null = true,
+        Pattern::Literal(Literal::Bool(true), _) => *has_true = true,
+        Pattern::Literal(Literal::Bool(false), _) => *has_false = true,
+        Pattern::Literal(Literal::Int(lit), _) => {
+            let v = int_literal_value(lit);
+            ints.push((v, v));
+        }
+        Pattern::Range { start, end, inclusive, .. } => {
+            let bound = |l: &Option<Literal>| match l {
+                Some(Literal::Int(lit)) => Some(Some(int_literal_value(lit))),
+                None => Some(None),
+                // A char or float range covers no integer.
+                Some(_) => None,
+            };
+            let (Some(lo), Some(hi)) = (bound(start), bound(end)) else { return };
+            let lo = lo.unwrap_or(i128::MIN / 2);
+            let hi = match hi {
+                Some(h) if *inclusive => h,
+                Some(h) => h - 1,
+                None => i128::MAX / 2,
+            };
+            if lo <= hi {
+                ints.push((lo, hi));
+            }
+        }
+        Pattern::Or(alts, _) => {
+            for alt in alts {
+                collect_scalar_coverage(alt, null, ints, has_true, has_false);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The lowest integer in `[lo, hi]` that no interval in `covered` contains.
+fn lowest_uncovered(lo: i128, hi: i128, covered: &mut [(i128, i128)]) -> Option<i128> {
+    covered.sort_unstable();
+    let mut next = lo;
+    for &(a, b) in covered.iter() {
+        if a > next {
+            break;
+        }
+        next = next.max(b.saturating_add(1));
+        if next > hi {
+            return None;
+        }
+    }
+    (next <= hi).then_some(next)
+}
+
 /// `dom` without its nullable layer.
 fn inner_domain(dom: &Domain) -> &Domain {
     match dom {
