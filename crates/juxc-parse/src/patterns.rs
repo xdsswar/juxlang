@@ -59,16 +59,22 @@ impl<'a> Parser<'a> {
             return None;
         };
 
-        // Or-pattern alternatives: `case A | B | C ->` (§A.3). Folded
-        // into Pattern::Or when at least one `|` follows.
-        let pattern = if self.at(&TokenKind::Pipe) {
-            let pstart = self.last_consumed_span();
+        // Or-pattern alternatives: `case A | B | C ->` (§A.3), and the
+        // comma list `case A, B, C ->` (JUX-LANG-V1 §7.5), which the grammar
+        // defines as the same thing. Both fold into one Pattern::Or, so the
+        // checker, exhaustiveness and the backend see a single shape. A
+        // pattern's own commas (`Point(var x, 0)`, `(a, b)`) sit inside its
+        // parentheses and are consumed by `parse_pattern`, so a comma here
+        // always separates two whole patterns.
+        let pattern = if self.at(&TokenKind::Pipe) || self.at(&TokenKind::Comma) {
+            let pstart = pattern.span();
             let mut alts = vec![pattern];
-            while self.eat(&TokenKind::Pipe) {
-                if let Some(next) = self.parse_pattern() {
-                    alts.push(next);
-                } else {
-                    break;
+            while self.eat(&TokenKind::Pipe) || self.eat(&TokenKind::Comma) {
+                match self.parse_pattern() {
+                    // `case A | B, C` is one flat list of three alternatives.
+                    Some(Pattern::Or(inner, _)) => alts.extend(inner),
+                    Some(next) => alts.push(next),
+                    None => break,
                 }
             }
             let pend = self.last_consumed_span();

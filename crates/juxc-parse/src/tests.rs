@@ -2449,6 +2449,35 @@ fn switch_arm_or_pattern_parses() {
     assert!(alts.iter().all(|p| matches!(p, Pattern::Literal(_, _))));
 }
 
+/// The comma list `case A, B ->` (JUX-LANG-V1 §7.5) is the same or-pattern,
+/// and mixing it with `|` gives one flat list. A record pattern's own commas
+/// stay inside it.
+#[test]
+fn switch_arm_comma_list_parses_as_or_pattern() {
+    use juxc_ast::Pattern;
+    let ast = parse_clean(
+        r#"public void main() {
+               var n = 5;
+               switch (n) {
+                   case 1, 2 | 3, 4 -> print("low");
+                   case Point(var x, 0), Point(0, var x) -> print("axis");
+                   default -> print("high");
+               }
+           }"#,
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Switch(s)) = &body.statements[1] else { panic!() };
+    let Pattern::Or(alts, _) = &s.arms[0].pattern else {
+        panic!("expected Or pattern, got {:?}", s.arms[0].pattern);
+    };
+    assert_eq!(alts.len(), 4);
+    let Pattern::Or(records, _) = &s.arms[1].pattern else {
+        panic!("expected Or pattern, got {:?}", s.arms[1].pattern);
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|p| matches!(p, Pattern::EnumVariant { args, .. } if args.len() == 2)));
+}
+
 // ---------------------------------------------------------------------------
 // Enums (§7.7)
 // ---------------------------------------------------------------------------

@@ -1,0 +1,42 @@
+// A `case` that lists several patterns: `case Sat, Sun ->` (JUX-LANG-V1 §7.5).
+//
+// The comma list means what the or-pattern `Sat | Sun` means: the arm runs
+// when any of them matches, and exhaustiveness counts every one of them, so
+// the enum switch below needs no `default`.
+
+enum Day { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+String kind(Day d) {
+    return switch (d) {
+        case Sat, Sun -> "weekend";
+        case Mon, Tue, Wed, Thu, Fri -> "weekday";
+    };
+}
+
+String size(int n) {
+    return switch (n) {
+        case 0 -> "none";
+        case 1, 2, 3 -> "a few";
+        default -> "many";
+    };
+}
+
+// The statement form, over a `String`, with a guard after the list.
+void greet(String who, bool loud) {
+    switch (who) {
+        case "ann", "bob" when loud -> print($"HELLO, ${who}!");
+        case "ann", "bob" -> print($"hello ${who}");
+        default -> print("who is that?");
+    }
+}
+
+public void main() {
+    print(kind(Day.Sat));
+    print(kind(Day.Wed));
+    print(size(0));
+    print(size(2));
+    print(size(9));
+    greet("ann", false);
+    greet("bob", true);
+    greet("cy", false);
+}
