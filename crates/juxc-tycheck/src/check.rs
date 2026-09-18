@@ -688,6 +688,8 @@ impl<'a> Checker<'a> {
             .unwrap_or_default();
         self.env.current_package = pkg;
         self.check_annotation_applications(unit);
+        // E0933: a `HashMap`/`HashSet` key type with no `operator hash`.
+        crate::hash_keys::check_unit(unit, &self.env, self.symbols, self.diagnostics);
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
@@ -8310,6 +8312,21 @@ impl<'a> Checker<'a> {
                 // there is no method to look up. Only the receiver is checked.
                 if crate::infer::named_operator_call_type(c).is_some() {
                     self.check_expr(&field.object);
+                    // All but a few values have `operator hash` (§O.2.7): a
+                    // function value, an array and a collection have none, nor
+                    // does a type holding one (E0933, the hash-key rule).
+                    if field.field.text == "operator hash" {
+                        let receiver = self.infer_and_record(&field.object);
+                        if let Some(why) = self.symbols.hash_blocker(&receiver) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0933_KeyHasNoHash,
+                                    format!("`{receiver}` has no `operator hash`: {why} (§O.2.7)"),
+                                )
+                                .with_span(field.field.span),
+                            );
+                        }
+                    }
                     return;
                 }
                 // `weakField.get()` (§6.5): a zero-arg `.get()` on a weak-field

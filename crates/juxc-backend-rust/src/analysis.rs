@@ -2103,35 +2103,25 @@ pub(crate) fn field_supports_copy(ty: &juxc_ast::TypeRef) -> bool {
     is_copy_eq_primitive(name) || is_float_primitive(name)
 }
 
-/// True if a field of type `ty` is **Eq**-compatible. Records can
-/// derive `Eq` iff every field qualifies. `Hash` follows the same
-/// eligibility rule — every Eq-eligible type we recognize is also
-/// `Hash` in std.
+/// True if a field of type `ty` is **Eq**-compatible by its syntax alone.
+/// The older of the two answers: whether a record, struct or enum HASHES is
+/// the shared hash plan's question ([`crate::decls::hashing`]); this one
+/// still decides `Eq` for a type that does not hash.
 ///
 /// Rules:
 /// - Floats disqualify (`f32`/`f64` are `PartialEq` only).
 /// - Other primitives qualify.
 /// - `String` qualifies (Rust's `String` is `Eq` + `Hash`).
-/// - Arrays: qualify iff the element does — `Vec<T>` and `[T; N]` are
-///   both `Eq + Hash` when `T` is.
+/// - Arrays disqualify: an array is a shared handle (`JuxArr<T>`, §6.5.2)
+///   with `PartialEq` but no `Eq`. Counting it made every record with an
+///   array component derive `Eq` and fail to compile.
 /// - Nullable types qualify when the inner does (`Option<T>` is `Eq`
 ///   when `T` is).
-/// - User types, generic args, multi-segment paths: conservatively
-///   **disqualify**. A future turn can grow a real symbol-table walk
-///   to recognize Eq-bearing user types.
+/// - User types, generic args, multi-segment paths: **disqualify** here;
+///   the hash plan knows them.
 pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
-    if let Some(_shape) = &ty.array_shape {
-        // Construct a non-array view of the same element and recurse.
-        let element = juxc_ast::TypeRef {
-            name: ty.name.clone(),
-            generic_args: ty.generic_args.clone(),
-            nullable: ty.nullable,
-            array_shape: None,
-            fn_shape: ty.fn_shape.clone(),
-            ptr_depth: 0,
-            span: ty.span,
-        };
-        return field_supports_eq(&element);
+    if ty.array_shape.is_some() {
+        return false;
     }
     if ty.nullable {
         let inner = juxc_ast::TypeRef {
@@ -2155,12 +2145,6 @@ pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
     is_copy_eq_primitive(name)
 }
 
-/// True if a field of type `ty` is `Hash`-compatible. Identical to the
-/// `Eq` predicate for the types we recognize — std's `Hash` impls
-/// cover the same set.
-pub(crate) fn field_supports_hash(ty: &juxc_ast::TypeRef) -> bool {
-    field_supports_eq(ty)
-}
 
 /// True if a field of type `ty` is `Default`-compatible (every Jux
 /// primitive and `String` implements `Default`, arrays of those do

@@ -548,6 +548,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
 | `E0932`  | An operator must be `public`                                 | Operators §O.2.8               |
+| `E0933`  | A type with no `operator hash` used as a hash key (`HashMap` key, `HashSet` element) or given `.operator hash()`: a function value, an array, a collection, a float by itself, or a type holding one | Operators §O.3.1 / §O.2.7 |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |

@@ -810,6 +810,14 @@ pub enum Code {
     /// declaration-site rejection rather than a use-site one so the
     /// error lands on the modifier that is wrong.
     E0932_OperatorNotPublic,
+    /// E0933 — A type with no `operator hash` used as a **hash key**: the key
+    /// of a `HashMap` or the element of a `HashSet`
+    /// (`JUX-OPERATORS-ADDENDUM.md` §O.3.1, §O.2.7). A record, struct or enum
+    /// derives its hash from its components, so one component with none (a
+    /// function value, an array, a collection) leaves the whole type without
+    /// one; a floating-point value hashes as a component but is not a key by
+    /// itself. The message names the component, which is what has to change.
+    E0933_KeyHasNoHash,
     /// E0935 — Call to a `delete`d operator. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.3.4, a record/struct/enum can
     /// suppress an auto-derived operator with `operator <op>(...) = delete;`.
@@ -987,6 +995,7 @@ impl Code {
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0932_OperatorNotPublic        => "E0932",
+            Code::E0933_KeyHasNoHash             => "E0933",
             Code::E0935_DeletedOperator          => "E0935",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",

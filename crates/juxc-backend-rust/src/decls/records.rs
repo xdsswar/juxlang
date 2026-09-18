@@ -6,7 +6,7 @@
 use juxc_ast::OperatorKind;
 
 use crate::analysis::{
-    field_supports_copy, field_supports_eq, field_supports_hash,
+    field_supports_copy, field_supports_eq,
 };
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
@@ -24,9 +24,10 @@ impl RustEmitter {
     /// auto-`.clone()` via the same machinery — so the user can write
     /// `print(v.x)` without thinking about ownership.
     ///
-    /// **`Hash` and `Eq`** are intentionally not derived in Turn 1 —
-    /// records carrying `f32`/`f64` components break both. A future
-    /// pass can derive them conditionally per component types.
+    /// **`Hash` and `Eq`** come from the shared hash plan
+    /// ([`crate::decls::hashing`]): derived when every component hashes
+    /// natively, written by hand when a component is a float (hashed by its
+    /// bits, §O.3.1), and absent when a component has no hash at all.
     pub(crate) fn emit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
         // (Migrated to Writer indent-aware API)
         // Per `JUX-OPERATORS-ADDENDUM.md` §O.3.1 records auto-provide
@@ -67,7 +68,10 @@ impl RustEmitter {
                 .iter()
                 .all(|c| crate::analysis::field_supports_default(&c.ty))
         };
-        self.w.line(&record_derive_attribute(record_decl, has_default));
+        let components: Vec<&juxc_ast::TypeRef> = record_decl.components.iter().map(|c| &c.ty).collect();
+        let legacy_eq = components.iter().all(|t| field_supports_eq(t));
+        let hash_plan = self.value_hash_plan(&fqn, &components, &record_decl.operators, legacy_eq);
+        self.w.line(&record_derive_attribute(record_decl, has_default, hash_plan));
 
         // pub struct Name<T, U> { …components… }
         self.w.emit_indent();
@@ -234,6 +238,16 @@ impl RustEmitter {
             for op in &record_decl.operators {
                 self.emit_operator_trait_impl(&record_decl.name.text, op);
             }
+        }
+        // `Hash` by hand when a float component rules out the derive, and the
+        // `Eq` promise a hash key needs when it was not derived.
+        if hash_plan.manual_hash {
+            let fields: Vec<(&str, &juxc_ast::TypeRef)> =
+                record_decl.components.iter().map(|c| (c.name.text.as_str(), &c.ty)).collect();
+            self.emit_value_hash_for_fields(&record_decl.name.text, &record_decl.generic_params, &fields);
+        }
+        if hash_plan.eq_marker {
+            self.emit_value_eq_marker(&record_decl.name.text, &record_decl.generic_params);
         }
     }
 
@@ -432,30 +446,19 @@ impl RustEmitter {
 /// corresponding auto-derive: when the user wrote
 /// `operator==(...) { ... }` we emit `impl PartialEq` from the
 /// override and don't want a competing derive.
-fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl, all_default: bool) -> String {
+fn record_derive_attribute(
+    record_decl: &juxc_ast::RecordDecl,
+    all_default: bool,
+    hash_plan: crate::decls::hashing::HashPlan,
+) -> String {
     let mut derives: Vec<&str> = vec!["Debug", "Clone"];
 
     let has_eq_op = record_decl
         .operators
         .iter()
         .any(|o| o.kind == OperatorKind::Eq);
-    let has_hash_op = record_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Hash);
-    let eq_deleted = record_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Eq && o.is_deleted);
-    let hash_deleted = record_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Hash && o.is_deleted);
-
     let component_tys: Vec<&juxc_ast::TypeRef> =
         record_decl.components.iter().map(|c| &c.ty).collect();
-    let all_eq = component_tys.iter().all(|t| field_supports_eq(t));
-    let all_hash = component_tys.iter().all(|t| field_supports_hash(t));
     let all_copy = component_tys.iter().all(|t| field_supports_copy(t));
 
     // PartialEq: derived unless the user wrote operator== (override
@@ -463,15 +466,14 @@ fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl, all_default: bool
     // PartialEq`; `= delete;` opts out entirely.
     if !has_eq_op {
         derives.push("PartialEq");
-        if all_eq {
-            derives.push("Eq");
-        }
     }
-    // Hash: derived only when not user-supplied and not deleted. The
-    // Eq marker logic on classes lives in `emit_class_decl`; for
-    // records the Hash derive only fires when PartialEq is also
-    // present (otherwise the Eq derive above is skipped).
-    if !has_hash_op && !hash_deleted && !eq_deleted && all_hash {
+    // Eq and Hash follow the shared hash plan (§O.3.1): derived when every
+    // component hashes natively; a float component is hashed by hand after
+    // the declaration instead.
+    if hash_plan.derive_eq {
+        derives.push("Eq");
+    }
+    if hash_plan.derive_hash {
         derives.push("Hash");
     }
     // Copy: always conditional on field types. Deletion doesn't

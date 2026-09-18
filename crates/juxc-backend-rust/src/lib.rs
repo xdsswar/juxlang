@@ -4473,14 +4473,19 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             "    h.finish() as isize\n",
             "}\n",
             // A float hashes its bits. `-0.0 == 0.0` in Jux, so the two must
-            // hash alike; every NaN is one NaN.
+            // hash alike; every NaN is one NaN. The bits are also what a
+            // record, struct or enum hashes for a float component (§O.3.1).
+            "pub fn jux_f64_bits(v: f64) -> u64 {\n",
+            "    if v == 0.0 { 0 } else if v.is_nan() { f64::NAN.to_bits() } else { v.to_bits() }\n",
+            "}\n",
+            "pub fn jux_f32_bits(v: f32) -> u32 {\n",
+            "    if v == 0.0 { 0 } else if v.is_nan() { f32::NAN.to_bits() } else { v.to_bits() }\n",
+            "}\n",
             "pub fn jux_hash_f64(v: f64) -> isize {\n",
-            "    let v = if v == 0.0 { 0.0 } else if v.is_nan() { f64::NAN } else { v };\n",
-            "    jux_hash(&v.to_bits())\n",
+            "    jux_hash(&jux_f64_bits(v))\n",
             "}\n",
             "pub fn jux_hash_f32(v: f32) -> isize {\n",
-            "    let v = if v == 0.0 { 0.0 } else if v.is_nan() { f32::NAN } else { v };\n",
-            "    jux_hash(&v.to_bits())\n",
+            "    jux_hash(&jux_f32_bits(v))\n",
             "}\n",
         ));
         // Character-indexed `String` access (CORE-LIB K.7): an index outside

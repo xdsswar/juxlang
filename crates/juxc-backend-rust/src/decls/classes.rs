@@ -202,6 +202,21 @@ impl RustEmitter {
         // with the operator impls; a derive beside either would be a second
         // `impl PartialEq`.
         let is_value_struct = class_decl.is_struct;
+        // A value struct's `Eq` / `Hash`, from the shared plan (§O.3.1): the
+        // fields are its components. Used by the derive line and again after
+        // the operator bridges, where a float field's `Hash` is written.
+        let struct_hash_plan = is_value_struct.then(|| {
+            let fields: Vec<&juxc_ast::TypeRef> =
+                class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+            let legacy_eq = fields.iter().all(|t| crate::analysis::field_supports_eq(t));
+            let pkg = self.current_package_path();
+            let fqn = if pkg.is_empty() {
+                class_decl.name.text.clone()
+            } else {
+                format!("{pkg}.{}", class_decl.name.text)
+            };
+            self.value_hash_plan(&fqn, &fields, &class_decl.operators, legacy_eq)
+        });
         let declares_equality = class_decl
             .operators
             .iter()
@@ -214,9 +229,7 @@ impl RustEmitter {
             if crate::is_layout_c_struct(class_decl) {
                 self.w.line("#[repr(C)]");
             }
-            let field_tys: Vec<&juxc_ast::TypeRef> =
-                class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
-            let declares_hash = class_decl.operators.iter().any(|o| o.kind == OperatorKind::Hash);
+            let plan = struct_hash_plan.unwrap_or_default();
             let mut derives = vec!["Clone"];
             if self.struct_is_copy(class_decl) {
                 derives.push("Copy");
@@ -226,12 +239,12 @@ impl RustEmitter {
             }
             if !declares_equality {
                 derives.push("PartialEq");
-                if field_tys.iter().all(|t| crate::analysis::field_supports_eq(t)) {
-                    derives.push("Eq");
-                    if !declares_hash {
-                        derives.push("Hash");
-                    }
-                }
+            }
+            if plan.derive_eq {
+                derives.push("Eq");
+            }
+            if plan.derive_hash {
+                derives.push("Hash");
             }
             self.w.line(&format!("#[derive({})]", derives.join(", ")));
         } else if has_fn_field {
@@ -770,10 +783,23 @@ impl RustEmitter {
         // additionally emit `impl Eq for Class {}` — the marker
         // trait that signals reflexive equality and unlocks
         // `HashMap`/`HashSet` key usage on top of the Hash impl.
-        if has_eq && has_hash {
+        // A value struct's plan may promise `Eq` on its own (a float field).
+        if (has_eq && has_hash) || struct_hash_plan.is_some_and(|p| p.eq_marker) {
             self.emit_eq_marker(&class_decl.name.text);
         }
         self.op_impl_class = None;
+        // A value struct with a float field: `Hash` by hand, by its bits.
+        if struct_hash_plan.is_some_and(|p| p.manual_hash) {
+            let fields: Vec<(&str, &juxc_ast::TypeRef)> = class_decl
+                .fields
+                .iter()
+                .filter(|f| !f.is_static)
+                .filter_map(|f| f.ty.as_ref().map(|t| (f.name.text.as_str(), t)))
+                .collect();
+            self.op_impl_class = generic.then(|| class_decl.clone());
+            self.emit_value_hash_for_fields(&class_decl.name.text, &class_decl.generic_params, &fields);
+            self.op_impl_class = None;
+        }
 
         // For each `implements I`, emit a trait-impl block that
         // **delegates** to the inherent methods on this class. The
