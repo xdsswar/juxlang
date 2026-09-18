@@ -1,0 +1,10 @@
+<html>
+<body>
+Reports a method that declares a result but can reach the end of its body without returning one.
+<!-- tooltip end -->
+<p>When the IDE cannot tell whether a statement lets control through (a <code>switch</code>, a labeled
+statement), it assumes it does not, so a method that does return is never reported.</p>
+<p>Quick-fixes: add a <code>return</code> at the end, or make the method return <code>void</code> when no
+<code>return</code> in it carries a value.</p>
+</body>
+</html>

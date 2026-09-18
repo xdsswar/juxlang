@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports an <code>if</code>, <code>while</code> or <code>for</code> whose body is empty: usually a stray
+semicolon, as in <code>if (ready);</code>.
+<!-- tooltip end -->
+<p>A body holding a comment is taken as deliberate. A <code>while</code> with an empty block
+(<code>while (poll()) {}</code>) spins on its condition on purpose and is not reported, and neither is
+an empty <code>if</code> block that has an <code>else</code>.</p>
+<p>Quick-fix: remove an empty <code>if</code> whose condition has no side effects.</p>
+</body>
+</html>

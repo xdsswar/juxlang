@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports a boolean literal that changes nothing or decides everything: <code>b == true</code>,
+<code>b != true</code>, <code>b &amp;&amp; true</code>, <code>b || false</code>, <code>!true</code>,
+<code>! !b</code>, and <code>b &amp;&amp; false</code> / <code>b || true</code> when <code>b</code> has no
+side effects.
+<!-- tooltip end -->
+<p>Comparisons are only simplified when the other side is known to be a <code>bool</code>.</p>
+<p>Quick-fix: replace with the simpler form.</p>
+</body>
+</html>

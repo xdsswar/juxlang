@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports a checked exception that is thrown, or declared by a called method, but neither caught nor
+declared in the enclosing method's <code>throws</code> clause.
+<!-- tooltip end -->
+<p>An exception class is checked when its <code>extends</code> chain reaches <code>Exception</code> without
+passing <code>RuntimeException</code>. The IDE follows the chain through the project's own declarations
+only, so exceptions declared elsewhere are left to the compiler. Nothing is reported inside a lambda.</p>
+<p>Quick-fixes: add the exception to the method's <code>throws</code>, or surround the statement with
+<code>try</code> / <code>catch</code>.</p>
+</body>
+</html>

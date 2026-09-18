@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports a condition whose value is always the same: <code>if (true)</code>, <code>while (false)</code>,
+<code>false ? a : b</code>, a value compared with itself (<code>n == n</code>), or two literals compared
+(<code>1 &lt; 2</code>).
+<!-- tooltip end -->
+<p><code>while (true)</code> and <code>do ... while (false)</code> are idioms and are not reported.
+Comparing a value with itself is only reported for a primitive whose <code>==</code> is reflexive:
+never a float, since <code>x != x</code> is how a NaN test is written, and never a class, whose
+<code>operator==</code> may say anything.</p>
+<p>Quick-fix: keep only what always happens.</p>
+</body>
+</html>
