@@ -1,0 +1,84 @@
+// Records, structs and enums as hash keys (JUX-OPERATORS-ADDENDUM §O.3.1).
+//
+// Each derives `operator==` and `operator hash` from its components, so any of
+// them can key a `HashMap` or fill a `HashSet`: with float components (hashed
+// by their bits, so `0.0` and `-0.0` are one key, as they are `==`), with
+// other records inside, with a class inside (hashed by identity), generic, or
+// with the type's own `operator hash`.
+
+record Point(double x, double y) {}
+
+record Segment(Point from, Point to) {}
+
+struct Pixel {
+    int x;
+    int y;
+    float brightness;
+}
+
+enum Shape {
+    Circle(double radius),
+    Square(int side),
+    Empty
+}
+
+class Owner {
+    public String name;
+    public Owner(String name) { this.name = name; }
+}
+
+record Tag(Owner owner, String label) {}
+
+record Pair<A, B>(A first, B second) {}
+
+record Reading(String sensor, double value) {
+    // Readings from one sensor share a hash bucket; `==` still compares both.
+    public int operator hash() {
+        return sensor.operator hash();
+    }
+}
+
+public void main() {
+    var points = new HashSet<Point>();
+    points.insert(new Point(1.0, 2.0));
+    points.insert(new Point(1.0, 2.0));
+    points.insert(new Point(0.0, 5.0));
+    points.insert(new Point(-0.0, 5.0));
+    print(points.len());
+    print(points.contains(new Point(1.0, 2.0)));
+
+    var lengths = new HashMap<Segment, double>();
+    lengths.insert(new Segment(new Point(0.0, 0.0), new Point(3.0, 4.0)), 5.0);
+    print(lengths.contains_key(new Segment(new Point(0.0, 0.0), new Point(3.0, 4.0))));
+
+    var pixels = new HashSet<Pixel>();
+    pixels.insert(new Pixel(1, 1, 0.5f));
+    pixels.insert(new Pixel(1, 1, 0.5f));
+    print(pixels.len());
+
+    var shapes = new HashSet<Shape>();
+    shapes.insert(Shape.Circle(1.5));
+    shapes.insert(Shape.Circle(1.5));
+    shapes.insert(Shape.Square(2));
+    shapes.insert(Shape.Empty);
+    print(shapes.len());
+
+    // A class component hashes by identity: two owners with one name differ.
+    var ann = new Owner("ann");
+    var tags = new HashSet<Tag>();
+    tags.insert(new Tag(ann, "admin"));
+    tags.insert(new Tag(ann, "admin"));
+    tags.insert(new Tag(new Owner("ann"), "admin"));
+    print(tags.len());
+
+    var pairs = new HashSet<Pair<String, int>>();
+    pairs.insert(new Pair<String, int>("a", 1));
+    pairs.insert(new Pair<String, int>("a", 1));
+    print(pairs.len());
+
+    var readings = new HashSet<Reading>();
+    readings.insert(new Reading("t1", 20.5));
+    readings.insert(new Reading("t1", 20.5));
+    readings.insert(new Reading("t1", 21.0));
+    print(readings.len());
+}

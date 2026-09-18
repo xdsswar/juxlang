@@ -202,6 +202,21 @@ impl RustEmitter {
         // with the operator impls; a derive beside either would be a second
         // `impl PartialEq`.
         let is_value_struct = class_decl.is_struct;
+        // A value struct's `Eq` / `Hash`, from the shared plan (§O.3.1): the
+        // fields are its components. Used by the derive line and again after
+        // the operator bridges, where a float field's `Hash` is written.
+        let struct_hash_plan = is_value_struct.then(|| {
+            let fields: Vec<&juxc_ast::TypeRef> =
+                class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+            let legacy_eq = fields.iter().all(|t| crate::analysis::field_supports_eq(t));
+            let pkg = self.current_package_path();
+            let fqn = if pkg.is_empty() {
+                class_decl.name.text.clone()
+            } else {
+                format!("{pkg}.{}", class_decl.name.text)
+            };
+            self.value_hash_plan(&fqn, &fields, &class_decl.operators, legacy_eq)
+        });
         let declares_equality = class_decl
             .operators
             .iter()
@@ -214,9 +229,7 @@ impl RustEmitter {
             if crate::is_layout_c_struct(class_decl) {
                 self.w.line("#[repr(C)]");
             }
-            let field_tys: Vec<&juxc_ast::TypeRef> =
-                class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
-            let declares_hash = class_decl.operators.iter().any(|o| o.kind == OperatorKind::Hash);
+            let plan = struct_hash_plan.unwrap_or_default();
             let mut derives = vec!["Clone"];
             if self.struct_is_copy(class_decl) {
                 derives.push("Copy");
@@ -226,12 +239,12 @@ impl RustEmitter {
             }
             if !declares_equality {
                 derives.push("PartialEq");
-                if field_tys.iter().all(|t| crate::analysis::field_supports_eq(t)) {
-                    derives.push("Eq");
-                    if !declares_hash {
-                        derives.push("Hash");
-                    }
-                }
+            }
+            if plan.derive_eq {
+                derives.push("Eq");
+            }
+            if plan.derive_hash {
+                derives.push("Hash");
             }
             self.w.line(&format!("#[derive({})]", derives.join(", ")));
         } else if has_fn_field {
@@ -770,10 +783,23 @@ impl RustEmitter {
         // additionally emit `impl Eq for Class {}` — the marker
         // trait that signals reflexive equality and unlocks
         // `HashMap`/`HashSet` key usage on top of the Hash impl.
-        if has_eq && has_hash {
+        // A value struct's plan may promise `Eq` on its own (a float field).
+        if (has_eq && has_hash) || struct_hash_plan.is_some_and(|p| p.eq_marker) {
             self.emit_eq_marker(&class_decl.name.text);
         }
         self.op_impl_class = None;
+        // A value struct with a float field: `Hash` by hand, by its bits.
+        if struct_hash_plan.is_some_and(|p| p.manual_hash) {
+            let fields: Vec<(&str, &juxc_ast::TypeRef)> = class_decl
+                .fields
+                .iter()
+                .filter(|f| !f.is_static)
+                .filter_map(|f| f.ty.as_ref().map(|t| (f.name.text.as_str(), t)))
+                .collect();
+            self.op_impl_class = generic.then(|| class_decl.clone());
+            self.emit_value_hash_for_fields(&class_decl.name.text, &class_decl.generic_params, &fields);
+            self.op_impl_class = None;
+        }
 
         // For each `implements I`, emit a trait-impl block that
         // **delegates** to the inherent methods on this class. The
@@ -2187,6 +2213,59 @@ impl RustEmitter {
                 (bare && params.contains(name)).then_some((p.name.text.as_str(), name))
             }))
             .collect();
+        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
+        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
+        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
+        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
+        blocks.extend(class_decl.init_blocks.iter());
+        let (eq, hashed) = self.equality_bound_params(&params, &param_fields, &blocks);
+        self.eq_bound_params = eq;
+        self.hashed_params = hashed;
+    }
+
+    /// [`Self::collect_equality_bound_params`] for a function or method's OWN
+    /// type parameters (`<K> bool same(K a, K b) { return a == b; }`): its
+    /// parameters play the part a class's fields do. Replaces the sets, so
+    /// the caller clears them once the signature is written.
+    pub(crate) fn collect_fn_equality_bound_params(&mut self, fn_decl: &juxc_ast::FnDecl) {
+        let params: HashSet<&str> = fn_decl
+            .generic_params
+            .iter()
+            .filter(|p| !p.is_const())
+            .map(|p| p.name.text.as_str())
+            .collect();
+        let param_fields: std::collections::HashMap<&str, &str> = fn_decl
+            .params
+            .iter()
+            .filter_map(|p| {
+                let ty = &p.ty;
+                let bare = ty.array_shape.is_none()
+                    && ty.generic_args.is_empty()
+                    && ty.fn_shape.is_none()
+                    && ty.name.segments.len() == 1;
+                let name = ty.name.segments.first()?.text.as_str();
+                (bare && params.contains(name)).then_some((p.name.text.as_str(), name))
+            })
+            .collect();
+        let blocks: Vec<&juxc_ast::Block> = fn_decl.body.iter().collect();
+        let (eq, hashed) = self.equality_bound_params(&params, &param_fields, &blocks);
+        self.eq_bound_params = eq;
+        self.hashed_params = hashed;
+    }
+
+    /// The core of the `PartialEq` / `Hash` inference (§T.2.1): which of
+    /// `params` the `blocks` compare with `==` / `!=` and hash with
+    /// `.operator hash()`. `named` maps a field or parameter name to the type
+    /// parameter it is declared as, for reads that carry no recorded type.
+    fn equality_bound_params(
+        &self,
+        params: &HashSet<&str>,
+        param_fields: &std::collections::HashMap<&str, &str>,
+        blocks: &[&juxc_ast::Block],
+    ) -> (HashSet<String>, HashSet<String>) {
+        if params.is_empty() {
+            return (HashSet::new(), HashSet::new());
+        }
         // The parameter `e`'s value has, when it has one.
         let param_of = |e: &juxc_ast::Expr| -> Option<String> {
             let recorded = match self.expr_types.get(&crate::exprs::expr_span_of(e)) {
@@ -2207,17 +2286,17 @@ impl RustEmitter {
             };
             param_fields.get(field).map(|p| p.to_string())
         };
-        let mut blocks: Vec<&juxc_ast::Block> = Vec::new();
-        blocks.extend(class_decl.constructors.iter().map(|c| &c.body));
-        blocks.extend(class_decl.methods.iter().filter_map(|m| m.body.as_ref()));
-        blocks.extend(class_decl.operators.iter().filter_map(|o| o.body.as_ref()));
-        blocks.extend(class_decl.init_blocks.iter());
         let mut eq = HashSet::new();
         let mut hashed = HashSet::new();
+        // `x == null` is a null test (it lowers to `is_none()`), not a value
+        // comparison, so it asks nothing of `x`'s type.
+        let is_null = |e: &juxc_ast::Expr| matches!(e, juxc_ast::Expr::Literal(juxc_ast::Literal::Null));
         for block in blocks {
             juxc_ast::visit::for_each_expr(block, &mut |e| match e {
                 juxc_ast::Expr::Binary(b)
-                    if matches!(b.op, juxc_ast::BinaryOp::Eq | juxc_ast::BinaryOp::NotEq) =>
+                    if matches!(b.op, juxc_ast::BinaryOp::Eq | juxc_ast::BinaryOp::NotEq)
+                        && !is_null(&b.left)
+                        && !is_null(&b.right) =>
                 {
                     if let Some(p) = param_of(&b.left).or_else(|| param_of(&b.right)) {
                         eq.insert(p);
@@ -2235,8 +2314,7 @@ impl RustEmitter {
                 _ => {}
             });
         }
-        self.eq_bound_params = eq;
-        self.hashed_params = hashed;
+        (eq, hashed)
     }
 
     /// Every type a class mentions in a storage or signature position — field

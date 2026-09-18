@@ -3416,18 +3416,19 @@ fn float_bearing_record_drops_eq_and_hash() {
         public void main() {}
         "#,
     );
-    // PartialEq stays, Copy stays (float is Copy), Eq/Hash are absent.
-    // Default joins the line because `double` implements Default.
+    // PartialEq stays, Copy stays (float is Copy). Rust derives neither Eq
+    // nor Hash over an `f64`, so both are written by hand: the float hashes
+    // by its bits (§O.3.1), which keeps the record a hash key.
     assert!(
         rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
         "got: {rust}",
     );
-    assert!(!rust.contains(", Eq"), "Eq should be skipped: {rust}");
-    assert!(!rust.contains(", Hash"), "Hash should be skipped: {rust}");
+    assert!(rust.contains("crate::jux_f64_bits(self.v).hash(state);"), "hand-written Hash: {rust}");
+    assert!(rust.contains("impl Eq for Sample {}"), "Eq promise: {rust}");
 }
 
-/// A record whose components include a user-defined class drops all of
-/// Eq/Hash/Copy — the analyzer can't prove the class supports them.
+/// A record holding a class derives `Eq` and `Hash` (the class hashes by
+/// identity, §O.3.1) but never `Copy`: a class is a shared handle.
 #[test]
 fn user_typed_record_drops_extra_derives() {
     let rust = emit(
@@ -3437,14 +3438,11 @@ fn user_typed_record_drops_extra_derives() {
         public void main() {}
         "#,
     );
-    // Only the baseline three remain.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq)]"),
-        "expected baseline derives, got: {rust}",
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash)]"),
+        "expected identity-hashed derives, got: {rust}",
     );
-    assert!(!rust.contains(", Eq"), "Eq should be skipped: {rust}");
     assert!(!rust.contains(", Copy"), "Copy should be skipped: {rust}");
-    assert!(!rust.contains(", Hash"), "Hash should be skipped: {rust}");
 }
 
 /// An enum whose variants carry only int payloads inherits the full
@@ -3695,6 +3693,41 @@ fn unmapped_operator_emits_inherent_method_only() {
         !rust.contains("impl Fn<"),
         "should NOT emit Fn impl yet: {rust}",
     );
+}
+
+/// A static interface method's own type parameters carry the baseline
+/// bounds its body relies on: returning `u` clones it. Written bare, the
+/// emitted `fn Maker_same<U>(u: U) -> U { u.clone() }` failed in rustc.
+#[test]
+fn static_interface_method_type_params_get_baseline_bounds() {
+    let rust = emit(
+        r#"
+        interface Maker<T> {
+            static <U> U same(U u) { return u; }
+        }
+        public void main() { print(Maker.same(3)); }
+        "#,
+    );
+    assert!(
+        rust.contains("fn Maker_same<U: Clone + std::fmt::Debug + 'static>(u: U) -> U {"),
+        "bounded static method: {rust}",
+    );
+}
+
+/// A function's own type parameter compared with `==` acquires `PartialEq`,
+/// and one hashed with `.operator hash()` acquires `Hash` (§T.2.1), the way a
+/// class's parameters do.
+#[test]
+fn generic_function_params_get_equality_and_hash_bounds() {
+    let rust = emit(
+        r#"
+        <K> bool same(K a, K b) { return a == b; }
+        <K> int hashOf(K a) { return a.operator hash(); }
+        public void main() { print(same(1, 1)); print(hashOf(2)); }
+        "#,
+    );
+    assert!(rust.contains("K: Clone + std::fmt::Debug + 'static + std::cmp::PartialEq"), "PartialEq: {rust}");
+    assert!(rust.contains("K: Clone + std::fmt::Debug + 'static + std::hash::Hash"), "Hash: {rust}");
 }
 
 /// A generic class gets its `==` bridge, with the parameters bounded as the

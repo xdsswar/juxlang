@@ -437,7 +437,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
-| `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed | LANG-V1 §7.10 |
+| `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed; also an operator (arithmetic, bitwise, shift, ordering, logical, unary, compound assignment) applied to such an operand | LANG-V1 §7.10 |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
 > diagnostic ("generic type inference has no solution", §T.4.2) originally
@@ -550,6 +550,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
 | `E0932`  | An operator must be `public`                                 | Operators §O.2.8               |
+| `E0933`  | A type with no `operator hash` used as a hash key (`HashMap` key, `HashSet` element) or given `.operator hash()`: a function value, an array, a collection, a float by itself, or a type holding one | Operators §O.3.1 / §O.2.7 |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |

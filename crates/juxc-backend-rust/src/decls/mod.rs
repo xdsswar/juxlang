@@ -23,6 +23,7 @@ pub(crate) mod classes;
 pub(crate) mod constructors;
 pub(crate) mod enums;
 pub(crate) mod functions;
+pub(crate) mod hashing;
 pub(crate) mod interfaces;
 pub(crate) mod observers;
 pub(crate) mod operators;

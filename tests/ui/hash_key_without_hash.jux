@@ -1,0 +1,18 @@
+// A hash key needs `operator hash` (JUX-OPERATORS-ADDENDUM §O.3.1). A record
+// derives one from its components, so a component with none (a function
+// value, an array, a collection) leaves the record without one, and a
+// floating-point value is a key only as a component. Each is E0933, naming
+// the component to change, where rustc used to fail on the first `insert`.
+
+record Handler(String name, (int) -> int run) {}
+record Batch(int[] ids) {}
+record Box<T>(T value) {}
+
+public void main() {
+    var handlers = new HashSet<Handler>();
+    HashMap<Batch, int> sizes = new HashMap<Batch, int>();
+    var readings = new HashSet<double>();
+    var boxed = new HashSet<Box<double>>();
+    (int) -> int twice = x -> x * 2;
+    print(twice.operator hash());
+}

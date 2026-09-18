@@ -8,7 +8,7 @@
 
 use juxc_ast::OperatorKind;
 
-use crate::analysis::{field_supports_copy, field_supports_eq, field_supports_hash};
+use crate::analysis::{field_supports_copy, field_supports_eq};
 use crate::backend_fqn::to_rust_ident;
 use std::collections::HashSet;
 
@@ -226,7 +226,8 @@ impl RustEmitter {
 
         // `#[derive(...)] pub enum Name {` — deletion-aware just like
         // records (`record_derive_attribute` shape).
-        self.w.line(&enum_derive_attribute(enum_decl));
+        let hash_plan = self.enum_hash_plan(enum_decl);
+        self.w.line(&enum_derive_attribute(enum_decl, hash_plan));
         // `@layout(c, repr = "…")` (§L.1.3): a C-compatible integer enum. Emit
         // `#[repr(<int>)]` so the value is bit-identical to a C `int` enum; the
         // explicit per-variant discriminants are emitted below.
@@ -400,6 +401,32 @@ impl RustEmitter {
         for op in &enum_decl.operators {
             self.emit_operator_trait_impl(&enum_decl.name.text, op);
         }
+        // `Hash` by hand when a float payload rules out the derive, and the
+        // `Eq` promise a hash key needs when it was not derived (§O.3.1).
+        if hash_plan.manual_hash {
+            self.emit_value_hash_for_enum(enum_decl);
+        }
+        if hash_plan.eq_marker {
+            self.emit_value_eq_marker(&enum_decl.name.text, &enum_decl.generic_params);
+        }
+    }
+
+    /// The enum's `Eq` / `Hash` plan: the payloads are its components.
+    fn enum_hash_plan(&self, enum_decl: &juxc_ast::EnumDecl) -> crate::decls::hashing::HashPlan {
+        let pkg = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .map(|unit| unit.package.join("."))
+            .unwrap_or_default();
+        let fqn = if pkg.is_empty() {
+            enum_decl.name.text.clone()
+        } else {
+            format!("{pkg}.{}", enum_decl.name.text)
+        };
+        let payloads: Vec<&juxc_ast::TypeRef> =
+            enum_decl.variants.iter().flat_map(|v| v.payload.iter().map(|p| &p.ty)).collect();
+        let legacy_eq = payloads.iter().all(|t| field_supports_eq(t));
+        self.value_hash_plan(&fqn, &payloads, &enum_decl.operators, legacy_eq)
     }
 
     /// Emit one delegating `impl <Iface> for <Enum>` per interface the enum
@@ -656,42 +683,29 @@ impl RustEmitter {
 /// helper for records — kept separate because the spec's wording
 /// applies independently to each value-type kind and an enum-specific
 /// helper makes the derives easier to evolve.
-fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl) -> String {
+fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl, hash_plan: crate::decls::hashing::HashPlan) -> String {
     let mut derives: Vec<&str> = vec!["Debug", "Clone"];
 
     let has_eq_op = enum_decl
         .operators
         .iter()
         .any(|o| o.kind == OperatorKind::Eq);
-    let has_hash_op = enum_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Hash);
-    let eq_deleted = enum_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Eq && o.is_deleted);
-    let hash_deleted = enum_decl
-        .operators
-        .iter()
-        .any(|o| o.kind == OperatorKind::Hash && o.is_deleted);
-
     let payload_tys: Vec<&juxc_ast::TypeRef> = enum_decl
         .variants
         .iter()
         .flat_map(|v| v.payload.iter().map(|p| &p.ty))
         .collect();
-    let all_eq = payload_tys.iter().all(|t| field_supports_eq(t));
-    let all_hash = payload_tys.iter().all(|t| field_supports_hash(t));
     let all_copy = payload_tys.iter().all(|t| field_supports_copy(t));
 
     if !has_eq_op {
         derives.push("PartialEq");
-        if all_eq {
-            derives.push("Eq");
-        }
     }
-    if !has_hash_op && !hash_deleted && !eq_deleted && all_hash {
+    // Eq and Hash follow the shared hash plan (§O.3.1); a float payload is
+    // hashed by hand after the declaration instead.
+    if hash_plan.derive_eq {
+        derives.push("Eq");
+    }
+    if hash_plan.derive_hash {
         derives.push("Hash");
     }
     if all_copy {

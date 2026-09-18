@@ -1,0 +1,28 @@
+// A generic function or static interface method bounds its own type
+// parameters by how its body uses them (JUX-TYPE-SYSTEM-ADDENDUM §T.2.1),
+// exactly as a generic class does: returned or stored, formatted, compared
+// with `==`, hashed with `.operator hash()`.
+
+interface Pick<T> {
+    static <U> U same(U u) { return u; }
+    static <U> String show(U u) { return $"<${u}>"; }
+    static <K> bool agree(K a, K b) { return a == b; }
+}
+
+<K> int hashOf(K value) {
+    return value.operator hash();
+}
+
+<K> bool differ(K a, K b) {
+    return a != b;
+}
+
+public void main() {
+    print(Pick.same(3));
+    print(Pick.same("hi"));
+    print(Pick.show(4.5));
+    print(Pick.agree("a", "a"));
+    print(Pick.agree(1, 2));
+    print(hashOf("jux") == hashOf("jux"));
+    print(differ(1, 2));
+}

@@ -688,6 +688,8 @@ impl<'a> Checker<'a> {
             .unwrap_or_default();
         self.env.current_package = pkg;
         self.check_annotation_applications(unit);
+        // E0933: a `HashMap`/`HashSet` key type with no `operator hash`.
+        crate::hash_keys::check_unit(unit, &self.env, self.symbols, self.diagnostics);
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
@@ -3783,6 +3785,71 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// E0418 (§7.10) for the operands of a binary operator: `x + 1`,
+    /// `x < y`, `flag && x` with `x` a `T?` no test has narrowed. `==`, `!=`,
+    /// `===` and `??` take a null by design, and so does `+` with a `String`
+    /// on either side, which concatenates and prints a null as `null`.
+    fn check_nullable_operands(&mut self, b: &juxc_ast::BinaryExpr) {
+        let Some(spelled) = nullable_sensitive_op(b.op) else { return };
+        if b.op == BinaryOp::Add {
+            let is_text = |e: &Expr| {
+                let t = infer_expr(e, &self.env, self.symbols);
+                matches!(t, Ty::String) || matches!(&t, Ty::Nullable(inner) if matches!(**inner, Ty::String))
+            };
+            if is_text(&b.left) || is_text(&b.right) {
+                return;
+            }
+        }
+        self.check_nullable_operand(&b.left, spelled, expr_span(&b.left));
+        self.check_nullable_operand(&b.right, spelled, expr_span(&b.right));
+    }
+
+    /// E0418 (§7.10), for an operator: `operand` is a `T?` no null test has
+    /// narrowed, and `op` needs its value, as a member does. Without this
+    /// `int? + 1` typed as `int?` and the lowering asked Rust to add to an
+    /// `Option`.
+    fn check_nullable_operand(&mut self, operand: &Expr, op: &str, span: Span) {
+        if self.expr_ptr_depth(operand) > 0 {
+            // A raw pointer's null is its own value (§L.6.1).
+            return;
+        }
+        let Ty::Nullable(inner) = infer_expr(operand, &self.env, self.symbols) else {
+            return;
+        };
+        fn spelled(e: &Expr) -> Option<String> {
+            match e {
+                Expr::Path(qn) => Some(qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".")),
+                Expr::This(_) => Some("this".to_string()),
+                Expr::Field(inner) => spelled(&inner.object).map(|o| format!("{o}.{}", inner.field.text)),
+                _ => None,
+            }
+        }
+        let shown = spelled(operand).unwrap_or_else(|| "this operand".to_string());
+        // Only a local or parameter narrows (§7.10); a field or property is
+        // copied into one first.
+        let local = matches!(operand, Expr::Path(qn)
+            if qn.segments.len() == 1 && self.env.lookup(&qn.segments[0].text).is_some());
+        let help = if local {
+            format!(
+                "test it first (`if ({shown} != null) {{ ... }}`), give a default with `??`, \
+                 or assert it with `!!`"
+            )
+        } else {
+            format!(
+                "assert it with `{shown}!!`, give a default with `{shown} ?? ...`, or copy it \
+                 into a local and test that (only a local narrows)"
+            )
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0418_MemberOfNullable,
+                format!("`{shown}` may be null here (its type is `{inner}?`), so `{op}` has no value to work on"),
+            )
+            .with_span(span)
+            .with_help(help),
+        );
+    }
+
     /// Every binding `cond` proves non-null when it evaluates to `outcome`,
     /// each with its non-null type (§7.10): the `!= null` conjuncts of an
     /// `&&` chain when true, the `== null` disjuncts of an `||` chain when
@@ -4041,11 +4108,15 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Assign(a) => {
-                // `v += 1` on an `any` (§T.1.2): it has no operators.
+                // `v += 1` on an `any` (§T.1.2): it has no operators. And
+                // `x += 1` on a `T?` target reads the target first (§7.10).
                 if let Some(op) = a.op {
                     if self.check_any_receiver(&a.target, &format!("has no operator `{}=`", op.as_rust_str()), a.span) {
                         self.check_expr(&a.value);
                         return;
+                    }
+                    if let Some(spelled) = nullable_sensitive_op(op) {
+                        self.check_nullable_operand(&a.target, &format!("{spelled}="), a.span);
                     }
                 }
                 // `p += n` / `p -= n`: the step must be an integer (§L.6.1a).
@@ -5067,7 +5138,9 @@ impl<'a> Checker<'a> {
                 match u.op {
                     juxc_ast::UnaryOp::AddrOf => self.check_address_of(u),
                     juxc_ast::UnaryOp::Deref => self.check_deref(u),
-                    _ => {}
+                    juxc_ast::UnaryOp::Neg => self.check_nullable_operand(&u.operand, "-", u.span),
+                    juxc_ast::UnaryOp::Not => self.check_nullable_operand(&u.operand, "!", u.span),
+                    juxc_ast::UnaryOp::BitNot => self.check_nullable_operand(&u.operand, "~", u.span),
                 }
                 // §O.3.4 — unary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
@@ -5090,6 +5163,7 @@ impl<'a> Checker<'a> {
                 };
                 self.check_narrowed(&proven, |this| this.check_expr(&b.right));
                 self.check_numeric_operands(b);
+                self.check_nullable_operands(b);
                 self.check_comparison_chain(b);
                 self.check_pointer_operators(b);
                 self.check_any_binary(b);
@@ -8522,8 +8596,22 @@ impl<'a> Checker<'a> {
                 // there is no method to look up. Only the receiver is checked.
                 if crate::infer::named_operator_call_type(c).is_some() {
                     self.check_expr(&field.object);
-                    if method_name == "operator hash" {
-                        self.check_any_receiver(&field.object, "has no hash", c.span);
+                    if method_name == "operator hash"
+                        && !self.check_any_receiver(&field.object, "has no hash", c.span)
+                    {
+                        // All but a few values have `operator hash` (§O.2.7): a
+                        // function value, an array and a collection have none, nor
+                        // does a type holding one (E0933, the hash-key rule).
+                        let receiver = self.infer_and_record(&field.object);
+                        if let Some(why) = self.symbols.hash_blocker(&receiver) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0933_KeyHasNoHash,
+                                    format!("`{receiver}` has no `operator hash`: {why} (§O.2.7)"),
+                                )
+                                .with_span(field.field.span),
+                            );
+                        }
                     }
                     return;
                 }
@@ -10594,6 +10682,37 @@ fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
         UnaryOp::BitNot => OperatorKind::BitNot,
         // `!x`, raw-pointer `*p` / `&x` aren't overloadable (§O.2.5).
         UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
+    })
+}
+
+/// The binary operators that need their operands' VALUES (§7.10), with their
+/// spelling: everything but the equality tests, `??`, `in` and `=`.
+/// `None` for an operator that takes a null.
+fn nullable_sensitive_op(op: BinaryOp) -> Option<&'static str> {
+    Some(match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Rem => "%",
+        BinaryOp::WrapAdd => "+%",
+        BinaryOp::WrapSub => "-%",
+        BinaryOp::WrapMul => "*%",
+        BinaryOp::WrapShl => "<<%",
+        BinaryOp::WrapShr => ">>%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
+        BinaryOp::Lt => "<",
+        BinaryOp::Le => "<=",
+        BinaryOp::Gt => ">",
+        BinaryOp::Ge => ">=",
+        BinaryOp::Cmp => "<=>",
+        BinaryOp::And => "&&",
+        BinaryOp::Or => "||",
+        _ => return None,
     })
 }
 

@@ -116,7 +116,7 @@ If a class defines `operator==`, the compiler **requires** it to also define `op
 
 Records/structs/enums never trigger this — auto-derivation produces a consistent pair.
 
-**Invoking a named operator.** An `operator hash` or `operator string` is called by spelling the operator, as the member it is: `x.operator hash()` and `x.operator string()`. Every value has both. A type that declares the operator gets its own; any other value gets the built-in one: a primitive or `String` hashes its value, a float hashes its bits (with `-0.0` and `0.0` alike, since they are `==`), a record, struct or enum hashes its fields as its derived `==` compares them, and a class with no `operator==` hashes its identity. A `T?` that holds a value hashes as that `T` does, and a null hashes to `0`. `x.operator string()` is the text string interpolation produces for `x`, so a null gives `"null"`.
+**Invoking a named operator.** An `operator hash` or `operator string` is called by spelling the operator, as the member it is: `x.operator hash()` and `x.operator string()`. Every value has `operator string`, and every value but three has `operator hash`: a function value, an array and a collection have none (each is a shared handle whose contents can change), nor does a record, struct or enum holding one (§O.3.1); calling it on one is `E0933`. A type that declares the operator gets its own; any other value gets the built-in one: a primitive or `String` hashes its value, a float hashes its bits (with `-0.0` and `0.0` alike, since they are `==`), a record, struct or enum hashes its fields as its derived `==` compares them, and a class with no `operator==` hashes its identity. A `T?` that holds a value hashes as that `T` does, and a null hashes to `0`. `x.operator string()` is the text string interpolation produces for `x`, so a null gives `"null"`.
 
 The form exists so an `operator hash` can combine its fields' hashes. Combine with the wrapping operators (§S.2.1), since a hash is expected to overflow:
 
@@ -221,6 +221,14 @@ public record Point(double x, double y) {}
 //   operator string()   — "Point(x: 1.5, y: 2.7)"
 //   copy on assignment   — implicit (records are value types)
 ```
+
+**Which components hash.** The derived `operator hash` hashes each component in turn, so it exists when every component has one (§O.2.7):
+
+- A float component hashes by its bits, `0.0` and `-0.0` alike since they are `==`: `Point` above is a key like any other. A floating-point value is not a key *by itself* (`HashSet<double>`), and neither is a generic record whose parameter is instantiated with one (`Pair<double, int>`): only a component *declared* as a float is hashed by its bits.
+- A record, struct or enum component hashes by this same rule, a class component by its own `operator hash` or, without `operator==`, by identity.
+- A function value, an array or a collection has no hash, so a record holding one has none either, unless it declares `operator hash` itself.
+
+A type with no hash cannot be a key: using it as the key of a `HashMap` or the element of a `HashSet` is `E0933`, which names the component that has none.
 
 A user-supplied `operator string` (or any other operator) overrides the auto-derived one for the named operator only; the rest stay derived:
 

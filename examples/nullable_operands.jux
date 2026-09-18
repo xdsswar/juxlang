@@ -1,0 +1,42 @@
+// The ways to do arithmetic with a value that may be null (LANG-V1 §7.10).
+// An operator needs a value, so a `T?` operand is first narrowed with a null
+// test, asserted with `!!`, or given a default with `??`. An auto-property
+// with no initializer is `T?` (§M.7.3.1), and only a local narrows, so a
+// property is asserted or defaulted, or copied into a local and tested.
+// `==` and string `+` take a null as it is.
+
+class Account {
+    public int Balance { get; set; }
+    public Account() {}
+
+    public int doubled() { return Balance!! * 2; }
+    public int orZero() { return (Balance ?? 0) + 1; }
+}
+
+int addOne(int? x) {
+    if (x != null) {
+        return x + 1;
+    }
+    return -1;
+}
+
+public void main() {
+    var a = new Account();
+    print(a.orZero());
+    a.Balance = 5;
+    a.Balance = a.Balance!! + 10;
+    print(a.Balance);
+    print(a.doubled());
+
+    int? copy = a.Balance;
+    if (copy != null) {
+        print(copy * 10);
+    }
+
+    print(addOne(4));
+    print(addOne(null));
+
+    String? name = null;
+    print("name=" + name);
+    print(name == null);
+}

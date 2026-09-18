@@ -1,0 +1,6 @@
+hash_key_without_hash.jux:12:32: [E0933] error: `Handler` cannot be a `HashSet` key: its component `Handler.run` is `(int) -> int`, and a function value has no hash; a key needs `operator hash` (§O.3.1)
+hash_key_without_hash.jux:13:13: [E0933] error: `Batch` cannot be a `HashMap` key: its component `Batch.ids` is `int[]`, and an array has no hash (it is a shared handle whose elements can change); a key needs `operator hash` (§O.3.1)
+hash_key_without_hash.jux:13:45: [E0933] error: `Batch` cannot be a `HashMap` key: its component `Batch.ids` is `int[]`, and an array has no hash (it is a shared handle whose elements can change); a key needs `operator hash` (§O.3.1)
+hash_key_without_hash.jux:14:32: [E0933] error: `double` cannot be a `HashSet` key: a `double` has no hash by itself (floating-point values are not a key); a record or struct field of type `double` hashes by its bits; a key needs `operator hash` (§O.3.1)
+hash_key_without_hash.jux:15:29: [E0933] error: `Box<double>` cannot be a `HashSet` key: its component `Box.value` is the type parameter `T`, here `double`, and a floating-point type argument has no hash (a field declared `double` hashes by its bits); a key needs `operator hash` (§O.3.1)
+hash_key_without_hash.jux:17:17: [E0933] error: `(int) -> int` has no `operator hash`: a function value has no hash (§O.2.7)

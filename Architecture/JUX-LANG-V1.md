@@ -2783,6 +2783,27 @@ print(cur?.v);               // int?
 print(cur!!.v);              // throws NullPointerException on null
 ```
 
+**An operator needs its operands' values too.** Arithmetic, bitwise, shift,
+comparison (`<`, `<=`, `>`, `>=`, `<=>`), the logical operators and the
+unary `-`, `!` and `~` on a `T?` operand no test has narrowed are `E0418`,
+as is a compound assignment (`x += 1`, and `x++`) to a `T?` target. The
+result is the operator's own type, never nullable. The operators that take
+a null by design are left alone: `==`, `!=`, `===`, `!==` and `??`, and
+`+` with a `String` on either side, which concatenates and prints a null as
+`null`. An auto-property with no initializer is `T?` (§M.7.3.1), so this
+holds for `c.Age + 1` and a bare `Age + 1` alike; only a local narrows, so a
+property is asserted (`Age!! + 1`), defaulted (`(Age ?? 0) + 1`) or copied
+into a local and tested.
+
+```java
+int? n = find();
+print(n + 1);                // E0418: `n` may be null
+if (n != null) {
+    print(n + 1);            // narrowed
+}
+print((n ?? 0) + 1);         // int
+```
+
 Narrowing is lexical: it ends where the region it covers does, and a region
 that REBINDS the name gets none of it. The region is the branch the test
 proves the name for -- the then-branch of `x != null`, the else-branch of

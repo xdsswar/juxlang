@@ -1,0 +1,28 @@
+// An operator needs its operands' values (LANG-V1 §7.10): arithmetic,
+// ordering, unary and compound assignment on a `T?` no test has narrowed are
+// E0418, where `int? + 1` used to reach rustc as "cannot add to Option". An
+// auto-property with no initializer is `T?` (§M.7.3.1), read bare or through
+// the object. `==`, `??` and string `+` take a null and stay silent.
+
+class Account {
+    public int Balance { get; set; }
+    public Account() {}
+    public int doubled() { return Balance * 2; }
+}
+
+int bump(int? x) {
+    return x + 1;
+}
+
+public void main() {
+    var a = new Account();
+    a.Balance = a.Balance + 10;
+    int? n = null;
+    n += 1;
+    bool? flag = null;
+    print(!flag);
+    print(n < 3);
+    print(n == null);
+    print((n ?? 0) + 1);
+    print("n=" + n);
+}

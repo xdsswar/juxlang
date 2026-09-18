@@ -411,11 +411,17 @@ impl RustEmitter {
                 &fn_decl.body.iter().collect::<Vec<_>>(),
                 &[],
             );
+            // Compared with `==` or hashed with `.operator hash()`: `PartialEq`
+            // / `Hash` (§T.2.1). Scoped to this signature, so the sets never
+            // carry over to the next declaration.
+            self.collect_fn_equality_bound_params(fn_decl);
             self.emit_generic_params_with_clone_bound_plus_display(
                 &combined_generics,
                 &displayed,
                 &defaulted,
             );
+            self.eq_bound_params.clear();
+            self.hashed_params.clear();
         }
         self.w.push('(');
         // Params the body mutates in place (`xs.push(…)` on a by-value

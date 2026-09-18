@@ -466,7 +466,13 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(&interface.name.text));
             self.w.push('_');
             self.w.push_str(&to_rust_ident(&method.name.text));
-            self.emit_generic_params(&method.generic_params);
+            // The method's own type parameters take the bounds a free
+            // function's do (§T.2.1): the baseline `Clone + Debug + 'static`
+            // the body relies on (a returned parameter is cloned), `Display`
+            // when one is formatted, `Default` for `new T[n]`, and the key
+            // bounds. Written bare, `static <U> U same(U u)` asked rustc to
+            // `clone()` a `U` it knew nothing about.
+            self.emit_static_method_generic_params(method);
             self.w.push('(');
             for (i, param) in method.params.iter().enumerate() {
                 if i > 0 {
@@ -541,5 +547,32 @@ impl RustEmitter {
         if !interface.fields.is_empty() {
             self.w.newline();
         }
+    }
+
+    /// `<U: Clone + std::fmt::Debug + 'static, …>` for a static interface
+    /// method's own type parameters, computed as for a free function. The
+    /// per-declaration bound sets are collected fresh from this method, so an
+    /// earlier declaration's `Hash` / `PartialEq` requirements cannot leak on.
+    fn emit_static_method_generic_params(&mut self, method: &juxc_ast::FnDecl) {
+        if method.generic_params.is_empty() {
+            return;
+        }
+        let displayed = self.fn_displayed_generic_params(method);
+        let defaulted = crate::analysis::new_array_element_params(
+            &method.generic_params,
+            &method.body.iter().collect::<Vec<_>>(),
+            &[],
+        );
+        let mut declared: Vec<juxc_ast::TypeRef> = method.params.iter().map(|p| p.ty.clone()).collect();
+        if let ReturnType::Type(t) | ReturnType::AsyncType(t) = &method.return_type {
+            declared.push(t.clone());
+        }
+        self.collect_key_bound_params(&method.generic_params, declared.iter());
+        self.collect_fn_equality_bound_params(method);
+        self.emit_generic_params_with_clone_bound_plus_display(&method.generic_params, &displayed, &defaulted);
+        self.hash_key_params.clear();
+        self.ord_key_params.clear();
+        self.eq_bound_params.clear();
+        self.hashed_params.clear();
     }
 }

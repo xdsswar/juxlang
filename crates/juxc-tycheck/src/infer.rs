@@ -502,7 +502,15 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     // Unknown, so the backend could not see that a bare
                     // `items` was an array and `items.length` lowered to a
                     // `len()` on the handle instead of on the buffer inside.
-                    if symbols.lookup_field(class_fqn, name).is_some_and(|(f, _)| !f.is_static) {
+                    // A PROPERTY read bare is the same `this.Name` read: an
+                    // auto-property with no initializer is `T?` (§M.7.3.1),
+                    // and a bare `Age + 1` has to see that as `c.Age + 1` does.
+                    let instance_property = symbols
+                        .lookup_property(class_fqn, name)
+                        .is_some_and(|(p, _)| !p.is_static);
+                    if instance_property
+                        || symbols.lookup_field(class_fqn, name).is_some_and(|(f, _)| !f.is_static)
+                    {
                         let this_field = juxc_ast::FieldExpr {
                             object: Box::new(Expr::This(qn.span)),
                             field: qn.segments[0].clone(),
@@ -2369,7 +2377,12 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::BitOr
         | BinaryOp::BitXor
         | BinaryOp::BitAnd => {
-            let right_ty = infer_expr(&b.right, env, symbols);
+            // An operator works on VALUES: a `T?` operand is E0418 (§7.10,
+            // reported by the checker), and the result is what the operator
+            // produces, never nullable. Keeping the `?` reported the same
+            // mistake twice, as E0418 and again as a mismatch at the use.
+            let left_ty = strip_nullable(left_ty);
+            let right_ty = strip_nullable(infer_expr(&b.right, env, symbols));
             // A signed/unsigned pair with no common type is reported once, at
             // this operator (E0410); its result is unknown, so an enclosing
             // `a - b - c` does not report the same mistake again.
@@ -2393,7 +2406,15 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::WrapSub
         | BinaryOp::WrapMul
         | BinaryOp::WrapShl
-        | BinaryOp::WrapShr => left_ty,
+        | BinaryOp::WrapShr => strip_nullable(left_ty),
+    }
+}
+
+/// `T` for a `T?`, anything else unchanged.
+fn strip_nullable(ty: Ty) -> Ty {
+    match ty {
+        Ty::Nullable(inner) => *inner,
+        other => other,
     }
 }
 
