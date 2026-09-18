@@ -526,6 +526,7 @@ impl RustEmitter {
         // locals the block declares -- they leave `nullable_locals` with the
         // block they were declared in.
         let outer_nullable = self.nullable_locals.clone();
+        self.note_fixed_array_escapes(&block.statements);
         for stmt in &block.statements {
             // Per-statement source-map marker (only when `source` is
             // attached on the emitter — see `lower_with_source`).
@@ -537,6 +538,86 @@ impl RustEmitter {
             self.emit_stmt(stmt);
         }
         self.nullable_locals = outer_nullable;
+    }
+
+    /// Record, for every `T[N]` local declared directly in `statements`,
+    /// whether a later statement in the same block (its whole scope) hands it
+    /// to a `T[]` slot; such a local is stored runtime-sized (see
+    /// `fixed_array_dynamic_decls`). Called for every block, a function body
+    /// included.
+    pub(crate) fn note_fixed_array_escapes(&mut self, statements: &[Stmt]) {
+        for (i, stmt) in statements.iter().enumerate() {
+            if let Stmt::VarDecl(v) = stmt {
+                let fixed = v.ty.as_ref().and_then(|t| t.array_shape.as_ref()).is_some_and(|shape| {
+                    shape.dims.iter().any(|d| matches!(d, juxc_ast::ArrayDim::Fixed(_)))
+                });
+                if fixed {
+                    if let Some(dynamic) = self.fixed_array_escape(&v.name.text, &statements[i + 1..]) {
+                        self.fixed_array_dynamic_decls.insert(v.span, dynamic);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the array local `name` flows into a runtime-sized array slot
+    /// anywhere in `rest` (the statements after its declaration, nested ones
+    /// included): passed as an argument to a `T[]` parameter, used to
+    /// initialize or assign a `T[]` variable, or returned from a function
+    /// declared to return `T[]`. The answer is, per dimension outermost
+    /// first, whether that slot's dimension is runtime-sized; `None` when the
+    /// array never leaves fixed-size slots.
+    ///
+    /// A fixed array and a runtime-sized one lower to different Rust storage
+    /// (`[T; N]` and `Vec<T>`), and an array is a reference (§6.5.2): handing
+    /// a copy to the `T[]` slot would make the callee's writes vanish. Storing
+    /// the local runtime-sized from the start keeps one array under both
+    /// names, and the language allows it: `T[N]` in a declaration constrains
+    /// the length, it does not ask for fixed storage.
+    fn fixed_array_escape(&self, name: &str, rest: &[Stmt]) -> Option<Vec<bool>> {
+        fn dynamic_dims(t: &juxc_ast::TypeRef) -> Option<Vec<bool>> {
+            let shape = t.array_shape.as_ref()?;
+            let dims: Vec<bool> = shape.dims.iter().map(|d| matches!(d, juxc_ast::ArrayDim::Dynamic)).collect();
+            dims.iter().any(|d| *d).then_some(dims)
+        }
+        let is_name = |e: &Expr| matches!(e, Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == name);
+        let return_dims = match &self.current_return_type {
+            Some(juxc_ast::ReturnType::Type(t)) => dynamic_dims(t),
+            _ => None,
+        };
+        let mut found: Option<Vec<bool>> = None;
+        let scope = Block { statements: rest.to_vec(), span: Span::DUMMY };
+        juxc_ast::visit::for_each_node(&scope, &mut |node| {
+            if found.is_some() {
+                return;
+            }
+            match node {
+                juxc_ast::visit::Node::Expr(Expr::Call(c)) => {
+                    for (i, arg) in c.args.iter().enumerate() {
+                        if is_name(arg) {
+                            if let Some(dims) = self.callee_param_type(&c.callee, i).as_ref().and_then(dynamic_dims) {
+                                found = Some(dims);
+                            }
+                        }
+                    }
+                }
+                juxc_ast::visit::Node::Stmt(Stmt::VarDecl(v)) if v.init.as_ref().is_some_and(is_name) => {
+                    found = v.ty.as_ref().and_then(dynamic_dims);
+                }
+                juxc_ast::visit::Node::Stmt(Stmt::Assign(a)) if a.op.is_none() && is_name(&a.value) => {
+                    if let Some(juxc_tycheck::Ty::Array { kind: juxc_tycheck::ArrayKind::Dynamic, .. }) =
+                        self.expr_types.get(&expr_span_of(&a.target))
+                    {
+                        found = Some(vec![true]);
+                    }
+                }
+                juxc_ast::visit::Node::Stmt(Stmt::Return(Some(e), _)) if is_name(e) => {
+                    found = return_dims.clone();
+                }
+                _ => {}
+            }
+        });
+        found
     }
 
     /// Emit a single statement. The writer's current indent level is
@@ -2434,6 +2515,37 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        // A `T[N]` local that some later statement hands to a `T[]` slot:
+        // store it as that slot's runtime-sized handle (the rest of the
+        // declaration is emitted as usual, from the rewritten type).
+        if let Some(dynamic) = self.fixed_array_dynamic_decls.remove(&var.span) {
+            let mut rewritten = var.clone();
+            if let Some(shape) = rewritten.ty.as_mut().and_then(|t| t.array_shape.as_mut()) {
+                for (dim, make_dynamic) in shape.dims.iter_mut().zip(dynamic.iter()) {
+                    if *make_dynamic {
+                        *dim = juxc_ast::ArrayDim::Dynamic;
+                    }
+                }
+            }
+            // A brace initializer took its shape from the declared type when
+            // it was parsed; give it the new one, one brace level per
+            // dimension.
+            fn reshape(e: &mut Expr, dynamic: &[bool]) {
+                if let (Expr::NewArrayLit(lit), Some(first)) = (e, dynamic.first()) {
+                    if *first {
+                        lit.fixed = false;
+                    }
+                    for element in &mut lit.elements {
+                        reshape(element, &dynamic[1..]);
+                    }
+                }
+            }
+            if let Some(init) = rewritten.init.as_mut() {
+                reshape(init, &dynamic);
+            }
+            self.emit_var_decl(&rewritten);
+            return;
+        }
         let holds_concrete_polybase = var.ty.is_none()
             && matches!(&var.init, Some(Expr::NewObject(n))
                 if n.class_name.segments.last().is_some_and(|s| self.is_poly_base_class(&s.text)));

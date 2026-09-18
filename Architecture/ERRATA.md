@@ -813,6 +813,24 @@ point at `jux.toml`.
 
 ---
 
+## E42. Sharing a `T[N]` array with a `T[]` slot
+
+**Conflict.** JUX-LANG-V1 §5.5 says `T[N]` passes wherever `T[]` is expected,
+and §6.5.2 says an array is a reference: the function receives the caller's
+array. The two lower to different storage (a fixed Rust array and a vector),
+so the same array under both types cannot exist, and a copy would make the
+callee's writes vanish without a word. Every such call failed in rustc.
+
+**Resolution.** A local declared `T[N]` that is handed to a `T[]` slot is
+stored as a `T[]` is, keeping its `T[N]` type: §6.5.2 already says `T[N]`
+constrains the length, not the storage. Where no single storage serves, the
+program is told (`E0468`): one local handed to both a `T[]` and a `T[N]` slot,
+or a fixed-size parameter or field handed to a `T[]` slot.
+
+**Spec status:** §5.5 states the rule; E0468 is in the catalog.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

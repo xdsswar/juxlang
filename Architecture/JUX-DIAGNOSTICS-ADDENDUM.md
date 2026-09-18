@@ -423,6 +423,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |
 | `E0466`  | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default) | §M.14.5 |
 | `E0467`  | A defaulted parameter precedes a non-defaulted parameter | §M.14.4 |
+| `E0468`  | A `T[N]` array cannot be shared with a `T[]` slot here: one local handed to both a `T[]` and a `T[N]` slot, or a fixed-size parameter or field handed to a `T[]` slot | JUX-LANG-V1 §5.5 / ERRATA E42 |
 | `E0470`  | Annotation applied outside its `@Target` set | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter   | Annotations §A.13              |

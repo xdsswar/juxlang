@@ -1,0 +1,45 @@
+// A fixed-size array `T[N]` handed to a runtime-sized `T[]` slot is the SAME
+// array (JUX-LANG-V1 §5.5, §6.5.2): what the callee writes, the caller sees.
+// The length check stays: `a` is still an `int[3]`.
+
+int sum(int[] xs) {
+    int total = 0;
+    for (var x : xs) {
+        total += x;
+    }
+    return total;
+}
+
+void bump(int[] xs) {
+    xs[0] = 100;
+}
+
+int[] make() {
+    int[3] local = {7, 8, 9};
+    return local;
+}
+
+<int N> int size(int[N] xs) {
+    return N;
+}
+
+public void main() {
+    int[3] a = {1, 2, 3};
+    print(sum(a));
+
+    // The callee's write lands in `a`.
+    bump(a);
+    print(a[0]);
+    print(a.length);
+
+    // A `T[]` variable names the same array.
+    int[] b = a;
+    b[1] = 50;
+    print(a[1]);
+
+    print(sum(make()));
+
+    // An array that stays fixed-size goes to a `<int N>` function.
+    int[4] ones = {1, 1, 1, 1};
+    print(size(ones));
+}

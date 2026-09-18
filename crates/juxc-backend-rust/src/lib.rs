@@ -1103,6 +1103,13 @@ struct RustEmitter {
     /// read and clones only at the reads listed here — the same choice a Rust
     /// programmer makes by hand.
     pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
+    /// `T[N]` local declarations (by span) whose value flows into a
+    /// runtime-sized `T[]` slot later in their block, with, per dimension
+    /// (outermost first), whether that slot makes it runtime-sized. Such a
+    /// local is STORED as the runtime-sized handle so both names share one
+    /// array (LANG-V1 §5.5, §6.5.2); its static type is still `T[N]`. Filled
+    /// by `emit_block_contents`, consumed by `emit_var_decl`.
+    pub(crate) fixed_array_dynamic_decls: std::collections::HashMap<juxc_source::Span, Vec<bool>>,
     /// Per lambda span, the captured bindings the body reads again after the
     /// capture, with one read's span each (`crate::lastuse::captures_read_again`).
     /// The lambda clones those before its `move` closure takes them.
@@ -5069,6 +5076,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
+            fixed_array_dynamic_decls: std::collections::HashMap::new(),
             captures_read_again: std::collections::HashMap::new(),
             sync_classes: std::collections::HashSet::new(),
             sync_class_fqns: std::collections::HashSet::new(),

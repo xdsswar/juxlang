@@ -1,0 +1,9 @@
+int sum(int[] xs) { return xs.length; }
+<int N> int size(int[N] xs) { return N; }
+<int N> int forward(int[N] xs) { return sum(xs); }
+
+public void main() {
+    int[3] a = {1, 2, 3};
+    print(sum(a));
+    print(size(a));
+}

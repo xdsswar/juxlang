@@ -351,6 +351,10 @@ pub(crate) struct Checker<'a> {
     /// outside a function body, and also inside constructor bodies
     /// (constructors don't `return value;`).
     pub(crate) current_return: Option<Ty>,
+    /// Per `T[N]` local, where it was first handed to a runtime-sized `T[]`
+    /// slot and where to a fixed `T[N]` one. Both at once is E0468
+    /// (JUX-LANG-V1 §5.5); decided when the local's block ends.
+    pub(crate) fixed_array_slot_uses: std::collections::HashMap<String, (Option<Span>, Option<Span>)>,
     /// Raw-pointer depth of the enclosing function's declared return type
     /// (`int*` is 1), for the pointer check on `return` (§L.6.1a).
     pub(crate) current_return_ptr: u8,
@@ -513,6 +517,7 @@ impl<'a> Checker<'a> {
             symbols,
             diagnostics,
             current_return: None,
+            fixed_array_slot_uses: std::collections::HashMap::new(),
             current_return_ptr: 0,
             current_return_void: false,
             expr_types: HashMap::new(),
@@ -1154,6 +1159,7 @@ impl<'a> Checker<'a> {
                 let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
                 self.env.declare(&param.name.text, ty);
                 self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+                self.note_fixed_array_decl(&param.name.text, &param.ty, true);
                 if crate::infer::type_ref_is_void_pointer(&param.ty) {
                     self.env.declare_void_base(&param.name.text);
                 }
@@ -1863,6 +1869,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -2608,6 +2615,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -2682,6 +2690,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -3292,6 +3301,7 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
             }
@@ -3734,6 +3744,101 @@ impl<'a> Checker<'a> {
             self.check_stmt(stmt);
         }
         self.assigned_in_block = saved;
+        // A `T[N]` local this block declared, handed both to a `T[]` slot and
+        // to a `T[N]` one: the two need different storage for one array.
+        for stmt in &block.statements {
+            let Stmt::VarDecl(v) = stmt else { continue };
+            if let Some((Some(_), Some(fixed_at))) = self.fixed_array_slot_uses.remove(&v.name.text) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0468_FixedArrayNotShareable,
+                        format!(
+                            "`{}` is handed to a runtime-sized array slot and also to a fixed-size one here: one array cannot be stored both ways (JUX-LANG-V1 §5.5)",
+                            v.name.text,
+                        ),
+                    )
+                    .with_span(fixed_at)
+                    .with_help(format!(
+                        "declare `{}` with a runtime-sized type (`[]`), or pass `{}.clone()` where a copy is meant",
+                        v.name.text, v.name.text,
+                    )),
+                );
+            }
+        }
+    }
+
+    /// Record `name` as declared with a fixed-size array type when `ty` has a
+    /// fixed dimension (see [`TypeEnv::declare_fixed_array`]).
+    fn note_fixed_array_decl(&mut self, name: &str, ty: &juxc_ast::TypeRef, is_param: bool) {
+        let fixed = ty
+            .array_shape
+            .as_ref()
+            .is_some_and(|shape| shape.dims.iter().any(|d| matches!(d, juxc_ast::ArrayDim::Fixed(_))));
+        if fixed && ty.ptr_depth == 0 {
+            self.env.declare_fixed_array(name, is_param);
+            if !is_param {
+                self.fixed_array_slot_uses.remove(name);
+            }
+        }
+    }
+
+    /// `value` flows into an array slot whose outermost dimension is
+    /// runtime-sized (`slot_dynamic`) or fixed. A declared-`T[N]` local is
+    /// noted for the end-of-block check; a declared-`T[N]` parameter or field
+    /// going into a runtime-sized slot is E0468 at once, since its storage
+    /// was fixed where it was declared (JUX-LANG-V1 §5.5, ERRATA E42).
+    fn note_array_slot(&mut self, value: &Expr, slot_dynamic: bool, span: Span) {
+        let (what, param) = match value {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                match self.env.fixed_array(name) {
+                    Some(false) => {
+                        let entry = self.fixed_array_slot_uses.entry(name.to_string()).or_default();
+                        if slot_dynamic {
+                            entry.0.get_or_insert(span);
+                        } else {
+                            entry.1.get_or_insert(span);
+                        }
+                        return;
+                    }
+                    Some(true) => (format!("parameter `{name}`"), true),
+                    None => return,
+                }
+            }
+            Expr::Field(f) => {
+                let Ty::User { name: class, .. } = infer_expr(&f.object, &self.env, self.symbols) else {
+                    return;
+                };
+                let fixed = self.symbols.lookup_field(&class, &f.field.text).is_some_and(|(fs, _)| {
+                    fs.ty.array_shape.as_ref().is_some_and(|shape| {
+                        shape.dims.iter().any(|d| matches!(d, juxc_ast::ArrayDim::Fixed(_)))
+                    })
+                });
+                if !fixed {
+                    return;
+                }
+                (format!("field `{}`", f.field.text), false)
+            }
+            _ => return,
+        };
+        if !slot_dynamic {
+            return;
+        }
+        let ty = infer_expr(value, &self.env, self.symbols);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0468_FixedArrayNotShareable,
+                format!(
+                    "{what} is a fixed-size array (`{ty}`) and cannot be handed to a runtime-sized array slot as the same array (JUX-LANG-V1 §5.5)"
+                ),
+            )
+            .with_span(span)
+            .with_help(if param {
+                "declare the parameter with a runtime-sized type (`[]`), or pass a copy with `.clone()`"
+            } else {
+                "declare the field with a runtime-sized type (`[]`), or pass a copy with `.clone()`"
+            }),
+        );
     }
 
     /// E0418 (§7.10): `recv.member` where `recv` is `T?` and no test has
@@ -3995,6 +4100,12 @@ impl<'a> Checker<'a> {
                 // — reject the non-dispatchable forms before the backend
                 // emits a broken slot type.
                 if let Some(t) = &v.ty {
+                    if let (Some(shape), Some(init)) = (t.array_shape.as_ref(), v.init.as_ref()) {
+                        if let Some(outer) = shape.dims.first() {
+                            let slot_dynamic = matches!(outer, juxc_ast::ArrayDim::Dynamic);
+                            self.note_array_slot(init, slot_dynamic, expr_span(init));
+                        }
+                    }
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
                     self.check_fixed_array_size_in_type(t);
@@ -4101,6 +4212,9 @@ impl<'a> Checker<'a> {
                     (None, None) => false,
                 };
                 self.env.declare(&v.name.text, final_ty);
+                if let Some(t) = &v.ty {
+                    self.note_fixed_array_decl(&v.name.text, t, false);
+                }
                 self.env.declare_pointer(&v.name.text, ptr_depth);
                 if void_base {
                     self.env.declare_void_base(&v.name.text);
@@ -4271,6 +4385,10 @@ impl<'a> Checker<'a> {
                 // mutably borrow `self` to walk the expression below
                 // without a borrow conflict on `current_return`.
                 let expected = self.current_return.clone();
+                // An array returned where the function returns `T[]` or `T[N]`.
+                if let (Some(Ty::Array { kind, .. }), Some(e)) = (&expected, opt) {
+                    self.note_array_slot(e, *kind == crate::ty::ArrayKind::Dynamic, expr_span(e));
+                }
                 match (&expected, opt) {
                     // Bare `return;` inside a void function — fine.
                     (Some(t), None) if t.is_void() => {}
@@ -10080,6 +10198,19 @@ impl<'a> Checker<'a> {
         subst_args: &[Ty],
     ) {
         self.check_wildcard_receiver_write(callee_name, params, subst_params, subst_args, call_span);
+        // An array argument handed to an array parameter (JUX-LANG-V1 §5.5).
+        for (i, arg) in args.iter().enumerate() {
+            if arg_names.get(i).is_some_and(|n| n.is_some()) {
+                continue;
+            }
+            let Some(param) = params.get(i) else { break };
+            if let Some(shape) = param.ty.array_shape.as_ref() {
+                if let Some(outer) = shape.dims.first() {
+                    let slot_dynamic = matches!(outer, juxc_ast::ArrayDim::Dynamic);
+                    self.note_array_slot(arg, slot_dynamic, expr_span(arg));
+                }
+            }
+        }
         // ---- variadic callee (§7.2 / §E.1.2.1) ----
         //
         // The last parameter being `T...` switches the mapping:
