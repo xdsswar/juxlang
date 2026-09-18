@@ -1,0 +1,56 @@
+// Java-style enum fields and constructors (JUX-LANG-V1 §7.7.4) and the
+// lookups (§7.7.3), against Java's enum with fields and `valueOf`.
+// `fromNameStrict` is Java's `valueOf` with null instead of an exception.
+
+enum Planet {
+    Mercury(3.303e+23, 2.4397e6),
+    Venus(4.869e+24, 6.0518e6),
+    Earth(5.976e+24, 6.37814e6);
+
+    private final double mass;
+    private final double radius;
+
+    Planet(double mass, double radius) {
+        this.mass = mass;
+        this.radius = radius;
+    }
+
+    public double gravity() {
+        return 6.67300E-11 * mass / (radius * radius);
+    }
+}
+
+enum Op {
+    Add("+", 1),
+    Mul("*", 2);
+
+    public final String symbol;
+    public final int precedence;
+
+    Op(String symbol, int precedence) {
+        this.symbol = symbol;
+        this.precedence = precedence;
+    }
+
+    public int apply(int a, int b) {
+        return switch (this) {
+            case Add -> a + b;
+            case Mul -> a * b;
+        };
+    }
+}
+
+public void main() {
+    for (var p : Planet.values()) {
+        long g = (long) (p.gravity() * 1000.0);
+        print(p.name() + " " + p.ordinal() + " " + g);
+    }
+    for (var op : Op.values()) {
+        print(op.symbol + " " + op.precedence + " " + op.apply(6, 7));
+    }
+    var found = Planet.fromNameStrict("Venus");
+    print(found == null ? "missing" : found!!.name());
+    var missing = Planet.fromNameStrict("Pluto");
+    print(missing == null ? "missing" : missing!!.name());
+    print(Op.fromOrdinal(1) == null ? "none" : Op.fromOrdinal(1)!!.symbol);
+}

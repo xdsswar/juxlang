@@ -1,0 +1,53 @@
+// Compact and additional record constructors (JUX-LANG-V1 §7.6.1), against
+// Java's. The compact form normalizes before the components are stored; an
+// additional constructor delegates with `this(...)`. Components are printed
+// by name, since the two languages spell a record's text differently.
+
+record Range(int lo, int hi) {
+    Range {
+        if (lo > hi) {
+            int t = lo;
+            lo = hi;
+            hi = t;
+        }
+    }
+
+    Range(int single) {
+        this(single, single);
+    }
+
+    public int length() { return hi - lo; }
+}
+
+record Name(String first, String last) {
+    Name {
+        if (first == "") {
+            throw new IllegalArgumentException("empty first name");
+        }
+    }
+
+    Name(String only) {
+        this(only, "?");
+    }
+
+    public String full() { return first + " " + last; }
+}
+
+String show(Range r) {
+    return r.lo + ".." + r.hi + " (" + r.length() + ")";
+}
+
+public void main() {
+    print(show(new Range(1, 5)));
+    print(show(new Range(9, 2)));
+    print(show(new Range(4)));
+    print(new Range(9, 2) == new Range(2, 9));
+    print(new Name("Ada", "Lovelace").full());
+    print(new Name("Plato").full());
+    try {
+        new Name("", "x");
+        print("accepted");
+    } catch (IllegalArgumentException e) {
+        print("rejected: " + e.message);
+    }
+}

@@ -983,6 +983,10 @@ struct RustEmitter {
     /// (`self.clone()`, enums always derive Clone) so binders own
     /// their payloads and `return v;` type-checks for generic `T`.
     pub(crate) in_enum_method: bool,
+    /// The per-variant fields (JUX-LANG-V1 §7.7.4) of the enum whose methods
+    /// are being emitted, by name. A bare `mass` in one of its methods reads
+    /// `this.mass`, which lowers through the enum's `__field` accessor.
+    pub(crate) enclosing_enum_fields: std::collections::HashMap<String, juxc_ast::TypeRef>,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -5061,6 +5065,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             in_catch_arm: false,
             catch_rethrow: None,
             in_enum_method: false,
+            enclosing_enum_fields: std::collections::HashMap::new(),
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,

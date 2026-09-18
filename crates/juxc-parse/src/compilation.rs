@@ -475,9 +475,11 @@ impl<'a> Parser<'a> {
                 .parse_annotation_decl(annotations, visibility)
                 .map(TopLevelDecl::Annotation);
         }
-        // `const NAME …;` is unambiguously a top-level constant —
-        // `const` is never a class modifier in Jux.
-        if self.eat_kw(Keyword::Const) {
+        // `const NAME …;` is a top-level constant. `const class X` is the
+        // one exception: `const` on a type declaration means `final`
+        // (JUX-LANG-V1 §7.3.1), so a `const` that a type keyword follows is
+        // left for the modifier loop below.
+        if self.at_kw(Keyword::Const) && !looks_like_class_modifier_chain(self) && self.eat_kw(Keyword::Const) {
             let decl =
                 self.parse_const_decl(annotations, visibility, /*used_final=*/ false)?;
             return Some(TopLevelDecl::Const(decl));
@@ -511,7 +513,8 @@ impl<'a> Parser<'a> {
         loop {
             if self.eat_kw(Keyword::Abstract) {
                 is_abstract_top = true;
-            } else if self.eat_kw(Keyword::Final) {
+            } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                // `const class` is `final class` spelled another way (§7.3.1).
                 is_final_top = true;
             } else if self.eat_kw(Keyword::Sealed) {
                 is_sealed_top = true;
@@ -550,6 +553,33 @@ impl<'a> Parser<'a> {
         if is_sealed_top && !is_abstract_top && !is_final_top && self.at_kw(Keyword::Interface) {
             let interface_decl = self.parse_interface_decl(annotations, visibility, true)?;
             return Some(TopLevelDecl::Interface(interface_decl));
+        }
+        // A record is implicitly final and an enum implicitly sealed (§7.6,
+        // §7.7.6), so the modifier that says so again is accepted as written:
+        // `final record` (and `const record`), `sealed enum` (and `final
+        // enum`). The one that contradicts it is an error.
+        if (is_abstract_top || is_final_top || is_sealed_top)
+            && (self.at_kw(Keyword::Record) || self.at_kw(Keyword::Enum))
+        {
+            let is_record = self.at_kw(Keyword::Record);
+            let contradiction = if is_abstract_top {
+                Some(format!("{} cannot be `abstract`: it is a complete type with a fixed shape", if is_record { "a record" } else { "an enum" }))
+            } else if is_record && is_sealed_top {
+                Some("a record cannot be `sealed`: it is already final, so nothing extends it; use a `sealed interface` that records implement".to_string())
+            } else {
+                None
+            };
+            if let Some(message) = contradiction {
+                self.diagnostics.push(
+                    Diagnostic::error(code::Code::E0200_UnexpectedToken, message).with_span(self.peek_span()),
+                );
+            }
+            if is_record {
+                let record_decl = self.parse_record_decl(annotations, visibility)?;
+                return Some(TopLevelDecl::Record(record_decl));
+            }
+            let enum_decl = self.parse_enum_decl(annotations, visibility)?;
+            return Some(TopLevelDecl::Enum(enum_decl));
         }
         if is_abstract_top || is_final_top || is_sealed_top {
             // A class modifier was consumed but no `class` followed —
@@ -763,8 +793,14 @@ fn looks_like_class_modifier_chain<'a>(parser: &crate::Parser<'a>) -> bool {
         match parser.tokens.get(i).map(|t| &t.kind) {
             Some(TokenKind::Kw(Keyword::Final))
             | Some(TokenKind::Kw(Keyword::Abstract))
-            | Some(TokenKind::Kw(Keyword::Sealed)) => i += 1,
-            Some(TokenKind::Kw(Keyword::Class)) => return true,
+            | Some(TokenKind::Kw(Keyword::Sealed))
+            | Some(TokenKind::Kw(Keyword::Const)) => i += 1,
+            // A type keyword after the modifiers: `final class`, `const
+            // class`, `final record`, `sealed enum`, and `final interface`
+            // (which the modifier check then rejects with a clear message).
+            Some(TokenKind::Kw(
+                Keyword::Class | Keyword::Record | Keyword::Enum | Keyword::Interface,
+            )) => return true,
             _ => return false,
         }
     }

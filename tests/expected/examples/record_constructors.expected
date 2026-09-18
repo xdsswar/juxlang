@@ -1,0 +1,8 @@
+Range(lo: 1, hi: 5)
+Range(lo: 2, hi: 9)
+Range(lo: 7, hi: 7)
+Range(lo: 0, hi: 0)
+5
+Temperature(celsius: 21.5)
+Temperature(celsius: 100.0)
+rejected: below absolute zero: -300.0

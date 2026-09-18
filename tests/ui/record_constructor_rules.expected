@@ -1,0 +1,5 @@
+record_constructor_rules.jux:3:13: [E0491] error: a compact constructor cannot use `this`: the record does not exist until it ends. Read and assign the components by name, as parameters
+record_constructor_rules.jux:4:13: [E0491] error: a compact constructor cannot `return`: the components are stored when its body ends, and a `return` would skip that
+record_constructor_rules.jux:8:5: [E0491] error: a record has at most one compact constructor
+record_constructor_rules.jux:11:5: [E0492] error: this constructor of record `Range` must begin with `this(...)`: a record's state is its header, so every constructor passes the component values on to the canonical one
+record_constructor_rules.jux:15:5: [E0493] error: record `Range` already has this constructor: its header declares it. To check or adjust the values, write the compact form `Range { … }` with no parameter list

@@ -2360,18 +2360,25 @@ Every enum gets these auto-generated methods, available on instances and statica
 | `value.ordinal()`                   | any enum instance        | `int` — zero-based declaration index          |
 | `Self.values()`                     | no-payload enums only    | `Self[]` — every variant in declaration order |
 | `Self.fromName(String)`             | no-payload enums only    | `Self?` — null on miss; case-insensitive       |
+| `Self.fromNameStrict(String)`       | no-payload enums only    | `Self?` — null on miss; exact spelling only    |
 | `Self.fromOrdinal(int)`             | no-payload enums only    | `Self?` — null if out-of-range                 |
-| `Self.cases()`                      | any enum                 | `Vec<EnumCase<Self>>` — variant descriptors  |
+| `Self.cases()`                      | any enum without type parameters | `Vec<EnumCase<Self>>` — variant descriptors  |
 
 `Self.values()` is restricted to no-payload enums because variants with payloads can't be enumerated without invented payload data. For payload-carrying enums, `Self.cases()` returns descriptors (variant name, ordinal, payload type signature) — useful for reflection.
 
-**Phase 1 implements `name()`, `ordinal()` and `values()`.** The other three
-rows of the table are not available yet: `fromName` / `fromOrdinal` want a
-decision about the case-insensitive default before they are worth having, and
-`cases()` needs the `EnumCase<T>` descriptor type, which does not exist. A
-call to any of them is an ordinary unresolved-member error.
+`fromName` is **case-insensitive** by default (matches `"North"`, `"north"`, `"NORTH"`). For strict matching, use `fromNameStrict(String)`. When two variants differ only in case (`Red` and `RED`), `fromName` returns the one spelled exactly as asked, and otherwise the first declared: a lookup never picks between two equally good answers at random.
 
-`fromName` is **case-insensitive** by default (matches `"North"`, `"north"`, `"NORTH"`). For strict matching, use `fromNameStrict(String)`.
+`EnumCase<T>` (package `jux.std.meta`, in scope without an import) describes one variant:
+
+| Member          | Returns   | Meaning                                                            |
+|-----------------|-----------|--------------------------------------------------------------------|
+| `name()`        | `String`  | the variant's declared name                                        |
+| `ordinal()`     | `int`     | its zero-based position                                            |
+| `payload()`     | `String`  | the payload as declared, `(int status, String body)`; empty if none |
+| `hasPayload()`  | `bool`    | whether the variant carries a payload                              |
+| `value()`       | `T?`      | the variant itself when it has no payload, `null` when it has one  |
+
+A descriptor prints as its name followed by its payload, `Ok(int status, String body)`.
 
 ```java
 public enum Color { Red, Green, Blue }
@@ -2412,6 +2419,13 @@ print(Planet.Earth.surfaceGravity());    // 9.802...
 ```
 
 This is the same shape as Java's enum-with-fields, but with all the extra power of payload-carrying variants.
+
+The rules of this form (ERRATA E34):
+
+- An enum that declares a constructor passes each variant's arguments to it: `Mercury(3.303e23, 2.4397e6)` is a call, not a payload declaration. Such an enum has no payload variants and no type parameters (`E0496`), and a variant that passes arguments needs a constructor to take them (`E0496`).
+- The per-variant fields are `final` (`E0494`): a variant is one value, the same everywhere it is used.
+- A constructor only gives each field its value, once: `this.mass = mass;` per field, reading its parameters but not `this` (`E0495`). Validation belongs in a static method that picks a variant, not in the constructor.
+- The values are computed once per variant, in declaration order, the first time the enum is used, as Java runs its enum constructors when the enum is first initialized. A field reads like a class's: `this.mass`, a bare `mass` inside the enum, or `Planet.Earth.mass` where visibility allows.
 
 #### 7.7.4.1. Enums May Implement Interfaces
 

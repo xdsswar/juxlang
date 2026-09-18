@@ -1,0 +1,8 @@
+abstract record Money(long cents) {}
+sealed record Tag(String name) {}
+abstract enum Mode { On, Off }
+sealed enum Color permits Red, Blue { Red, Green }
+const class Base {}
+class Derived extends Base {}
+
+public void main() {}

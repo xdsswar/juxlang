@@ -306,6 +306,17 @@ pub struct RecordDecl {
     /// parser sets `is_static = true` on every entry and rejects
     /// non-static fields with E0200 to keep that rule explicit.
     pub static_fields: Vec<FieldDecl>,
+    /// The **compact constructor** (JUX-LANG-V1 §7.6.1): `Range { … }`, a
+    /// body with no parameter list. It runs before the components are
+    /// stored, sees them as parameters it may reassign (to normalize), and
+    /// the values they hold when it ends are what the record keeps. Carried
+    /// as a [`ConstructorDecl`] with no params. At most one.
+    pub compact_ctor: Option<ConstructorDecl>,
+    /// **Additional constructors** (§7.6.1), `Range(int single) {
+    /// this(single, single); }`. Each must begin with `this(...)`, which
+    /// reaches the canonical constructor directly or through another
+    /// additional one, so every path ends with the components set.
+    pub constructors: Vec<ConstructorDecl>,
     /// Span covering the whole `record … { … }` declaration.
     pub span: Span,
 }
@@ -351,6 +362,12 @@ pub struct EnumDecl {
     /// implicitly final — so this is its whole supertype list. Same shape as
     /// [`RecordDecl::implements`].
     pub implements: Vec<TypeRef>,
+    /// The `permits A, B` list of a `sealed enum` (JUX-CORE-LIB-ADDENDUM
+    /// writes `sealed enum Option<T> permits Some, None`). An enum is sealed
+    /// by default (JUX-LANG-V1 §7.7.6), so the list only restates the
+    /// variants; the checker requires it to name exactly them (E0490).
+    /// Empty when no `permits` clause was written.
+    pub permits: Vec<Ident>,
     /// Variant declarations in source order. Order determines auto-
     /// derived ordinal values when those land.
     pub variants: Vec<EnumVariant>,
@@ -369,6 +386,15 @@ pub struct EnumDecl {
     /// `const` fields in the enum body — implicitly static, like
     /// interface constants.
     pub constants: Vec<FieldDecl>,
+    /// Per-variant fields, the Java-style form (JUX-LANG-V1 §7.7.4):
+    /// `private final double mass;`, one value per variant, set by the
+    /// constructor from the variant's arguments. Final by rule (E0494: an
+    /// enum value is immutable). Empty for an enum without them.
+    pub fields: Vec<FieldDecl>,
+    /// The enum's constructors (§7.7.4), `Planet(double mass, double
+    /// radius) { this.mass = mass; ... }`. Each variant's arguments,
+    /// `Mercury(3.303e23, 2.4397e6)`, are a call to one of them.
+    pub constructors: Vec<ConstructorDecl>,
     /// Span covering the whole `enum Name { … }` declaration.
     pub span: Span,
 }
@@ -390,6 +416,11 @@ pub struct EnumVariant {
     /// repr = "…")` C enum, where it sets the variant's integer value; the
     /// backend emits it after the variant name (`Ok = 200,`).
     pub discriminant: Option<Expr>,
+    /// Constructor arguments, the Java-style form (JUX-LANG-V1 §7.7.4):
+    /// `Mercury(3.303e23, 2.4397e6)` in an enum that declares a constructor.
+    /// Distinct from [`Self::payload`], which declares the TYPES a payload
+    /// variant carries. At most one of the two is non-empty.
+    pub args: Vec<Expr>,
     /// Span covering the variant declaration.
     pub span: Span,
 }

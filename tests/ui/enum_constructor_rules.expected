@@ -1,0 +1,7 @@
+enum_constructor_rules.jux:5:13: [E0494] error: field `cents` of enum `Coin` must be `final`: a variant is one immutable value, and its fields are set once, by its constructor
+enum_constructor_rules.jux:7:5: [E0495] error: an enum constructor only gives each field its value (`this.mass = mass;`): the values are computed once per variant, from its arguments, so there is no place for other statements
+enum_constructor_rules.jux:14:5: [E0496] error: variant `Small` passes arguments, but enum `Size` declares no constructor to take them. Declare one (`Size(...) { ... }`) with fields for the values, or write a payload variant with the types it carries (`Small(int code)`)
+enum_constructor_rules.jux:15:5: [E0496] error: variant `Large` passes arguments, but enum `Size` declares no constructor to take them. Declare one (`Size(...) { ... }`) with fields for the values, or write a payload variant with the types it carries (`Large(int code)`)
+enum_constructor_rules.jux:20:5: [E0496] error: variant `Payload` declares a payload, but enum `Mixed` has a constructor: its variants pass constructor arguments instead (`Payload(value, ...)`). Use one form or the other
+enum_constructor_rules.jux:35:5: [E0495] error: this constructor of enum `Pair` leaves `b` without a value
+enum_constructor_rules.jux:37:9: [E0495] error: field `a` is set twice

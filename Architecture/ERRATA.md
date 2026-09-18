@@ -796,6 +796,74 @@ is `E0489`.
 
 ---
 
+## E32. The enum lookups and `cases()`
+
+**Conflict.** JUX-LANG-V1 §7.7.3 listed `fromName`, `fromOrdinal` and
+`cases()` in its table and then said none of them existed: `fromName` waited
+on a case-insensitivity decision and `cases()` on an `EnumCase<T>` type
+nobody had defined. The same section had already made the decision
+(case-insensitive, with `fromNameStrict` for exact matching), and a call
+reached rustc instead of failing in Jux.
+
+**Resolution.** All four exist. `fromName` is case-insensitive; when two
+variants differ only in case the exact spelling wins, then the first
+declared. `EnumCase<T>` is a stdlib class in `jux.std.meta` with `name()`,
+`ordinal()`, `payload()`, `hasPayload()` and `value()`. `value()` is not in
+the original description; it gives the descriptor's type parameter a use (a
+payload-free variant's own value, `null` for a payload variant), which is
+also what lets a program go from a descriptor back to the variant. `cases()`
+is on every enum without type parameters: `Tree.cases()` is a static call,
+with no type arguments to say what `EnumCase<Tree<T>>` holds.
+
+**Spec status:** JUX-LANG-V1 §7.7.3 states the rules and the `EnumCase`
+members.
+
+---
+
+## E34. Values that belong to each enum variant
+
+**Conflict.** JUX-LANG-V1 §7.7.4 showed a Java-style enum with fields and a
+constructor (`Planet`) without saying how a variant's arguments reach the
+constructor, when the constructor runs, or what a constructor may do, and the
+grammar (§A.2.5) had no field or constructor members for an enum at all. The
+grammar also let any enum write an explicit discriminator (`Ok = 200`), while
+Layout-ABI §L.1.3 rejects one outside `@layout(c)` with `E0510`.
+
+**Resolution.** In an enum that declares a constructor, a variant's
+parentheses hold constructor arguments. The per-variant fields are `final`
+(`E0494`); a constructor gives each one its value exactly once and does
+nothing else (`E0495`); the values are computed once per variant, in
+declaration order, on first use. Such an enum has no payload variants and no
+type parameters, and arguments without a constructor are an error (all
+`E0496`). An explicit discriminator stays a C-enum feature: its value is the
+variant's integer representation, which only `@layout(c)` pins, and a value
+that merely belongs to each variant is what the per-variant field is for.
+
+**Spec status:** JUX-LANG-V1 §7.7.4 and Grammar §A.2.5 state the rules;
+Layout-ABI §L.1.3 points from `E0510` to the field form.
+
+---
+
+## E33. Modifiers on records and enums
+
+**Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and
+interfaces and gave records and enums no modifiers at all, while JUX-LANG-V1
+writes `public final record Circle(...)` (§7.5) and `public sealed enum
+HttpResponse` (§7.7.1), and JUX-CORE-LIB-ADDENDUM writes `sealed enum
+Option<T> permits Some, None`. The parser rejected all three, and `const
+class`, which §7.3.1 defines as a synonym for `final class`.
+
+**Resolution.** A modifier that restates what the type already is, is
+accepted and changes nothing: `final` or `const` on a record, `sealed` or
+`final` on an enum. `const class` is `final class`. A modifier that
+contradicts the type is an error: `abstract` on a record or an enum, `sealed`
+on a record. An enum's `permits` list may name only its own variants, and all
+of them, or it is `E0490`.
+
+**Spec status:** Grammar §A.2.5 states the rule; `E0490` is in the catalog.
+
+---
+
 ## E38. There is no `module.jux`
 
 **Conflict.** JUX-LANG-V1 §4.3 and JUX-BUILD-SYSTEM-ADDENDUM §B.3 specified a

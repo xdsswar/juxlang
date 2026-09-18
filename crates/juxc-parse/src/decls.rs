@@ -232,6 +232,7 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Kw(Keyword::Abstract))
                         | Some(TokenKind::Kw(Keyword::Final))
                         | Some(TokenKind::Kw(Keyword::Sealed))
+                        | Some(TokenKind::Kw(Keyword::Const))
                 ) {
                     probe += 1;
                 }
@@ -245,9 +246,21 @@ impl<'a> Parser<'a> {
                 );
                 if is_nested_keyword {
                     let _ = self.eat_kw(Keyword::Static);
-                    let is_abstract = self.eat_kw(Keyword::Abstract);
-                    let is_final = self.eat_kw(Keyword::Final);
-                    let is_sealed = self.eat_kw(Keyword::Sealed);
+                    // The modifiers in any order; `const` on a type is `final`
+                    // (JUX-LANG-V1 §7.3.1). A record is final and an enum
+                    // sealed already, so saying so again is accepted.
+                    let (mut is_abstract, mut is_final, mut is_sealed) = (false, false, false);
+                    loop {
+                        if self.eat_kw(Keyword::Abstract) {
+                            is_abstract = true;
+                        } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                            is_final = true;
+                        } else if self.eat_kw(Keyword::Sealed) {
+                            is_sealed = true;
+                        } else {
+                            break;
+                        }
+                    }
                     let nested = match self.peek() {
                         TokenKind::Kw(Keyword::Class) => self
                             .parse_class_decl(
@@ -1756,6 +1769,8 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
         let mut methods = Vec::new();
         let mut static_fields: Vec<juxc_ast::FieldDecl> = Vec::new();
+        let mut compact_ctor: Option<ConstructorDecl> = None;
+        let mut constructors: Vec<ConstructorDecl> = Vec::new();
         // A body-less record may be closed with `;`
         // (`public record Point(int x, int y);`), the shape a one-line record
         // is usually written in. The grammar makes the body optional, so the
@@ -1770,6 +1785,42 @@ impl<'a> Parser<'a> {
                 // carry `@Override` exactly as a class's do.
                 let member_annotations = self.parse_annotations();
                 let member_vis = self.parse_visibility();
+                // A constructor (§7.6.1) begins with the record's own name:
+                // `Range { … }` is the compact form, `Range(int x) { … }` an
+                // additional one.
+                let names_record = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text);
+                let after_name = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+                if names_record && matches!(after_name, Some(TokenKind::LBrace)) {
+                    let ctor_start = self.peek_span();
+                    self.advance(); // the record's name
+                    let body = self.parse_block();
+                    let ctor = ConstructorDecl {
+                        annotations: member_annotations,
+                        visibility: member_vis,
+                        params: Vec::new(),
+                        throws: Vec::new(),
+                        body,
+                        span: ctor_start.join(self.last_consumed_span()),
+                    };
+                    if compact_ctor.is_some() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0491_CompactConstructorMisuse,
+                                "a record has at most one compact constructor",
+                            )
+                            .with_span(ctor.span),
+                        );
+                    } else {
+                        compact_ctor = Some(ctor);
+                    }
+                    continue;
+                }
+                if names_record && matches!(after_name, Some(TokenKind::LParen)) {
+                    if let Some(ctor) = self.parse_constructor_decl(member_annotations, member_vis) {
+                        constructors.push(ctor);
+                    }
+                    continue;
+                }
                 // Member-shape lookahead: walk past modifiers and
                 // the return type, then probe what follows. Three
                 // shapes are recognized:
@@ -1874,9 +1925,9 @@ impl<'a> Parser<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0200_UnexpectedToken,
-                                "record bodies support operator overrides, methods, and \
-                                 static fields only (instance fields and extra \
-                                 constructors are class-exclusive)",
+                                "a record body holds constructors, methods, operator overrides \
+                                 and static fields; its instance state is the header's \
+                                 components",
                             )
                             .with_span(here),
                         );
@@ -1900,6 +1951,8 @@ impl<'a> Parser<'a> {
             operators,
             methods,
             static_fields,
+            compact_ctor,
+            constructors,
             span: start.join(end),
         })
     }
@@ -1929,6 +1982,9 @@ impl<'a> Parser<'a> {
         // `( 'implements' type-list )?` (§A.2.5). An enum is implicitly final
         // and has no `extends`, so interfaces are its only supertypes.
         let implements = self.parse_implements_clause();
+        // `sealed enum Option<T> permits Some, None` restates the variants;
+        // the checker holds it to exactly them (E0490).
+        let permits = self.parse_permits_clause();
         self.expect(&TokenKind::LBrace, "'{' to start enum body");
 
         let mut variants = Vec::new();
@@ -1953,6 +2009,8 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
         let mut methods: Vec<FnDecl> = Vec::new();
         let mut constants: Vec<juxc_ast::FieldDecl> = Vec::new();
+        let mut fields: Vec<juxc_ast::FieldDecl> = Vec::new();
+        let mut constructors: Vec<ConstructorDecl> = Vec::new();
         if self.eat(&TokenKind::Semicolon) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
                 // `enum-member = annotation* ( function-decl | const-decl )`
@@ -1984,6 +2042,15 @@ impl<'a> Parser<'a> {
                     };
                     self.operator_kw_starts_decl(after_type)
                 };
+                // A constructor (§7.7.4): the enum's own name, then `(`.
+                let names_enum = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text)
+                    && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LParen));
+                if names_enum {
+                    if let Some(ctor) = self.parse_constructor_decl(member_annotations, member_vis) {
+                        constructors.push(ctor);
+                    }
+                    continue;
+                }
                 if is_operator {
                     if let Some(op) = self.parse_operator_decl(member_vis) {
                         operators.push(op);
@@ -1993,12 +2060,28 @@ impl<'a> Parser<'a> {
                     // implicitly static (interface-constant rules).
                     // `parse_field_decl` consumes the modifier itself
                     // and records is_final; we force is_static below.
+                    //
+                    // A `final` field WITHOUT a value is the Java-style
+                    // per-variant field (§7.7.4): each variant's constructor
+                    // call gives it one.
+                    let is_const = self.at_kw(Keyword::Const);
                     if let Some(mut field) =
                         self.parse_field_decl(member_annotations.clone(), member_vis)
                     {
-                        field.is_static = true;
-                        field.is_final = true;
-                        constants.push(field);
+                        if !is_const && !field.is_static && field.default.is_none() {
+                            fields.push(field);
+                        } else {
+                            field.is_static = true;
+                            field.is_final = true;
+                            constants.push(field);
+                        }
+                    }
+                } else if self.enum_member_is_plain_field() {
+                    // `private double mass;` -- an instance field without
+                    // `final`. Recorded so the checker can say what is
+                    // wrong (E0494: an enum's fields are final).
+                    if let Some(field) = self.parse_field_decl(member_annotations.clone(), member_vis) {
+                        fields.push(field);
                     }
                 } else {
                     // Enum METHOD (§A.2.5) — same shape as a class
@@ -2020,6 +2103,31 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(&TokenKind::RBrace, "'}' to close enum body");
+        // In an enum with a constructor, `Earth(MASS, RADIUS)` is a call,
+        // not a payload of two types named `MASS` and `RADIUS`: the variant
+        // list came first, before the constructor said which reading holds.
+        if !constructors.is_empty() {
+            for variant in &mut variants {
+                let simple = !variant.payload.is_empty()
+                    && variant.args.is_empty()
+                    && variant.payload.iter().all(|slot| {
+                        slot.name.is_none()
+                            && slot.ty.name.segments.len() == 1
+                            && slot.ty.generic_args.is_empty()
+                            && slot.ty.array_shape.is_none()
+                            && !slot.ty.nullable
+                            && slot.ty.ptr_depth == 0
+                            && slot.ty.fn_shape.is_none()
+                    });
+                if simple {
+                    let slots = std::mem::take(&mut variant.payload);
+                    variant.args = slots
+                        .into_iter()
+                        .map(|slot| juxc_ast::Expr::Path(slot.ty.name))
+                        .collect();
+                }
+            }
+        }
         let end = self.last_consumed_span();
         Some(EnumDecl {
             annotations,
@@ -2027,10 +2135,13 @@ impl<'a> Parser<'a> {
             name,
             generic_params,
             implements,
+            permits,
             variants,
             operators,
             methods,
             constants,
+            fields,
+            constructors,
             span: start.join(end),
         })
     }
@@ -2044,6 +2155,34 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_enum_variant(&mut self) -> Option<EnumVariant> {
         let start = self.peek_span();
         let name = self.parse_ident()?;
+        // `Name(...)` holds either payload TYPES (`Ok(int status)`) or
+        // constructor ARGUMENTS (`Mercury(3.303e23, 2.4397e6)`, §7.7.4). Try
+        // the types; if what is inside the parentheses is not a list of them
+        // (a literal, an operator, a call), it is arguments.
+        let mut args: Vec<juxc_ast::Expr> = Vec::new();
+        if self.at(&TokenKind::LParen) {
+            let before = self.pos;
+            let diags_before = self.diagnostics.len();
+            self.advance(); // '('
+            if !self.enum_payload_slots_follow() {
+                self.pos = before;
+                self.diagnostics.truncate(diags_before);
+                self.advance(); // '('
+                let (parsed, _names) = self.parse_arg_list();
+                args = parsed;
+                self.expect(&TokenKind::RParen, "')' to close the variant's constructor arguments");
+                let end = self.last_consumed_span();
+                return Some(EnumVariant {
+                    name,
+                    payload: Vec::new(),
+                    discriminant: None,
+                    args,
+                    span: start.join(end),
+                });
+            }
+            self.pos = before;
+            self.diagnostics.truncate(diags_before);
+        }
         let payload = if self.eat(&TokenKind::LParen) {
             let mut slots = Vec::new();
             if !self.at(&TokenKind::RParen) {
@@ -2080,7 +2219,58 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.last_consumed_span();
-        Some(EnumVariant { name, payload, discriminant, span: start.join(end) })
+        Some(EnumVariant { name, payload, discriminant, args, span: start.join(end) })
+    }
+
+    /// With the cursor just past a variant's `(`: whether what follows is a
+    /// payload declaration, `Type [name], ...` up to `)`. Probes by parsing
+    /// and reports without consuming anything the caller keeps (the caller
+    /// rewinds either way).
+    fn enum_payload_slots_follow(&mut self) -> bool {
+        if self.at(&TokenKind::RParen) {
+            return true;
+        }
+        loop {
+            // A type starts with a name (or a primitive keyword the lexer
+            // gives as one); a literal, `-`, `new` or `(` cannot.
+            let starts_type = matches!(self.peek(), TokenKind::Ident(_));
+            if !starts_type || self.parse_type_ref().is_none() {
+                return false;
+            }
+            if matches!(self.peek(), TokenKind::Ident(_)) {
+                self.advance();
+            }
+            if self.eat(&TokenKind::Comma) {
+                continue;
+            }
+            return self.at(&TokenKind::RParen);
+        }
+    }
+
+    /// Whether an enum member at the cursor is a plain instance field,
+    /// `Type name;` or `Type name = value;`, with no modifier before it.
+    fn enum_member_is_plain_field(&self) -> bool {
+        let kind = |i: usize| self.tokens.get(i).map(|t| &t.kind);
+        let mut i = self.pos;
+        if !matches!(kind(i), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        i += 1;
+        // Generic arguments, array brackets and `?` belong to the type.
+        let mut depth = 0usize;
+        loop {
+            match kind(i) {
+                Some(TokenKind::Lt) => depth += 1,
+                Some(TokenKind::Gt) if depth > 0 => depth -= 1,
+                Some(TokenKind::GtGt) if depth > 0 => depth = depth.saturating_sub(2),
+                Some(TokenKind::LBracket | TokenKind::RBracket | TokenKind::Question) => {}
+                Some(TokenKind::Comma | TokenKind::Ident(_)) if depth > 0 => {}
+                _ => break,
+            }
+            i += 1;
+        }
+        matches!(kind(i), Some(TokenKind::Ident(_)))
+            && matches!(kind(i + 1), Some(TokenKind::Semicolon) | Some(TokenKind::Eq))
     }
 
     // ------------------------------------------------------------------

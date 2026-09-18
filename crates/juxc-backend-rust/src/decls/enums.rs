@@ -353,12 +353,32 @@ impl RustEmitter {
             // (`&self` receiver); bodies typically dispatch via
             // `switch (this)`. Enums are plain Rust value enums, so
             // none of the wrapper machinery threads here.
+            // A Java-style enum's methods read its per-variant fields
+            // (§7.7.4) through `__field`, bare names included.
+            let java_style = !enum_decl.fields.is_empty() && !enum_decl.constructors.is_empty();
+            let prev_fields = std::mem::replace(
+                &mut self.enclosing_enum_fields,
+                enum_decl
+                    .fields
+                    .iter()
+                    .filter_map(|f| f.ty.clone().map(|t| (f.name.text.clone(), t)))
+                    .collect(),
+            );
+            if java_style {
+                self.w.indent_inc();
+                self.emit_enum_field_methods(enum_decl);
+                self.w.indent_dec();
+            }
             for method in &enum_decl.methods {
                 self.emit_enum_method(method);
             }
+            self.enclosing_enum_fields = prev_fields;
             self.emit_enum_auto_helpers(enum_decl);
             self.w.line("}");
             self.w.newline();
+            if java_style {
+                self.emit_enum_field_table(enum_decl);
+            }
         }
 
         // `impl <Iface> for <Enum>` per interface the enum declares (§A.2.5).
@@ -564,6 +584,124 @@ impl RustEmitter {
             self.w.indent_dec();
             self.w.line("}");
         }
+
+        // `fromName` / `fromNameStrict` / `fromOrdinal` (§7.7.3): the reverse
+        // of `name()` and `ordinal()`, `None` on a miss. Payload-free enums
+        // only, like `values()`.
+        let self_ty = if enum_decl.generic_params.is_empty() {
+            bare.clone()
+        } else {
+            let params: Vec<String> =
+                enum_decl.generic_params.iter().map(|p| to_rust_ident(&p.name.text)).collect();
+            format!("{bare}<{}>", params.join(", "))
+        };
+        let unit = |v: &juxc_ast::EnumVariant| format!("{bare}::{}", to_rust_ident(&v.name.text));
+        if payload_free && !declared.contains("fromNameStrict") {
+            self.w.line(&format!("pub fn fromNameStrict(name: String) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            self.w.line("match name.as_str() {");
+            self.w.indent_inc();
+            for v in &enum_decl.variants {
+                self.w.line(&format!("\"{}\" => Some({}),", v.name.text, unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        if payload_free && !declared.contains("fromName") {
+            // Case-insensitive, so `"north"` finds `North`. When two variants
+            // differ only in case (`Red`, `RED`), the exact spelling decides,
+            // and otherwise the first declared wins: the lookup never guesses
+            // between two equally good answers.
+            let mut seen = HashSet::new();
+            let folded: Vec<(String, &juxc_ast::EnumVariant)> = enum_decl
+                .variants
+                .iter()
+                .filter_map(|v| {
+                    let key = v.name.text.to_lowercase();
+                    seen.insert(key.clone()).then_some((key, v))
+                })
+                .collect();
+            let collides = folded.len() < enum_decl.variants.len();
+            self.w.line(&format!("pub fn fromName(name: String) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            if collides {
+                self.w.line("match name.as_str() {");
+                self.w.indent_inc();
+                for v in &enum_decl.variants {
+                    self.w.line(&format!("\"{}\" => return Some({}),", v.name.text, unit(v)));
+                }
+                self.w.line("_ => {}");
+                self.w.indent_dec();
+                self.w.line("}");
+            }
+            self.w.line("match name.to_lowercase().as_str() {");
+            self.w.indent_inc();
+            for (key, v) in &folded {
+                self.w.line(&format!("\"{key}\" => Some({}),", unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        if payload_free && !declared.contains("fromOrdinal") {
+            self.w.line(&format!("pub fn fromOrdinal(ordinal: isize) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            self.w.line("match ordinal {");
+            self.w.indent_inc();
+            for (i, v) in enum_decl.variants.iter().enumerate() {
+                self.w.line(&format!("{i} => Some({}),", unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+
+        // `cases()` (§7.7.3): one `EnumCase` per variant, on every enum. A
+        // payload-free variant carries itself as `value()`; a payload variant
+        // is described by its declared payload and has no value.
+        if !declared.contains("cases") && enum_decl.generic_params.is_empty() {
+            let case = "crate::jux::std::meta::EnumCase";
+            self.w.line(&format!(
+                "pub fn cases() -> crate::JuxArr<std::vec::Vec<{case}<{self_ty}>>> {{"
+            ));
+            self.w.indent_inc();
+            self.w.line("crate::jux_arr(std::vec![");
+            self.w.indent_inc();
+            for (i, v) in enum_decl.variants.iter().enumerate() {
+                let (payload, value) = if v.payload.is_empty() {
+                    (String::new(), format!("Some({})", unit(v)))
+                } else {
+                    let slots: Vec<String> = v
+                        .payload
+                        .iter()
+                        .map(|p| {
+                            let ty = juxc_tycheck::symbol_table::render_type_ref(&p.ty);
+                            match &p.name {
+                                Some(n) => format!("{ty} {}", n.text),
+                                None => ty,
+                            }
+                        })
+                        .collect();
+                    (format!("({})", slots.join(", ")), "None".to_string())
+                };
+                self.w.line(&format!(
+                    "{case}::new(\"{}\".to_string(), {i}, \"{}\".to_string(), {value}),",
+                    v.name.text,
+                    payload.replace('\\', "\\\\").replace('"', "\\\""),
+                ));
+            }
+            self.w.indent_dec();
+            self.w.line("])");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
     }
 
 
@@ -730,6 +868,158 @@ impl crate::RustEmitter {
     /// value enum, but `this = …`-style reassignment isn't a thing, so
     /// in practice this stays `&self`), static methods drop the
     /// receiver entirely.
+    /// The Java-style form's runtime (JUX-LANG-V1 §7.7.4, ERRATA E34), for an
+    /// enum with per-variant fields. The Rust enum keeps plain unit variants;
+    /// the values live in a table beside it:
+    ///
+    /// ```text
+    /// struct Planet__Fields { mass: f64, radius: f64 }
+    /// thread_local! { static PLANET__FIELDS: Vec<Planet__Fields> = vec![
+    ///     Planet::__new_fields(3.303e23, 2.4397e6),   // Mercury
+    ///     ... ] }
+    /// ```
+    ///
+    /// The table is built on first use, one row per variant in declaration
+    /// order, so each constructor call runs once, as Java's do when the enum
+    /// is first used. `__new_fields` is the constructor, `__field` reads a
+    /// value of `self`'s row. Called while the `impl` block is open (for the
+    /// methods) and again after it (for the struct and the table).
+    pub(crate) fn emit_enum_field_methods(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        let bare = to_rust_ident(&enum_decl.name.text);
+        let table = format!("{}__FIELDS", enum_decl.name.text.to_uppercase());
+        let fields_ty = format!("{bare}__Fields");
+        self.w.line(&format!(
+            "/// One of this variant's fields (§7.7.4), read from the `{table}` table."
+        ));
+        self.w.line(&format!(
+            "fn __field<R>(&self, read: impl FnOnce(&{fields_ty}) -> R) -> R {{"
+        ));
+        self.w.indent_inc();
+        self.w.line(&format!("{table}.with(|all| read(&all[*self as usize]))"));
+        self.w.indent_dec();
+        self.w.line("}");
+        for (idx, ctor) in enum_decl.constructors.iter().enumerate() {
+            let suffix = if idx == 0 { String::new() } else { format!("__{idx}") };
+            self.w.line("/// A constructor (§7.7.4): the field values one variant's arguments give.");
+            self.w.emit_indent();
+            self.w.push_str(&format!("fn __new_fields{suffix}("));
+            for (i, p) in ctor.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                self.w.push_str(": ");
+                self.emit_value_type_as_rust(&p.ty);
+            }
+            self.w.push_str(&format!(") -> {fields_ty} {{\n"));
+            self.w.indent_inc();
+            self.w.line(&format!("{fields_ty} {{"));
+            self.w.indent_inc();
+            let params: std::collections::HashSet<String> =
+                ctor.params.iter().map(|p| p.name.text.clone()).collect();
+            let prev_params = std::mem::replace(&mut self.current_fn_params, params.clone());
+            let prev_alias = self.this_alias.take();
+            for field in &enum_decl.fields {
+                // The checker guarantees exactly one `this.f = value;` per
+                // field (E0495).
+                let value = ctor.body.statements.iter().find_map(|st| match st {
+                    juxc_ast::Stmt::Assign(a) => {
+                        let target = match &a.target {
+                            juxc_ast::Expr::Field(f) if matches!(f.object.as_ref(), juxc_ast::Expr::This(_)) => {
+                                Some(f.field.text.as_str())
+                            }
+                            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 && !params.contains(&qn.segments[0].text) => {
+                                Some(qn.segments[0].text.as_str())
+                            }
+                            _ => None,
+                        };
+                        (target == Some(field.name.text.as_str())).then_some(&a.value)
+                    }
+                    _ => None,
+                });
+                let Some(value) = value else { continue };
+                let name = to_rust_ident(&field.name.text);
+                let shorthand = matches!(value, juxc_ast::Expr::Path(qn)
+                    if qn.segments.len() == 1 && qn.segments[0].text == field.name.text)
+                    && !field.ty.as_ref().is_some_and(|t| t.nullable);
+                self.w.emit_indent();
+                if shorthand {
+                    // `this.mass = mass;` -- Rust's field shorthand.
+                    self.w.push_str(&name);
+                } else {
+                    self.w.push_str(&name);
+                    self.w.push_str(": ");
+                    let nullable = field.ty.as_ref().is_some_and(|t| t.nullable);
+                    self.emit_arg_with_nullable_wrap(value, nullable);
+                }
+                self.w.push_str(",\n");
+            }
+            self.this_alias = prev_alias;
+            self.current_fn_params = prev_params;
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
+    /// The fields struct and the per-variant table (see
+    /// [`Self::emit_enum_field_methods`]), emitted after the enum's `impl`.
+    pub(crate) fn emit_enum_field_table(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        let bare = to_rust_ident(&enum_decl.name.text);
+        let table = format!("{}__FIELDS", enum_decl.name.text.to_uppercase());
+        let fields_ty = format!("{bare}__Fields");
+        self.w.line(&format!(
+            "/// The per-variant fields of `{}` (JUX-LANG-V1 §7.7.4).",
+            enum_decl.name.text
+        ));
+        self.w.line("#[derive(Debug, Clone)]");
+        self.w.line(&format!("pub(crate) struct {fields_ty} {{"));
+        self.w.indent_inc();
+        for field in &enum_decl.fields {
+            let Some(ty) = &field.ty else { continue };
+            self.w.emit_indent();
+            self.w.push_str(&format!("{}: ", to_rust_ident(&field.name.text)));
+            self.emit_field_type_as_rust(ty);
+            self.w.push_str(",\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.line("thread_local! {");
+        self.w.indent_inc();
+        self.w.line("/// Built on first use, one row per variant, in declaration order.");
+        self.w.line(&format!("static {table}: std::vec::Vec<{fields_ty}> = std::vec!["));
+        self.w.indent_inc();
+        let sigs = self
+            .symbols
+            .enums
+            .iter()
+            .find(|(k, _)| k.rsplit('.').next() == Some(enum_decl.name.text.as_str()))
+            .map(|(_, e)| e.constructors.clone())
+            .unwrap_or_default();
+        for variant in &enum_decl.variants {
+            let pick = self.symbols.ctor_selections.get(&variant.span).copied().unwrap_or(0);
+            let suffix = if pick == 0 { String::new() } else { format!("__{pick}") };
+            let params = sigs.get(pick).map(|c| c.params.clone()).unwrap_or_default();
+            self.w.emit_indent();
+            self.w.push_str(&format!("{bare}::__new_fields{suffix}("));
+            for (i, arg) in variant.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                let nullable = params.get(i).is_some_and(|p| p.ty.nullable);
+                self.emit_arg_with_nullable_wrap(arg, nullable);
+            }
+            self.w.push_str(&format!("), // {}\n", variant.name.text));
+        }
+        self.w.indent_dec();
+        self.w.line("];");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
     pub(crate) fn emit_enum_method(&mut self, method: &juxc_ast::FnDecl) {
         use juxc_ast::ReturnType;
         let body = method.body.as_ref();

@@ -1,0 +1,45 @@
+// The enum lookups and `cases()` (JUX-LANG-V1 §7.7.3, ERRATA E32).
+//
+// `fromName` is case-insensitive, `fromNameStrict` exact, `fromOrdinal`
+// positional; each returns null on a miss. `cases()` describes every variant,
+// payload variants included, as `EnumCase` values.
+
+enum Direction { North, East, South, West }
+
+enum Level { Low, low, High }
+
+enum Shape {
+    Circle(double radius),
+    Rect(double width, double height),
+    Empty;
+}
+
+String describe(Direction? d) {
+    if (d == null) {
+        return "no such direction";
+    }
+    return $"${d} (ordinal ${d!!.ordinal()})";
+}
+
+public void main() {
+    print(describe(Direction.fromName("east")));
+    print(describe(Direction.fromName("WEST")));
+    print(describe(Direction.fromName("up")));
+    print(describe(Direction.fromNameStrict("north")));
+    print(describe(Direction.fromNameStrict("North")));
+    print(describe(Direction.fromOrdinal(2)));
+    print(describe(Direction.fromOrdinal(9)));
+
+    // Two variants differing only in case: the exact spelling wins, then the
+    // first declared.
+    print(Level.fromName("low"));
+    print(Level.fromName("Low"));
+    print(Level.fromName("LOW"));
+
+    for (var c : Direction.cases()) {
+        print($"${c.ordinal()}: ${c.name()} value=${c.value()}");
+    }
+    for (var c : Shape.cases()) {
+        print($"${c} hasPayload=${c.hasPayload()} payload='${c.payload()}'");
+    }
+}

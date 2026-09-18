@@ -1,0 +1,5 @@
+type_modifier_contradictions.jux:1:10: [E0200] error: a record cannot be `abstract`: it is a complete type with a fixed shape
+type_modifier_contradictions.jux:2:8: [E0200] error: a record cannot be `sealed`: it is already final, so nothing extends it; use a `sealed interface` that records implement
+type_modifier_contradictions.jux:3:10: [E0200] error: an enum cannot be `abstract`: it is a complete type with a fixed shape
+type_modifier_contradictions.jux:4:27: [E0490] error: the `permits` list of enum `Color` must name exactly its variants: `Blue` is not a variant; variant `Green` is left out. An enum is sealed already, so the list can be dropped
+type_modifier_contradictions.jux:6:23: [E0420] error: class `Derived` cannot extend `Base` because `Base` is declared `final`

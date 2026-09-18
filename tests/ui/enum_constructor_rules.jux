@@ -1,0 +1,41 @@
+enum Coin {
+    Penny(1),
+    Dime(10);
+
+    private int cents;
+
+    Coin(int cents) {
+        print("making a coin");
+        this.cents = cents;
+    }
+}
+
+enum Size {
+    Small(1),
+    Large(2);
+}
+
+enum Mixed {
+    Plain(1),
+    Payload(int code, String text);
+
+    private final int value;
+
+    Mixed(int value) {
+        this.value = value;
+    }
+}
+
+enum Pair {
+    One(1, 2);
+
+    private final int a;
+    private final int b;
+
+    Pair(int a, int b) {
+        this.a = a;
+        this.a = b;
+    }
+}
+
+public void main() {}

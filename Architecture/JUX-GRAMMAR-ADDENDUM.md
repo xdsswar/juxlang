@@ -356,28 +356,34 @@ struct-body       = '{' ( field-decl | function-decl | drop-decl )* '}'
 -- E20): copied on assignment and pass, no identity, no `extends`, lowered to a
 -- plain Rust `struct` rather than the class handle.
 
-record-decl       = visibility? 'record' identifier generic-params?
+record-decl       = visibility? binding-immut? 'record' identifier generic-params?
                     '(' record-component-list? ')'
                     ( 'implements' type-list )?
                     record-body?
 record-component-list = record-component ( ',' record-component )*
 record-component  = annotation* type identifier
 record-body       = '{' record-member* '}'
-record-member     = annotation* ( function-decl | static-init-block )
+record-member     = annotation* ( function-decl | static-init-block
+                                | compact-constructor | constructor-decl )
+compact-constructor = visibility? identifier block                        -- JUX-LANG-V1 §7.6.1
 
-enum-decl         = visibility? 'enum' identifier generic-params?
-                    ( 'implements' type-list )?
+enum-decl         = visibility? ( 'sealed' | binding-immut )? 'enum' identifier generic-params?
+                    ( 'implements' type-list )? permits-clause?
                     '{' enum-variant-list ( ';' enum-member* )? '}'
 enum-variant-list = enum-variant ( ',' enum-variant )* ','?
 enum-variant      = identifier ( '(' record-component-list ')' )?       -- payload variant
-                  | identifier '=' const-expr                              -- explicit discriminator (no payload)
+                  | identifier '(' arg-list? ')'                           -- constructor arguments (§7.7.4)
+                  | identifier '=' const-expr                              -- explicit discriminator: @layout(c) only
                   | identifier                                              -- bare variant
-enum-member       = annotation* ( function-decl | const-decl )
+enum-member       = annotation* ( function-decl | const-decl
+                                | field-decl | constructor-decl )         -- fields/constructors: §7.7.4
 ```
 
 Enum variants are **comma-separated** inside the body. The `case` keyword does **not** appear in enum declarations — it stays reserved for `switch` patterns. A semicolon separates the variant list from any methods/constants that follow; if the enum has no methods, the trailing semicolon is optional.
 
 `sealed` is permitted on `class` and `interface`. `permits` lists are required on sealed types unless every permitted subtype is declared in the same file (`E0220`).
+
+A record is implicitly final and an enum implicitly sealed (JUX-LANG-V1 §7.6, §7.7.6), so the modifier that restates it is accepted and changes nothing: `final record` (or `const record`), `sealed enum` (or `final enum`). A modifier that contradicts it is an error: `abstract record`, `abstract enum`, `sealed record`. An enum's `permits` list may only restate its variants, all of them (`E0490`); it is optional and usually left out. See `ERRATA.md` E33.
 
 ### A.2.6. Generics
 

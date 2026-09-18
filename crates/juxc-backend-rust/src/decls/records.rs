@@ -116,11 +116,25 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&record_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
+        // The compact constructor (§7.6.1) is the canonical constructor's
+        // body: it runs on the components as parameters, and a component it
+        // reassigns is a `mut` parameter.
+        let compact_muts: std::collections::HashSet<String> = match &record_decl.compact_ctor {
+            Some(compact) => {
+                let mut muts = std::collections::HashSet::new();
+                crate::analysis::collect_mutated_names(&compact.body, &mut muts, &self.user_mut_methods);
+                muts
+            }
+            None => std::collections::HashSet::new(),
+        };
         self.w.emit_indent();
         self.w.push_str("pub fn new(");
         for (i, comp) in record_decl.components.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            if compact_muts.contains(&comp.name.text) {
+                self.w.push_str("mut ");
             }
             self.w.push_str(&to_rust_ident(&comp.name.text));
             self.w.push_str(": ");
@@ -131,6 +145,26 @@ impl RustEmitter {
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
+        if let Some(compact) = record_decl.compact_ctor.clone() {
+            let params: Vec<juxc_ast::Param> = record_decl
+                .components
+                .iter()
+                .map(|c| juxc_ast::Param {
+                    name: c.name.clone(),
+                    ty: c.ty.clone(),
+                    is_final: false,
+                    is_ref: false,
+                    is_mut_ref: false,
+                    default: None,
+                    is_varargs: false,
+                    is_out: false,
+                    is_shared_ref: false,
+                    is_weak: false,
+                    span: c.span,
+                })
+                .collect();
+            self.emit_record_ctor_body(record_decl, &params, &compact.body.statements, None);
+        }
         self.w.line("Self {");
         self.w.indent_inc();
         for comp in &record_decl.components {
@@ -148,6 +182,84 @@ impl RustEmitter {
         // Now at depth 2 — close `pub fn new(...) -> Self { ... }`.
         self.w.indent_dec();
         self.w.line("}");
+        // Additional constructors (§7.6.1), `new__K` at the index the symbol
+        // table gave them (the canonical one is 0). Each begins with
+        // `this(...)`: the delegated constructor builds the value, and the
+        // rest of the body runs with `this` bound to it.
+        let sigs = self
+            .symbols
+            .records
+            .get(&fqn)
+            .map(|r| r.constructors.clone())
+            .unwrap_or_default();
+        for ctor in &record_decl.constructors {
+            let Some(idx) = sigs.iter().position(|c| c.span == ctor.span) else { continue };
+            let Some((call, rest)) = ctor.body.statements.split_first() else { continue };
+            let juxc_ast::Stmt::Expr(juxc_ast::Expr::Call(delegation)) = call else { continue };
+            let mut muts = std::collections::HashSet::new();
+            let rest_block = juxc_ast::Block { statements: rest.to_vec(), span: ctor.body.span };
+            crate::analysis::collect_mutated_names(&rest_block, &mut muts, &self.user_mut_methods);
+            self.w.emit_indent();
+            self.emit_visibility(ctor.visibility);
+            self.w.push_str(&format!("fn new__{idx}("));
+            for (i, p) in ctor.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                if muts.contains(&p.name.text) {
+                    self.w.push_str("mut ");
+                }
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                self.w.push_str(": ");
+                self.emit_type_as_rust(&p.ty);
+            }
+            self.w.push_str(") -> Self {\n");
+            self.w.indent_inc();
+            // The delegation, with each argument shaped for the parameter
+            // it lands in (a `T?` slot wraps a plain value).
+            let target = self
+                .symbols
+                .ctor_selections
+                .get(&delegation.span)
+                .copied()
+                .unwrap_or(0);
+            let target_params = sigs.get(target).map(|c| c.params.clone()).unwrap_or_default();
+            let prev_params = std::mem::replace(
+                &mut self.current_fn_params,
+                ctor.params.iter().map(|p| p.name.text.clone()).collect(),
+            );
+            self.w.emit_indent();
+            if rest.is_empty() {
+                self.w.push_str("Self::new");
+            } else {
+                self.w.push_str("let __self = Self::new");
+            }
+            if target > 0 {
+                self.w.push_str(&format!("__{target}"));
+            }
+            self.w.push('(');
+            for (i, arg) in delegation.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                let nullable = target_params.get(i).is_some_and(|p| p.ty.nullable);
+                self.emit_arg_with_nullable_wrap(arg, nullable);
+                if !nullable && self.wrapper_value_needs_clone(arg) {
+                    self.w.push_str(".clone()");
+                }
+            }
+            self.w.push(')');
+            self.current_fn_params = prev_params;
+            if rest.is_empty() {
+                self.w.push('\n');
+            } else {
+                self.w.push_str(";\n");
+                self.emit_record_ctor_body(record_decl, &ctor.params, rest, Some("__self"));
+                self.w.line("__self");
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+        }
         // Depth 1 — inside the `impl Name { ... }` block. Emit
         // inherent operator methods, then user-declared methods.
         // `emit_operator_as_method` skips deleted operators (no
@@ -249,6 +361,45 @@ impl RustEmitter {
         if hash_plan.eq_marker {
             self.emit_value_eq_marker(&record_decl.name.text, &record_decl.generic_params);
         }
+    }
+
+    /// Emit the statements of a record constructor body: the compact
+    /// constructor's (inside the canonical `new`, `this` unset, since the
+    /// record does not exist yet) or the part of an additional constructor
+    /// after its `this(...)` (`this` is the delegated value, `this_name`).
+    /// The body's parameters shadow the components' field names, exactly as
+    /// a method's parameters shadow fields.
+    fn emit_record_ctor_body(
+        &mut self,
+        record_decl: &juxc_ast::RecordDecl,
+        params: &[juxc_ast::Param],
+        statements: &[juxc_ast::Stmt],
+        this_name: Option<&str>,
+    ) {
+        let body = juxc_ast::Block { statements: statements.to_vec(), span: record_decl.span };
+        let prev_record = self.enclosing_record.replace(record_decl.clone());
+        let prev_alias = std::mem::replace(&mut self.this_alias, this_name.map(str::to_string));
+        let mut muts = std::collections::HashSet::new();
+        crate::analysis::collect_mutated_names(&body, &mut muts, &self.user_mut_methods);
+        self.collect_mut_slot_locals(&body, &mut muts);
+        let prev_muts = std::mem::replace(&mut self.mutated_in_fn, muts);
+        self.nullable_locals.clear();
+        for p in params {
+            if p.ty.nullable {
+                self.nullable_locals.insert(p.name.text.clone());
+            }
+        }
+        let prev_params = std::mem::replace(
+            &mut self.current_fn_params,
+            params.iter().map(|p| p.name.text.clone()).collect(),
+        );
+        let prev_return = self.current_return_type.replace(juxc_ast::ReturnType::Void);
+        self.emit_fn_body_at(&body, &juxc_ast::ReturnType::Void);
+        self.current_return_type = prev_return;
+        self.current_fn_params = prev_params;
+        self.mutated_in_fn = prev_muts;
+        self.this_alias = prev_alias;
+        self.enclosing_record = prev_record;
     }
 
     /// Generate the `impl std::fmt::Display for Name { … }` block for a
