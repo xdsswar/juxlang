@@ -297,7 +297,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         return prev[b.length]
     }
 
-    private companion object {
+    companion object {
         /**
          * Identifier parents that mark a *use* rather than a binding — every
          * other identifier position is treated as introducing a name (see

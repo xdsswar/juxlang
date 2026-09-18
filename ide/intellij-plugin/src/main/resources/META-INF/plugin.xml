@@ -652,6 +652,11 @@
 
   <!-- Re-discover dependencies when jux.toml changes: restart the serving
        juxc-lsp (so new rust.<crate> deps resolve) and refresh the daemon. -->
+  <extensions defaultExtensionNs="com.intellij">
+    <!-- Settings | Editor | General | Auto Import | Jux -->
+    <autoImportOptionsProvider instance="dev.jux.intellij.settings.JuxAutoImportOptionsProvider"/>
+  </extensions>
+
   <projectListeners>
     <listener class="dev.jux.intellij.lsp.JuxManifestChangeListener"
               topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>

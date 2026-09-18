@@ -9,25 +9,29 @@ import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxElementTypes as E
 
 /**
- * Java-like **Optimize Imports** (`Ctrl+Alt+O`) for Jux.
+ * **Optimize Imports** (`Ctrl+Alt+O`) for Jux, doing what IntelliJ's Java
+ * optimizer does:
  *
- * Walks the file's `import` statements and, in one write action:
- *  - drops imports whose bound name is never referenced in the file,
- *  - drops exact duplicates,
- *  - sorts the survivors alphabetically by their import path.
+ *  - drops imports whose bound name is never referenced in the file, and
+ *    exact duplicates;
+ *  - prunes the unused members of a grouped import (`import a.{X, Y};` with
+ *    only `X` used becomes `import a.X;`);
+ *  - drops a wildcard import the project index proves nothing is taken from
+ *    ([JuxImportSupport.wildcardMaySupply]);
+ *  - lays the survivors out in groups, alphabetical within each, separated by
+ *    a blank line: bound crates (`rust.` / `c.` / `cpp.`), then the Jux
+ *    library (`jux.`), then the project's own packages. That is the order the
+ *    examples use, and the analogue of Java's default layout keeping library
+ *    and project imports apart.
  *
- * Wildcard imports (`import a.b.*`) and side-effect-only forms are always kept
- * (their usage can't be proven from this file alone). Grouped imports
- * (`import a.b.{X, Y as Z}`) survive if *any* of their bound names is used.
+ * The decisions live in [JuxImportSupport.analyze], shared with the
+ * unused-import inspection so the two never disagree. The rewrite is textual
+ * over the document, and it does nothing if anything other than whitespace
+ * sits between the imports, so an interleaved comment is never eaten.
  *
- * The unused/duplicate analysis lives in [JuxImportSupport] (shared with the
- * unused-import inspection). The rewrite is purely textual over the document
- * so it needs no element factory, and it bails out (does nothing) if anything
- * other than whitespace sits between the imports — never eating an
- * interleaved comment.
- *
- * Registered via `<lang.importOptimizer>` in `plugin.xml`; the `Ctrl+Alt+O`
- * binding is the platform default, so no keymap entry is required.
+ * Registered via `<lang.importOptimizer>` in `plugin.xml`; `Ctrl+Alt+O` is the
+ * platform default binding, and the platform also runs it over directories and
+ * on commit.
  */
 class JuxImportOptimizer : ImportOptimizer {
     override fun supports(file: PsiFile): Boolean = file is JuxFile
@@ -35,41 +39,65 @@ class JuxImportOptimizer : ImportOptimizer {
     override fun processFile(file: PsiFile): Runnable {
         // All analysis happens up front (read context); the returned Runnable
         // only mutates the document (write context).
-        val imports = JuxImportSupport.collectImports(file)
-        if (imports.isEmpty()) return EMPTY
+        val decisions = JuxImportSupport.analyze(file)
+        if (decisions.isEmpty()) return EMPTY
 
-        // Names referenced anywhere outside the import region.
-        val used = JuxImportSupport.collectUsedNames(file, imports)
-
-        // Filter unused / duplicate, preserving the first occurrence of each.
-        val seen = HashSet<String>()
-        val kept = ArrayList<JuxImportSupport.ImportInfo>()
-        for (imp in imports) {
-            if (!seen.add(imp.dedupKey)) continue // exact duplicate
-            if (!imp.alwaysKeep && imp.boundNames.none { it in used }) continue // unused
-            kept.add(imp)
+        val kept = decisions.mapNotNull { d ->
+            when (d.verdict) {
+                JuxImportSupport.Verdict.KEEP -> d.import.sortKey to d.import.text
+                JuxImportSupport.Verdict.PRUNE -> d.import.sortKey to JuxImportSupport.prunedText(d)
+                JuxImportSupport.Verdict.UNUSED, JuxImportSupport.Verdict.DUPLICATE -> null
+            }
         }
 
-        // Java orders imports alphabetically by their path text.
-        val sorted = kept.sortedBy { it.sortKey }
+        val newBlock = layout(kept)
 
         // The contiguous span the imports occupy, plus a guard that nothing but
         // whitespace lives between them (so comments are never swallowed).
-        val first = imports.first().element
-        val last = imports.last().element
+        val first = decisions.first().import.element
+        val last = decisions.last().import.element
         if (!onlyWhitespaceBetween(first, last)) return EMPTY
-
-        val newBlock = sorted.joinToString("\n") { it.text }
-        val oldBlock = file.text.substring(first.textRange.startOffset, last.textRange.endOffset)
-        if (newBlock == oldBlock) return EMPTY // already optimal — no-op
 
         val start = first.textRange.startOffset
         val end = last.textRange.endOffset
+        val oldBlock = file.text.substring(start, end)
+        if (newBlock == oldBlock) return EMPTY // already optimal: no-op
+
         return Runnable {
             val docMgr = PsiDocumentManager.getInstance(file.project)
             val doc = docMgr.getDocument(file) ?: return@Runnable
-            doc.replaceString(start, end, newBlock)
+            // An empty block leaves the blank line that followed it; take the
+            // line break with the imports so the file does not open with a gap.
+            var removeEnd = end
+            if (newBlock.isEmpty()) {
+                val text = doc.charsSequence
+                while (removeEnd < text.length && (text[removeEnd] == '\n' || text[removeEnd] == '\r')) {
+                    removeEnd++
+                }
+            }
+            doc.replaceString(start, removeEnd, newBlock)
             docMgr.commitDocument(doc)
+        }
+    }
+
+    /**
+     * Group, sort and join the surviving import lines. Groups are separated by
+     * one blank line; empty groups leave no trace.
+     */
+    private fun layout(lines: List<Pair<String, String>>): String =
+        lines
+            .groupBy { (_, text) -> groupOf(text) }
+            .toSortedMap()
+            .values
+            .joinToString("\n\n") { group -> group.sortedBy { it.first }.joinToString("\n") { it.second } }
+
+    /** 0: bound crates, 1: the Jux library, 2: everything else (the project). */
+    private fun groupOf(importText: String): Int {
+        val path = importText.removePrefix("import").trim()
+        return when {
+            path.startsWith("rust.") || path.startsWith("c.") || path.startsWith("cpp.") -> 0
+            path.startsWith("jux.") -> 1
+            else -> 2
         }
     }
 

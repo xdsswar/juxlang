@@ -1,6 +1,5 @@
 package dev.jux.intellij.completion
 
-import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.codeInsight.daemon.ReferenceImporter
 import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiElement
@@ -9,17 +8,19 @@ import com.intellij.psi.util.elementType
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.resolve.JuxImports
+import dev.jux.intellij.settings.JuxCodeInsightSettings
 import java.util.function.BooleanSupplier
 
 /**
  * "Add unambiguous imports on the fly" (Settings | Editor | General | Auto
- * Import), for Jux: a type name with exactly one importable declaration gets
- * its `import` written as soon as it is typed, the same setting Java honours.
+ * Import | Jux): a type name with exactly one importable declaration gets its
+ * `import` written as soon as it is typed. The option is Jux's own, as
+ * Kotlin's is, so it works in IDEs without the Java plugin.
  */
 class JuxReferenceImporter : ReferenceImporter {
 
     override fun isAddUnambiguousImportsOnTheFlyEnabled(file: PsiFile): Boolean =
-        file is JuxFile && CodeInsightSettings.getInstance().ADD_UNAMBIGIOUS_IMPORTS_ON_THE_FLY
+        file is JuxFile && JuxCodeInsightSettings.getInstance().addUnambiguousImportsOnTheFly
 
     override fun computeAutoImportAtOffset(
         editor: Editor,
