@@ -324,6 +324,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0104`  | Block comment never terminated *(reserved)*          | Grammar §A.1.2                 |
 | `E0105`  | Numeric literal out of range for its declared type *(reserved)*| Grammar §A.1.4                 |
 | `E0150`  | Invalid `@cfg(...)` / `if cfg(...)` predicate: unknown key or flag, non-literal value, malformed `all`/`any`/`not` | Pipeline §C.2.5 |
+| `E0144`  | Colon type annotation on a local (`var x: int = 5;`): Jux writes the type first, `int x = 5;` or `var x = 5;` | JUX-LANG-V1 §5.6 |
 
 ### Syntax (`E0200–E0299`)
 
@@ -339,11 +340,13 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0213`  | Single-element tuple `(e,)`: reserved in v1 | Grammar §A.4.1 |
 | `E0220`  | Sealed type with `permits` clause needed *(reserved)* | Grammar §A.2.5                 |
 | `E0240`  | `try` block without `catch` or `finally` *(reserved)* | Grammar §A.2.8                 |
-| `E0241`  | Label-targeted `break`/`continue` mismatched *(reserved)* | Grammar §A.2.8              |
+| `E0241`  | `break name;` / `continue name;` names no enclosing labeled statement, or `continue` names a labeled block | Grammar §A.2.8 |
 | `E0260`  | `if`-expression missing `else` branch                | Grammar §A.2.9                 |
+| `E0262`  | Expression body `= expr;` on a `void` function        | Grammar §A.2.4                 |
+| `E0263`  | Constructor declared as `new(...)` instead of with its class name | JUX-LANG-V1 §7.3.1 / ERRATA E39 |
 | `E0261`  | `switch` expression must be exhaustive *(reserved; statement form is `E0440`)* | Type system §T.5 |
 | `E0270`  | Or-pattern alternatives bind incompatible names *(reserved)* | Grammar §A.3            |
-| `E0271`  | Local-variable destructuring requires irrefutable pattern *(reserved)* | Grammar §A.3  |
+| `E0271`  | Local-variable destructuring requires an irrefutable pattern: the value must always be the pattern's record | Grammar §A.3 / JUX-LANG-V1 §5.4 |
 | `E0272`  | Pattern guard expression must have type `bool` | Grammar §A.3             |
 
 ### Resolution (`E0300–E0399`)
@@ -352,7 +355,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
 | `E0302`  | Import of a type from the importing file's own package | Build system §B.4 / `ERRATA.md` E25 |
-| `E0308`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
+| `E0308`  | Dependency cycle between modules (`jux.toml` packages) | Build system §B.4.6 / ERRATA E41 |
 | `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |

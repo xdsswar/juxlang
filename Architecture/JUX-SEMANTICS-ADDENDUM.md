@@ -573,7 +573,9 @@ Per `ERRATA.md` E1, panics and exceptions are **two orthogonal layers**: excepti
 
 ### S.7.2. `assert` Built-in
 
-`assert(condition)` and `assert(condition, message)` are language built-ins. In debug builds, they evaluate the condition and panic if false. In release builds, they may be elided depending on profile:
+`assert(condition)` and `assert(condition, message)` are language built-ins. In debug builds, they evaluate the condition and panic if false.
+
+The statement spelling is the same built-in: `assert condition;` is `assert(condition);`, and `assert condition : message;` is `assert(condition, message);`, the form Java programmers already write. A parenthesized argument list followed by `;` (`assert(x > 0);`) is the call; anything else after `assert` is the statement (see ERRATA E40). In release builds, they may be elided depending on profile:
 
 - `jux-full` debug, `jux-embedded` debug, `jux-core` debug: assertion is checked.
 - `jux-full` release, `jux-embedded` release: assertion is elided unless the `assertions = true` build flag is set.

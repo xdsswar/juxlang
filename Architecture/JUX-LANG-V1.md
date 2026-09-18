@@ -508,6 +508,8 @@ switch (shape) {
 }
 ```
 
+A destructuring declaration binds one local per binder, in component order. A binder is a name, `var name` (the same spelling a `case` pattern uses), or `_` to skip a component; `final var Point(x, y) = p;` makes every binder final. A record pattern names the record and gives exactly one binder per component (`E0439` otherwise). A declaration has no other branch to take if its pattern fails, so the value must always be that record: a value typed as a supertype, a sealed interface, or `Point?` is `E0271`, and the program tests it first with `switch` or `=>`. Nested patterns in a declaration (`var Line(Point(a, b), q) = l;`) are not supported yet; destructure the outer record, then the component.
+
 ### 5.5. Special Types
 
 **`String` and `string` are the same type.** Either spelling declares a UTF-8
@@ -1594,7 +1596,7 @@ public class User {
 
 #### 7.3.1. Constructors
 
-Constructors are declared with the **class name** as the method name, matching Java. The earlier `public new(...)` form is dropped — `new` is the **construction operator** used at call sites (`new User("Alice", 30)`), not part of the constructor declaration.
+Constructors are declared with the **class name** as the method name, matching Java. The earlier `public new(...)` form is dropped — `new` is the **construction operator** used at call sites (`new User("Alice", 30)`), not part of the constructor declaration. A declaration written `new(...)` is `E0263`, and is read as the constructor it means so nothing else in the class is affected.
 
 **Overloading.** Multiple constructors are distinguished by parameter list:
 
