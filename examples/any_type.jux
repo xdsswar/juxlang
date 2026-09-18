@@ -1,0 +1,137 @@
+// `any` (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2): the opaque type every value
+// converts to. An `any` has no members. A program can compare it with `===`,
+// test it with `=>` and print it; anything else is E0489, so the value is
+// tested back into what it is before it is used.
+
+interface Named { String name(); }
+
+class Animal implements Named {
+    protected String label;
+    public Animal(String label) { this.label = label; }
+    public String name() { return label; }
+    public String operator string() { return $"Animal(${label})"; }
+}
+
+class Dog extends Animal {
+    public Dog(String label) { super(label); }
+    public String bark() { return "woof"; }
+    public String operator string() { return $"Dog(${label})"; }
+}
+
+class Counter { public int count; public Counter(int count) { this.count = count; } }
+
+record Point(int x, int y) {}
+
+enum Color { Red, Green }
+
+class Slot {
+    public any item;
+    public Slot(any item) { this.item = item; }
+}
+
+any same(any value) { return value; }
+
+// A value comes back out by testing for what it might be. The test holds for
+// the value's own type and every type above it.
+String describe(any value) {
+    if (value => int n) { return $"int, one more is ${n + 1}"; }
+    if (value => String s) { return $"String of ${s.len()} bytes"; }
+    if (value => Dog d) { return $"a Dog that says ${d.bark()}"; }
+    if (value => Animal a) { return $"an Animal named ${a.name()}"; }
+    if (value => Point p) { return $"a Point at ${p.x}, ${p.y}"; }
+    return $"something else: ${value}";
+}
+
+public void main() {
+    // Every kind of value goes in.
+    any number = 5;
+    any text = "hi";
+    any dog = new Dog("rex");
+    Animal asBase = new Dog("fido");
+    Named asInterface = new Dog("spot");
+    any viaBase = asBase;
+    any viaInterface = asInterface;
+    any point = new Point(1, 2);
+    any color = Color.Green;
+    any real = 2.0;
+
+    // An `any` prints as the value it holds.
+    print(number);
+    print(text);
+    print(dog);
+    print(point);
+    print(color);
+    print(real);
+    print($"interpolated: ${number} and ${dog}");
+    print("concatenated: " + text);
+
+    // `=>` finds the value however it went in: as itself, through its base
+    // class, or through an interface.
+    print(describe(number));
+    print(describe(text));
+    print(describe(dog));
+    print(describe(viaBase));
+    print(describe(viaInterface));
+    print(describe(new Animal("cat")));
+    print(describe(point));
+    print(describe(color));
+
+    print(dog => Animal);
+    print(viaInterface => Dog);
+    print(number => long);
+    print(number => any);
+
+    // `===`: the same object for a class instance, array or collection; an
+    // equal value for everything else.
+    var counter = new Counter(1);
+    any first = counter;
+    any second = counter;
+    any other = new Counter(1);
+    print(first === second);
+    print(first === other);
+    any five = 5;
+    print(number === five);
+    print(point === new Point(1, 2));
+    print(number === text);
+    print(number !== text);
+
+    int[] scores = {1, 2, 3};
+    any scoresA = scores;
+    any scoresB = scores;
+    print(scoresA === scoresB);
+    print(scoresA);
+
+    // An `any` is shared the way a class handle is.
+    any copy = dog;
+    print(copy === dog);
+    print(dog);
+
+    // Collections, fields, parameters and returns.
+    var bag = new Vec<any>();
+    bag.push(1);
+    bag.push("two");
+    bag.push(new Point(3, 4));
+    for (var item : bag) {
+        print(describe(item));
+    }
+    var slot = new Slot("held");
+    print(slot.item);
+    print(same(7) === 7);
+
+    // A nullable value needs `any?`.
+    any? maybe = null;
+    print(maybe == null);
+    maybe = 3;
+    print(maybe != null);
+    String? missing = null;
+    any? fromMissing = missing;
+    print(fromMissing == null);
+
+    // A `switch` matches an `any` by type.
+    var scaled = switch (number) {
+        case String s -> -1;
+        case int n -> n * 10;
+        default -> 0;
+    };
+    print(scaled);
+}

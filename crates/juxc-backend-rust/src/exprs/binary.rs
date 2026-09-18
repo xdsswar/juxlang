@@ -583,6 +583,27 @@ impl RustEmitter {
                     .push_str(if is_eq { ".is_none()" } else { ".is_some()" });
                 return;
             }
+            // `===` on an `any` (§T.1.2): the held value decides, identity
+            // for an object and equality for a value.
+            if self.expr_is_any(&b.left) || self.expr_is_any(&b.right) {
+                if !is_eq {
+                    self.w.push('!');
+                }
+                let any_ty = crate::analysis::synth_iface_type_ref("any", b.span);
+                // The `any` side is the receiver; the other side, if it is not
+                // one already, goes into an `any` to be compared.
+                let (recv, other) =
+                    if self.expr_is_any(&b.left) { (&b.left, &b.right) } else { (&b.right, &b.left) };
+                self.emit_expr(recv);
+                self.w.push_str(".same(&");
+                if self.expr_is_any(other) {
+                    self.emit_expr(other);
+                } else {
+                    self.emit_expr_into_any(&any_ty, other);
+                }
+                self.w.push(')');
+                return;
+            }
             // **`===` on a VALUE type is `==` (§7.14.3).** "For value types
             // (struct, record, primitive) it is identical to `==`" -- a
             // `String` or an `int` has no address to compare, and emitting

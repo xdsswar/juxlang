@@ -50,6 +50,9 @@ impl RustEmitter {
         let dyn_scrutinee = self
             .cast_source_bare(&s.scrutinee)
             .filter(|bare| self.source_is_dyn(bare));
+        // An `any` scrutinee (§T.1.2) is matched by type the same way, through
+        // the `JuxAny` getter rather than a hook.
+        let any_scrutinee = self.expr_is_any(&s.scrutinee);
         let scrutinee_mark = self.w.len();
         self.emit_expr(&s.scrutinee);
         // Enum `&self` method dispatch: clone the receiver so payload
@@ -100,11 +103,17 @@ impl RustEmitter {
             // keyword itself, which was emitted naked above.
             self.w.push_str("    ");
             let prev_guards = std::mem::take(&mut self.pattern_string_guards);
+            // The runtime type test as an `Option`-producing expression on the
+            // matched value, and the name it binds.
             let runtime_type_test = match (&arm.pattern, &dyn_scrutinee) {
+                (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, _) if any_scrutinee => {
+                    let target = crate::analysis::synth_iface_type_ref(&type_name.text, type_name.span);
+                    Some((self.any_getter_text("__jux_subject", &target), to_rust_ident(&binder.text)))
+                }
                 (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, Some(source))
                     if &type_name.text != source =>
                 {
-                    Some((type_name.text.clone(), to_rust_ident(&binder.text)))
+                    Some((format!("__jux_subject.__jux_as_{}()", type_name.text), to_rust_ident(&binder.text)))
                 }
                 _ => None,
             };
@@ -147,18 +156,18 @@ impl RustEmitter {
             // A string literal nested in a tuple or record pattern came back
             // as a binder; its comparison leads the guard.
             let string_guards = std::mem::replace(&mut self.pattern_string_guards, prev_guards);
-            if let Some((target, binder)) = &runtime_type_test {
+            if let Some((getter, binder)) = &runtime_type_test {
                 // `case Ins i when i.ok() ->` needs `i` inside the guard, and
                 // edition 2021 has no `if let` guards, so the test binds it
                 // in a `match` of its own.
                 self.w.push_str(" if ");
                 match &arm.guard {
                     Some(guard) => {
-                        self.w.push_str(&format!("match __jux_subject.__jux_as_{target}() {{ Some({binder}) => "));
+                        self.w.push_str(&format!("match {getter} {{ Some({binder}) => "));
                         self.emit_expr(guard);
                         self.w.push_str(", None => false }");
                     }
-                    None => self.w.push_str(&format!("__jux_subject.__jux_as_{target}().is_some()")),
+                    None => self.w.push_str(&format!("{getter}.is_some()")),
                 }
             }
             for (i, (binder, literal)) in string_guards.iter().enumerate() {
@@ -183,8 +192,8 @@ impl RustEmitter {
             // (the decl boxed the self-referential slot to avoid E0072).
             let rebinds = self.boxed_recursive_binders(&arm.pattern);
             // The arm matched, so the hook answers `Some`: bind its value.
-            let downcast_let = runtime_type_test.as_ref().map(|(target, binder)| {
-                format!("let Some({binder}) = __jux_subject.__jux_as_{target}() else {{ unreachable!() }};")
+            let downcast_let = runtime_type_test.as_ref().map(|(getter, binder)| {
+                format!("let Some({binder}) = {getter} else {{ unreachable!() }};")
             });
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {

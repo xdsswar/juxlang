@@ -244,6 +244,10 @@ impl RustEmitter {
     /// emitted inside a block that still evaluates the operand for its side
     /// effects.
     pub(crate) fn emit_type_test(&mut self, t: &juxc_ast::TypeTestExpr) {
+        if self.expr_is_any(&t.value) {
+            self.emit_any_type_test(t);
+            return;
+        }
         let target = t
             .ty
             .name

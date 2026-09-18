@@ -1645,6 +1645,8 @@ impl RustEmitter {
             // array is a `Vec`/`[T; N]`. Both are `Clone` whenever their element
             // is, which every Jux value type is.
             Some(juxc_tycheck::Ty::String) | Some(juxc_tycheck::Ty::Array { .. }) => true,
+            // An `any` is a shared handle: re-reading it copies the handle.
+            Some(juxc_tycheck::Ty::Any) => true,
             // A scanned type answers for itself: bindgen records `@RustClone`
             // from the type's real `Clone` impl, so a newly bound crate's
             // collection shares by clone without being named here. The list
@@ -2097,7 +2099,7 @@ impl RustEmitter {
     /// `Clone`, never `Copy`).
     pub(crate) fn ty_needs_clone_on_field_read(&self, ty: &Ty) -> bool {
         match ty {
-            Ty::String | Ty::Param(_) => true,
+            Ty::String | Ty::Param(_) | Ty::Any => true,
             // Collection / array fields are non-Copy `Vec`s etc. — a
             // VALUE-position read (`return this.items;`, S15) must
             // clone or it moves out of `&self`. Receiver positions

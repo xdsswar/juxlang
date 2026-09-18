@@ -1,0 +1,18 @@
+// E0489: an `any` has no members and no operators (§T.1.2). Each line uses it
+// for something only the value inside could do.
+public void main() {
+    any value = 5;
+    var sum = value + 1;
+    print(value == value);
+    value.run();
+    print(value.size);
+    print(value[0]);
+    print(-value);
+    value += 1;
+    for (var item : value) { print(item); }
+    print(value.operator hash());
+    var label = switch (value) {
+        case 5 -> "five";
+        default -> "other";
+    };
+}

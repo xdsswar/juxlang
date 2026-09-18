@@ -1,0 +1,39 @@
+5
+hi
+Dog(rex)
+Point(x: 1, y: 2)
+Green
+2.0
+interpolated: 5 and Dog(rex)
+concatenated: hi
+int, one more is 6
+String of 2 bytes
+a Dog that says woof
+a Dog that says woof
+a Dog that says woof
+an Animal named cat
+a Point at 1, 2
+something else: Green
+true
+true
+false
+true
+true
+false
+true
+true
+false
+true
+true
+[1, 2, 3]
+true
+Dog(rex)
+int, one more is 2
+String of 3 bytes
+a Point at 3, 4
+held
+true
+true
+true
+true
+50

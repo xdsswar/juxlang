@@ -1,0 +1,10 @@
+any_has_no_operations.jux:5:15: [E0489] error: an `any` has no operator `+`
+any_has_no_operations.jux:6:11: [E0489] error: an `any` has no `==`
+any_has_no_operations.jux:7:5: [E0489] error: an `any` has no method `run`
+any_has_no_operations.jux:8:11: [E0489] error: an `any` has no field `size`
+any_has_no_operations.jux:9:11: [E0489] error: an `any` cannot be indexed
+any_has_no_operations.jux:10:11: [E0489] error: an `any` has no operators
+any_has_no_operations.jux:11:5: [E0489] error: an `any` has no operator `+=`
+any_has_no_operations.jux:12:5: [E0489] error: an `any` cannot be iterated
+any_has_no_operations.jux:13:11: [E0489] error: an `any` has no hash
+any_has_no_operations.jux:15:14: [E0489] error: an `any` is matched by type, not by value

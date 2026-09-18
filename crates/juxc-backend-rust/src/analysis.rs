@@ -46,6 +46,8 @@ pub(crate) fn ty_to_type_ref(ty: &juxc_tycheck::Ty) -> Option<TypeRef> {
     }
     match ty {
         Ty::String => Some(make("String", Vec::new())),
+        // `any` is spelled as it is written (§T.1.2).
+        Ty::Any => Some(make("any", Vec::new())),
         Ty::Primitive(p) => {
             // Jux source spelling of each primitive (matches the parser).
             let name = match p {
@@ -154,6 +156,11 @@ pub(crate) enum IfaceCoercion {
     /// hierarchy (e.g. a `BaseErr` into an `Exception` cause slot) — slice it up
     /// to the parent via the generated `From<Sub> for Parent` with `.into()`.
     IntoBase,
+    /// The target is `any` / `any?` (§T.1.2): box the value in a
+    /// `crate::JuxAny`. Every coercion site routes it through
+    /// [`RustEmitter::emit_expr_coerced_to_iface`], which owns the nullable
+    /// wrap too.
+    IntoAny,
 }
 
 /// A conservative "is this expression a place (lvalue) that may be used
@@ -166,6 +173,11 @@ fn expr_is_place(expr: &Expr) -> bool {
         expr,
         Expr::Path(_) | Expr::This(_) | Expr::Field(_) | Expr::Index(_)
     )
+}
+
+/// [`expr_is_place`] for the rest of the backend.
+pub(crate) fn expr_is_place_pub(expr: &Expr) -> bool {
+    expr_is_place(expr)
 }
 
 /// Synthesize a bare, non-generic [`TypeRef`] naming the interface `bare`.
@@ -3954,6 +3966,9 @@ impl crate::RustEmitter {
         if target_ty.array_shape.is_some() {
             return IfaceCoercion::None;
         }
+        if self.type_ref_is_any(target_ty) {
+            return IfaceCoercion::IntoAny;
+        }
         // Concrete subclass → its direct base class under the non-sealed,
         // non-polymorphic open hierarchy (the `From<Sub> for Parent` slicing
         // model, e.g. exception causes). Detected here so every coercion call
@@ -4137,6 +4152,11 @@ impl crate::RustEmitter {
         target_ty: &TypeRef,
         expr: &Expr,
     ) {
+        // An `any` slot (§T.1.2) boxes whatever arrives.
+        if self.type_ref_is_any(target_ty) {
+            self.emit_expr_into_any(target_ty, expr);
+            return;
+        }
         let coercion = self.iface_coercion_to(target_ty, expr);
         if matches!(coercion, IfaceCoercion::None) {
             self.emit_expr(expr);
@@ -4150,7 +4170,7 @@ impl crate::RustEmitter {
             self.w.push_str("Some(");
         }
         match coercion {
-            IfaceCoercion::None => unreachable!("handled above"),
+            IfaceCoercion::None | IfaceCoercion::IntoAny => unreachable!("handled above"),
             IfaceCoercion::UpcastDyn { clone_first } => {
                 self.w.push('(');
                 self.emit_expr(expr);

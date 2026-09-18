@@ -518,6 +518,11 @@ impl RustEmitter {
                         .push_str("std::sync::Arc<std::sync::atomic::AtomicI64>");
                     return;
                 }
+                // `any` (§T.1.2): the prelude's `JuxAny`.
+                "any" if ty.generic_args.is_empty() => {
+                    self.w.push_str("crate::JuxAny");
+                    return;
+                }
                 _ => {}
             }
         }
@@ -1578,6 +1583,7 @@ pub(crate) fn ty_to_type_ref(
             Some(out)
         }
         juxc_tycheck::Ty::String => named("String", Vec::new(), false),
+        juxc_tycheck::Ty::Any => named("any", Vec::new(), false),
         juxc_tycheck::Ty::Primitive(p) => {
             named(juxc_tycheck::ty::primitive_name(*p), Vec::new(), false)
         }

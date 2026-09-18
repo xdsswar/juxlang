@@ -44,6 +44,14 @@ Where Java APIs use `Object`, Jux APIs use:
 
 The `any` type is a built-in opaque type with no methods. Values of type `any` can only be compared by `===` (reference identity for class types; primitive equality for value types) and downcast via `=>` type-test. It is the explicit "I really do mean any value" escape hatch and is meant to be uncommon.
 
+**Using an `any`.** A value converts to `any` implicitly: a primitive, a `String`, an instance of a class, record, struct or enum, an array, a collection. The value keeps its own type inside: `any v = 5;` holds an `int`, so `v => int` is `true` and `v => long` is `false`. A nullable value needs an `any?` slot, and a function value does not convert (it has neither an identity nor a string form). Once a value is an `any`, a program can do three things with it:
+
+- compare it with `===` / `!==`: the same object for a class instance, an array or a collection, an equal value for a primitive, `String`, record, struct or enum. Two `any` holding different types are never `===`.
+- test it with `=>`, which holds for the held value's own type and every type above it (`v => Animal` is `true` when `v` holds a `Dog`). The bound form `v => Dog d` gives the value back as a `Dog`, and so does a `switch` type pattern.
+- turn it into text: `print(v)`, `$"${v}"`, `"" + v` and `v.operator string()` give the text of the value it holds.
+
+Anything else, a field, a method, an operator, indexing, `==`, a hash, is `E0489`: test the value with `=>` first, then use it as what it is. Passing an `any` where another type is expected is `E0410` for the same reason.
+
 ### T.1.3. Equality Without an `Object` Root
 
 `==` is **never** dispatched through an interface. It is resolved by the operator-resolution rules in `JUX-OPERATORS-ADDENDUM.md` §O.2.3:
@@ -263,7 +271,7 @@ For `a == b` and `a != b`, dispatch follows the operator-resolution rules in `JU
 - `A` is `T` and `B` is `T?`. Or
 - `A` is a function type compatible with `B`'s function type (contravariant in parameters, covariant in return). Or
 - `A` and `B` are tuples of the same arity with element-wise assignability. Or
-- `B` is `any` and `A` is any reference type.
+- `B` is `any` and `A` is any type except a nullable or a function type (§T.1.2).
 
 Assignability is **not** transitive across explicit casts (no implicit chaining).
 

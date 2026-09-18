@@ -4467,6 +4467,98 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for ::std::boxed::Box<T> {\n");
         w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
         w.push_str("}\n\n");
+        // `any` (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). The value sits behind
+        // `dyn Any`, which keeps its concrete type for the `=>` test. What the
+        // value cannot say from behind `dyn Any` -- how `===` compares it and
+        // what it prints -- is decided where it goes in, where its type is
+        // known: an address for a class, array or collection, a value
+        // comparison otherwise, and the same text `${x}` gives.
+        w.push_str(r##"/// A Jux `any`: a value of any type (§T.1.2).
+#[derive(Clone)]
+pub struct JuxAny {
+    value: ::std::rc::Rc<dyn ::std::any::Any>,
+    /// The object's address, for a class instance, array or collection.
+    address: Option<*const ()>,
+    /// Value equality for everything else, `===` on a value type.
+    same_value: fn(&dyn ::std::any::Any, &dyn ::std::any::Any) -> bool,
+    text: ::std::rc::Rc<dyn Fn(&dyn ::std::any::Any) -> String>,
+}
+impl JuxAny {
+    /// Hold a value type: `===` compares values.
+    pub fn of_value<T: 'static + PartialEq>(value: T, text: fn(&T) -> String) -> JuxAny {
+        fn same<T: 'static + PartialEq>(a: &dyn ::std::any::Any, b: &dyn ::std::any::Any) -> bool {
+            matches!((a.downcast_ref::<T>(), b.downcast_ref::<T>()), (Some(a), Some(b)) if a == b)
+        }
+        JuxAny {
+            value: ::std::rc::Rc::new(value),
+            address: None,
+            same_value: same::<T>,
+            text: ::std::rc::Rc::new(move |v| text(v.downcast_ref::<T>().expect("the type it was built with"))),
+        }
+    }
+    /// Hold a class instance, array or collection: `===` compares addresses.
+    pub fn of_ref<T: 'static + JuxIdentity>(value: T, text: fn(&T) -> String) -> JuxAny {
+        fn never(_: &dyn ::std::any::Any, _: &dyn ::std::any::Any) -> bool { false }
+        let address = Some(value.__jux_identity());
+        JuxAny {
+            value: ::std::rc::Rc::new(value),
+            address,
+            same_value: never,
+            text: ::std::rc::Rc::new(move |v| text(v.downcast_ref::<T>().expect("the type it was built with"))),
+        }
+    }
+    /// Hold a value with no identity or equality Jux can read (a foreign
+    /// value): it is `===` only to copies of this same `any`.
+    pub fn of_opaque<T: 'static>(value: T, text: fn(&T) -> String) -> JuxAny {
+        fn never(_: &dyn ::std::any::Any, _: &dyn ::std::any::Any) -> bool { false }
+        let value: ::std::rc::Rc<dyn ::std::any::Any> = ::std::rc::Rc::new(value);
+        let address = Some(::std::rc::Rc::as_ptr(&value).cast::<()>());
+        JuxAny {
+            value,
+            address,
+            same_value: never,
+            text: ::std::rc::Rc::new(move |v| text(v.downcast_ref::<T>().expect("the type it was built with"))),
+        }
+    }
+    /// `a === b`.
+    pub fn same(&self, other: &JuxAny) -> bool {
+        // Two objects are the same when they are one object; two values when
+        // they are equal values of one type; an object and a value never.
+        match (self.address, other.address) {
+            (Some(a), Some(b)) => a == b,
+            (Option::None, Option::None) => (self.same_value)(&*self.value, &*other.value),
+            _ => false,
+        }
+    }
+    /// `v => T`, for the held value's own type.
+    pub fn is<T: 'static>(&self) -> bool {
+        self.value.is::<T>()
+    }
+    /// `v => T t`: the held value as a `T`, shared like any other read.
+    pub fn get<T: 'static + Clone>(&self) -> Option<T> {
+        self.value.downcast_ref::<T>().cloned()
+    }
+}
+impl ::std::fmt::Display for JuxAny {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(&(self.text)(&*self.value))
+    }
+}
+impl ::std::fmt::Debug for JuxAny {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(&(self.text)(&*self.value))
+    }
+}
+/// A collection's identity is its shared cell.
+impl<T: ?Sized> JuxIdentity for ::std::cell::RefCell<T> {
+    fn __jux_identity(&self) -> *const () { (self as *const Self).cast::<()>() }
+}
+/// An array's identity is its shared cell.
+impl<T: ?Sized> JuxIdentity for JuxCell<T> {
+    fn __jux_identity(&self) -> *const () { (self as *const Self).cast::<()>() }
+}
+
+"##);
         // `x.operator hash()` for a value with no operator of its own (§O.2.7):
         // Rust's `Hash`, through a hasher with fixed keys, so a value hashes
         // the same way on every run.

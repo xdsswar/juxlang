@@ -88,7 +88,9 @@ fn ty_has_default_in(ty: &Ty, symbols: &SymbolTable, visiting: &mut Vec<String>)
             crate::ty::ArrayKind::Dynamic => true,
             crate::ty::ArrayKind::Fixed => ty_has_default_in(element, symbols, visiting),
         },
-        Ty::Fn { .. } | Ty::Void | Ty::Wildcard(_) => false,
+        // `any` has no value of its own to start from: it holds whatever the
+        // program puts in it (§T.1.2).
+        Ty::Fn { .. } | Ty::Void | Ty::Wildcard(_) | Ty::Any => false,
         Ty::User { name, .. } => {
             // A type that reaches itself without a nullable in between has no
             // finite value to start from, default or otherwise.
