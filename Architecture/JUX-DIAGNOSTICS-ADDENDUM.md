@@ -435,7 +435,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
-| `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed | LANG-V1 §7.10 |
+| `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed; also an operator (arithmetic, bitwise, shift, ordering, logical, unary, compound assignment) applied to such an operand | LANG-V1 §7.10 |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
 > diagnostic ("generic type inference has no solution", §T.4.2) originally

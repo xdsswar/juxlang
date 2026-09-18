@@ -1,0 +1,6 @@
+operator_on_nullable.jux:10:35: [E0418] error: `Balance` may be null here (its type is `int?`), so `*` has no value to work on
+operator_on_nullable.jux:14:12: [E0418] error: `x` may be null here (its type is `int?`), so `+` has no value to work on
+operator_on_nullable.jux:19:17: [E0418] error: `a.Balance` may be null here (its type is `int?`), so `+` has no value to work on
+operator_on_nullable.jux:21:5: [E0418] error: `n` may be null here (its type is `int?`), so `+=` has no value to work on
+operator_on_nullable.jux:23:11: [E0418] error: `flag` may be null here (its type is `bool?`), so `!` has no value to work on
+operator_on_nullable.jux:24:11: [E0418] error: `n` may be null here (its type is `int?`), so `<` has no value to work on

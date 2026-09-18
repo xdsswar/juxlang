@@ -3731,6 +3731,71 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// E0418 (§7.10) for the operands of a binary operator: `x + 1`,
+    /// `x < y`, `flag && x` with `x` a `T?` no test has narrowed. `==`, `!=`,
+    /// `===` and `??` take a null by design, and so does `+` with a `String`
+    /// on either side, which concatenates and prints a null as `null`.
+    fn check_nullable_operands(&mut self, b: &juxc_ast::BinaryExpr) {
+        let Some(spelled) = nullable_sensitive_op(b.op) else { return };
+        if b.op == BinaryOp::Add {
+            let is_text = |e: &Expr| {
+                let t = infer_expr(e, &self.env, self.symbols);
+                matches!(t, Ty::String) || matches!(&t, Ty::Nullable(inner) if matches!(**inner, Ty::String))
+            };
+            if is_text(&b.left) || is_text(&b.right) {
+                return;
+            }
+        }
+        self.check_nullable_operand(&b.left, spelled, expr_span(&b.left));
+        self.check_nullable_operand(&b.right, spelled, expr_span(&b.right));
+    }
+
+    /// E0418 (§7.10), for an operator: `operand` is a `T?` no null test has
+    /// narrowed, and `op` needs its value, as a member does. Without this
+    /// `int? + 1` typed as `int?` and the lowering asked Rust to add to an
+    /// `Option`.
+    fn check_nullable_operand(&mut self, operand: &Expr, op: &str, span: Span) {
+        if self.expr_ptr_depth(operand) > 0 {
+            // A raw pointer's null is its own value (§L.6.1).
+            return;
+        }
+        let Ty::Nullable(inner) = infer_expr(operand, &self.env, self.symbols) else {
+            return;
+        };
+        fn spelled(e: &Expr) -> Option<String> {
+            match e {
+                Expr::Path(qn) => Some(qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".")),
+                Expr::This(_) => Some("this".to_string()),
+                Expr::Field(inner) => spelled(&inner.object).map(|o| format!("{o}.{}", inner.field.text)),
+                _ => None,
+            }
+        }
+        let shown = spelled(operand).unwrap_or_else(|| "this operand".to_string());
+        // Only a local or parameter narrows (§7.10); a field or property is
+        // copied into one first.
+        let local = matches!(operand, Expr::Path(qn)
+            if qn.segments.len() == 1 && self.env.lookup(&qn.segments[0].text).is_some());
+        let help = if local {
+            format!(
+                "test it first (`if ({shown} != null) {{ ... }}`), give a default with `??`, \
+                 or assert it with `!!`"
+            )
+        } else {
+            format!(
+                "assert it with `{shown}!!`, give a default with `{shown} ?? ...`, or copy it \
+                 into a local and test that (only a local narrows)"
+            )
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0418_MemberOfNullable,
+                format!("`{shown}` may be null here (its type is `{inner}?`), so `{op}` has no value to work on"),
+            )
+            .with_span(span)
+            .with_help(help),
+        );
+    }
+
     /// Every binding `cond` proves non-null when it evaluates to `outcome`,
     /// each with its non-null type (§7.10): the `!= null` conjuncts of an
     /// `&&` chain when true, the `== null` disjuncts of an `||` chain when
@@ -3977,6 +4042,12 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Assign(a) => {
+                // `x += 1` on a `T?` target reads the target first (§7.10).
+                if let Some(op) = a.op {
+                    if let Some(spelled) = nullable_sensitive_op(op) {
+                        self.check_nullable_operand(&a.target, &format!("{spelled}="), a.span);
+                    }
+                }
                 // `p += n` / `p -= n`: the step must be an integer (§L.6.1a).
                 if matches!(a.op, Some(juxc_ast::BinaryOp::Add) | Some(juxc_ast::BinaryOp::Sub))
                     && self.expr_ptr_depth(&a.target) > 0
@@ -4989,7 +5060,9 @@ impl<'a> Checker<'a> {
                 match u.op {
                     juxc_ast::UnaryOp::AddrOf => self.check_address_of(u),
                     juxc_ast::UnaryOp::Deref => self.check_deref(u),
-                    _ => {}
+                    juxc_ast::UnaryOp::Neg => self.check_nullable_operand(&u.operand, "-", u.span),
+                    juxc_ast::UnaryOp::Not => self.check_nullable_operand(&u.operand, "!", u.span),
+                    juxc_ast::UnaryOp::BitNot => self.check_nullable_operand(&u.operand, "~", u.span),
                 }
                 // §O.3.4 — unary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
@@ -5012,6 +5085,7 @@ impl<'a> Checker<'a> {
                 };
                 self.check_narrowed(&proven, |this| this.check_expr(&b.right));
                 self.check_numeric_operands(b);
+                self.check_nullable_operands(b);
                 self.check_comparison_chain(b);
                 self.check_pointer_operators(b);
                 if !self.in_unsafe
@@ -10388,6 +10462,37 @@ fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
         UnaryOp::BitNot => OperatorKind::BitNot,
         // `!x`, raw-pointer `*p` / `&x` aren't overloadable (§O.2.5).
         UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
+    })
+}
+
+/// The binary operators that need their operands' VALUES (§7.10), with their
+/// spelling: everything but the equality tests, `??`, `in` and `=`.
+/// `None` for an operator that takes a null.
+fn nullable_sensitive_op(op: BinaryOp) -> Option<&'static str> {
+    Some(match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Rem => "%",
+        BinaryOp::WrapAdd => "+%",
+        BinaryOp::WrapSub => "-%",
+        BinaryOp::WrapMul => "*%",
+        BinaryOp::WrapShl => "<<%",
+        BinaryOp::WrapShr => ">>%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
+        BinaryOp::Lt => "<",
+        BinaryOp::Le => "<=",
+        BinaryOp::Gt => ">",
+        BinaryOp::Ge => ">=",
+        BinaryOp::Cmp => "<=>",
+        BinaryOp::And => "&&",
+        BinaryOp::Or => "||",
+        _ => return None,
     })
 }
 
