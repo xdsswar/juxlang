@@ -498,8 +498,16 @@
       "spelling": "+"
     },
     {
+      "name": "PLUS_PLUS",
+      "spelling": "++"
+    },
+    {
       "name": "MINUS",
       "spelling": "-"
+    },
+    {
+      "name": "MINUS_MINUS",
+      "spelling": "--"
     },
     {
       "name": "STAR",

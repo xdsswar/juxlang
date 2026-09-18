@@ -215,7 +215,9 @@ pub fn grammar_spec_with(extra_builtins: &[String]) -> GrammarSpec {
         NamedToken::fixed("GE", ">="),
         NamedToken::fixed("SPACESHIP", "<=>"),
         NamedToken::fixed("PLUS", "+"),
+        NamedToken::fixed("PLUS_PLUS", "++"),
         NamedToken::fixed("MINUS", "-"),
+        NamedToken::fixed("MINUS_MINUS", "--"),
         NamedToken::fixed("STAR", "*"),
         NamedToken::fixed("SLASH", "/"),
         NamedToken::fixed("PERCENT", "%"),
@@ -312,6 +314,50 @@ mod tests {
             assert_eq!(Keyword::lookup(kw.as_str()), Some(*kw));
         }
         assert_eq!(Keyword::ALL.len(), 58, "keyword count changed -- update grammar spec consumers");
+    }
+
+    /// Every operator and punctuation token the lexer knows is exported.
+    ///
+    /// The lists above are written by hand beside `TokenKind`, and a token
+    /// missing from them does not fail anything in the compiler: the editor's
+    /// lexer quietly splits it instead. `++` was missing, so the IDE read
+    /// `i++` as two `+` and Reformat Code wrote `i + +`. This asks the real
+    /// lexer: any string of one to three punctuation characters that lexes as
+    /// ONE token must be in the spec.
+    #[test]
+    fn every_operator_token_is_exported() {
+        let spec = grammar_spec();
+        let exported: std::collections::HashSet<&str> = spec
+            .operators
+            .iter()
+            .chain(spec.punctuation.iter())
+            .chain(spec.comments.iter())
+            .filter_map(|t| t.spelling.as_deref())
+            .collect();
+        let chars: Vec<char> = "=!<>+-*/%&|^~.?:,;()[]{}@#$".chars().collect();
+        let mut missing = Vec::new();
+        let mut check = |text: String| {
+            // A comment is trivia, not a token: `=//` lexes as just `=`.
+            if text.contains("//") || text.contains("/*") {
+                return;
+            }
+            let file = juxc_source::SourceFile::new("probe.jux", text.clone());
+            let lexed = crate::lex(&file);
+            // One real token, then EOF.
+            if lexed.diagnostics.is_empty() && lexed.tokens.len() == 2 && !exported.contains(text.as_str()) {
+                missing.push(text);
+            }
+        };
+        for &a in &chars {
+            check(a.to_string());
+            for &b in &chars {
+                check(format!("{a}{b}"));
+                for &c in &chars {
+                    check(format!("{a}{b}{c}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "lexer tokens missing from the grammar spec: {missing:?}");
     }
 
 }

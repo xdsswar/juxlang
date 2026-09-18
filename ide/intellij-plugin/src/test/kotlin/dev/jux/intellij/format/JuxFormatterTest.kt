@@ -124,6 +124,34 @@ class JuxFormatterTest : BasePlatformTestCase() {
         """.trimMargin(),
     )
 
+    /**
+     * `++` and `--` are one token each (as juxc lexes them) and hug their
+     * operand. The IDE used to lex `i++` as two `+`, and Reformat wrote
+     * `i + +`.
+     */
+    fun testIncrementAndDecrementStayTight() = doTest(
+        """
+        |void f(int n) {
+        |    for (int i = 0; i < n; i ++) {
+        |        n --;
+        |        -- n;
+        |        ++ n;
+        |    }
+        |    int d = n - -n;
+        |}
+        """.trimMargin(),
+        """
+        |void f(int n) {
+        |    for (int i = 0; i < n; i++) {
+        |        n--;
+        |        --n;
+        |        ++n;
+        |    }
+        |    int d = n - -n;
+        |}
+        """.trimMargin(),
+    )
+
     fun testGenericsStayTightAndCommasSpace() = doTest(
         """
         |public class A {

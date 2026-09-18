@@ -43,6 +43,7 @@ val JUX_EXPR_START: TokenSet = TokenSet.orSet(
         T.SIZEOF_KW,
         T.LPAREN, T.LBRACKET,
         T.BANG, T.MINUS, T.PLUS, T.TILDE, T.AMP, T.STAR, T.MOVE_KW, T.AWAIT_KW, T.ASYNC_KW,
+        T.PLUS_PLUS, T.MINUS_MINUS,
     ),
     TYPEOF_SET,
 )
@@ -54,6 +55,7 @@ private val ASSIGN_OPS: TokenSet = TokenSet.create(
 private val ELVIS_OPS: TokenSet = TokenSet.create(T.QUESTION_COLON, T.QUESTION_QUESTION)
 private val PREFIX_OPS: TokenSet = TokenSet.create(
     T.BANG, T.MINUS, T.PLUS, T.TILDE, T.AMP, T.STAR, T.MOVE_KW, T.AWAIT_KW,
+    T.PLUS_PLUS, T.MINUS_MINUS, // `++i`, `--i`
 )
 
 /** Tokens after `(Type)` that make it a cast rather than a parenthesized expr. */
@@ -288,7 +290,8 @@ private fun PsiBuilder.parsePostfix(): PsiBuilder.Marker? {
                 m.done(E.POSTFIX_EXPRESSION)
                 operand = m
             }
-            T.BANG_BANG -> {
+            T.BANG_BANG, T.PLUS_PLUS, T.MINUS_MINUS -> {
+                // `x!!`, and the postfix `i++` / `i--`.
                 val m = operand.precede()
                 advanceLexer()
                 m.done(E.POSTFIX_EXPRESSION)

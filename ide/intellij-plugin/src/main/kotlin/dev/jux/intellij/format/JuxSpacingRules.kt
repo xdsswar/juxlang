@@ -51,6 +51,7 @@ object JuxSpacingRules {
             .beforeInside(T.STAR, E.TYPE_REFERENCE).spaces(0)
             .beforeInside(T.QUESTION, E.POSTFIX_EXPRESSION).spaces(0)
             .beforeInside(T.BANG_BANG, E.POSTFIX_EXPRESSION).spaces(0)
+            .beforeInside(INC_DEC_OPS, E.POSTFIX_EXPRESSION).spaces(0)
             .before(T.ELLIPSIS).spaces(0)
             .after(T.ELLIPSIS).spaces(1)
             // ⑤ unary operators bind to their operand.
@@ -172,7 +173,11 @@ object JuxSpacingRules {
     // ---- operator groups (mirrors §A.4 / the expression parser) ------------
 
     private val GT_CLOSERS = TokenSet.create(T.GT, T.GT_GT)
-    private val UNARY_OPS = TokenSet.create(T.BANG, T.TILDE, T.MINUS, T.PLUS, T.AMP, T.STAR)
+    private val UNARY_OPS = TokenSet.create(
+        T.BANG, T.TILDE, T.MINUS, T.PLUS, T.AMP, T.STAR, T.PLUS_PLUS, T.MINUS_MINUS,
+    )
+    /** `++` / `--`: hug their operand on either side (`i++`, `--i`). */
+    private val INC_DEC_OPS = TokenSet.create(T.PLUS_PLUS, T.MINUS_MINUS)
     private val ASSIGN_OPS = TokenSet.create(
         T.EQ, T.PLUS_EQ, T.MINUS_EQ, T.STAR_EQ, T.SLASH_EQ, T.PERCENT_EQ,
         T.AMP_EQ, T.PIPE_EQ, T.CARET_EQ, T.LT_LT_EQ, T.GT_GT_EQ,
