@@ -220,6 +220,15 @@ private fun PsiBuilder.parseLocalVariable() {
 }
 
 private fun PsiBuilder.parseLabeledOrExprOrLocal() {
+    if (atAssertStatement()) {
+        val m = mark()
+        advanceLexer() // `assert`
+        parseExpression()
+        if (at(T.COLON)) { advanceLexer(); parseExpression() } // `: message`
+        semicolon()
+        m.done(E.EXPRESSION_STATEMENT)
+        return
+    }
     // Labeled statement: `name:` followed by a loop/block.
     if (at(T.IDENTIFIER) && lookAhead(1) === T.COLON) {
         val m = mark()
@@ -364,12 +373,21 @@ private fun PsiBuilder.parsePattern() {
     val m = mark()
     while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
     if (at(T.VAR_KW)) advanceLexer()
+    // A literal bound, allowing a leading minus (`-5`).
+    fun literalBound(): Boolean {
+        if (at(T.MINUS) && T.LITERALS.contains(lookAhead(1))) { advanceLexer(); advanceLexer(); return true }
+        if (T.LITERALS.contains(tokenType)) { advanceLexer(); return true }
+        return false
+    }
     when {
-        T.LITERALS.contains(tokenType) -> {
-            advanceLexer()
+        // `..0` / `..=0`: a range open at the bottom.
+        at(T.DOT_DOT) || at(T.DOT_DOT_EQ) -> { advanceLexer(); literalBound() }
+        T.LITERALS.contains(tokenType) || (at(T.MINUS) && T.LITERALS.contains(lookAhead(1))) -> {
+            literalBound()
+            // `0..10`, `0..=10`, or `10..` open at the top.
             if (at(T.DOT_DOT) || at(T.DOT_DOT_EQ)) {
                 advanceLexer()
-                if (T.LITERALS.contains(tokenType)) advanceLexer()
+                literalBound()
             }
         }
         at(T.IDENTIFIER) -> {
@@ -384,6 +402,22 @@ private fun PsiBuilder.parsePattern() {
         else -> if (!at(T.ARROW) && !at(T.FAT_ARROW) && !at(T.WHEN_KW)) advanceLexer()
     }
     m.done(E.PATTERN)
+}
+
+/**
+ * `assert` as a statement (S.7.2): followed by a condition that is not a
+ * parenthesized call argument list, or by `(…)` and then `: message`. A plain
+ * `assert(x);` stays the built-in call it always was.
+ */
+private fun PsiBuilder.atAssertStatement(): Boolean {
+    if (!atContextualKw("assert")) return false
+    if (lookAhead(1) !== T.LPAREN) return lookAhead(1) !== T.SEMICOLON && lookAhead(1) !== T.DOT
+    val probe = mark()
+    advanceLexer()
+    skipMatched(T.LPAREN, T.RPAREN)
+    val withMessage = at(T.COLON)
+    probe.rollbackTo()
+    return withMessage
 }
 
 private fun PsiBuilder.atContextualKw(text: String): Boolean =

@@ -119,12 +119,15 @@ class JuxParser : PsiParser {
             // script-mode top-level statements aren't swallowed.
             ((b.at(T.IDENTIFIER) || b.at(T.LPAREN) || b.at(T.LT)) && probeTypeThenName(b))
 
-    /** Speculative: does `‹generics?› Type Name` start here? Always rolls back. */
+    /**
+     * Speculative: does `‹generics?› Type Name` start here, or
+     * `Type operator…` (a free-function operator, §7.14)? Always rolls back.
+     */
     private fun probeTypeThenName(b: PsiBuilder): Boolean {
         val probe = b.mark()
         if (b.at(T.LT)) b.skipAngleBalanced()
         b.parseType()
-        val ok = b.at(T.IDENTIFIER)
+        val ok = b.at(T.IDENTIFIER) || b.at(T.OPERATOR_KW)
         probe.rollbackTo()
         return ok
     }
@@ -351,6 +354,14 @@ class JuxParser : PsiParser {
     private fun parseMethodOrField(b: PsiBuilder, decl: PsiBuilder.Marker) {
         // Java-style leading method generics: `public <T extends Shape> T pick(…)`.
         if (b.at(T.LT)) parseTypeParameters(b)
+        // A record's compact constructor, `Range { … }` (§7.6.1): the type's
+        // own name straight into a block, no parameter list.
+        if (b.at(T.IDENTIFIER) && b.lookAhead(1) === T.LBRACE) {
+            b.advanceLexer() // the record's name
+            parseCodeBlock(b)
+            decl.done(E.CONSTRUCTOR_DECLARATION)
+            return
+        }
         parseType(b)
         // `ReturnType operator <op>( … )` — operator overload after the type.
         if (b.at(T.OPERATOR_KW)) {

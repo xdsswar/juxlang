@@ -124,7 +124,15 @@ private fun PsiBuilder.parseElvis(): PsiBuilder.Marker? {
     if (atAny(ELVIS_OPS)) {
         val m = left.precede()
         advanceLexer()
-        parseElvis() // right-associative
+        if (at(T.THROW_KW)) {
+            // `s ?: throw new X(…)` (T.6.2): `throw` as the fallback expression.
+            val t = mark()
+            advanceLexer()
+            parseExpression()
+            t.done(E.THROW_STATEMENT)
+        } else {
+            parseElvis() // right-associative
+        }
         m.done(E.BINARY_EXPRESSION)
         return m
     }
