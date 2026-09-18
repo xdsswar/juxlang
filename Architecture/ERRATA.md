@@ -820,6 +820,30 @@ members.
 
 ---
 
+## E34. Values that belong to each enum variant
+
+**Conflict.** JUX-LANG-V1 §7.7.4 showed a Java-style enum with fields and a
+constructor (`Planet`) without saying how a variant's arguments reach the
+constructor, when the constructor runs, or what a constructor may do, and the
+grammar (§A.2.5) had no field or constructor members for an enum at all. The
+grammar also let any enum write an explicit discriminator (`Ok = 200`), while
+Layout-ABI §L.1.3 rejects one outside `@layout(c)` with `E0510`.
+
+**Resolution.** In an enum that declares a constructor, a variant's
+parentheses hold constructor arguments. The per-variant fields are `final`
+(`E0494`); a constructor gives each one its value exactly once and does
+nothing else (`E0495`); the values are computed once per variant, in
+declaration order, on first use. Such an enum has no payload variants and no
+type parameters, and arguments without a constructor are an error (all
+`E0496`). An explicit discriminator stays a C-enum feature: its value is the
+variant's integer representation, which only `@layout(c)` pins, and a value
+that merely belongs to each variant is what the per-variant field is for.
+
+**Spec status:** JUX-LANG-V1 §7.7.4 and Grammar §A.2.5 state the rules;
+Layout-ABI §L.1.3 points from `E0510` to the field form.
+
+---
+
 ## E33. Modifiers on records and enums
 
 **Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and

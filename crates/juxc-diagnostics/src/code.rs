@@ -552,6 +552,21 @@ pub enum Code {
     /// parameter types: that is the canonical constructor, which the header
     /// already declares. Validation goes in the compact form instead.
     E0493_RecordCanonicalRedeclared,
+    /// E0494 -- An enum's per-variant field (JUX-LANG-V1 §7.7.4) that is not
+    /// `final`. An enum value is immutable: each variant's fields are set
+    /// once, by its constructor call, and a variant is the same value
+    /// everywhere it is used.
+    E0494_EnumFieldNotFinal,
+    /// E0495 -- An enum constructor (§7.7.4) that does something other than
+    /// give each field its value (`this.mass = mass;`), or that leaves a
+    /// field unset or sets one twice. The values are computed once per
+    /// variant, from the variant's arguments.
+    E0495_EnumConstructorShape,
+    /// E0496 -- Constructor arguments and payloads mixed up: a variant passes
+    /// arguments (`Mercury(3.3e23)`) but the enum declares no constructor, a
+    /// payload variant (`Ok(int status)`) sits in an enum that has one, or a
+    /// generic enum declares one.
+    E0496_EnumArgumentsWithoutConstructor,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -988,6 +1003,9 @@ impl Code {
             Code::E0491_CompactConstructorMisuse => "E0491",
             Code::E0492_RecordConstructorMustDelegate => "E0492",
             Code::E0493_RecordCanonicalRedeclared => "E0493",
+            Code::E0494_EnumFieldNotFinal        => "E0494",
+            Code::E0495_EnumConstructorShape     => "E0495",
+            Code::E0496_EnumArgumentsWithoutConstructor => "E0496",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",

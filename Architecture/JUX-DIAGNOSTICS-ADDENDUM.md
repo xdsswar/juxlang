@@ -437,6 +437,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0491`  | A record's compact constructor reads `this`, `return`s, or is declared twice | LANG-V1 §7.6.1 |
 | `E0492`  | An additional record constructor does not begin with `this(...)` | LANG-V1 §7.6.1 |
 | `E0493`  | An additional record constructor redeclares the canonical one (the header's parameter types) | LANG-V1 §7.6.1 |
+| `E0494`  | An enum's per-variant field is not `final` | LANG-V1 §7.7.4 |
+| `E0495`  | An enum constructor does more than give each field its value once | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
+| `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |

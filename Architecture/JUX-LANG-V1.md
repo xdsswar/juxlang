@@ -2426,6 +2426,13 @@ print(Planet.Earth.surfaceGravity());    // 9.802...
 
 This is the same shape as Java's enum-with-fields, but with all the extra power of payload-carrying variants.
 
+The rules of this form (ERRATA E34):
+
+- An enum that declares a constructor passes each variant's arguments to it: `Mercury(3.303e23, 2.4397e6)` is a call, not a payload declaration. Such an enum has no payload variants and no type parameters (`E0496`), and a variant that passes arguments needs a constructor to take them (`E0496`).
+- The per-variant fields are `final` (`E0494`): a variant is one value, the same everywhere it is used.
+- A constructor only gives each field its value, once: `this.mass = mass;` per field, reading its parameters but not `this` (`E0495`). Validation belongs in a static method that picks a variant, not in the constructor.
+- The values are computed once per variant, in declaration order, the first time the enum is used, as Java runs its enum constructors when the enum is first initialized. A field reads like a class's: `this.mass`, a bare `mass` inside the enum, or `Planet.Earth.mass` where visibility allows.
+
 #### 7.7.4.1. Enums May Implement Interfaces
 
 An enum carries an `implements` clause exactly as a class or a record does

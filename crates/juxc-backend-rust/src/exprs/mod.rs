@@ -1191,6 +1191,28 @@ impl RustEmitter {
                         return;
                     }
                 }
+                // An enum's own per-variant field read by its bare name in
+                // one of its methods (§7.7.4) is `this.mass`.
+                if qn.segments.len() == 1 && !self.emitting_call_callee {
+                    let name = qn.segments[0].text.as_str();
+                    let shadowed = self.current_fn_params.contains(name)
+                        || self.local_types.iter().any(|s| s.contains_key(name));
+                    if self.in_enum_method
+                        && self.this_alias.is_some()
+                        && !shadowed
+                        && self.enclosing_enum_fields.contains_key(name)
+                    {
+                        let span = qn.span;
+                        let this_field = juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span,
+                        };
+                        self.emit_field(&this_field);
+                        return;
+                    }
+                }
                 // A record's own component read by its bare name (§O.8.1:
                 // `new Vec3(x + o.x, ...)`) is `this.x`.
                 if qn.segments.len() == 1 && !self.emitting_call_callee {

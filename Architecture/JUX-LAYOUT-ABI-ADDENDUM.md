@@ -153,7 +153,7 @@ at the boundary remains E0508.
 
 Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union, so a payload-carrying variant under `@layout(c)` is rejected with **E0509**. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
 
-An explicit discriminant (`Variant = <const>`) is only meaningful on a C enum: on a regular sum-type enum the value has no representation and would be silently dropped, so a stray `= N` without `@layout(c)` is rejected with **E0510** (add `@layout(c, repr = "...")` or remove the value).
+An explicit discriminant (`Variant = <const>`) is only meaningful on a C enum: on a regular sum-type enum the value has no representation and would be silently dropped, so a stray `= N` without `@layout(c)` is rejected with **E0510** (add `@layout(c, repr = "...")` or remove the value). A value that belongs to each variant without being its C representation is a per-variant field (JUX-LANG-V1 §7.7.4): `Ok(200)` with a constructor that stores it. See `ERRATA.md` E34.
 
 ### L.1.4. Alignment Control: `@align(N)`
 

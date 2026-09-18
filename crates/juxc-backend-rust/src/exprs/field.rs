@@ -21,6 +21,22 @@ use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // A Java-style enum's per-variant field (JUX-LANG-V1 §7.7.4): the
+        // values live in the enum's table, one row per variant, reached
+        // through its `__field` accessor. `Planet.Earth.mass` and `this.mass`
+        // alike read `...__field(|f| f.mass)`.
+        if !f.safe && !self.emitting_call_callee {
+            if let Some(ty) = self.enum_field_type(&f.object, &f.field.text) {
+                self.emit_expr(&f.object);
+                self.w.push_str(".__field(|f| f.");
+                self.w.push_str(&to_rust_ident(&f.field.text));
+                if !crate::analysis::field_supports_copy(&ty) {
+                    self.w.push_str(".clone()");
+                }
+                self.w.push(')');
+                return;
+            }
+        }
         // `this.field` inside a constructor's `__self` builder, for a field an
         // ancestor declares: the builder holds the class's `_Inner` struct,
         // and an inherited field lives in its `__parent` slot (one level per
@@ -1706,6 +1722,20 @@ impl RustEmitter {
                         .is_some_and(|inner| inner.is_struct && self.struct_is_copy_within(&inner, depth + 1))
                 })
         })
+    }
+
+    /// The declared type of `field` when `object` is a value of a Java-style
+    /// enum that has such a per-variant field (§7.7.4), `None` otherwise.
+    /// `this` inside the enum's own methods counts, as does any expression
+    /// the checker typed as the enum.
+    pub(crate) fn enum_field_type(&self, object: &Expr, field: &str) -> Option<juxc_ast::TypeRef> {
+        if matches!(object, Expr::This(_)) && self.in_enum_method {
+            return self.enclosing_enum_fields.get(field).cloned();
+        }
+        let recorded = self.expr_types.get(&crate::exprs::expr_span_of(object))?;
+        let juxc_tycheck::Ty::User { name, .. } = recorded else { return None };
+        let en = self.symbols.enums.get(name)?;
+        en.fields.get(field).map(|f| f.ty.clone())
     }
 
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {

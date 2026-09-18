@@ -372,9 +372,11 @@ enum-decl         = visibility? ( 'sealed' | binding-immut )? 'enum' identifier 
                     '{' enum-variant-list ( ';' enum-member* )? '}'
 enum-variant-list = enum-variant ( ',' enum-variant )* ','?
 enum-variant      = identifier ( '(' record-component-list ')' )?       -- payload variant
-                  | identifier '=' const-expr                              -- explicit discriminator (no payload)
+                  | identifier '(' arg-list? ')'                           -- constructor arguments (§7.7.4)
+                  | identifier '=' const-expr                              -- explicit discriminator: @layout(c) only
                   | identifier                                              -- bare variant
-enum-member       = annotation* ( function-decl | const-decl )
+enum-member       = annotation* ( function-decl | const-decl
+                                | field-decl | constructor-decl )         -- fields/constructors: §7.7.4
 ```
 
 Enum variants are **comma-separated** inside the body. The `case` keyword does **not** appear in enum declarations — it stays reserved for `switch` patterns. A semicolon separates the variant list from any methods/constants that follow; if the enum has no methods, the trailing semicolon is optional.

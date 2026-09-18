@@ -1153,10 +1153,12 @@ impl<'a> Checker<'a> {
                             format!(
                                 "variant `{}` of enum `{}` has an explicit discriminant `= …`, but \
                                  `{}` is not a C enum -- add `@layout(c, repr = \"i32\")` to make it \
-                                 a C-compatible integer enum, or remove the `= …`",
+                                 a C-compatible integer enum, or remove the `= …`. A value that belongs to \
+                                 each variant is a field: give the enum a constructor and write `{}(…)`",
                                 variant.name.text,
                                 enum_decl.name.text,
                                 enum_decl.name.text,
+                                variant.name.text,
                             ),
                         )
                         .with_span(variant.span),
@@ -1165,7 +1167,12 @@ impl<'a> Checker<'a> {
             }
         }
         let name = crate::symbol_table::make_fqn(&self.env.current_package, &enum_decl.name.text);
+        self.check_java_style_enum(enum_decl, &name);
         self.env.set_class(&name);
+        let ctor_this = Ty::User { name: name.clone(), generic_args: Vec::new() };
+        for (idx, ctor) in enum_decl.constructors.iter().enumerate() {
+            self.check_constructor(ctor, &ctor_this, idx);
+        }
         let this_ty = Ty::User {
             name: name.clone(),
             generic_args: Vec::new(),
@@ -3771,6 +3778,197 @@ impl<'a> Checker<'a> {
         }
         self.env.clear_generic_params();
         self.env.clear_class();
+    }
+
+    /// The Java-style enum form (JUX-LANG-V1 §7.7.4, ERRATA E34): per-variant
+    /// fields, constructors, and each variant's arguments as a call to one of
+    /// them. The rules: the fields are `final` (E0494); a constructor only
+    /// gives each field its value, once (E0495), which is what lets the
+    /// values be computed once per variant; arguments need a constructor and
+    /// a constructor excludes payload variants and generics (E0496).
+    fn check_java_style_enum(&mut self, enum_decl: &juxc_ast::EnumDecl, fqn: &str) {
+        for field in &enum_decl.fields {
+            if !field.is_final {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0494_EnumFieldNotFinal,
+                        format!(
+                            "field `{}` of enum `{}` must be `final`: a variant is one immutable value, \
+                             and its fields are set once, by its constructor",
+                            field.name.text, enum_decl.name.text,
+                        ),
+                    )
+                    .with_span(field.span),
+                );
+            }
+        }
+        let has_ctor = !enum_decl.constructors.is_empty();
+        if has_ctor && !enum_decl.generic_params.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0496_EnumArgumentsWithoutConstructor,
+                    format!(
+                        "generic enum `{}` cannot declare a constructor: a variant built from arguments is \
+                         one value, with one type, so there is nothing for the type parameters to vary",
+                        enum_decl.name.text,
+                    ),
+                )
+                .with_span(enum_decl.constructors[0].span),
+            );
+        }
+        for variant in &enum_decl.variants {
+            if !has_ctor && !variant.args.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0496_EnumArgumentsWithoutConstructor,
+                        format!(
+                            "variant `{}` passes arguments, but enum `{}` declares no constructor to take them. \
+                             Declare one (`{}(...) {{ ... }}`) with fields for the values, or write a payload \
+                             variant with the types it carries (`{}(int code)`)",
+                            variant.name.text, enum_decl.name.text, enum_decl.name.text, variant.name.text,
+                        ),
+                    )
+                    .with_span(variant.span),
+                );
+                for arg in &variant.args {
+                    self.check_expr(arg);
+                }
+            }
+            if has_ctor && !variant.payload.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0496_EnumArgumentsWithoutConstructor,
+                        format!(
+                            "variant `{}` declares a payload, but enum `{}` has a constructor: its variants \
+                             pass constructor arguments instead (`{}(value, ...)`). Use one form or the other",
+                            variant.name.text, enum_decl.name.text, variant.name.text,
+                        ),
+                    )
+                    .with_span(variant.span),
+                );
+            }
+        }
+        if !has_ctor {
+            return;
+        }
+        // Each variant calls a constructor with its arguments.
+        let Some(sig) = self.symbols.enums.get(fqn) else { return };
+        let ctors = sig.constructors.clone();
+        for variant in &enum_decl.variants {
+            if !variant.payload.is_empty() {
+                continue;
+            }
+            match self.select_ctor_typed(&ctors, &variant.args) {
+                Some(k) => {
+                    self.ctor_selections.insert(variant.span, k);
+                    self.check_call_args(
+                        &format!("{} (enum constructor)", enum_decl.name.text),
+                        &ctors[k].params,
+                        &variant.args,
+                        &vec![None; variant.args.len()],
+                        variant.span,
+                        Some(fqn),
+                        &[],
+                        &[],
+                    );
+                }
+                None => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0411_WrongArgCount,
+                            format!(
+                                "no constructor of enum `{}` accepts the {} argument{} variant `{}` passes",
+                                enum_decl.name.text,
+                                variant.args.len(),
+                                if variant.args.len() == 1 { "" } else { "s" },
+                                variant.name.text,
+                            ),
+                        )
+                        .with_span(variant.span),
+                    );
+                    for arg in &variant.args {
+                        self.check_expr(arg);
+                    }
+                }
+            }
+        }
+        // A constructor gives each field its value, once, and does nothing
+        // else: `this.mass = mass;` (or `mass = mass` is NOT this: a bare
+        // name on the left is the parameter when one shadows the field).
+        let field_names: Vec<&str> = enum_decl.fields.iter().map(|f| f.name.text.as_str()).collect();
+        for ctor in &enum_decl.constructors {
+            let params: Vec<&str> = ctor.params.iter().map(|p| p.name.text.as_str()).collect();
+            let mut assigned: Vec<String> = Vec::new();
+            for stmt in &ctor.body.statements {
+                let target = match stmt {
+                    Stmt::Assign(a) if a.op.is_none() => match &a.target {
+                        Expr::Field(f) if matches!(f.object.as_ref(), Expr::This(_)) => Some(f.field.text.clone()),
+                        Expr::Path(qn)
+                            if qn.segments.len() == 1
+                                && field_names.contains(&qn.segments[0].text.as_str())
+                                && !params.contains(&qn.segments[0].text.as_str()) =>
+                        {
+                            Some(qn.segments[0].text.clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let reads_this = matches!(stmt, Stmt::Assign(a) if {
+                    let mut found = false;
+                    juxc_ast::visit::for_each_expr_in(&a.value, &mut |e| {
+                        if matches!(e, Expr::This(_)) {
+                            found = true;
+                        }
+                    });
+                    found
+                });
+                let problem = match &target {
+                    None => Some(
+                        "an enum constructor only gives each field its value (`this.mass = mass;`): the \
+                         values are computed once per variant, from its arguments, so there is no place \
+                         for other statements"
+                            .to_string(),
+                    ),
+                    Some(f) if !field_names.contains(&f.as_str()) => {
+                        Some(format!("`{f}` is not a field of enum `{}`", enum_decl.name.text))
+                    }
+                    Some(f) if assigned.contains(f) => Some(format!("field `{f}` is set twice")),
+                    Some(_) if reads_this => Some(
+                        "a field's value cannot read `this`: the other fields may not have theirs yet"
+                            .to_string(),
+                    ),
+                    Some(_) => None,
+                };
+                if let Some(problem) = problem {
+                    self.diagnostics.push(
+                        Diagnostic::error(code::Code::E0495_EnumConstructorShape, problem)
+                            .with_span(match stmt {
+                                Stmt::Assign(a) => a.span,
+                                _ => ctor.span,
+                            }),
+                    );
+                }
+                if let Some(f) = target {
+                    assigned.push(f);
+                }
+            }
+            let missing: Vec<&str> =
+                field_names.iter().copied().filter(|f| !assigned.iter().any(|a| a == f)).collect();
+            if !missing.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0495_EnumConstructorShape,
+                        format!(
+                            "this constructor of enum `{}` leaves `{}` without a value",
+                            enum_decl.name.text,
+                            missing.join("`, `"),
+                        ),
+                    )
+                    .with_span(ctor.span),
+                );
+            }
+        }
     }
 
     /// A record's compact constructor (JUX-LANG-V1 §7.6.1): the header's

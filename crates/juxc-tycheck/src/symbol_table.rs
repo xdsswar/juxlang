@@ -835,6 +835,11 @@ impl SymbolTable {
         class_name: &str,
         field_name: &str,
     ) -> Option<(&'a FieldSig, &'a str)> {
+        // An enum's per-variant fields (§7.7.4). An enum has no `extends`,
+        // so there is no chain to walk.
+        if let Some((enum_key, en)) = self.enums.get_key_value(class_name) {
+            return en.fields.get(field_name).map(|f| (f, enum_key.as_str()));
+        }
         let mut cursor: Option<&str> = Some(class_name);
         let mut depth = 0usize;
         while let Some(name) = cursor {
@@ -1280,6 +1285,12 @@ pub struct EnumSig {
     /// instead of the non-existent `crate::rust::minifb::Key`. `None` for an
     /// ordinary Jux enum. Mirrors [`ClassSig::rust_path`].
     pub rust_path: Option<String>,
+    /// Per-variant fields (JUX-LANG-V1 §7.7.4), `private final double mass;`.
+    /// Read like a class's fields (`this.mass`, a bare `mass`, `p.mass`), and
+    /// set only by the constructor.
+    pub fields: HashMap<String, FieldSig>,
+    /// The constructors a variant's arguments call (§7.7.4).
+    pub constructors: Vec<ConstructorSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -4501,6 +4512,18 @@ fn insert_enum(
             is_layout_c: is_layout_c_annotation(&enum_decl.annotations),
             is_external,
             rust_path: rust_path_annotation(&enum_decl.annotations),
+            fields: enum_decl.fields.iter().map(|f| (f.name.text.clone(), field_sig(f))).collect(),
+            constructors: enum_decl
+                .constructors
+                .iter()
+                .map(|c| ConstructorSig {
+                    visibility: c.visibility,
+                    params: c.params.iter().map(param_sig).collect(),
+                    is_foreign_result: false,
+                    is_rust_default: false,
+                    span: c.span,
+                })
+                .collect(),
             span: enum_decl.span,
         },
     );

@@ -1,0 +1,66 @@
+// Java-style enum fields and constructors (JUX-LANG-V1 §7.7.4, ERRATA E34).
+//
+// A variant's arguments are a call to the enum's constructor, which gives
+// each per-variant field its value. The values are computed once per
+// variant, in declaration order, the first time the enum is used.
+
+enum Planet {
+    Mercury(3.303e+23, 2.4397e6),
+    Venus(4.869e+24, 6.0518e6),
+    Earth(5.976e+24, 6.37814e6);
+
+    private final double mass;
+    private final double radius;
+
+    Planet(double mass, double radius) {
+        this.mass = mass;
+        this.radius = radius;
+    }
+
+    public double surfaceGravity() {
+        const double G = 6.67300E-11;
+        return G * mass / (radius * radius);
+    }
+
+    public double surfaceWeight(double otherMass) {
+        return otherMass * this.surfaceGravity();
+    }
+}
+
+enum HttpStatus {
+    Ok(200, "OK"),
+    NotFound(404, "Not Found"),
+    Teapot(418);
+
+    public final int code;
+    public final String reason;
+
+    HttpStatus(int code, String reason) {
+        this.code = code;
+        this.reason = reason;
+    }
+
+    HttpStatus(int code) {
+        this.code = code;
+        this.reason = "Unknown";
+    }
+
+    public String line() { return $"${code} ${reason}"; }
+}
+
+public void main() {
+    double earthWeight = 175.0;
+    double mass = earthWeight / Planet.Earth.surfaceGravity();
+    for (var p : Planet.values()) {
+        // Rounded to two places: the digits past that depend on the platform's
+        // floating-point formatting, not on the program.
+        var w = p.surfaceWeight(mass);
+        print($"${p.name()}: ${(long)(w * 100.0 + 0.5) / 100.0}");
+    }
+    print(Planet.Earth.surfaceGravity() > 9.8);
+
+    print(HttpStatus.Ok.line());
+    print(HttpStatus.NotFound.code);
+    print(HttpStatus.Teapot.line());
+    print(HttpStatus.fromName("notfound")!!.reason);
+}

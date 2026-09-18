@@ -895,7 +895,8 @@ impl Resolver {
             self.pop_scope();
         }
         // Enum METHOD bodies (§A.2.5) — `this` + params in scope; the
-        // enum's own constants are reachable as bare names too.
+        // enum's own constants and its per-variant fields (§7.7.4) are
+        // reachable as bare names too.
         for method in &enum_decl.methods {
             let Some(body) = &method.body else { continue };
             self.push_scope();
@@ -903,11 +904,41 @@ impl Resolver {
             for c in &enum_decl.constants {
                 self.declare(&c.name.text);
             }
+            for f in &enum_decl.fields {
+                self.declare(&f.name.text);
+            }
+            // Parameters in an inner scope, so one may shadow a field.
+            self.push_scope();
             for param in &method.params {
                 self.declare(&param.name.text);
             }
             self.visit_block(body);
             self.pop_scope();
+            self.pop_scope();
+        }
+        // Constructors (§7.7.4) see the same names, then their parameters.
+        for ctor in &enum_decl.constructors {
+            self.push_scope();
+            self.declare("this");
+            for c in &enum_decl.constants {
+                self.declare(&c.name.text);
+            }
+            for f in &enum_decl.fields {
+                self.declare(&f.name.text);
+            }
+            self.push_scope();
+            for param in &ctor.params {
+                self.declare(&param.name.text);
+            }
+            self.visit_block(&ctor.body);
+            self.pop_scope();
+            self.pop_scope();
+        }
+        // A variant's constructor arguments are ordinary expressions.
+        for variant in &enum_decl.variants {
+            for arg in &variant.args {
+                self.visit_expr(arg);
+            }
         }
     }
 
