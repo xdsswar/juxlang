@@ -2124,8 +2124,19 @@ impl RustEmitter {
             }
             _ => false,
         };
-        let body_moves_var =
-            !element_is_copy && (element_is_record || body_moves_path(&f.body, &f.var_name.text));
+        // A TYPE-PARAMETER element (`for (var item : items)` over a `K[]` in a
+        // generic function) is bound owned. Borrowed it would be `&K`, and Rust
+        // has no `&K == K` or `&K + K` for a parameter the way it does through
+        // auto-deref on a concrete type, so `item == target` failed to compile.
+        // `K` always carries `Clone` (§T.2.1); for a class the clone is a
+        // refcount bump.
+        let element_is_param = match self.expr_types.get(&expr_span_of(&f.iter)) {
+            Some(Ty::Array { element, .. }) => matches!(element.as_ref(), Ty::Param(_)),
+            Some(Ty::User { generic_args, .. }) => matches!(generic_args.first(), Some(Ty::Param(_))),
+            _ => false,
+        };
+        let body_moves_var = !element_is_copy
+            && (element_is_record || element_is_param || body_moves_path(&f.body, &f.var_name.text));
 
         // **Re-entrancy guard.** When the iterable is a collection field read
         // through a wrapper's `.0.borrow()` (`for (n : this.items) …`), iterating

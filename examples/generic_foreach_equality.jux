@@ -1,0 +1,54 @@
+// A generic function that walks a `K[]` or a `Vec<K>` and compares each
+// element with `==`. The element of a for-each over a type parameter is its
+// own value, so `item == target` is an ordinary comparison, whatever `K` turns
+// out to be: a primitive, a String, a record (structural equality) or a class
+// (identity, since this one declares no `operator==`).
+
+record Point(int x, int y) {}
+
+class Tag {
+    private String label;
+    public Tag(String label) { this.label = label; }
+}
+
+<K> bool has(K[] items, K target) {
+    for (var item : items) {
+        if (item == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+<K> int countOf(Vec<K> items, K target) {
+    int n = 0;
+    for (var item : items) {
+        if (item == target) {
+            n++;
+        }
+    }
+    return n;
+}
+
+public void main() {
+    int[] numbers = {1, 2, 3};
+    print(has(numbers, 2));
+    print(has(numbers, 9));
+
+    String[] words = {"ann", "bob"};
+    print(has(words, "bob"));
+
+    Point[] points = {new Point(1, 2), new Point(3, 4)};
+    print(has(points, new Point(3, 4)));
+
+    var red = new Tag("red");
+    Tag[] tags = {red, new Tag("blue")};
+    print(has(tags, red));
+    print(has(tags, new Tag("red")));
+
+    var letters = new Vec<String>();
+    letters.push("a");
+    letters.push("b");
+    letters.push("a");
+    print(countOf(letters, "a"));
+}
