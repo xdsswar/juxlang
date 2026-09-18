@@ -73,7 +73,10 @@ fn lower(example: &str, out: &PathBuf) -> Vec<(String, String)> {
 
 #[test]
 fn lowering_is_deterministic() {
-    let tmp = std::env::temp_dir().join("jux-determinism");
+    // One folder per run: two checkouts (or worktrees) testing at once used
+    // to share `jux-determinism` in the system temp dir, and one run's cleanup
+    // emptied the other's output ("emitted nothing").
+    let tmp = std::env::temp_dir().join(format!("jux-determinism-{}", std::process::id()));
     for example in SAMPLE {
         let a = lower(example, &tmp.join("a"));
         let b = lower(example, &tmp.join("b"));
