@@ -1,0 +1,26 @@
+// Tuple types in every declaration position (Grammar §A.2.7): a local, a
+// parameter and a return type all spell `(A, B, ...)`, and `.0`, `.1` read the
+// elements.
+
+(int, int) divmod(int a, int b) {
+    return (a / b, a % b);
+}
+
+int total((int, int) pair) {
+    return pair.0 + pair.1;
+}
+
+public void main() {
+    (int, int) qr = divmod(17, 5);
+    print($"17 / 5 = ${qr.0} remainder ${qr.1}");
+
+    (String, int, bool) row = ("widgets", 12, true);
+    print($"${row.0}: ${row.1} (in stock: ${row.2})");
+
+    print(total(qr));
+
+    // A tuple local can be reassigned like any other.
+    (int, int) point = (1, 2);
+    point = (point.1, point.0);
+    print($"swapped: ${point.0}, ${point.1}");
+}

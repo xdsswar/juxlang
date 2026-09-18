@@ -1,0 +1,1 @@
+super_call_not_first.jux:8:9: [E0210] error: `super(...)` must be the first statement of the constructor: the parent is built before the rest of the body runs

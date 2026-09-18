@@ -15,7 +15,9 @@ workspace = true
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 juxc-ast         = { workspace = true }
+# The shared name lists (primitive type names, prelude built-ins) behind
+# the "did you mean" hint on an unknown type.
+juxc-lex         = { workspace = true }
 
 [dev-dependencies]
-juxc-lex   = { workspace = true }
 juxc-parse = { workspace = true }

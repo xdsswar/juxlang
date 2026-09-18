@@ -881,6 +881,53 @@ point at `jux.toml`.
 
 ---
 
+## E39. How a constructor is declared
+
+**Conflict.** JUX-GRAMMAR-ADDENDUM §A.2.4 declared a constructor with the
+keyword `new` (`public new(int n) { ... }`), while JUX-LANG-V1 §7.3.1 says the
+`new(...)` form was dropped: a constructor takes its class name, as in Java,
+and `new` is only the call-site operator. The compiler implemented §7.3.1, and
+a `new(...)` declaration produced a cascade that ended in "a class cannot be
+declared inside a function body".
+
+**Resolution.** §7.3.1 is normative. §A.2.4's `constructor-decl` names the
+class; a `new(...)` declaration is `E0263`, read as the constructor it means.
+
+**Spec status:** §A.2.4 is corrected; §7.3.1 names `E0263`.
+
+---
+
+## E40. The `assert` statement
+
+**Conflict.** JUX-SEMANTICS-ADDENDUM §S.7.2 specified only the built-in call,
+`assert(condition)` / `assert(condition, message)`. Java writes
+`assert condition;` and `assert condition : message;`, and the IDE already
+parsed that form, so the editor accepted a statement the compiler rejected.
+
+**Resolution.** Both spellings are the same built-in: the statement form is
+parsed into the call. `assert(x);` stays the call.
+
+**Spec status:** §S.7.2 states the statement form.
+
+---
+
+## E41. Which import cycles are an error
+
+**Conflict.** JUX-BUILD-SYSTEM-ADDENDUM §B.4.6 rejected cycles between "source
+modules" and said cyclic imports across packages are "always rejected". It was
+written for the `module.jux` model that E38 removed, and it forbade something
+Java allows and Jux programs rely on: two packages of one project importing
+each other.
+
+**Resolution.** A module is a `jux.toml` package (E38). A dependency cycle
+between modules is `E0308`, reported with the whole circle; it cannot build,
+since each module is its own library built after its dependencies. Imports
+between packages inside one module may be cyclic, as in Java.
+
+**Spec status:** §B.4.6 is rewritten; the catalog row for `E0308` is live.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

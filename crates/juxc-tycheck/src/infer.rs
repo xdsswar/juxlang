@@ -979,7 +979,12 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             return raw;
         }
         if let Some(record) = symbols.records.get(name) {
-            if let Some(component) = record.components.iter().find(|c| c.name == field_name) {
+            // A destructuring read names its component by position until the
+            // driver renames it (`juxc_ast::record_destructure_temp`).
+            let component = record.components.iter().find(|c| c.name == field_name).or_else(|| {
+                juxc_ast::record_component_index(field_name).and_then(|i| record.components.get(i))
+            });
+            if let Some(component) = component {
                 let raw = lower_member_type(&component.ty, name, symbols);
                 return substitute(&raw, &record.generic_params, generic_args);
             }

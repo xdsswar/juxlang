@@ -1,0 +1,3 @@
+nested_type_spelling.jux:9:5: [E0413] error: no method `missing` on type `Outer.Inner`
+nested_type_spelling.jux:10:11: [E0412] error: no field `nothing` on type `Outer.Inner`
+nested_type_spelling.jux:11:5: [E0410] error: type mismatch in declaration of `text`: expected String, found Outer.Inner

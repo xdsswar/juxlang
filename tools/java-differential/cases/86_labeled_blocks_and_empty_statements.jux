@@ -1,0 +1,57 @@
+// Labeled blocks, labeled loops and the empty statement: `break name;` leaves
+// the labeled statement from anywhere inside it, a labeled block included.
+
+class Scan {
+    public static int steps = 0;
+
+    public static bool step() {
+        steps = steps + 1;
+        return steps < 5;
+    }
+}
+
+int indexOf(int[] values, int wanted) {
+    int found = -1;
+    search: {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == wanted) {
+                found = i;
+                break search;
+            }
+        }
+        print("not found: " + wanted);
+    }
+    return found;
+}
+
+public void main() {
+    int[] values = {3, 9, 4, 7};
+    print(indexOf(values, 4));
+    print(indexOf(values, 5));
+
+    // A labeled block inside a loop: break leaves the block, the loop goes on.
+    for (int i = 0; i < 3; i++) {
+        check: {
+            if (i == 1) {
+                break check;
+            }
+            print("checked " + i);
+        }
+    }
+
+    // Leaving two loops at once.
+    outer: for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            if (row * col == 2) {
+                print("stop at " + row + "," + col);
+                break outer;
+            }
+        }
+    }
+
+    // The empty statement as a loop body, and stray semicolons.
+    while (Scan.step());
+    print(Scan.steps);;
+    ;
+    print("end");
+}

@@ -55,7 +55,12 @@ fn stmt_diverges(stmt: &Stmt) -> bool {
             !sw.arms.is_empty() && sw.arms.iter().all(|a| switch_body_diverges(&a.body))
         }
         // Transparent wrappers — recurse into the inner statement / block.
-        Stmt::Labeled { stmt, .. } => stmt_diverges(stmt),
+        // A labeled BLOCK is the exception: `break name;` inside it finishes
+        // the block normally, so it diverges only when nothing leaves it.
+        Stmt::Labeled { label, stmt } => match stmt.as_ref() {
+            Stmt::Block(b) => block_diverges(b) && !block_breaks_to(b, &label.text),
+            _ => stmt_diverges(stmt),
+        },
         Stmt::Unsafe(b) => block_diverges(b),
         // `try` diverges when a `finally` diverges, or when the try body and
         // every catch body diverge (no normal-completion path remains).
@@ -122,6 +127,21 @@ fn is_true_literal(e: &Expr) -> bool {
 /// when ANY break is present is the conservative, false-positive-free choice.)
 fn block_has_break(block: &Block) -> bool {
     block.statements.iter().any(stmt_has_break)
+}
+
+/// True when some `break name;` anywhere inside `block` targets `name`,
+/// however deeply nested (a loop or lambda in between does not stop a
+/// labeled break, and a lambda cannot contain one that reaches out).
+fn block_breaks_to(block: &Block, name: &str) -> bool {
+    let mut found = false;
+    juxc_ast::visit::for_each_node(block, &mut |n| {
+        if let juxc_ast::visit::Node::Stmt(Stmt::Break(Some(l), _)) = n {
+            if l.text == name {
+                found = true;
+            }
+        }
+    });
+    found
 }
 
 fn stmt_has_break(stmt: &Stmt) -> bool {

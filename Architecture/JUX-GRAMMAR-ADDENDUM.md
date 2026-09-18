@@ -269,12 +269,12 @@ function-body     = block | '=' expression ';' | ';'   -- ; for abstract/native
 block             = '{' statement* '}'
 ```
 
-The single-expression form `= expression ;` is shorthand for `{ return expression ; }`; permitted only on non-`void` functions whose body is one expression. `out` parameters are specified in `JUX-MISSING-DEFS-ADDENDUM.md`.
+The single-expression form `= expression ;` is shorthand for `{ return expression ; }`; permitted only on non-`void` functions whose body is one expression (`E0262` on a `void` one). It applies to free functions and methods alike: `int twice(int x) = x * 2;`. `out` parameters are specified in `JUX-MISSING-DEFS-ADDENDUM.md`.
 
-A constructor is a function-decl whose name is the literal keyword `new`:
+A constructor is declared with the name of its class, as in Java (JUX-LANG-V1 §7.3.1). `new` is the operator that calls one, not part of the declaration; a declaration spelled `new(...)` is `E0263` (see ERRATA E39):
 
 ```
-constructor-decl  = annotation* visibility? 'new'
+constructor-decl  = annotation* visibility? class-name
                     '(' param-list? ')' throws-clause?
                     constructor-body
 

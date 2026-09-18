@@ -375,6 +375,9 @@ pub(crate) struct Checker<'a> {
     /// before the backend runs, so emission only ever sees plain
     /// positional calls.
     pub(crate) call_expansions: HashMap<Span, Vec<crate::ArgSource>>,
+    /// Record-destructuring reads resolved to component names, keyed by the
+    /// field identifier's span (see `juxc_ast::record_destructure_temp`).
+    pub(crate) component_names: HashMap<Span, String>,
     /// Constructor-overload selections — `new T(...)` / `super(...)` /
     /// `this(...)` call span → index into the class's constructor
     /// list. Absorbed into `SymbolTable::ctor_selections` after the
@@ -403,6 +406,16 @@ pub(crate) struct Checker<'a> {
     /// first statement), and a delegation may not resolve back to
     /// the declaring constructor itself.
     pub(crate) current_ctor: Option<usize>,
+    /// The labeled statements enclosing the one being checked, innermost
+    /// last: the label and whether it names a loop (`true`) or a block
+    /// (`false`). `break name;` needs one of them; `continue name;` needs a
+    /// loop (Grammar §A.2.8, E0241). A lambda body starts with none: a jump
+    /// cannot leave the closure.
+    pub(crate) labels: Vec<(String, bool)>,
+    /// Labels that enclose the current lambda from OUTSIDE it: not jump
+    /// targets (a jump can't leave the closure), but worth naming when a
+    /// `break outer;` inside the lambda reaches for one.
+    pub(crate) labels_outside_closure: Vec<String>,
     /// `true` while walking an instance or `static` `init { }` block.
     /// Like `current_ctor.is_some()`, this is a context in which a
     /// `final`/`const` field MAY be assigned (the init runs during
@@ -502,6 +515,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, usize>,
     HashMap<Span, String>,
     HashMap<Span, String>,
+    HashMap<Span, String>,
 );
 
 impl<'a> Checker<'a> {
@@ -517,6 +531,7 @@ impl<'a> Checker<'a> {
             current_return_void: false,
             expr_types: HashMap::new(),
             call_expansions: HashMap::new(),
+            component_names: HashMap::new(),
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
@@ -524,6 +539,8 @@ impl<'a> Checker<'a> {
             record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
             current_ctor: None,
+            labels: Vec::new(),
+            labels_outside_closure: Vec::new(),
             in_init_block: false,
             checked_escapes: Vec::new(),
             catch_absorb_stack: Vec::new(),
@@ -641,6 +658,7 @@ impl<'a> Checker<'a> {
             self.function_selections,
             self.typed_assert_throws,
             self.record_patterns,
+            self.component_names,
         )
     }
 
@@ -2585,6 +2603,19 @@ impl<'a> Checker<'a> {
         // the delegated-to constructor owns parent initialization.
         let mut saw_this_call = false;
         for (i, stmt) in ctor.body.statements.iter().enumerate() {
+            // `super(...)` must come first too: the parent is built before
+            // anything in the child's body runs (Grammar §A.2.4).
+            if let Stmt::SuperCall(_, sspan) = stmt {
+                if i != 0 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0210_ConstructorCallNotFirst,
+                            "`super(...)` must be the first statement of the constructor: the parent is built before the rest of the body runs",
+                        )
+                        .with_span(*sspan),
+                    );
+                }
+            }
             if let Stmt::Expr(Expr::Call(call)) = stmt {
                 if matches!(call.callee.as_ref(), Expr::This(_)) {
                     saw_this_call = true;
@@ -4312,6 +4343,7 @@ impl<'a> Checker<'a> {
                 // — reject the non-dispatchable forms before the backend
                 // emits a broken slot type.
                 if let Some(t) = &v.ty {
+                    self.check_local_type_known(t);
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
                     self.check_fixed_array_size_in_type(t);
@@ -4333,7 +4365,11 @@ impl<'a> Checker<'a> {
                     self.check_expr(e);
                     infer_expr(e, &self.env, self.symbols)
                 });
+                let destructure = juxc_ast::record_destructure_arity(&v.name.text);
                 let final_ty = match (&declared, &inferred) {
+                    (Some(d), Some(i)) if destructure.is_some() => {
+                        self.check_record_destructure(v, d, i, destructure.unwrap_or_default())
+                    }
                     (Some(d), Some(i)) => {
                         // A raw-pointer slot (`T*`) accepts the `null` literal —
                         // `null` is the sole `T*` literal for any `T` (§L.6.1).
@@ -5086,8 +5122,119 @@ impl<'a> Checker<'a> {
                 self.check_block(b);
                 self.in_unsafe = saved_unsafe;
             }
-            Stmt::Break(..) | Stmt::Continue(..) => {}
-            Stmt::Labeled { stmt, .. } => self.check_stmt(stmt),
+            Stmt::Break(label, span) | Stmt::Continue(label, span) => {
+                let is_break = matches!(stmt, Stmt::Break(..));
+                if let Some(label) = label {
+                    self.check_jump_label(&label.text, is_break, label.span.join(*span));
+                }
+            }
+            Stmt::Labeled { label, stmt: inner } => {
+                let is_loop = matches!(
+                    inner.as_ref(),
+                    Stmt::While(_) | Stmt::DoWhile(_) | Stmt::ForEach(_) | Stmt::ForC(_)
+                );
+                self.labels.push((label.text.clone(), is_loop));
+                self.check_stmt(inner);
+                self.labels.pop();
+            }
+        }
+    }
+
+    /// `var R(a, b) = value;` (§5.4), checked at the temporary the parser
+    /// desugared it into (`juxc_ast::record_destructure_temp`). `declared` is
+    /// the pattern's type `R`, `value` the initializer's. Returns the type the
+    /// temporary takes: the value's own when it IS an `R` (so a generic
+    /// record keeps its arguments), `R` otherwise.
+    ///
+    /// - `R` must be a record, with as many components as the pattern has
+    ///   binders (E0439).
+    /// - The value must always be an `R`: a declaration has no other branch to
+    ///   fall to, so a pattern that can fail to match is E0271. A value typed
+    ///   as a supertype, or nullable, can fail.
+    fn check_record_destructure(&mut self, v: &juxc_ast::VarDecl, declared: &Ty, value: &Ty, arity: usize) -> Ty {
+        let span = v.span;
+        let Ty::User { name: record_name, .. } = declared else {
+            return declared.clone();
+        };
+        let shown = crate::ty::nested_type_spelling(record_name.rsplit('.').next().unwrap_or(record_name)).into_owned();
+        let Some(record) = self.symbols.records.get(record_name) else {
+            if !matches!(declared, Ty::Unknown) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0439_PatternShapeMismatch,
+                        format!("`var {shown}(...)` takes a record apart, and `{shown}` is not a record"),
+                    )
+                    .with_span(span),
+                );
+            }
+            return declared.clone();
+        };
+        let components = record.components.len();
+        if components != arity {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0439_PatternShapeMismatch,
+                    format!(
+                        "`{shown}` has {components} component{}, and this pattern gives {arity}",
+                        if components == 1 { "" } else { "s" },
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+        match value {
+            Ty::User { name, .. } if name == record_name => value.clone(),
+            Ty::Unknown => declared.clone(),
+            other => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0271_RefutableDestructuring,
+                        format!(
+                            "`var {shown}(...)` needs a value that is always a `{shown}`, and this one is a `{other}`: the pattern could fail to match, and a declaration has nowhere to go if it does",
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help(format!(
+                        "test it first with `switch` (`case {shown}(var a, ...) -> ...`) or `if (value => {shown} r)`",
+                    )),
+                );
+                declared.clone()
+            }
+        }
+    }
+
+    /// `break name;` / `continue name;` (Grammar §A.2.8, E0241): the label
+    /// must name an enclosing labeled statement, and `continue` must name a
+    /// loop, since a labeled block has no next iteration to continue to.
+    fn check_jump_label(&mut self, name: &str, is_break: bool, span: Span) {
+        let keyword = if is_break { "break" } else { "continue" };
+        match self.labels.iter().rev().find(|(l, _)| l == name) {
+            None if self.labels_outside_closure.iter().any(|l| l == name) => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0241_LabelMismatch,
+                    format!(
+                        "`{keyword} {name};` would have to leave the lambda it is written in, and a jump cannot: `{name}:` is outside the closure"
+                    ),
+                )
+                .with_span(span),
+            ),
+            None => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0241_LabelMismatch,
+                    format!("`{keyword} {name};` names no enclosing statement: there is no `{name}:` around it"),
+                )
+                .with_span(span),
+            ),
+            Some((_, false)) if !is_break => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0241_LabelMismatch,
+                    format!(
+                        "`continue {name};` needs a loop, and `{name}` labels a block: use `break {name};` to leave it"
+                    ),
+                )
+                .with_span(span),
+            ),
+            Some(_) => {}
         }
     }
 
@@ -5740,10 +5887,17 @@ impl<'a> Checker<'a> {
                 // async function does NOT (§18.1.2).
                 let saved_async = self.in_async;
                 self.in_async = l.is_async;
+                // A jump can't leave the closure, so no outer label is visible.
+                let saved_labels = std::mem::take(&mut self.labels);
+                let hidden = saved_labels.len();
+                self.labels_outside_closure.extend(saved_labels.iter().map(|(l, _)| l.clone()));
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(e) => self.check_expr(e),
                     juxc_ast::LambdaBody::Block(b) => self.check_block(b),
                 }
+                let keep = self.labels_outside_closure.len() - hidden;
+                self.labels_outside_closure.truncate(keep);
+                self.labels = saved_labels;
                 self.in_async = saved_async;
                 self.current_return = saved_return;
                 self.lambda_depth -= 1;
@@ -6565,6 +6719,70 @@ impl<'a> Checker<'a> {
     /// deliberately generous on a shared PREFIX, because the misses that
     /// matter are a Rust name the user shortened (`sort` for
     /// `sort_unstable`) or a Java name that has a differently-spelled twin.
+    /// A local's declared type must name something (E0417): `Zork z = 5;`
+    /// used to pass the checker and fail in rustc. Checks the head and every
+    /// generic argument and function-type slot, with the same resolver the
+    /// signature check uses, and suggests the nearest visible type name.
+    fn check_local_type_known(&mut self, tref: &TypeRef) {
+        if let Some(fs) = &tref.fn_shape {
+            for p in &fs.params {
+                self.check_local_type_known(p);
+            }
+            self.check_local_type_known(&fs.return_type);
+            return;
+        }
+        if tref.const_literal_text().is_some() {
+            return;
+        }
+        if self.sig_head_unresolved(tref, &[]) {
+            let bare = tref.name.segments[0].text.clone();
+            let hint = self.nearest_type_hint(&bare);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0417_UnknownType,
+                    format!(
+                        "unknown type `{bare}`: no class, record, enum, interface or primitive of that name is visible here{hint}"
+                    ),
+                )
+                .with_span(tref.span),
+            );
+            return;
+        }
+        for ga in &tref.generic_args {
+            if let juxc_ast::GenericArg::Type(inner) = ga {
+                self.check_local_type_known(inner);
+            }
+        }
+    }
+
+    /// `" -- did you mean `String`?"` when a visible type name, a primitive,
+    /// or a prelude type is a likely misspelling of `wanted`; empty otherwise.
+    /// Ranked by edit distance first: `Strng` is one letter from `String` and
+    /// two from `Stream`, and a typo is what an unknown type name usually is.
+    fn nearest_type_hint(&self, wanted: &str) -> String {
+        let mut names: Vec<String> = juxc_lex::PRIMITIVE_TYPE_NAMES.iter().map(|s| s.to_string()).collect();
+        names.extend(juxc_lex::grammar_spec::BUILTIN_NAMES.iter().map(|s| s.to_string()));
+        let bare = |k: &String| k.rsplit('.').next().unwrap_or(k).to_string();
+        names.extend(self.symbols.classes.keys().map(bare));
+        names.extend(self.symbols.records.keys().map(bare));
+        names.extend(self.symbols.enums.keys().map(bare));
+        names.extend(self.symbols.interfaces.keys().map(bare));
+        names.sort_unstable();
+        names.dedup();
+        // At most a third of the name may differ (one letter in a short one).
+        let budget = (wanted.chars().count() / 3).max(1);
+        let mut scored: Vec<(&str, usize)> = names
+            .iter()
+            .map(|c| (c.as_str(), edit_distance(&wanted.to_lowercase(), &c.to_lowercase())))
+            .filter(|(_, d)| *d <= budget)
+            .collect();
+        scored.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.len().cmp(&b.0.len())).then(a.0.cmp(b.0)));
+        match scored.first() {
+            Some((c, _)) => format!(" -- did you mean `{c}`?"),
+            None => String::new(),
+        }
+    }
+
     fn nearest_method_hint(&self, type_name: &str, wanted: &str) -> String {
         let mut names: Vec<&str> = Vec::new();
         if let Some(cls) = self.symbols.classes.get(type_name) {
@@ -6859,6 +7077,17 @@ impl<'a> Checker<'a> {
     }
 
     fn check_field_access(&mut self, f: &FieldExpr) {
+        // A record-destructuring read (`__jux_component_N` on the temporary):
+        // name the component for the driver's rewrite. The pattern's shape was
+        // judged at the temporary's declaration.
+        if let Some(index) = juxc_ast::record_component_index(&f.field.text) {
+            if let Ty::User { name, .. } = infer_expr(&f.object, &self.env, self.symbols) {
+                if let Some(component) = self.symbols.records.get(&name).and_then(|r| r.components.get(index)) {
+                    self.component_names.insert(f.field.span, component.name.clone());
+                }
+            }
+            return;
+        }
         // `ClassName.STATIC_FIELD` — recognize the static-access
         // shape before treating the receiver as a value. Visibility
         // applies the same as for instance fields; reading an
@@ -7181,7 +7410,10 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0412_UnresolvedField,
-                        format!("no field `{field_name}` on type `{name}`"),
+                        format!(
+                            "no field `{field_name}` on type `{}`",
+                            crate::ty::nested_type_spelling(name),
+                        ),
                     )
                     .with_span(f.span),
                 );
@@ -9654,7 +9886,8 @@ impl<'a> Checker<'a> {
                                 juxc_diagnostics::Diagnostic::error(
                                     code::Code::E0427_StaticCalledOnInstance,
                                     format!(
-                                        "`{method_name}` is a static method on `{name}`; call it as `{name}.{method_name}(...)`, not on an instance",
+                                        "`{method_name}` is a static method on `{shown}`; call it as `{shown}.{method_name}(...)`, not on an instance",
+                                        shown = crate::ty::nested_type_spelling(&name),
                                     ),
                                 )
                                 .with_span(c.span),
@@ -9812,7 +10045,10 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0413_UnresolvedMethod,
-                        format!("no method `{method_name}` on type `{name}`{hint}"),
+                        format!(
+                            "no method `{method_name}` on type `{}`{hint}",
+                            crate::ty::nested_type_spelling(&name),
+                        ),
                     )
                     .with_span(c.span),
                 );

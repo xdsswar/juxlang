@@ -55,6 +55,30 @@ pub enum Code {
     E0203_ReservedNotImplemented,
 
     E0210_ConstructorCallNotFirst,
+    /// E0144: A **colon type annotation** on a local, `var x: int = 5;`.
+    /// Jux writes the type first, the Java way (JUX-LANG-V1 §5.6): the
+    /// declaration is `int x = 5;` or `var x = 5;`. One diagnostic, and the
+    /// parser reads on as if the annotation were absent, so nothing cascades.
+    E0144_ColonTypeAnnotation,
+    /// E0262: An **expression body on a `void` function**:
+    /// `void log(String s) = print(s);`. The `= expression;` form is
+    /// shorthand for `{ return expression; }` (Grammar §A.2.4), so it only
+    /// fits a function that returns a value; a `void` one takes a block.
+    E0262_ExpressionBodyOnVoid,
+    /// E0263: A constructor **declared as `new(...)`**. JUX-LANG-V1 §7.3
+    /// declares a constructor with its class name, the Java way, and keeps
+    /// `new` for the call site (`new User("Alice")`). The declaration is read
+    /// as the constructor anyway, so nothing else in the class cascades.
+    E0263_NewConstructorForm,
+    /// E0241: A **label that doesn't fit its jump**: `break name;` or
+    /// `continue name;` naming no enclosing labeled statement, or `continue`
+    /// aimed at a labeled block, which has no next iteration (Grammar §A.2.8).
+    E0241_LabelMismatch,
+    /// E0271: A **refutable pattern in a declaration**: `var Pt(x, y) = s;`
+    /// where `s` might not be a `Pt` (a supertype, or nullable). A declaration
+    /// has no other branch to take when the pattern fails, so the pattern
+    /// must always match (Grammar §A.3); test first with `switch` or `=>`.
+    E0271_RefutableDestructuring,
     /// E0211 — Constructor missing required `super(...)` call.
     E0211_MissingSuperCall,
 
@@ -92,6 +116,12 @@ pub enum Code {
     /// stubs are exempt — a Rust API member named like a keyword is surfaced
     /// verbatim and `r#`-escaped by the backend.)
     E0305_RustKeywordIdentifier,
+    /// E0308: A **dependency cycle between modules**: `jux.toml` packages
+    /// whose `[dependencies]` lead back to themselves. Each module builds as
+    /// its own library after the modules it depends on (§B.4.6), so a circle
+    /// has no first module to build. Imports between packages INSIDE one
+    /// module may be cyclic, as in Java (ERRATA E41).
+    E0308_ModuleDependencyCycle,
     /// E0320 — Entry file has both top-level statements and a `main` function.
     E0320_AmbiguousEntryPoint,
     /// E0326 — A class member named `main` with an entry-shaped signature is
@@ -916,12 +946,18 @@ impl Code {
             Code::E0202_NumericLiteralOutOfRange => "E0202",
             Code::E0203_ReservedNotImplemented   => "E0203",
             Code::E0210_ConstructorCallNotFirst  => "E0210",
+            Code::E0144_ColonTypeAnnotation      => "E0144",
+            Code::E0262_ExpressionBodyOnVoid     => "E0262",
+            Code::E0263_NewConstructorForm       => "E0263",
+            Code::E0241_LabelMismatch            => "E0241",
+            Code::E0271_RefutableDestructuring   => "E0271",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",
             Code::E0302_SamePackageImport        => "E0302",
             Code::E0304_DuplicateLocalDeclaration => "E0304",
             Code::E0303_ConflictingImport        => "E0303",
             Code::E0305_RustKeywordIdentifier    => "E0305",
+            Code::E0308_ModuleDependencyCycle    => "E0308",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
             Code::E0323_MainSignatureMismatch    => "E0323",
             Code::E0326_ClassMainNotStatic       => "E0326",

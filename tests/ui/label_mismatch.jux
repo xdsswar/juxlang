@@ -1,0 +1,14 @@
+public void main() {
+    section: {
+        continue section;
+    }
+    for (int i = 0; i < 3; i++) {
+        break nowhere;
+    }
+    outer: while (true) {
+        var leave = () -> {
+            break outer;
+        };
+        break;
+    }
+}

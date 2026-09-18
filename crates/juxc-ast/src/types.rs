@@ -18,6 +18,45 @@ use crate::exprs::Expr;
 /// out of user namespace; helpers below construct/recognize it.
 pub const TUPLE_SENTINEL: &str = "__tuple";
 
+/// **Record destructuring** (`var Pt(a, b) = p;`, JUX-LANG-V1 §5.4) is
+/// desugared by the parser into a typed temporary and one read per binder:
+///
+/// ```text
+/// Pt __jux_rec0_2 = p;
+/// var a = __jux_rec0_2.__jux_component_0;
+/// var b = __jux_rec0_2.__jux_component_1;
+/// ```
+///
+/// The parser cannot know the component NAMES (the record may live in another
+/// file), so the reads name components by position. The checker validates the
+/// temporary (a record of that arity, a value that is always one: E0439 /
+/// E0271), resolves each position to its component, and the driver rewrites
+/// the AST to the real names before the backend runs. The temporary's name
+/// carries the pattern's arity, since `_` binders produce no read.
+pub fn record_destructure_temp(counter: u32, arity: usize) -> String {
+    format!("__jux_rec{counter}_{arity}")
+}
+
+/// The pattern arity encoded in a [`record_destructure_temp`] name, or `None`
+/// for any other name.
+pub fn record_destructure_arity(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("__jux_rec")?;
+    let (counter, arity) = rest.split_once('_')?;
+    counter.parse::<u32>().ok()?;
+    arity.parse().ok()
+}
+
+/// The positional field name the destructuring desugar reads component
+/// `index` through (see [`record_destructure_temp`]).
+pub fn record_component_marker(index: usize) -> String {
+    format!("__jux_component_{index}")
+}
+
+/// The component position a [`record_component_marker`] names, or `None`.
+pub fn record_component_index(field: &str) -> Option<usize> {
+    field.strip_prefix("__jux_component_")?.parse().ok()
+}
+
 /// A reference to a type, e.g. `List<String>?`, `int[10]`, `byte[]`.
 ///
 /// Structural details (generics, nullability, array shape) hang off this

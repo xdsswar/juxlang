@@ -344,7 +344,9 @@ If no match is found, emit `E0301` ("name not found"). If multiple matches exist
 
 ### B.4.6. Cyclic Imports
 
-A cycle in the dependency graph between source modules is rejected (`E0308`) unless one of the modules is `@async-init` (per JUX-LANG-V1 §10.1.7). Cyclic imports across packages (rather than across source modules within a package) are always rejected.
+A module is one `jux.toml` package (§B.3). A cycle in the dependency graph between modules, where each module's `[dependencies]` lead back to itself, is rejected (`E0308`): each module is built as its own library after the modules it depends on, so a circle has none to build first. The error names the whole circle (`a -> b -> a`).
+
+Imports between packages **inside one module** may be cyclic, as in Java: `com.shop.order` may import `com.shop.customer` while `com.shop.customer` imports `com.shop.order`. One module compiles as one unit, so there is no order to break. (An earlier draft rejected those too; see ERRATA E41.)
 
 ---
 

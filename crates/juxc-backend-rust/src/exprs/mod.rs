@@ -1010,11 +1010,19 @@ impl RustEmitter {
             // (tycheck's `Ty` Display gives the source spelling). The
             // operand is never evaluated.
             Expr::TypeOf(inner, _) => {
-                let name = self
-                    .expr_types
-                    .get(&expr_span_of(inner))
-                    .map(|t| bare_type_spelling(&t.to_string()))
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                // A literal carries no span of its own, so the span-keyed
+                // types never have it; its type is fixed by its spelling
+                // (`5` is `int`, `5L` is `long`, `"s"` is `String`), so ask
+                // the checker's literal rule directly.
+                // Packages are dropped from each type NAME before display, not
+                // from the displayed text: `Shelf.Slot` is a nested type, and
+                // stripping every dotted prefix of the text would leave `Slot`.
+                let name = match inner.as_ref() {
+                    Expr::Literal(lit) => Some(juxc_tycheck::infer::infer_literal(lit)),
+                    _ => self.expr_types.get(&expr_span_of(inner)).cloned(),
+                }
+                .map(|t| without_packages(&t).to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
                 self.w.push('"');
                 self.w.push_str(&name.escape_default().to_string());
                 self.w.push('"');
@@ -2964,32 +2972,26 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     }
 }
 
-/// Reduce every dotted type name inside a Jux type spelling to its
-/// bare last segment — `tof.Point` → `Point`,
-/// `rust.std.Vec<a.b.C>` → `Vec<C>` — for `typeof`'s user-facing
-/// String (§5.9.10). Operates on the `Ty` Display output, so the
-/// dotted runs are always `ident ('.' ident)+` sequences.
-pub(crate) fn bare_type_spelling(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut segment = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c.is_alphanumeric() || c == '_' {
-            segment.push(c);
-        } else if c == '.'
-            && !segment.is_empty()
-            && chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_')
-        {
-            // A dotted continuation — drop the prefix segment.
-            segment.clear();
-        } else {
-            out.push_str(&segment);
-            segment.clear();
-            out.push(c);
-        }
+/// `ty` with every user type's package qualifier removed (`com.shop.Order`
+/// becomes `Order`, `com.shop.Shelf__Slot` becomes `Shelf__Slot`, which
+/// displays as `Shelf.Slot`), through generic arguments, arrays, nullables and
+/// function types. What `typeof` prints (§5.9.10).
+pub(crate) fn without_packages(ty: &juxc_tycheck::Ty) -> juxc_tycheck::Ty {
+    use juxc_tycheck::Ty;
+    match ty {
+        Ty::User { name, generic_args } => Ty::User {
+            name: name.rsplit('.').next().unwrap_or(name).to_string(),
+            generic_args: generic_args.iter().map(without_packages).collect(),
+        },
+        Ty::Array { element, kind } => Ty::Array { element: Box::new(without_packages(element)), kind: *kind },
+        Ty::Nullable(inner) => Ty::Nullable(Box::new(without_packages(inner))),
+        Ty::Fn { params, return_type, is_async } => Ty::Fn {
+            params: params.iter().map(without_packages).collect(),
+            return_type: Box::new(without_packages(return_type)),
+            is_async: *is_async,
+        },
+        other => other.clone(),
     }
-    out.push_str(&segment);
-    out
 }
 
 /// Cheap "what kind of Ty would this TypeRef lower to?" — primitives,
