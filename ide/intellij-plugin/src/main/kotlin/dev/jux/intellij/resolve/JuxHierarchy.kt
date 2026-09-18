@@ -360,7 +360,8 @@ object JuxHierarchy {
         while (c != null) {
             val t = c.node.elementType
             if (t == JuxElementTypes.MODIFIER_LIST) { c = c.nextSibling; continue }
-            if (t == JuxElementTypes.CLASS_BODY || c.text == ";" || c.text == "{") break
+            // A body is a CODE_BLOCK node, whose text merely starts with `{`.
+            if (t == JuxElementTypes.CLASS_BODY || t == JuxElementTypes.CODE_BLOCK || c.text == ";" || c.text == "{") break
             sb.append(c.text)
             if (t == JuxElementTypes.PARAMETER_LIST) sawParams = true
             c = c.nextSibling
