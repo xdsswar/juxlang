@@ -363,7 +363,9 @@ record-decl       = visibility? binding-immut? 'record' identifier generic-param
 record-component-list = record-component ( ',' record-component )*
 record-component  = annotation* type identifier
 record-body       = '{' record-member* '}'
-record-member     = annotation* ( function-decl | static-init-block )
+record-member     = annotation* ( function-decl | static-init-block
+                                | compact-constructor | constructor-decl )
+compact-constructor = visibility? identifier block                        -- JUX-LANG-V1 §7.6.1
 
 enum-decl         = visibility? ( 'sealed' | binding-immut )? 'enum' identifier generic-params?
                     ( 'implements' type-list )? permits-clause?

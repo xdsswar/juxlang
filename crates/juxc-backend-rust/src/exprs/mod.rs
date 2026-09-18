@@ -784,6 +784,10 @@ impl RustEmitter {
                         })
                     })
                     .or_else(|| {
+                        // A record: the constructor the checker picked (the
+                        // canonical one, index 0, unless an additional one
+                        // matched, §7.6.1).
+                        let pick = self.symbols.ctor_selections.get(&n.span).copied().unwrap_or(0);
                         self.symbols
                             .records
                             .iter()
@@ -791,7 +795,10 @@ impl RustEmitter {
                                 k.as_str() == name
                                     || k.rsplit('.').next().unwrap_or(k.as_str()) == name
                             })
-                            .map(|(_, r)| r.components.iter().map(|c| c.ty.clone()).collect())
+                            .map(|(_, r)| match r.constructors.get(pick) {
+                                Some(ctor) => ctor.params.iter().map(|p| p.ty.clone()).collect(),
+                                None => r.components.iter().map(|c| c.ty.clone()).collect(),
+                            })
                     })
             })
             .unwrap_or_default();

@@ -1,0 +1,22 @@
+record Range(int lo, int hi) {
+    Range {
+        if (this.lo > hi) {
+            return;
+        }
+    }
+
+    Range {
+    }
+
+    Range(int single) {
+        print("no delegation");
+    }
+
+    Range(int a, int b) {
+        this(a, b);
+    }
+}
+
+public void main() {
+    print(new Range(1, 2));
+}

@@ -306,6 +306,17 @@ pub struct RecordDecl {
     /// parser sets `is_static = true` on every entry and rejects
     /// non-static fields with E0200 to keep that rule explicit.
     pub static_fields: Vec<FieldDecl>,
+    /// The **compact constructor** (JUX-LANG-V1 §7.6.1): `Range { … }`, a
+    /// body with no parameter list. It runs before the components are
+    /// stored, sees them as parameters it may reassign (to normalize), and
+    /// the values they hold when it ends are what the record keeps. Carried
+    /// as a [`ConstructorDecl`] with no params. At most one.
+    pub compact_ctor: Option<ConstructorDecl>,
+    /// **Additional constructors** (§7.6.1), `Range(int single) {
+    /// this(single, single); }`. Each must begin with `this(...)`, which
+    /// reaches the canonical constructor directly or through another
+    /// additional one, so every path ends with the components set.
+    pub constructors: Vec<ConstructorDecl>,
     /// Span covering the whole `record … { … }` declaration.
     pub span: Span,
 }

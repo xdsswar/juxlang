@@ -539,6 +539,19 @@ pub enum Code {
     /// list can only restate them; one that names something else, or leaves
     /// a variant out, says the enum is something it is not.
     E0490_EnumPermitsMismatch,
+    /// E0491 -- A record's **compact constructor** (JUX-LANG-V1 §7.6.1) used
+    /// as something else: it reads `this` (the record does not exist yet, the
+    /// constructor's job is to decide what it will hold), it `return`s, or the
+    /// record declares a second one. It works on the components as parameters.
+    E0491_CompactConstructorMisuse,
+    /// E0492 -- An **additional record constructor** does not begin with
+    /// `this(...)` (§7.6.1). A record's state is its header, so every
+    /// constructor has to reach the canonical one to set it.
+    E0492_RecordConstructorMustDelegate,
+    /// E0493 -- An additional record constructor with exactly the header's
+    /// parameter types: that is the canonical constructor, which the header
+    /// already declares. Validation goes in the compact form instead.
+    E0493_RecordCanonicalRedeclared,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -972,6 +985,9 @@ impl Code {
             Code::E0481_PublicTypeFileName       => "E0481",
             Code::E0489_AnyHasNoOperation        => "E0489",
             Code::E0490_EnumPermitsMismatch      => "E0490",
+            Code::E0491_CompactConstructorMisuse => "E0491",
+            Code::E0492_RecordConstructorMustDelegate => "E0492",
+            Code::E0493_RecordCanonicalRedeclared => "E0493",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",

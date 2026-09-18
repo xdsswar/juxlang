@@ -1769,6 +1769,8 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
         let mut methods = Vec::new();
         let mut static_fields: Vec<juxc_ast::FieldDecl> = Vec::new();
+        let mut compact_ctor: Option<ConstructorDecl> = None;
+        let mut constructors: Vec<ConstructorDecl> = Vec::new();
         // A body-less record may be closed with `;`
         // (`public record Point(int x, int y);`), the shape a one-line record
         // is usually written in. The grammar makes the body optional, so the
@@ -1783,6 +1785,42 @@ impl<'a> Parser<'a> {
                 // carry `@Override` exactly as a class's do.
                 let member_annotations = self.parse_annotations();
                 let member_vis = self.parse_visibility();
+                // A constructor (§7.6.1) begins with the record's own name:
+                // `Range { … }` is the compact form, `Range(int x) { … }` an
+                // additional one.
+                let names_record = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text);
+                let after_name = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+                if names_record && matches!(after_name, Some(TokenKind::LBrace)) {
+                    let ctor_start = self.peek_span();
+                    self.advance(); // the record's name
+                    let body = self.parse_block();
+                    let ctor = ConstructorDecl {
+                        annotations: member_annotations,
+                        visibility: member_vis,
+                        params: Vec::new(),
+                        throws: Vec::new(),
+                        body,
+                        span: ctor_start.join(self.last_consumed_span()),
+                    };
+                    if compact_ctor.is_some() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0491_CompactConstructorMisuse,
+                                "a record has at most one compact constructor",
+                            )
+                            .with_span(ctor.span),
+                        );
+                    } else {
+                        compact_ctor = Some(ctor);
+                    }
+                    continue;
+                }
+                if names_record && matches!(after_name, Some(TokenKind::LParen)) {
+                    if let Some(ctor) = self.parse_constructor_decl(member_annotations, member_vis) {
+                        constructors.push(ctor);
+                    }
+                    continue;
+                }
                 // Member-shape lookahead: walk past modifiers and
                 // the return type, then probe what follows. Three
                 // shapes are recognized:
@@ -1887,9 +1925,9 @@ impl<'a> Parser<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0200_UnexpectedToken,
-                                "record bodies support operator overrides, methods, and \
-                                 static fields only (instance fields and extra \
-                                 constructors are class-exclusive)",
+                                "a record body holds constructors, methods, operator overrides \
+                                 and static fields; its instance state is the header's \
+                                 components",
                             )
                             .with_span(here),
                         );
@@ -1913,6 +1951,8 @@ impl<'a> Parser<'a> {
             operators,
             methods,
             static_fields,
+            compact_ctor,
+            constructors,
             span: start.join(end),
         })
     }

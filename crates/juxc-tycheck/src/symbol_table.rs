@@ -1224,6 +1224,12 @@ pub struct RecordSig {
     /// the header components are the only fields and the canonical
     /// `new(...)` is synthesized. Duplicate names emit `E0402`.
     pub methods: HashMap<String, MethodSig>,
+    /// The record's constructors (JUX-LANG-V1 §7.6.1). Index 0 is always the
+    /// canonical one, one parameter per component, synthesized from the
+    /// header (the compact constructor, when written, is its body). The
+    /// additional constructors follow in declaration order. The indexes are
+    /// what `ctor_selections` records and the backend names `new` / `new__K`.
+    pub constructors: Vec<ConstructorSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -4343,6 +4349,58 @@ fn insert_record(
         }
         methods.insert(method.name.text.clone(), method_sig(method, is_external));
     }
+    // Constructors: the canonical one first (§7.6.1), then the additional
+    // ones. An additional constructor with exactly the header's parameter
+    // types would BE the canonical one, which the header already declares:
+    // E0493 points at the compact form, where validation belongs.
+    let canonical = ConstructorSig {
+        visibility: Visibility::Public,
+        params: record_decl
+            .components
+            .iter()
+            .map(|c| ParamSig {
+                name: c.name.text.clone(),
+                ty: c.ty.clone(),
+                is_ref: false,
+                is_mut_ref: false,
+                default: None,
+                is_varargs: false,
+                is_out: false,
+                is_shared_ref: false,
+                is_final: false,
+                is_weak: false,
+            })
+            .collect(),
+        is_foreign_result: false,
+        is_rust_default: false,
+        span: record_decl.span,
+    };
+    let header_types: Vec<String> = record_decl.components.iter().map(|c| render_type_ref(&c.ty)).collect();
+    let mut constructors = vec![canonical];
+    for ctor in &record_decl.constructors {
+        let types: Vec<String> = ctor.params.iter().map(|p| render_type_ref(&p.ty)).collect();
+        if types == header_types {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0493_RecordCanonicalRedeclared,
+                    format!(
+                        "record `{}` already has this constructor: its header declares it. To check or \
+                         adjust the values, write the compact form `{} {{ … }}` with no parameter list",
+                        record_decl.name.text, record_decl.name.text,
+                    ),
+                )
+                .with_span(ctor.span),
+            );
+            continue;
+        }
+        constructors.push(ConstructorSig {
+            visibility: ctor.visibility,
+            params: ctor.params.iter().map(param_sig).collect(),
+            is_foreign_result: false,
+            is_rust_default: false,
+            span: ctor.span,
+        });
+    }
     table.records.insert(
         fqn,
         RecordSig {
@@ -4359,6 +4417,7 @@ fn insert_record(
                 .collect(),
             operators,
             methods,
+            constructors,
             span: record_decl.span,
         },
     );

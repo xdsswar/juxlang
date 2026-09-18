@@ -3739,8 +3739,98 @@ impl<'a> Checker<'a> {
         for method in &record.methods {
             self.check_method(method, &this_ty);
         }
+        if let Some(compact) = &record.compact_ctor {
+            self.check_compact_constructor(record, compact, &this_ty);
+        }
+        // Additional constructors (§7.6.1): each begins with `this(...)`,
+        // which is what guarantees every path reaches the canonical
+        // constructor and sets the components.
+        let sigs = self.symbols.records.get(&name).map(|r| r.constructors.clone()).unwrap_or_default();
+        for ctor in &record.constructors {
+            // A constructor E0493 rejected has no signature and no index.
+            let Some(idx) = sigs.iter().position(|c| c.span == ctor.span) else { continue };
+            let starts_with_this = matches!(
+                ctor.body.statements.first(),
+                Some(Stmt::Expr(Expr::Call(call))) if matches!(call.callee.as_ref(), Expr::This(_))
+            );
+            if !starts_with_this {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0492_RecordConstructorMustDelegate,
+                        format!(
+                            "this constructor of record `{}` must begin with `this(...)`: a record's state \
+                             is its header, so every constructor passes the component values on to the \
+                             canonical one",
+                            record.name.text,
+                        ),
+                    )
+                    .with_span(ctor.span),
+                );
+            }
+            self.check_constructor(ctor, &this_ty, idx);
+        }
         self.env.clear_generic_params();
         self.env.clear_class();
+    }
+
+    /// A record's compact constructor (JUX-LANG-V1 §7.6.1): the header's
+    /// components are its parameters, which it may reassign; the values they
+    /// hold when it ends are what the record stores. The record does not
+    /// exist while it runs, so `this` is E0491, and so is a `return`, which
+    /// would skip the storing.
+    fn check_compact_constructor(&mut self, record: &RecordDecl, ctor: &ConstructorDecl, this_ty: &Ty) {
+        let mut lambdas: Vec<Span> = Vec::new();
+        let mut misuse: Vec<(Span, &str)> = Vec::new();
+        juxc_ast::visit::for_each_node(&ctor.body, &mut |node| match node {
+            juxc_ast::visit::Node::Expr(Expr::Lambda(l)) => lambdas.push(l.span),
+            juxc_ast::visit::Node::Expr(Expr::This(span)) => misuse.push((
+                *span,
+                "a compact constructor cannot use `this`: the record does not exist until it ends. \
+                 Read and assign the components by name, as parameters",
+            )),
+            juxc_ast::visit::Node::Stmt(Stmt::Return(_, span)) => misuse.push((
+                *span,
+                "a compact constructor cannot `return`: the components are stored when its body \
+                 ends, and a `return` would skip that",
+            )),
+            _ => {}
+        });
+        for (span, message) in misuse {
+            // A `return` inside a lambda returns from the lambda.
+            let in_lambda = lambdas.iter().any(|l| l.start <= span.start && span.end <= l.end);
+            if in_lambda && message.contains("`return`") {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0491_CompactConstructorMisuse, message).with_span(span),
+            );
+        }
+        // Checked as a constructor whose parameters are the components.
+        let as_ctor = ConstructorDecl {
+            annotations: ctor.annotations.clone(),
+            visibility: ctor.visibility,
+            params: record
+                .components
+                .iter()
+                .map(|c| juxc_ast::Param {
+                    name: c.name.clone(),
+                    ty: c.ty.clone(),
+                    is_final: false,
+                    is_ref: false,
+                    is_mut_ref: false,
+                    default: None,
+                    is_varargs: false,
+                    is_out: false,
+                    is_shared_ref: false,
+                    is_weak: false,
+                    span: c.span,
+                })
+                .collect(),
+            throws: Vec::new(),
+            body: ctor.body.clone(),
+            span: ctor.span,
+        };
+        self.check_constructor(&as_ctor, this_ty, 0);
     }
 
     // ------------------------------------------------------------------
@@ -8330,6 +8420,56 @@ impl<'a> Checker<'a> {
                 let Some(class_name) = self.env.current_class.clone() else {
                     return;
                 };
+                // A record's additional constructor delegates among the
+                // record's constructors, the canonical one at index 0.
+                if let Some(record) = self.symbols.records.get(&class_name) {
+                    let ctors = record.constructors.clone();
+                    let subst_params = record.generic_params.clone();
+                    match self.select_ctor_typed(&ctors, &c.args) {
+                        Some(k) if k == current_idx => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    "`this(...)` resolves to the declaring constructor itself -- a constructor can't delegate to itself",
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                        }
+                        Some(k) => {
+                            self.ctor_selections.insert(c.span, k);
+                            self.check_call_args(
+                                &format!("this (={class_name} constructor)"),
+                                &ctors[k].params,
+                                &c.args,
+                                &c.arg_names,
+                                c.span,
+                                Some(&class_name),
+                                &subst_params,
+                                &[],
+                            );
+                        }
+                        None => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0411_WrongArgCount,
+                                    format!(
+                                        "no constructor of record `{class_name}` accepts {} argument{}",
+                                        c.args.len(),
+                                        if c.args.len() == 1 { "" } else { "s" },
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                        }
+                    }
+                    return;
+                }
                 let Some(class) = self.symbols.classes.get(&class_name) else {
                     return;
                 };
@@ -9589,24 +9729,21 @@ impl<'a> Checker<'a> {
             return;
         }
         if let Some(record) = self.symbols.records.get(&class_name) {
-            // Canonical constructor: one param per component.
-            let params: Vec<ParamSig> = record
-                .components
-                .iter()
-                .map(|c| ParamSig {
-                    name: c.name.clone(),
-                    ty: c.ty.clone(),
-                    is_ref: false,
-                    is_mut_ref: false,
-                    default: None,
-                    is_varargs: false,
-                    is_out: false,
-                    is_shared_ref: false,
-                    is_final: false,
-                    is_weak: false,
-                })
-                .collect();
+            // The canonical constructor (index 0, one parameter per
+            // component) or an additional one (§7.6.1), picked by argument
+            // types as a class's overloads are. Only a record that HAS
+            // additional constructors records the pick: with the canonical
+            // one alone every call is `new`.
+            let selected = self.select_ctor_typed(&record.constructors, &n.args).unwrap_or(0);
+            if record.constructors.len() > 1 {
+                self.ctor_selections.insert(n.span, selected);
+            }
+            let params: Vec<ParamSig> =
+                record.constructors.get(selected).map(|c| c.params.clone()).unwrap_or_default();
+            let ctor_vis =
+                record.constructors.get(selected).map(|c| c.visibility).unwrap_or(juxc_ast::Visibility::Public);
             let subst_params = record.generic_params.clone();
+            self.check_visibility(ctor_vis, &class_name, "constructor", "constructor", n.span);
             let subst_args = self.resolve_ctor_generic_args(
                 &subst_params,
                 &explicit_generic_args,

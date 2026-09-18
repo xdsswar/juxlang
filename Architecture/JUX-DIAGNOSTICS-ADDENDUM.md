@@ -434,6 +434,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0481`  | A file's public type must be the only one and share the file's name | JUX-LANG-V1 §3.1 |
 | `E0489`  | An `any` used for something other than `===`, `=>` or its text: a member, an operator, indexing, `==` | Type system §T.1.2 |
 | `E0490`  | A `sealed enum`'s `permits` list does not name exactly its variants | LANG-V1 §7.7.6 / `ERRATA.md` E33 |
+| `E0491`  | A record's compact constructor reads `this`, `return`s, or is declared twice | LANG-V1 §7.6.1 |
+| `E0492`  | An additional record constructor does not begin with `this(...)` | LANG-V1 §7.6.1 |
+| `E0493`  | An additional record constructor redeclares the canonical one (the header's parameter types) | LANG-V1 §7.6.1 |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |

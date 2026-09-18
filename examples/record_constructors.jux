@@ -1,0 +1,55 @@
+// Compact and additional record constructors (JUX-LANG-V1 §7.6.1).
+//
+// The compact constructor runs before the components are stored, on the
+// components as parameters: it validates them and may normalize them. An
+// additional constructor begins with `this(...)`, so every path reaches the
+// canonical one.
+
+record Range(int lo, int hi) {
+    Range {
+        if (lo > hi) {
+            // Normalize rather than reject: keep the pair in order.
+            int t = lo;
+            lo = hi;
+            hi = t;
+        }
+    }
+
+    Range(int single) {
+        this(single, single);
+    }
+
+    Range() {
+        this(0);
+    }
+
+    public int length() { return hi - lo; }
+}
+
+record Temperature(double celsius) {
+    Temperature {
+        if (celsius < -273.15) {
+            throw new IllegalArgumentException($"below absolute zero: ${celsius}");
+        }
+    }
+
+    Temperature(String reading) {
+        this(reading == "boiling" ? 100.0 : 0.0);
+    }
+}
+
+public void main() {
+    print(new Range(1, 5));
+    print(new Range(9, 2));
+    print(new Range(7));
+    print(new Range());
+    print(new Range(3, 8).length());
+
+    print(new Temperature(21.5));
+    print(new Temperature("boiling"));
+    try {
+        new Temperature(-300.0);
+    } catch (IllegalArgumentException e) {
+        print($"rejected: ${e.message}");
+    }
+}
