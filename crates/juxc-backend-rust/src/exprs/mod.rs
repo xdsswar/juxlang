@@ -2469,6 +2469,14 @@ impl RustEmitter {
         // Take-and-clear the void-target marker (§TS.3): an expression
         // body under a `() -> void` slot discards its value.
         let void_target = std::mem::take(&mut self.lambda_void_target);
+        // `async (x) -> …` (LANG-V1 §7.9): the body becomes a future the
+        // caller awaits, `crate::jux_async(async move { … })`.
+        if l.is_async {
+            self.w.push_str("crate::jux_async(async move ");
+            if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
+                self.w.push_str("{ ");
+            }
+        }
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => {
                 if void_target {
@@ -2498,6 +2506,12 @@ impl RustEmitter {
                 self.w.push('}');
                 self.in_lambda_body = prev_lam;
             }
+        }
+        if l.is_async {
+            if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
+                self.w.push_str(" }");
+            }
+            self.w.push(')');
         }
         self.local_types.pop();
         for n in &shadowed_refs {

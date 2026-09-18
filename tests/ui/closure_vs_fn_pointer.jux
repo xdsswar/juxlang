@@ -1,0 +1,8 @@
+int square(int x) { return x * x; }
+
+public void main() {
+    (int) -> int closure = (x) -> x * x;
+    fn(int) -> int pointer = closure;
+    fn(int) -> int named = square;
+    (int) -> int back = named;
+}

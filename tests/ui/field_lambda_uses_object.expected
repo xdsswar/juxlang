@@ -1,0 +1,1 @@
+field_lambda_uses_object.jux:5:9: [E0981] error: the lambda that initializes `watch` uses this object, which does not exist yet while its fields are being initialized; this is not supported in this phase

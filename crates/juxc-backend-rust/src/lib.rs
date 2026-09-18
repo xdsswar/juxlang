@@ -4245,6 +4245,11 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("/// A Jux array: a shared, interior-mutable sequence.\n");
+        w.push_str("/// An async lambda's body, boxed as the future an `() async -> R`\n");
+        w.push_str("/// value produces when called (LANG-V1 §10.1.5).\n");
+        w.push_str("pub fn jux_async<F: std::future::Future + 'static>(f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>> {\n");
+        w.push_str("    Box::pin(f)\n");
+        w.push_str("}\n");
         w.push_str("pub type JuxArr<T> = std::rc::Rc<JuxCell<T>>;\n");
         w.push_str("/// Build a [`JuxArr`] - the constructor an alias cannot provide.\n");
         w.push_str("pub fn jux_arr<T>(v: T) -> JuxArr<T> {\n");

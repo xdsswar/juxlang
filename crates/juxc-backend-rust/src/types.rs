@@ -374,6 +374,11 @@ impl RustEmitter {
                 self.emit_type_as_rust(p);
             }
             self.w.push_str(") -> ");
+            // `() async -> R` (LANG-V1 §10.1.5): calling it starts work that
+            // is awaited later, so the call returns a boxed future of `R`.
+            if fn_shape.is_async {
+                self.w.push_str("std::pin::Pin<Box<dyn std::future::Future<Output = ");
+            }
             // `(int) -> void` returns Rust unit — `void` is a return-
             // slot keyword, not a type name `emit_type_as_rust` knows.
             let returns_void = fn_shape.return_type.array_shape.is_none()
@@ -390,6 +395,9 @@ impl RustEmitter {
                 self.w.push_str("()");
             } else {
                 self.emit_type_as_rust(&fn_shape.return_type);
+            }
+            if fn_shape.is_async {
+                self.w.push_str(">>>");
             }
             self.w.push('>');
             return;

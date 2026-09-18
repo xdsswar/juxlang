@@ -1389,17 +1389,19 @@ impl Resolver {
                 // nothing to bind here.
                 self.visit_expr(&t.value);
             }
-            Expr::This(_) => {
+            Expr::This(span) => {
                 // `this` is bound at the head of each constructor /
                 // method scope by `visit_class_decl`. If we ever see
                 // it outside a class body, it'll come up as unresolved
-                // and the user gets a clear E0301.
+                // and the user gets a clear E0301 -- with its span, so the
+                // editor can show it (a span-less diagnostic is dropped).
                 if !self.is_known("this") {
                     self.diagnostics.push(
                         juxc_diagnostics::Diagnostic::error(
                             code::Code::E0301_NameNotFound,
                             "`this` is only available inside a class constructor or method",
-                        ),
+                        )
+                        .with_span(*span),
                     );
                 }
             }

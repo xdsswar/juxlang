@@ -1,0 +1,25 @@
+// Async lambdas and the `() async -> R` function type (LANG-V1 §7.9,
+// §10.1.5): calling an async function value starts work that `await` (or
+// `block_on`) finishes.
+
+async int twice(int x) { return x * 2; }
+
+// An async function value passed in and awaited, like any async call.
+async int runTwice(() async -> int job) {
+    var first = await job();
+    var second = await job();
+    return first + second;
+}
+
+public void main() {
+    () async -> int answer = async () -> await twice(21);
+    print(block_on(answer()));
+
+    (int) async -> String describe = async (int n) -> {
+        var doubled = await twice(n);
+        return $"${n} doubled is ${doubled}";
+    };
+    print(block_on(describe(5)));
+
+    print(block_on(runTwice(answer)));
+}

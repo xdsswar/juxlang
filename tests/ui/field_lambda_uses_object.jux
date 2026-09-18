@@ -1,0 +1,13 @@
+class Counter {
+    public int Count { get; set; } = 0;
+    private int changes = 0;
+    private final observer<int> watch = (old, now) -> {
+        changes = changes + 1;
+    };
+    public Counter() { Count.observers.add(watch); }
+}
+
+public void main() {
+    var c = new Counter();
+    c.Count = 1;
+}

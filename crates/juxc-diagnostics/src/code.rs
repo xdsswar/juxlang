@@ -393,6 +393,12 @@ pub enum Code {
     /// or there is no expected type at all. Give the reference a function
     /// type, or write a lambda.
     E0980_AmbiguousMethodRef,
+    /// E0981 — A **field-initializer lambda that uses the object** it belongs
+    /// to (`observer<int> watch = (o, n) -> { count++; }`). Field initializers
+    /// run while the object is being built, before the shared handle a
+    /// capture needs exists, and Phase 1 cannot lower that capture (ERRATA
+    /// E43). Not a rustc leak: the program is told.
+    E0981_FieldLambdaUsesThis,
     /// E0213 — A **single-element tuple** `(e,)`. Grammar §A.4.1 reserves
     /// the form: a tuple has two or more elements (§5.3), and a trailing
     /// comma after ONE expression would otherwise read as plain grouping
@@ -961,6 +967,7 @@ impl Code {
             Code::E0463_SizeofVoid               => "E0463",
             Code::E0468_FixedArrayNotShareable   => "E0468",
             Code::E0980_AmbiguousMethodRef       => "E0980",
+            Code::E0981_FieldLambdaUsesThis      => "E0981",
             Code::E0213_SingleElementTuple       => "E0213",
             Code::E0260_IfExprMissingElse        => "E0260",
             Code::W0720_ReturnInFinally          => "W0720",

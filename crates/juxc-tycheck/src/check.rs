@@ -2387,6 +2387,29 @@ impl<'a> Checker<'a> {
                         && t.name.segments[0].text == "observer"
                 })
                 .unwrap_or(false);
+            // A field whose initializer is a lambda (an observer, or any
+            // function-typed field) runs before the object exists, so the
+            // lambda cannot reach it yet (E0981, see `lambda_uses_this`).
+            if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
+                if !field.is_static {
+                    if let Some(span) = lambda_uses_this(l, class) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0981_FieldLambdaUsesThis,
+                                format!(
+                                    "the lambda that initializes `{}` uses this object, which does not exist yet \
+                                     while its fields are being initialized; this is not supported in this phase",
+                                    field.name.text,
+                                ),
+                            )
+                            .with_span(span)
+                            .with_help(
+                                "make the lambda independent of the object, or store what it needs in a separate object it can capture",
+                            ),
+                        );
+                    }
+                }
+            }
             if is_observer {
                 if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
                     if !matches!(l.params.len(), 0 | 2 | 3) {
@@ -4343,16 +4366,18 @@ impl<'a> Checker<'a> {
                                 .with_help("a function has no identity and no string form to hold (§T.1.2); give the slot the function's own type"),
                             );
                         } else if !compatible(d, i, self.symbols) {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0410_TypeMismatch,
-                                    format!(
-                                        "type mismatch in declaration of `{}`: expected {}, found {}",
-                                        v.name.text, d, i,
-                                    ),
-                                )
-                                .with_span(v.span),
-                            );
+                            let mut diag = Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!(
+                                    "type mismatch in declaration of `{}`: expected {}, found {}",
+                                    v.name.text, d, i,
+                                ),
+                            )
+                            .with_span(v.span);
+                            if let Some(help) = fn_kind_mismatch_help(d, i) {
+                                diag = diag.with_help(help);
+                            }
+                            self.diagnostics.push(diag);
                         }
                         d.clone()
                     }
@@ -10705,6 +10730,9 @@ impl<'a> Checker<'a> {
                 )
                 // A literal argument has no span of its own; the call does.
                 .with_span([expr_span(arg), call_span].into_iter().find(|s| *s != Span::DUMMY).unwrap_or(call_span));
+                if let Some(help) = fn_kind_mismatch_help(&expected, &found) {
+                    diag = diag.with_help(help);
+                }
                 // A nullable `T?` flowing into a non-nullable slot is the #1
                 // foreign-boundary mistake (e.g. a `WindowOptions?` field
                 // passed to `new Window(.., WindowOptions)`). Point the user at
@@ -11813,6 +11841,75 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     }
 }
 
+/// Where a field-initializer lambda uses the object it belongs to: a bare
+/// name that is one of the class's own instance fields, properties or
+/// methods and not a parameter or local of the lambda. (An explicit `this`
+/// there is already the resolver's E0301, one diagnostic per mistake.)
+/// Those initializers run while the object is being built (before the handle
+/// a capture would need exists), which the backend cannot lower yet (E0981).
+fn lambda_uses_this(l: &juxc_ast::LambdaExpr, class: &juxc_ast::ClassDecl) -> Option<Span> {
+    let mut members: std::collections::HashSet<&str> = class
+        .fields
+        .iter()
+        .filter(|f| !f.is_static)
+        .map(|f| f.name.text.as_str())
+        .collect();
+    members.extend(class.properties.iter().filter(|p| !p.is_static).map(|p| p.name.text.as_str()));
+    members.extend(
+        class
+            .methods
+            .iter()
+            .filter(|m| !m.modifiers.contains(&juxc_ast::FnModifier::Static))
+            .map(|m| m.name.text.as_str()),
+    );
+    let mut own: std::collections::HashSet<String> = l.params.iter().map(|p| p.name.text.clone()).collect();
+    let body = match &l.body {
+        juxc_ast::LambdaBody::Block(b) => (**b).clone(),
+        juxc_ast::LambdaBody::Expr(e) => Block {
+            statements: vec![Stmt::Expr((**e).clone())],
+            span: Span::DUMMY,
+        },
+    };
+    juxc_ast::visit::for_each_node(&body, &mut |n| {
+        if let juxc_ast::visit::Node::Stmt(Stmt::VarDecl(v)) = n {
+            own.insert(v.name.text.clone());
+        }
+    });
+    let mut found = None;
+    juxc_ast::visit::for_each_expr(&body, &mut |e| {
+        if found.is_some() {
+            return;
+        }
+        match e {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if members.contains(name) && !own.contains(name) {
+                    found = Some(qn.span);
+                }
+            }
+            _ => {}
+        }
+    });
+    found
+}
+
+/// The help for a function value where a function POINTER is expected, or
+/// the reverse (Layout-ABI §L.6.4). The two look alike and are not
+/// interchangeable: `(A) -> R` is a closure that may capture, `fn(A) -> R`
+/// the address of a C-callable function with no environment.
+fn fn_kind_mismatch_help(expected: &Ty, found: &Ty) -> Option<&'static str> {
+    match (expected, found) {
+        (Ty::FnPtr { .. }, Ty::Fn { .. }) => Some(
+            "`fn(...) -> R` is a function pointer, for C code; a lambda or a `(...) -> R` value is a closure and \
+             does not convert. Pass a named function, or declare the slot `(...) -> R`",
+        ),
+        (Ty::Fn { .. }, Ty::FnPtr { .. }) => Some(
+            "a `fn(...)` pointer is not a closure value; wrap it in a lambda, `(x) -> p(x)`, to store it as `(...) -> R`",
+        ),
+        _ => None,
+    }
+}
+
 /// Why the literal `lit` cannot be the argument of a const parameter of
 /// kind `cty` (T.11.3), or `None` when it can. An integer kind takes an
 /// integer literal that fits it; `int` and `uint` take no negative value,
@@ -11829,9 +11926,9 @@ fn const_arg_mismatch(cty: &juxc_ast::TypeRef, lit: &str) -> Option<String> {
             if is_bool || is_char {
                 return Some(format!("it is an `{kind}` parameter; give an integer"));
             }
-            let Some(p) = crate::ty::primitive_from_name(kind) else { return None };
-            let Some(bits) = crate::ty::integer_bits(p) else { return None };
-            let Ok(v) = lit.replace('_', "").parse::<i128>() else { return None };
+            let p = crate::ty::primitive_from_name(kind)?;
+            let bits = crate::ty::integer_bits(p)?;
+            let v = lit.replace('_', "").parse::<i128>().ok()?;
             let sizes_arrays = matches!(p, Primitive::Int | Primitive::Uint);
             let (lo, hi): (i128, i128) = match p {
                 Primitive::Int => (0, (1i128 << 63) - 1),

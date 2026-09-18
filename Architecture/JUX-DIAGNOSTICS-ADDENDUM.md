@@ -570,6 +570,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0973`  | Direct assignment to a bound property *(reserved)*          | Properties §P.4.2              |
 | `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
 | `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
+| `E0981`  | A field-initializer lambda uses the object it belongs to (`this` or a bare instance member); not supported in this phase | ERRATA E43 |
 | `E0980`  | Method reference is ambiguous: several overloads (or constructors) and no expected function type picks exactly one | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |

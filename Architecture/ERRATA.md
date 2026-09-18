@@ -831,6 +831,26 @@ or a fixed-size parameter or field handed to a `T[]` slot.
 
 ---
 
+## E43. A field-initializer lambda that uses its own object
+
+**Conflict.** JUX-OBSERVABLE-PROPERTIES-ADDENDUM §P.2.3 shows an observer
+field whose lambda writes one of the object's own properties
+(`nameObs = (old, now) -> { Label.Text = now; }`), and LANG-V1 §7.9 lets a
+lambda capture `this`. A field initializer runs while the object is being
+built, before the shared handle such a capture needs exists, and the Phase 1
+lowering had no way to capture it: the program reached rustc.
+
+**Resolution.** Phase-1 restriction, now diagnosed: a field-initializer
+lambda that uses `this`, or a bare instance field, property or method of its
+class, is `E0981`. Lambdas written in constructors and methods capture `this`
+as before. Lifting the restriction needs the object's handle to exist before
+its fields are initialized (a cyclic construction).
+
+**Spec status:** the catalog has E0981; §P.2.3 describes the intended
+behaviour and stands.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,
