@@ -249,6 +249,18 @@ impl RustEmitter {
         if hash_plan.eq_marker {
             self.emit_value_eq_marker(&record_decl.name.text, &record_decl.generic_params);
         }
+        // `<=>` totally orders the record (§7.14.4): `Ord`, and the `Eq` it
+        // requires when the hash plan did not give one. Non-generic records
+        // only, like the operator bridges above.
+        if record_decl.generic_params.is_empty() {
+            if let Some(cmp) = record_decl.operators.iter().find(|o| o.kind == OperatorKind::Cmp && !o.is_deleted) {
+                if !hash_plan.derive_eq && !hash_plan.eq_marker {
+                    self.emit_value_eq_marker(&record_decl.name.text, &record_decl.generic_params);
+                }
+                let arg = self.operator_other_arg(cmp);
+                self.emit_ord_from_cmp(&record_decl.name.text, arg);
+            }
+        }
     }
 
     /// Generate the `impl std::fmt::Display for Name { … }` block for a

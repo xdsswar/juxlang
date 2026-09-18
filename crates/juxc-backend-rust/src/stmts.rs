@@ -2955,6 +2955,31 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // `a += b` on a type with its own `operator+` (§O.2.3): compound
+        // assignment IS the binary operator followed by a plain assignment,
+        // never a separately overloadable `+=`. Rust's `AddAssign` family is
+        // not implemented for a user type, so lower it as `a = a + b`, where
+        // the `+` dispatches to the operator like any other `+`.
+        if let Some(op) = a.op {
+            if crate::exprs::binary::binary_operator_kind(op)
+                .is_some_and(|kind| self.expr_declares_operator(&a.target, kind))
+                || self.symbols.free_operator_calls.contains_key(&a.span)
+            {
+                let desugared = AssignStmt {
+                    target: a.target.clone(),
+                    op: None,
+                    value: Expr::Binary(juxc_ast::BinaryExpr {
+                        op,
+                        left: Box::new(a.target.clone()),
+                        right: Box::new(a.value.clone()),
+                        span: a.span,
+                    }),
+                    span: a.span,
+                };
+                self.emit_assign(&desugared);
+                return;
+            }
+        }
         // `action = () -> parse(s);` into a `() -> void` slot discards the
         // body's value, as the declaration of that slot does.
         if crate::exprs::is_expression_lambda(&a.value) {

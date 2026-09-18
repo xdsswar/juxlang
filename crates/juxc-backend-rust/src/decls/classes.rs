@@ -13,6 +13,10 @@ use crate::analysis::{body_writes_to_this, collect_mutated_names};
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
+/// `method_targets` marker for an interface property contract met by a public
+/// field (JUX-MISSING-DEFS §M.7.10); no Rust path can spell it.
+const FIELD_BACKED_TARGET: &str = "#field";
+
 impl RustEmitter {
     /// Emit a Jux class declaration as a Rust `pub struct` plus an
     /// `impl` block carrying its constructor and methods.
@@ -784,8 +788,18 @@ impl RustEmitter {
         // trait that signals reflexive equality and unlocks
         // `HashMap`/`HashSet` key usage on top of the Hash impl.
         // A value struct's plan may promise `Eq` on its own (a float field).
-        if (has_eq && has_hash) || struct_hash_plan.is_some_and(|p| p.eq_marker) {
+        let eq_emitted = (has_eq && has_hash) || struct_hash_plan.is_some_and(|p| p.eq_marker);
+        if eq_emitted {
             self.emit_eq_marker(&class_decl.name.text);
+        }
+        // `<=>` totally orders the type (§7.14.4): `Ord`, and the `Eq` it
+        // requires when nothing above gave it.
+        if let Some(cmp) = class_decl.operators.iter().find(|o| o.kind == OperatorKind::Cmp && !o.is_deleted) {
+            if !eq_emitted && !struct_hash_plan.is_some_and(|p| p.derive_eq) {
+                self.emit_eq_marker(&class_decl.name.text);
+            }
+            let arg = self.operator_other_arg(cmp);
+            self.emit_ord_from_cmp(&class_decl.name.text, arg);
         }
         self.op_impl_class = None;
         // A value struct with a float field: `Hash` by hand, by its bits.
@@ -1459,6 +1473,15 @@ impl RustEmitter {
         }
         if has_eq && has_hash {
             self.emit_eq_marker(name);
+        }
+        // `<=>` totally orders the type (§7.14.4): `Ord`, and the `Eq` it
+        // requires when `==` and `hash` did not already give it.
+        if let Some(cmp) = cmp.filter(|c| !c.is_deleted) {
+            if !(has_eq && has_hash) {
+                self.emit_eq_marker(name);
+            }
+            let arg = self.operator_other_arg(cmp);
+            self.emit_ord_from_cmp(name, arg);
         }
         self.op_impl_class = None;
         self.emit_class_trait_impls(class_decl);
@@ -4814,6 +4837,12 @@ impl RustEmitter {
                     method_targets.insert(name.clone(), Some(String::new()));
                     continue;
                 }
+                // A property contract met by a public field (§M.7.10): the
+                // impl reads (or writes) the field itself.
+                if self.property_contract_field(class_decl, name, sig, &methods).is_some() {
+                    method_targets.insert(name.clone(), Some(FIELD_BACKED_TARGET.to_string()));
+                    continue;
+                }
                 {
                     // **An ancestor class may carry the override.** This runs
                     // for BOTH kinds of interface method, and for different
@@ -5010,6 +5039,30 @@ impl RustEmitter {
                     self.w.push_str("::std::boxed::Box::pin(async move { ");
                 }
                 match target {
+                    Some(ref t) if t == FIELD_BACKED_TARGET => {
+                        // Implementers of an interface are wrapper classes, so
+                        // the field sits behind the handle's `RefCell`, `depth`
+                        // `__parent` hops up when an ancestor declares it:
+                        // `self.0.borrow().Size.clone()` reads it and
+                        // `self.0.borrow_mut().Size = value` writes it.
+                        let (field, depth) = self
+                            .property_contract_field(class_decl, method_name, method, &methods)
+                            .unwrap_or_default();
+                        let write = !method.params.is_empty();
+                        self.w.push_str(if write { "self.0.borrow_mut()" } else { "self.0.borrow()" });
+                        for _ in 0..depth {
+                            self.w.push_str(".__parent");
+                        }
+                        self.w.push('.');
+                        self.w.push_str(&to_rust_ident(&field));
+                        if write {
+                            self.w.push_str(" = ");
+                            self.w.push_str(&method.params[0].name);
+                            self.w.push(';');
+                        } else {
+                            self.w.push_str(".clone()");
+                        }
+                    }
                     _ if abstract_stubs.contains(method_name.as_str()) => {
                         // Left abstract here — see `abstract_stubs` above. The
                         // message names the class and method so a stub that
@@ -5095,6 +5148,44 @@ impl RustEmitter {
             self.w.line("}");
             self.w.newline();
         }
+    }
+
+    /// The field that meets interface property contract `method` for this
+    /// class (§M.7.10), with how many `__parent` hops up the class chain it is
+    /// declared, or `None`: the getter of a property named like a public
+    /// instance field of the class or an ancestor, or the `__set_` half when
+    /// that field is not `final`. The class's own getter or setter, when it
+    /// has one, wins before this is asked.
+    fn property_contract_field(
+        &self,
+        class_decl: &juxc_ast::ClassDecl,
+        method: &str,
+        sig: &MethodSig,
+        methods: &[(String, MethodSig)],
+    ) -> Option<(String, usize)> {
+        let (field, needs_write) = if sig.is_property {
+            (method, false)
+        } else {
+            let prop = method.strip_prefix("__set_")?;
+            if !methods.iter().any(|(n, m)| n == prop && m.is_property) {
+                return None;
+            }
+            (prop, true)
+        };
+        let mut class = Some(class_decl.clone());
+        for depth in 0..64 {
+            let Some(c) = class else { break };
+            if let Some(f) = c.fields.iter().find(|f| f.name.text == field && !f.is_static) {
+                let usable = f.visibility == juxc_ast::Visibility::Public && (!needs_write || !f.is_final);
+                return usable.then(|| (field.to_string(), depth));
+            }
+            class = c
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last())
+                .and_then(|s| self.class_ast_named(&s.text));
+        }
+        None
     }
 
     /// Close an `impl Iface for Class` that has no methods to write: a

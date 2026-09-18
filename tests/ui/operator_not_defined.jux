@@ -1,0 +1,12 @@
+class Plain {
+    public int n;
+    public Plain(int n) { this.n = n; }
+}
+
+public void main() {
+    var p = new Plain(1);
+    var sum = p + new Plain(2);
+    p += new Plain(3);
+    var scaled = 2 * p;
+    print("label " + p);
+}

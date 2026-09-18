@@ -434,6 +434,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0481`  | A file's public type must be the only one and share the file's name | JUX-LANG-V1 §3.1 |
 | `E0482`  | `I.super.m()` outside an instance member of a class that directly implements `I`, or `I.super` used as a value | Type system §T.8.3 |
 | `E0483`  | `I.super.m()` names a method `I` declares without a default body | Type system §T.8.3 |
+| `E0484`  | An arithmetic or bitwise operator (or its compound assignment) on a user type that declares no such operator, with no free-function operator for the operands | Operators §O.2.3, §O.2.6 |
 | `E0489`  | An `any` used for something other than `===`, `=>` or its text: a member, an operator, indexing, `==` | Type system §T.1.2 |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |

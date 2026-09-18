@@ -3008,7 +3008,7 @@ public Vec3 operator* (Vec3 v, double scalar) {
 }
 ```
 
-The compiler resolves operator calls by looking first at the left operand's member operators, then at free-function operators in scope. Ambiguity is a compile error; explicit qualification resolves it.
+The compiler resolves operator calls by looking first at the left operand's member operators, then at free-function operators in scope. Ambiguity is a compile error; explicit qualification resolves it. A free-function operator takes its two operands as its two parameters, left then right, and has a body. Only the arithmetic and bitwise operators (`+ - * / % & | ^ << >>`) can be declared free; equality, ordering, `hash`, `string`, indexing, calling, ranges and `in` are declared on the type. Free operators of one symbol overload by operand type like any function (§T.3), and they are in scope the way a function of the same package, or an imported one, is. A compound assignment reaches them too: `m *= 2` is `m = m * 2`. With a primitive on the left, a free-function operator is the only one that can apply; when none takes the operands, the program is rejected with `E0484`.
 
 #### 7.14.1. Overloadable Operators
 
@@ -3108,6 +3108,8 @@ print(a < b);        // true   — derived from <=>
 print(a <= b);       // true
 print(a > b);        // false
 ```
+
+A `<=>` is a total order, so the type can be an element or key of the ordered Rust std collections with nothing else declared: `v.sort_unstable()`, a `BTreeMap` or `BTreeSet` key, a `BinaryHeap` element.
 
 A type that defines `<=>` should not also define `<`, `<=`, `>`, `>=` separately — it is a compile error to mix the two styles. A type that defines `<` etc. separately must define all four; partial overloading is rejected.
 

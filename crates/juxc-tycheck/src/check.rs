@@ -388,6 +388,10 @@ pub(crate) struct Checker<'a> {
     /// absorbed into `SymbolTable::function_selections`. The same
     /// mechanism as `method_selections`, for the other kind of callee.
     pub(crate) function_selections: HashMap<Span, usize>,
+    /// Binary expressions resolved to a free-function operator (§7.14):
+    /// binary span -> (function key, overload index). Absorbed into
+    /// `SymbolTable::free_operator_calls` for the backend.
+    pub(crate) free_operator_calls: HashMap<Span, (String, usize)>,
     /// Typed `assertThrows<E>(f)` calls (§TS.3): call span -> the FQN of `E`,
     /// absorbed into `SymbolTable::typed_assert_throws`.
     pub(crate) typed_assert_throws: HashMap<Span, String>,
@@ -505,6 +509,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, usize>,
     HashMap<Span, String>,
     HashMap<Span, String>,
+    HashMap<Span, (String, usize)>,
 );
 
 impl<'a> Checker<'a> {
@@ -523,6 +528,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
+            free_operator_calls: HashMap::new(),
             typed_assert_throws: HashMap::new(),
             record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
@@ -645,6 +651,7 @@ impl<'a> Checker<'a> {
             self.function_selections,
             self.typed_assert_throws,
             self.record_patterns,
+            self.free_operator_calls,
         )
     }
 
@@ -1325,6 +1332,72 @@ impl<'a> Checker<'a> {
                     .with_help("checked = extends Exception without passing through RuntimeException (§X.1.3)"),
                 );
             }
+        }
+    }
+
+    /// `a + b` (or `a += b`) where `a` is a value of a user type that declares
+    /// no such operator (§O.2.6: dispatch starts from the left operand), and no
+    /// free-function operator takes the operands either: `E0484`. Without this
+    /// the program reached rustc, which named a Rust trait (`Add`) the program
+    /// never mentions.
+    ///
+    /// Only the arithmetic and bitwise family is checked here; equality has an
+    /// identity default and ordering is derived from `<=>`. Foreign types from
+    /// a crate stub are left alone: their operators come from Rust.
+    fn check_user_operator_defined(&mut self, op: BinaryOp, left: &Expr, right: &Expr, span: Span) {
+        use OperatorKind as K;
+        let Some(kind) = op_kind_for_binary(op) else { return };
+        if !matches!(
+            kind,
+            K::Plus | K::Minus | K::Mul | K::Div | K::Rem | K::BitAnd | K::BitOr | K::BitXor | K::Shl | K::Shr
+        ) {
+            return;
+        }
+        let left_ty = infer_expr(left, &self.env, self.symbols);
+        let right_ty = infer_expr(right, &self.env, self.symbols);
+        let user_declared = |this: &Self, t: &Ty| match t {
+            Ty::User { name, .. } => {
+                this.symbols.classes.get(name).is_some_and(|c| !c.is_external)
+                    || this.symbols.records.contains_key(name)
+                    || this.symbols.enums.get(name).is_some_and(|e| !e.is_external)
+            }
+            _ => false,
+        };
+        // `+` with a `String` on either side is concatenation, which takes
+        // any value (§S.3).
+        if kind == K::Plus && (matches!(left_ty, Ty::String) || matches!(right_ty, Ty::String)) {
+            return;
+        }
+        let symbol = operator_kind_user_spelling(kind);
+        let span = [expr_span(left), span].into_iter().find(|sp| *sp != Span::DUMMY).unwrap_or(span);
+        if crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env).is_some() {
+            return;
+        }
+        if user_declared(self, &left_ty) {
+            if self.ty_satisfies_operator(&left_ty, kind) {
+                return;
+            }
+            let Ty::User { name, .. } = &left_ty else { return };
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("`{bare}` has no `operator{symbol}`, so `{symbol}` has nothing to call (§O.2.6)"),
+                )
+                .with_span(span)
+                .with_help(format!("declare it on `{bare}`: `public {bare} operator{symbol}({right_ty} other) {{ ... }}`")),
+            );
+        } else if matches!(left_ty, Ty::Primitive(_)) && user_declared(self, &right_ty) {
+            // A primitive on the left has no member operators, so only a
+            // free-function operator can take a user type on the right (§7.14).
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("no `operator{symbol}` takes `{left_ty}` and `{right_ty}`, so `{symbol}` has nothing to call (§7.14)"),
+                )
+                .with_span(span)
+                .with_help(format!("declare a free-function operator: `public R operator{symbol}({left_ty} left, {right_ty} right) {{ ... }}`")),
+            );
         }
     }
 
@@ -4219,6 +4292,24 @@ impl<'a> Checker<'a> {
                         .with_span(a.span),
                     );
                 }
+                // `a += b` is `a = a + b` (§O.2.3), so the `+` has to exist. When
+                // a free-function operator answers it (§7.14), record the pick
+                // under the assignment's span, which the backend's desugared
+                // `a + b` carries.
+                if let Some(op) = a.op {
+                    self.check_user_operator_defined(op, &a.target, &a.value, a.span);
+                    if let Some(kind) = op_kind_for_binary(op) {
+                        let target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                        let value_ty = infer_expr(&a.value, &self.env, self.symbols);
+                        if let Some((key, k, _)) =
+                            crate::infer::free_operator_for(self.symbols, kind, &target_ty, &value_ty, &self.env)
+                        {
+                            let bare = key.rsplit('.').next().unwrap_or(&key).to_string();
+                            self.free_operator_calls.insert(a.span, (bare, k));
+                            self.function_selections.insert(a.span, k);
+                        }
+                    }
+                }
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
                 // What actually gets STORED. For a plain `=` that is the
                 // value; for a compound assignment it is the result of
@@ -5235,6 +5326,24 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // `k * v` answered by a free-function operator (§7.14): the
+                // backend calls it, so remember which one.
+                if let Some(kind) = op_kind_for_binary(b.op) {
+                    let left_ty = infer_expr(&b.left, &self.env, self.symbols);
+                    let right_ty = infer_expr(&b.right, &self.env, self.symbols);
+                    if let Some((key, k, _)) =
+                        crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env)
+                    {
+                        let bare = key.rsplit('.').next().unwrap_or(&key).to_string();
+                        self.free_operator_calls.insert(b.span, (bare, k));
+                        // The call the backend emits carries the binary's span,
+                        // so the overload pick is recorded the way a written
+                        // call's is.
+                        self.function_selections.insert(b.span, k);
+                    }
+                }
+                // An operator a user type does not declare (§O.2.6).
+                self.check_user_operator_defined(b.op, &b.left, &b.right, b.span);
                 // §O.3.4 — binary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
                 // The receiver is the LHS; that's what determines
@@ -5883,6 +5992,7 @@ impl<'a> Checker<'a> {
         self.symbols
             .lookup_method(name, &f.field.text)
             .is_some_and(|(m, _)| m.is_property)
+            || self.symbols.lookup_interface_property(name, &f.field.text).is_some()
     }
 
     /// `(record, component)` when `target` writes a component of a record
@@ -6807,6 +6917,12 @@ impl<'a> Checker<'a> {
                         self.check_visibility(vis, &declaring, field_name, "property", f.span);
                         return;
                     }
+                }
+                // A property an interface declares (§M.7.10): a contract read
+                // through an interface-typed value, or a default property the
+                // class inherits. Interface members are public.
+                if self.symbols.lookup_interface_property(name, field_name).is_some() {
+                    return;
                 }
                 // Records: check components directly. Record
                 // components are always public per the spec (records

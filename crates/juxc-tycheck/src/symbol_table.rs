@@ -93,6 +93,10 @@ pub struct SymbolTable {
     /// -> index into [`Self::function_overloads`]. The mirror of
     /// [`Self::method_selections`], read by the backend at call emission.
     pub function_selections: HashMap<juxc_source::Span, usize>,
+    /// Binary expressions the checker resolved to a FREE-FUNCTION operator
+    /// (LANG-V1 §7.14): binary span -> (function name, overload index). The
+    /// backend emits each as a call to that function instead of the operator.
+    pub free_operator_calls: HashMap<juxc_source::Span, (String, usize)>,
     /// Typed `assertThrows<E>(f)` calls (JUX-TESTING-ADDENDUM §TS.3) found by
     /// the checker -- call span -> the FQN of the exception class `E`. The
     /// backend lowers each one at the call site to the type dispatch a
@@ -891,6 +895,68 @@ impl SymbolTable {
             depth += 1;
         }
         None
+    }
+
+    /// A property an INTERFACE declares (JUX-MISSING-DEFS §M.7.10), reached
+    /// from `type_name`: the interface itself and every interface it extends,
+    /// or, for a class, every interface the class or a superclass implements.
+    /// Returns the property's getter (a method with `is_property`) and the
+    /// FQN of the interface that declares it.
+    ///
+    /// A class's own property is found by [`Self::lookup_property`] first; this
+    /// is for a read through an interface-typed value (`Sized s; s.Size`) and
+    /// for a default property the class inherits (`bag.isEmpty`).
+    pub fn lookup_interface_property<'a>(
+        &'a self,
+        type_name: &str,
+        prop_name: &str,
+    ) -> Option<(&'a MethodSig, &'a str)> {
+        let mut pending: Vec<String> = Vec::new();
+        if self.interfaces.contains_key(type_name) {
+            pending.push(type_name.to_string());
+        }
+        // A class contributes the interfaces of its whole superclass chain.
+        let mut cursor: Option<String> = Some(type_name.to_string());
+        let mut depth = 0usize;
+        while let Some(name) = cursor.take() {
+            let Some(class) = self.classes.get(&name) else { break };
+            pending.extend(class.implements.iter().filter_map(|t| self.interface_fqn_of(t)));
+            depth += 1;
+            if depth > 64 {
+                break;
+            }
+            cursor = class.extends_fqn.clone().or_else(|| {
+                class.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
+        }
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(iface) = pending.pop() {
+            if !seen.insert(iface.clone()) {
+                continue;
+            }
+            let Some((key, sig)) = self.interfaces.get_key_value(&iface) else { continue };
+            if let Some(method) = sig.methods.get(prop_name).filter(|m| m.is_property) {
+                return Some((method, key.as_str()));
+            }
+            pending.extend(sig.extends.iter().filter_map(|t| self.interface_fqn_of(t)));
+        }
+        None
+    }
+
+    /// The interface-table key a written interface name refers to: the exact
+    /// dotted name, or the one interface whose FQN ends with that bare name.
+    fn interface_fqn_of(&self, t: &juxc_ast::TypeRef) -> Option<String> {
+        let joined =
+            t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        if self.interfaces.contains_key(&joined) {
+            return Some(joined);
+        }
+        let suffix = format!(".{joined}");
+        let mut hits = self.interfaces.keys().filter(|k| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some(k), None) => Some(k.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -3196,6 +3262,12 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
                 if class_provides_method(table, class_name, m_name) {
                     continue;
                 }
+                // A property contract (§M.7.10) is also met by a public
+                // instance field of that name: `{ get; }` by any, and the
+                // `set` half of `{ get; set; }` by one that is not `final`.
+                if field_meets_property_contract(table, class_name, iface, m_name, m_sig) {
+                    continue;
+                }
                 // Reachable as a default method on any interface in the
                 // closure -- a default declared on a SUPER-interface satisfies
                 // the requirement exactly as one on a direct interface does.
@@ -3243,20 +3315,75 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
         if !missing.is_empty() {
             missing.sort();
             missing.dedup();
+            // A property contract (§M.7.10) is named as the property, not
+            // as the getter or `__set_` method it lowers to.
+            let owner_property = |owner: &str, m: &str| -> Option<String> {
+                let iface = resolve_interface(table, owner)?;
+                if iface.methods.get(m).is_some_and(|sig| sig.is_property) {
+                    return Some(m.to_string());
+                }
+                let prop = m.strip_prefix("__set_")?;
+                iface.methods.get(prop).filter(|sig| sig.is_property).map(|_| prop.to_string())
+            };
+            let any_property = missing.iter().any(|(o, m)| owner_property(o, m).is_some());
+            // A contract missing entirely is one property, not a getter AND a
+            // setter: drop the `set` half when its getter is missing too.
+            let getter_missing = |owner: &str, prop: &str| {
+                missing.iter().any(|(o, m)| o == owner && m == prop)
+            };
             let list = missing
                 .iter()
-                .map(|(owner, m)| format!("`{owner}.{m}`"))
+                .filter(|(owner, m)| {
+                    m.strip_prefix("__set_").map_or(true, |prop| {
+                        owner_property(owner, m).is_none() || !getter_missing(owner, prop)
+                    })
+                })
+                .map(|(owner, m)| match owner_property(owner, m) {
+                    Some(prop) if m.starts_with("__set_") => {
+                        format!("property `{owner}.{prop}` (its `set`)")
+                    }
+                    Some(prop) => format!("property `{owner}.{prop}`"),
+                    None if any_property => format!("method `{owner}.{m}`"),
+                    None => format!("`{owner}.{m}`"),
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
+            let kind = if any_property { "member(s)" } else { "method(s)" };
             diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0429_AbstractNotImplemented,
-                    format!("class `{class_name}` doesn't implement abstract method(s): {list}",),
+                    format!("class `{class_name}` doesn't implement abstract {kind}: {list}",),
                 )
                 .with_span(class.span),
             );
         }
     }
+}
+
+/// True when a public instance field of `class_name` (or an ancestor)
+/// satisfies the interface property contract `method` (§M.7.10): the getter of
+/// a property named like the field, or the `__set_` half of one when the field
+/// is not `final`.
+fn field_meets_property_contract(
+    table: &SymbolTable,
+    class_name: &str,
+    iface: &InterfaceSig,
+    method: &str,
+    sig: &MethodSig,
+) -> bool {
+    let (field_name, needs_write) = if sig.is_property {
+        (method, false)
+    } else if let Some(prop) = method.strip_prefix("__set_") {
+        if !iface.methods.get(prop).is_some_and(|m| m.is_property) {
+            return false;
+        }
+        (prop, true)
+    } else {
+        return false;
+    };
+    table.lookup_field(class_name, field_name).is_some_and(|(f, _)| {
+        !f.is_static && f.visibility == Visibility::Public && (!needs_write || !f.is_final)
+    })
 }
 
 /// True if `class_name` (or one of its ancestor classes) has an

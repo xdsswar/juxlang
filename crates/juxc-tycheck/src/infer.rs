@@ -989,6 +989,13 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 return substitute(&raw, &record.generic_params, generic_args);
             }
         }
+        // A property an interface declares (§M.7.10), read through an
+        // interface-typed value or inherited as a default by a class.
+        if let Some((getter, iface)) = symbols.lookup_interface_property(name, field_name) {
+            if let juxc_ast::ReturnType::Type(t) = &getter.return_type {
+                return lower_member_type(t, iface, symbols);
+            }
+        }
     }
 
     Ty::Unknown
@@ -1910,6 +1917,66 @@ pub(crate) fn direct_superinterface(
         .map(|t| (class.to_string(), t.clone()))
 }
 
+/// The free-function operator (LANG-V1 §7.14) that `left op right` calls, as
+/// (function key, overload index, signature), or `None`.
+///
+/// Only consulted when the left operand has no member operator of its own
+/// (§7.14: "looking first at the left operand's member operators, then at
+/// free-function operators in scope"), and only when a user type is involved:
+/// two primitives keep their built-in meaning. Candidates are the functions
+/// declared under the operator's name that the call site can see (its own
+/// package, or imported); among them the one whose two parameters accept the
+/// operands wins, an exact match over a merely assignable one.
+pub(crate) fn free_operator_for(
+    symbols: &SymbolTable,
+    kind: OperatorKind,
+    left: &Ty,
+    right: &Ty,
+    env: &TypeEnv,
+) -> Option<(String, usize, FunctionSig)> {
+    let name = kind.free_function_name()?;
+    let user = |t: &Ty| matches!(t, Ty::User { .. });
+    if !user(left) && !user(right) {
+        return None;
+    }
+    if lookup_user_operator_return_type(left, kind, env, symbols).is_some() {
+        return None;
+    }
+    let package = env.current_package.join(".");
+    let visible = |key: &str| -> bool {
+        let (pkg, bare) = key.rsplit_once('.').unwrap_or(("", key));
+        bare == name
+            && (pkg == package || env.unqualified.get(name).is_some_and(|k| k == key))
+    };
+    let mut best: Option<(i32, String, usize, FunctionSig)> = None;
+    for key in symbols.functions.keys().filter(|k| visible(k)) {
+        let group: Vec<FunctionSig> = symbols
+            .function_overload_group(key)
+            .map(|g| g.to_vec())
+            .or_else(|| symbols.functions.get(key).map(|f| vec![f.clone()]))
+            .unwrap_or_default();
+        for (k, sig) in group.into_iter().enumerate() {
+            let [lp, rp] = sig.params.as_slice() else { continue };
+            let lt = ty_from_ref(&lp.ty, env, symbols);
+            let rt = ty_from_ref(&rp.ty, env, symbols);
+            let score = |want: &Ty, got: &Ty| -> Option<i32> {
+                if want == got {
+                    Some(2)
+                } else if crate::check::compatible(want, got, symbols) {
+                    Some(1)
+                } else {
+                    None
+                }
+            };
+            let (Some(a), Some(b)) = (score(&lt, left), score(&rt, right)) else { continue };
+            if best.as_ref().map_or(true, |(s, ..)| a + b > *s) {
+                best = Some((a + b, key.clone(), k, sig));
+            }
+        }
+    }
+    best.map(|(_, key, k, sig)| (key, k, sig))
+}
+
 /// Mirror of [`path_resolves_to_class`] for interfaces. Recognizes
 /// `IfaceName.member` as an interface-static-member access so the
 /// call/field dispatch in `check.rs` can branch on it before
@@ -2374,6 +2441,14 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     if let Some(kind) = binary_op_to_kind(b.op) {
         if let Some(ret) = lookup_user_operator_return_type(&left_ty, kind, env, symbols) {
             return ret;
+        }
+        // Then a free-function operator that takes the pair (§7.14).
+        let right_ty = infer_expr(&b.right, env, symbols);
+        if let Some((_, _, sig)) = free_operator_for(symbols, kind, &left_ty, &right_ty, env) {
+            return match &sig.return_type {
+                juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => ty_from_ref(t, env, symbols),
+                juxc_ast::ReturnType::Void => Ty::Void,
+            };
         }
     }
     // `q - p` over two pointers is the signed element count between them, a

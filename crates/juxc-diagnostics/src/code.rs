@@ -538,6 +538,11 @@ pub enum Code {
     /// E0483 -- `I.super.m()` names a method that `I` declares without a
     /// default body, so there is nothing to call (Type system §T.8.3).
     E0483_InterfaceSuperNoDefault,
+    /// E0484 -- An arithmetic or bitwise operator (`+`, `*`, `&`, `<<`, ...),
+    /// or its compound assignment, on a value of a user type that declares no
+    /// such operator, when no free-function operator takes the operands
+    /// either (§O.2.3, §O.2.6). Declare the operator on the type.
+    E0484_OperatorNotDefined,
     /// E0489 -- An `any` used for something other than `===`, the `=>` type
     /// test or its text: a member, a call, an operator, indexing, `==`, a hash
     /// (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Test it with `=>` first.
@@ -975,6 +980,7 @@ impl Code {
             Code::E0481_PublicTypeFileName       => "E0481",
             Code::E0482_InterfaceSuperMisplaced  => "E0482",
             Code::E0483_InterfaceSuperNoDefault  => "E0483",
+            Code::E0484_OperatorNotDefined       => "E0484",
             Code::E0489_AnyHasNoOperation        => "E0489",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",

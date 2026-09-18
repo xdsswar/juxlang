@@ -116,7 +116,7 @@ fn type_ref_is_string(ty: &juxc_ast::TypeRef) -> bool {
 /// `expr.method()` would require wrapping `expr` in parens —
 /// false for atoms, true for composite shapes.
 /// The overloadable operator a binary operator dispatches to, if any.
-fn binary_operator_kind(op: BinaryOp) -> Option<OperatorKind> {
+pub(crate) fn binary_operator_kind(op: BinaryOp) -> Option<OperatorKind> {
     Some(match op {
         BinaryOp::Cmp => OperatorKind::Cmp,
         BinaryOp::Add => OperatorKind::Plus,
@@ -433,6 +433,24 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_binary(&mut self, b: &BinaryExpr) {
+        // `k * v` resolved to a free-function operator (LANG-V1 §7.14): emit
+        // the call `__op_mul(k, v)` through the ordinary call path, which
+        // handles overload suffixes, argument conversion and handle sharing.
+        if let Some((name, _)) = self.symbols.free_operator_calls.get(&b.span).cloned() {
+            let call = juxc_ast::CallExpr {
+                callee: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: name, span: b.span }],
+                    span: b.span,
+                })),
+                args: vec![(*b.left).clone(), (*b.right).clone()],
+                arg_names: vec![None, None],
+                explicit_generic_args: Vec::new(),
+                eval_order: Vec::new(),
+                span: b.span,
+            };
+            self.emit_call(&call);
+            return;
+        }
         // Armed by `numeric_widen_or_arm` for exactly this expression, and
         // taken here so it cannot reach any other.
         let signed_slot = self.signed_slot_target.take();

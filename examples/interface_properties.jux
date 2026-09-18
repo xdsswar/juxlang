@@ -1,0 +1,55 @@
+// Properties declared by interfaces (JUX-MISSING-DEFS §M.7.10).
+//
+// An interface states a property contract (`{ get; }`, `{ get; set; }`) that
+// every implementing type meets, and can give a property a default, the way a
+// `default` method gives a body: `IsEmpty` below is computed from `Size`.
+
+interface Sized {
+    int Size { get; }
+    default bool IsEmpty -> Size == 0;
+    default String Summary { get -> $"${Size} items"; }
+}
+
+interface Named {
+    String Name { get; set; }
+}
+
+// Meets `Size` with a computed property and `Name` with an auto-property.
+class Bag implements Sized, Named {
+    private int count = 0;
+    public int Size -> count;
+    public String Name { get; set; } = "bag";
+    public void add() { count += 1; }
+}
+
+// A public field meets a contract too.
+class Crate implements Sized {
+    public int Size = 3;
+}
+
+// A class replaces a default by declaring the property itself.
+class Bottomless implements Sized {
+    public int Size -> 0;
+    public bool IsEmpty -> false;
+}
+
+public void main() {
+    var bag = new Bag();
+    print(bag.IsEmpty);
+    bag.add();
+    bag.add();
+    print(bag.IsEmpty);
+    print(bag.Summary);
+
+    // The same properties through the interface types.
+    Sized sized = bag;
+    print(sized.Size);
+    Named named = bag;
+    named.Name = "sack";
+    print(bag.Name);
+
+    Sized boxed = new Crate();
+    print(boxed.Summary);
+    Sized bottomless = new Bottomless();
+    print(bottomless.IsEmpty);
+}

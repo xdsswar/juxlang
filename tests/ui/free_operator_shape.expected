@@ -1,0 +1,2 @@
+free_operator_shape.jux:6:8: [E0200] error: only an arithmetic or bitwise operator (`+ - * / % & | ^ << >>`) can be declared as a free function; declare this one on its type (§7.14)
+free_operator_shape.jux:8:8: [E0200] error: a free-function operator takes its two operands as parameters, left then right, and has a body: `R operator*(A left, B right) { ... }` (§7.14)

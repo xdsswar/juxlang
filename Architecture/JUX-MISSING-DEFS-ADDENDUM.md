@@ -761,7 +761,19 @@ public interface HasName {
 }
 ```
 
-Implementing types must provide matching properties (or fields with the right visibility).
+Implementing types must provide matching properties (or fields with the right visibility). Precisely: a contract is met by a property of the same name and type that the class or an ancestor declares, or by a `public` instance field of that name and type. Any such field meets `{ get; }`; only a non-`final` one meets `{ get; set; }`. A contract nothing meets is `E0429`, which names the property.
+
+An interface can also give a property a **default**, the way a `default` method gives a body:
+
+```jux
+public interface Sized {
+    int Size { get; }                                    // contract
+    default bool IsEmpty -> Size == 0;                   // default property
+    default String Summary { get -> $"${Size} items"; }  // same, accessor form
+}
+```
+
+A default property is computed and read-only. An interface has no storage, so a property declared in one has no initializer and no setter body, and a default property has no `set` at all. As with methods, a property with a body must be marked `default`, and a `default` property must have one. Inside the body, a bare name of another of the interface's properties reads it through `this`. An implementing type inherits the default, or declares a property of the same name to replace it. The property is read the same way whether the value is typed as the class or as the interface: `bag.IsEmpty`, `sized.IsEmpty`.
 
 ### M.7.11. Mutation Inference
 
