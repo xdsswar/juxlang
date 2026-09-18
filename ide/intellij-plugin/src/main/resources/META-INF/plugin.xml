@@ -410,6 +410,21 @@
     <typeHierarchyProvider
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.hierarchy.JuxTypeHierarchyProvider"/>
+    <!-- Call Hierarchy (Ctrl+Alt+H) and Method Hierarchy (Ctrl+Shift+H). -->
+    <callHierarchyProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.hierarchy.JuxCallHierarchyProvider"/>
+    <methodHierarchyProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.hierarchy.JuxMethodHierarchyProvider"/>
+    <!-- Go to Super Method (Ctrl+U). -->
+    <codeInsight.gotoSuper
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxGotoSuperHandler"/>
+    <!-- Keyword highlight-usages: exit points, break-outs, exceptions,
+         overriding methods (Java's handlers). -->
+    <highlightUsagesHandlerFactory
+        implementation="dev.jux.intellij.codeInsight.highlighting.JuxHighlightUsagesHandlerFactory"/>
 
     <!-- Complete Current Statement (Ctrl+Shift+Enter): close open brackets,
          give a header its `{ }`, or terminate the statement — then move on. -->
@@ -839,6 +854,36 @@
             text="operator string"
             description="Generate operator string listing the type's fields">
       <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.EqualsAndHash"/>
+    </action>
+    <action id="Jux.Generate.CopyConstructor"
+            class="dev.jux.intellij.actions.JuxGenerateCopyConstructorAction"
+            text="Copy Constructor"
+            description="Generate a constructor that copies another instance's fields">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Constructor"/>
+    </action>
+    <action id="Jux.Generate.DelegateMethods"
+            class="dev.jux.intellij.actions.JuxGenerateDelegateMethodsAction"
+            text="Delegate Methods..."
+            description="Generate methods that forward to a field">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.OperatorString"/>
+    </action>
+    <action id="Jux.Generate.TestFunction"
+            class="dev.jux.intellij.actions.JuxGenerateTestFunctionAction"
+            text="Test Function"
+            description="Generate a @Test function">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.DelegateMethods"/>
+    </action>
+    <action id="Jux.Generate.BeforeEach"
+            class="dev.jux.intellij.actions.JuxGenerateBeforeEachAction"
+            text="BeforeEach Function"
+            description="Generate the file's @BeforeEach hook">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.TestFunction"/>
+    </action>
+    <action id="Jux.Generate.AfterEach"
+            class="dev.jux.intellij.actions.JuxGenerateAfterEachAction"
+            text="AfterEach Function"
+            description="Generate the file's @AfterEach hook">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.BeforeEach"/>
     </action>
     <action id="Jux.ShowLicense"
             class="dev.jux.intellij.license.JuxShowLicenseAction"

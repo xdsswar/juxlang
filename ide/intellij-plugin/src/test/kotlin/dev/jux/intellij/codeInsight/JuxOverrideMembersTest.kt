@@ -234,4 +234,21 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         val text = myFixture.file.text
         assertTrue(text.contains("return super.value();"))
     }
+
+    /**
+     * A concrete method's signature stops at its body. The body is a CODE_BLOCK
+     * node, and the old check compared node text to `{`, so the whole body
+     * leaked into every override stub of a method that had one.
+     */
+    fun testConcreteSignatureLeavesTheBodyOut() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public class Base { public int value() { return 1; } }
+            public class Impl extends Base { }
+            """.trimIndent(),
+        )
+        val candidates = JuxOverrideMembers.candidates(typeNamed("Impl"))
+        assertEquals("int value()", candidates.single().signature)
+    }
 }
