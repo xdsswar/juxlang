@@ -3221,6 +3221,16 @@ impl crate::RustEmitter {
         if ty.name.segments.len() == 1 && last == "String" {
             return false;
         }
+        // A collection is a shared HANDLE (JUX-LANG-V1 §6.5.1): passing one
+        // shares it, as passing a class instance does, so a callee that
+        // mutates it already mutates the caller's. `&mut` is for foreign
+        // values that are NOT handles. Giving a handle `&mut` too split the
+        // declaration from call sites that pass the handle itself (a class
+        // calling its own method with a `Vec` parameter), and rustc said
+        // "expected `&mut Rc<...>`, found `Rc<...>`".
+        if self.collection_name_is_handle(last) {
+            return false;
+        }
         // Resolve to a class signature and read the foreign flag. The
         // FQN spelling (`rust.std.Vec`) and the bare spelling (`Vec`)
         // both route through the package-aware lookup.

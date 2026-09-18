@@ -2886,6 +2886,15 @@ impl RustEmitter {
     /// empty outside constructor bodies, so this is a no-op
     /// everywhere else.
     fn emit_assign_rhs(&mut self, value: &Expr) {
+        // The value reads the local it is about to replace: evaluate it first
+        // (see `assign_rhs_reads_target`). A `let` statement drops its
+        // temporaries, the `borrow()` guard among them, before the next line.
+        if std::mem::take(&mut self.assign_rhs_reads_target) {
+            self.w.push_str("{ let next = ");
+            self.emit_expr(value);
+            self.w.push_str("; next }");
+            return;
+        }
         self.emit_expr(value);
         if let Expr::Path(qn) = value {
             // A local that is still read after this store must be copied into
@@ -2955,6 +2964,35 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // `cur = cur.next!!;`: the new value reads the local being replaced.
+        let prev_reads_target = self.assign_rhs_reads_target;
+        self.assign_rhs_reads_target = a.op.is_none() && Self::value_reads_local_through_member(a);
+        self.emit_assign_outer(a);
+        self.assign_rhs_reads_target = prev_reads_target;
+    }
+
+    /// True when `a` assigns a bare local and its value reads that same local
+    /// through a member (`cur.next`, `node.left!!`, `n.child(0)`), which is
+    /// what takes a `borrow()` on it. A value that IS the local, or never
+    /// mentions it, needs nothing.
+    fn value_reads_local_through_member(a: &AssignStmt) -> bool {
+        let Expr::Path(qn) = &a.target else { return false };
+        if qn.segments.len() != 1 || matches!(a.value, Expr::Path(_)) {
+            return false;
+        }
+        let name = qn.segments[0].text.as_str();
+        let mut reads = false;
+        juxc_ast::visit::for_each_expr_in(&a.value, &mut |e| {
+            if let Expr::Field(f) = e {
+                if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1 && p.segments[0].text == name) {
+                    reads = true;
+                }
+            }
+        });
+        reads
+    }
+
+    fn emit_assign_outer(&mut self, a: &AssignStmt) {
         // `action = () -> parse(s);` into a `() -> void` slot discards the
         // body's value, as the declaration of that slot does.
         if crate::exprs::is_expression_lambda(&a.value) {
@@ -4131,6 +4169,25 @@ impl RustEmitter {
         value: &Expr,
         is_compound: bool,
     ) {
+        // The value reads the local it replaces (`cur = cur.next!!;`):
+        // evaluate it in its own `let` so its `borrow()` guard is gone before
+        // the store (see `assign_rhs_reads_target`).
+        if std::mem::take(&mut self.assign_rhs_reads_target) {
+            self.w.push_str("{ let next = ");
+            self.emit_assign_stored_value_inner(target, value, is_compound);
+            self.w.push_str("; next }");
+            return;
+        }
+        self.emit_assign_stored_value_inner(target, value, is_compound);
+    }
+
+    /// [`Self::emit_assign_stored_value`] without the evaluate-first wrapper.
+    fn emit_assign_stored_value_inner(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        is_compound: bool,
+    ) {
         let a_target = target;
         let a_value = value;
         // Nullable-field assign coercion: when the LHS is a field
@@ -4688,6 +4745,14 @@ impl RustEmitter {
         restored
     }
 
+    /// True when `name` is a local or parameter in scope here, as opposed to
+    /// a field reached through implicit `this`.
+    fn name_is_local_binding(&self, name: &str) -> bool {
+        self.nullable_locals.contains(name)
+            || self.local_types.iter().any(|scope| scope.contains_key(name))
+            || self.current_fn_params.iter().any(|p| p == name)
+    }
+
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
         // Smart-cast bookkeeping: when the condition is `name !=
         // null`, `name` inside the `then` block is the unwrapped
@@ -4698,6 +4763,11 @@ impl RustEmitter {
         // function still sees the original nullable shape.
         let cast_name: Option<String> = match_simple_not_null_check(&if_stmt.condition)
             .filter(|_| self.null_test_operand_may_be_option(&if_stmt.condition))
+            // Only a LOCAL or parameter can be rebound by `if let`. A bare name
+            // that is an implicit-`this` field (`if (head != null)` in a
+            // method) is a read through `self`; binding it as `head` left the
+            // generated `if let Some(head) = head` with no `head` to read.
+            .filter(|n| self.name_is_local_binding(n))
             .map(|s| s.to_string());
         let was_nullable = cast_name
             .as_ref()

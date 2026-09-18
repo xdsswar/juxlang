@@ -1,0 +1,110 @@
+// A hand-built singly linked list: nullable links, insertion at both ends,
+// removal by value, in-place reversal, and a recursive length.
+
+class Node {
+    public int value;
+    public Node? next = null;
+    public Node(int value) { this.value = value; }
+}
+
+class IntList {
+    private Node? head = null;
+    private int count = 0;
+
+    public void pushFront(int v) {
+        var n = new Node(v);
+        n.next = head;
+        head = n;
+        count = count + 1;
+    }
+
+    public void pushBack(int v) {
+        var n = new Node(v);
+        if (head == null) {
+            head = n;
+        } else {
+            Node cur = head!!;
+            while (cur.next != null) {
+                cur = cur.next!!;
+            }
+            cur.next = n;
+        }
+        count = count + 1;
+    }
+
+    public bool remove(int v) {
+        if (head == null) { return false; }
+        Node first = head!!;
+        if (first.value == v) {
+            head = first.next;
+            count = count - 1;
+            return true;
+        }
+        Node prev = first;
+        while (prev.next != null) {
+            Node cur = prev.next!!;
+            if (cur.value == v) {
+                prev.next = cur.next;
+                count = count - 1;
+                return true;
+            }
+            prev = cur;
+        }
+        return false;
+    }
+
+    public void reverse() {
+        Node? prev = null;
+        Node? cur = head;
+        while (cur != null) {
+            Node n = cur!!;
+            Node? after = n.next;
+            n.next = prev;
+            prev = n;
+            cur = after;
+        }
+        head = prev;
+    }
+
+    public int size() { return count; }
+
+    public int lengthOf(Node? n) {
+        if (n == null) { return 0; }
+        return 1 + lengthOf(n!!.next);
+    }
+
+    public int recursiveLength() { return lengthOf(head); }
+
+    public String show() {
+        String out = "[";
+        Node? cur = head;
+        bool first = true;
+        while (cur != null) {
+            Node n = cur!!;
+            if (!first) { out = out + ", "; }
+            out = out + n.value;
+            first = false;
+            cur = n.next;
+        }
+        return out + "]";
+    }
+}
+
+public void main() {
+    var list = new IntList();
+    print(list.show());
+    list.pushBack(2);
+    list.pushBack(3);
+    list.pushFront(1);
+    list.pushBack(4);
+    print(list.show() + " size " + list.size());
+    print(list.remove(3));
+    print(list.remove(9));
+    print(list.remove(1));
+    print(list.show() + " size " + list.size());
+    list.pushFront(7);
+    list.pushBack(8);
+    list.reverse();
+    print(list.show());
+    print(list.recursiveLength() == list.size());
+}

@@ -1,0 +1,98 @@
+// An LRU cache: a map from key to node plus a doubly linked recency list,
+// eviction of the least recently used entry, and hit/miss accounting.
+
+class Entry {
+    public String key;
+    public int value;
+    public Entry? prev = null;
+    public Entry? next = null;
+    public Entry(String key, int value) {
+        this.key = key;
+        this.value = value;
+    }
+}
+
+class Lru {
+    private int capacity;
+    private HashMap<String, Entry> map = new HashMap<String, Entry>();
+    private Entry? head = null;   // most recent
+    private Entry? tail = null;   // least recent
+    public int hits = 0;
+    public int misses = 0;
+
+    public Lru(int capacity) { this.capacity = capacity; }
+
+    private void unlink(Entry e) {
+        if (e.prev != null) { e.prev!!.next = e.next; } else { head = e.next; }
+        if (e.next != null) { e.next!!.prev = e.prev; } else { tail = e.prev; }
+        e.prev = null;
+        e.next = null;
+    }
+
+    private void pushFront(Entry e) {
+        e.next = head;
+        if (head != null) { head!!.prev = e; }
+        head = e;
+        if (tail == null) { tail = e; }
+    }
+
+    public int? get(String key) {
+        if (!map.contains_key(key)) {
+            misses = misses + 1;
+            return null;
+        }
+        Entry e = map.get(key)!!;
+        unlink(e);
+        pushFront(e);
+        hits = hits + 1;
+        return e.value;
+    }
+
+    public void put(String key, int value) {
+        if (map.contains_key(key)) {
+            Entry e = map.get(key)!!;
+            e.value = value;
+            unlink(e);
+            pushFront(e);
+            return;
+        }
+        if (map.len() == capacity) {
+            Entry old = tail!!;
+            unlink(old);
+            map.remove(old.key);
+            print("evict " + old.key);
+        }
+        var e = new Entry(key, value);
+        map.insert(key, e);
+        pushFront(e);
+    }
+
+    public String order() {
+        String out = "";
+        Entry? cur = head;
+        while (cur != null) {
+            Entry e = cur!!;
+            out = out + e.key + "=" + e.value + " ";
+            cur = e.next;
+        }
+        return out.trim();
+    }
+}
+
+public void main() {
+    var cache = new Lru(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+    print(cache.order());
+    print(cache.get("a"));
+    cache.put("d", 4);
+    print(cache.order());
+    print(cache.get("b"));
+    cache.put("c", 30);
+    cache.put("e", 5);
+    print(cache.order());
+    print(cache.get("c"));
+    print(cache.get("zz"));
+    print("hits " + cache.hits + " misses " + cache.misses);
+}

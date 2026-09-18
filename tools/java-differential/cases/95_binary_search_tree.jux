@@ -1,0 +1,102 @@
+// A binary search tree over strings: recursive insert and lookup, in-order
+// walk into a list, height, min/max, and counting nodes in a range.
+
+class TreeNode {
+    public String key;
+    public int count = 1;
+    public TreeNode? left = null;
+    public TreeNode? right = null;
+    public TreeNode(String key) { this.key = key; }
+}
+
+class Tree {
+    private TreeNode? root = null;
+
+    public void add(String key) { root = insert(root, key); }
+
+    private TreeNode insert(TreeNode? n, String key) {
+        if (n == null) { return new TreeNode(key); }
+        TreeNode node = n!!;
+        int c = key <=> node.key;
+        if (c < 0) {
+            node.left = insert(node.left, key);
+        } else if (c > 0) {
+            node.right = insert(node.right, key);
+        } else {
+            node.count = node.count + 1;
+        }
+        return node;
+    }
+
+    public int countOf(String key) {
+        TreeNode? cur = root;
+        while (cur != null) {
+            TreeNode n = cur!!;
+            int c = key <=> n.key;
+            if (c == 0) { return n.count; }
+            cur = c < 0 ? n.left : n.right;
+        }
+        return 0;
+    }
+
+    private void walk(TreeNode? n, Vec<String> out) {
+        if (n == null) { return; }
+        TreeNode node = n!!;
+        walk(node.left, out);
+        out.push(node.key + ":" + node.count);
+        walk(node.right, out);
+    }
+
+    public Vec<String> inOrder() {
+        var out = new Vec<String>();
+        walk(root, out);
+        return out;
+    }
+
+    private int heightOf(TreeNode? n) {
+        if (n == null) { return 0; }
+        TreeNode node = n!!;
+        int l = heightOf(node.left);
+        int r = heightOf(node.right);
+        return 1 + (l > r ? l : r);
+    }
+
+    public int height() { return heightOf(root); }
+
+    public String min() {
+        TreeNode n = root!!;
+        while (n.left != null) { n = n.left!!; }
+        return n.key;
+    }
+
+    public String max() {
+        TreeNode n = root!!;
+        while (n.right != null) { n = n.right!!; }
+        return n.key;
+    }
+
+    private int rangeCount(TreeNode? n, String lo, String hi) {
+        if (n == null) { return 0; }
+        TreeNode node = n!!;
+        int here = (node.key >= lo && node.key <= hi) ? 1 : 0;
+        return here + rangeCount(node.left, lo, hi) + rangeCount(node.right, lo, hi);
+    }
+
+    public int between(String lo, String hi) { return rangeCount(root, lo, hi); }
+}
+
+public void main() {
+    var t = new Tree();
+    String text = "the quick brown fox jumps over the lazy dog the end";
+    for (var w : text.split(" ")) {
+        t.add(w);
+    }
+    for (var line : t.inOrder()) {
+        print(line);
+    }
+    print(t.countOf("the"));
+    print(t.countOf("cat"));
+    print(t.height());
+    print(t.min() + " " + t.max());
+    print(t.between("d", "l"));
+}

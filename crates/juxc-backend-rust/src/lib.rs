@@ -1379,6 +1379,13 @@ struct RustEmitter {
     /// closure types as `()`. Take-and-cleared by the lambda
     /// emitters.
     pub(crate) lambda_void_target: bool,
+    /// Set while emitting the value of `x = <value>` when `<value>` reads the
+    /// local `x` itself (`cur = cur.next!!;`). The value is then evaluated in
+    /// its own `let` so the `borrow()` guard it takes on `x` is dropped before
+    /// `x` is assigned; left inline, the guard lives to the end of the
+    /// statement and rustc refuses the assignment (E0506). Read by
+    /// `emit_assign_rhs`.
+    pub(crate) assign_rhs_reads_target: bool,
     /// How many tuple / record / variant patterns enclose the pattern being
     /// emitted. A string literal at depth 0 matches against the scrutinee's
     /// `.as_str()`; deeper, it sits on a `String` part and cannot be a Rust
@@ -5107,6 +5114,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             emitting_method_receiver: false,
             in_lambda_body: false,
             lambda_void_target: false,
+            assign_rhs_reads_target: false,
             pattern_depth: 0,
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
