@@ -50,6 +50,7 @@ pub mod expand;
 pub mod hashing;
 pub(crate) mod hash_keys;
 pub mod infer;
+pub mod java_habits;
 pub(crate) mod pattern_check;
 pub mod assigned;
 pub mod return_check;

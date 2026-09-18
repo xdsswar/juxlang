@@ -1,0 +1,3 @@
+java_habit_print_and_arrays.jux:2:5: [E0301] error: cannot find `System` in this scope -- Jux prints with `print(...)`
+java_habit_print_and_arrays.jux:3:5: [E0301] error: cannot find `System` in this scope -- Jux prints with `print(...)`; format with interpolation, `print($"${x}")`
+java_habit_print_and_arrays.jux:4:22: [E0200] error: an array literal is written with braces: `{a, b, c}`, not `[a, b, c]`

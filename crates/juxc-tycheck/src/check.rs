@@ -6498,6 +6498,65 @@ impl<'a> Checker<'a> {
         false
     }
 
+    /// A `System.out.println(...)`-shaped call on an undeclared `System`:
+    /// the span of `System` and the help to give. The parser reads the callee
+    /// as the dotted path `System.out.println`, or as field accesses on it.
+    fn java_system_out_call(&self, c: &CallExpr) -> Option<(juxc_source::Span, &'static str)> {
+        let (head, stream, method) = match c.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 3 => {
+                (&qn.segments[0], qn.segments[1].text.as_str(), qn.segments[2].text.as_str())
+            }
+            Expr::Field(f) => match f.object.as_ref() {
+                Expr::Field(inner) => match inner.object.as_ref() {
+                    Expr::Path(p) if p.segments.len() == 1 => {
+                        (&p.segments[0], inner.field.text.as_str(), f.field.text.as_str())
+                    }
+                    _ => return None,
+                },
+                Expr::Path(p) if p.segments.len() == 2 => {
+                    (&p.segments[0], p.segments[1].text.as_str(), f.field.text.as_str())
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if head.text != "System"
+            || self.env.lookup("System").is_some()
+            // Only a `System` the program declares counts. The scanned Rust
+            // std has one (`std::alloc::System`), which is not this.
+            || self
+                .symbols
+                .classes
+                .iter()
+                .any(|(k, cls)| k.rsplit('.').next() == Some("System") && !cls.is_external)
+        {
+            return None;
+        }
+        crate::java_habits::system_out_hint(stream, method).map(|help| (head.span, help))
+    }
+
+    /// Whether the type `type_name` declares or was scanned with a method
+    /// `method` (classes, interfaces, records and enums).
+    fn type_has_method(&self, type_name: &str, method: &str) -> bool {
+        self.symbols.classes.get(type_name).is_some_and(|c| c.methods.contains_key(method))
+            || self.symbols.interfaces.get(type_name).is_some_and(|i| i.methods.contains_key(method))
+            || self.symbols.records.get(type_name).is_some_and(|r| r.methods.contains_key(method))
+            || self.symbols.enums.get(type_name).is_some_and(|e| e.methods.contains_key(method))
+    }
+
+    /// Whether `name` is something a Jux program READS on the type rather
+    /// than calls: a field, a property or a record component. A Java getter
+    /// call on one of those gets the "read it directly" help.
+    fn type_has_readable(&self, type_name: &str, name: &str) -> bool {
+        self.symbols.lookup_field(type_name, name).is_some()
+            || self.symbols.classes.get(type_name).is_some_and(|c| c.properties.contains_key(name))
+            || self
+                .symbols
+                .records
+                .get(type_name)
+                .is_some_and(|r| r.components.iter().any(|comp| comp.name == name))
+    }
+
     /// `" -- did you mean `x`?"` when the type has a method whose name is
     /// close to the one written, else an empty string.
     ///
@@ -8493,6 +8552,22 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // `System.out.println(x)` out of Java habit: there is no `System`
+        // (unless the program declares one), and it used to reach rustc as
+        // "cannot find value `System`" (JUX-DIAGNOSTICS-ADDENDUM "Java Habits").
+        if let Some((span, help)) = self.java_system_out_call(c) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0301_NameNotFound,
+                    format!("cannot find `System` in this scope -- {help}"),
+                )
+                .with_span(span),
+            );
+            for arg in &c.args {
+                self.check_expr(arg);
+            }
+            return;
+        }
         if let Expr::Field(f) = c.callee.as_ref() {
             self.check_nullable_receiver(f, true);
         }
@@ -9725,7 +9800,15 @@ impl<'a> Checker<'a> {
                 {
                     return;
                 }
-                let hint = self.nearest_method_hint(&name, method_name);
+                // A Java habit's help first (JUX-DIAGNOSTICS-ADDENDUM "Java
+                // Habits"), else the near names from the receiver's surface.
+                let hint = crate::java_habits::member_hint(
+                    method_name,
+                    c.args.len(),
+                    &|m| self.type_has_method(&name, m),
+                    &|m| self.type_has_readable(&name, m),
+                )
+                .unwrap_or_else(|| self.nearest_method_hint(&name, method_name));
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0413_UnresolvedMethod,

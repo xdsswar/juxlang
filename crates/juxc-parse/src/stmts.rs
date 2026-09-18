@@ -1217,6 +1217,19 @@ impl<'a> Parser<'a> {
             // start with `{`.
             if self.at(&TokenKind::LBrace) && ty.array_shape.is_some() {
                 Some(self.parse_bare_array_initializer(&ty)?)
+            } else if self.at(&TokenKind::LBracket) && ty.array_shape.is_some() {
+                // `["a", "b"]` out of habit from other languages: say once
+                // that Jux writes an array literal with braces, then read it
+                // as that, so nothing after it cascades (JUX-DIAGNOSTICS-
+                // ADDENDUM "Java Habits").
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "an array literal is written with braces: `{a, b, c}`, not `[a, b, c]`",
+                    )
+                    .with_span(self.peek_span()),
+                );
+                Some(self.parse_array_initializer_between(&ty, TokenKind::LBracket, TokenKind::RBracket)?)
             } else {
                 self.parse_expr()
             }
@@ -1235,8 +1248,20 @@ impl<'a> Parser<'a> {
     /// Caller invariant: the next token is `{` and `lhs_ty.array_shape`
     /// is `Some(...)`.
     pub(crate) fn parse_bare_array_initializer(&mut self, lhs_ty: &TypeRef) -> Option<Expr> {
+        self.parse_array_initializer_between(lhs_ty, TokenKind::LBrace, TokenKind::RBrace)
+    }
+
+    /// [`Self::parse_bare_array_initializer`] with the delimiters given: `{`
+    /// and `}` for the real form, `[` and `]` when recovering from the
+    /// bracket habit (the caller has already reported it).
+    pub(crate) fn parse_array_initializer_between(
+        &mut self,
+        lhs_ty: &TypeRef,
+        open: TokenKind,
+        close: TokenKind,
+    ) -> Option<Expr> {
         let start = self.peek_span();
-        self.expect(&TokenKind::LBrace, "'{' to open array initializer");
+        self.expect(&open, "'{' to open array initializer");
 
         // Peel ONE (outermost) dimension off the LHS to get the *element*
         // type. For a 1-D `int[]`/`int[N]` LHS the element is the scalar
@@ -1259,10 +1284,10 @@ impl<'a> Parser<'a> {
         // element is a scalar/reference expression.
         let element_is_array = element_type.array_shape.is_some();
         let mut elements = Vec::new();
-        if !self.at(&TokenKind::RBrace) {
+        if !self.at(&close) {
             loop {
-                let e = if element_is_array && self.at(&TokenKind::LBrace) {
-                    self.parse_bare_array_initializer(&element_type)?
+                let e = if element_is_array && self.at(&open) {
+                    self.parse_array_initializer_between(&element_type, open.clone(), close.clone())?
                 } else {
                     self.parse_expr()?
                 };
@@ -1270,13 +1295,13 @@ impl<'a> Parser<'a> {
                 // A trailing comma before `}` is allowed (grammar: array
                 // initializer), so a list written one element per line can
                 // end every line the same way.
-                if !self.eat(&TokenKind::Comma) || self.at(&TokenKind::RBrace) {
+                if !self.eat(&TokenKind::Comma) || self.at(&close) {
                     break;
                 }
             }
         }
         let end = self.peek_span();
-        self.expect(&TokenKind::RBrace, "'}' to close array initializer");
+        self.expect(&close, "'}' to close array initializer");
         // Fixed-vs-dynamic dispatch keys off the OUTERMOST dimension —
         // the one this literal directly fills.
         let fixed = matches!(

@@ -1,0 +1,4 @@
+java_habit_collections.jux:3:5: [E0413] error: no method `add` on type `rust.std.Vec` -- Jux collections are the Rust std ones: use `push` or `insert`
+java_habit_collections.jux:4:11: [E0413] error: no method `size` on type `rust.std.Vec` -- Jux collections are the Rust std ones: use `len`
+java_habit_collections.jux:6:5: [E0413] error: no method `put` on type `rust.std.HashMap` -- Jux collections are the Rust std ones: use `insert`
+java_habit_collections.jux:7:11: [E0413] error: no method `containsKey` on type `rust.std.HashMap` -- Jux collections are the Rust std ones: use `contains_key`

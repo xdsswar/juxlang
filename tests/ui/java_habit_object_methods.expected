@@ -1,0 +1,4 @@
+java_habit_object_methods.jux:9:11: [E0413] error: no method `equals` on type `Point` -- equality is an operator: write `a == b` (override `operator==` to define it)
+java_habit_object_methods.jux:10:11: [E0413] error: no method `hashCode` on type `Point` -- hashing is an operator: `x.operator hash()` (override `operator hash` to define it)
+java_habit_object_methods.jux:11:11: [E0413] error: no method `compareTo` on type `Point` -- ordering is an operator: `a <=> b`, or `<` / `>` (override `operator<=>` to define it)
+java_habit_object_methods.jux:12:11: [E0413] error: no method `toString` on type `Point` -- a value's text is its `operator string` (override it to define it): interpolate it, `$"${x}"`, or call `x.operator string()`

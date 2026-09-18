@@ -1,0 +1,6 @@
+public void main() {
+    System.out.println("hello");
+    System.err.printf("%d", 1);
+    String[] names = ["ann", "bob"];
+    print(names.length);
+}

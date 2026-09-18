@@ -1,0 +1,14 @@
+record Item(String name, int qty) {}
+
+class Account {
+    public String Owner { get; set; } = "ann";
+    private bool active = true;
+    public Account() {}
+}
+
+public void main() {
+    var it = new Item("bolt", 3);
+    print(it.qty());
+    var acct = new Account();
+    print(acct.getOwner());
+}

@@ -1,0 +1,13 @@
+class Point {
+    public int x;
+    public Point(int x) { this.x = x; }
+}
+
+public void main() {
+    var a = new Point(1);
+    var b = new Point(1);
+    print(a.equals(b));
+    print(a.hashCode());
+    print(a.compareTo(b));
+    print(a.toString());
+}

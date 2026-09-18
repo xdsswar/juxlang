@@ -1,0 +1,8 @@
+public void main() {
+    var v = new Vec<int>();
+    v.add(1);
+    print(v.size());
+    var m = new HashMap<String, int>();
+    m.put("a", 1);
+    print(m.containsKey("a"));
+}

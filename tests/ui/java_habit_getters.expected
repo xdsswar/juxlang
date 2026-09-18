@@ -1,0 +1,2 @@
+java_habit_getters.jux:11:11: [E0413] error: no method `qty` on type `Item` -- `qty` is read directly: `x.qty`, with no call
+java_habit_getters.jux:13:11: [E0413] error: no method `getOwner` on type `Account` -- `Owner` is read directly: `x.Owner`, with no call

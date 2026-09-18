@@ -171,6 +171,44 @@ Rules:
 This operationalizes "Actionable" from the philosophy section above for
 name resolution, which it asked for and nothing implemented.
 
+### Java Habits (`E0413`, `E0200`, `E0301`)
+
+Most people writing Jux write Java first. The syntax is familiar on purpose,
+so the habits carry over, and where Jux does something differently the
+diagnostic says what the Jux way is instead of only refusing:
+
+```
+error[E0413]: no method `add` on type `rust.std.Vec` -- Jux collections are the
+              Rust std ones: use `push`
+error[E0413]: no method `equals` on type `Point` -- equality is an operator:
+              write `a == b` (override `operator==` to define it)
+error[E0413]: no method `qty` on type `Item` -- `qty` is a record component:
+              read it as `item.qty`
+```
+
+Rules:
+
+- **Library habits name only what the receiver has.** A collection method
+  Java spells differently (`add`, `size`, `put`, `get`, `remove`,
+  `containsKey`, `isEmpty`, `clear`, ...) suggests the Rust std spelling only
+  when the receiver's discovered surface has that member, so the help can never
+  point at a method that does not exist.
+- **Language habits have one fixed answer**, because they are language rules
+  rather than library surface:
+  - Jux has no `equals`, `hashCode`, `compareTo` or `toString` methods.
+    Equality, hashing, ordering and text are operator overrides: `==`,
+    `.operator hash()`, `<=>` and `operator string` (interpolation prints it),
+    each defined by overriding the operator. JUX-OPERATORS-ADDENDUM §O.2.
+  - A getter call, `x.name()` or `x.getName()`, on a type whose record
+    component, field or property is `name` reads it directly: `x.name`.
+  - `System.out.println(x)` and `System.out.print(x)` are `print(x)`.
+  - An array literal is written with braces, `{1, 2, 3}`, as Java writes an
+    initializer. `[1, 2, 3]` is one diagnostic naming that form, not a cascade
+    of parse errors.
+- **Help is added to the diagnostic the habit already raises.** It never
+  turns a program that compiles into one that does not, and it never replaces
+  a near-name suggestion that fits better.
+
 ## §D.2 — JSON Schema
 
 `--diagnostic-format=json` emits one JSON object per line (NDJSON), one object per top-level diagnostic.
