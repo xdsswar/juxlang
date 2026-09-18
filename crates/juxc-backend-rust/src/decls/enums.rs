@@ -564,6 +564,124 @@ impl RustEmitter {
             self.w.indent_dec();
             self.w.line("}");
         }
+
+        // `fromName` / `fromNameStrict` / `fromOrdinal` (§7.7.3): the reverse
+        // of `name()` and `ordinal()`, `None` on a miss. Payload-free enums
+        // only, like `values()`.
+        let self_ty = if enum_decl.generic_params.is_empty() {
+            bare.clone()
+        } else {
+            let params: Vec<String> =
+                enum_decl.generic_params.iter().map(|p| to_rust_ident(&p.name.text)).collect();
+            format!("{bare}<{}>", params.join(", "))
+        };
+        let unit = |v: &juxc_ast::EnumVariant| format!("{bare}::{}", to_rust_ident(&v.name.text));
+        if payload_free && !declared.contains("fromNameStrict") {
+            self.w.line(&format!("pub fn fromNameStrict(name: String) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            self.w.line("match name.as_str() {");
+            self.w.indent_inc();
+            for v in &enum_decl.variants {
+                self.w.line(&format!("\"{}\" => Some({}),", v.name.text, unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        if payload_free && !declared.contains("fromName") {
+            // Case-insensitive, so `"north"` finds `North`. When two variants
+            // differ only in case (`Red`, `RED`), the exact spelling decides,
+            // and otherwise the first declared wins: the lookup never guesses
+            // between two equally good answers.
+            let mut seen = HashSet::new();
+            let folded: Vec<(String, &juxc_ast::EnumVariant)> = enum_decl
+                .variants
+                .iter()
+                .filter_map(|v| {
+                    let key = v.name.text.to_lowercase();
+                    seen.insert(key.clone()).then_some((key, v))
+                })
+                .collect();
+            let collides = folded.len() < enum_decl.variants.len();
+            self.w.line(&format!("pub fn fromName(name: String) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            if collides {
+                self.w.line("match name.as_str() {");
+                self.w.indent_inc();
+                for v in &enum_decl.variants {
+                    self.w.line(&format!("\"{}\" => return Some({}),", v.name.text, unit(v)));
+                }
+                self.w.line("_ => {}");
+                self.w.indent_dec();
+                self.w.line("}");
+            }
+            self.w.line("match name.to_lowercase().as_str() {");
+            self.w.indent_inc();
+            for (key, v) in &folded {
+                self.w.line(&format!("\"{key}\" => Some({}),", unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        if payload_free && !declared.contains("fromOrdinal") {
+            self.w.line(&format!("pub fn fromOrdinal(ordinal: isize) -> Option<{self_ty}> {{"));
+            self.w.indent_inc();
+            self.w.line("match ordinal {");
+            self.w.indent_inc();
+            for (i, v) in enum_decl.variants.iter().enumerate() {
+                self.w.line(&format!("{i} => Some({}),", unit(v)));
+            }
+            self.w.line("_ => None,");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+
+        // `cases()` (§7.7.3): one `EnumCase` per variant, on every enum. A
+        // payload-free variant carries itself as `value()`; a payload variant
+        // is described by its declared payload and has no value.
+        if !declared.contains("cases") && enum_decl.generic_params.is_empty() {
+            let case = "crate::jux::std::meta::EnumCase";
+            self.w.line(&format!(
+                "pub fn cases() -> crate::JuxArr<std::vec::Vec<{case}<{self_ty}>>> {{"
+            ));
+            self.w.indent_inc();
+            self.w.line("crate::jux_arr(std::vec![");
+            self.w.indent_inc();
+            for (i, v) in enum_decl.variants.iter().enumerate() {
+                let (payload, value) = if v.payload.is_empty() {
+                    (String::new(), format!("Some({})", unit(v)))
+                } else {
+                    let slots: Vec<String> = v
+                        .payload
+                        .iter()
+                        .map(|p| {
+                            let ty = juxc_tycheck::symbol_table::render_type_ref(&p.ty);
+                            match &p.name {
+                                Some(n) => format!("{ty} {}", n.text),
+                                None => ty,
+                            }
+                        })
+                        .collect();
+                    (format!("({})", slots.join(", ")), "None".to_string())
+                };
+                self.w.line(&format!(
+                    "{case}::new(\"{}\".to_string(), {i}, \"{}\".to_string(), {value}),",
+                    v.name.text,
+                    payload.replace('\\', "\\\\").replace('"', "\\\""),
+                ));
+            }
+            self.w.indent_dec();
+            self.w.line("])");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
     }
 
 

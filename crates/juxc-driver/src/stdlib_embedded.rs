@@ -917,6 +917,54 @@ public class AnnotatedItem {
     }
 }
 "###),
+    ("meta/EnumCase.jux", r###"/**
+ * jux.std.meta.EnumCase
+ *
+ * One variant of an enum, as `Enum.cases()` describes it (JUX-LANG-V1
+ * §7.7.3): its name, its ordinal, and the payload it declares. Every enum has
+ * `cases()`, including one whose variants carry payloads, which is why this
+ * exists beside `values()`: a payload variant has no value to list until
+ * someone supplies the payload, but it can still be described.
+ */
+package jux.std.meta;
+
+public final class EnumCase<T> {
+    private String label;
+    private int index;
+    private String signature;
+    private T? unit;
+
+    public EnumCase(String label, int index, String signature, T? unit) {
+        this.label = label;
+        this.index = index;
+        this.signature = signature;
+        this.unit = unit;
+    }
+
+    /** The variant's declared name, as `value.name()` gives it. */
+    public String name() { return this.label; }
+
+    /** The variant's zero-based position in the declaration. */
+    public int ordinal() { return this.index; }
+
+    /**
+     * The payload the variant declares, as written: `(int status, String body)`.
+     * Empty for a variant with no payload.
+     */
+    public String payload() { return this.signature; }
+
+    /** True when the variant carries a payload. */
+    public bool hasPayload() { return this.signature != ""; }
+
+    /**
+     * The variant itself when it has no payload; null when it has one, since
+     * such a variant is not a value until its payload is given.
+     */
+    public T? value() { return this.unit; }
+
+    public String operator string() { return this.label + this.signature; }
+}
+"###),
     ("io/Console.jux", r###"/**
  * jux.std.io.Console
  *

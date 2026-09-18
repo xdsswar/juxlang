@@ -4678,13 +4678,29 @@ fn ty_to_type_ref(ty: &crate::ty::Ty, span: Span) -> Option<TypeRef> {
 /// variant list. A user declaration of the same name wins: it is already in
 /// the map, and these only fill what is absent.
 ///
-/// `values()` is restricted to payload-free enums for the reason §7.7.3
-/// gives: a variant with a payload cannot be enumerated without inventing
-/// one. The other three helpers in that table (`fromName`, `fromOrdinal`,
-/// `cases`) are not implemented -- `cases()` needs an `EnumCase<T>` type that
-/// does not exist yet.
+/// `values()`, `fromName()`, `fromNameStrict()` and `fromOrdinal()` are
+/// restricted to payload-free enums for the reason §7.7.3 gives: a variant
+/// with a payload cannot be produced without inventing one. `cases()` is on
+/// every enum: it DESCRIBES the variants (`jux.std.meta.EnumCase`), and a
+/// description needs no payload.
 fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &EnumDecl) {
     let span = enum_decl.span;
+    let param = |name: &str, ty: TypeRef| ParamSig {
+        name: name.to_string(),
+        ty,
+        is_ref: false,
+        is_mut_ref: false,
+        default: None,
+        is_varargs: false,
+        is_out: false,
+        is_shared_ref: false,
+        is_final: false,
+        is_weak: false,
+    };
+    let with_params = |mut sig: MethodSig, params: Vec<ParamSig>| {
+        sig.params = params;
+        sig
+    };
     let helper = |ret: ReturnType, is_static: bool| MethodSig {
         visibility: Visibility::Public,
         throws: Vec::new(),
@@ -4706,13 +4722,50 @@ fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &E
     methods
         .entry("ordinal".to_string())
         .or_insert_with(|| helper(ReturnType::Type(synth_type_ref("int", span)), false));
+    // `Self` as a type, with the enum's own type parameters as arguments
+    // (`Tree<T>`), so a generic enum's lookups return its own instantiation.
+    let mut self_ty = synth_type_ref(&enum_decl.name.text, span);
+    self_ty.generic_args = enum_decl
+        .generic_params
+        .iter()
+        .map(|p| juxc_ast::GenericArg::Type(synth_type_ref(&p.name.text, span)))
+        .collect();
     if enum_decl.variants.iter().all(|v| v.payload.is_empty()) {
-        let mut elem = synth_type_ref(&enum_decl.name.text, span);
+        let mut elem = self_ty.clone();
         elem.array_shape = Some(juxc_ast::ArrayShape::single(juxc_ast::ArrayDim::Dynamic));
         methods
             .entry("values".to_string())
             .or_insert_with(|| helper(ReturnType::Type(elem), true));
+        // Lookups return `Self?`: null when nothing matches (§7.7.3).
+        let mut found = self_ty.clone();
+        found.nullable = true;
+        for (name, arg, arg_ty) in [
+            ("fromName", "name", "String"),
+            ("fromNameStrict", "name", "String"),
+            ("fromOrdinal", "ordinal", "int"),
+        ] {
+            let found = found.clone();
+            methods.entry(name.to_string()).or_insert_with(|| {
+                with_params(
+                    helper(ReturnType::Type(found), true),
+                    vec![param(arg, synth_type_ref(arg_ty, span))],
+                )
+            });
+        }
     }
+    // `cases()`: `Vec<EnumCase<Self>>`, on every enum without type
+    // parameters. A generic enum's is left out: `Tree.cases()` is a static
+    // call with no type arguments to give `EnumCase<Tree<T>>` its `T`.
+    if !enum_decl.generic_params.is_empty() {
+        return;
+    }
+    let mut case_ty = synth_type_ref("EnumCase", span);
+    case_ty.generic_args = vec![juxc_ast::GenericArg::Type(self_ty)];
+    let mut list = synth_type_ref("Vec", span);
+    list.generic_args = vec![juxc_ast::GenericArg::Type(case_ty)];
+    methods
+        .entry("cases".to_string())
+        .or_insert_with(|| helper(ReturnType::Type(list), true));
 }
 
 fn synth_type_ref(name: &str, span: Span) -> TypeRef {
@@ -4969,7 +5022,9 @@ fn render_generic_arg(arg: &juxc_ast::GenericArg) -> String {
     }
 }
 
-fn render_type_ref(t: &TypeRef) -> String {
+/// A type as its Jux source spells it: `Map<String, int>`, `int[]`, `T?`.
+/// `EnumCase.payload()` shows a variant's payload with it.
+pub fn render_type_ref(t: &TypeRef) -> String {
     let mut out: String = t
         .name
         .segments

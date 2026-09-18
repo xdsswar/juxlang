@@ -2366,18 +2366,25 @@ Every enum gets these auto-generated methods, available on instances and statica
 | `value.ordinal()`                   | any enum instance        | `int` — zero-based declaration index          |
 | `Self.values()`                     | no-payload enums only    | `Self[]` — every variant in declaration order |
 | `Self.fromName(String)`             | no-payload enums only    | `Self?` — null on miss; case-insensitive       |
+| `Self.fromNameStrict(String)`       | no-payload enums only    | `Self?` — null on miss; exact spelling only    |
 | `Self.fromOrdinal(int)`             | no-payload enums only    | `Self?` — null if out-of-range                 |
-| `Self.cases()`                      | any enum                 | `Vec<EnumCase<Self>>` — variant descriptors  |
+| `Self.cases()`                      | any enum without type parameters | `Vec<EnumCase<Self>>` — variant descriptors  |
 
 `Self.values()` is restricted to no-payload enums because variants with payloads can't be enumerated without invented payload data. For payload-carrying enums, `Self.cases()` returns descriptors (variant name, ordinal, payload type signature) — useful for reflection.
 
-**Phase 1 implements `name()`, `ordinal()` and `values()`.** The other three
-rows of the table are not available yet: `fromName` / `fromOrdinal` want a
-decision about the case-insensitive default before they are worth having, and
-`cases()` needs the `EnumCase<T>` descriptor type, which does not exist. A
-call to any of them is an ordinary unresolved-member error.
+`fromName` is **case-insensitive** by default (matches `"North"`, `"north"`, `"NORTH"`). For strict matching, use `fromNameStrict(String)`. When two variants differ only in case (`Red` and `RED`), `fromName` returns the one spelled exactly as asked, and otherwise the first declared: a lookup never picks between two equally good answers at random.
 
-`fromName` is **case-insensitive** by default (matches `"North"`, `"north"`, `"NORTH"`). For strict matching, use `fromNameStrict(String)`.
+`EnumCase<T>` (package `jux.std.meta`, in scope without an import) describes one variant:
+
+| Member          | Returns   | Meaning                                                            |
+|-----------------|-----------|--------------------------------------------------------------------|
+| `name()`        | `String`  | the variant's declared name                                        |
+| `ordinal()`     | `int`     | its zero-based position                                            |
+| `payload()`     | `String`  | the payload as declared, `(int status, String body)`; empty if none |
+| `hasPayload()`  | `bool`    | whether the variant carries a payload                              |
+| `value()`       | `T?`      | the variant itself when it has no payload, `null` when it has one  |
+
+A descriptor prints as its name followed by its payload, `Ok(int status, String body)`.
 
 ```java
 public enum Color { Red, Green, Blue }

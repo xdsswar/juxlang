@@ -1,0 +1,17 @@
+East (ordinal 1)
+West (ordinal 3)
+no such direction
+no such direction
+North (ordinal 0)
+South (ordinal 2)
+no such direction
+low
+Low
+Low
+0: North value=North
+1: East value=East
+2: South value=South
+3: West value=West
+Circle(double radius) hasPayload=true payload='(double radius)'
+Rect(double width, double height) hasPayload=true payload='(double width, double height)'
+Empty hasPayload=false payload=''

@@ -796,6 +796,30 @@ is `E0489`.
 
 ---
 
+## E32. The enum lookups and `cases()`
+
+**Conflict.** JUX-LANG-V1 §7.7.3 listed `fromName`, `fromOrdinal` and
+`cases()` in its table and then said none of them existed: `fromName` waited
+on a case-insensitivity decision and `cases()` on an `EnumCase<T>` type
+nobody had defined. The same section had already made the decision
+(case-insensitive, with `fromNameStrict` for exact matching), and a call
+reached rustc instead of failing in Jux.
+
+**Resolution.** All four exist. `fromName` is case-insensitive; when two
+variants differ only in case the exact spelling wins, then the first
+declared. `EnumCase<T>` is a stdlib class in `jux.std.meta` with `name()`,
+`ordinal()`, `payload()`, `hasPayload()` and `value()`. `value()` is not in
+the original description; it gives the descriptor's type parameter a use (a
+payload-free variant's own value, `null` for a payload variant), which is
+also what lets a program go from a descriptor back to the variant. `cases()`
+is on every enum without type parameters: `Tree.cases()` is a static call,
+with no type arguments to say what `EnumCase<Tree<T>>` holds.
+
+**Spec status:** JUX-LANG-V1 §7.7.3 states the rules and the `EnumCase`
+members.
+
+---
+
 ## E33. Modifiers on records and enums
 
 **Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and
