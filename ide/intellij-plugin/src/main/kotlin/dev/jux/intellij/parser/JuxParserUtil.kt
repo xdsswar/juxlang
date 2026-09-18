@@ -111,6 +111,7 @@ fun PsiBuilder.closeBrace() {
  * `value.type()`) parses cleanly instead of erroring. Reports success.
  */
 fun PsiBuilder.consumeMemberName(): Boolean {
+    if (consumeNamedOperatorMember()) return true
     if (at(T.IDENTIFIER) || T.KEYWORDS.contains(tokenType)) {
         advanceLexer()
         return true
@@ -118,6 +119,28 @@ fun PsiBuilder.consumeMemberName(): Boolean {
     errorHere("Name expected")
     return false
 }
+
+/**
+ * A named operator used as a member (§O.2.7): `x.operator hash()` and
+ * `x.operator string()`. Two tokens form the one name, and only when a call
+ * follows, which is how juxc reads it too. Anything else rolls back, so a
+ * stray `x.operator` still reports the missing name.
+ */
+fun PsiBuilder.consumeNamedOperatorMember(): Boolean {
+    if (!at(T.OPERATOR_KW)) return false
+    val probe = mark()
+    advanceLexer() // `operator`
+    if (at(T.IDENTIFIER) && tokenText in NAMED_OPERATORS && lookAhead(1) === T.LPAREN) {
+        advanceLexer() // `hash` / `string`
+        probe.drop()
+        return true
+    }
+    probe.rollbackTo()
+    return false
+}
+
+/** The operators a program can call by name (§O.2.7). */
+val NAMED_OPERATORS: Set<String> = setOf("hash", "string")
 
 /**
  * Keywords that can only OPEN a declaration or a statement. They are the one

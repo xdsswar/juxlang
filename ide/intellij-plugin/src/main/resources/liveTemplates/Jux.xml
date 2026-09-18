@@ -1,158 +1,226 @@
 <templateSet group="Jux">
-  <!-- Free main needs no `public`/`static` (sec. E.1.2.2) — the bare form is canonical. -->
-  <template name="psvm" value="void main() {&#10;    $END$&#10;}" description="Entry-point main function" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <!-- Generated shape: contexts mirror Java's (JuxTemplateContextType). -->
+  <template name="psvm" value="$SIGNATURE$ {&#10;    $END$&#10;}" description="main() entry point (sec. E.1.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="SIGNATURE" expression="juxMainSignature()" defaultValue='"void main()"' alwaysStopAt="false"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="sout" value="print($END$);" description="print(...)" toReformat="false" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <template name="main" value="$SIGNATURE$ {&#10;    $END$&#10;}" description="main() entry point (sec. E.1.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="SIGNATURE" expression="juxMainSignature()" defaultValue='"void main()"' alwaysStopAt="false"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="soutf" value="print($&quot;$END$&quot;);" description="print an interpolated string" toReformat="false" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <template name="sout" value="print($END$);" description="Prints a value" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
-  <template name="fore" value="for (var $ITEM$ : $ITERABLE$) {&#10;    $END$&#10;}" description="for-each loop" toReformat="true" toShortenFQNames="false">
-    <variable name="ITEM" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
-    <variable name="ITERABLE" expression="" defaultValue="&quot;items&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="soutf" value='print($$"$END$");' description="Prints an interpolated string" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
-  <template name="ifn" value="if ($VAR$ == null) {&#10;    $END$&#10;}" description="if value is null" toReformat="true" toShortenFQNames="false">
-    <variable name="VAR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="soutv" value='print($$"$EXPR_COPY$ = $${$EXPR$}");' description="Prints a value with its name" toReformat="false" toShortenFQNames="false">
+    <variable name="EXPR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <variable name="EXPR_COPY" expression="EXPR" defaultValue="" alwaysStopAt="false"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
-  <template name="inn" value="if ($VAR$ != null) {&#10;    $END$&#10;}" description="if value is not null" toReformat="true" toShortenFQNames="false">
-    <variable name="VAR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="soutm" value='print("$METHOD$");' description="Prints the current type and method name" toReformat="false" toShortenFQNames="false">
+    <variable name="METHOD" expression="juxQualifiedMethodName()" defaultValue="" alwaysStopAt="false"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="soutp" value='print($$"$FORMAT$");' description="Prints the method's parameters and their values" toReformat="false" toShortenFQNames="false">
+    <variable name="FORMAT" expression="juxParametersFormat()" defaultValue="" alwaysStopAt="false"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="iter" value="for (var $VAR$ : $ITERABLE$) {&#10;    $END$&#10;}" description="Iterates over an array, collection or other iterable" toReformat="true" toShortenFQNames="false">
+    <variable name="ITERABLE" expression="juxIterableVariable()" defaultValue='"items"' alwaysStopAt="true"/>
+    <variable name="VAR" expression="juxElementName(ITERABLE)" defaultValue='"item"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="fore" value="for (var $VAR$ : $ITERABLE$) {&#10;    $END$&#10;}" description="for-each loop" toReformat="true" toShortenFQNames="false">
+    <variable name="ITERABLE" expression="juxIterableVariable()" defaultValue='"items"' alwaysStopAt="true"/>
+    <variable name="VAR" expression="juxElementName(ITERABLE)" defaultValue='"item"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="itar" value="for (var $INDEX$ = 0; $INDEX$ &lt; $ARRAY$.length; $INDEX$++) {&#10;    var $VAR$ = $ARRAY$[$INDEX$];&#10;    $END$&#10;}" description="Iterates over the elements of an array" toReformat="true" toShortenFQNames="false">
+    <variable name="INDEX" expression="" defaultValue='"i"' alwaysStopAt="true"/>
+    <variable name="ARRAY" expression="juxArrayVariable()" defaultValue='"array"' alwaysStopAt="true"/>
+    <variable name="VAR" expression="juxElementName(ARRAY)" defaultValue='"item"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="ritar" value="for (var $INDEX$ = $ARRAY$.length - 1; $INDEX$ &gt;= 0; $INDEX$--) {&#10;    var $VAR$ = $ARRAY$[$INDEX$];&#10;    $END$&#10;}" description="Iterates over the elements of an array in reverse order" toReformat="true" toShortenFQNames="false">
+    <variable name="INDEX" expression="" defaultValue='"i"' alwaysStopAt="true"/>
+    <variable name="ARRAY" expression="juxArrayVariable()" defaultValue='"array"' alwaysStopAt="true"/>
+    <variable name="VAR" expression="juxElementName(ARRAY)" defaultValue='"item"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="fori" value="for (var $INDEX$ = 0; $INDEX$ &lt; $LIMIT$; $INDEX$++) {&#10;    $END$&#10;}" description="Indexed for loop" toReformat="true" toShortenFQNames="false">
+    <variable name="INDEX" expression="" defaultValue='"i"' alwaysStopAt="true"/>
+    <variable name="LIMIT" expression="" defaultValue='"count"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
   <template name="whilet" value="while (true) {&#10;    $END$&#10;}" description="while (true) loop" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="fawe" value="for await (var $ITEM$ : $STREAM$) {&#10;    $END$&#10;}" description="for-await loop over a Stream (sec. 18.6)" toReformat="true" toShortenFQNames="false">
+    <variable name="ITEM" expression="" defaultValue='"item"' alwaysStopAt="true"/>
+    <variable name="STREAM" expression="" defaultValue='"stream"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="ifn" value="if ($VAR$ == null) {&#10;    $END$&#10;}" description="Inserts if null statement" toReformat="true" toShortenFQNames="false">
+    <variable name="VAR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="inn" value="if ($VAR$ != null) {&#10;    $END$&#10;}" description="Inserts if not null statement" toReformat="true" toShortenFQNames="false">
+    <variable name="VAR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="lazy" value="if ($VAR$ == null) {&#10;    $VAR$ = new $TYPE$($END$);&#10;}" description="Performs lazy initialization" toReformat="true" toShortenFQNames="false">
+    <variable name="VAR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <variable name="TYPE" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="thr" value="throw new $END$" description="throw new" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
   <template name="tryc" value="try {&#10;    $END$&#10;} catch (Exception e) {&#10;}" description="try / catch" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
   <template name="ret" value="return $END$;" description="return statement" toReformat="false" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
   <template name="var" value="var $NAME$ = $VALUE$;$END$" description="var declaration" toReformat="false" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"x"' alwaysStopAt="true"/>
     <variable name="VALUE" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="sw" value="switch ($EXPR$) {&#10;    case $PAT$ -&gt; $BODY$;&#10;    default -&gt; $END$;&#10;}" description="switch with case arms" toReformat="true" toShortenFQNames="false">
+    <variable name="EXPR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <variable name="BODY" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="swe" value="var $NAME$ = switch ($EXPR$) {&#10;    case $PAT$ -&gt; $VAL$;&#10;    default -&gt; $END$;&#10;};" description="switch expression into a local" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue='"result"' alwaysStopAt="true"/>
+    <variable name="EXPR" expression="juxVariable()" defaultValue='"value"' alwaysStopAt="true"/>
+    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <variable name="VAL" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="raws" value='var $NAME$ = """&#10;$END$&#10;""";' description="raw (triple-quoted) string" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue='"text"' alwaysStopAt="true"/>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
+  </template>
+  <template name="lst" value="$ARRAY$[$ARRAY$.length - 1]" description="Gets the last element of an array" toReformat="false" toShortenFQNames="false">
+    <variable name="ARRAY" expression="juxArrayVariable()" defaultValue='"array"' alwaysStopAt="true"/>
+    <context><option name="JUX_EXPRESSION" value="true"/></context>
+  </template>
+  <template name="St" value="String " description="String" toReformat="false" toShortenFQNames="false">
     <context><option name="JUX" value="true"/></context>
   </template>
   <template name="cls" value="public class $NAME$ {&#10;    $END$&#10;}" description="public class" toReformat="true" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
   <template name="intf" value="public interface $NAME$ {&#10;    $END$&#10;}" description="public interface" toReformat="true" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
   <template name="enm" value="public enum $NAME$ {&#10;    $END$&#10;}" description="public enum" toReformat="true" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
   <template name="rec" value="public record $NAME$($END$) {}" description="public record" toReformat="false" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="fn" value="public $RET$ $NAME$($PARAMS$) {&#10;    $END$&#10;}" description="public method" toReformat="true" toShortenFQNames="false">
-    <variable name="RET" expression="" defaultValue="&quot;void&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+  <template name="fn" value="public $RET$ $NAME$($PARAMS$) {&#10;    $END$&#10;}" description="public function or method" toReformat="true" toShortenFQNames="false">
+    <variable name="RET" expression="" defaultValue='"void"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"name"' alwaysStopAt="true"/>
     <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="prop" value="public $TYPE$ $NAME$ { get; set; } = $INIT$;$END$" description="observable property (§P.1)" toReformat="false" toShortenFQNames="false">
-    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+  <template name="test" value="@Test&#10;void $NAME$() {&#10;    $END$&#10;}" description="test function (sec. TS.1)" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue='"testName"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="tbe" value="@BeforeEach&#10;void setup() {&#10;    $END$&#10;}" description="before-each hook (sec. TS.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="tae" value="@AfterEach&#10;void teardown() {&#10;    $END$&#10;}" description="after-each hook (sec. TS.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="psf" value="public static final " description="public static final" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="psfi" value="public static final int " description="public static final int" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="psfs" value="public static final String " description="public static final String" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="prsf" value="private static final " description="private static final" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
+  </template>
+  <template name="prop" value="public $TYPE$ $NAME$ { get; set; } = $INIT$;$END$" description="observable property (sec. P.1)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue='"String"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
     <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="propr" value="public $TYPE$ $NAME$ { get; private set; } = $INIT$;$END$" description="read-outside property, private setter (§P.1.3)" toReformat="false" toShortenFQNames="false">
-    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+  <template name="propr" value="public $TYPE$ $NAME$ { get; private set; } = $INIT$;$END$" description="read-outside property, private setter (sec. P.1.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue='"String"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
     <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="propc" value="public $TYPE$ $NAME$ { get -&gt; $EXPR$; };$END$" description="computed read-only property (§P.1.5)" toReformat="false" toShortenFQNames="false">
-    <variable name="TYPE" expression="" defaultValue="&quot;bool&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;IsEmpty&quot;" alwaysStopAt="true"/>
+  <template name="propc" value="public $TYPE$ $NAME$ { get -&gt; $EXPR$; };$END$" description="computed read-only property (sec. P.1.5)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue='"bool"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"IsEmpty"' alwaysStopAt="true"/>
     <variable name="EXPR" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="propgs" value="public $TYPE$ $NAME$ {&#10;    get;&#10;    set;&#10;}$END$" description="property with get/set accessors (§M.7)" toReformat="true" toShortenFQNames="false">
-    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="propgs" value="public $TYPE$ $NAME$ {&#10;    get;&#10;    set;&#10;}$END$" description="property with get/set accessors (sec. M.7)" toReformat="true" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue='"String"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"Name"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="obs" value="private final observer&lt;$T$&gt; $NAME$ = (old, now) -&gt; {&#10;    $END$&#10;};" description="named observer variable (§P.2)" toReformat="true" toShortenFQNames="false">
-    <variable name="T" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;obs&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="obs" value="private final observer&lt;$T$&gt; $NAME$ = (old, now) -&gt; {&#10;    $END$&#10;};" description="named observer variable (sec. P.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="T" expression="" defaultValue='"String"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"obs"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="obsi" value="private final observer&lt;$T$&gt; $NAME$ = () -&gt; {&#10;    $END$&#10;};" description="invalidation observer (§P.2.2 shape 3)" toReformat="true" toShortenFQNames="false">
-    <variable name="T" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;inv&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="obsi" value="private final observer&lt;$T$&gt; $NAME$ = () -&gt; {&#10;    $END$&#10;};" description="invalidation observer (sec. P.2.2 shape 3)" toReformat="true" toShortenFQNames="false">
+    <variable name="T" expression="" defaultValue='"String"' alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue='"inv"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="initb" value="init {&#10;    $END$&#10;}" description="instance init block (§M.1)" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <template name="initb" value="init {&#10;    $END$&#10;}" description="instance init block (sec. M.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="sinit" value="static {&#10;    $END$&#10;}" description="static initializer block (§S.4.1)" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <template name="sinit" value="static {&#10;    $END$&#10;}" description="static initializer block (sec. S.4.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="drp" value="drop {&#10;    $END$&#10;}" description="drop (destructor) block (§6.6)" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
+  <template name="drp" value="drop {&#10;    $END$&#10;}" description="drop (destructor) block (sec. 6.6)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="sw" value="switch ($EXPR$) {&#10;    case $PAT$ -&gt; $BODY$;&#10;    default -&gt; $END$;&#10;}" description="switch with case arms" toReformat="true" toShortenFQNames="false">
-    <variable name="EXPR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
-    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
-    <variable name="BODY" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="opeq" value="public bool operator==($OTHER$ other) {&#10;    return $END$;&#10;}" description="equality operator (sec. O.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="OTHER" expression="juxClassName()" defaultValue='"Other"' alwaysStopAt="true"/>
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="swe" value="var $NAME$ = switch ($EXPR$) {&#10;    case $PAT$ -&gt; $VAL$;&#10;    default -&gt; $END$;&#10;};" description="switch expression into a local" toReformat="true" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;result&quot;" alwaysStopAt="true"/>
-    <variable name="EXPR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
-    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
-    <variable name="VAL" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="ophash" value="public int operator hash() {&#10;    return $END$;&#10;}" description="hash operator (sec. O.2.7)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="raws" value="var $NAME$ = &quot;&quot;&quot;&#10;$END$&#10;&quot;&quot;&quot;;" description="raw (triple-quoted) string" toReformat="false" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;text&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+  <template name="opstr" value='public String operator string() {&#10;    return $$"$END$";&#10;}' description="string operator (sec. O.2.2)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX_DECLARATION" value="true"/></context>
   </template>
-  <template name="opeq" value="public bool operator==($OTHER$ o) {&#10;    return $END$;&#10;}" description="equality operator overload (§O.2)" toReformat="true" toShortenFQNames="false">
-    <variable name="OTHER" expression="" defaultValue="&quot;Other&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="fori" value="for (var $I$ = 0; $I$ &lt; $N$; $I$++) {&#10;    $END$&#10;}" description="C-style indexed for loop" toReformat="true" toShortenFQNames="false">
-    <variable name="I" expression="" defaultValue="&quot;i&quot;" alwaysStopAt="true"/>
-    <variable name="N" expression="" defaultValue="&quot;count&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="fawe" value="for await (var $ITEM$ : $STREAM$) {&#10;    $END$&#10;}" description="for-await loop over a Stream (§18.6)" toReformat="true" toShortenFQNames="false">
-    <variable name="ITEM" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
-    <variable name="STREAM" expression="" defaultValue="&quot;stream&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="test" value="@Test&#10;void $NAME$() {&#10;    $END$&#10;}" description="test function (§TS.1)" toReformat="true" toShortenFQNames="false">
-    <variable name="NAME" expression="" defaultValue="&quot;testName&quot;" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="tbe" value="@BeforeEach&#10;void setup() {&#10;    $END$&#10;}" description="before-each hook (§TS.1)" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="tae" value="@AfterEach&#10;void teardown() {&#10;    $END$&#10;}" description="after-each hook (§TS.1)" toReformat="true" toShortenFQNames="false">
-    <context><option name="JUX" value="true"/></context>
-  </template>
-  <template name="aeq" value="assertEqual($EXPECTED$, $ACTUAL$);$END$" description="assertEqual (§TS.3)" toReformat="false" toShortenFQNames="false">
+  <template name="aeq" value="assertEqual($EXPECTED$, $ACTUAL$);$END$" description="assertEqual (sec. TS.3)" toReformat="false" toShortenFQNames="false">
     <variable name="EXPECTED" expression="" defaultValue="" alwaysStopAt="true"/>
     <variable name="ACTUAL" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
-  <template name="atr" value="assertTrue($COND$);$END$" description="assertTrue (§TS.3)" toReformat="false" toShortenFQNames="false">
+  <template name="atr" value="assertTrue($COND$);$END$" description="assertTrue (sec. TS.3)" toReformat="false" toShortenFQNames="false">
     <variable name="COND" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
-  <template name="athr" value="var $E$ = assertThrows(() -&gt; $CALL$);$END$" description="assertThrows capturing the exception (§TS.3)" toReformat="false" toShortenFQNames="false">
-    <variable name="E" expression="" defaultValue="&quot;e&quot;" alwaysStopAt="true"/>
+  <template name="athr" value="var $E$ = assertThrows(() -&gt; $CALL$);$END$" description="assertThrows capturing the exception (sec. TS.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="E" expression="" defaultValue='"e"' alwaysStopAt="true"/>
     <variable name="CALL" expression="" defaultValue="" alwaysStopAt="true"/>
-    <context><option name="JUX" value="true"/></context>
+    <context><option name="JUX_STATEMENT" value="true"/></context>
   </template>
 </templateSet>

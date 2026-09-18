@@ -335,7 +335,28 @@
     <liveTemplateContext
         contextId="JUX"
         implementation="dev.jux.intellij.templates.JuxTemplateContextType"/>
+    <!-- Java's split: statement / expression / declaration positions. -->
+    <liveTemplateContext
+        contextId="JUX_STATEMENT" baseContextId="JUX"
+        implementation="dev.jux.intellij.templates.JuxTemplateContextType$Statement"/>
+    <liveTemplateContext
+        contextId="JUX_EXPRESSION" baseContextId="JUX"
+        implementation="dev.jux.intellij.templates.JuxTemplateContextType$Expression"/>
+    <liveTemplateContext
+        contextId="JUX_DECLARATION" baseContextId="JUX"
+        implementation="dev.jux.intellij.templates.JuxTemplateContextType$Declaration"/>
     <defaultLiveTemplates file="liveTemplates/Jux"/>
+    <!-- Jux counterparts of Java's template macros (className, methodName,
+         variableOfType, iterableVariable, arrayVariable, suggestVariableName). -->
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxClassNameMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxMethodNameMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxQualifiedMethodNameMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxMainSignatureMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxParametersFormatMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxAnyVariableMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxIterableVariableMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxArrayVariableMacro"/>
+    <liveTemplateMacro implementation="dev.jux.intellij.templates.JuxElementNameMacro"/>
 
     <!-- Native syntax highlighting + a customizable color page (§I.3). -->
     <lang.syntaxHighlighterFactory
@@ -714,6 +735,20 @@
             text="Override/Implement Methods"
             description="Generate @override stubs for inherited methods not yet declared">
       <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+    </action>
+    <!-- Java's "equals() and hashCode()" and "toString()": Jux spells them as
+         operators (§O.2.7), so the generated code is operators too. -->
+    <action id="Jux.Generate.EqualsAndHash"
+            class="dev.jux.intellij.actions.JuxGenerateEqualsAndHashAction"
+            text="operator== and hash"
+            description="Generate operator== and operator hash from the class's fields">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.OverrideMethods"/>
+    </action>
+    <action id="Jux.Generate.OperatorString"
+            class="dev.jux.intellij.actions.JuxGenerateOperatorStringAction"
+            text="operator string"
+            description="Generate operator string listing the type's fields">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.EqualsAndHash"/>
     </action>
     <action id="Jux.ShowLicense"
             class="dev.jux.intellij.license.JuxShowLicenseAction"

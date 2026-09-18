@@ -34,6 +34,9 @@ class JuxReferenceContributor : PsiReferenceContributor() {
                     importReferences(element)?.let { return it }
                     if (element.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
                     val name = nameLeaf(element) ?: return PsiReference.EMPTY_ARRAY
+                    // `x.operator hash()` (§O.2.7) names an operator every value
+                    // has, not a member called `hash`.
+                    if (isNamedOperatorName(name)) return PsiReference.EMPTY_ARRAY
                     val range = TextRange.from(name.startOffsetInParent, name.textLength)
                     return arrayOf(JuxReference(element, range))
                 }
@@ -110,6 +113,13 @@ class JuxReferenceContributor : PsiReferenceContributor() {
             c = c.nextSibling
         }
         return last
+    }
+
+    /** True when [name] is the `hash` of `x.operator hash()`. */
+    private fun isNamedOperatorName(name: PsiElement): Boolean {
+        var prev = name.prevSibling
+        while (prev != null && prev.elementType === com.intellij.psi.TokenType.WHITE_SPACE) prev = prev.prevSibling
+        return prev?.elementType === JuxTokenTypes.OPERATOR_KW
     }
 
     private companion object {
