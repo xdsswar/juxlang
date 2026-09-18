@@ -65,6 +65,7 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
             JuxMissingReturnInspection(),
             JuxAbstractMethodInClassInspection(),
             JuxUnhandledExceptionInspection(),
+            JuxPackageMismatchInspection(),
         )
     }
 

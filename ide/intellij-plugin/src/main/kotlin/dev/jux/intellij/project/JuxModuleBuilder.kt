@@ -62,7 +62,9 @@ class JuxModuleBuilder : ModuleBuilder() {
             val src = VfsUtil.createDirectoryIfMissing(baseDir, "src")
             if (src != null) {
                 writeChild(src, JuxScaffold.entryFileName(projectKind), JuxScaffold.entryContent(projectKind, generateSample))
-                contentEntry.addSourceFolder(src, false)
+                // A Jux Sources Root, not a plain source folder: packages are
+                // read from it (§I.4) and the Project view shows it as Jux's.
+                contentEntry.addSourceFolder(src, JuxSourceRootType.SOURCE)
             }
         } catch (e: Exception) {
             LOG.warn("Failed to scaffold Jux project", e)

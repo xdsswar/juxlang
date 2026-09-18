@@ -1,0 +1,14 @@
+<html>
+<body>
+Reports a <code>package</code> declaration that does not match the file's location under its package
+root, or a missing one where the location implies a package. A file in <code>src/com/example/</code>
+declares <code>package com.example;</code>, and a file directly in <code>src/</code> declares none.
+<!-- tooltip end -->
+<p>The package root is a directory marked <b>Jux Sources Root</b> or <b>Jux Test Sources Root</b>, or,
+with nothing marked, the <code>src/</code> and <code>test/</code> directories of a <code>jux.toml</code>
+project. A test file may also add <code>.test</code> to its package. Files outside a package root are not
+checked.</p>
+<p>Quick-fixes: set the package name to match the location, move the file to the directory of its
+declared package, or add the missing declaration.</p>
+</body>
+</html>
