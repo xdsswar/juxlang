@@ -603,6 +603,14 @@
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxInheritedTypeParamInspection"/>
 
+    <!-- "Create method from usage" on `receiver.name(...)` when the receiver's
+         class has no such method (the language server draws the error). -->
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.quickfix.JuxCreateMethodFromUsageIntention</className>
+      <category>Jux</category>
+    </intentionAction>
+
     <!-- Java-style Implement Methods (Ctrl+I) / Override Methods (Ctrl+O),
          backed by the same engine as Alt+Insert -> Override/Implement. These
          EPs feed the platform's ImplementMethods/OverrideMethods actions

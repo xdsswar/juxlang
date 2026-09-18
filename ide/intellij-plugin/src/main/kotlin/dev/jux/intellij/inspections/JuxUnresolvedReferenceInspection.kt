@@ -21,6 +21,10 @@ import dev.jux.intellij.psi.JuxElementFactory
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxObservableProps
+import dev.jux.intellij.quickfix.JuxCreateMethodFix
+import dev.jux.intellij.quickfix.JuxCreateTypeFix
+import dev.jux.intellij.quickfix.JuxCreateVariables
+import dev.jux.intellij.quickfix.JuxMethodCreator
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.resolve.JuxReference
 import dev.jux.intellij.resolve.JuxTypeIndex
@@ -57,7 +61,10 @@ import dev.jux.intellij.resolve.JuxTypeIndex
  *  - it does not sit under a node the resolver is blind to ([BLIND_ANCESTORS]).
  *
  * The remaining names are genuinely unknown: a typo, or a usage orphaned by a
- * rename. Quick-fix: change the usage to the nearest in-scope declaration.
+ * rename. Quick-fixes: change the usage to the nearest in-scope declaration,
+ * or create what it names (Java's "Create … from usage": a class, interface,
+ * enum or record for a type; a method for a call; a local variable, field or
+ * parameter for a value).
  */
 class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
 
@@ -222,10 +229,22 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
      * visible type names for a type.
      */
     private fun fixesFor(element: PsiElement, name: String, isType: Boolean): Array<LocalQuickFix> {
-        val suggestion =
-            (if (isType) nearestTypeName(element, name) else nearestVisibleName(element, name))
-                ?: return LocalQuickFix.EMPTY_ARRAY
-        return arrayOf(RenameReferenceFix(suggestion))
+        val out = ArrayList<LocalQuickFix>()
+        val suggestion = if (isType) nearestTypeName(element, name) else nearestVisibleName(element, name)
+        if (suggestion != null) out.add(RenameReferenceFix(suggestion))
+        // Java's "Create … from usage" family: a type, a method for a call,
+        // else a local variable, field or parameter.
+        if (isType) {
+            out.addAll(JuxCreateTypeFix.fixesFor(element, name))
+        } else {
+            val parent = element.parent
+            if (parent?.elementType === E.CALL_EXPRESSION && parent.firstChild === element) {
+                if (JuxMethodCreator.targetForBareCall(parent) != null) out.add(JuxCreateMethodFix(element, name))
+            } else {
+                out.addAll(JuxCreateVariables.fixesFor(element, name))
+            }
+        }
+        return out.toTypedArray()
     }
 
     /**
