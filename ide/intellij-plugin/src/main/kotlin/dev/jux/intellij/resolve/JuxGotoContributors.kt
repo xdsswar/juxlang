@@ -28,8 +28,9 @@ class JuxGotoClassContributor : ChooseByNameContributorEx {
         processor: Processor<in NavigationItem>,
         parameters: FindSymbolParameters,
     ) {
-        JuxTypeIndex.forEachType(parameters.project, parameters.searchScope) { decl ->
-            if (decl.name == name && !processor.process(decl)) return
+        // Only the files the name index says declare [name] are read.
+        JuxTypeIndex.forEachTypeMatching(parameters.project, parameters.searchScope, { it == name }) { decl ->
+            if (!processor.process(decl)) return
         }
     }
 }

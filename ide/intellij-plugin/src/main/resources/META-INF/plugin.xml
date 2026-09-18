@@ -256,6 +256,11 @@
     <completion.contributor
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
+    <!-- Usage statistics for completion ordering: what the user picks in a
+         kind of position floats up there next time, as in Java. -->
+    <completion.statistician
+        language="Jux"
+        implementationClass="dev.jux.intellij.completion.JuxCompletionStatistician"/>
 
     <!-- Postfix templates (`expr.if`, `expr.var`, ...). A separate extension
          point from completion, so these keep working while juxc-lsp serves
@@ -321,6 +326,16 @@
     <codeInsight.parameterNameHints
         language="Jux"
         implementationClass="dev.jux.intellij.hints.JuxInlayHintsProvider"/>
+    <!-- The inferred type of a `var` local, after its name (`var n: int = …`). -->
+    <codeInsight.declarativeInlayProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.hints.JuxVarTypeHintsProvider"
+        isEnabledByDefault="true"
+        group="TYPES_GROUP"
+        providerId="jux.var.types"
+        bundle="messages.JuxInlayBundle"
+        nameKey="jux.var.types.name"
+        descriptionKey="jux.var.types.description"/>
 
     <!-- Parameter Info (Ctrl+P): the signature of the call the caret is inside,
          active parameter in bold. Jux overloads on parameter TYPES, so every
@@ -909,6 +924,8 @@
     <!-- Offer to mark src/ and test/ when a jux.toml project opens. -->
     <notificationGroup id="Jux Project" displayType="BALLOON"/>
     <postStartupActivity implementation="dev.jux.intellij.project.JuxSourceRootDetectorStartup"/>
+    <!-- Generate any missing or stale crate stub when the project opens. -->
+    <postStartupActivity implementation="dev.jux.intellij.project.JuxDependencyStartup"/>
     <!-- Project view: Flatten Packages shows a Jux root as dotted package nodes. -->
     <treeStructureProvider implementation="dev.jux.intellij.project.JuxPackageTreeStructureProvider"/>
   </extensions>
@@ -922,6 +939,10 @@
 
   <projectListeners>
     <listener class="dev.jux.intellij.lsp.JuxManifestChangeListener"
+              topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    <!-- Dependencies: re-read on a jux.toml change, refresh git checkouts,
+         regenerate a Rust crate's stub when its entry or sources change. -->
+    <listener class="dev.jux.intellij.project.JuxDependencyFileListener"
               topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
   </projectListeners>
 

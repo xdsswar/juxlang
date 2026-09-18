@@ -8,33 +8,48 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
 import dev.jux.intellij.highlight.JuxTokenTypes
 import dev.jux.intellij.psi.JuxElementTypes as E
-import dev.jux.intellij.psi.JuxMethodDeclaration
+import dev.jux.intellij.psi.JuxFile
+import dev.jux.intellij.psi.JuxNamedElement
+import dev.jux.intellij.psi.JuxTypeDeclaration
+import dev.jux.intellij.resolve.JuxHierarchy
+import dev.jux.intellij.resolve.JuxTypeEngine
+import dev.jux.intellij.resolve.JuxTypeIndex
 
 /**
- * Java-style **parameter name hints**: inside a resolved `foo(a, b)` /
- * `obj.foo(a, b)` call, show `paramName:` in front of each argument. Resolution
- * is by-name over the file's method/function declarations (the native PSI), so
- * it works without the LSP; cross-file / std calls simply get no hints.
+ * Java-style **parameter name hints**: inside a resolved `foo(a, b)`,
+ * `obj.foo(a, b)` or `new Point(a, b)`, show `paramName:` in front of each
+ * argument.
  *
- * Overloads are disambiguated by argument count — a hint set is only produced
- * when exactly one declaration of that name has a matching arity, so the IDE
- * never shows a wrong label.
+ * The callee is resolved through the plugin's type engine, the one member
+ * completion uses, so a method reached through a chain (`a.b().run(x)`), an
+ * inherited method, one declared in another file, and one from a library
+ * stub all get hints, not only methods of the current file.
+ *
+ * Jux overloads on parameter types, so several declarations can share a name
+ * and an argument count. A hint is shown at a position only when every such
+ * candidate names that parameter the same: a label is never wrong. As in
+ * Java, no hint repeats what the argument already says: `move(x, y)` into
+ * parameters `x` and `y` shows nothing.
  */
 class JuxInlayHintsProvider : InlayParameterHintsProvider {
     override fun getParameterHints(element: PsiElement): List<InlayInfo> {
-        if (element.elementType !== E.CALL_EXPRESSION) return emptyList()
+        val type = element.elementType
+        if (type !== E.CALL_EXPRESSION && type !== E.NEW_EXPRESSION) return emptyList()
         val argList = generateSequence(element.firstChild) { it.nextSibling }
             .firstOrNull { it.elementType === E.ARGUMENT_LIST } ?: return emptyList()
-        val argOffsets = argStartOffsets(argList)
-        if (argOffsets.isEmpty()) return emptyList()
+        val args = JuxTypeEngine.expressionChildren(argList)
+        if (args.isEmpty()) return emptyList()
 
-        val name = calleeName(element) ?: return emptyList()
-        val params = resolveParamNames(element.containingFile, name, argOffsets.size) ?: return emptyList()
+        val candidates = if (type === E.NEW_EXPRESSION) constructors(element, args.size)
+        else callees(element, args.size)
+        if (candidates.isEmpty()) return emptyList()
 
-        val out = ArrayList<InlayInfo>(argOffsets.size)
-        for (i in argOffsets.indices) {
-            if (i >= params.size) break
-            out.add(InlayInfo(params[i], argOffsets[i]))
+        val out = ArrayList<InlayInfo>(args.size)
+        for ((i, arg) in args.withIndex()) {
+            val names = candidates.map { it.getOrNull(i) }.distinct()
+            val name = names.singleOrNull() ?: continue
+            if (name.isEmpty() || sameAsArgument(arg, name)) continue
+            out.add(InlayInfo(name, arg.textRange.startOffset))
         }
         return out
     }
@@ -43,65 +58,72 @@ class JuxInlayHintsProvider : InlayParameterHintsProvider {
 
     override fun getDefaultBlackList(): Set<String> = emptySet()
 
-    // ---- call-site shape ----
+    // ---- resolution ----
 
-    /**
-     * The start offset of each argument: the first non-blank token following the
-     * opening `(` or a `,`. Robust whether an argument is a single leaf or a
-     * composite expression node.
-     */
-    private fun argStartOffsets(argList: PsiElement): List<Int> {
-        val offsets = ArrayList<Int>()
-        var expectArg = false
-        var child: PsiElement? = argList.firstChild
-        while (child != null) {
-            val t = child.elementType
-            when {
-                t === JuxTokenTypes.LPAREN || t === JuxTokenTypes.COMMA -> expectArg = true
-                t === JuxTokenTypes.RPAREN -> {}
-                child.text.isBlank() -> {}
-                expectArg -> {
-                    offsets.add(child.textRange.startOffset)
-                    expectArg = false
-                }
+    /** Parameter-name lists of every method the call could reach with [argCount] arguments. */
+    private fun callees(call: PsiElement, argCount: Int): List<List<String>> {
+        val callee = call.firstChild ?: return emptyList()
+        val methods: List<PsiElement> = when (callee.elementType) {
+            E.FIELD_ACCESS_EXPRESSION -> {
+                val name = JuxTypeEngine.memberName(callee) ?: return emptyList()
+                val qualifier = JuxTypeEngine.firstExpressionChild(callee) ?: return emptyList()
+                JuxTypeEngine.membersOfAllOverloads(JuxTypeEngine.typeOf(qualifier), name)
             }
-            child = child.nextSibling
+            E.REFERENCE_EXPRESSION -> {
+                val target = JuxTypeEngine.resolveReferenceExpression(callee, argCount) ?: return emptyList()
+                if (target.elementType !== E.METHOD_DECLARATION) return emptyList()
+                siblingsNamed(target)
+            }
+            else -> emptyList()
         }
-        return offsets
+        return methods
+            .filter { it.elementType === E.METHOD_DECLARATION && JuxHierarchy.arity(it) == argCount }
+            .map { paramNames(it) }
     }
-
-    /** The called member's name — the last identifier in the callee subtree
-     *  (`foo` → `foo`, `a.b.foo` → `foo`). */
-    private fun calleeName(call: PsiElement): String? {
-        val callee = generateSequence(call.firstChild) { it.nextSibling }
-            .firstOrNull { it.elementType !== E.ARGUMENT_LIST && !it.text.isBlank() } ?: return null
-        return lastIdentifier(callee)
-    }
-
-    // ---- declaration resolution ----
 
     /**
-     * Parameter names of the unique file-local method/function named `name` that
-     * takes `argCount` parameters. `null` when none — or more than one — matches
-     * (ambiguous → no hints, so a label is never wrong).
+     * Every overload that shares [target]'s name where [target] lives: its
+     * class and supertypes for a member, the file for a free function.
      */
-    private fun resolveParamNames(file: PsiElement?, name: String, argCount: Int): List<String>? {
-        if (file == null) return null
-        val matches = PsiTreeUtil.findChildrenOfType(file, JuxMethodDeclaration::class.java)
-            .filter { it.name == name }
-            .map { paramNames(it) }
-            .filter { it.size == argCount }
-        return matches.singleOrNull()
+    private fun siblingsNamed(target: PsiElement): List<PsiElement> {
+        val name = (target as? JuxNamedElement)?.name ?: return listOf(target)
+        val owner = PsiTreeUtil.getParentOfType(target, JuxTypeDeclaration::class.java)
+        if (owner != null) return JuxTypeEngine.membersOfAllOverloads(JuxTypeEngine.selfType(owner), name)
+        val file = target.containingFile as? JuxFile ?: return listOf(target)
+        return file.children.filter { (it as? JuxNamedElement)?.name == name }
     }
 
-    /** The parameter names of a method declaration, in order. */
-    private fun paramNames(method: JuxMethodDeclaration): List<String> {
-        val list = generateSequence(method.firstChild) { it.nextSibling }
-            .firstOrNull { it.elementType === E.PARAMETER_LIST } ?: return emptyList()
-        return generateSequence(list.firstChild) { it.nextSibling }
-            .filter { it.elementType === E.PARAMETER }
-            .mapNotNull { lastIdentifier(it) }
-            .toList()
+    /** Parameter-name lists of the constructors of `new T(…)` taking [argCount] arguments. */
+    private fun constructors(newExpr: PsiElement, argCount: Int): List<List<String>> {
+        val typeRef = newExpr.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return emptyList()
+        val type = JuxTypeIndex.findType(newExpr, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
+        val ctors = JuxHierarchy.directChildren(type, E.CONSTRUCTOR_DECLARATION)
+        if (ctors.isNotEmpty()) {
+            return ctors.filter { JuxHierarchy.arity(it) == argCount }.map { paramNames(it) }
+        }
+        // A record without a written constructor is built from its components.
+        val components = type.node.findChildByType(E.RECORD_COMPONENT_LIST)?.psi?.children
+            ?.filter { it.elementType === E.RECORD_COMPONENT }
+            ?.map { (it as? JuxNamedElement)?.name ?: lastIdentifier(it) ?: "" }
+            ?: return emptyList()
+        return if (components.size == argCount) listOf(components) else emptyList()
+    }
+
+    /** The parameter names of a method or constructor, in order. */
+    private fun paramNames(method: PsiElement): List<String> =
+        JuxHierarchy.parameters(method).map { (it as? JuxNamedElement)?.name ?: lastIdentifier(it) ?: "" }
+
+    /**
+     * True when the argument already says the parameter's name: a bare
+     * `name`, or a member read ending in `.name` / a getter-like `name()`.
+     */
+    private fun sameAsArgument(arg: PsiElement, name: String): Boolean {
+        val last = when (arg.elementType) {
+            E.REFERENCE_EXPRESSION, E.FIELD_ACCESS_EXPRESSION -> JuxTypeEngine.memberName(arg)
+            E.CALL_EXPRESSION -> arg.firstChild?.let { JuxTypeEngine.memberName(it) }
+            else -> null
+        } ?: return false
+        return last.equals(name, ignoreCase = true)
     }
 
     /** The last IDENTIFIER token within `el`'s subtree (or `el` itself). */

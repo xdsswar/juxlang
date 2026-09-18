@@ -77,8 +77,13 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
             }
             at += text.length + SEPARATOR.length
         }
+        // An overload with fewer parameters than the caret has reached cannot
+        // be the one being called: grey it out, as Java does, unless its last
+        // parameter is variadic and so takes any number more.
+        val variadic = p.params.lastOrNull()?.contains("...") == true
+        val disabled = current >= p.params.size && !variadic
         context.setupUIComponentPresentation(
-            p.label, start, end, false, false, false, context.defaultParameterColor,
+            p.label, start, end, disabled, false, false, context.defaultParameterColor,
         )
     }
 
@@ -100,20 +105,23 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
         return null
     }
 
-    /** Number of depth-0 commas between the opening paren and [offset]. */
+    /**
+     * The argument the caret is in: the argument list's own commas before
+     * [offset].
+     *
+     * Read from the PSI, where only the list's direct COMMA children separate
+     * its arguments. The old character scan counted `<` and `>` as brackets,
+     * so a comparison in an argument (`f(a < b, c)`) swallowed every comma
+     * after it and the popup stuck on the first parameter.
+     */
     private fun activeParameter(args: PsiElement, offset: Int): Int {
         val range = args.textRange
         if (offset <= range.startOffset || offset > range.endOffset) return -1
-        val text = args.text
-        val upTo = (offset - range.startOffset).coerceIn(0, text.length)
-        var depth = 0
         var index = 0
-        for (i in 0 until upTo) {
-            when (text[i]) {
-                '(', '[', '{', '<' -> depth++
-                ')', ']', '}', '>' -> depth--
-                ',' -> if (depth == 1) index++
-            }
+        var c = args.node.firstChildNode
+        while (c != null && c.startOffset < offset) {
+            if (c.elementType === dev.jux.intellij.highlight.JuxTokenTypes.COMMA) index++
+            c = c.treeNext
         }
         return index
     }
@@ -135,11 +143,17 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
         return candidates.mapNotNull { render(it) }.distinctBy { it.label }
     }
 
-    /** Constructors of the type named by a `new T(…)` expression. */
+    /**
+     * Constructors of the type named by a `new T(…)` expression. A record
+     * with no written constructor is built from its components, so its
+     * component list is the one signature.
+     */
     private fun constructorsOf(newExpr: PsiElement, args: PsiElement): List<PsiElement> {
         val typeRef = newExpr.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return emptyList()
         val type = JuxTypeIndex.findType(args, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
-        return JuxHierarchy.directChildren(type, E.CONSTRUCTOR_DECLARATION)
+        val ctors = JuxHierarchy.directChildren(type, E.CONSTRUCTOR_DECLARATION)
+        if (ctors.isNotEmpty()) return ctors
+        return listOfNotNull(type.node.findChildByType(E.RECORD_COMPONENT_LIST)?.psi)
     }
 
     /** Declarations a `recv.m(…)` or bare `f(…)` call could be reaching. */
@@ -148,7 +162,14 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
         return when (callee.node?.elementType) {
             // `recv.m(…)` — the member name is the callee's last identifier.
             E.FIELD_ACCESS_EXPRESSION -> {
-                val name = callee.lastChild?.text ?: return emptyList()
+                val name = dev.jux.intellij.resolve.JuxTypeEngine.memberName(callee) ?: return emptyList()
+                // The type engine follows chains, calls, generics and `var`
+                // (`a.b().c(`), where the receiver's text alone does not.
+                val qualifier = dev.jux.intellij.resolve.JuxTypeEngine.firstExpressionChild(callee)
+                val engineType = dev.jux.intellij.resolve.JuxTypeEngine.classOf(
+                    dev.jux.intellij.resolve.JuxTypeEngine.typeOf(qualifier),
+                )?.decl
+                if (engineType != null) return methodsNamed(engineType, name)
                 val receiver = callee.firstChild?.text ?: return emptyList()
                 val target = JuxTypeInference.resolveReceiverExpression(receiver, args)
                     ?: return emptyList()
@@ -196,6 +217,11 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
 
     /** Render one declaration's parameter list, or null when it has no list. */
     private fun render(decl: PsiElement): Signature? {
+        if (decl.node.elementType === E.RECORD_COMPONENT_LIST) {
+            val params = decl.children.filter { it.node.elementType === E.RECORD_COMPONENT }
+                .map { it.text.replace(WHITESPACE, " ").trim() }
+            return Signature(params, params.joinToString(SEPARATOR))
+        }
         if (decl.node.findChildByType(E.PARAMETER_LIST) == null) return null
         val params = JuxHierarchy.parameters(decl).map { it.text.replace(WHITESPACE, " ").trim() }
         return Signature(params, params.joinToString(SEPARATOR))

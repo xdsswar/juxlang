@@ -812,7 +812,7 @@ private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() 
  * target`. Section-aware line scan; tolerant of comments, quotes, and
  * whitespace; never throws.
  */
-internal object JuxToml {
+object JuxToml {
     fun packageName(text: String): String? = stringValueIn(text, "package", "name")
     fun packageVersion(text: String): String? = stringValueIn(text, "package", "version")
     fun edition(text: String): String? = stringValueIn(text, "package", "edition")
@@ -884,6 +884,76 @@ internal object JuxToml {
             out.add(name to depDetail(inline))
         }
         return out
+    }
+
+    /**
+     * One `[dependencies]` entry, as far as the IDE needs it to find the code
+     * behind it. Mirrors the driver's reading (`juxc-driver` `manifest.rs`): a
+     * bare string that looks like a repository URL is the git shorthand, the
+     * most specific git ref wins (`rev` over `tag` over `branch`), and a
+     * dependency with both `path` and `git` is read from the path (§B.5.5).
+     */
+    data class DepSpec(
+        val name: String,
+        val path: String?,
+        val git: String?,
+        /** The pinned ref as the driver describes it: `branch=x`, `tag=x`, `rev=x`. */
+        val gitRef: String?,
+        val version: String?,
+        /** `package = "tiny-skia"`: the published name when it differs. */
+        val packageName: String?,
+        val features: List<String>,
+        val defaultFeatures: Boolean,
+    ) {
+        /** Everything about the entry that changes what its code IS. */
+        val fingerprint: String
+            get() = listOf(path, git, gitRef, version, packageName, features.joinToString(","), defaultFeatures)
+                .joinToString("|")
+    }
+
+    /** Every `[dependencies]` entry of [text], inline and `[dependencies.NAME]` sub-tables alike. */
+    fun dependencySpecs(text: String): List<DepSpec> {
+        val out = ArrayList<DepSpec>()
+        sectionBody(text, "dependencies")?.let { body ->
+            for (raw in body.lineSequence()) {
+                val line = raw.substringBefore('#').trim()
+                if (line.isEmpty() || line.startsWith("[") || '=' !in line) continue
+                val key = line.substringBefore('=').trim().trim('"')
+                if (key.isNotEmpty()) out.add(depSpec(key, line.substringAfter('=').trim()))
+            }
+        }
+        for ((name, body) in subTables(text, "dependencies")) {
+            out.add(depSpec(name, "{" + body.replace(Regex("[\\r\\n]+"), ", ").trim() + "}"))
+        }
+        return out
+    }
+
+    private fun depSpec(name: String, value: String): DepSpec {
+        if (value.startsWith("\"")) {
+            val v = value.trim().trim('"')
+            val isUrl = v.startsWith("http://") || v.startsWith("https://") ||
+                v.startsWith("git@") || v.startsWith("ssh://")
+            return DepSpec(name, null, if (isUrl) v else null, null, if (isUrl) null else v, null, emptyList(), true)
+        }
+        fun field(key: String): String? =
+            Regex("""(?:^|[{,\s])$key\s*=\s*"([^"]*)"""").find(value)?.groupValues?.get(1)
+        val features = Regex("""(?:^|[{,\s])features\s*=\s*\[(.*?)]""").find(value)?.groupValues?.get(1)
+            ?.let { list -> Regex("\"([^\"]+)\"").findAll(list).map { it.groupValues[1] }.toList() }
+            ?: emptyList()
+        val defaultFeatures = Regex("""default-features\s*=\s*false""").find(value) == null
+        val ref = field("rev")?.let { "rev=$it" }
+            ?: field("tag")?.let { "tag=$it" }
+            ?: field("branch")?.let { "branch=$it" }
+        return DepSpec(
+            name = name,
+            path = field("path"),
+            git = field("git"),
+            gitRef = ref,
+            version = field("version"),
+            packageName = field("package"),
+            features = features,
+            defaultFeatures = defaultFeatures,
+        )
     }
 
     private fun depDetail(value: String): String {

@@ -42,6 +42,17 @@ class JuxLsp4ijServerFactory : LanguageServerFactory, LanguageServerEnablementSu
     /** A client whose settings carry `jux.sourceRoots` (§I.4). */
     override fun createLanguageClient(project: Project): LanguageClientImpl = JuxLsp4ijLanguageClient(project)
 
+    /**
+     * The client's own completion is switched off, as the native client's is
+     * (`LspCompletionDisabled` in the native descriptor): the plugin owns
+     * completion (ranked, scope-filtered, statistics-aware), and a second list
+     * from the server would duplicate every name and push the ranked items
+     * down.
+     */
+    override fun createClientFeatures(): com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures =
+        com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures()
+            .setCompletionFeature(JuxLsp4ijNoCompletion())
+
     override fun isEnabled(project: Project): Boolean =
         !nativeLspActive() &&
             PropertiesComponent.getInstance(project).getBoolean(ENABLED_KEY, true)
@@ -88,6 +99,11 @@ class JuxLsp4ijServerFactory : LanguageServerFactory, LanguageServerEnablementSu
             false
         }
     }
+}
+
+/** LSP4IJ completion for Jux files: never enabled (see [JuxLsp4ijServerFactory.createClientFeatures]). */
+class JuxLsp4ijNoCompletion : com.redhat.devtools.lsp4ij.client.features.LSPCompletionFeature() {
+    override fun isEnabled(file: com.intellij.psi.PsiFile): Boolean = false
 }
 
 /**
