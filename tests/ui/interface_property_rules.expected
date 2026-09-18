@@ -1,0 +1,6 @@
+interface_property_rules.jux:2:5: [E0200] error: an interface property with a body must be marked `default`; write `{ get; }` for a contract
+interface_property_rules.jux:3:5: [E0200] error: a `default` interface property needs a body, as in `default T Name -> expr;`
+interface_property_rules.jux:4:5: [E0200] error: a `default` interface property is read-only: it computes its value and has no `set` (§M.7.10)
+interface_property_rules.jux:5:5: [E0200] error: an interface property has no initializer: an interface has no storage (§M.7.10)
+interface_property_rules.jux:12:1: [E0429] error: class `ReadOnlyField` doesn't implement abstract member(s): property `Sized.Size` (its `set`)
+interface_property_rules.jux:16:1: [E0429] error: class `Nothing` doesn't implement abstract member(s): property `Sized.Size`

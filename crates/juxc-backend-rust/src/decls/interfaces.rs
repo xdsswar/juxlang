@@ -320,6 +320,15 @@ impl RustEmitter {
             if is_static {
                 continue;
             }
+            // `I.super.m()` somewhere in the program (§T.8.3): the default body
+            // moves to `__jux_default_<m>`, which a class overriding `m` can
+            // still call, and `m` itself delegates to it.
+            let super_called = method.body.is_some()
+                && self
+                    .interface_super_calls
+                    .contains(&(interface.name.text.clone(), method.name.text.clone()));
+            let passes: &[bool] = if super_called { &[true, false] } else { &[false] };
+            for &as_default_twin in passes {
             self.w.emit_indent();
             // An `async T` interface method lowers to a plain `fn` returning a
             // BOXED future, not to Rust's `async fn` in a trait. Rust has had
@@ -331,7 +340,12 @@ impl RustEmitter {
             // as their sync counterparts" requires.
             let is_async = matches!(method.return_type, ReturnType::AsyncType(_));
             self.w.push_str("fn ");
-            self.w.push_str(&to_rust_ident(&method.name.text));
+            if as_default_twin {
+                self.w.push_str("__jux_default_");
+                self.w.push_str(&method.name.text);
+            } else {
+                self.w.push_str(&to_rust_ident(&method.name.text));
+            }
             self.emit_generic_params(&method.generic_params);
             // `&self` — interface methods take a shared receiver so the
             // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
@@ -373,7 +387,24 @@ impl RustEmitter {
             // `emit_fn_body` path as regular function bodies so
             // tail-return elision, format-arg discipline, etc. all
             // apply uniformly.
-            if let Some(body) = &method.body {
+            if super_called && !as_default_twin {
+                // The delegating default: `self.__jux_default_m(args)`.
+                self.w.push_str(" {\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("self.__jux_default_");
+                self.w.push_str(&method.name.text);
+                self.w.push('(');
+                for (i, param) in method.params.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.w.push_str(&to_rust_ident(&param.name.text));
+                }
+                self.w.push_str(")\n");
+                self.w.indent_dec();
+                self.w.line("}");
+            } else if let Some(body) = &method.body {
                 self.w.push_str(" {\n");
                 self.w.indent_inc();
                 // A default body for an async method IS the future the boxed
@@ -413,6 +444,7 @@ impl RustEmitter {
                 self.w.line("}");
             } else {
                 self.w.push_str(";\n");
+            }
             }
         }
         // Runtime-type downcast hooks (`__jux_as_<T>`) so a value typed as this

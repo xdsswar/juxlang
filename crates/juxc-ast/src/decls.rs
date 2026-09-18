@@ -247,6 +247,12 @@ pub struct InterfaceDecl {
     /// a constant declaration; an initializer is required because
     /// the field can't be assigned elsewhere.
     pub fields: Vec<FieldDecl>,
+    /// Property contracts and default properties (JUX-MISSING-DEFS §M.7.10):
+    /// `T Name { get; }`, `T Name { get; set; }`, and
+    /// `default T Name -> expr;`. Kept for diagnostics; the desugar pass also
+    /// adds each one's getter (and setter) to [`Self::methods`], so the rest of
+    /// the compiler sees ordinary interface methods.
+    pub properties: Vec<PropertyDecl>,
     /// `true` for `sealed interface I permits A, B`: only the types in
     /// [`Self::permits`] may implement or extend it, which makes a `switch`
     /// over an `I` exhaustive once every one of them has an arm.
@@ -746,6 +752,30 @@ pub enum OperatorKind {
     /// `in` — containment (§O.2.4), declared on the CONTAINER type:
     /// `bool operator in(T element)`.
     In,
+}
+
+impl OperatorKind {
+    /// The function name a FREE-FUNCTION operator of this kind is declared
+    /// under (LANG-V1 §7.14): `Vec3 operator*(double k, Vec3 v)` is the
+    /// function `__op_mul(k, v)`. Only the binary arithmetic and bitwise
+    /// family can be declared free; `None` for every other kind, which a type
+    /// declares on itself. The parser names the function, the checker resolves
+    /// `a * b` to it, and the backend calls it, all through this.
+    pub fn free_function_name(self) -> Option<&'static str> {
+        Some(match self {
+            OperatorKind::Plus => "__op_add",
+            OperatorKind::Minus => "__op_sub",
+            OperatorKind::Mul => "__op_mul",
+            OperatorKind::Div => "__op_div",
+            OperatorKind::Rem => "__op_rem",
+            OperatorKind::BitAnd => "__op_bitand",
+            OperatorKind::BitOr => "__op_bitor",
+            OperatorKind::BitXor => "__op_bitxor",
+            OperatorKind::Shl => "__op_shl",
+            OperatorKind::Shr => "__op_shr",
+            _ => return None,
+        })
+    }
 }
 
 /// A generic type parameter per §A.2.4 `generic-params`.

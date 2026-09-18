@@ -477,72 +477,7 @@ impl<'a> Parser<'a> {
             // (A plain field is `type name [= …] ;`; a method is
             // `type name (`. Neither can be followed by `=>` / `{`,
             // so this discriminator is unambiguous.)
-            let lookahead_is_property = {
-                let mut i = self.pos;
-                // Skip leading modifiers (same shape as field/method).
-                while matches!(
-                    self.tokens.get(i).map(|t| &t.kind),
-                    Some(TokenKind::Kw(Keyword::Static))
-                        | Some(TokenKind::Kw(Keyword::Final))
-                        | Some(TokenKind::Kw(Keyword::Const))
-                ) {
-                    i += 1;
-                }
-                // Type tokens (best-effort skip — single Ident
-                // optionally followed by generics / array / nullable).
-                if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
-                    i += 1;
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
-                        i += 1;
-                        let mut depth: u32 = 1;
-                        while depth > 0 {
-                            match self.tokens.get(i).map(|t| &t.kind) {
-                                Some(TokenKind::Lt) => depth += 1,
-                                Some(TokenKind::Gt) => depth -= 1,
-                                // A glued `>>` closes two nested generic lists.
-                                Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
-                                Some(TokenKind::Eof) | None => break,
-                                _ => {}
-                            }
-                            i += 1;
-                        }
-                    }
-                    while matches!(
-                        self.tokens.get(i).map(|t| &t.kind),
-                        Some(TokenKind::LBracket)
-                    ) {
-                        i += 1;
-                        let mut depth: u32 = 1;
-                        while depth > 0 {
-                            match self.tokens.get(i).map(|t| &t.kind) {
-                                Some(TokenKind::LBracket) => depth += 1,
-                                Some(TokenKind::RBracket) => depth -= 1,
-                                Some(TokenKind::Eof) | None => break,
-                                _ => {}
-                            }
-                            i += 1;
-                        }
-                    }
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
-                        i += 1;
-                    }
-                    // Now expect Ident + (`->` | `{`) for a property.
-                    // NB: Jux uses `->` (not C#'s `=>`) for expression-bodied
-                    // property/accessor bodies, because `=>` is the type-test
-                    // (instanceof) operator in Jux and must stay unambiguous.
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
-                        i += 1;
-                        matches!(
-                            self.tokens.get(i).map(|t| &t.kind),
-                            Some(TokenKind::Arrow) | Some(TokenKind::LBrace),
-                        )
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            };
+            let lookahead_is_property = self.looks_like_property_at(self.pos);
             if lookahead_is_method {
                 let method = self.parse_fn_decl(member_anns, member_vis)?;
                 methods.push(method);
@@ -937,6 +872,7 @@ impl<'a> Parser<'a> {
 
         let mut methods = Vec::new();
         let mut fields = Vec::new();
+        let mut properties = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             // Interface members carry annotations like class members
             // (grammar §A.2.4) — bindgen stubs also emit machine
@@ -944,6 +880,13 @@ impl<'a> Parser<'a> {
             // `&mut self` receiver).
             let member_annotations = self.parse_annotations();
             let member_vis = self.parse_visibility();
+            // A property contract or a default property (§M.7.10).
+            if self.looks_like_property_at(self.pos) {
+                if let Some(prop) = self.parse_interface_property(member_annotations, member_vis) {
+                    properties.push(prop);
+                }
+                continue;
+            }
             // Field-vs-method lookahead. Per `classes-rules.md` §3.3
             // any field in an interface is implicitly `public static
             // final`, so we accept `int X = 10;` as the canonical
@@ -1155,10 +1098,81 @@ impl<'a> Parser<'a> {
             extends,
             methods,
             fields,
+            properties,
             is_sealed,
             permits,
             span: start.join(end),
         })
+    }
+
+    /// One property member of an interface (JUX-MISSING-DEFS §M.7.10):
+    ///
+    /// - a contract, `T Name { get; }` or `T Name { get; set; }`, which every
+    ///   implementing type must satisfy;
+    /// - a default property, `default T Name -> expr;` or
+    ///   `default T Name { get -> expr; }` (or a `get { ... }` block), a
+    ///   computed read-only value implementers inherit.
+    ///
+    /// An interface has no storage, so a default property has no setter and
+    /// no initializer, and a body always needs `default`, as a method's does.
+    fn parse_interface_property(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<juxc_ast::PropertyDecl> {
+        use juxc_ast::AccessorBody;
+        let default_span = self.eat_kw(Keyword::Default).then(|| self.last_consumed_span());
+        let mut prop = self.parse_property_decl(annotations, visibility)?;
+        let error = |this: &mut Self, message: &str, span: juxc_source::Span| {
+            this.diagnostics.push(
+                Diagnostic::error(code::Code::E0200_UnexpectedToken, message.to_string()).with_span(span),
+            );
+        };
+        let getter_has_body = prop.getter.as_ref().is_some_and(|g| !matches!(g.body, AccessorBody::Auto));
+        let setter_has_body = prop.setter.as_ref().is_some_and(|st| !matches!(st.body, AccessorBody::Auto));
+        if prop.is_static {
+            error(self, "an interface property cannot be `static`; declare a `static` method instead", prop.span);
+        }
+        if prop.initializer.is_some() {
+            error(
+                self,
+                "an interface property has no initializer: an interface has no storage (§M.7.10)",
+                prop.span,
+            );
+            prop.initializer = None;
+        }
+        if setter_has_body {
+            error(
+                self,
+                "an interface property's `set` has no body: an interface has no storage, so a setter is a contract the implementing type fulfils (§M.7.10)",
+                prop.span,
+            );
+        }
+        match (default_span, getter_has_body) {
+            (None, true) => error(
+                self,
+                "an interface property with a body must be marked `default`; write `{ get; }` for a contract",
+                prop.span,
+            ),
+            (Some(span), false) => error(
+                self,
+                "a `default` interface property needs a body, as in `default T Name -> expr;`",
+                span,
+            ),
+            (Some(span), true) if prop.setter.is_some() => error(
+                self,
+                "a `default` interface property is read-only: it computes its value and has no `set` (§M.7.10)",
+                span,
+            ),
+            _ => {}
+        }
+        // Interface members are public unless written otherwise (§7.6).
+        if prop.visibility == Visibility::Package {
+            prop.visibility = Visibility::Public;
+        }
+        // Nothing to back: the implementing type owns the storage.
+        prop.has_backing_field = false;
+        Some(prop)
     }
 
 
@@ -1380,6 +1394,69 @@ impl<'a> Parser<'a> {
             origin_property: None,
             span: start.join(end),
         })
+    }
+
+    /// True when the tokens from `i` read `[modifiers] Type Name` followed by
+    /// `->` or `{`: a property (JUX-MISSING-DEFS §M.7), not a field or a
+    /// method. Non-consuming. A plain field is `Type name [= ...] ;` and a
+    /// method is `Type name (`; neither can be followed by `->` or `{`, so the
+    /// test is unambiguous. `default` is skipped too, for an interface's
+    /// default property (§M.7.10).
+    ///
+    /// Jux uses `->` (not C#'s `=>`) for expression-bodied property and
+    /// accessor bodies, because `=>` is the type-test operator.
+    pub(crate) fn looks_like_property_at(&self, mut i: usize) -> bool {
+        let kind = |i: usize| self.tokens.get(i).map(|t| &t.kind);
+        while matches!(
+            kind(i),
+            Some(TokenKind::Kw(Keyword::Static))
+                | Some(TokenKind::Kw(Keyword::Final))
+                | Some(TokenKind::Kw(Keyword::Const))
+                | Some(TokenKind::Kw(Keyword::Default))
+        ) {
+            i += 1;
+        }
+        // The type: one name, optionally with generics, array brackets and `?`.
+        if !matches!(kind(i), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        i += 1;
+        if matches!(kind(i), Some(TokenKind::Lt)) {
+            i += 1;
+            let mut depth: u32 = 1;
+            while depth > 0 {
+                match kind(i) {
+                    Some(TokenKind::Lt) => depth += 1,
+                    Some(TokenKind::Gt) => depth -= 1,
+                    // A glued `>>` closes two nested generic lists.
+                    Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
+                    Some(TokenKind::Eof) | None => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        while matches!(kind(i), Some(TokenKind::LBracket)) {
+            i += 1;
+            let mut depth: u32 = 1;
+            while depth > 0 {
+                match kind(i) {
+                    Some(TokenKind::LBracket) => depth += 1,
+                    Some(TokenKind::RBracket) => depth -= 1,
+                    Some(TokenKind::Eof) | None => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        if matches!(kind(i), Some(TokenKind::Question)) {
+            i += 1;
+        }
+        // The name, then the property body.
+        if !matches!(kind(i), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        matches!(kind(i + 1), Some(TokenKind::Arrow) | Some(TokenKind::LBrace))
     }
 
     /// Parse a C#-style property declaration per JUX-MISSING-DEFS

@@ -1,0 +1,63 @@
+// `operator<=>` totally orders a type (LANG-V1 §7.14.4), so the ordered
+// Rust std collections accept it as it is: `sort_unstable`, `BTreeMap` keys
+// and `BinaryHeap`, with no extra declaration.
+
+import rust.std.BinaryHeap;
+
+class Version {
+    public int major;
+    public int minor;
+
+    public Version(int major, int minor) {
+        this.major = major;
+        this.minor = minor;
+    }
+
+    public int operator<=>(Version other) {
+        if (major != other.major) {
+            return major - other.major;
+        }
+        return minor - other.minor;
+    }
+
+    public String operator string() { return $"${major}.${minor}"; }
+}
+
+record Score(String name, double points) {
+    public int operator<=>(Score other) { return points <=> other.points; }
+}
+
+public void main() {
+    // Sorting a Vec.
+    var releases = new Vec<Version>();
+    releases.push(new Version(2, 0));
+    releases.push(new Version(1, 5));
+    releases.push(new Version(1, 12));
+    releases.sort_unstable();
+    for (var v : releases) {
+        print(v);
+    }
+
+    // The derived comparisons.
+    print(new Version(1, 0) < new Version(1, 1));
+    print(new Version(3, 0) >= new Version(2, 9));
+
+    // A BTreeMap keeps its keys in `<=>` order.
+    var notes = new BTreeMap<Version, String>();
+    notes.insert(new Version(3, 1), "rewrite");
+    notes.insert(new Version(1, 0), "first");
+    notes.insert(new Version(2, 4), "fixes");
+    for (var entry : notes) {
+        print($"${entry.0}: ${entry.1}");
+    }
+
+    // A BinaryHeap pops the greatest first.
+    var board = new BinaryHeap<Score>();
+    board.push(new Score("ann", 1.5));
+    board.push(new Score("bob", 9.0));
+    board.push(new Score("cy", 4.0));
+    while (board.len() > 0) {
+        var top = board.pop()!!;
+        print($"${top.name} ${top.points}");
+    }
+}

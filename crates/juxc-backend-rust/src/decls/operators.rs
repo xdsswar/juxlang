@@ -674,6 +674,25 @@ impl RustEmitter {
     /// class (per the spec §O.2.7 pairing rule). With both present,
     /// the user has signalled full-equality + hashing intent so the
     /// class can serve as a `HashMap` / `HashSet` key.
+    /// `impl Ord` through `__op_cmp` (LANG-V1 §7.14.4). A type with
+    /// `operator<=>` is totally ordered: that is what `sort_unstable`,
+    /// `BTreeMap` keys and `BinaryHeap` ask of it, so the program can use
+    /// them with no extra declaration. `partial_cmp` stays the `Some(...)`
+    /// bridge next to it; `Ord` needs `Eq`, which the caller provides.
+    pub(super) fn emit_ord_from_cmp(&mut self, class_name: &str, arg: &str) {
+        self.emit_operator_impl_head("Ord", class_name);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.line("fn cmp(&self, other: &Self) -> std::cmp::Ordering {");
+        self.w.indent_inc();
+        self.w.line(&format!("self.__op_cmp({arg}).cmp(&0)"));
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
     pub(super) fn emit_eq_marker(&mut self, class_name: &str) {
         self.emit_operator_impl_head("Eq", class_name);
         self.w.push_str(" {}\n");

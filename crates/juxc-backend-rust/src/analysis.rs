@@ -963,6 +963,7 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         }
         Expr::Cast(c) => collect_mutating_calls(&c.value, out, user_mut),
         Expr::NotNullAssert(inner, _) => collect_mutating_calls(inner, out, user_mut),
+        Expr::Throw(inner, _) => collect_mutating_calls(inner, out, user_mut),
         Expr::TypeTest(t) => collect_mutating_calls(&t.value, out, user_mut),
         Expr::Index(idx) => {
             collect_mutating_calls(&idx.array, out, user_mut);
@@ -1124,6 +1125,7 @@ fn expr_contains_await(e: &Expr) -> bool {
                 || t.catches.iter().any(|c| block_contains_await(&c.body))
         }
         Expr::NotNullAssert(inner, _) => expr_contains_await(inner),
+        Expr::Throw(inner, _) => expr_contains_await(inner),
         Expr::Call(c) => {
             expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)
         }
@@ -2284,6 +2286,20 @@ pub(crate) fn is_jux_string_type_ref(ty: &juxc_ast::TypeRef) -> bool {
     is_jux_string_type(ty)
 }
 
+/// `I.super.m(...)` (Type system §T.8.3): the interface's written name (last
+/// segment) and the method name, or `None` for any other expression. The
+/// checker has already rejected every illegal use, so the shape is enough.
+pub(crate) fn interface_super_call(c: &juxc_ast::CallExpr) -> Option<(&str, &str)> {
+    let juxc_ast::Expr::Field(m) = c.callee.as_ref() else { return None };
+    let juxc_ast::Expr::Field(recv) = m.object.as_ref() else { return None };
+    if recv.field.text != "super" {
+        return None;
+    }
+    let juxc_ast::Expr::Path(qn) = recv.object.as_ref() else { return None };
+    let iface = qn.segments.last()?.text.as_str();
+    Some((iface, m.field.text.as_str()))
+}
+
 impl crate::RustEmitter {
     /// True iff `expr`'s emitted Rust value is already
     /// `Option<T>`-shaped — meaning no additional `Some(...)` wrap
@@ -3343,6 +3359,32 @@ impl crate::RustEmitter {
     /// function/method/constructor's by-`&mut` parameter indices into
     /// [`Self::byref_params`] under the shared key scheme. Idempotent —
     /// safe to call per-unit and over the whole workspace.
+    /// Record every `I.super.m()` call in the program (Type system §T.8.3) in
+    /// [`Self::interface_super_calls`], so the trait for `I` can keep `m`'s
+    /// default body reachable under a second name.
+    pub(crate) fn populate_interface_super_calls(&mut self, units: &[juxc_ast::CompilationUnit]) {
+        let mut found = std::collections::HashSet::new();
+        let mut visit = |e: &juxc_ast::Expr| {
+            if let Some((iface, method)) = match e {
+                juxc_ast::Expr::Call(c) => interface_super_call(c),
+                _ => None,
+            } {
+                found.insert((iface.to_string(), method.to_string()));
+            }
+        };
+        for unit in units.iter().filter(|u| !u.is_external) {
+            for item in &unit.items {
+                let juxc_ast::TopLevelDecl::Class(class) = item else { continue };
+                for method in &class.methods {
+                    if let Some(body) = &method.body {
+                        juxc_ast::visit::for_each_expr(body, &mut visit);
+                    }
+                }
+            }
+        }
+        self.interface_super_calls = found;
+    }
+
     pub(crate) fn populate_byref_params(&mut self, units: &[juxc_ast::CompilationUnit]) {
         for unit in units {
             // Stub units have no bodies to analyze.

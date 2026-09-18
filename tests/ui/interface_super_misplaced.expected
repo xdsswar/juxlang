@@ -1,0 +1,6 @@
+interface_super_misplaced.jux:11:35: [E0482] error: `Child` does not implement `Walker` directly, so `Walker.super` names no default of its own: add `Walker` to its `implements` clause (§T.8.3)
+interface_super_misplaced.jux:15:29: [E0482] error: `Walker.super.move()` belongs in an instance method: a constructor or `init` block is still building `this` (§T.8.3)
+interface_super_misplaced.jux:16:35: [E0483] error: `Walker.name` has no default body, so `Walker.super.name()` has nothing to call (§T.8.3)
+interface_super_misplaced.jux:17:33: [E0482] error: `Walker.super` is not a value: it only calls one of `Walker`'s default methods, as `Walker.super.m(...)` (§T.8.3)
+interface_super_misplaced.jux:18:43: [E0482] error: `Walker.super.move()` needs `this`, and a `static` method has none (§T.8.3)
+interface_super_misplaced.jux:22:11: [E0482] error: `Walker.super.move()` calls a default method on `this`, so it belongs in a class that implements `Walker` (§T.8.3)

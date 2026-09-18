@@ -1,0 +1,75 @@
+// The flow refinements of Type system §T.6.2 and §T.6.5.
+//
+// - `if (a => Dog)` with no binder: `a` is a `Dog` in the branch.
+// - `s ?: throw E`: the result is `s` without its null; the throw runs only
+//   when `s` is null.
+// - `assert(x != null);`: `x` is non-null for the rest of the block.
+// - `while (cur != null)`: `cur` is non-null in the body until it is
+//   reassigned, which is the linked-list walk.
+
+class Animal {
+    public String name() { return "animal"; }
+}
+
+class Dog extends Animal {
+    public String bark() { return "woof"; }
+}
+
+class Node {
+    public int value;
+    public Node? next;
+    public Node(int value) { this.value = value; }
+}
+
+String require(String? s) {
+    return s ?: throw new IllegalArgumentException("missing value");
+}
+
+String shout(String? s) {
+    assert(s != null);
+    return s.to_uppercase() + "!";
+}
+
+int total(Node? head) {
+    Node? cur = head;
+    int sum = 0;
+    while (cur != null) {
+        sum += cur.value;
+        cur = cur.next;
+    }
+    return sum;
+}
+
+int count(Node? head) {
+    int n = 0;
+    Node? cur = head;
+    while (cur != null) {
+        n += 1;
+        cur = cur.next;
+    }
+    return n;
+}
+
+public void main() {
+    Animal pet = new Dog();
+    if (pet => Dog) print(pet.bark());
+    if (pet => Dog) {
+        print(pet.name() + " says " + pet.bark());
+    }
+
+    print(require("ok"));
+    try {
+        print(require(null));
+    } catch (IllegalArgumentException e) {
+        print("caught: " + e.getMessage());
+    }
+
+    print(shout("hey"));
+
+    var list = new Node(1);
+    list.next = new Node(2);
+    list.next!!.next = new Node(3);
+    print(total(list));
+    print(count(list));
+    print(total(null));
+}

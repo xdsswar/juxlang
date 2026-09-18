@@ -636,6 +636,48 @@ impl<'a> Parser<'a> {
             );
             return None;
         }
+        // `Vec3 operator*(double k, Vec3 v) { ... }`: a free-function
+        // operator (LANG-V1 §7.14). It is an ordinary function under the
+        // operator's function name, so overloading, calls and emission need
+        // nothing new; the checker resolves `k * v` to it.
+        if self.top_level_is_free_operator() {
+            let op = self.parse_operator_decl(visibility)?;
+            let Some(name) = op.kind.free_function_name() else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "only an arithmetic or bitwise operator (`+ - * / % & | ^ << >>`) can be declared as a free function; declare this one on its type (§7.14)",
+                    )
+                    .with_span(op.span),
+                );
+                return None;
+            };
+            if op.params.len() != 2 || op.is_deleted || op.body.is_none() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "a free-function operator takes its two operands as parameters, left then right, and has a body: `R operator*(A left, B right) { ... }` (§7.14)",
+                    )
+                    .with_span(op.span),
+                );
+                return None;
+            }
+            return Some(TopLevelDecl::Function(juxc_ast::FnDecl {
+                annotations,
+                visibility: op.visibility,
+                modifiers: Vec::new(),
+                return_type: op.return_type,
+                name: juxc_ast::Ident { text: name.to_string(), span: op.span },
+                generic_params: Vec::new(),
+                params: op.params,
+                throws: Vec::new(),
+                wheres: Vec::new(),
+                body: op.body,
+                is_property: false,
+                is_c_variadic: false,
+                span: op.span,
+            }));
+        }
         let fn_decl = self.parse_fn_decl(annotations, visibility)?;
         Some(TopLevelDecl::Function(fn_decl))
     }
@@ -643,6 +685,21 @@ impl<'a> Parser<'a> {
     /// Whether the declaration at the cursor is `Type name = ...;` or
     /// `Type name;` rather than a function: an `=` or `;` comes before any `(`
     /// or `{`, outside generic brackets.
+    /// True when the declaration ahead is a free-function operator: the
+    /// `operator` keyword comes before the first `(`, `{` or `;`
+    /// (`Vec3 operator*(...)`). Non-consuming.
+    fn top_level_is_free_operator(&self) -> bool {
+        let mut i = self.pos;
+        while let Some(t) = self.tokens.get(i) {
+            match &t.kind {
+                TokenKind::Kw(Keyword::Operator) => return true,
+                TokenKind::LParen | TokenKind::LBrace | TokenKind::Semicolon | TokenKind::Eof => return false,
+                _ => i += 1,
+            }
+        }
+        false
+    }
+
     fn top_level_looks_like_variable(&self) -> bool {
         let mut depth = 0usize;
         for tok in &self.tokens[self.pos..] {

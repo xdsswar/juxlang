@@ -1,0 +1,23 @@
+interface Walker {
+    default String move() { return "walking"; }
+    String name();
+}
+
+class Base implements Walker {
+    public String name() { return "base"; }
+}
+
+class Child extends Base {
+    public String move() { return Walker.super.move(); }
+}
+
+class Direct implements Walker {
+    public Direct() { print(Walker.super.move()); }
+    public String name() { return Walker.super.name(); }
+    public Walker me() { return Walker.super; }
+    public static String quick() { return Walker.super.move(); }
+}
+
+public void main() {
+    print(Walker.super.move());
+}

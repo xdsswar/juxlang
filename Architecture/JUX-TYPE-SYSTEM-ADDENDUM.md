@@ -558,6 +558,12 @@ A **flow type** is a refined type assigned to a name in a particular program reg
 | `requireNonNull(x)`                      | Same                                                    |
 | Pattern bindings in `switch` case body   | Bound names take their pattern-derived type             |
 
+Notes on three of the forms:
+
+- `if (x => T)` with no binder refines a local `x` in the then-branch only when the branch never assigns `x`; an assignment there has to reach the variable with its declared type, so such a branch sees `x` unrefined (§T.6.3). The refinement is the one `if (x => T x)` would give.
+- `throw` is an expression in exactly one place: the right operand of `?:` / `??`. `s ?: throw new IllegalArgumentException("none")` has the type of `s` without its null, and the throw runs only when `s` is null. The thrown value follows the `throw` statement's rules (`E0710`, checked exceptions).
+- The assertion is written `assert(x != null);` (Semantics §S.7.2). Any null test the assertion's condition proves when true refines the rest of the enclosing block, as a guard clause does.
+
 ### T.6.3. Refinement Persistence
 
 A flow refinement persists until:
@@ -587,6 +593,16 @@ public void example(User? maybe) {
 Inside a loop body, refinements valid at the loop entry are valid for the body — but only if the body does not invalidate them. A reassignment to `x` inside the body invalidates the refinement on subsequent iterations.
 
 This is conservative; it produces some false negatives (refinements that *would* hold but the compiler can't prove). The user works around with a fresh local or an explicit `as` cast.
+
+**A `while` condition refines its own body.** `while (x != null) { ... }` proves `x` non-null at the top of every iteration, because the condition is tested there. Inside the body the refinement lasts until the first statement that assigns `x`: in a direct assignment `x = e;` the value `e` still reads `x` refined, and every statement after it sees the declared `T?` again until the next test. A statement that assigns `x` somewhere inside it (an `if` whose branch does) ends the refinement before it. This is the linked-list walk:
+
+```jux
+Node? cur = head;
+while (cur != null) {
+    total += cur.value;         -- cur: Node
+    cur = cur.next;             -- `cur.next` reads cur: Node; cur is Node? afterwards
+}
+```
 
 ### T.6.6. Combined Refinements
 
@@ -738,7 +754,7 @@ public class C implements A, B {
 }
 ```
 
-The `Type.super.method()` syntax is allowed only inside the overriding class for an inherited default method.
+The `Type.super.method()` syntax is allowed only inside the overriding class for an inherited default method. Precisely: `I.super.m(args)` is legal in an instance method (or a lambda inside one) of a class that lists `I` in its own `implements` clause, and `m` must be a method `I` declares with a default body. It runs `I`'s default body on `this`, even when the class or a superclass overrides `m`. `I.super` is only a call receiver: it is not a value. Anywhere else, including a static method, a constructor or `init` block (where `this` is still being built), a class that reaches `I` only through a superclass or another interface, and `I.super` used as a value, is `E0482`. Naming a method that `I` declares without a default body is `E0483`.
 
 ### T.8.4. Interaction with Generics
 

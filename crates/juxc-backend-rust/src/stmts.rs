@@ -217,7 +217,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             .iter()
             .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
         Expr::Cast(c) => is_path_named(&c.value, name) || expr_moves_path_at_top(&c.value, name),
-        Expr::NotNullAssert(inner, _) => {
+        Expr::NotNullAssert(inner, _) | Expr::Throw(inner, _) => {
             is_path_named(inner, name) || expr_moves_path_at_top(inner, name)
         }
         Expr::TypeTest(t) => expr_moves_path_at_top(&t.value, name),
@@ -545,6 +545,41 @@ impl RustEmitter {
     /// [`Writer::emit_indent`]), and for bumping the writer's level
     /// when nested blocks need to land one deeper.
     pub(crate) fn emit_stmt(&mut self, stmt: &Stmt) {
+        // A `while` refinement (§T.6.5) ends at the first statement that
+        // assigns the name: before it, or after a direct `x = e;` whose `e`
+        // still reads the value. Mirrors the checker's `check_stmt`.
+        if !self.loop_narrowed.is_empty() {
+            let assigned = juxc_tycheck::assigned::names_assigned_in_stmt(stmt);
+            let direct = juxc_tycheck::assigned::direct_assign_target(stmt);
+            let ending: Vec<String> =
+                self.loop_narrowed.iter().filter(|n| assigned.contains(*n)).cloned().collect();
+            let (after, before): (Vec<String>, Vec<String>) =
+                ending.into_iter().partition(|n| direct.as_deref() == Some(n.as_str()));
+            for name in before.iter().chain(after.iter()) {
+                self.end_loop_narrowing(name);
+            }
+            // `cur = cur.next;`: the target is the `Option` again, but the
+            // value was proved present, so its reads of `cur` become `cur!!`.
+            if let (Stmt::Assign(a), false) = (stmt, after.is_empty()) {
+                let mut value = a.value.clone();
+                assert_present_reads(&mut value, &after);
+                let rewritten = AssignStmt { value, ..a.clone() };
+                self.emit_stmt_scoped(&Stmt::Assign(rewritten));
+                return;
+            }
+            self.emit_stmt_scoped(stmt);
+            return;
+        }
+        self.emit_stmt_scoped(stmt);
+    }
+
+    /// Drop a `while` refinement: reads of `name` see the `Option` again.
+    fn end_loop_narrowing(&mut self, name: &str) {
+        self.loop_narrowed.retain(|n| n != name);
+        self.expr_narrowed.retain(|n| n != name);
+    }
+
+    fn emit_stmt_scoped(&mut self, stmt: &Stmt) {
         // Which collection handles this statement borrows twice over, so the
         // call emitter knows where its scoping wrapper is needed and where it
         // would do harm. Saved and restored because a nested statement
@@ -643,6 +678,13 @@ impl RustEmitter {
             Stmt::Expr(e) => {
                 self.emit_expr(e);
                 self.w.push_str(";\n");
+                // `assert(x != null);` (§T.6.2): past it, `x` reads as its
+                // contents. The shadow lasts to the end of the block, which
+                // `emit_block_contents` restores, as for a guard clause.
+                if let Some(cond) = juxc_ast::assert_condition(e) {
+                    let proven = self.null_narrowed_locals(cond, true);
+                    self.shadow_narrowed(&proven);
+                }
             }
             Stmt::Return(value, _) => {
                 // **Try-body return threading.** Inside a `try` block's
@@ -2836,7 +2878,14 @@ impl RustEmitter {
         }
         self.w.indent_inc();
         self.loop_emit_depth += 1;
+        // `while (x != null)` (§T.6.5): reads of `x` in the body are the value
+        // until a statement assigns it; `emit_stmt` ends that.
+        let proven = self.null_narrowed_locals(&w.condition, true);
+        let saved = (self.expr_narrowed.clone(), self.loop_narrowed.clone());
+        self.expr_narrowed.extend(proven.iter().cloned());
+        self.loop_narrowed.extend(proven);
         self.emit_block_contents(&w.body);
+        (self.expr_narrowed, self.loop_narrowed) = saved;
         self.loop_emit_depth -= 1;
         self.w.indent_dec();
         self.w.emit_indent();
@@ -2968,6 +3017,31 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // `a += b` on a type with its own `operator+` (§O.2.3): compound
+        // assignment IS the binary operator followed by a plain assignment,
+        // never a separately overloadable `+=`. Rust's `AddAssign` family is
+        // not implemented for a user type, so lower it as `a = a + b`, where
+        // the `+` dispatches to the operator like any other `+`.
+        if let Some(op) = a.op {
+            if crate::exprs::binary::binary_operator_kind(op)
+                .is_some_and(|kind| self.expr_declares_operator(&a.target, kind))
+                || self.symbols.free_operator_calls.contains_key(&a.span)
+            {
+                let desugared = AssignStmt {
+                    target: a.target.clone(),
+                    op: None,
+                    value: Expr::Binary(juxc_ast::BinaryExpr {
+                        op,
+                        left: Box::new(a.target.clone()),
+                        right: Box::new(a.value.clone()),
+                        span: a.span,
+                    }),
+                    span: a.span,
+                };
+                self.emit_assign(&desugared);
+                return;
+            }
+        }
         // `cur = cur.next!!;`: the new value reads the local being replaced.
         let prev_reads_target = self.assign_rhs_reads_target;
         self.assign_rhs_reads_target = a.op.is_none() && Self::value_reads_local_through_member(a);
@@ -5175,5 +5249,46 @@ fn untyped_literal_arith(e: &Expr) -> bool {
                 && untyped_literal_arith(&b.right)
         }
         other => juxc_tycheck::infer::untyped_int_literal(other),
+    }
+}
+
+/// Wrap every read of one of `names` inside `e` in `!!` (Type system §T.6.5):
+/// the right side of the `x = e;` that ends a `while` refinement still reads
+/// `x` as proved present, while the assignment's target is the `Option`
+/// again. Lambdas are left alone, as a refinement does not reach into one
+/// (§T.6.4).
+fn assert_present_reads(e: &mut Expr, names: &[String]) {
+    let recurse = |e: &mut Expr| assert_present_reads(e, names);
+    match e {
+        Expr::Path(qn) if qn.segments.len() == 1 && names.contains(&qn.segments[0].text) => {
+            let span = qn.span;
+            let read = std::mem::replace(e, Expr::This(span));
+            *e = Expr::NotNullAssert(Box::new(read), span);
+        }
+        Expr::Field(f) => recurse(&mut f.object),
+        Expr::Call(c) => {
+            recurse(&mut c.callee);
+            c.args.iter_mut().for_each(recurse);
+        }
+        Expr::Binary(b) => {
+            recurse(&mut b.left);
+            recurse(&mut b.right);
+        }
+        Expr::Unary(u) => recurse(&mut u.operand),
+        Expr::Index(i) => {
+            recurse(&mut i.array);
+            recurse(&mut i.index);
+        }
+        Expr::Cast(c) => recurse(&mut c.value),
+        Expr::Elvis(el) => {
+            recurse(&mut el.value);
+            recurse(&mut el.fallback);
+        }
+        Expr::Ternary(t) => {
+            recurse(&mut t.condition);
+            recurse(&mut t.then_branch);
+            recurse(&mut t.else_branch);
+        }
+        _ => {}
     }
 }

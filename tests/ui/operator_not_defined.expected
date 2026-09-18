@@ -1,0 +1,3 @@
+operator_not_defined.jux:8:15: [E0484] error: `Plain` has no `operator+`, so `+` has nothing to call (§O.2.6)
+operator_not_defined.jux:9:5: [E0484] error: `Plain` has no `operator+`, so `+` has nothing to call (§O.2.6)
+operator_not_defined.jux:10:18: [E0484] error: no `operator*` takes `int` and `Plain`, so `*` has nothing to call (§7.14)

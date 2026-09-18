@@ -69,7 +69,8 @@ fn walk_expr(e: &Expr, f: &mut dyn FnMut(Node<'_>)) {
         | Expr::TypeOf(inner, _)
         | Expr::Await(inner, _)
         | Expr::ErrorProp(inner, _)
-        | Expr::NotNullAssert(inner, _) => walk_expr(inner, f),
+        | Expr::NotNullAssert(inner, _)
+        | Expr::Throw(inner, _) => walk_expr(inner, f),
         Expr::Call(c) => {
             walk_expr(&c.callee, f);
             for a in &c.args {

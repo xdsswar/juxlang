@@ -1,0 +1,30 @@
+class Animal { public String name() { return "animal"; } }
+class Dog extends Animal { public String bark() { return "woof"; } }
+class Cat extends Animal {}
+class Node {
+    public int v;
+    public Node? next;
+    public Node(int v) { this.v = v; }
+}
+
+String need(String? s) {
+    return s ?: throw "not an exception";
+}
+
+int walk(Node? head) {
+    Node? cur = head;
+    int total = 0;
+    while (cur != null) {
+        cur = cur.next;
+        total += cur.v;
+    }
+    return total;
+}
+
+public void main() {
+    Animal a = new Dog();
+    if (a => Dog) {
+        a = new Cat();
+        print(a.bark());
+    }
+}

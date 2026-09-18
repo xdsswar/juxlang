@@ -227,6 +227,7 @@ pub fn lower_workspace_with_entry(
     // ctor across ALL units, so a call in `app.jux` to `fill` declared
     // in `util.jux` emits `&mut <arg>` matching the `&mut T` signature.
     e.populate_byref_params(units);
+    e.populate_interface_super_calls(units);
     // C6: methods containing a self-aliasing byref call become
     // receiver-mutating (write-back assigns `self.field`); register
     // them so they emit `&mut self` and their callers promote the
@@ -426,6 +427,7 @@ pub fn lower_workspace_test(
     }
     // C6 pre-pass (see lower_workspace_with_entry).
     e.populate_byref_params(units);
+    e.populate_interface_super_calls(units);
     e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
@@ -675,6 +677,12 @@ struct RustEmitter {
     /// `None` outside an interface default-method body. Set in
     /// `emit_interface_decl` only.
     pub(crate) enclosing_interface: Option<String>,
+    /// `(interface, method)` pairs some class calls as `I.super.m()` (Type
+    /// system §T.8.3), by the interface's bare name. Only these defaults get
+    /// a `__jux_default_<m>` twin in their trait, the one body an overriding
+    /// class can still reach; every other trait emits as before. Filled by
+    /// `populate_interface_super_calls` before any declaration is emitted.
+    pub(crate) interface_super_calls: std::collections::HashSet<(String, String)>,
     /// Names of user-defined methods whose bodies write to `this.field`
     /// — i.e. methods that the backend emits with `&mut self`. Computed
     /// in a single pre-pass over the compilation unit before any
@@ -815,6 +823,10 @@ struct RustEmitter {
     /// around exactly that operand, so the test itself still sees the
     /// `Option`.
     pub(crate) expr_narrowed: Vec<String>,
+    /// Names a `while` condition proved non-null for the body being emitted
+    /// (§T.6.5). They are also in `expr_narrowed`, so reads emit the value;
+    /// each leaves both lists at the first statement that assigns it.
+    pub(crate) loop_narrowed: Vec<String>,
     /// `var` locals initialized by `new Base(...)` of a polymorphic base
     /// class. Written without a type, such a local holds the CONCRETE
     /// object, where a local declared `Base b = ...` holds the
@@ -1876,6 +1888,7 @@ pub(crate) fn compute_aliased_classes(
             }
             Expr::Await(inner, _) => walk_expr(inner, aliased, mark),
             Expr::NotNullAssert(inner, _) => walk_expr(inner, aliased, mark),
+            Expr::Throw(inner, _) => walk_expr(inner, aliased, mark),
             Expr::Lambda(l) => {
                 // A class captured by a lambda IS an alias: the closure
                 // holds its own handle to the object, mutations through
@@ -3753,6 +3766,7 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         }
         Expr::Await(inner, _) => cast_targets_expr(inner, out),
         Expr::NotNullAssert(inner, _) => cast_targets_expr(inner, out),
+        Expr::Throw(inner, _) => cast_targets_expr(inner, out),
         Expr::Lambda(l) => match &l.body {
             juxc_ast::LambdaBody::Expr(b) => cast_targets_expr(b, out),
             juxc_ast::LambdaBody::Block(blk) => cast_targets_block(blk, out),
@@ -5027,6 +5041,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             enclosing_class: None,
             current_fn_params: std::collections::HashSet::new(),
             enclosing_interface: None,
+            interface_super_calls: std::collections::HashSet::new(),
             user_mut_methods: extern_mut_methods.clone(),
             extern_mut_methods,
             byref_params: std::collections::HashMap::new(),
@@ -5043,6 +5058,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             expr_narrowed: Vec::new(),
+            loop_narrowed: Vec::new(),
             concrete_polybase_locals: HashSet::new(),
             enclosing_record: None,
             ref_locals: HashSet::new(),

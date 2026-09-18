@@ -1,0 +1,9 @@
+woof
+animal says woof
+ok
+caught: missing value
+HEY!
+6
+3
+0
+examples/smart_cast_forms.jux:20:12: [W0457] warning: field `next` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)

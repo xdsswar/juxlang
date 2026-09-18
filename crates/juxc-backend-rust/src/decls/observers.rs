@@ -213,7 +213,8 @@ fn walk_expr_deps(e: &Expr, settable: &[&str], out: &mut Vec<String>) {
         Expr::Out(inner, _)
         | Expr::Await(inner, _)
         | Expr::ErrorProp(inner, _)
-        | Expr::NotNullAssert(inner, _) => walk_expr_deps(inner, settable, out),
+        | Expr::NotNullAssert(inner, _)
+        | Expr::Throw(inner, _) => walk_expr_deps(inner, settable, out),
         Expr::Call(c) => {
             walk_expr_deps(&c.callee, settable, out);
             for a in &c.args {

@@ -1,0 +1,72 @@
+// Compound assignment through a user operator (§O.2.3), and free-function
+// operators (LANG-V1 §7.14).
+//
+// `a += b` is `a = a + b`: the type's own `operator+` runs and the result is
+// stored back. A free-function operator is how a primitive goes on the LEFT
+// (`2.0 * v`), where no member operator can be declared, and how one symbol
+// takes different operand types (`3 * m` and `m * 4`).
+
+record Vec3(double x, double y, double z) {
+    public Vec3 operator+(Vec3 o) { return new Vec3(x + o.x, y + o.y, z + o.z); }
+    public Vec3 operator*(double s) { return new Vec3(x * s, y * s, z * s); }
+}
+
+class Money {
+    public long cents;
+    public Money(long cents) { this.cents = cents; }
+    public Money operator+(Money o) { return new Money(cents + o.cents); }
+    public Money operator-(Money o) { return new Money(cents - o.cents); }
+    public String operator string() { return $"${cents}c"; }
+}
+
+class Wallet {
+    public Money total = new Money(0);
+    public void add(Money m) { total += m; }
+}
+
+// Scalar on the left: delegates to the member operator.
+public Vec3 operator*(double s, Vec3 v) {
+    return v * s;
+}
+
+// One symbol, two operand orders: picked by the operand types.
+public Money operator*(int k, Money m) {
+    return new Money(m.cents * k);
+}
+
+public Money operator*(Money m, int k) {
+    return k * m;
+}
+
+public void main() {
+    // Compound assignment rebinds: `alias` keeps the old value, as it would
+    // after `price = price + tip`.
+    var price = new Money(100);
+    var alias = price;
+    price += new Money(50);
+    price -= new Money(30);
+    print(price);
+    print(alias);
+
+    var v = new Vec3(1.0, 2.0, 3.0);
+    v += new Vec3(0.5, 0.5, 0.5);
+    print(v);
+
+    var wallet = new Wallet();
+    wallet.add(new Money(5));
+    wallet.add(new Money(7));
+    print(wallet.total);
+
+    var bills = new Money[]{new Money(1), new Money(2)};
+    bills[1] += new Money(40);
+    print(bills[1]);
+
+    // Free-function operators.
+    print(2.0 * v);
+    print(3 * new Money(10));
+    print(new Money(10) * 4);
+    var doubled = new Money(6);
+    doubled *= 2;
+    print(doubled);
+    print(2 * 3);
+}

@@ -548,6 +548,7 @@ impl La {
             Expr::TypeOf(inner, _) => self.reads(inner, st),
             Expr::Await(inner, _) => self.reads(inner, st),
             Expr::NotNullAssert(inner, _) => self.reads(inner, st),
+            Expr::Throw(inner, _) => self.reads(inner, st),
             Expr::ErrorProp(inner, _) => self.reads(inner, st),
             Expr::Unary(u) => self.reads(&u.operand, st),
             Expr::Cast(c) => self.reads(&c.value, st),

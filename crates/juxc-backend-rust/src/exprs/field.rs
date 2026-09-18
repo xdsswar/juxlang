@@ -318,7 +318,8 @@ impl RustEmitter {
                             .lookup_method(&k, f.field.text.as_str())
                             .map(|(m, _)| m.is_property)
                     })
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || self.interface_property_on_receiver(&f.object, &f.field.text).is_some();
                 if is_property {
                     self.emit_expr(&f.object);
                     self.w.push('.');
@@ -1896,18 +1897,56 @@ impl RustEmitter {
         // ancestor is a property of the receiver — its setter/getter
         // copies live on the receiver's wrapper via inherited-method
         // inlining, so the write/read routing works identically.
-        let mut class = self.receiver_class_ast(recv)?;
-        for _ in 0..64 {
-            if let Some(p) = class.properties.iter().find(|p| p.name.text == prop_name) {
-                return Some(p);
+        if let Some(mut class) = self.receiver_class_ast(recv) {
+            for _ in 0..64 {
+                if let Some(p) = class.properties.iter().find(|p| p.name.text == prop_name) {
+                    return Some(p);
+                }
+                let Some(parent_bare) = class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.first().map(|s| s.text.clone()))
+                else {
+                    break;
+                };
+                let Some(parent) = self.class_ast_by_bare(&parent_bare) else { break };
+                class = parent;
             }
-            let parent_bare = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.first().map(|s| s.text.clone()))?;
-            class = self.class_ast_by_bare(&parent_bare)?;
         }
-        None
+        self.interface_property_on_receiver(recv, prop_name)
+    }
+
+    /// A property an interface declares (JUX-MISSING-DEFS §M.7.10) that `recv`
+    /// reaches: a contract read or written through an interface-typed value, a
+    /// default property a class inherits, or `this.P` inside a default body.
+    /// Its getter is `P()` and its setter `__set_P(v)`, on the trait, so the
+    /// read and write paths route exactly as they do for a class property.
+    pub(crate) fn interface_property_on_receiver(
+        &self,
+        recv: &Expr,
+        prop_name: &str,
+    ) -> Option<&juxc_ast::PropertyDecl> {
+        let written = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone().or_else(|| self.enclosing_interface.clone())?
+        } else {
+            match self.expr_types.get(&crate::exprs::expr_span_of(recv))? {
+                juxc_tycheck::Ty::User { name, .. } => name.clone(),
+                juxc_tycheck::Ty::Nullable(inner) => match inner.as_ref() {
+                    juxc_tycheck::Ty::User { name, .. } => name.clone(),
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        };
+        let key = if self.symbols.classes.contains_key(&written)
+            || self.symbols.interfaces.contains_key(&written)
+        {
+            written
+        } else {
+            self.resolve_bare_type_fqn(&written).unwrap_or(written)
+        };
+        let (_, iface) = self.symbols.lookup_interface_property(&key, prop_name)?;
+        self.interface_asts.get(iface)?.properties.iter().find(|p| p.name.text == prop_name)
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {

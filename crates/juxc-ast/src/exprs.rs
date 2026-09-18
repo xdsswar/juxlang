@@ -88,6 +88,11 @@ pub enum Expr {
     /// is the result, else `b` (also of type `T`) provides the
     /// fallback. Backend lowers to `a.unwrap_or(b)`.
     Elvis(ElvisExpr),
+    /// `throw e` used as an expression: legal only as the fallback of `?:` /
+    /// `??` (`s ?: throw new IllegalArgumentException("none")`, Type system
+    /// §T.6.2). It never produces a value, so the `?:` has the non-null type
+    /// of its left side. The parser admits it nowhere else.
+    Throw(Box<Expr>, Span),
     /// `Type::method` — method reference per §A.4 level 20. Produces
     /// a function-typed value bound to the named member: instance
     /// methods lower to `|x| x.method()`, static methods to
@@ -185,6 +190,7 @@ impl Expr {
             Expr::Switch(s) => s.span,
             Expr::Lambda(l) => l.span,
             Expr::Elvis(e) => e.span,
+            Expr::Throw(_, s) => *s,
             Expr::MethodRef(m) => m.span,
             Expr::Ternary(t) => t.span,
             Expr::Await(_, s) => *s,
@@ -801,4 +807,16 @@ pub struct CallExpr {
     pub eval_order: Vec<usize>,
     /// Span covering callee and argument list.
     pub span: Span,
+}
+
+/// The condition of an `assert(cond)` / `assert(cond, message)` call
+/// statement (Semantics §S.7.2), or `None`. Past the statement the condition
+/// is known to hold, so a null test in it narrows (Type system §T.6.2).
+pub fn assert_condition(e: &Expr) -> Option<&Expr> {
+    let Expr::Call(c) = e else { return None };
+    let Expr::Path(qn) = c.callee.as_ref() else { return None };
+    if qn.segments.len() != 1 || qn.segments[0].text != "assert" {
+        return None;
+    }
+    c.args.first()
 }

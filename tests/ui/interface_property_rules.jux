@@ -1,0 +1,19 @@
+interface Shape {
+    double Area { get -> 0.0; }
+    default double Perimeter { get; }
+    default String Label { get -> "shape"; set; }
+    int Sides { get; } = 3;
+}
+
+interface Sized {
+    int Size { get; set; }
+}
+
+class ReadOnlyField implements Sized {
+    public final int Size = 1;
+}
+
+class Nothing implements Sized {
+}
+
+public void main() {}

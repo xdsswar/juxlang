@@ -391,6 +391,10 @@ pub(crate) struct Checker<'a> {
     /// absorbed into `SymbolTable::function_selections`. The same
     /// mechanism as `method_selections`, for the other kind of callee.
     pub(crate) function_selections: HashMap<Span, usize>,
+    /// Binary expressions resolved to a free-function operator (§7.14):
+    /// binary span -> (function key, overload index). Absorbed into
+    /// `SymbolTable::free_operator_calls` for the backend.
+    pub(crate) free_operator_calls: HashMap<Span, (String, usize)>,
     /// Typed `assertThrows<E>(f)` calls (§TS.3): call span -> the FQN of `E`,
     /// absorbed into `SymbolTable::typed_assert_throws`.
     pub(crate) typed_assert_throws: HashMap<Span, String>,
@@ -449,6 +453,16 @@ pub(crate) struct Checker<'a> {
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
     pub(crate) in_static: bool,
+    /// True while the receiver of an `I.super.m()` call is being checked, so
+    /// `check_field_access` accepts `I.super` there and nowhere else (§T.8.3).
+    pub(crate) in_interface_super_call: bool,
+    /// Names a `while` condition refined for the loop body being checked, with
+    /// their declared (nullable) types (§T.6.5). A name leaves the list at the
+    /// first body statement that assigns it.
+    pub(crate) loop_narrowed: Vec<(String, Ty)>,
+    /// Set while checking a direct `x = e;` that ends a loop refinement of
+    /// `x`: the assignment's target has the declared `T?` type.
+    pub(crate) loop_assign_widen: Option<(String, Ty)>,
     /// True while we're inside an **async context** — the body of an
     /// `async` function/method, or an async lambda. Drives the
     /// `E0700_AwaitRequiresAsyncContext` check: `await` is only legal when
@@ -516,6 +530,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, String>,
     HashMap<Span, String>,
     HashMap<Span, String>,
+    HashMap<Span, (String, usize)>,
 );
 
 impl<'a> Checker<'a> {
@@ -535,6 +550,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
+            free_operator_calls: HashMap::new(),
             typed_assert_throws: HashMap::new(),
             record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
@@ -548,6 +564,9 @@ impl<'a> Checker<'a> {
             lambda_slot_params: None,
             in_foreach_iter: false,
             in_static: false,
+            in_interface_super_call: false,
+            loop_narrowed: Vec::new(),
+            loop_assign_widen: None,
             in_async: false,
             in_future_slot: false,
             in_unsafe: false,
@@ -659,6 +678,7 @@ impl<'a> Checker<'a> {
             self.typed_assert_throws,
             self.record_patterns,
             self.component_names,
+            self.free_operator_calls,
         )
     }
 
@@ -1375,6 +1395,72 @@ impl<'a> Checker<'a> {
                     .with_help("checked = extends Exception without passing through RuntimeException (§X.1.3)"),
                 );
             }
+        }
+    }
+
+    /// `a + b` (or `a += b`) where `a` is a value of a user type that declares
+    /// no such operator (§O.2.6: dispatch starts from the left operand), and no
+    /// free-function operator takes the operands either: `E0484`. Without this
+    /// the program reached rustc, which named a Rust trait (`Add`) the program
+    /// never mentions.
+    ///
+    /// Only the arithmetic and bitwise family is checked here; equality has an
+    /// identity default and ordering is derived from `<=>`. Foreign types from
+    /// a crate stub are left alone: their operators come from Rust.
+    fn check_user_operator_defined(&mut self, op: BinaryOp, left: &Expr, right: &Expr, span: Span) {
+        use OperatorKind as K;
+        let Some(kind) = op_kind_for_binary(op) else { return };
+        if !matches!(
+            kind,
+            K::Plus | K::Minus | K::Mul | K::Div | K::Rem | K::BitAnd | K::BitOr | K::BitXor | K::Shl | K::Shr
+        ) {
+            return;
+        }
+        let left_ty = infer_expr(left, &self.env, self.symbols);
+        let right_ty = infer_expr(right, &self.env, self.symbols);
+        let user_declared = |this: &Self, t: &Ty| match t {
+            Ty::User { name, .. } => {
+                this.symbols.classes.get(name).is_some_and(|c| !c.is_external)
+                    || this.symbols.records.contains_key(name)
+                    || this.symbols.enums.get(name).is_some_and(|e| !e.is_external)
+            }
+            _ => false,
+        };
+        // `+` with a `String` on either side is concatenation, which takes
+        // any value (§S.3).
+        if kind == K::Plus && (matches!(left_ty, Ty::String) || matches!(right_ty, Ty::String)) {
+            return;
+        }
+        let symbol = operator_kind_user_spelling(kind);
+        let span = [expr_span(left), span].into_iter().find(|sp| *sp != Span::DUMMY).unwrap_or(span);
+        if crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env).is_some() {
+            return;
+        }
+        if user_declared(self, &left_ty) {
+            if self.ty_satisfies_operator(&left_ty, kind) {
+                return;
+            }
+            let Ty::User { name, .. } = &left_ty else { return };
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("`{bare}` has no `operator{symbol}`, so `{symbol}` has nothing to call (§O.2.6)"),
+                )
+                .with_span(span)
+                .with_help(format!("declare it on `{bare}`: `public {bare} operator{symbol}({right_ty} other) {{ ... }}`")),
+            );
+        } else if matches!(left_ty, Ty::Primitive(_)) && user_declared(self, &right_ty) {
+            // A primitive on the left has no member operators, so only a
+            // free-function operator can take a user type on the right (§7.14).
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("no `operator{symbol}` takes `{left_ty}` and `{right_ty}`, so `{symbol}` has nothing to call (§7.14)"),
+                )
+                .with_span(span)
+                .with_help(format!("declare a free-function operator: `public R operator{symbol}({left_ty} left, {right_ty} right) {{ ... }}`")),
+            );
         }
     }
 
@@ -4333,7 +4419,37 @@ impl<'a> Checker<'a> {
 
     /// Walk one statement, emitting diagnostics where types disagree.
     /// (see `match_null_test` below for the null-test shapes)
+    /// Check one statement, ending `while`-condition refinements it assigns
+    /// (§T.6.5): before it when it assigns inside a nested statement, and
+    /// after it when it is the direct `x = e;` whose `e` still reads `x`.
     fn check_stmt(&mut self, stmt: &Stmt) {
+        if self.loop_narrowed.is_empty() {
+            self.check_stmt_inner(stmt);
+            return;
+        }
+        let assigned = crate::assigned::names_assigned_in_stmt(stmt);
+        let direct = crate::assigned::direct_assign_target(stmt);
+        let mut after: Vec<(String, Ty)> = Vec::new();
+        let mut kept: Vec<(String, Ty)> = Vec::new();
+        for (name, declared) in std::mem::take(&mut self.loop_narrowed) {
+            if !assigned.contains(&name) {
+                kept.push((name, declared));
+            } else if direct.as_deref() == Some(name.as_str()) {
+                after.push((name, declared));
+            } else {
+                self.env.declare(&name, declared);
+            }
+        }
+        self.loop_narrowed = kept;
+        let prev = std::mem::replace(&mut self.loop_assign_widen, after.first().cloned());
+        self.check_stmt_inner(stmt);
+        self.loop_assign_widen = prev;
+        for (name, declared) in after {
+            self.env.declare(&name, declared);
+        }
+    }
+
+    fn check_stmt_inner(&mut self, stmt: &Stmt) {
         match stmt {
             // `if cfg` is resolved to its branch before this phase runs (the driver's
             // cfg pass); a unit that skipped that pass has nothing to say here.
@@ -4568,7 +4684,32 @@ impl<'a> Checker<'a> {
                         .with_span(a.span),
                     );
                 }
-                let target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                // `a += b` is `a = a + b` (§O.2.3), so the `+` has to exist. When
+                // a free-function operator answers it (§7.14), record the pick
+                // under the assignment's span, which the backend's desugared
+                // `a + b` carries.
+                if let Some(op) = a.op {
+                    self.check_user_operator_defined(op, &a.target, &a.value, a.span);
+                    if let Some(kind) = op_kind_for_binary(op) {
+                        let target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                        let value_ty = infer_expr(&a.value, &self.env, self.symbols);
+                        if let Some((key, k, _)) =
+                            crate::infer::free_operator_for(self.symbols, kind, &target_ty, &value_ty, &self.env)
+                        {
+                            let bare = key.rsplit('.').next().unwrap_or(&key).to_string();
+                            self.free_operator_calls.insert(a.span, (bare, k));
+                            self.function_selections.insert(a.span, k);
+                        }
+                    }
+                }
+                let mut target_ty = infer_expr(&a.target, &self.env, self.symbols);
+                // `cur = cur.next;` ending a `while` refinement (§T.6.5): the
+                // slot is the declared `T?`, whatever `cur` read as above.
+                if let (Some((name, declared)), Expr::Path(qn)) = (&self.loop_assign_widen, &a.target) {
+                    if qn.segments.len() == 1 && qn.segments[0].text == *name {
+                        target_ty = declared.clone();
+                    }
+                }
                 // What actually gets STORED. For a plain `=` that is the
                 // value; for a compound assignment it is the result of
                 // `target op value`, which is a different type whenever the
@@ -4753,8 +4894,18 @@ impl<'a> Checker<'a> {
                         .with_span(expr_span(&w.condition)),
                     );
                 }
+                // `while (x != null)` refines `x` in the body (§T.6.5).
+                let nothing_assigned = std::collections::HashSet::new();
+                let narrowed = self.narrowings(&w.condition, true, &nothing_assigned);
                 self.env.push_scope();
+                let prev_loop = self.loop_narrowed.clone();
+                for (name, ty) in &narrowed {
+                    let declared = self.env.lookup(name).cloned().unwrap_or_else(|| Ty::nullable(ty.clone()));
+                    self.env.declare(name, ty.clone());
+                    self.loop_narrowed.push((name.clone(), declared));
+                }
                 self.check_block(&w.body);
+                self.loop_narrowed = prev_loop;
                 self.env.pop_scope();
             }
 
@@ -4931,6 +5082,16 @@ impl<'a> Checker<'a> {
 
             Stmt::Expr(e) => {
                 self.check_expr(e);
+                // `assert(x != null);` (§T.6.2): the rest of the block runs only
+                // when the condition held, so the names it proves non-null are
+                // declared non-null in the enclosing scope, as a guard clause's
+                // are.
+                if let Some(cond) = juxc_ast::assert_condition(e) {
+                    let nothing_assigned = std::collections::HashSet::new();
+                    for (name, ty) in self.narrowings(cond, true, &nothing_assigned) {
+                        self.env.declare(&name, ty);
+                    }
+                }
             }
 
             Stmt::SuperCall(args, span) => self.check_super_call(args, *span),
@@ -5347,6 +5508,9 @@ impl<'a> Checker<'a> {
             // `typeof(expr)` (§5.9.10) — the operand is type-checked
             // (undefined names etc. still report) but never evaluated.
             Expr::TypeOf(inner, _) => self.check_expr(inner),
+            // `x ?: throw E` (§T.6.2): the thrown value is checked exactly as a
+            // `throw` statement's is (E0710, checked raises).
+            Expr::Throw(inner, span) => self.check_stmt_inner(&Stmt::Throw((**inner).clone(), *span)),
             // `out <place>` (§M.4) — recurse into the place so an undefined
             // variable etc. is still reported. The place/agreement rules are in
             // `check_call_args`; a bare `out` outside a call is meaningless but
@@ -5695,6 +5859,24 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // `k * v` answered by a free-function operator (§7.14): the
+                // backend calls it, so remember which one.
+                if let Some(kind) = op_kind_for_binary(b.op) {
+                    let left_ty = infer_expr(&b.left, &self.env, self.symbols);
+                    let right_ty = infer_expr(&b.right, &self.env, self.symbols);
+                    if let Some((key, k, _)) =
+                        crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env)
+                    {
+                        let bare = key.rsplit('.').next().unwrap_or(&key).to_string();
+                        self.free_operator_calls.insert(b.span, (bare, k));
+                        // The call the backend emits carries the binary's span,
+                        // so the overload pick is recorded the way a written
+                        // call's is.
+                        self.function_selections.insert(b.span, k);
+                    }
+                }
+                // An operator a user type does not declare (§O.2.6).
+                self.check_user_operator_defined(b.op, &b.left, &b.right, b.span);
                 // §O.3.4 — binary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
                 // The receiver is the LHS; that's what determines
@@ -6350,6 +6532,7 @@ impl<'a> Checker<'a> {
         self.symbols
             .lookup_method(name, &f.field.text)
             .is_some_and(|(m, _)| m.is_property)
+            || self.symbols.lookup_interface_property(name, &f.field.text).is_some()
     }
 
     /// `(record, component)` when `target` writes a component of a record
@@ -7076,6 +7259,46 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// `I.super.m(...)` (§T.8.3): legal only in an instance context of a class
+    /// that lists `I` in its own `implements` clause (`E0482`), and only for a
+    /// method `I` declares with a default body (`E0483`). A method `I` does not
+    /// declare at all is left to the ordinary member lookup, which says so.
+    fn check_interface_super_call(&mut self, iface: &str, method: &str, c: &CallExpr) {
+        let bare = iface.rsplit('.').next().unwrap_or(iface);
+        let misplaced = if self.env.current_class.is_none() {
+            Some(format!("`{bare}.super.{method}()` calls a default method on `this`, so it belongs in a class that implements `{bare}`"))
+        } else if self.in_static {
+            Some(format!("`{bare}.super.{method}()` needs `this`, and a `static` method has none"))
+        } else if self.current_ctor.is_some() || self.in_init_block {
+            Some(format!("`{bare}.super.{method}()` belongs in an instance method: a constructor or `init` block is still building `this`"))
+        } else if crate::infer::direct_superinterface(&self.env, self.symbols, iface).is_none() {
+            let class = self.env.current_class.as_deref().unwrap_or("");
+            let class = class.rsplit('.').next().unwrap_or(class);
+            Some(format!("`{class}` does not implement `{bare}` directly, so `{bare}.super` names no default of its own: add `{bare}` to its `implements` clause"))
+        } else {
+            None
+        };
+        if let Some(message) = misplaced {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0482_InterfaceSuperMisplaced, format!("{message} (§T.8.3)"))
+                    .with_span(c.span),
+            );
+            return;
+        }
+        let declared = self.symbols.interfaces.get(iface).and_then(|i| i.methods.get(method));
+        if let Some(sig) = declared {
+            if sig.is_abstract {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0483_InterfaceSuperNoDefault,
+                        format!("`{bare}.{method}` has no default body, so `{bare}.super.{method}()` has nothing to call (§T.8.3)"),
+                    )
+                    .with_span(c.span),
+                );
+            }
+        }
+    }
+
     fn check_field_access(&mut self, f: &FieldExpr) {
         // A record-destructuring read (`__jux_component_N` on the temporary):
         // name the component for the driver's rewrite. The pattern's shape was
@@ -7085,6 +7308,22 @@ impl<'a> Checker<'a> {
                 if let Some(component) = self.symbols.records.get(&name).and_then(|r| r.components.get(index)) {
                     self.component_names.insert(f.field.span, component.name.clone());
                 }
+            }
+            return;
+        }
+        // `I.super` (§T.8.3) is a call receiver and nothing else. Its call
+        // was validated by `check_interface_super_call`; used as a value it
+        // has no meaning.
+        if let Some((iface, _)) = crate::infer::interface_super_receiver(f, &self.env, self.symbols) {
+            if !self.in_interface_super_call {
+                let bare = iface.rsplit('.').next().unwrap_or(&iface);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0482_InterfaceSuperMisplaced,
+                        format!("`{bare}.super` is not a value: it only calls one of `{bare}`'s default methods, as `{bare}.super.m(...)` (§T.8.3)"),
+                    )
+                    .with_span(f.span),
+                );
             }
             return;
         }
@@ -7352,6 +7591,12 @@ impl<'a> Checker<'a> {
                         self.check_visibility(vis, &declaring, field_name, "property", f.span);
                         return;
                     }
+                }
+                // A property an interface declares (§M.7.10): a contract read
+                // through an interface-typed value, or a default property the
+                // class inherits. Interface members are public.
+                if self.symbols.lookup_interface_property(name, field_name).is_some() {
+                    return;
                 }
                 // Records: check components directly. Record
                 // components are always public per the spec (records
@@ -9559,8 +9804,23 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
+                // `I.super.m(...)` (§T.8.3): check where it is written and that
+                // `m` has a default to run, then let the ordinary interface-method
+                // path check the arguments against `I`'s signature.
+                let super_call = match field.object.as_ref() {
+                    Expr::Field(recv) => {
+                        crate::infer::interface_super_receiver(recv, &self.env, self.symbols)
+                            .map(|(iface, _)| iface)
+                    }
+                    _ => None,
+                };
+                if let Some(iface) = &super_call {
+                    self.check_interface_super_call(iface, method_name, c);
+                }
                 // Walk the receiver sub-expression first.
+                self.in_interface_super_call = super_call.is_some();
                 self.check_expr(&field.object);
+                self.in_interface_super_call = false;
                 let receiver_ty = infer_expr(&field.object, &self.env, self.symbols);
                 // A NULLABLE receiver is checked against the type it wraps.
                 // `?.` and `!!` both reach the same members, so the member
@@ -11606,6 +11866,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::Throw(_, s) => *s,
         Expr::IncDec(i) => i.span,
     }
 }

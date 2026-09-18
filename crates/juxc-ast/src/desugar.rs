@@ -29,7 +29,7 @@ use juxc_source::Span;
 
 use crate::common::{Ident, QualifiedName, Visibility};
 use crate::decls::{
-    AccessorBody, ClassDecl, ConstructorDecl, FieldDecl, FnDecl, Param,
+    AccessorBody, ClassDecl, ConstructorDecl, FieldDecl, FnDecl, InterfaceDecl, Param,
     PropertyDecl, ReturnType, TopLevelDecl,
 };
 use crate::exprs::{Expr, FieldExpr};
@@ -59,10 +59,98 @@ pub fn desugar_properties(unit: &mut CompilationUnit) {
 }
 
 fn desugar_top_level(item: &mut TopLevelDecl) {
-    if let TopLevelDecl::Class(class) = item {
-        synth_value_struct_ctor(class);
-        desugar_class(class);
+    match item {
+        TopLevelDecl::Class(class) => {
+            synth_value_struct_ctor(class);
+            desugar_class(class);
+        }
+        TopLevelDecl::Interface(iface) => desugar_interface(iface),
+        _ => {}
     }
+}
+
+/// Lower an interface's properties (JUX-MISSING-DEFS §M.7.10) into the
+/// methods an interface already has:
+///
+/// - `T Name { get; }` becomes the abstract getter `T Name()`, flagged
+///   `is_property` so `x.Name` reads call it, exactly as a class property's
+///   getter is;
+/// - `{ get; set; }` adds the abstract setter `void __set_Name(T value)`;
+/// - `default T Name -> expr;` becomes a default getter whose body returns
+///   `expr`, with bare references to the interface's other properties read
+///   through `this` (the implicit-`this` rule a class accessor follows).
+///
+/// There is no backing field: the implementing type owns the storage. The
+/// property list stays on the interface for diagnostics.
+fn desugar_interface(iface: &mut InterfaceDecl) {
+    if iface.properties.is_empty() {
+        return;
+    }
+    let members: std::collections::HashSet<String> =
+        iface.properties.iter().map(|p| p.name.text.clone()).collect();
+    let mut methods = Vec::new();
+    for prop in &iface.properties {
+        let span = prop.span;
+        let body = match prop.getter.as_ref().map(|g| &g.body) {
+            Some(AccessorBody::Expr(e)) => {
+                let mut e = e.clone();
+                rewrite_implicit_this(&mut e, &members, &mut local_set());
+                Some(block_return(e, span))
+            }
+            Some(AccessorBody::Block(b)) => {
+                let mut b = b.clone();
+                rewrite_block_implicit_this(&mut b, &members, &mut local_set());
+                Some(b)
+            }
+            // A contract: the implementing type supplies the getter.
+            Some(AccessorBody::Auto) | None => None,
+        };
+        methods.push(FnDecl {
+            annotations: prop.annotations.clone(),
+            visibility: prop.getter.as_ref().and_then(|g| g.visibility).unwrap_or(prop.visibility),
+            modifiers: Vec::new(),
+            return_type: ReturnType::Type(prop.ty.clone()),
+            name: prop.name.clone(),
+            generic_params: Vec::new(),
+            params: Vec::new(),
+            throws: Vec::new(),
+            wheres: Vec::new(),
+            body,
+            is_property: true,
+            is_c_variadic: false,
+            span,
+        });
+        if let Some(setter) = &prop.setter {
+            methods.push(FnDecl {
+                annotations: Vec::new(),
+                visibility: setter.visibility.unwrap_or(prop.visibility),
+                modifiers: Vec::new(),
+                return_type: ReturnType::Void,
+                name: ident(&setter_method_name(&prop.name.text), span),
+                generic_params: Vec::new(),
+                params: vec![Param {
+                    name: ident("value", span),
+                    ty: prop.ty.clone(),
+                    is_final: false,
+                    is_ref: false,
+                    is_mut_ref: false,
+                    default: None,
+                    is_varargs: false,
+                    is_out: false,
+                    is_shared_ref: false,
+                    is_weak: false,
+                    span,
+                }],
+                throws: Vec::new(),
+                wheres: Vec::new(),
+                body: None,
+                is_property: false,
+                is_c_variadic: false,
+                span,
+            });
+        }
+    }
+    iface.methods.extend(methods);
 }
 
 /// Synthesize the implicit positional constructor of a value struct that

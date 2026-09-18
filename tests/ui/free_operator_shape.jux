@@ -1,0 +1,10 @@
+class Plain {
+    public int n;
+    public Plain(int n) { this.n = n; }
+}
+
+public bool operator==(Plain a, Plain b) { return a.n == b.n; }
+
+public Plain operator-(Plain a) { return a; }
+
+public void main() {}

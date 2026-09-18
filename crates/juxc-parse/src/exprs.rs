@@ -128,9 +128,20 @@ impl<'a> Parser<'a> {
         ) {
             let op_span = self.peek_span();
             self.advance(); // '?:' or '??'
-            // Right-associative: recurse into `parse_elvis` for the
-            // fallback so chains stack the right way.
-            let fallback = self.parse_elvis()?;
+            // `x ?: throw E` (§T.6.2): the fallback may throw instead of
+            // supplying a value. `throw` is an expression here and nowhere
+            // else; the exception is everything that follows it.
+            let fallback = if self.at_kw(Keyword::Throw) {
+                let throw_span = self.peek_span();
+                self.advance(); // `throw`
+                let thrown = self.parse_elvis()?;
+                let span = throw_span.join(self.last_consumed_span());
+                Expr::Throw(Box::new(thrown), span)
+            } else {
+                // Right-associative: recurse into `parse_elvis` for the
+                // fallback so chains stack the right way.
+                self.parse_elvis()?
+            };
             // The OPERATOR's span is part of it. Several expression kinds --
             // a literal above all -- carry no span, so joining only the two
             // operands gave `name ?? "x"` the same span as `name` alone, and
@@ -1836,6 +1847,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::Throw(_, s) => *s,
         Expr::IncDec(i) => i.span,
     }
 }

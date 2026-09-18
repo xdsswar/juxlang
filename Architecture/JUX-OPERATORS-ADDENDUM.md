@@ -70,7 +70,7 @@ These replace what other languages call `hashCode()`/`Hashable.hash()` and `toSt
 | `<<`     | `T operator<<(U other)`                    |                              |
 | `>>`     | `T operator>>(U other)`                    |                              |
 
-Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary operator. Cannot be overridden separately.
+Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary operator. Cannot be overridden separately. `a += b` is `a = a + b`: the result of `operator+` is stored back in `a`, so it must be assignable to `a`'s type (`E0410` otherwise), and `a` names the new value afterwards. An arithmetic or bitwise operator on a value of a user type that declares none, in either form, and that no free-function operator takes (§O.2.6), is `E0484`.
 
 ### O.2.4. Indexing, Calling, Range, Containment
 
