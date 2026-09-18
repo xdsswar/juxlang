@@ -1,0 +1,65 @@
+// An event bus: callbacks stored in a list, closures capturing a counter
+// object, handlers added and cleared, and a handler that fires another event.
+
+class Counter {
+    public int hits = 0;
+    public void hit() { hits = hits + 1; }
+}
+
+class Bus {
+    private Vec<(String) -> void> handlers = new Vec<(String) -> void>();
+    private Vec<String> log = new Vec<String>();
+
+    public void on((String) -> void h) { handlers.push(h); }
+
+    public void emit(String event) {
+        log.push(event);
+        for (var h : handlers) {
+            h(event);
+        }
+    }
+
+    public void clear() { handlers.clear(); }
+    public int handlerCount() { return handlers.len(); }
+    public int logged() { return log.len(); }
+}
+
+public void main() {
+    var bus = new Bus();
+    var counter = new Counter();
+    var seen = new Vec<String>();
+
+    bus.on((e) -> counter.hit());
+    bus.on((e) -> seen.push(e.toUpperCase()));
+    bus.on((e) -> {
+        if (e.startsWith("err")) {
+            print("alarm: " + e);
+        }
+    });
+
+    bus.emit("start");
+    bus.emit("error-disk");
+    bus.emit("tick");
+    print(counter.hits);
+    print(seen.len());
+    for (var s : seen) {
+        print(s);
+    }
+
+    print(bus.handlerCount());
+    bus.clear();
+    bus.emit("after-clear");
+    print(counter.hits);
+    print(bus.logged());
+
+    // A transform pipeline built from function values.
+    var steps = new Vec<(int) -> int>();
+    steps.push((x) -> x + 3);
+    steps.push((x) -> x * 2);
+    steps.push((x) -> x - 1);
+    int v = 5;
+    for (var f : steps) {
+        v = f(v);
+    }
+    print(v);
+}

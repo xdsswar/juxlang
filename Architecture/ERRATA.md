@@ -820,6 +820,26 @@ members.
 
 ---
 
+## E33. Modifiers on records and enums
+
+**Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and
+interfaces and gave records and enums no modifiers at all, while JUX-LANG-V1
+writes `public final record Circle(...)` (§7.5) and `public sealed enum
+HttpResponse` (§7.7.1), and JUX-CORE-LIB-ADDENDUM writes `sealed enum
+Option<T> permits Some, None`. The parser rejected all three, and `const
+class`, which §7.3.1 defines as a synonym for `final class`.
+
+**Resolution.** A modifier that restates what the type already is, is
+accepted and changes nothing: `final` or `const` on a record, `sealed` or
+`final` on an enum. `const class` is `final class`. A modifier that
+contradicts the type is an error: `abstract` on a record or an enum, `sealed`
+on a record. An enum's `permits` list may name only its own variants, and all
+of them, or it is `E0490`.
+
+**Spec status:** Grammar §A.2.5 states the rule; `E0490` is in the catalog.
+
+---
+
 ## E34. Values that belong to each enum variant
 
 **Conflict.** JUX-LANG-V1 §7.7.4 showed a Java-style enum with fields and a
@@ -844,23 +864,39 @@ Layout-ABI §L.1.3 points from `E0510` to the field form.
 
 ---
 
-## E33. Modifiers on records and enums
+## E35. What an interface property may declare, and what meets one
 
-**Conflict.** Grammar §A.2.5 permitted `sealed` only on classes and
-interfaces and gave records and enums no modifiers at all, while JUX-LANG-V1
-writes `public final record Circle(...)` (§7.5) and `public sealed enum
-HttpResponse` (§7.7.1), and JUX-CORE-LIB-ADDENDUM writes `sealed enum
-Option<T> permits Some, None`. The parser rejected all three, and `const
-class`, which §7.3.1 defines as a synonym for `final class`.
+**Conflict.** JUX-MISSING-DEFS §M.7.10 let an interface declare property
+contracts (`{ get; }`, `{ get; set; }`) and said an implementing type meets one
+with "matching properties (or fields with the right visibility)". It never said
+which fields count, and it had no default property, although an interface can
+give a method a default body and a computed property is the everyday way to
+expose derived state (`IsEmpty` from `Size`).
 
-**Resolution.** A modifier that restates what the type already is, is
-accepted and changes nothing: `final` or `const` on a record, `sealed` or
-`final` on an enum. `const class` is `final class`. A modifier that
-contradicts the type is an error: `abstract` on a record or an enum, `sealed`
-on a record. An enum's `permits` list may name only its own variants, and all
-of them, or it is `E0490`.
+**Resolution.** A contract is met by a property of the same name and type, or a
+`public` instance field of that name and type (a non-`final` one for
+`{ get; set; }`). `default T Name -> expr;` (or the `get` accessor forms)
+declares a read-only default property; a property with a body must be marked
+`default`, has no setter and no initializer, and reads the interface's other
+properties through `this`.
 
-**Spec status:** Grammar §A.2.5 states the rule; `E0490` is in the catalog.
+**Spec status:** §M.7.10 states both rules.
+
+---
+
+## E36. A `while` condition's null test and the loop body
+
+**Conflict.** JUX-TYPE-SYSTEM-ADDENDUM §T.6.2 lists the `if` forms of null-test
+refinement and §T.6.5 covers refinements made before a loop, but nothing said
+whether `while (x != null)` refines `x` in its own body. The linked-list walk,
+`while (cur != null) { use(cur.v); cur = cur.next; }`, was rejected with E0418
+on every read of `cur`.
+
+**Resolution.** The condition refines the body until the first statement that
+assigns the name (§T.6.3 already ends a refinement at an assignment); the
+right side of a direct `x = e;` still reads the refined `x`.
+
+**Spec status:** §T.6.5 states the rule.
 
 ---
 
@@ -928,42 +964,6 @@ between packages inside one module may be cyclic, as in Java.
 
 ---
 
-## E35. What an interface property may declare, and what meets one
-
-**Conflict.** JUX-MISSING-DEFS §M.7.10 let an interface declare property
-contracts (`{ get; }`, `{ get; set; }`) and said an implementing type meets one
-with "matching properties (or fields with the right visibility)". It never said
-which fields count, and it had no default property, although an interface can
-give a method a default body and a computed property is the everyday way to
-expose derived state (`IsEmpty` from `Size`).
-
-**Resolution.** A contract is met by a property of the same name and type, or a
-`public` instance field of that name and type (a non-`final` one for
-`{ get; set; }`). `default T Name -> expr;` (or the `get` accessor forms)
-declares a read-only default property; a property with a body must be marked
-`default`, has no setter and no initializer, and reads the interface's other
-properties through `this`.
-
-**Spec status:** §M.7.10 states both rules.
-
----
-
-## E36. A `while` condition's null test and the loop body
-
-**Conflict.** JUX-TYPE-SYSTEM-ADDENDUM §T.6.2 lists the `if` forms of null-test
-refinement and §T.6.5 covers refinements made before a loop, but nothing said
-whether `while (x != null)` refines `x` in its own body. The linked-list walk,
-`while (cur != null) { use(cur.v); cur = cur.next; }`, was rejected with E0418
-on every read of `cur`.
-
-**Resolution.** The condition refines the body until the first statement that
-assigns the name (§T.6.3 already ends a refinement at an assignment); the
-right side of a direct `x = e;` still reads the refined `x`.
-
-**Spec status:** §T.6.5 states the rule.
-
----
-
 ## E42. Sharing a `T[N]` array with a `T[]` slot
 
 **Conflict.** JUX-LANG-V1 §5.5 says `T[N]` passes wherever `T[]` is expected,
@@ -999,7 +999,6 @@ its fields are initialized (a cyclic construction).
 
 **Spec status:** the catalog has E0981; §P.2.3 describes the intended
 behaviour and stands.
-
 
 ---
 

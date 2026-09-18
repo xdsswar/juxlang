@@ -1,0 +1,85 @@
+// A binary min-heap of tasks ordered by the tasks' own `<=>` operator:
+// sift up and down over a Vec, ties broken by insertion order.
+
+class Task {
+    public String name;
+    public int priority;
+    public int seq;
+
+    public Task(String name, int priority, int seq) {
+        this.name = name;
+        this.priority = priority;
+        this.seq = seq;
+    }
+
+    // Lower priority first; equal priorities in arrival order.
+    public int operator<=>(Task other) {
+        if (priority != other.priority) { return priority - other.priority; }
+        return seq - other.seq;
+    }
+}
+
+class TaskHeap {
+    private Vec<Task> items = new Vec<Task>();
+    private int nextSeq = 0;
+
+    public void add(String name, int priority) {
+        items.push(new Task(name, priority, nextSeq));
+        nextSeq = nextSeq + 1;
+        int i = items.len() - 1;
+        while (i > 0) {
+            int parent = (i - 1) / 2;
+            if (items[i] < items[parent]) {
+                Task t = items[i];
+                items[i] = items[parent];
+                items[parent] = t;
+                i = parent;
+            } else {
+                break;
+            }
+        }
+    }
+
+    public bool isEmpty() { return items.len() == 0; }
+    public int size() { return items.len(); }
+
+    public Task poll() {
+        Task top = items[0];
+        Task last = items.pop()!!;
+        if (items.len() > 0) {
+            items[0] = last;
+            int i = 0;
+            while (true) {
+                int l = 2 * i + 1;
+                int r = l + 1;
+                int smallest = i;
+                if (l < items.len() && items[l] < items[smallest]) { smallest = l; }
+                if (r < items.len() && items[r] < items[smallest]) { smallest = r; }
+                if (smallest == i) { break; }
+                Task t = items[i];
+                items[i] = items[smallest];
+                items[smallest] = t;
+                i = smallest;
+            }
+        }
+        return top;
+    }
+}
+
+public void main() {
+    var h = new TaskHeap();
+    h.add("write report", 3);
+    h.add("fix outage", 1);
+    h.add("lunch", 5);
+    h.add("review pr", 2);
+    h.add("reply email", 3);
+    h.add("deploy", 1);
+    print(h.size());
+    while (!h.isEmpty()) {
+        Task t = h.poll();
+        print(t.priority + " " + t.name);
+    }
+    h.add("late", 4);
+    h.add("early", 0);
+    print(h.poll().name);
+}
