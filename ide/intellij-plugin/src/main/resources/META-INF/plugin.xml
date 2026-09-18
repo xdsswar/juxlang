@@ -924,6 +924,8 @@
     <!-- Offer to mark src/ and test/ when a jux.toml project opens. -->
     <notificationGroup id="Jux Project" displayType="BALLOON"/>
     <postStartupActivity implementation="dev.jux.intellij.project.JuxSourceRootDetectorStartup"/>
+    <!-- Generate any missing or stale crate stub when the project opens. -->
+    <postStartupActivity implementation="dev.jux.intellij.project.JuxDependencyStartup"/>
     <!-- Project view: Flatten Packages shows a Jux root as dotted package nodes. -->
     <treeStructureProvider implementation="dev.jux.intellij.project.JuxPackageTreeStructureProvider"/>
   </extensions>
@@ -937,6 +939,10 @@
 
   <projectListeners>
     <listener class="dev.jux.intellij.lsp.JuxManifestChangeListener"
+              topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    <!-- Dependencies: re-read on a jux.toml change, refresh git checkouts,
+         regenerate a Rust crate's stub when its entry or sources change. -->
+    <listener class="dev.jux.intellij.project.JuxDependencyFileListener"
               topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
   </projectListeners>
 
