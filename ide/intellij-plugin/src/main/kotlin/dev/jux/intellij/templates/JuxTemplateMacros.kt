@@ -61,7 +61,7 @@ object JuxScopeVariables {
             when (scope.elementType) {
                 E.CODE_BLOCK ->
                     // Nearest declaration first.
-                    scope.children
+                    dev.jux.intellij.psi.JuxLocals.blockLocals(scope)
                         .filter { it.elementType === E.LOCAL_VARIABLE && it.textRange.endOffset <= offset }
                         .asReversed()
                         .forEach(::add)

@@ -56,6 +56,23 @@ class JuxPhase3SyntaxTest : BasePlatformTestCase() {
         assertEquals(1, count(E.OPERATOR_DECLARATION))
     }
 
+    fun testDestructuringDeclaresEachBinder() {
+        parses("record", "record Pt(int x, int y) {}\nvoid m(Pt p) { var Pt(a, b) = p; print(a + b); }")
+        assertEquals(1, count(E.DESTRUCTURING_DECLARATION))
+        assertEquals(2, count(E.LOCAL_VARIABLE))
+        parses("nested", "void m(Line l) { var Line(Pt(x1, y1), var end) = l; var (i, j) = (1, 2); print(x1 + y1 + i + j); }")
+        assertEquals(2, count(E.DESTRUCTURING_DECLARATION))
+        assertEquals(5, count(E.LOCAL_VARIABLE))
+    }
+
+    fun testDestructuredBinderIsTheDeclarationOfItsUses() {
+        myFixture.configureByText("go.jux", "record Pt(int x, int y) {}\nvoid m(Pt p) { var Pt(a, b) = p; print(<caret>a); }")
+        val target = myFixture.elementAtCaret
+        assertEquals(E.LOCAL_VARIABLE, target.elementType)
+        assertEquals("a", (target as dev.jux.intellij.psi.JuxNamedElement).name)
+        assertEquals(E.DESTRUCTURING_DECLARATION, target.parent.elementType)
+    }
+
     fun testSmartCastForms() {
         parses("elvisThrow", "String need(String? s) { return s ?: throw new IllegalArgumentException(\"none\"); }")
         assertEquals(1, count(E.THROW_STATEMENT))

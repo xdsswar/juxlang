@@ -389,7 +389,7 @@ internal object JuxRefactoringUtil {
         var scope: PsiElement? = at.parent
         while (scope != null && scope !is PsiFile) {
             val found = when (scope.elementType) {
-                E.CODE_BLOCK -> scope.children.lastOrNull {
+                E.CODE_BLOCK -> dev.jux.intellij.psi.JuxLocals.blockLocals(scope).lastOrNull {
                     it.elementType === E.LOCAL_VARIABLE && it.textRange.endOffset <= offset && nameOf(it) == name
                 }
                 E.FOR_EACH_STATEMENT, E.FOR_STATEMENT, E.CATCH_CLAUSE ->

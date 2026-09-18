@@ -275,7 +275,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         while (scope != null) {
             when (scope.elementType) {
                 E.CODE_BLOCK ->
-                    for (child in scope.children) {
+                    for (child in dev.jux.intellij.psi.JuxLocals.blockLocals(scope)) {
                         if (child is JuxNamedElement && child.elementType === E.LOCAL_VARIABLE) {
                             child.name?.let(candidates::add)
                         }

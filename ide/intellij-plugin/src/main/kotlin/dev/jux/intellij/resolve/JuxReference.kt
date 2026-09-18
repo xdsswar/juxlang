@@ -169,7 +169,7 @@ class JuxReference(element: PsiElement, range: TextRange) :
         when (scope.elementType) {
             E.CODE_BLOCK ->
                 // Locals are visible only after their declaration in the block.
-                for (child in scope.children) {
+                for (child in dev.jux.intellij.psi.JuxLocals.blockLocals(scope)) {
                     if (child.elementType === E.LOCAL_VARIABLE && child.textOffset < refOffset &&
                         (child as? JuxNamedElement)?.name == name
                     ) return child

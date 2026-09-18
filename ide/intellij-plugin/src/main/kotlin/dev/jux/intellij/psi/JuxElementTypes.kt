@@ -86,6 +86,13 @@ object JuxElementTypes {
     // ---- statements -------------------------------------------------------
     val CODE_BLOCK = JuxElementType("CODE_BLOCK")
     val LOCAL_VARIABLE = JuxElementType("LOCAL_VARIABLE")
+    /**
+     * `var Pt(x, y) = p;` / `var (a, b) = t;` (LANG-V1 §5.4): one statement
+     * declaring several locals. Each binder inside is its own
+     * [LOCAL_VARIABLE] node, so resolve, rename and the unused check treat it
+     * as the declaration it is; [dev.jux.intellij.psi.JuxLocals] finds them.
+     */
+    val DESTRUCTURING_DECLARATION = JuxElementType("DESTRUCTURING_DECLARATION")
     val EXPRESSION_STATEMENT = JuxElementType("EXPRESSION_STATEMENT")
     val IF_STATEMENT = JuxElementType("IF_STATEMENT")
     val WHILE_STATEMENT = JuxElementType("WHILE_STATEMENT")

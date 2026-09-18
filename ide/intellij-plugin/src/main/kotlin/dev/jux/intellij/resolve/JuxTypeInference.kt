@@ -72,7 +72,7 @@ object JuxTypeInference {
         while (scope != null) {
             when (scope.elementType) {
                 E.CODE_BLOCK ->
-                    for (child in scope.children) {
+                    for (child in dev.jux.intellij.psi.JuxLocals.blockLocals(scope)) {
                         if (child.elementType === E.LOCAL_VARIABLE && child.textOffset < offset &&
                             (child as? JuxNamedElement)?.name == name
                         ) return child as JuxNamedElement

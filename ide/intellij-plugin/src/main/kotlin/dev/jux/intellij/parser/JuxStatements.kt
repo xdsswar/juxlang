@@ -211,12 +211,66 @@ private fun PsiBuilder.parseForInit() {
 private fun PsiBuilder.parseLocalVariable() {
     val m = mark()
     while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
-    if (at(T.VAR_KW)) advanceLexer() else parseType()
-    if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // destructuring `var (x, y)`
+    val isVar = at(T.VAR_KW)
+    if (isVar) advanceLexer() else parseType()
+    // Destructuring (§5.4): `var (x, y) = t;` or `var Pt(x, y) = p;`.
+    if (isVar && (at(T.LPAREN) || atRecordPatternHead())) {
+        parseBindingPattern()
+        if (expect(T.EQ)) parseExpressionOrError()
+        semicolon()
+        m.done(E.DESTRUCTURING_DECLARATION)
+        return
+    }
+    if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // typed tuple destructuring
     else expectOrError(T.IDENTIFIER, "Variable name expected")
     if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     m.done(E.LOCAL_VARIABLE)
+}
+
+/** `Pt(` or `geo.Pt(`: a record pattern's type name, then its components. */
+private fun PsiBuilder.atRecordPatternHead(): Boolean {
+    if (!at(T.IDENTIFIER)) return false
+    var i = 1
+    while (lookAhead(i) === T.DOT && lookAhead(i + 1) === T.IDENTIFIER) i += 2
+    return lookAhead(i) === T.LPAREN
+}
+
+/**
+ * One binding pattern of a destructuring declaration: a tuple `(p, q)`, a
+ * record `Pt(p, q)`, or a binder `x` / `var x` / `int x`. Each binder is a
+ * LOCAL_VARIABLE node.
+ */
+private fun PsiBuilder.parseBindingPattern() {
+    when {
+        at(T.LPAREN) -> parseBindingList()
+        atRecordPatternHead() -> {
+            val type = mark()
+            advanceLexer()
+            while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) { advanceLexer(); advanceLexer() }
+            type.done(E.TYPE_REFERENCE)
+            parseBindingList()
+        }
+        else -> {
+            val binder = mark()
+            while (at(T.FINAL_KW) || at(T.VAR_KW)) advanceLexer()
+            // A typed binder `int x`: a type, then the name.
+            val typed = mark()
+            parseType()
+            if (at(T.IDENTIFIER)) typed.drop() else typed.rollbackTo()
+            expectOrError(T.IDENTIFIER, "Binding name expected")
+            binder.done(E.LOCAL_VARIABLE)
+        }
+    }
+}
+
+private fun PsiBuilder.parseBindingList() {
+    advanceLexer() // `(`
+    if (!at(T.RPAREN)) {
+        parseBindingPattern()
+        while (at(T.COMMA)) { advanceLexer(); if (!at(T.RPAREN)) parseBindingPattern() }
+    }
+    expectOrError(T.RPAREN, "')' expected")
 }
 
 private fun PsiBuilder.parseLabeledOrExprOrLocal() {

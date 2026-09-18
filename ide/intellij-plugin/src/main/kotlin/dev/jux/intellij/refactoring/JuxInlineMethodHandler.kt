@@ -221,6 +221,9 @@ class JuxInlineMethodHandler : InlineActionHandler() {
             while (scope != null && scope !is com.intellij.psi.PsiFile) {
                 for (child in scope.children) {
                     if (child.elementType === E.LOCAL_VARIABLE || child.elementType === E.PARAMETER) JuxRefactoringUtil.nameOf(child)?.let(out::add)
+                    if (child.elementType === E.DESTRUCTURING_DECLARATION) {
+                        dev.jux.intellij.psi.JuxLocals.declaredBy(child).mapNotNull { JuxRefactoringUtil.nameOf(it) }.forEach(out::add)
+                    }
                     if (child.elementType === E.PARAMETER_LIST) child.children.mapNotNull { JuxRefactoringUtil.nameOf(it) }.forEach(out::add)
                 }
                 scope = scope.parent
