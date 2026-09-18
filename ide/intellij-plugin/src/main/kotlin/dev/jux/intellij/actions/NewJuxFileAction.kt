@@ -53,23 +53,36 @@ class NewJuxFileAction :
      * seed the `PACKAGE` property — the platform's default path only knows how
      * to fill it for Java-aware file types.
      */
-    override fun createFileFromTemplate(name: String, template: FileTemplate, dir: PsiDirectory): PsiFile? {
-        return try {
+    override fun createFileFromTemplate(name: String, template: FileTemplate, dir: PsiDirectory): PsiFile? =
+        create(name, template, dir)
+
+    companion object {
+        private val LOG = Logger.getInstance(NewJuxFileAction::class.java)
+
+        /** The internal template names the dialog offers, one per kind (§I.5). */
+        val TEMPLATE_NAMES = listOf(
+            "Jux File", "Jux Class", "Jux Interface", "Jux Enum", "Jux Struct", "Jux Record", "Jux Annotation",
+        )
+
+        /**
+         * Create `[name].jux` in [dir] from [template], with `NAME` and the
+         * `PACKAGE` [JuxPackageResolver] infers for [dir]. Outside any package
+         * root `PACKAGE` is empty and the template drops the `package` line.
+         * Must run in a write action.
+         */
+        fun create(name: String, template: FileTemplate, dir: PsiDirectory): PsiFile? = try {
             val project = dir.project
             val props = FileTemplateManager.getInstance(project).defaultProperties
             props.setProperty("NAME", name)
-            props.setProperty(
-                "PACKAGE",
-                JuxPackageResolver.inferPackage(dir.virtualFile, project) ?: "",
-            )
+            props.setProperty("PACKAGE", JuxPackageResolver.inferPackage(dir.virtualFile, project) ?: "")
             FileTemplateUtil.createFromTemplate(template, name, props, dir).containingFile
         } catch (e: Exception) {
             LOG.error("Failed to create Jux file from template '${template.name}'", e)
             null
         }
-    }
 
-    companion object {
-        private val LOG = Logger.getInstance(NewJuxFileAction::class.java)
+        /** [create] by internal template name ([TEMPLATE_NAMES]). */
+        fun create(name: String, templateName: String, dir: PsiDirectory): PsiFile? =
+            create(name, FileTemplateManager.getInstance(dir.project).getInternalTemplate(templateName), dir)
     }
 }
