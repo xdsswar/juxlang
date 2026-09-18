@@ -410,6 +410,17 @@
     <typeHierarchyProvider
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.hierarchy.JuxTypeHierarchyProvider"/>
+    <!-- Call Hierarchy (Ctrl+Alt+H) and Method Hierarchy (Ctrl+Shift+H). -->
+    <callHierarchyProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.hierarchy.JuxCallHierarchyProvider"/>
+    <methodHierarchyProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.hierarchy.JuxMethodHierarchyProvider"/>
+    <!-- Go to Super Method (Ctrl+U). -->
+    <codeInsight.gotoSuper
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxGotoSuperHandler"/>
 
     <!-- Complete Current Statement (Ctrl+Shift+Enter): close open brackets,
          give a header its `{ }`, or terminate the statement — then move on. -->
