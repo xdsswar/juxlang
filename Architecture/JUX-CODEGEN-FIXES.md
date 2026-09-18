@@ -1,8 +1,10 @@
 # JUX-CODEGEN-FIXES.md
 
-**Status:** ✅ COMPLETE — all five fixes landed and verified. Generated output is
-clean, rustfmt-idempotent, warning-free, and spec-compliant. Kept as a record of
-the polish pass and its acceptance criteria (now all ticked).
+**Status:** a historical record. Fixes 1 to 6 landed and still describe the
+compiler. Fix 7 landed too, but the collection half of it was later replaced:
+collections became reference types (JUX-LANG-V1 §6.5.1), so its "plain
+`std::vec::Vec`" lowering no longer holds. See the note under Fix 7. The
+current lowering is specified in JUX-LANG-V1, not here.
 **Target:** The Rust source emitter in `juxc`.
 **Goal:** Move generated output from "compiles with rough edges" to "clean, idiomatic Rust."
 
@@ -526,6 +528,15 @@ in §7.4.3 — this was a pure codegen gap, no spec change.
 
 ## Fix 7 — Foreign collection parameters pass by `&mut` (Java container semantics, gap C6)
 
+> **Superseded for collections.** Collections are now reference types
+> (JUX-LANG-V1 §6.5.1): a `Vec`, `HashMap`, `HashSet` or `VecDeque` lowers to a
+> shared `Rc<RefCell<...>>` handle, so passing one to a function shares it the
+> way a class instance is shared, and no `&mut` parameter is needed for that.
+> `Vec` is also in the prelude now; the `import rust.std.Vec;` below is no
+> longer required. The `&mut` rule described here still applies to other
+> non-`Copy` foreign types that a body mutates. What follows is kept as the
+> record of the original fix.
+
 **Symptom.** A function that takes a `rust.std` collection and mutates it
 left the caller's collection unchanged — Rust's by-value move, not Java's
 by-reference container passing:
@@ -544,7 +555,7 @@ public void main() {
 
 **Model (what Jux guarantees, matching Java).** Collections are the Rust std
 collections used as-is — `Vec`/`HashMap`/… imported from `rust.std`, Rust
-method names (`push`/`insert`/`len`/`containsKey`), lowering to genuine
+method names (`push`/`insert`/`len`/`contains_key`), lowering to genuine
 `std::vec::Vec`. There is **no** Jux `List`/`Vec`; `Vec` IS the name a
 Jux program writes, with Rust's own methods. Of Java's three
 behaviors, two already held: class **objects** added to a collection are
