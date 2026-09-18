@@ -36,6 +36,14 @@ class JuxRefactoringSupportProvider : RefactoringSupportProvider() {
 
     override fun getExtractMethodHandler(): RefactoringActionHandler = JuxExtractMethodHandler()
 
+    override fun getIntroduceFieldHandler(): RefactoringActionHandler = JuxIntroduceFieldHandler()
+
+    override fun getIntroduceParameterHandler(): RefactoringActionHandler = JuxIntroduceParameterHandler()
+
+    override fun getPullUpHandler(): RefactoringActionHandler = JuxPullUpHandler()
+
+    override fun getPushDownHandler(): RefactoringActionHandler = JuxPushDownHandler()
+
     override fun getChangeSignatureHandler(): com.intellij.refactoring.changeSignature.ChangeSignatureHandler =
         JuxChangeSignatureHandler()
 

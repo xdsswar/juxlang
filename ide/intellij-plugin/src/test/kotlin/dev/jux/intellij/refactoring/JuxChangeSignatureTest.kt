@@ -112,6 +112,26 @@ class JuxChangeSignatureTest : BasePlatformTestCase() {
         )
     }
 
+    fun testSwappingTwoNamesDoesNotChainInsideAnInterpolation() {
+        val file = myFixture.addFileToProject(
+            "Swap.jux",
+            """
+            void show(int a, int b) {
+                print(${'$'}"${'$'}a then ${'$'}{b}");
+            }
+            """.trimIndent(),
+        )
+        JuxChangeSignature(method(file, "show"), "show", null, listOf(P(0, "b", "int"), P(1, "a", "int"))).run(project)
+        assertEquals(
+            """
+            void show(int b, int a) {
+                print(${'$'}"${'$'}b then ${'$'}{a}");
+            }
+            """.trimIndent(),
+            file.text,
+        )
+    }
+
     fun testANewParameterWithoutAValueIsAProblem() {
         val file = myFixture.addFileToProject("A.jux", "void f(int a) {}")
         val change = JuxChangeSignature(method(file, "f"), "f", null, listOf(P(0, "a", "int"), P(-1, "b", "int")))

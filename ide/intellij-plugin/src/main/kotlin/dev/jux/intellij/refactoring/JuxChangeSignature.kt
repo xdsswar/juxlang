@@ -110,14 +110,16 @@ class JuxChangeSignature(
             if (kept == null) "${p.type} ${p.name}" else renderKept(kept, p)
         }
         out += JuxRefactoringUtil.Edit(file, list.textRange, "($rendered)")
-        // Renamed parameters: their uses in the body.
+        // Renamed parameters: their uses in the body, all at once so a swap
+        // of two names does not chain.
         val body = JuxRefactoringUtil.body(m)
         if (body != null) {
+            val renames = HashMap<PsiElement, String>()
             for (p in parameters) {
                 val kept = old.getOrNull(p.oldIndex) ?: continue
-                val oldName = JuxRefactoringUtil.nameOf(kept) ?: continue
-                if (oldName != p.name) out += renameUses(body, kept, oldName, p.name)
+                if (JuxRefactoringUtil.nameOf(kept) != p.name) renames[kept] = p.name
             }
+            out += JuxRefactoringUtil.renameEdits(body, renames)
         }
         return out
     }
@@ -134,22 +136,6 @@ class JuxChangeSignature(
         sb.replace(id.textRange.startOffset - base, id.textRange.endOffset - base, p.name)
         sb.replace(typeRef.textRange.startOffset - base, typeRef.textRange.endOffset - base, p.type)
         return sb.toString()
-    }
-
-    /** Edits renaming [decl]'s uses under [body], interpolated ones included. */
-    private fun renameUses(body: PsiElement, decl: PsiElement, oldName: String, newName: String): List<JuxRefactoringUtil.Edit> {
-        val file = body.containingFile
-        val out = ArrayList<JuxRefactoringUtil.Edit>()
-        for ((target, use) in JuxRefactoringUtil.variableUses(body)) {
-            if (target !== decl) continue
-            if (use.elementType === E.REFERENCE_EXPRESSION) {
-                out += JuxRefactoringUtil.Edit(file, use.textRange, newName)
-            } else {
-                val raw = use.elementType === T.INTERP_RAW_STRING_LITERAL
-                out += JuxRefactoringUtil.Edit(file, use.textRange, renameInInterpolation(use.text, oldName, newName, raw))
-            }
-        }
-        return out.distinct()
     }
 
     // ---- calls -------------------------------------------------------------
@@ -202,10 +188,20 @@ class JuxChangeSignature(
          * a `${…}` hole or a `$name` shorthand renamed. Literal text is left
          * alone: `"count: ${count}"` keeps its label.
          */
-        fun renameInInterpolation(text: String, oldName: String, newName: String, raw: Boolean): String {
+        fun renameInInterpolation(text: String, oldName: String, newName: String, raw: Boolean): String =
+            renameInInterpolation(text, mapOf(oldName to newName), raw)
+
+        /**
+         * [renameInInterpolation] for several names at once, in ONE pass, so a
+         * swap (`a` to `b` and `b` to `a`) does not chain.
+         */
+        fun renameInInterpolation(text: String, renames: Map<String, String>, raw: Boolean): String {
+            if (renames.isEmpty()) return text
             val out = StringBuilder()
             var i = 0
             fun isIdent(c: Char) = c.isLetterOrDigit() || c == '_'
+            // A bare identifier in a hole, not a member name after a `.`.
+            val word = Regex("(?<![\\w.])[A-Za-z_]\\w*")
             while (i < text.length) {
                 val c = text[i]
                 if (!raw && c == '\\' && i + 1 < text.length) {
@@ -220,17 +216,25 @@ class JuxChangeSignature(
                     }
                     val holeEnd = if (depth == 0) j - 1 else j
                     val hole = text.substring(i + 2, holeEnd)
-                    val renamed = Regex("(?<![\\w.])${Regex.escape(oldName)}(?!\\w)").replace(hole, newName)
+                    val renamed = word.replace(hole) { m -> renames[m.value] ?: m.value }
                     out.append("\${").append(renamed)
                     if (depth == 0) out.append('}')
                     i = j
                     continue
                 }
-                if (c == '$' && text.startsWith(oldName, i + 1) &&
-                    (i + 1 + oldName.length >= text.length || !isIdent(text[i + 1 + oldName.length]))
-                ) {
-                    out.append('$').append(newName)
-                    i += 1 + oldName.length
+                if (c == '$' && i + 1 < text.length && (text[i + 1].isLetter() || text[i + 1] == '_')) {
+                    var j = i + 1
+                    while (j < text.length && isIdent(text[j])) j++
+                    val name = text.substring(i + 1, j)
+                    val target = renames[name]
+                    if (target != null) {
+                        // `$name` only takes a name; anything else needs a `${…}` hole.
+                        if (target.all { isIdent(it) }) out.append('$').append(target)
+                        else out.append("\${").append(target).append('}')
+                    } else {
+                        out.append('$').append(name)
+                    }
+                    i = j
                     continue
                 }
                 out.append(c)

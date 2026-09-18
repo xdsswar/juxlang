@@ -316,6 +316,65 @@ internal object JuxRefactoringUtil {
         return out
     }
 
+    /**
+     * Edits that rewrite each use of the declarations in [renames] (declaration
+     * -> new text) under [root]. A plain reference is replaced; an interpolated
+     * string gets ONE edit applying every rename that touches it, since two
+     * edits on the same token would overwrite each other.
+     */
+    fun renameEdits(root: PsiElement, renames: Map<PsiElement, String>): List<Edit> {
+        val file = root.containingFile
+        val out = ArrayList<Edit>()
+        val tokens = LinkedHashMap<PsiElement, MutableList<PsiElement>>()
+        for ((decl, use) in variableUses(root)) {
+            val target = renames[decl] ?: continue
+            if (use.elementType === E.REFERENCE_EXPRESSION) out += Edit(file, use.textRange, target)
+            else tokens.getOrPut(use) { ArrayList() }.add(decl)
+        }
+        for ((token, decls) in tokens) {
+            val raw = token.elementType === JuxTokenTypes.INTERP_RAW_STRING_LITERAL
+            val byName = decls.distinct().mapNotNull { d -> nameOf(d)?.let { it to renames.getValue(d) } }.toMap()
+            out += Edit(file, token.textRange, JuxChangeSignature.renameInInterpolation(token.text, byName, raw))
+        }
+        return out
+    }
+
+    /**
+     * The range to delete to remove a member or a top-level declaration: the
+     * doc comment right above it, its lines, and one of the blank lines around
+     * it, so what is left stays one blank line apart.
+     */
+    fun memberDeletionRange(member: PsiElement): TextRange {
+        var start: PsiElement = member
+        var prev = member.prevSibling
+        while (prev is PsiWhiteSpace && !prev.text.contains("\n\n")) {
+            val before = prev.prevSibling
+            if (before is PsiComment) {
+                start = before; prev = before.prevSibling
+            } else break
+        }
+        val text = member.containingFile.text
+        var s = start.textRange.startOffset
+        while (s > 0 && (text[s - 1] == ' ' || text[s - 1] == '\t')) s--
+        // One blank line above goes with it.
+        var s2 = s
+        if (s2 > 0 && text[s2 - 1] == '\n') {
+            var k = s2 - 1
+            while (k > 0 && (text[k - 1] == ' ' || text[k - 1] == '\t')) k--
+            if (k > 0 && text[k - 1] == '\n') s2 = k
+        }
+        var e = member.textRange.endOffset
+        while (e < text.length && (text[e] == ' ' || text[e] == '\t')) e++
+        if (e < text.length && text[e] == '\n') e++
+        if (s2 == s) {
+            // No blank line went from above, so take the one below.
+            var k = e
+            while (k < text.length && (text[k] == ' ' || text[k] == '\t')) k++
+            if (k < text.length && text[k] == '\n') e = k + 1
+        }
+        return TextRange(s2, e)
+    }
+
     /** A local or a parameter. */
     fun isVariable(decl: PsiElement): Boolean =
         decl is dev.jux.intellij.psi.JuxLocalVariable || decl is dev.jux.intellij.psi.JuxParameter

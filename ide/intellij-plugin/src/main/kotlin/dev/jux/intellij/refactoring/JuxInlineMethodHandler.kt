@@ -160,8 +160,8 @@ class JuxInlineMethodHandler : InlineActionHandler() {
 
             // ---- the inlined text ------------------------------------------------
             val bodyStatements = if (tailReturn != null) statements.dropLast(1) else statements
-            val renderedStatements = bodyStatements.joinToString("\n") { render(it, uses, substitution) }
-            val renderedReturn = returnExpr?.let { render(it, uses, substitution) }
+            val renderedStatements = bodyStatements.joinToString("\n") { render(it, substitution) }
+            val renderedReturn = returnExpr?.let { render(it, substitution) }
             val file = call.containingFile
             val out = ArrayList<JuxRefactoringUtil.Edit>()
             val head = prologue.toString() + if (renderedStatements.isNotEmpty()) "$renderedStatements\n" else ""
@@ -185,39 +185,21 @@ class JuxInlineMethodHandler : InlineActionHandler() {
         }
 
         /** [element]'s text with each use of a substituted declaration replaced. */
-        private fun render(element: PsiElement, uses: List<Pair<PsiElement, PsiElement>>, substitution: Map<PsiElement, String>): String {
+        private fun render(element: PsiElement, substitution: Map<PsiElement, String>): String {
             val base = element.textRange.startOffset
-            val replacements = ArrayList<Pair<TextRange, String>>()
-            for ((decl, use) in uses) {
-                if (!element.textRange.contains(use.textRange)) continue
-                val target = substitution[decl] ?: continue
-                if (use.elementType === E.REFERENCE_EXPRESSION) {
-                    replacements += use.textRange to target
-                } else {
-                    val raw = use.elementType === T.INTERP_RAW_STRING_LITERAL
-                    val old = JuxRefactoringUtil.nameOf(decl) ?: continue
-                    replacements += use.textRange to JuxChangeSignature.renameInInterpolation(use.text, old, target, raw)
-                }
-            }
-            // The declarations of renamed locals.
+            // Uses (one edit per interpolated token, all renames at once), then
+            // the declarations of renamed locals.
+            val edits = JuxRefactoringUtil.renameEdits(element, substitution).toMutableList()
             for ((decl, target) in substitution) {
                 if (decl.elementType !== E.LOCAL_VARIABLE || !element.textRange.contains(decl.textRange)) continue
-                (decl as? dev.jux.intellij.psi.JuxNamedElement)?.nameIdentifier?.let { replacements += it.textRange to target }
-            }
-            // Several renames can hit one interpolated token; apply them in turn.
-            val merged = replacements.groupBy { it.first }.map { (range, reps) ->
-                if (reps.size == 1) reps.first() else {
-                    var text = element.containingFile.text.substring(range.startOffset, range.endOffset)
-                    for ((decl, target) in substitution) {
-                        val old = JuxRefactoringUtil.nameOf(decl) ?: continue
-                        text = JuxChangeSignature.renameInInterpolation(text, old, target, text.startsWith("$\"\"\"") || text.startsWith("r"))
-                    }
-                    range to text
+                (decl as? dev.jux.intellij.psi.JuxNamedElement)?.nameIdentifier?.let {
+                    edits += JuxRefactoringUtil.Edit(element.containingFile, it.textRange, target)
                 }
             }
             val sb = StringBuilder(element.text)
-            for ((range, text) in merged.sortedByDescending { it.first.startOffset }) {
-                sb.replace(range.startOffset - base, range.endOffset - base, text)
+            for (edit in edits.distinctBy { it.range }.sortedByDescending { it.range.startOffset }) {
+                val text = edit.parts.joinToString("") { (it as JuxRefactoringUtil.Part.Lit).text }
+                sb.replace(edit.range.startOffset - base, edit.range.endOffset - base, text)
             }
             return JuxRefactoringUtil.dedent(sb.toString())
         }
@@ -276,40 +258,7 @@ class JuxInlineMethodHandler : InlineActionHandler() {
             return name
         }
 
-        /**
-         * The method's text range to delete, with the doc comment in front of
-         * it and the lines it leaves empty.
-         */
-        private fun deletionRange(method: PsiElement): TextRange {
-            var start: PsiElement = method
-            var prev = method.prevSibling
-            while (prev is PsiWhiteSpace && !prev.text.contains("\n\n")) {
-                val before = prev.prevSibling
-                if (before is PsiComment) {
-                    start = before; prev = before.prevSibling
-                } else break
-            }
-            val text = method.containingFile.text
-            var s = start.textRange.startOffset
-            while (s > 0 && (text[s - 1] == ' ' || text[s - 1] == '\t')) s--
-            // Swallow one blank line before, so members stay one blank line apart.
-            var s2 = s
-            if (s2 > 0 && text[s2 - 1] == '\n') {
-                var k = s2 - 1
-                while (k > 0 && (text[k - 1] == ' ' || text[k - 1] == '\t')) k--
-                if (k > 0 && text[k - 1] == '\n') s2 = k
-            }
-            var e = method.textRange.endOffset
-            while (e < text.length && (text[e] == ' ' || text[e] == '\t')) e++
-            if (e < text.length && text[e] == '\n') e++
-            if (s2 == s) {
-                // No blank line went from above, so take the one below.
-                var k = e
-                while (k < text.length && (text[k] == ' ' || text[k] == '\t')) k++
-                if (k < text.length && text[k] == '\n') e = k + 1
-            }
-            return TextRange(s2, e)
-        }
+        private fun deletionRange(method: PsiElement): TextRange = JuxRefactoringUtil.memberDeletionRange(method)
 
         private val SIMPLE = Regex("^([A-Za-z_][A-Za-z0-9_]*|-?\\d[\\d_.]*[a-zA-Z]*|\"[^\"\\\\$]*\"|'[^']*'|true|false|null|this)$")
 
