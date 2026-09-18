@@ -7769,60 +7769,171 @@ impl<'a> Checker<'a> {
             if params.contains(name.as_str()) {
                 continue;
             }
-            fn is_object_ty(ty: &Ty) -> bool {
-                match ty {
-                    Ty::User { .. } => true,
-                    Ty::Nullable(inner) => is_object_ty(inner),
-                    Ty::Array { element, .. } => is_object_ty(element),
-                    _ => false,
-                }
-            }
-            /// The bare class name a capture's type names, peeling `T?` / `T[]`.
-            fn object_class_name(ty: &Ty) -> Option<String> {
-                match ty {
-                    Ty::User { name, .. } => {
-                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
-                    }
-                    Ty::Nullable(inner) => object_class_name(inner),
-                    Ty::Array { element, .. } => object_class_name(element),
-                    _ => None,
-                }
-            }
-            // Runtime handles (Channel, Task) are Arc-backed and
-            // Send — they exist to cross task boundaries.
-            if self
-                .env
-                .lookup(&name)
-                .map(Self::capture_is_thread_safe)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let Some(ty) = self.env.lookup(&name) else {
+            let Some(ty) = self.env.lookup(&name).cloned() else {
                 continue;
             };
-            if !is_object_ty(ty) {
-                continue;
-            }
-            // §18.2: a class whose refcount can be made atomic IS transferable —
-            // the backend's `worker` pass upgrades it instead of refusing. Only
-            // a class holding something that cannot come along is an error, and
-            // the message names that member.
-            let Some(class_bare) = object_class_name(ty) else {
+            let Some(why) = self.worker_capture_blocker(&ty, 0) else {
                 continue;
             };
-            if let Some(why) = self.symbols.worker_share_blocker(&class_bare) {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0702_ObjectCapturedBySpawn,
-                        format!(
-                            "`{name}` cannot be captured by a `Worker.spawn` closure: {why}. A class whose members are all shareable is upgraded to an atomic handle automatically; move the unshareable member out, or pass data in and return results out",
-                        ),
-                    )
-                    .with_span(span),
-                );
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0702_ObjectCapturedBySpawn,
+                    format!("`{name}` cannot be captured by a `Worker.spawn` closure: {why}"),
+                )
+                .with_span(span),
+            );
+        }
+        // **`this`, written or implied.** A method's closure that reads a field
+        // or calls a method of its own class captures the object, exactly as
+        // `this.total` would. The class then crosses the boundary like any
+        // other captured object, so the same blocker applies to it.
+        if let Some(span) = self.worker_lambda_this_capture(l) {
+            if let Some(class) = self.env.current_class.clone() {
+                let bare = class.rsplit('.').next().unwrap_or(&class).to_string();
+                if let Some(why) = self.symbols.worker_share_blocker(&bare) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0702_ObjectCapturedBySpawn,
+                            format!(
+                                "`this` cannot be captured by a `Worker.spawn` closure: {why}. A class whose members are all shareable is upgraded to an atomic handle automatically; move the unshareable member out, or copy what the worker needs into a local first",
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
             }
         }
+    }
+
+    /// Where a `Worker.spawn` closure reaches `this`: an explicit `this`, or a
+    /// bare name that is a field, property or method of the enclosing class
+    /// and not a local or one of the closure's own parameters. `None` when it
+    /// does not, or when there is no enclosing class.
+    fn worker_lambda_this_capture(&self, l: &juxc_ast::LambdaExpr) -> Option<Span> {
+        let class = self.env.current_class.clone()?;
+        let params: std::collections::HashSet<&str> =
+            l.params.iter().map(|p| p.name.text.as_str()).collect();
+        let mut found: Option<Span> = None;
+        let mut visit = |e: &Expr| {
+            if found.is_some() {
+                return;
+            }
+            match e {
+                Expr::This(span) => found = Some(*span),
+                Expr::Path(qn) if qn.segments.len() == 1 => {
+                    let name = qn.segments[0].text.as_str();
+                    if params.contains(name) || self.env.lookup(name).is_some() {
+                        return;
+                    }
+                    let member = self.symbols.lookup_field(&class, name).is_some()
+                        || self.symbols.lookup_method(&class, name).is_some()
+                        || self
+                            .symbols
+                            .resolve_class(&class)
+                            .is_some_and(|(_, c)| c.properties.contains_key(name));
+                    if member {
+                        found = Some(qn.span);
+                    }
+                }
+                _ => {}
+            }
+        };
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => juxc_ast::visit::for_each_expr_in(e, &mut visit),
+            juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_expr(b, &mut visit),
+        }
+        found
+    }
+
+    /// Why a value of type `ty` cannot be captured by a `Worker.spawn`
+    /// closure, or `None` when it is transferable (JUX-ASYNC-ADDENDUM §18.2).
+    ///
+    /// Transferable: primitives, `String`, tuples and records of transferable
+    /// values, the async runtime's own handles, classes (upgraded to an atomic
+    /// handle unless a member cannot come along), and collections and arrays of
+    /// transferable values, which the worker receives as its own copy. Not
+    /// transferable: function values and interface handles (single-threaded
+    /// shared references), streams (task-local, §18.6.1), and a collection of
+    /// collections, which a one-level copy cannot carry.
+    fn worker_capture_blocker(&self, ty: &Ty, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        match ty {
+            Ty::Nullable(inner) => self.worker_capture_blocker(inner, depth + 1),
+            Ty::Fn { .. } => Some(
+                "it is a function value, which is a single-threaded shared reference; call it before spawning and capture the result, or write the work inside the worker closure".to_string(),
+            ),
+            Ty::Array { element, .. } => self.worker_element_blocker(element, depth),
+            Ty::User { name, generic_args } => {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                if Self::capture_is_thread_safe(ty) {
+                    return None;
+                }
+                if bare == "__tuple" {
+                    return generic_args.iter().find_map(|a| self.worker_capture_blocker(a, depth + 1));
+                }
+                if self.symbols.is_builtin_stream(name) {
+                    return Some("it is a stream, which is task-local (§18.6.1); send its elements through a `Channel` instead".to_string());
+                }
+                if self.symbols.is_interface_name(name) {
+                    return Some(format!(
+                        "an interface handle (`{bare}`) is a single-threaded shared reference; capture the concrete class instead",
+                    ));
+                }
+                if self.symbols.is_rust_collection(name) {
+                    return generic_args.iter().find_map(|a| self.worker_element_blocker(a, depth));
+                }
+                if let Some((_, record)) = self.symbols.resolve_record(name) {
+                    for c in &record.components {
+                        let head = c.ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                        let why = if let Some(why) = self.symbols.typeref_share_blocker(&c.ty) {
+                            why.to_string()
+                        } else if c.ty.array_shape.is_some() || self.symbols.is_rust_collection(head) {
+                            "a collection, which a record carries as a shared handle".to_string()
+                        } else {
+                            continue;
+                        };
+                        return Some(format!(
+                            "`{bare}.{}` holds {why}; copy the values the worker needs into locals first",
+                            c.name,
+                        ));
+                    }
+                    return None;
+                }
+                if self.symbols.resolve_class(name).is_some_and(|(_, c)| !c.is_external) {
+                    return self.symbols.worker_share_blocker(bare).map(|why| {
+                        format!(
+                            "{why}. A class whose members are all shareable is upgraded to an atomic handle automatically; move the unshareable member out, or pass data in and return results out",
+                        )
+                    });
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// The element type of a captured collection or array. The worker gets a
+    /// copy of the collection one level deep, so each element must itself be
+    /// transferable, and must not be another collection.
+    fn worker_element_blocker(&self, element: &Ty, depth: usize) -> Option<String> {
+        let mut inner = element;
+        while let Ty::Nullable(t) = inner {
+            inner = t;
+        }
+        let nested = match inner {
+            Ty::Array { .. } => true,
+            Ty::User { name, .. } => self.symbols.is_rust_collection(name),
+            _ => false,
+        };
+        if nested {
+            return Some(
+                "it holds collections, and a worker receives a copy of a collection only one level deep; flatten the data or copy it into records first".to_string(),
+            );
+        }
+        self.worker_capture_blocker(element, depth + 1)
+            .map(|why| format!("its elements cannot come along: {why}"))
     }
 
     /// Resolve `e` as a PROPERTY ACCESS (`recv.PropName` /

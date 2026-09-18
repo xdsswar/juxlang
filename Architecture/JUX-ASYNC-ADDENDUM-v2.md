@@ -447,7 +447,8 @@ Transferable types are:
 - All primitive types and tuples of transferable types
 - `struct` and `record` types whose fields are all transferable
 - `class` types whose refcount can be made atomic; the compiler upgrades the refcount automatically when an instance crosses a worker boundary
-- `String`, `Vec<T>`, `Map<K, V>` (their internal sharing is thread-safe by construction)
+- `String`
+- collections and arrays whose elements are transferable and are not themselves collections or arrays; the worker receives its own copy (see "Captures are by value" below)
 
 **How the class upgrade works.** A class whose instances cross a worker boundary lowers to an atomic handle (`Arc<Mutex<…>>`) instead of the default single-threaded one (`Rc<RefCell<…>>`). The upgrade follows the object graph: a class reached through a shared class's field is upgraded with it, since the payload of a shareable handle must itself be shareable. Whole `extends` components move together, because a subclass and its base share one storage layout. Classes that never cross a boundary keep the cheaper handle, so a program pays for atomicity only where it actually shares.
 
@@ -455,7 +456,11 @@ The guarantee is **Java's, and stops where Java's does**: one mutating call on a
 
 **Captures are by value.** A worker closure takes a copy of each captured local at the spawn point. That matters for a local the surrounding code also reassigns — a loop counter, say. Such a local would ordinarily be promoted to a shared cell so a closure observes later writes, but a worker runs on another thread, where that sharing is exactly what the transferable rule forbids; the value is read out at the boundary instead. A worker capture therefore never forces the promotion, which also keeps the enclosing `async` function sendable.
 
-When the compiler rejects a capture, the diagnostic names the offending value and points to the alternative (e.g., "wrap in `AtomicShared<T>`" or "send by value"). A class is rejected only when it holds something that cannot come along — an interface handle, a closure, a weak reference, or an observable property's listener list, each of which is a single-threaded shared reference — and the message names that member. The terms `Send` and `Sync` never appear in error messages or in the user-visible type system.
+The same rule gives a captured **collection or array** its meaning. A collection is a shared handle (§6.5.1, JUX-LANG-V1 §6.5.2), and a handle cannot cross threads, so the worker takes a copy of the contents at the spawn point, one level deep. The worker can read and change its copy freely; the caller's collection is not affected, and later changes to the caller's collection are not seen by the worker. Return results from the worker instead (`await` the task) or send them through a `Channel`. A collection whose elements are themselves collections or arrays cannot be copied one level deep and is rejected (`E0702`); elements that are class objects are shared, as any captured object is.
+
+A closure in a method that reads one of the class's own fields or calls one of its methods captures `this`, exactly as writing `this.` would. The object then crosses the boundary like any other captured object.
+
+When the compiler rejects a capture, the diagnostic names the offending value and points to the alternative (e.g., "wrap in `AtomicShared<T>`" or "send by value"). A class is rejected only when it holds something that cannot come along — an interface handle, a closure, a weak reference, or an observable property's listener list, each of which is a single-threaded shared reference — and the message names that member. The same values are rejected when captured directly, as is a stream (task-local, §18.6.1), a record holding any of them or holding a collection, and a collection of collections. The terms `Send` and `Sync` never appear in error messages or in the user-visible type system.
 
 ```
 Error: cannot capture `db` across a worker boundary

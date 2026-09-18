@@ -1,0 +1,1 @@
+worker_capture_this_holding_closure.jux:7:36: [E0702] error: `this` cannot be captured by a `Worker.spawn` closure: `Service.adjust` holds a function value, which is a single-threaded shared reference. A class whose members are all shareable is upgraded to an atomic handle automatically; move the unshareable member out, or copy what the worker needs into a local first

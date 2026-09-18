@@ -1,0 +1,80 @@
+// What a `Worker.spawn` closure can take to another thread, and what it gets
+// (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27).
+//
+// A worker takes its captures by value. For a collection or an array that
+// means its own copy of the contents: changes stay in the worker, and results
+// come back through the task. A class object is shared instead, upgraded to an
+// atomic handle, so a change made in the worker is seen by the caller. A
+// method's closure that reads a field of its own class captures `this`.
+
+int sumRange(int[] data, int from, int to) {
+    int total = 0;
+    for (int i = from; i < to; i++) {
+        total += data[i];
+    }
+    return total;
+}
+
+// The §18.2 example: two workers over halves of one array parameter.
+public async int parallelSum(int[] data) {
+    var mid = data.length / 2;
+    var left = Worker.spawn(() -> sumRange(data, 0, mid));
+    var right = Worker.spawn(() -> sumRange(data, mid, data.length));
+    return await left + await right;
+}
+
+class Job {
+    public int done = 0;
+}
+
+class Tally {
+    public int base = 100;
+
+    // `base` is `this.base`: the closure captures the object.
+    public async int plus(int n) {
+        var t = Worker.spawn(() -> base + n);
+        return await t;
+    }
+}
+
+public async void main() {
+    int[] data = new int[10];
+    for (int i = 0; i < 10; i++) {
+        data[i] = i + 1;
+    }
+    print(await parallelSum(data));
+
+    // A captured collection is the worker's own copy.
+    var names = new Vec<String>();
+    names.push("ann");
+    var grown = Worker.spawn(() -> {
+        names.push("bob");
+        return names.len();
+    });
+    print(await grown);
+    print(names.len());
+
+    var ages = new HashMap<String, int>();
+    ages.insert("ann", 31);
+    var count = Worker.spawn(() -> ages.len());
+    print(await count);
+
+    // Class objects are shared, even inside a copied collection.
+    var jobs = new Vec<Job>();
+    jobs.push(new Job());
+    jobs.push(new Job());
+    var worked = Worker.spawn(() -> {
+        for (var j : jobs) {
+            j.done = 1;
+        }
+        return jobs.len();
+    });
+    print(await worked);
+    int finished = 0;
+    for (var j : jobs) {
+        finished += j.done;
+    }
+    print(finished);
+
+    print(await new Tally().plus(5));
+}

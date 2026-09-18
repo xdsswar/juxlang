@@ -1,0 +1,13 @@
+// Reading a field in a method's worker closure captures `this`, and this class
+// holds a function value: E0702 (§18.2).
+class Service {
+    public int base = 5;
+    public (int) -> int adjust = (x) -> x;
+    public async int total() {
+        var t = Worker.spawn(() -> base + 1);
+        return await t;
+    }
+}
+public async void main() {
+    print(await new Service().total());
+}

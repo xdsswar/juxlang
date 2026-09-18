@@ -1,0 +1,7 @@
+// A record carries a collection as a shared handle: E0702 (§18.2, ERRATA E27).
+record Bag(int[] items) {}
+public async void main() {
+    var bag = new Bag(new int[2]);
+    var t = Worker.spawn(() -> bag.items.length);
+    print(await t);
+}

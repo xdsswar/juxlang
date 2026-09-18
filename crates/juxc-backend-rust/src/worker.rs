@@ -106,31 +106,139 @@ fn worker_capture_class_names(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
 ) -> HashSet<String> {
+    worker_capture_seeds(units, expr_types)
+        .into_iter()
+        .map(|fqn| fqn.rsplit('.').next().unwrap_or(&fqn).to_string())
+        .collect()
+}
+
+/// Every class a `Worker.spawn(…)` closure takes across, by the name its type
+/// carries (the FQN when the class lives in a package).
+///
+/// Two sources. A captured value's type, walked through `T?`, `T[]` and type
+/// arguments, because a `Vec<Job>` capture hands the worker the `Job`s in it.
+/// And the enclosing class, when the closure reaches `this`: explicitly, or
+/// through a bare name that is one of the class's own fields, properties or
+/// methods (Java's `total` for `this.total`). Missing the second made a method
+/// that spawned work over its own fields send `Rc<RefCell<…>>` to a thread.
+fn worker_capture_seeds(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::new();
-    walk_unit_exprs(units, &mut |e| {
-        let Expr::Call(c) = e else { return };
-        if !is_worker_spawn_callee(&c.callee) {
-            return;
-        }
-        let Some(Expr::Lambda(l)) = c.args.first() else { return };
+    for_each_worker_lambda(units, &mut |owner, l| {
         let params: HashSet<&str> = l.params.iter().map(|p| p.name.text.as_str()).collect();
+        let mut reaches_this = false;
         // Resolve each capture's type as we see it: the walker hands out
         // borrows valid only inside the callback, so nothing is collected.
-        let mut visit = |inner: &Expr| {
-            let Expr::Path(qn) = inner else { return };
-            if qn.segments.len() != 1 || params.contains(qn.segments[0].text.as_str()) {
-                return;
+        let mut visit = |inner: &Expr| match inner {
+            Expr::This(_) => reaches_this = true,
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if params.contains(name) {
+                    return;
+                }
+                if let Some(ty) = expr_types.get(&qn.span) {
+                    ty_class_names(ty, &mut out);
+                }
+                if let Some((_, cd)) = owner {
+                    let member = cd.fields.iter().any(|f| f.name.text == name)
+                        || cd.properties.iter().any(|p| p.name.text == name)
+                        || cd.methods.iter().any(|m| m.name.text == name);
+                    if member {
+                        reaches_this = true;
+                    }
+                }
             }
-            if let Some(Ty::User { name, .. }) = peel(expr_types.get(&qn.span)) {
-                out.insert(name.rsplit('.').next().unwrap_or(name).to_string());
-            }
+            _ => {}
         };
         match &l.body {
             LambdaBody::Expr(b) => walk_expr(b, &mut visit),
             LambdaBody::Block(b) => walk_block(b, &mut visit),
         }
+        if reaches_this {
+            if let Some((pkg, cd)) = owner {
+                out.insert(if pkg.is_empty() {
+                    cd.name.text.clone()
+                } else {
+                    format!("{pkg}.{}", cd.name.text)
+                });
+            }
+        }
     });
     out
+}
+
+/// Every user type name `ty` mentions, through `T?`, `T[]` and type arguments.
+/// Names that are not classes are filtered out later against the class table.
+fn ty_class_names(ty: &Ty, out: &mut HashSet<String>) {
+    match ty {
+        Ty::Nullable(inner) => ty_class_names(inner, out),
+        Ty::Array { element, .. } => ty_class_names(element, out),
+        Ty::User { name, generic_args } => {
+            out.insert(name.clone());
+            for a in generic_args {
+                ty_class_names(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Where a worker closure sits: its package and class, or `None` in a free
+/// function.
+type LambdaOwner<'a> = Option<(&'a str, &'a juxc_ast::ClassDecl)>;
+
+/// Call `sink` for every `Worker.spawn(…)` closure in the program, with the
+/// package and class declaration it sits in (`None` in a free function).
+fn for_each_worker_lambda(
+    units: &[juxc_ast::CompilationUnit],
+    sink: &mut dyn FnMut(LambdaOwner<'_>, &juxc_ast::LambdaExpr),
+) {
+    let mut in_body = |owner: LambdaOwner<'_>, b: &Block| {
+        walk_block(b, &mut |e| {
+            let Expr::Call(c) = e else { return };
+            if !is_worker_spawn_callee(&c.callee) {
+                return;
+            }
+            if let Some(Expr::Lambda(l)) = c.args.first() {
+                sink(owner, l);
+            }
+        });
+    };
+    for unit in units {
+        let pkg = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        for item in &unit.items {
+            match item {
+                juxc_ast::TopLevelDecl::Function(f) => {
+                    if let Some(b) = &f.body {
+                        in_body(None, b);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Class(cd) => {
+                    let owner = Some((pkg.as_str(), cd));
+                    for m in &cd.methods {
+                        if let Some(b) = &m.body {
+                            in_body(owner, b);
+                        }
+                    }
+                    for ctor in &cd.constructors {
+                        in_body(owner, &ctor.body);
+                    }
+                    for op in &cd.operators {
+                        if let Some(b) = &op.body {
+                            in_body(owner, b);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The fully-qualified names of the classes that cross a worker boundary.
@@ -150,30 +258,13 @@ pub(crate) fn compute_worker_shared_class_fqns(
     expr_types: &HashMap<Span, Ty>,
     symbols: &juxc_tycheck::SymbolTable,
 ) -> HashSet<String> {
-    // Seeds: a capture's checked type is already a full name.
-    let mut out: HashSet<String> = HashSet::new();
-    walk_unit_exprs(units, &mut |e| {
-        let Expr::Call(c) = e else { return };
-        if !is_worker_spawn_callee(&c.callee) {
-            return;
-        }
-        let Some(Expr::Lambda(l)) = c.args.first() else { return };
-        let params: HashSet<&str> = l.params.iter().map(|p| p.name.text.as_str()).collect();
-        let mut visit = |inner: &Expr| {
-            let Expr::Path(qn) = inner else { return };
-            if qn.segments.len() != 1 || params.contains(qn.segments[0].text.as_str()) {
-                return;
-            }
-            if let Some(Ty::User { name, .. }) = peel(expr_types.get(&qn.span)) {
-                out.insert(name.clone());
-            }
-        };
-        match &l.body {
-            LambdaBody::Expr(b) => walk_expr(b, &mut visit),
-            LambdaBody::Block(b) => walk_block(b, &mut visit),
-        }
+    // Seeds: a capture's checked type is already a full name, and so is the
+    // enclosing class a closure reaches through `this`. Only classes count.
+    let mut out = worker_capture_seeds(units, expr_types);
+    out.retain(|fqn| {
+        symbols.classes.get(fqn).is_some_and(|c| !c.is_external)
+            && symbols.worker_share_blocker(fqn.rsplit('.').next().unwrap_or(fqn)).is_none()
     });
-    out.retain(|fqn| symbols.worker_share_blocker(fqn.rsplit('.').next().unwrap_or(fqn)).is_none());
     if out.is_empty() {
         return out;
     }
@@ -258,15 +349,6 @@ pub(crate) fn is_worker_spawn_callee(callee: &Expr) -> bool {
         )
 }
 
-/// Strip `T?` / `T[]` down to the type that decides shareability.
-fn peel(ty: Option<&Ty>) -> Option<&Ty> {
-    match ty? {
-        Ty::Nullable(inner) => peel(Some(inner)),
-        Ty::Array { element, .. } => peel(Some(element)),
-        other => Some(other),
-    }
-}
-
 /// For each class, the classes its fields name — the edges the shared-class
 /// closure walks. A `Vec<Job>` field reaches `Job` just as a `Job` field does.
 fn class_field_class_names(
@@ -308,38 +390,6 @@ fn class_field_class_names(
 // ---------------------------------------------------------------------------
 // Expression walk
 // ---------------------------------------------------------------------------
-
-/// Visit every expression in every body of the program — free functions, class
-/// methods, constructors and operator overloads.
-fn walk_unit_exprs(units: &[juxc_ast::CompilationUnit], sink: &mut dyn FnMut(&Expr)) {
-    for unit in units {
-        for item in &unit.items {
-            match item {
-                juxc_ast::TopLevelDecl::Function(f) => {
-                    if let Some(b) = &f.body {
-                        walk_block(b, sink);
-                    }
-                }
-                juxc_ast::TopLevelDecl::Class(cd) => {
-                    for m in &cd.methods {
-                        if let Some(b) = &m.body {
-                            walk_block(b, sink);
-                        }
-                    }
-                    for ctor in &cd.constructors {
-                        walk_block(&ctor.body, sink);
-                    }
-                    for op in &cd.operators {
-                        if let Some(b) = &op.body {
-                            walk_block(b, sink);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
 
 fn walk_block(b: &Block, sink: &mut dyn FnMut(&Expr)) {
     for s in &b.statements {

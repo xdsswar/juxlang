@@ -1,0 +1,7 @@
+// A worker copies a captured collection one level deep, so a collection of
+// collections cannot come along: E0702 (§18.2, ERRATA E27).
+public async void main() {
+    var rows = new Vec<Vec<int>>();
+    var t = Worker.spawn(() -> rows.len());
+    print(await t);
+}

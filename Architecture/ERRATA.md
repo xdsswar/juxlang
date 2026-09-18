@@ -755,6 +755,30 @@ magic-name methods, and would collide with a user method named `hash`.
 
 ---
 
+## E27. A worker capture of a collection
+
+**Conflict.** JUX-ASYNC-ADDENDUM §18.2 listed `Vec<T>` and `Map<K, V>` as
+transferable because "their internal sharing is thread-safe by construction".
+Since JUX-LANG-V1 §6.5.2 and §6.5.1 made collections and arrays shared handles,
+that is no longer true: the handle is single-threaded. Every collection or
+array capture, including §18.2's own `parallelSum` example over `int[] data`,
+failed in rustc, and so did a closure reaching `this` and a capture of a
+function value, an interface or a stream.
+
+**Resolution.** A worker takes a captured collection or array by value, one
+level deep, as §18.2 already says for every capture: the worker gets its own
+copy. Changes in the worker stay in the worker, which is the one place a
+collection does not alias (§6.5.1 already made the same exception for a
+collection read out of a worker-shared object). A collection of collections, a
+record holding a collection, and the values that are never transferable
+(function values, interface handles, streams) are `E0702`, named by value. A
+closure reading a field or method of its own class captures `this`, and the
+class is upgraded to the atomic handle like any captured object.
+
+**Spec status:** §18.2 states the rule.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

@@ -1,0 +1,1 @@
+worker_capture_nested_collection.jux:5:32: [E0702] error: `rows` cannot be captured by a `Worker.spawn` closure: it holds collections, and a worker receives a copy of a collection only one level deep; flatten the data or copy it into records first

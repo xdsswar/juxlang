@@ -1,0 +1,1 @@
+worker_capture_record_holding_collection.jux:5:32: [E0702] error: `bag` cannot be captured by a `Worker.spawn` closure: `Bag.items` holds a collection, which a record carries as a shared handle; copy the values the worker needs into locals first

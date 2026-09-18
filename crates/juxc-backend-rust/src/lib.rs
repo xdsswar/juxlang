@@ -1394,6 +1394,11 @@ struct RustEmitter {
     /// `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare closure.
     /// Take-and-cleared by [`Self::emit_lambda`].
     pub(crate) lambda_bare_target: bool,
+    /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
+    /// crossed the boundary as a plain copy of a collection's contents (the
+    /// handle itself cannot), and the body reads it as a handle again. The
+    /// flag is `true` for a nullable capture. Taken by `emit_bare_move_lambda`.
+    pub(crate) worker_attach: Vec<(String, bool)>,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -5008,6 +5013,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             pattern_depth: 0,
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
+            worker_attach: Vec::new(),
         }
     }
 
