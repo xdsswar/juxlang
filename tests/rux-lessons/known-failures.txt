@@ -4,7 +4,6 @@
 # the same commit that fixes the bug. The README has a minimal repro for each.
 
 Algorithm: `for (var i : 0..items.len())` binds `i` as usize and leaks rustc E0308 when assigned to an int local or returned as int?; a nullable narrowed inside a ternary branch leaks E0308 when interpolated
-Callback: a free function named as a value (`applyAll(numbers, doubled)`, `(int) -> int f = doubled;`) passes juxc and leaks rustc E0308 (fn item vs Rc<dyn Fn>)
 Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)
 Propagate: `switch` on a Result with `case Ok(var v)` / `case Err(var e)` lowers to std::result::Result and leaks rustc E0308 against jux.std Result
 Result: same Result-switch lowering leak as Propagate; the inner switch on the bound error then also loses its enum path (E0531)
