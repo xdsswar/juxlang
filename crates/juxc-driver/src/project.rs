@@ -262,18 +262,29 @@ impl WorkspaceBuild {
 /// path-dependency wired to the sibling's emitted library crate (linking
 /// seam). See the module docs for the first-cut limitation.
 pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild> {
-    // Load every member manifest, keyed by package name.
+    // Load every member manifest, keyed by package name. The member directory
+    // each name came from is kept so `default-members` (written as
+    // directories) can be mapped onto package names.
     let mut members: BTreeMap<String, Manifest> = BTreeMap::new();
+    let mut dir_to_name: HashMap<String, String> = HashMap::new();
     for rel in &root.workspace_members {
         let dir = root.project_root.join(rel);
         let m = Manifest::load(&dir).with_context(|| {
             format!("workspace member `{rel}` has no readable jux.toml at {}", dir.display())
         })?;
+        dir_to_name.insert(rel.clone(), m.package.name.clone());
         members.insert(m.package.name.clone(), m);
     }
 
     // Topologically sort members by intra-workspace path dependencies.
-    let order = topo_order(&members)?;
+    let mut order = topo_order(&members)?;
+
+    // A bare build builds the default members (§B.7.2) and whatever members
+    // they depend on, since a dependent cannot be compiled without its
+    // dependency's sources. With no `default-members` every member is a
+    // default one, so nothing is dropped.
+    let wanted = default_member_closure(root, &members, &dir_to_name);
+    order.retain(|name| wanted.contains(name));
 
     // Emitted crates live under <workspace-root>/target/.rust-build/.
     let emit_root = root.project_root.join("target").join(".rust-build");
@@ -512,6 +523,35 @@ fn add_dep(
 
 /// Topologically order workspace members so a member is built after the
 /// members it path-depends on. Detects cycles (rejected per §B.4.6).
+/// The package names a bare workspace build must compile: every
+/// `default-members` package plus, transitively, the members it depends on
+/// through `path` dependencies.
+fn default_member_closure(
+    root: &Manifest,
+    members: &BTreeMap<String, Manifest>,
+    dir_to_name: &HashMap<String, String>,
+) -> BTreeSet<String> {
+    let mut pending: Vec<String> = root
+        .workspace_default_members
+        .iter()
+        .filter_map(|dir| dir_to_name.get(dir).cloned())
+        .collect();
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !wanted.insert(name.clone()) {
+            continue;
+        }
+        if let Some(m) = members.get(&name) {
+            for dep in m.dependencies.iter().filter(|d| d.path.is_some()) {
+                if members.contains_key(&dep.name) {
+                    pending.push(dep.name.clone());
+                }
+            }
+        }
+    }
+    wanted
+}
+
 fn topo_order(members: &BTreeMap<String, Manifest>) -> Result<Vec<String>> {
     // Build adjacency: name → its in-workspace path-dependency names.
     let mut deps: HashMap<String, Vec<String>> = HashMap::new();

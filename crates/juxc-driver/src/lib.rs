@@ -229,6 +229,7 @@ mod stability;
 mod stdlib;
 mod stdlib_embedded;
 pub mod stubs;
+pub mod workspace;
 
 pub use cfg::CfgFacts;
 pub use juxc_tycheck::Profile;

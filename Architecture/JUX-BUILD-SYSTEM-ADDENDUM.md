@@ -510,6 +510,17 @@ license.workspace = true
 
 `jux build` at the workspace root builds every default member. `jux build -p pkg-a` builds only `pkg-a`. The resolver runs once, producing a single `jux.lock` consumed by all members. This guarantees that every member sees the same version of any shared dependency — no diamond dependency conflicts within a workspace.
 
+### B.7.2a. Phase-1 Status
+
+All of §B.7.1 is implemented:
+
+- **`members` patterns.** An entry may use `*` and `?` inside any path segment (`"tools/*"`, `"pkg-?"`). A pattern expands to the matching directories that contain a `jux.toml`, in alphabetical order; a plain entry is kept as written, so a missing member is reported by name. Hidden directories and `target/` never match.
+- **`exclude`** removes entries (exact paths or patterns) after expansion.
+- **`default-members`** is what a bare `jux build` / `run` / `check` at the root builds. The members those depend on through `path` dependencies are built too, because a dependent cannot compile without its dependency's sources. Absent, every member is a default member. `-p <name>` still selects any member. An entry that names no member is a warning.
+- **`[workspace.package]` / `[workspace.dependencies]`** are inherited through `key.workspace = true` (`edition.workspace = true`, `"com.x.json".workspace = true`). A member's `features` on an inherited dependency are added to the root's. A `path` in `[workspace.dependencies]` is relative to the workspace root. An inherited key the root does not define is a warning and is dropped.
+
+The workspace root is the nearest directory at or above the member whose `jux.toml` has a `[workspace]` table.
+
 ### B.7.3. Why Workspaces Are Standard
 
 A monorepo of related Jux packages — a server + its client + their shared protocol — should live in one workspace. The shared lockfile and unified `jux build` make iteration fast and prevent version skew. This is the design that makes Cargo's monorepo story work; Jux inherits it directly.
