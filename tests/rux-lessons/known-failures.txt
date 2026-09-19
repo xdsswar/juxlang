@@ -3,5 +3,4 @@
 # failures and fails the moment a listed lesson passes, so remove the line in
 # the same commit that fixes the bug. The README has a minimal repro for each.
 
-Algorithm: a nullable narrowed inside a ternary branch leaks E0308 when interpolated
 Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)

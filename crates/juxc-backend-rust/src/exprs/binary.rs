@@ -1297,6 +1297,21 @@ impl RustEmitter {
     /// The primitive of the enclosing function's declared return type, when it
     /// is a plain numeric primitive (no array / generics / nullable / pointer).
     /// Used to widen a narrower numeric `return` value to the declared type.
+    /// The numeric primitive inside a nullable return type (`int` of `int?`),
+    /// else `None`. The value a `return` wraps in `Some(...)` converts to it.
+    pub(crate) fn nullable_return_inner_primitive(&self) -> Option<juxc_tycheck::Primitive> {
+        let t = match self.current_return_type.as_ref()? {
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,
+            _ => return None,
+        };
+        if !t.nullable {
+            return None;
+        }
+        let mut inner = t.clone();
+        inner.nullable = false;
+        self.type_ref_primitive(&inner)
+    }
+
     pub(crate) fn return_type_primitive(&self) -> Option<juxc_tycheck::Primitive> {
         let t = match self.current_return_type.as_ref()? {
             juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,

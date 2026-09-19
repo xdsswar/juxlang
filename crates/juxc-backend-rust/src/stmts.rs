@@ -876,9 +876,16 @@ impl RustEmitter {
                         // accepts the widening but Rust does not implicitly widen,
                         // so the bare value would leak (rustc E0308). Only widens
                         // (never narrows); skipped under nullable/sealed wraps.
-                        let widen = if !do_some && !wrap_upcast {
+                        // Under the `Some(...)` of an `int?` return the value
+                        // converts to the inner `int` the same way: a `uint`
+                        // loop index returned as an `int?` was `Some(usize)`.
+                        let target = if do_some {
+                            self.nullable_return_inner_primitive()
+                        } else {
                             self.return_type_primitive()
-                                .and_then(|t| self.numeric_widen_or_arm(e, t))
+                        };
+                        let widen = if !wrap_upcast {
+                            target.and_then(|t| self.numeric_widen_or_arm(e, t))
                         } else {
                             None
                         };
