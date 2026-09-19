@@ -668,7 +668,8 @@ impl RustEmitter {
                         // form; a chained write (`Registry.global.n = 5`)
                         // mutates through the read-out handle's own
                         // `RefCell`, so the rvalue shape is correct there.
-                        if self.static_type_needs_thread_local(&field.ty) {
+                        let field_is_ref = field.is_ref;
+                        if self.static_field_is_thread_local(field.is_ref, &field.ty) {
                             if has_si {
                                 self.w.push_str("({ ");
                                 self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
@@ -680,7 +681,14 @@ impl RustEmitter {
                             if let Some(sfx) = &method_suffix {
                                 self.w.push_str(sfx);
                             }
-                            self.w.push_str(".with(|__s| __s.borrow().clone())");
+                            // A `static ref` read into a `ref` slot hands out
+                            // the cell itself (§M.13 aliasing); any other read
+                            // clones the value out.
+                            if field_is_ref && self.emitting_ref_handle {
+                                self.w.push_str(".with(|__s| __s.clone())");
+                            } else {
+                                self.w.push_str(".with(|__s| __s.borrow().clone())");
+                            }
                             if has_si {
                                 self.w.push_str(" })");
                             }
@@ -1075,9 +1083,13 @@ impl RustEmitter {
             .and_then(|c| c.fields.get(field_name))
             .map(|fs| (fs.ty.clone(), fs.default.is_some()));
         let field_ty = field_sig.as_ref().map(|(ty, _)| ty.clone());
+        let is_ref = self
+            .lookup_class_by_bare_or_fqn(class_name)
+            .and_then(|c| c.fields.get(field_name))
+            .is_some_and(|fs| fs.is_ref);
         let is_thread_local = field_ty
             .as_ref()
-            .map(|ty| self.static_type_needs_thread_local(ty))
+            .map(|ty| self.static_field_is_thread_local(is_ref, ty))
             .unwrap_or(false);
         let final_runtime = is_final
             && field_sig
@@ -1108,7 +1120,12 @@ impl RustEmitter {
             self.w.push_str(class_name);
             self.w.push('_');
             self.w.push_str(&to_rust_ident(field_name));
-            self.w.push_str(".with(|__s| __s.borrow().clone())");
+            // A `static ref` into a `ref` slot hands out the cell (§M.13).
+            if is_ref && self.emitting_ref_handle {
+                self.w.push_str(".with(|__s| __s.clone())");
+            } else {
+                self.w.push_str(".with(|__s| __s.borrow().clone())");
+            }
             return;
         }
         if self.emitting_lvalue {
@@ -2601,6 +2618,19 @@ impl RustEmitter {
     /// Walks the `extends` chain; `this`/ctor-inner receivers resolve
     /// through the enclosing class.
     pub(crate) fn field_decl_is_ref(&self, object_expr: &Expr, field_name: &str) -> bool {
+        // `Counter.hits`: a STATIC field read through its class. The class
+        // name is not a value, so the receiver-type route below never sees
+        // it; ask the class's own table.
+        if let Expr::Path(qn) = object_expr {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                return self
+                    .symbols
+                    .classes
+                    .get(&class_fqn)
+                    .and_then(|c| c.fields.get(field_name))
+                    .is_some_and(|fs| fs.is_static && fs.is_ref);
+            }
+        }
         let bare = if matches!(object_expr, Expr::This(_)) {
             self.enclosing_class.clone()
         } else {

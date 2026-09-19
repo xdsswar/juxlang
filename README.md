@@ -307,7 +307,7 @@ compiling syntax (most of it lifted straight out of [`examples/`](examples/)).
 
 ```java
 public struct Vec2 {
-    public double x = 0.0;        // fields need a default or constructor assignment
+    public double x = 0.0;        // a default value, used when a constructor omits it
     public double y = 0.0;
     public double lengthSquared() { return x * x + y * y; }
 }
@@ -327,7 +327,7 @@ public class Holder<T extends Animal & Speaks> {
 }
 
 var b = new Box<int>(42);        // explicit type argument
-var v = new Vec2();              // v.x = 3.0; v.y = 4.0; ...
+var v = new Vec2(3.0, 4.0);      // a struct's implicit constructor takes every field
 ```
 
 ### Enums and pattern matching
@@ -632,6 +632,14 @@ public void main() {
     print(m);                                // 15 (same cell throughout)
 }
 ```
+
+Fields and structs work the same way. A `ref` field (including a `static` one)
+hands its own cell to a `ref` parameter, so the callee writes the field itself,
+and a write through a `ref` struct (`q.x = 7`) is seen by every alias. Passing a
+plain value to a `ref` parameter is still a copy: sharing is something you opt
+into on both sides. `ref` on a class, interface, array or collection is accepted
+and does nothing, since those are already shared, and says so (`W0490`).
+See [`examples/ref_semantics_full.jux`](examples/ref_semantics_full.jux).
 
 `unsafe { }` blocks, `unsafe` functions, and the raw-pointer basics work today:
 `T*` types, address-of a local (`&n`), and dereference (`*p`), all gated to an

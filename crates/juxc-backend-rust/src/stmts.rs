@@ -3119,18 +3119,14 @@ impl RustEmitter {
             self.w.push_str("let ");
             self.w.push_str(&to_rust_ident(&var.name.text));
             self.w.push_str(" = ");
-            let init_is_ref = matches!(
-                var.init.as_ref(),
-                Some(Expr::Path(qn))
-                    if qn.segments.len() == 1
-                        && self.ref_locals.contains(qn.segments[0].text.as_str())
-            );
-            if init_is_ref {
-                if let Some(Expr::Path(qn)) = &var.init {
-                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
-                    self.w.push_str(".clone()");
-                }
-            } else {
+            // Initializing from another `ref` binding -- a local, a
+            // parameter, or a `ref` field, instance or static -- ALIASES it
+            // (§M.13.2): the new name shares the same cell.
+            let aliased = match var.init.as_ref() {
+                Some(init) => self.emit_ref_alias_source(init),
+                None => false,
+            };
+            if !aliased {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 if let Some(init) = &var.init {
                     let prev = std::mem::take(&mut self.emitting_format_arg);
@@ -3142,6 +3138,16 @@ impl RustEmitter {
             }
             self.w.push_str(";\n");
             self.ref_locals.insert(var.name.text.clone());
+            // A `ref T?` cell holds an `Option<T>`; the nullable set drives
+            // the `Some(…)` lift on store and the `!!` / `?.` reads, exactly
+            // as it does for a plain nullable local.
+            let nullable = var.ty.as_ref().is_some_and(|t| t.nullable)
+                || var.init.as_ref().is_some_and(|e| self.expression_is_already_nullable(e));
+            if nullable {
+                self.nullable_locals.insert(var.name.text.clone());
+            } else {
+                self.nullable_locals.remove(&var.name.text);
+            }
             return;
         }
         // `var canvas = board.surface().canvas();` -- a borrow taken from a
@@ -3671,7 +3677,8 @@ impl RustEmitter {
         }
         // `cur = cur.next!!;`: the new value reads the local being replaced.
         let prev_reads_target = self.assign_rhs_reads_target;
-        self.assign_rhs_reads_target = a.op.is_none() && Self::value_reads_local_through_member(a);
+        self.assign_rhs_reads_target = (a.op.is_none() && Self::value_reads_local_through_member(a))
+            || self.value_reads_ref_root_of_place(a);
         self.emit_assign_outer(a);
         self.assign_rhs_reads_target = prev_reads_target;
     }
@@ -3692,6 +3699,65 @@ impl RustEmitter {
                 if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1 && p.segments[0].text == name) {
                     reads = true;
                 }
+            }
+        });
+        reads
+    }
+
+    /// When `e` names a `ref` binding (§M.13) -- a `ref` local or parameter,
+    /// or a `ref` field read through an object or a class -- write its SHARED
+    /// HANDLE (an `Rc` clone, so the result aliases the same cell) and
+    /// return `true`. Anything else writes nothing and returns `false`; the
+    /// caller then wraps the value in a fresh cell.
+    ///
+    /// One helper for every place a `ref` slot is filled from another one: a
+    /// `ref` local's initializer and a `ref` parameter's argument. Before it,
+    /// the local path knew only `ref` locals, so `ref int s = p.counter;`
+    /// silently copied the field instead of aliasing it.
+    pub(crate) fn emit_ref_alias_source(&mut self, e: &Expr) -> bool {
+        match e {
+            Expr::Path(qn) if qn.segments.len() == 1 && self.ref_locals.contains(qn.segments[0].text.as_str()) => {
+                self.w.push_str(&to_rust_ident(&qn.segments[0].text));
+                self.w.push_str(".clone()");
+                true
+            }
+            Expr::Field(ff) if self.field_decl_is_ref(&ff.object, &ff.field.text) => {
+                let prev = std::mem::replace(&mut self.emitting_ref_handle, true);
+                self.emit_expr(e);
+                self.emitting_ref_handle = prev;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// True when `a` writes a place rooted at a `ref` binding (`p.x = …`,
+    /// `p.items[i] = …`, §M.13) and its value reads that same binding
+    /// (`p.x = p.x + 1`). The store takes `p.borrow_mut()`, and a `borrow()`
+    /// taken by the value lives to the end of the statement, so the value
+    /// has to be evaluated in a `let` of its own first (the same
+    /// evaluate-first form as [`Self::value_reads_local_through_member`]).
+    fn value_reads_ref_root_of_place(&self, a: &AssignStmt) -> bool {
+        let mut root = &a.target;
+        loop {
+            match root {
+                Expr::Field(f) => root = &f.object,
+                Expr::Index(ix) => root = &ix.array,
+                _ => break,
+            }
+        }
+        if std::ptr::eq(root, &a.target) {
+            return false;
+        }
+        let Expr::Path(qn) = root else { return false };
+        if qn.segments.len() != 1 || !self.ref_locals.contains(qn.segments[0].text.as_str()) {
+            return false;
+        }
+        let name = qn.segments[0].text.as_str();
+        let mut reads = false;
+        juxc_ast::visit::for_each_expr_in(&a.value, &mut |e| {
+            if matches!(e, Expr::Path(p) if p.segments.len() == 1 && p.segments[0].text == name) {
+                reads = true;
             }
         });
         reads
@@ -4036,8 +4102,8 @@ impl RustEmitter {
                         .get(&class_fqn)
                         .and_then(|c| c.fields.get(tf.field.text.as_str()))
                         .filter(|fs| fs.is_static && !fs.is_final)
-                        .map(|fs| fs.ty.clone())
-                        .filter(|ty| self.static_type_needs_thread_local(ty));
+                        .filter(|fs| self.static_field_is_thread_local(fs.is_ref, &fs.ty))
+                        .map(|fs| fs.ty.clone());
                     if let Some(slot_ty) = tl_field {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push('_');
@@ -4088,8 +4154,8 @@ impl RustEmitter {
                         self.lookup_class_by_bare_or_fqn(&class_name)
                             .and_then(|c| c.fields.get(name.as_str()))
                             .filter(|fs| fs.is_static && !fs.is_final)
+                            .filter(|fs| self.static_field_is_thread_local(fs.is_ref, &fs.ty))
                             .map(|fs| fs.ty.clone())
-                            .filter(|ty| self.static_type_needs_thread_local(ty))
                     };
                     if let Some(slot_ty) = tl {
                         self.w.push_str(&class_name);
@@ -4211,8 +4277,23 @@ impl RustEmitter {
             if self.field_decl_is_ref(&tf.object, &tf.field.text) {
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
+                // A nullable `ref` field holds an `Option<T>`: lift a plain
+                // value into it, as every nullable store does.
+                let wrap = self
+                    .receiver_class_bare(&tf.object)
+                    .or_else(|| self.enclosing_class.clone())
+                    .is_some_and(|cls| self.class_field_is_nullable_in_chain(&cls, &tf.field.text))
+                    && a.op.is_none()
+                    && !is_null_literal(&a.value)
+                    && !self.expression_is_already_nullable(&a.value);
                 self.w.push_str("{ let __jux_v = ");
+                if wrap {
+                    self.w.push_str("Some(");
+                }
                 self.emit_assign_rhs(&a.value);
+                if wrap {
+                    self.w.push(')');
+                }
                 self.w.push_str("; *");
                 let depth = if self.receiver_is_wrapper_class(&tf.object) {
                     self.wrapper_field_parent_depth(&tf.object, &tf.field.text)
@@ -4249,8 +4330,21 @@ impl RustEmitter {
                 let name = qn.segments[0].text.clone();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
+                // A nullable `ref` slot (`ref int? n`) holds an `Option<T>`:
+                // storing a plain value lifts it, exactly as a nullable
+                // local or field store does.
+                let wrap = self.nullable_locals.contains(&name)
+                    && a.op.is_none()
+                    && !is_null_literal(&a.value)
+                    && !self.expression_is_already_nullable(&a.value);
                 self.w.push_str("{ let __jux_v = ");
+                if wrap {
+                    self.w.push_str("Some(");
+                }
                 self.emit_assign_rhs(&a.value);
+                if wrap {
+                    self.w.push(')');
+                }
                 self.w.push_str("; *");
                 self.w.push_str(&to_rust_ident(&name));
                 self.w.push_str(".borrow_mut() ");

@@ -1,0 +1,6 @@
+ref_rejected_forms.jux:3:1: [E0523] error: a `ref` return type is not supported yet (§M.13.2) -- return the value, or take a `ref` parameter and write through it
+ref_rejected_forms.jux:12:12: [E0523] error: a `ref` return type is not supported yet (§M.13.2) -- return the value, or take a `ref` parameter and write through it
+ref_rejected_forms.jux:18:9: [E0524] error: `ref` cannot nest: it is a binding mode, not a type, so one `ref` already makes the binding shared (§M.13.4)
+ref_rejected_forms.jux:19:25: [E0526] error: a generic argument names a type, and `ref` is a binding mode, not a type -- store the values and share the container, which is already a reference type (§M.13.4)
+ref_rejected_forms.jux:20:9: [W0490] warning: `ref` adds nothing here: an array is already a reference type (§6.5.2), so every binding of it shares one object (§M.13.2)
+ref_rejected_forms.jux:21:9: [W0490] warning: `ref` adds nothing here: `Thing` is already a reference type, so every binding of it shares one object (§M.13.2)

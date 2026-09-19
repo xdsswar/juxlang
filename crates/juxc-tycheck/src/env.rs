@@ -37,6 +37,12 @@ pub struct TypeEnv {
     /// gate on `p[i]` / `p + n` (§L.6.2) needs to know which names are
     /// pointers. A name absent here is not one.
     ptr_depths: Vec<HashMap<String, u8>>,
+    /// Names bound as `ref` (JUX-MISSING-DEFS §M.13), one set per scope,
+    /// parallel to `scopes`. A `ref` binding's TYPE is the plain `T`, so
+    /// nothing in the type tells a caller that the name is a shared cell:
+    /// the `Worker.spawn` gate (E0702) needs to know, because an `Rc` cell
+    /// cannot cross a thread.
+    ref_binds: Vec<HashSet<String>>,
     /// The names in the matching scope that are pointers to `void`. `Ty`
     /// lowers `void` to `Unknown`, so this is how `void*` stays distinct from
     /// a typed pointer (§L.6.1a).
@@ -92,6 +98,7 @@ impl TypeEnv {
         Self {
             scopes: vec![HashMap::new()],
             ptr_depths: vec![HashMap::new()],
+            ref_binds: vec![HashSet::new()],
             void_bases: vec![HashSet::new()],
             fixed_arrays: vec![HashMap::new()],
             current_class: None,
@@ -110,6 +117,7 @@ impl TypeEnv {
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.ptr_depths.push(HashMap::new());
+        self.ref_binds.push(HashSet::new());
         self.void_bases.push(HashSet::new());
         self.fixed_arrays.push(HashMap::new());
     }
@@ -121,6 +129,7 @@ impl TypeEnv {
         if self.scopes.len() > 1 {
             self.scopes.pop();
             self.ptr_depths.pop();
+            self.ref_binds.pop();
             self.void_bases.pop();
             self.fixed_arrays.pop();
         }
@@ -193,6 +202,24 @@ impl TypeEnv {
         if let Some(top) = self.ptr_depths.last_mut() {
             top.insert(name.to_string(), depth);
         }
+    }
+
+    /// Record that `name` is a `ref` binding in the current scope.
+    pub fn declare_ref_binding(&mut self, name: &str) {
+        if let Some(top) = self.ref_binds.last_mut() {
+            top.insert(name.to_string());
+        }
+    }
+
+    /// Whether `name` resolves to a `ref` binding (§M.13): a local, parameter
+    /// or field declared `ref`, whose slot is a shared cell.
+    pub fn is_ref_binding(&self, name: &str) -> bool {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return self.ref_binds.get(i).is_some_and(|s| s.contains(name));
+            }
+        }
+        false
     }
 
     /// The raw-pointer depth of the binding `name` resolves to, or 0 when it

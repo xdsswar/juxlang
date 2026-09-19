@@ -237,6 +237,23 @@ impl<'a> Parser<'a> {
                 span: start.join(end),
             }));
         }
+        // `Vec<ref int>`: a type argument names a TYPE, and `ref` is a
+        // binding mode (§M.13.4, ERRATA E84). Report it once and read the
+        // type that follows, so the rest of the declaration still parses.
+        if self.at_kw(Keyword::Ref) {
+            let span = self.peek_span();
+            self.advance();
+            self.diagnostics.push(
+                juxc_diagnostics::Diagnostic::error(
+                    juxc_diagnostics::code::Code::E0526_RefGenericArgument,
+                    "a generic argument names a type, and `ref` is a binding mode, not a type -- \
+                     store the values and share the container, which is already a reference \
+                     type (§M.13.4)"
+                        .to_string(),
+                )
+                .with_span(span),
+            );
+        }
         // Plain type slot — the common case.
         let ty = self.parse_type_ref()?;
         Some(GenericArg::Type(ty))

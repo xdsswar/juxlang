@@ -1192,6 +1192,20 @@ impl RustEmitter {
                     self.w.push_str(".borrow().clone()");
                     return;
                 }
+                // **`ref` binding as the ROOT of a place** (`q.x = 7`,
+                // `q.items[0] = 1` on a `ref Pt q`): the write goes INTO the
+                // shared cell, so every alias sees it (§M.13.2 "assignment
+                // stores through"). A whole-name write (`q = v`) never gets
+                // here -- `emit_assign` stores it through on its own -- so
+                // the only lvalue use of a bare `ref` name is as a place root.
+                if qn.segments.len() == 1
+                    && self.emitting_lvalue
+                    && self.ref_locals.contains(&qn.segments[0].text)
+                {
+                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
+                    self.w.push_str(".borrow_mut()");
+                    return;
+                }
                 // **`out` parameter access** (§M.4): an out param lowers to
                 // `&mut T`, so a value read derefs to `(*result)` and an
                 // assignment LHS to `*result`. An inner block local that shadows

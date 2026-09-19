@@ -1184,9 +1184,13 @@ public void main() {
   the argument is itself `ref`; a plain-value argument is wrapped into a
   fresh object (the callee's writes are then invisible to the caller —
   pass a `ref` binding when you want write-through).
-- **Returns.** `ref` return types are deferred (Phase 1 rejects them).
-- `ref` on a CLASS-typed binding is accepted and meaningless (classes are
-  already references); the compiler is free to warn (reserved W0490).
+- **Returns.** `ref` return types are deferred (Phase 1 rejects them with
+  `E0523`).
+- `ref` on a binding whose type is ALREADY a reference -- a class, an
+  interface, an array (§6.5.2) or a collection (§6.5.1) -- is accepted and
+  meaningless, and warns `W0490` naming the type (ERRATA E84). A `String`, a
+  `struct`, a `record` and an enum are value types, so `ref` on one is the
+  ordinary case and never warns.
 - `ref` bindings are task-local exactly like class instances; the E0702
   spawn-capture gate applies.
 
@@ -1212,11 +1216,13 @@ out, writes evaluate the RHS before taking the cell borrow.
 ref-type   = 'ref' type
 ```
 
-`ref` is valid at the START of a type in field declarations, local
-variable declarations, and parameter declarations. It joins the reserved
-keyword table (§3.2 / grammar §A.1.3). Nesting (`ref ref T`), `ref` array
-ELEMENTS (`ref T[]`), and `ref` generic arguments (`List<ref T>`) are
-rejected in Phase 1.
+`ref` is valid at the START of a type in field declarations (instance and
+`static` alike), local variable declarations, and parameter declarations. It
+joins the reserved keyword table (§3.2 / grammar §A.1.3). Nesting
+(`ref ref T`) is `E0524` and a `ref` generic argument (`List<ref T>`) is
+`E0526`: both put `ref` where a TYPE is expected, and `ref` is a binding mode.
+`ref T[]` is NOT rejected -- an array is a reference type (§6.5.2), so it is
+the `W0490` case above (ERRATA E84).
 
 > **Phase-1 implementation status (2026-06-12):** fully implemented —
 > locals, parameters, AND fields (`examples/ref_bindings.jux` +

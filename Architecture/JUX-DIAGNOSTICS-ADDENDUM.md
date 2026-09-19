@@ -575,6 +575,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0520`  | `@align` where it cannot apply: a field, an enum or an interface | Layout-ABI §L.1.4, ERRATA E62 |
 | `E0521`  | `array as T*` that cannot give a lasting pointer: a temporary array, a nested array, or a pointer-to-pointer target | Layout-ABI §L.6.3 |
 | `E0522`  | Invalid `transmute<A, B>(value)`: wrong argument count, or sizes not equal on every target | Layout-ABI §L.7.4, ERRATA E63 |
+| `E0523`  | A `ref` return type, deferred in Phase 1 | JUX-MISSING-DEFS §M.13.2 |
+| `E0524`  | A nested `ref` (`ref ref T`) | JUX-MISSING-DEFS §M.13.4 |
+| `E0526`  | A `ref` generic argument (`Vec<ref int>`) | JUX-MISSING-DEFS §M.13.4 |
 
 ### Lowering (`E0600–E0699`)
 
@@ -684,6 +687,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation | Missing-defs §M.3 / Operators §O.9 |
 | `W0241`  | Unknown annotation: neither built in nor declared (often a misspelling) | Annotations §A.12 |
 | `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |
+| `W0490`  | `ref` on a type that is already a reference (class, interface, array, collection) | JUX-MISSING-DEFS §M.13.2, ERRATA E84 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
 | `W0305`  | Two foreign symbols map to one Jux name; the second is renamed *(reserved)* | Bindgen §G.12 |
 | `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |

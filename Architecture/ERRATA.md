@@ -1307,6 +1307,27 @@ URL is not served yet; the JSON keeps its `docs_url` field.
 
 ---
 
+## E84. `ref` on a type that is already a reference
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.13.2 says `ref` on a
+CLASS-typed binding "is accepted and meaningless", reserving warning `W0490`
+for it, while §M.13.4 rejects "`ref` array ELEMENTS (`ref T[]`)" outright.
+Arrays became reference types after both lines were written
+(`JUX-LANG-V1.md` §6.5.2), and collections with them (§6.5.1), so `ref int[]`
+and `ref Vec<int>` are the array/collection spelling of exactly the case
+§M.13.2 allows.
+
+**Resolution.** One rule for every already-shared type. `ref` on a class,
+interface, array or collection binding parses, means nothing extra, and warns
+`W0490` naming the type. It is never an error. What §M.13.4 still rejects is
+`ref` where a TYPE is expected rather than a binding: `ref ref T` (`E0524`)
+and a `ref` generic argument such as `Vec<ref int>` (`E0526`). A `ref` RETURN
+type stays deferred, as §M.13.2 says, and is `E0523`.
+
+**Spec status:** §M.13.2 and §M.13.4 carry a note pointing here.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

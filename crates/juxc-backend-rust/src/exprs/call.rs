@@ -3337,21 +3337,10 @@ impl RustEmitter {
         // fresh shared object (the callee's writes then stay local —
         // pass a `ref` binding for write-through).
         if self.callee_param_is_shared_ref(&call.callee, i) {
-            if let Expr::Path(qn) = arg {
-                if qn.segments.len() == 1 && self.ref_locals.contains(&qn.segments[0].text) {
-                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
-                    self.w.push_str(".clone()");
-                    return;
-                }
-            }
-            // A `ref` FIELD argument aliases through its handle.
-            if let Expr::Field(ff) = arg {
-                if self.field_decl_is_ref(&ff.object, &ff.field.text) {
-                    let prev = std::mem::replace(&mut self.emitting_ref_handle, true);
-                    self.emit_expr(arg);
-                    self.emitting_ref_handle = prev;
-                    return;
-                }
+            // A `ref` local, parameter or field argument aliases through its
+            // handle (instance and static fields alike).
+            if self.emit_ref_alias_source(arg) {
+                return;
             }
             // A `ref` binding (§M.13) is its own shape -- an `Rc<RefCell<T>>`
             // spelled out, NOT the collection handle. They look alike, but the

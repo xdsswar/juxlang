@@ -71,3 +71,19 @@ fn ref_fields() {
         ],
     );
 }
+
+#[test]
+fn ref_semantics_full() {
+    // One program per rule of §M.13.2: aliasing, store-through, parameters
+    // (ref and plain), structs, records, instance and static fields, a
+    // nullable cell, closures, and a loop. The expected transcript lives
+    // beside the example in tests/expected, so this asserts the shape the
+    // rules produce rather than repeating every line.
+    let lines = run_example("ref_semantics_full.jux", "it-ref-semantics-full");
+    assert_eq!(lines.first().map(String::as_str), Some("second"));
+    assert_eq!(lines.len(), 18, "lines: {lines:?}");
+    // The two that used to be wrong: a ref local taken from a ref FIELD
+    // aliases it, and a static ref field aliases into a ref parameter.
+    assert_eq!(lines[12], "40");
+    assert_eq!(lines[13], "10");
+}

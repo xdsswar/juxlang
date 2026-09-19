@@ -1,0 +1,60 @@
+// `ref` write-through (§M.13.2) against the shape Java reaches for when it
+// wants the same thing: a one-element array, or a small holder object.
+//
+// Jux says it with the binding instead of the container, so the twin's Java
+// side uses `int[]` / a holder class and prints the same transcript.
+
+class Holder {
+    public int value;
+    public Holder(int value) { this.value = value; }
+}
+
+void bump(ref int n) {
+    n += 1;
+}
+
+void addAll(ref int acc, int[] xs) {
+    for (var x : xs) {
+        acc += x;
+    }
+}
+
+void raise(Holder h, int by) {
+    h.value += by;
+}
+
+void bumpCopy(int n) {
+    n += 1000;
+}
+
+public void main() {
+    ref int counter = 0;
+    bump(counter);
+    bump(counter);
+    print(counter);
+
+    ref int alias = counter;
+    alias += 10;
+    print(counter);
+    print(alias);
+
+    addAll(counter, new int[]{1, 2, 3});
+    print(counter);
+
+    bumpCopy(counter);
+    print(counter);
+
+    int plain = 5;
+    bump(plain);
+    print(plain);
+
+    var holder = new Holder(7);
+    raise(holder, 3);
+    print(holder.value);
+
+    ref String label = "start";
+    ref String same = label;
+    same = "changed";
+    print(label);
+    print(label.length());
+}
