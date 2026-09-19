@@ -2680,7 +2680,7 @@ impl RustEmitter {
         if self.foreign_iterator_next(&f.iter).is_some_and(|m| m.is_foreign_result) {
             let v = to_rust_ident(&f.var_name.text);
             self.w.line(&format!(
-                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e));"
+                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e));"
             ));
         }
         // Register the loop variable's element type in `local_types` for the

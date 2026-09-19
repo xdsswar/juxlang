@@ -388,6 +388,21 @@ impl RustEmitter {
     /// The `is_external` flag distinguishes a real declaration from a generated
     /// `.jux.d` stub entry that happens to sit at the top level.
     pub(crate) fn bare_name_is_user_type(&self, bare: &str) -> bool {
+        // A type the current unit's PACKAGE declares is keyed by its FQN
+        // (`dash.Layout`), so the bare key alone missed it: a wildcard
+        // `import rust.std.*;` then emitted `use std::alloc::Layout;` beside
+        // the program's own `Layout` (rustc E0255).
+        let pkg = self.current_package_path();
+        if !pkg.is_empty() && !bare.contains('.') {
+            let fqn = format!("{pkg}.{bare}");
+            if self.symbols.classes.get(&fqn).is_some_and(|c| !c.is_external)
+                || self.symbols.enums.get(&fqn).is_some_and(|e| !e.is_external)
+                || self.symbols.records.contains_key(&fqn)
+                || self.symbols.interfaces.get(&fqn).is_some_and(|i| !i.is_external)
+            {
+                return true;
+            }
+        }
         if let Some(sig) = self.symbols.classes.get(bare) {
             return !sig.is_external;
         }
@@ -1004,7 +1019,7 @@ impl RustEmitter {
         }
         if ctor_is_foreign_result {
             self.w
-                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e))");
+                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
         }
         // `new Path("a/b")`: Rust's `Path::new` hands back a `&Path`, and the
         // value Jux keeps is the owned form (see `external_owned_form`).
@@ -1408,7 +1423,7 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_call(c);
                     self.w
-                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e))");
+                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
                 } else {
                     self.emit_call(c);
                 }

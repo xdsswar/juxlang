@@ -12196,6 +12196,9 @@ impl<'a> Checker<'a> {
                 );
             if !pointer_null
                 && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
+                && !(declaring_class.is_none()
+                    && callee_is_foreign_free_fn(callee_name, self.symbols)
+                    && slice_arg_bridges(&expected, &found, param, self.symbols))
                 && !compatible(&expected, &found, self.symbols)
             {
                 let mut diag = Diagnostic::error(
@@ -12349,6 +12352,43 @@ fn pointee_is(a: &Ty, b: Ty, pair: &[Primitive; 2]) -> bool {
 /// (non-foreign) call-arg checking is unchanged. `Vec` is the sole owned std
 /// container that derefs to a slice, so naming it is a correct discriminator,
 /// not a maintenance-prone allowlist.
+/// Whether `name` names a FOREIGN free function (`rust.image.load_from_memory`)
+/// and no function the program declares of that name.
+fn callee_is_foreign_free_fn(name: &str, symbols: &SymbolTable) -> bool {
+    let foreign = |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+    let mut found = false;
+    for k in symbols.functions.keys() {
+        if k.rsplit('.').next() == Some(name) {
+            if foreign(k) {
+                found = true;
+            } else {
+                return false;
+            }
+        }
+    }
+    found
+}
+
+/// [`foreign_arg_bridges`] for a foreign FREE function: a Jux array or a
+/// `Vec<E>` argument reaches a slice parameter (`&[u8]`) by Deref coercion,
+/// as it does for a foreign method. `load_from_memory(png)` with a
+/// `Vec<ubyte>` from `encode_png()` is the case.
+fn slice_arg_bridges(expected: &Ty, found: &Ty, param: &ParamSig, symbols: &SymbolTable) -> bool {
+    if param.ty.array_shape.is_none() || param.is_ref {
+        return false;
+    }
+    let Ty::Array { element, .. } = expected else {
+        return false;
+    };
+    match found {
+        Ty::Array { element: found_el, .. } => compatible(element, found_el, symbols),
+        Ty::User { name, generic_args } if generic_args.len() == 1 => {
+            name.rsplit('.').next() == Some("Vec") && compatible(element, &generic_args[0], symbols)
+        }
+        _ => false,
+    }
+}
+
 fn foreign_arg_bridges(
     expected: &Ty,
     found: &Ty,

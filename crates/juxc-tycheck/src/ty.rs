@@ -779,7 +779,11 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     //        rule applied to every stdlib package.
     if t.name.segments.len() == 1 {
         let bare = &t.name.segments[0].text;
-        if let Some(fqn) = env.unqualified.get(bare) {
+        let declared_import = env
+            .declaring_unit
+            .and_then(|u| symbols.units.get(u))
+            .and_then(|ctx| ctx.unqualified.get(bare));
+        if let Some(fqn) = env.unqualified.get(bare).or(declared_import) {
             if symbols.is_type_name_or_stdlib(fqn) {
                 if let Some(expanded) = expand_alias(fqn, &t.generic_args, env, symbols)
                 {
@@ -940,6 +944,9 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
     if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
         env.current_package = pkg.split('.').map(str::to_string).collect();
     }
+    // ...and its imports: a crate type the declaring file imported is visible
+    // in the signature even where the caller did not import it (G.6.5).
+    env.declaring_unit = symbols.decl_unit.get(declaring_class).copied();
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);
@@ -982,6 +989,9 @@ pub fn lower_member_type_in_method(
     if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
         env.current_package = pkg.split('.').map(str::to_string).collect();
     }
+    // ...and its imports: a crate type the declaring file imported is visible
+    // in the signature even where the caller did not import it (G.6.5).
+    env.declaring_unit = symbols.decl_unit.get(declaring_class).copied();
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);
