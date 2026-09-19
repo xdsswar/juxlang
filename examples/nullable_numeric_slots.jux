@@ -1,0 +1,12 @@
+// A uint flows into a nullable int slot the way it flows into an int one:
+// converted, inside the Some.
+void main() {
+    uint w = 5u;
+    int? slot = null;
+    slot = w;
+    print(slot ?: -1);
+    int? other = w;
+    print(other ?: -1);
+    long? wide = 7;
+    print(wide ?: -1L);
+}

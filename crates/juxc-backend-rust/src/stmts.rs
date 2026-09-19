@@ -3210,16 +3210,19 @@ impl RustEmitter {
                 // Numeric coercion into a typed local: `int n = v.len();`
                 // (uint -> int) or `long x = intExpr;` (int -> long widening).
                 // Cast the init to the declared numeric type when it differs
-                // (widen or same-width signedness); never narrows. Skipped under
-                // the nullable `Some(...)` wrap.
-                let num_widen = if wrap_some {
-                    None
-                } else {
-                    var.ty
-                        .as_ref()
-                        .and_then(|t| self.type_ref_primitive(t))
-                        .and_then(|target| self.numeric_widen_or_arm(init, target))
-                };
+                // (widen or same-width signedness); never narrows. Under the
+                // nullable `Some(...)` wrap the cast goes inside it:
+                // `int? n = w;` with a `uint w` is `Some((w) as isize)`.
+                let num_widen = var
+                    .ty
+                    .as_ref()
+                    .filter(|_| wrap_some || !declared_nullable)
+                    .and_then(|t| {
+                        let mut inner = t.clone();
+                        inner.nullable = false;
+                        self.type_ref_primitive(&inner)
+                    })
+                    .and_then(|target| self.numeric_widen_or_arm(init, target));
                 let widen_inner =
                     num_widen.is_some() && crate::exprs::cast_needs_inner_parens(init);
                 if num_widen.is_some() {
@@ -4820,12 +4823,30 @@ impl RustEmitter {
             // target's numeric type when it differs; never narrows. A compound
             // assignment widens its operand the same way (`d += anInt`, `d++`),
             // since Rust has no `f64 += isize`. Skipped for nullable assigns.
+            // Into a nullable numeric slot the cast goes inside the `Some(...)`:
+            // `slot = w;` with `int? slot` and `uint w` is `Some((w) as isize)`.
             let num_widen = if assign_nullable {
-                None
+                match self.receiver_ty_of(a_target) {
+                    Some(Ty::Nullable(inner)) => match *inner {
+                        Ty::Primitive(p) if !self.expression_is_already_nullable(a_value) => {
+                            self.numeric_widen_or_arm(a_value, p)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
             } else {
                 self.operand_primitive(a_target)
                     .and_then(|t| self.numeric_widen_or_arm(a_value, t))
             };
+            if let (true, Some(cast)) = (assign_nullable, num_widen) {
+                self.w.push_str("Some((");
+                self.emit_expr(a_value);
+                self.w.push_str(") as ");
+                self.w.push_str(cast);
+                self.w.push(')');
+                return;
+            }
             let widen_inner =
                 num_widen.is_some() && crate::exprs::cast_needs_inner_parens(a_value);
             if num_widen.is_some() {
