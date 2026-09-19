@@ -163,6 +163,25 @@ impl RustEmitter {
         self.bound_position_classes.contains(bare) || self.is_dispatch_relevant_class(bare)
     }
 
+    /// The Rust spelling of the `Option` a nullable `T?` lowers to.
+    ///
+    /// Plain `Option` everywhere, except in a unit that has a Jux type of its
+    /// own named `Option` in scope (the core `jux.std.option.Option` enum's
+    /// own file, or one that imports it): there the bare name is that enum,
+    /// so `T?` spells out Rust's `std::option::Option`.
+    pub(crate) fn nullable_option_path(&self) -> &'static str {
+        let shadowed = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .and_then(|ctx| ctx.unqualified.get("Option"))
+            .is_some_and(|fqn| !fqn.starts_with("rust."));
+        if shadowed {
+            "std::option::Option<"
+        } else {
+            "Option<"
+        }
+    }
+
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // A function pointer (Layout-ABI §L.6.4) is the same Rust type in every
         // position: a nullable C code address.
@@ -418,7 +437,7 @@ impl RustEmitter {
             // to the element below.)
             if ty.nullable {
                 let inner = juxc_ast::TypeRef { nullable: false, ..ty.clone() };
-                self.w.push_str("Option<");
+                self.w.push_str(self.nullable_option_path());
                 self.emit_type_as_rust(&inner);
                 self.w.push('>');
                 return;
@@ -502,7 +521,7 @@ impl RustEmitter {
                 ptr_depth: 0,
                 span: ty.span,
             };
-            self.w.push_str("Option<");
+            self.w.push_str(self.nullable_option_path());
             self.emit_type_as_rust(&inner);
             self.w.push('>');
             return;

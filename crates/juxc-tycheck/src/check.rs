@@ -11161,6 +11161,20 @@ impl<'a> Checker<'a> {
                 if let Some(enum_sig) = self.symbols.enums.get(&name) {
                     if let Some(method) = enum_sig.methods.get(method_name) {
                         let params = method.params.clone();
+                        // The enum's own type arguments and the method's
+                        // inferred ones, as for a record: a lambda handed to
+                        // `Option<String>.map((p) -> p.charLength())` needs
+                        // `p` to be the String, not an unresolved `T`.
+                        let method_generic_params = method.generic_params.clone();
+                        let mut subst_params = enum_sig.generic_params.clone();
+                        let mut subst_args = generic_args.clone();
+                        self.append_method_generic_inference(
+                            &method_generic_params,
+                            &params,
+                            &c.args,
+                            &mut subst_params,
+                            &mut subst_args,
+                        );
                         self.check_call_args(
                             method_name,
                             &params,
@@ -11168,8 +11182,8 @@ impl<'a> Checker<'a> {
                             &c.arg_names,
                             c.span,
                             Some(&name),
-                            &[],
-                            &[],
+                            &subst_params,
+                            &subst_args,
                         );
                         return;
                     }
@@ -13179,6 +13193,28 @@ fn function_into_any(expected: &Ty, value: &Expr) -> bool {
     matches!(slot, Ty::Any) && matches!(value, Expr::Lambda(_) | Expr::MethodRef(_))
 }
 
+/// Whether two function types have the same shape and agree position by
+/// position, where a position agrees when both sides are equal or either is
+/// still open (`Unknown`, or a type parameter awaiting substitution). Nested
+/// function types are compared the same way. Used by [`compatible`].
+fn fn_shapes_agree(expected: &Ty, found: &Ty) -> bool {
+    fn agree(a: &Ty, b: &Ty) -> bool {
+        a == b
+            || a.is_unknown()
+            || b.is_unknown()
+            || matches!(a, Ty::Param(_))
+            || matches!(b, Ty::Param(_))
+            || fn_shapes_agree(a, b)
+    }
+    match (expected, found) {
+        (
+            Ty::Fn { params: ep, return_type: er, is_async: ea },
+            Ty::Fn { params: fp, return_type: fr, is_async: fa },
+        ) => ea == fa && ep.len() == fp.len() && ep.iter().zip(fp).all(|(e, f)| agree(e, f)) && agree(er, fr),
+        _ => false,
+    }
+}
+
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
@@ -13206,6 +13242,15 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     }
     // Exact match.
     if expected == found {
+        return true;
+    }
+    // Two function types of one shape whose positions differ only where one
+    // side is still to be inferred: a generic callee's `(A) -> B` slot,
+    // lowered before its own `A`/`B` are known, takes a caller's `(T) -> R`
+    // lambda (a default method handing its argument on, Core lib K.5).
+    // Positions that are both concrete must match exactly; function-type
+    // variance (T.3.6) is not implied.
+    if fn_shapes_agree(expected, found) {
         return true;
     }
     // `any` (§T.1.2 / §T.3.6): every value converts, except a nullable one

@@ -959,6 +959,13 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
         for tp in &iface.generic_params {
             env.add_generic_param(&tp.name.text);
         }
+    } else if let Some(en) = symbols.enums.get(declaring_class) {
+        // A generic enum's `T` (`Option<T>`, `Result<T, E>`, §K.3/§K.4) is
+        // in scope in its members' signatures too; without it `(T) -> R`
+        // lowered `T` to Unknown and a lambda handed to `map` lost its type.
+        for tp in &en.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
     }
     ty_from_ref(ty_ref, &env, symbols)
 }
@@ -1002,6 +1009,13 @@ pub fn lower_member_type_in_method(
         }
     } else if let Some(iface) = symbols.interfaces.get(declaring_class) {
         for tp in &iface.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+    } else if let Some(en) = symbols.enums.get(declaring_class) {
+        // A generic enum's `T` (`Option<T>`, `Result<T, E>`, §K.3/§K.4) is
+        // in scope in its members' signatures too; without it `(T) -> R`
+        // lowered `T` to Unknown and a lambda handed to `map` lost its type.
+        for tp in &en.generic_params {
             env.add_generic_param(&tp.name.text);
         }
     }

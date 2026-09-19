@@ -1048,6 +1048,30 @@ through a polymorphic base.
 
 **Spec status:** §T.2.6 describes the intended behaviour and stands.
 
+## E56. `Result.ok`/`Result.err` are both statics and instance methods
+
+**Conflict.** JUX-CORE-LIB-ADDENDUM §K.4 lists, on `Result<T, E>`, the instance
+methods `Option<T> ok()` and `Option<E> err()` and ALSO the static constructors
+`Result<T, never> ok<T>(T value)` and `Result<never, E> err<E>(E error)`. One
+type cannot carry an instance method and a static of the same name with one
+lowering, and a call `r.ok()` next to `Result.ok(5)` reads as the same member.
+Separately, §K.4 and §X.4 write `unwrap() throws E` (an `Err` throws its own
+error), but `E` carries no `extends Exception` bound, so a `Result<int, String>`
+has nothing throwable to throw.
+
+**Resolution.** Construction uses the variant forms every example in the spec
+already uses, `Result.Ok(v)` and `Result.Err(e)`; the two statics are not
+provided. The instance `ok()` / `err()` stay. `unwrap()` on an `Err` throws
+`IllegalStateException`, as it did before; a `Result` whose error type is an
+exception can rethrow it explicitly with a `switch`. The combinators §K.3, §K.4
+and §X.4 name are provided as written (`map`, `mapErr`, `flatMap`,
+`unwrapOrElse`, `ok`, `err`; `Option.map`, `flatMap`, `toNullable`,
+`ofNullable`), plus the everyday companions `orElse`, `filter`,
+`isSomeAnd`/`isOkAnd` and `Option.unwrapOrElse`.
+
+**Spec status:** §K.4 should drop the two static constructors and say how
+`unwrap` fails for a non-exception `E`.
+
 ---
 
 ## How to use this file

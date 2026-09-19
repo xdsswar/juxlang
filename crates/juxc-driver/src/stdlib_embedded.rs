@@ -1067,6 +1067,90 @@ public enum Option<T> {
             case Option.None -> fallback;
         };
     }
+
+    /**
+     * The held value, or what `f` computes when None. `f` runs only when
+     * it is needed.
+     */
+    public T unwrapOrElse(() -> T f) {
+        return switch (this) {
+            case Option.Some(var v) -> v;
+            case Option.None -> f();
+        };
+    }
+
+    /**
+     * `Some(f(v))` for `Some(v)`, `None` for None (§K.3).
+     */
+    public <R> Option<R> map((T) -> R f) {
+        return switch (this) {
+            case Option.Some(var v) -> Option.Some(f(v));
+            case Option.None -> Option.None;
+        };
+    }
+
+    /**
+     * `f(v)` for `Some(v)`, `None` for None (§K.3): chains a step that may
+     * itself come up empty.
+     */
+    public <R> Option<R> flatMap((T) -> Option<R> f) {
+        return switch (this) {
+            case Option.Some(var v) -> f(v);
+            case Option.None -> Option.None;
+        };
+    }
+
+    /**
+     * This Option when it holds a value, otherwise `other`.
+     */
+    public Option<T> orElse(Option<T> other) {
+        return switch (this) {
+            case Option.Some(var v) -> Option.Some(v);
+            case Option.None -> other;
+        };
+    }
+
+    /**
+     * This Option when its value passes `pred`, otherwise None.
+     */
+    public Option<T> filter((T) -> bool pred) {
+        return switch (this) {
+            case Option.Some(var v) -> pred(v) ? Option.Some(v) : Option.None;
+            case Option.None -> Option.None;
+        };
+    }
+
+    /**
+     * True when this Option holds a value that passes `pred`.
+     */
+    public bool isSomeAnd((T) -> bool pred) {
+        return switch (this) {
+            case Option.Some(var v) -> pred(v);
+            case Option.None -> false;
+        };
+    }
+
+    /**
+     * The value as a nullable (§K.3.1): `v` for `Some(v)`, `null` for None.
+     * `T?` and `Option<T>` never convert implicitly; this is the explicit
+     * way across.
+     */
+    public T? toNullable() {
+        return switch (this) {
+            case Option.Some(var v) -> v;
+            case Option.None -> null;
+        };
+    }
+
+    /**
+     * `Some(value)` for a non-null value, `None` for null (§K.3.1).
+     */
+    public static Option<T> ofNullable(T? value) {
+        if (value == null) {
+            return Option.None;
+        }
+        return Option.Some(value!!);
+    }
 }
 "###),
     ("result/Result.jux", r###"/**
@@ -1146,6 +1230,69 @@ public enum Result<T, E> {
         return switch (this) {
             case Result.Ok(var v) -> Option.None;
             case Result.Err(var e) -> Option.Some(e);
+        };
+    }
+
+    /**
+     * The success value, or what `f` makes of the error (§K.4). `f` runs
+     * only on an Err.
+     */
+    public T unwrapOrElse((E) -> T f) {
+        return switch (this) {
+            case Result.Ok(var v) -> v;
+            case Result.Err(var e) -> f(e);
+        };
+    }
+
+    /**
+     * `Ok(f(v))` for `Ok(v)`; an Err passes through unchanged (§K.4, §X.4).
+     */
+    public <R> Result<R, E> map((T) -> R f) {
+        return switch (this) {
+            case Result.Ok(var v) -> Result.Ok(f(v));
+            case Result.Err(var e) -> Result.Err(e);
+        };
+    }
+
+    /**
+     * `Err(f(e))` for `Err(e)`; an Ok passes through unchanged (§K.4).
+     */
+    public <F> Result<T, F> mapErr((E) -> F f) {
+        return switch (this) {
+            case Result.Ok(var v) -> Result.Ok(v);
+            case Result.Err(var e) -> Result.Err(f(e));
+        };
+    }
+
+    /**
+     * `f(v)` for `Ok(v)`; an Err passes through unchanged (§K.4, §X.4):
+     * chains a step that may itself fail.
+     */
+    public <R> Result<R, E> flatMap((T) -> Result<R, E> f) {
+        return switch (this) {
+            case Result.Ok(var v) -> f(v);
+            case Result.Err(var e) -> Result.Err(e);
+        };
+    }
+
+    /**
+     * This Result when it is Ok, otherwise what `f` makes of the error:
+     * a recovery step that may itself fail.
+     */
+    public <F> Result<T, F> orElse((E) -> Result<T, F> f) {
+        return switch (this) {
+            case Result.Ok(var v) -> Result.Ok(v);
+            case Result.Err(var e) -> f(e);
+        };
+    }
+
+    /**
+     * True when this Result is Ok with a value that passes `pred`.
+     */
+    public bool isOkAnd((T) -> bool pred) {
+        return switch (this) {
+            case Result.Ok(var v) -> pred(v);
+            case Result.Err(var e) -> false;
         };
     }
 }
