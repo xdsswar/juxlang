@@ -15,8 +15,10 @@ import dev.jux.intellij.psi.JuxTypeDeclaration
  *
  * The platform hands us the resolved target (a declaration) or its name leaf;
  * we normalize to the enclosing [JuxTypeDeclaration] / [JuxMethodDeclaration]
- * and feed each result's name identifier to the consumer so navigation lands on
- * the name. Non-Jux / unrelated elements yield nothing.
+ * and feed each result declaration to the consumer. A declaration's text
+ * offset is its name, so navigation still lands there, and Quick Definition
+ * (Ctrl+Shift+I) shows the whole declaration rather than one identifier.
+ * Non-Jux / unrelated elements yield nothing.
  */
 class JuxImplementationSearch :
     QueryExecutorBase<PsiElement, DefinitionsScopedSearch.SearchParameters>(/* requireReadAction = */ true) {
@@ -29,14 +31,14 @@ class JuxImplementationSearch :
         val type = element as? JuxTypeDeclaration ?: element.parent as? JuxTypeDeclaration
         if (type != null) {
             for (sub in JuxSubtypes.subtypesOf(type)) {
-                if (!consumer.process(sub.nameIdentifier ?: sub)) return
+                if (!consumer.process(sub)) return
             }
             return
         }
         val method = element as? JuxMethodDeclaration ?: element.parent as? JuxMethodDeclaration
         if (method != null) {
             for (m in JuxSubtypes.overridingMethods(method)) {
-                if (!consumer.process(m.nameIdentifier ?: m)) return
+                if (!consumer.process(m)) return
             }
         }
     }
