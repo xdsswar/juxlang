@@ -1,0 +1,59 @@
+// A method called by its bare name inside its class (Java's implicit `this`)
+// converts its arguments exactly as `this.m(..)` does (JUX-LANG-V1 §7.2,
+// JUX-SEMANTICS-ADDENDUM §S.2.7).
+//
+// `swap(i, j)` with `int` locals into `uint` parameters used to reach rustc
+// unconverted, while `this.swap(i, j)` compiled.
+
+class Board {
+    private Vec<int> cells = new Vec<int>();
+
+    public Board() {
+        for (var n = 1; n <= 5; n++) {
+            cells.push(n * 10);
+        }
+    }
+
+    private void swap(uint a, uint b) {
+        var t = cells[a];
+        cells[a] = cells[b];
+        cells[b] = t;
+    }
+
+    private long weigh(long factor, double scale) {
+        return (long) ((long) cells.len() * factor * scale);
+    }
+
+    public void reverse() {
+        var i = 0;
+        var j = 4;
+        while (i < j) {
+            swap(i, j);
+            i++;
+            j--;
+        }
+    }
+
+    public void mix() {
+        this.swap(0, 1);
+        var k = 3;
+        swap(k, 2);
+        print(weigh(k, 2));
+    }
+
+    public String text() {
+        var out = "";
+        for (var c : cells) {
+            out += c + " ";
+        }
+        return out.trim();
+    }
+}
+
+public void main() {
+    var b = new Board();
+    b.reverse();
+    print(b.text());
+    b.mix();
+    print(b.text());
+}

@@ -535,6 +535,7 @@ impl RustEmitter {
         // block they were declared in.
         let outer_nullable = self.nullable_locals.clone();
         self.note_fixed_array_escapes(&block.statements);
+        self.note_reassigned_vars(&block.statements);
         for stmt in &block.statements {
             // Per-statement source-map marker (only when `source` is
             // attached on the emitter — see `lower_with_source`).
@@ -546,6 +547,27 @@ impl RustEmitter {
             self.emit_stmt(stmt);
         }
         self.nullable_locals = outer_nullable;
+    }
+
+    /// Record every untyped `var x = init;` declared directly in `statements`
+    /// that a later statement of the same block (its whole scope) assigns as
+    /// a whole name (`x = ..`, `x *= ..`, `x++`), keyed by the declaration's
+    /// span. Writing through the object (`x.field = ..`) does not count: the
+    /// binding still holds the same object. Read by [`Self::emit_var_decl`].
+    pub(crate) fn note_reassigned_vars(&mut self, statements: &[Stmt]) {
+        for (i, stmt) in statements.iter().enumerate() {
+            if let Stmt::VarDecl(v) = stmt {
+                if v.ty.is_some() || v.init.is_none() {
+                    continue;
+                }
+                let rest = Block { statements: statements[i + 1..].to_vec(), span: juxc_source::Span::DUMMY };
+                let mut assigned = std::collections::HashSet::new();
+                crate::analysis::collect_whole_name_reassigned(&rest, &mut assigned);
+                if assigned.contains(&v.name.text) {
+                    self.reassigned_var_decls.insert(v.span);
+                }
+            }
+        }
     }
 
     /// Record, for every `T[N]` local declared directly in `statements`,
@@ -3030,7 +3052,7 @@ impl RustEmitter {
         // declared form `Vec2 c = a;` is. Without a written type the local
         // took the initializer's concrete shape and the reassignment failed
         // in rustc (E0308). Give it the type it was inferred to have.
-        if var.ty.is_none() && !var.is_ref && self.mutated_in_fn.contains(&var.name.text) {
+        if var.ty.is_none() && !var.is_ref && self.reassigned_var_decls.contains(&var.span) {
             if let Some(init) = &var.init {
                 if let Some(juxc_tycheck::Ty::User { name, generic_args }) =
                     self.expr_types.get(&expr_span_of(init)).cloned()

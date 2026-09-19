@@ -1150,6 +1150,11 @@ struct RustEmitter {
     /// array (LANG-V1 §5.5, §6.5.2); its static type is still `T[N]`. Filled
     /// by `emit_block_contents`, consumed by `emit_var_decl`.
     pub(crate) fixed_array_dynamic_decls: std::collections::HashMap<juxc_source::Span, Vec<bool>>,
+    /// Spans of the untyped `var` declarations whose local is assigned again
+    /// as a whole name later in its block (see `note_reassigned_vars`). Such a
+    /// local of a polymorphic base class is emitted with the base's handle
+    /// type, since the value assigned later may be any subclass.
+    pub(crate) reassigned_var_decls: std::collections::HashSet<juxc_source::Span>,
     /// Per lambda span, the captured bindings the body reads again after the
     /// capture, with one read's span each (`crate::lastuse::captures_read_again`).
     /// The lambda clones those before its `move` closure takes them.
@@ -5356,6 +5361,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
             fixed_array_dynamic_decls: std::collections::HashMap::new(),
+            reassigned_var_decls: std::collections::HashSet::new(),
             captures_read_again: std::collections::HashMap::new(),
             sync_classes: std::collections::HashSet::new(),
             sync_class_fqns: std::collections::HashSet::new(),
