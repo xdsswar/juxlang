@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 35;
+const STD_STUB_CACHE_VERSION: u32 = 40;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -455,8 +455,11 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         .iter()
         .map(|(n, j)| (n.as_str(), j.as_str()))
         .collect();
-    let stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
+    let mut stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
         .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
+    // The JSON is nightly's std; leave out what the user's own `rustc` would
+    // reject as unstable (B32, Bindgen G.6.2.3).
+    crate::stability::prune_unstable(&mut stub);
     let rendered = juxc_bindgen::render_stub(&stub);
     Ok(Some(format!("{}{rendered}", std_cache_header())))
 }

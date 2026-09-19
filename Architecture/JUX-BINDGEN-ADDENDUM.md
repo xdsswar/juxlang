@@ -417,6 +417,10 @@ The Rust standard library is auto-loaded into every compile and editor analysis 
 
 A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) items; items it merely re-exports from a lower layer appear as external references and are skipped. Rust's std is layered `core` ⊂ `alloc` ⊂ `std` — `Vec`, `String`, `Box`, `Rc`/`Arc`, `BTreeMap` are *defined* in `alloc` and only re-exported by `std` — so ingesting `std` alone misses them. `bindgen` therefore ingests each crate's JSON in turn (each as the local crate) and merges the results into one package, keyed by item name with **first-definition-wins** (crates supplied most-fundamental-first). Deduplication also collapses the platform-duplicated names std ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that would otherwise collide as duplicate Jux declarations (`E0400`).
 
+### G.6.2.3. Only What the Build Toolchain Accepts
+
+The rustdoc JSON of the standard library ships only with the nightly toolchain, so it describes nightly's `std`, unstable APIs included (`Path::is_empty`, `<[f64]>::sort_floats`, the integer `funnel_shl`). A program is built with the user's own toolchain, where calling one is rustc `E0658`, and the JSON does not record stability. So the generator asks that compiler: every item and method of the surface is named once in a probe crate, the probe is checked by the default `rustc`, and whatever it rejects as unstable is left out of the stub. A generic type is probed with a few type arguments, since a method may exist for only some of them. The probe only ever removes: a line that fails for any other reason keeps its item. Calling an unstable API is then an ordinary juxc error (`E0413`), not a rustc one.
+
 ### G.6.3. Type Kind Selection
 
 | Rust item        | Jux stub kind                                      |

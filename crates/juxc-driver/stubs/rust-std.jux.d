@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 35
+// juxc rust.std stub cache-version 40
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -16,12 +16,6 @@ public class AccessError implements ToOwned, ToString {
 @rust("std::net::AddrParseError")
 @RustClone
 public class AddrParseError {
-}
-
-/** The `AllocError` error indicates an allocation failure */
-@rust("std::alloc::AllocError")
-@RustClone
-public class AllocError {
 }
 
 /** An iterator over [`Path`] and its ancestors. */
@@ -53,52 +47,24 @@ public class Arc<T, A> implements ToOwned, ToString {
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
     public static Pin<T> pin(T data);
-    public static Pin<T> try_pin(T data) throws AllocError;
-    public static T try_new(T data) throws AllocError;
-    public static MaybeUninit<T> try_new_uninit() throws AllocError;
-    public static MaybeUninit<T> try_new_zeroed() throws AllocError;
-    @RustClosureRefs("1") public static U map<U>(Arc this, (T) -> U f);
-    @RustClosureRefs("1") public static Self.TryType try_map<R>(Arc this, (T) -> R f);
-    public static T new_in(T data, A alloc);
-    public static MaybeUninit<T> new_uninit_in(A alloc);
-    public static MaybeUninit<T> new_zeroed_in(A alloc);
-    @RustClosureRefs("0") public static T new_cyclic_in<F>((Weak<T, A>) -> T data_fn, A alloc);
-    public static Pin<T> pin_in(T data, A alloc);
-    public static Pin<T> try_pin_in(T data, A alloc) throws AllocError;
-    public static T try_new_in(T data, A alloc) throws AllocError;
-    public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
-    public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
     public static T try_unwrap(Arc this) throws Arc;
     public static T? into_inner(Arc this);
     public static MaybeUninit<T>[] new_uninit_slice(uint len);
     public static MaybeUninit<T>[] new_zeroed_slice(uint len);
-    public static MaybeUninit<T>[] new_uninit_slice_in(uint len, A alloc);
-    public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
     public T[] into_array() throws Arc;
     public unsafe T assume_init();
-    public static T clone_from_ref(&T value);
-    public static T try_clone_from_ref(&T value) throws AllocError;
-    public static T clone_from_ref_in(&T value, A alloc);
-    public static T try_clone_from_ref_in(&T value, A alloc) throws AllocError;
     public static unsafe Arc from_raw(T* ptr);
     public static T* into_raw(Arc this);
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
-    @RustRefOut public static A allocator(&Arc this);
-    public static (T*, A) into_raw_with_allocator(Arc this);
     public static T* as_ptr(&Arc this);
-    public static unsafe Arc from_raw_in(T* ptr, A alloc);
     public static Weak<T, A> downgrade(&Arc this);
     public static uint weak_count(&Arc this);
     public static uint strong_count(&Arc this);
-    public static unsafe void increment_strong_count_in(T* ptr, A alloc);
-    public static unsafe void decrement_strong_count_in(T* ptr, A alloc);
     public static bool ptr_eq(&Arc this, &Arc other);
     @RustRefOut public static T make_mut(&mut Arc this);
     public static T unwrap_or_clone(Arc this);
     @RustRefOut public static T? get_mut(&mut Arc this);
-    @RustRefOut public static unsafe T get_mut_unchecked(&mut Arc this);
-    public static bool is_unique(&Arc this);
     public T downcast<T>() throws Arc;
     public unsafe T downcast_unchecked<T>();
 }
@@ -119,16 +85,7 @@ public class ArgsOs implements RustIterator {
 @rust("std::fmt::Arguments")
 @RustClone
 public class Arguments {
-    public static Arguments from_str(&String s);
     @RustRefOut public String? as_str();
-}
-
-/** An iterator over `N` elements of the iterator at a time. */
-@rust("std::iter::ArrayChunks")
-@RustClone
-public class ArrayChunks<I> implements RustIterator {
-    public IntoIter<I.Item> into_remainder();
-    @MutSelf public I.Item[]? next();
 }
 
 /** A windowed iterator over a slice in overlapping chunks (`N` elements at a */
@@ -174,38 +131,6 @@ public interface AsSocket {
     @RustBorrowsSelf public BorrowedSocket as_socket();
 }
 
-/** One of the 128 Unicode characters from U+0000 through U+007F, */
-@rust("std::ascii::Char")
-@RustClone
-public enum AsciiChar {
-    Null = 0, StartOfHeading = 1, StartOfText = 2, EndOfText = 3, EndOfTransmission = 4, Enquiry = 5, Acknowledge = 6, Bell = 7, Backspace = 8, CharacterTabulation = 9, LineFeed = 10, LineTabulation = 11, FormFeed = 12, CarriageReturn = 13, ShiftOut = 14, ShiftIn = 15, DataLinkEscape = 16, DeviceControlOne = 17, DeviceControlTwo = 18, DeviceControlThree = 19, DeviceControlFour = 20, NegativeAcknowledge = 21, SynchronousIdle = 22, EndOfTransmissionBlock = 23, Cancel = 24, EndOfMedium = 25, Substitute = 26, Escape = 27, InformationSeparatorFour = 28, InformationSeparatorThree = 29, InformationSeparatorTwo = 30, InformationSeparatorOne = 31, Space = 32, ExclamationMark = 33, QuotationMark = 34, NumberSign = 35, DollarSign = 36, PercentSign = 37, Ampersand = 38, Apostrophe = 39, LeftParenthesis = 40, RightParenthesis = 41, Asterisk = 42, PlusSign = 43, Comma = 44, HyphenMinus = 45, FullStop = 46, Solidus = 47, Digit0 = 48, Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52, Digit5 = 53, Digit6 = 54, Digit7 = 55, Digit8 = 56, Digit9 = 57, Colon = 58, Semicolon = 59, LessThanSign = 60, EqualsSign = 61, GreaterThanSign = 62, QuestionMark = 63, CommercialAt = 64, CapitalA = 65, CapitalB = 66, CapitalC = 67, CapitalD = 68, CapitalE = 69, CapitalF = 70, CapitalG = 71, CapitalH = 72, CapitalI = 73, CapitalJ = 74, CapitalK = 75, CapitalL = 76, CapitalM = 77, CapitalN = 78, CapitalO = 79, CapitalP = 80, CapitalQ = 81, CapitalR = 82, CapitalS = 83, CapitalT = 84, CapitalU = 85, CapitalV = 86, CapitalW = 87, CapitalX = 88, CapitalY = 89, CapitalZ = 90, LeftSquareBracket = 91, ReverseSolidus = 92, RightSquareBracket = 93, CircumflexAccent = 94, LowLine = 95, GraveAccent = 96, SmallA = 97, SmallB = 98, SmallC = 99, SmallD = 100, SmallE = 101, SmallF = 102, SmallG = 103, SmallH = 104, SmallI = 105, SmallJ = 106, SmallK = 107, SmallL = 108, SmallM = 109, SmallN = 110, SmallO = 111, SmallP = 112, SmallQ = 113, SmallR = 114, SmallS = 115, SmallT = 116, SmallU = 117, SmallV = 118, SmallW = 119, SmallX = 120, SmallY = 121, SmallZ = 122, LeftCurlyBracket = 123, VerticalLine = 124, RightCurlyBracket = 125, Tilde = 126, Delete = 127;
-
-    public static AsciiChar? from_u8(ubyte b);
-    public static unsafe AsciiChar from_u8_unchecked(ubyte b);
-    public static AsciiChar? digit(ubyte d);
-    public static unsafe AsciiChar digit_unchecked(ubyte d);
-    public ubyte to_u8();
-    public char to_char();
-    @RustRefOut public String as_str();
-    public AsciiChar to_uppercase();
-    public AsciiChar to_lowercase();
-    public bool eq_ignore_case(AsciiChar other);
-    @MutSelf public void make_uppercase();
-    @MutSelf public void make_lowercase();
-    public bool is_alphabetic();
-    public bool is_uppercase();
-    public bool is_lowercase();
-    public bool is_alphanumeric();
-    public bool is_digit();
-    public bool is_octdigit();
-    public bool is_hexdigit();
-    public bool is_punctuation();
-    public bool is_graphic();
-    public bool is_whitespace();
-    public bool is_control();
-    public EscapeDefault escape_ascii();
-}
-
 /** Extension methods for ASCII-subset only operations. */
 @rust("std::ascii::AsciiExt")
 @RustImplementedBy("[]")
@@ -235,7 +160,6 @@ public class AssertUnwindSafe<T> {
 public class BTreeMap<K, V, A> implements ToOwned {
     public BTreeMap();
     @MutSelf public void clear();
-    public static Map<K, V> new_in(A alloc);
     @RustRefOut public V? get<Q>(&Q key);
     public (K, V)? get_key_value<Q>(&Q k);
     public (K, V)? first_key_value();
@@ -279,7 +203,6 @@ public class BTreeMap<K, V, A> implements ToOwned {
 @RustCollection
 public class BTreeSet<T, A> implements ToOwned {
     public BTreeSet();
-    public static Set<T> new_in(A alloc);
     @RustBorrowsSelf public Range<T> range<K, R>(R range);
     @RustBorrowsSelf public Difference<T, A> difference(&Set<T> other);
     @RustBorrowsSelf public SymmetricDifference<T> symmetric_difference(&Set<T> other);
@@ -297,9 +220,6 @@ public class BTreeSet<T, A> implements ToOwned {
     @MutSelf public T? pop_last();
     @MutSelf public bool insert(T value);
     @MutSelf public T? replace(T value);
-    @MutSelf @RustRefOut public T get_or_insert(T value);
-    @MutSelf @RustRefOut @RustClosureRefs("1") public T get_or_insert_with<Q, F>(&Q value, (Q) -> T f);
-    @MutSelf @RustBorrowsSelf public Entry<T, A> entry(T value);
     @MutSelf public bool remove<Q>(&Q value);
     @MutSelf public T? take<Q>(&Q value);
     @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
@@ -309,10 +229,6 @@ public class BTreeSet<T, A> implements ToOwned {
     @RustBorrowsSelf public Iter<T> iter();
     public uint len();
     public bool is_empty();
-    @RustBorrowsSelf public Cursor<T> lower_bound<Q>(Bound<Q> bound);
-    @MutSelf @RustBorrowsSelf public CursorMut<T, A> lower_bound_mut<Q>(Bound<Q> bound);
-    @RustBorrowsSelf public Cursor<T> upper_bound<Q>(Bound<Q> bound);
-    @MutSelf @RustBorrowsSelf public CursorMut<T, A> upper_bound_mut<Q>(Bound<Q> bound);
 }
 
 /** A captured OS thread stack backtrace. */
@@ -322,25 +238,12 @@ public class Backtrace implements ToString {
     public static Backtrace force_capture();
     public static Backtrace disabled();
     public BacktraceStatus status();
-    @RustRefOut public BacktraceFrame[] frames();
-}
-
-/** A single frame of a backtrace. */
-@rust("std::backtrace::BacktraceFrame")
-public class BacktraceFrame {
 }
 
 /** The current status of a backtrace, indicating whether it was captured or */
 @rust("std::backtrace::BacktraceStatus")
 public enum BacktraceStatus {
     Unsupported, Disabled, Captured
-}
-
-/** The configuration for whether and how the default panic hook will capture */
-@rust("std::panic::BacktraceStyle")
-@RustClone
-public enum BacktraceStyle implements ToOwned {
-    Short, Full, Off
 }
 
 /** A barrier enables multiple threads to synchronize the beginning */
@@ -363,19 +266,13 @@ public class BarrierWaitResult {
 public class BinaryHeap<T, A> implements ToOwned {
     public BinaryHeap();
     public static BinaryHeap<T> with_capacity(uint capacity);
-    public static BinaryHeap<T, A> new_in(A alloc);
-    public static BinaryHeap<T, A> with_capacity_in(uint capacity, A alloc);
-    public static unsafe BinaryHeap<T, A> from_raw_vec(Vec<T> vec);
     @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
     @MutSelf public T? pop();
-    @MutSelf @RustClosureRefs("0") public T? pop_if((T) -> bool predicate);
     @MutSelf public void push(T item);
     public Vec<T> into_sorted_vec();
     @MutSelf public void append(&mut BinaryHeap other);
-    @MutSelf @RustBorrowsSelf public DrainSorted<T, A> drain_sorted();
     @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
     @RustBorrowsSelf public Iter<T> iter();
-    public IntoIterSorted<T, A> into_iter_sorted();
     @RustRefOut public T? peek();
     public uint capacity();
     @MutSelf public void reserve_exact(uint additional);
@@ -385,44 +282,11 @@ public class BinaryHeap<T, A> implements ToOwned {
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
     @RustRefOut public T[] as_slice();
-    @MutSelf @RustRefOut public unsafe T[] as_mut_slice();
     public Vec<T> into_vec();
-    @RustRefOut public A allocator();
     public uint len();
     public bool is_empty();
     @MutSelf @RustBorrowsSelf public Drain<T, A> drain();
     @MutSelf public void clear();
-}
-
-/** A borrowed buffer of initially uninitialized elements, which is incrementally filled. */
-@rust("std::io::BorrowedBuf")
-public class BorrowedBuf<T> {
-    public uint capacity();
-    public uint len();
-    public bool is_init();
-    @RustRefOut public T[] filled();
-    @MutSelf @RustRefOut public T[] filled_mut();
-    @RustRefOut public T[] into_filled();
-    @RustRefOut public T[] into_filled_mut();
-    @MutSelf @RustBorrowsSelf public BorrowedCursor<T> unfilled();
-    @MutSelf @RustRefOut public BorrowedBuf clear();
-    @MutSelf @RustRefOut public unsafe BorrowedBuf set_init();
-}
-
-/** A writeable view of the unfilled portion of a [`BorrowedBuf`]. */
-@rust("std::io::BorrowedCursor")
-public class BorrowedCursor<T> {
-    @MutSelf @RustBorrowsSelf public BorrowedCursor<T> reborrow();
-    public uint capacity();
-    public uint written();
-    public bool is_init();
-    @MutSelf public unsafe void set_init();
-    @MutSelf @RustRefOut public unsafe MaybeUninit<T>[] as_mut();
-    @MutSelf @RustRefOut public BorrowedCursor advance_checked(uint n);
-    @MutSelf @RustRefOut public unsafe BorrowedCursor advance(uint n);
-    @MutSelf public void append(T[] buf);
-    @MutSelf @RustClosureRefs("0") public R with_unfilled_buf<R>((BorrowedBuf<T>) -> R f);
-    @MutSelf @RustRefOut public ubyte[] ensure_init();
 }
 
 /** A borrowed file descriptor. */
@@ -456,7 +320,6 @@ public enum Bound<T> {
     Included(T), Excluded(T), Unbounded;
 
     @RustRefOut public Bound<T> as_ref();
-    @MutSelf @RustRefOut public Bound<T> as_mut();
     public Bound<U> map<U, F>((T) -> U f);
     public Bound<T> copied();
     public Bound<T> cloned();
@@ -473,47 +336,15 @@ public class Box<T, A> implements RustIterator, ToOwned, ToString {
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
     public static Pin<T> pin(T x);
-    public static Box try_new(T x) throws AllocError;
-    public static MaybeUninit<T> try_new_uninit() throws AllocError;
-    public static MaybeUninit<T> try_new_zeroed() throws AllocError;
     public static U map<U>(Box this, (T) -> U f);
-    public static Self.TryType try_map<R>(Box this, (T) -> R f);
-    public static Box new_in(T x, A alloc);
-    public static Box try_new_in(T x, A alloc) throws AllocError;
-    public static MaybeUninit<T> new_uninit_in(A alloc);
-    public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
-    public static MaybeUninit<T> new_zeroed_in(A alloc);
-    public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
-    public static Pin<Box> pin_in(T x, A alloc);
-    public static T[] into_boxed_slice(Box boxed);
-    public static T into_inner(Box boxed);
     public static (T, MaybeUninit<T>) take(Box boxed);
-    public static T clone_from_ref(&T src);
-    public static T try_clone_from_ref(&T src) throws AllocError;
-    public static T clone_from_ref_in(&T src, A alloc);
-    public static T try_clone_from_ref_in(&T src, A alloc) throws AllocError;
     public static MaybeUninit<T>[] new_uninit_slice(uint len);
     public static MaybeUninit<T>[] new_zeroed_slice(uint len);
-    public static MaybeUninit<T>[] try_new_uninit_slice(uint len) throws AllocError;
-    public static MaybeUninit<T>[] try_new_zeroed_slice(uint len) throws AllocError;
-    public static MaybeUninit<T>[] new_uninit_slice_in(uint len, A alloc);
-    public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
-    public static MaybeUninit<T>[] try_new_uninit_slice_in(uint len, A alloc) throws AllocError;
-    public static MaybeUninit<T>[] try_new_zeroed_slice_in(uint len, A alloc) throws AllocError;
     public T[] into_array() throws Box;
     public unsafe T assume_init();
     public static T write(Box boxed, T value);
     public static unsafe Box from_raw(T* raw);
-    public static unsafe Box from_non_null(NonNull<T> ptr);
     public static T* into_raw(Box b);
-    public static NonNull<T> into_non_null(Box b);
-    public static unsafe Box from_raw_in(T* raw, A alloc);
-    public static unsafe Box from_non_null_in(NonNull<T> raw, A alloc);
-    public static (T*, A) into_raw_with_allocator(Box b);
-    public static (NonNull<T>, A) into_non_null_with_allocator(Box b);
-    public static T* as_mut_ptr(&mut Box b);
-    public static T* as_ptr(&Box b);
-    @RustRefOut public static A allocator(&Box b);
     @RustRefOut public static T leak(Box b);
     public static Pin<Box> into_pin(Box boxed);
     @MutSelf public I.Item? next();
@@ -565,235 +396,9 @@ public class Builder {
     public Builder();
     public Builder name(String name);
     public Builder stack_size(uint size);
-    public Builder no_hooks();
     public JoinHandle<T> spawn<F, T>(() -> T f) throws Error;
     public unsafe JoinHandle<T> spawn_unchecked<F, T>(() -> T f) throws Error;
     @RustBorrowsSelf public ScopedJoinHandle<T> spawn_scoped<F, T>(&Scope scope, () -> T f) throws Error;
-}
-
-/** A wrapper for `&[u8]` representing a human-readable string that's conventionally, but not */
-@rust("std::bstr::ByteStr")
-@RustDerefs("[]")
-public class ByteStr {
-    public ByteStr(&B bytes);
-    @RustDefault public ByteStr();
-    @RustRefOut public ByteStr as_byte_str();
-    @MutSelf @RustRefOut public ByteStr as_mut_byte_str();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    public uint len();
-    public bool is_empty();
-    @RustRefOut public T? first();
-    @MutSelf @RustRefOut public T? first_mut();
-    public (T, T[])? split_first();
-    @MutSelf public (T, T[])? split_first_mut();
-    public (T, T[])? split_last();
-    @MutSelf public (T, T[])? split_last_mut();
-    @RustRefOut public T? last();
-    @MutSelf @RustRefOut public T? last_mut();
-    @RustRefOut public T[]? first_chunk();
-    @MutSelf @RustRefOut public T[]? first_chunk_mut();
-    public (T[], T[])? split_first_chunk();
-    @MutSelf public (T[], T[])? split_first_chunk_mut();
-    public (T[], T[])? split_last_chunk();
-    @MutSelf public (T[], T[])? split_last_chunk_mut();
-    @RustRefOut public T[]? last_chunk();
-    @MutSelf @RustRefOut public T[]? last_chunk_mut();
-    @RustRefOut public I.Output? get<I>(I index);
-    @MutSelf @RustRefOut public I.Output? get_mut<I>(I index);
-    @RustRefOut public unsafe I.Output get_unchecked<I>(I index);
-    @MutSelf @RustRefOut public unsafe I.Output get_unchecked_mut<I>(I index);
-    public T* as_ptr();
-    @MutSelf public T* as_mut_ptr();
-    public Range<T*> as_ptr_range();
-    @MutSelf public Range<T*> as_mut_ptr_range();
-    @RustRefOut public T[]? as_array();
-    @MutSelf @RustRefOut public T[]? as_mut_array();
-    @MutSelf public void swap(uint a, uint b);
-    @MutSelf public unsafe void swap_unchecked(uint a, uint b);
-    @MutSelf public void reverse();
-    @RustBorrowsSelf public Iter<T> iter();
-    @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
-    @RustBorrowsSelf public Windows<T> windows(uint size);
-    @RustBorrowsSelf public Chunks<T> chunks(uint chunk_size);
-    @MutSelf @RustBorrowsSelf public ChunksMut<T> chunks_mut(uint chunk_size);
-    @RustBorrowsSelf public ChunksExact<T> chunks_exact(uint chunk_size);
-    @MutSelf @RustBorrowsSelf public ChunksExactMut<T> chunks_exact_mut(uint chunk_size);
-    @RustRefOut public unsafe T[][] as_chunks_unchecked();
-    public (T[][], T[]) as_chunks();
-    public (T[], T[][]) as_rchunks();
-    @MutSelf @RustRefOut public unsafe T[][] as_chunks_unchecked_mut();
-    @MutSelf public (T[][], T[]) as_chunks_mut();
-    @MutSelf public (T[], T[][]) as_rchunks_mut();
-    @RustBorrowsSelf public ArrayWindows<T> array_windows();
-    @RustBorrowsSelf public RChunks<T> rchunks(uint chunk_size);
-    @MutSelf @RustBorrowsSelf public RChunksMut<T> rchunks_mut(uint chunk_size);
-    @RustBorrowsSelf public RChunksExact<T> rchunks_exact(uint chunk_size);
-    @MutSelf @RustBorrowsSelf public RChunksExactMut<T> rchunks_exact_mut(uint chunk_size);
-    @RustBorrowsSelf @RustClosureRefs("0") public ChunkBy<T, F> chunk_by<F>((T, T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public ChunkByMut<T, F> chunk_by_mut<F>((T, T) -> bool pred);
-    public (T[], T[]) split_at(uint mid);
-    @MutSelf public (T[], T[]) split_at_mut(uint mid);
-    public unsafe (T[], T[]) split_at_unchecked(uint mid);
-    @MutSelf public unsafe (T[], T[]) split_at_mut_unchecked(uint mid);
-    public (T[], T[])? split_at_checked(uint mid);
-    @MutSelf public (T[], T[])? split_at_mut_checked(uint mid);
-    @RustBorrowsSelf @RustClosureRefs("0") public Split<T, F> split<F>((T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public SplitMut<T, F> split_mut<F>((T) -> bool pred);
-    @RustBorrowsSelf @RustClosureRefs("0") public SplitInclusive<T, F> split_inclusive<F>((T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public SplitInclusiveMut<T, F> split_inclusive_mut<F>((T) -> bool pred);
-    @RustBorrowsSelf @RustClosureRefs("0") public RSplit<T, F> rsplit<F>((T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public RSplitMut<T, F> rsplit_mut<F>((T) -> bool pred);
-    @RustBorrowsSelf @RustClosureRefs("1") public SplitN<T, F> splitn<F>(uint n, (T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
-    @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? split_once<F>((T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? rsplit_once<F>((T) -> bool pred);
-    public bool contains(&T x);
-    public bool starts_with(T[] needle);
-    public bool ends_with(T[] needle);
-    @RustRefOut public T[]? strip_prefix<P>(&P prefix);
-    @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    @RustRefOut public T[]? strip_circumfix<S, P>(&P prefix, &S suffix);
-    @RustRefOut public T[] trim_prefix<P>(&P prefix);
-    @RustRefOut public T[] trim_suffix<P>(&P suffix);
-    public uint binary_search(&T x) throws Error;
-    @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
-    @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
-    @MutSelf public void sort_unstable();
-    @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public void partial_sort_unstable<R>(R range);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by<F, R>(R range, (T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by_key<K, F, R>(R range, (T) -> K f);
-    @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
-    @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
-    @MutSelf public (T[], T[]) partition_dedup();
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by_key<K, F>((T) -> K key);
-    @MutSelf public void rotate_left(uint mid);
-    @MutSelf public void rotate_right(uint k);
-    @MutSelf public T[] shift_left(T[] inserted);
-    @MutSelf public T[] shift_right(T[] inserted);
-    @MutSelf public void fill(T value);
-    @MutSelf public void fill_with<F>(() -> T f);
-    @MutSelf public void clone_from_slice(T[] src);
-    @MutSelf public void copy_from_slice(T[] src);
-    @MutSelf public void copy_within<R>(R src, uint dest);
-    @MutSelf public void swap_with_slice(&mut T[] other);
-    public unsafe (T[], U[], T[]) align_to<U>();
-    @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public (T[], Simd<T>[], T[]) as_simd();
-    @MutSelf public (T[], Simd<T>[], T[]) as_simd_mut();
-    public bool is_sorted();
-    @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
-    @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
-    @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
-    @MutSelf @RustRefOut public Self? split_off<R>(R range);
-    @MutSelf @RustRefOut public Self? split_off_mut<R>(R range);
-    @MutSelf @RustRefOut public T? split_off_first();
-    @MutSelf @RustRefOut public T? split_off_first_mut();
-    @MutSelf @RustRefOut public T? split_off_last();
-    @MutSelf @RustRefOut public T? split_off_last_mut();
-    @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
-    @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
-    public uint? element_offset(&T element);
-    public Range<uint>? subslice_range(T[] subslice);
-    @RustRefOut public T[] as_slice();
-    @MutSelf @RustRefOut public T[] as_mut_slice();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public void sort_floats();
-    @RustRefOut public String as_str();
-}
-
-/** A wrapper for `Vec<u8>` representing a human-readable string that's conventionally, but not */
-@rust("std::bstr::ByteString")
-@RustClone
-@RustCollection
-@RustDerefs("Vec")
-public class ByteString implements ToOwned, ToString {
-    @RustDefault public ByteString();
-    public (T*, uint, uint, A) into_raw_parts_with_alloc();
-    public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
-    public uint capacity();
-    @MutSelf public void reserve(uint additional);
-    @MutSelf public void reserve_exact(uint additional);
-    @MutSelf public void try_reserve(uint additional) throws TryReserveError;
-    @MutSelf public void try_reserve_exact(uint additional) throws TryReserveError;
-    @MutSelf public void shrink_to_fit();
-    @MutSelf public void shrink_to(uint min_capacity);
-    @MutSelf public void try_shrink_to_fit() throws TryReserveError;
-    @MutSelf public void try_shrink_to(uint min_capacity) throws TryReserveError;
-    public T[] into_boxed_slice();
-    public T[] into_array() throws Self;
-    @MutSelf public void truncate(uint len);
-    @RustRefOut public T[] as_slice();
-    @MutSelf @RustRefOut public T[] as_mut_slice();
-    public T* as_ptr();
-    @MutSelf public T* as_mut_ptr();
-    @MutSelf public NonNull<T> as_non_null();
-    @RustRefOut public A allocator();
-    @MutSelf public unsafe void set_len(uint new_len);
-    @MutSelf public T swap_remove(uint index);
-    @MutSelf public void insert(uint index, T element);
-    @MutSelf @RustRefOut public T insert_mut(uint index, T element);
-    @MutSelf public T remove(uint index);
-    @MutSelf public T? try_remove(uint index);
-    @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
-    @MutSelf @RustClosureRefs("0") public void retain_mut<F>((T) -> bool f);
-    @MutSelf @RustClosureRefs("0") public void dedup_by_key<F, K>((T) -> K key);
-    @MutSelf @RustClosureRefs("0") public void dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustRefOut public T push_within_capacity(T value) throws T;
-    @MutSelf public T? pop();
-    @MutSelf @RustClosureRefs("0") public T? pop_if((T) -> bool predicate);
-    @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
-    @MutSelf public void append(&mut Self other);
-    @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
-    @MutSelf public void clear();
-    public uint len();
-    public bool is_empty();
-    @MutSelf public Self split_off(uint at);
-    @MutSelf public void resize_with<F>(uint new_len, () -> T f);
-    @RustRefOut public T[] leak();
-    @MutSelf @RustRefOut public MaybeUninit<T>[] spare_capacity_mut();
-    @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
-    public Vec<T[]> into_chunks();
-    public Vec<U> recycle<U>();
-    @MutSelf public void resize(uint new_len, T value);
-    @MutSelf public void extend_from_slice(T[] other);
-    @MutSelf public void extend_from_within<R>(R src);
-    public Vec<T> into_flattened();
-    @MutSelf public void push(T value);
-    @MutSelf @RustRefOut public T push_mut(T value);
-    @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    public (T*, uint, uint) into_raw_parts();
-    public (NonNull<T>, uint, uint) into_parts();
-    @RustRefOut public T[] const_make_global();
-    @MutSelf public void dedup();
 }
 
 /** An iterator over `u8` values of a reader. */
@@ -815,10 +420,7 @@ public class CStr {
     public bool is_empty();
     @RustRefOut public ubyte[] to_bytes();
     @RustRefOut public ubyte[] to_bytes_with_nul();
-    @RustBorrowsSelf public Bytes bytes();
     @RustRefOut public String to_str() throws Utf8Error;
-    public Display display();
-    @RustRefOut public CStr as_c_str();
 }
 
 /** A type representing an owned, C-compatible, nul-terminated string with no nul bytes in the */
@@ -845,21 +447,7 @@ public class CString implements ToOwned {
     public bool is_empty();
     @RustRefOut public ubyte[] to_bytes();
     @RustRefOut public ubyte[] to_bytes_with_nul();
-    @RustBorrowsSelf public Bytes bytes();
     @RustRefOut public String to_str() throws Utf8Error;
-    public Display display();
-}
-
-/** Compile-time type information about `char`. */
-@rust("std::mem::type_info::Char")
-public class Char {
-}
-
-/** The case of a cased character, */
-@rust("std::char::CharCase")
-@RustClone
-public enum CharCase {
-    Lower = 0, Title = 2, Upper = 3
 }
 
 /** An iterator over the [`char`]s of a string slice, and their positions. */
@@ -985,7 +573,6 @@ public class Command implements CommandExt {
     @RustBorrowsSelf public CommandEnvs get_envs();
     public CommandResolvedEnvs get_resolved_envs();
     @RustRefOut public Path? get_current_dir();
-    public bool get_env_clear();
 }
 
 /** An iterator over the command arguments. */
@@ -1029,13 +616,6 @@ public class Components implements RustIterator, ToOwned {
     @MutSelf public Component? next();
 }
 
-/** Helper trait for [`[T]::concat`](slice::concat). */
-@rust("std::slice::Concat")
-@RustImplementedBy("[]")
-public interface Concat<Item> {
-    @RustStatic public Self.Output concat(&Self slice);
-}
-
 /** A Condition Variable */
 @rust("std::sync::Condvar")
 public class Condvar {
@@ -1063,8 +643,6 @@ public class Copied<I> implements RustIterator {
 public enum Cow<B> implements ToOwned, ToString {
     Borrowed(B), Owned(B.Owned);
 
-    public static bool is_borrowed(&Cow c);
-    public static bool is_owned(&Cow c);
     @MutSelf @RustRefOut public B.Owned to_mut();
     public B.Owned into_owned();
 }
@@ -1113,22 +691,6 @@ public class CursorMut<T, A> {
     @MutSelf @RustRefOut public T? back_mut();
 }
 
-/** A cursor over a `BTreeMap` with editing operations, and which allows */
-@rust("std::collections::btree_map::CursorMutKey")
-public class CursorMutKey<K, V, A> {
-    @MutSelf public (K, V)? next();
-    @MutSelf public (K, V)? prev();
-    @MutSelf public (K, V)? peek_next();
-    @MutSelf public (K, V)? peek_prev();
-    @RustBorrowsSelf public Cursor<K, V> as_cursor();
-    @MutSelf public unsafe void insert_after_unchecked(K key, V value);
-    @MutSelf public unsafe void insert_before_unchecked(K key, V value);
-    @MutSelf public void insert_after(K key, V value) throws UnorderedKeyError;
-    @MutSelf public void insert_before(K key, V value) throws UnorderedKeyError;
-    @MutSelf public (K, V)? remove_next();
-    @MutSelf public (K, V)? remove_prev();
-}
-
 /** An iterator that repeats endlessly. */
 @rust("std::iter::Cycle")
 @RustClone
@@ -1164,14 +726,6 @@ public class DefaultHasher implements ToOwned {
 @RustClone
 public class Difference<T, A> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
-}
-
-/** An object providing access to a directory on the filesystem. */
-@rust("std::fs::Dir")
-public class Dir implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle {
-    public static Dir open<P>(P path) throws Error;
-    public File open_file<P>(P path) throws Error;
-    public Metadata metadata() throws Error;
 }
 
 /** A builder used to create directories in various manners. */
@@ -1239,8 +793,6 @@ public class Duration {
     public static Duration from_micros(ulong micros);
     public static Duration from_nanos(ulong nanos);
     public static Duration from_nanos_u128(u128 nanos);
-    public static Duration from_weeks(ulong weeks);
-    public static Duration from_days(ulong days);
     public static Duration from_hours(ulong hours);
     public static Duration from_mins(ulong mins);
     public bool is_zero();
@@ -1261,8 +813,6 @@ public class Duration {
     public Duration? checked_div(u32 rhs);
     public double as_secs_f64();
     public float as_secs_f32();
-    public double as_millis_f64();
-    public float as_millis_f32();
     public static Duration from_secs_f64(double secs);
     public static Duration from_secs_f32(float secs);
     public Duration mul_f64(double rhs);
@@ -1271,8 +821,6 @@ public class Duration {
     public Duration div_f32(float rhs);
     public double div_duration_f64(Duration rhs);
     public float div_duration_f32(Duration rhs);
-    public u128 div_duration_floor(Duration rhs);
-    public u128 div_duration_ceil(Duration rhs);
     public static Duration try_from_secs_f32(float secs) throws TryFromFloatSecsError;
     public static Duration try_from_secs_f64(double secs) throws TryFromFloatSecsError;
 }
@@ -1325,7 +873,6 @@ public enum Entry<K, V, A> {
 @RustClone
 public class Enumerate<I> implements RustIterator {
     @RustDefault public Enumerate();
-    public uint next_index();
     @MutSelf public (uint, I.Item)? next();
 }
 
@@ -1363,13 +910,6 @@ public class EscapeAscii implements RustIterator {
 @RustClone
 public class ExitCode implements ExitCodeExt, Termination, ToOwned {
     @RustDefault public ExitCode();
-    public never exit_process();
-}
-
-/** Windows-specific extensions to [`process::ExitCode`]. */
-@rust("std::os::windows::process::ExitCodeExt")
-public interface ExitCodeExt {
-    @RustStatic public Self from_raw(u32 raw);
 }
 
 /** Describes the result of a process after it has terminated. */
@@ -1377,18 +917,8 @@ public interface ExitCodeExt {
 @RustClone
 public class ExitStatus implements ExitStatusExt, ToOwned, ToString {
     @RustDefault public ExitStatus();
-    public void exit_ok() throws ExitStatusError;
     public bool success();
     public i32? code();
-}
-
-/** Describes the result of a process after it has failed */
-@rust("std::process::ExitStatusError")
-@RustClone
-public class ExitStatusError implements ExitStatusExt, ToOwned, ToString {
-    public i32? code();
-    public NonZero<i32>? code_nonzero();
-    public ExitStatus into_status();
 }
 
 /** Unix-specific extensions to [`process::ExitStatus`] and */
@@ -1415,9 +945,7 @@ public const String FAMILY;
 @rust("std::fs::File")
 public class File implements AsFd, AsHandle, AsRawFd, AsRawHandle, FileExt, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, IsTerminal, Read, Seek, Write {
     public static File open<P>(P path) throws Error;
-    public static BufReader<File> open_buffered<P>(P path) throws Error;
     public static File create<P>(P path) throws Error;
-    public static BufWriter<File> create_buffered<P>(P path) throws Error;
     public static File create_new<P>(P path) throws Error;
     public static OpenOptions options();
     public void sync_all() throws Error;
@@ -1577,7 +1105,6 @@ public class FromUtf16Error implements ToString {
 @RustClone
 public class FromUtf8Error implements ToOwned, ToString {
     @RustRefOut public ubyte[] as_bytes();
-    public String into_utf8_lossy();
     public Vec<ubyte> into_bytes();
     public Utf8Error utf8_error();
 }
@@ -1605,13 +1132,6 @@ public enum GetDisjointMutError {
     IndexOutOfBounds, OverlappingIndices
 }
 
-/** The global memory allocator. */
-@rust("std::alloc::Global")
-@RustClone
-public class Global implements ToOwned {
-    @RustDefault public Global();
-}
-
 /** An owned container for `HANDLE` object, closing them on Drop. */
 @rust("std::sys::pal::windows::handle::Handle")
 public class Handle {
@@ -1637,12 +1157,8 @@ public class HandleOrNull {
 public class HashMap<K, V, S, A> implements ToOwned {
     public HashMap();
     public static Map<K, V> with_capacity(uint capacity);
-    public static HashMap new_in(A alloc);
-    public static HashMap with_capacity_in(uint capacity, A alloc);
     public static Map<K, V> with_hasher(S hash_builder);
     public static Map<K, V> with_capacity_and_hasher(uint capacity, S hasher);
-    public static HashMap with_hasher_in(S hash_builder, A alloc);
-    public static HashMap with_capacity_and_hasher_in(uint capacity, S hash_builder, A alloc);
     public uint capacity();
     @RustBorrowsSelf public Keys<K, V> keys();
     public IntoKeys<K, V, A> into_keys();
@@ -1682,12 +1198,8 @@ public class HashMap<K, V, S, A> implements ToOwned {
 public class HashSet<T, S, A> implements ToOwned {
     public HashSet();
     public static Set<T> with_capacity(uint capacity);
-    public static Set<T> new_in(A alloc);
-    public static Set<T> with_capacity_in(uint capacity, A alloc);
     public static Set<T> with_hasher(S hasher);
     public static Set<T> with_capacity_and_hasher(uint capacity, S hasher);
-    public static Set<T> with_hasher_in(S hasher, A alloc);
-    public static Set<T> with_capacity_and_hasher_in(uint capacity, S hasher, A alloc);
     public uint capacity();
     @RustBorrowsSelf public Iter<T> iter();
     public uint len();
@@ -1707,9 +1219,6 @@ public class HashSet<T, S, A> implements ToOwned {
     @RustBorrowsSelf public Union<T, S, A> union(&Set<T> other);
     public bool contains<Q>(&Q value);
     @RustRefOut public T? get<Q>(&Q value);
-    @MutSelf @RustRefOut public T get_or_insert(T value);
-    @MutSelf @RustRefOut @RustClosureRefs("1") public T get_or_insert_with<Q, F>(&Q value, (Q) -> T f);
-    @MutSelf @RustBorrowsSelf public Entry<T, S, A> entry(T value);
     public bool is_disjoint(&Set<T> other);
     public bool is_subset(&Set<T> other);
     public bool is_superset(&Set<T> other);
@@ -1757,35 +1266,6 @@ public enum IntErrorKind {
 @RustClone
 public class Intersection<T, A> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
-}
-
-/** An iterator adapter that places a separator between all elements. */
-@rust("std::iter::Intersperse")
-@RustClone
-public class Intersperse<I> implements RustIterator {
-    @MutSelf public I.Item? next();
-}
-
-/** An iterator adapter that places a separator between all elements. */
-@rust("std::iter::IntersperseWith")
-@RustClone
-public class IntersperseWith<I, G> implements RustIterator {
-    @MutSelf public I.Item? next();
-}
-
-/** An iterator over the [`char`]s of a string. */
-@rust("std::string::IntoChars")
-@RustClone
-public class IntoChars implements RustIterator, ToOwned {
-    @RustRefOut public String as_str();
-    public String into_string();
-    @MutSelf public char? next();
-}
-
-/** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
-@rust("std::net::IntoIncoming")
-public class IntoIncoming implements RustIterator {
-    @MutSelf public TcpStream? next() throws Error;
 }
 
 /** An error returned by [`BufWriter::into_inner`] which combines an error that */
@@ -1867,8 +1347,10 @@ public class IoSlice {
     public IoSlice(ubyte[] buf);
     @MutSelf public void advance(uint n);
     public static void advance_slices(&mut IoSlice[] bufs, uint n);
-    @RustRefOut public ubyte[] as_slice();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1898,7 +1380,6 @@ public class IoSlice {
     @RustRefOut public T[]? as_array();
     @MutSelf @RustRefOut public T[]? as_mut_array();
     @MutSelf public void swap(uint a, uint b);
-    @MutSelf public unsafe void swap_unchecked(uint a, uint b);
     @MutSelf public void reverse();
     @RustBorrowsSelf public Iter<T> iter();
     @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
@@ -1936,35 +1417,22 @@ public class IoSlice {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? split_once<F>((T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? rsplit_once<F>((T) -> bool pred);
     public bool contains(&T x);
     public bool starts_with(T[] needle);
     public bool ends_with(T[] needle);
     @RustRefOut public T[]? strip_prefix<P>(&P prefix);
     @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    @RustRefOut public T[]? strip_circumfix<S, P>(&P prefix, &S suffix);
-    @RustRefOut public T[] trim_prefix<P>(&P prefix);
-    @RustRefOut public T[] trim_suffix<P>(&P suffix);
     public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @MutSelf public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public void partial_sort_unstable<R>(R range);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by<F, R>(R range, (T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by_key<K, F, R>(R range, (T) -> K f);
     @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
-    @MutSelf public (T[], T[]) partition_dedup();
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by_key<K, F>((T) -> K key);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public T[] shift_left(T[] inserted);
-    @MutSelf public T[] shift_right(T[] inserted);
     @MutSelf public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
     @MutSelf public void clone_from_slice(T[] src);
@@ -1973,8 +1441,6 @@ public class IoSlice {
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public (T[], Simd<T>[], T[]) as_simd();
-    @MutSelf public (T[], Simd<T>[], T[]) as_simd_mut();
     public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
@@ -1988,13 +1454,7 @@ public class IoSlice {
     @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
     @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public Range<uint>? subslice_range(T[] subslice);
-    @MutSelf @RustRefOut public T[] as_mut_slice();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
     public bool eq_ignore_ascii_case(ubyte[] other);
     @MutSelf public void make_ascii_uppercase();
     @MutSelf public void make_ascii_lowercase();
@@ -2002,19 +1462,18 @@ public class IoSlice {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @MutSelf public void sort_floats();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public void sort_floats();
-    @RustRefOut public String as_str();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** A buffer type used with `Read::read_vectored`. */
@@ -2024,8 +1483,10 @@ public class IoSliceMut {
     public IoSliceMut(&mut ubyte[] buf);
     @MutSelf public void advance(uint n);
     public static void advance_slices(&mut IoSliceMut[] bufs, uint n);
-    @RustRefOut public ubyte[] into_slice();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -2055,7 +1516,6 @@ public class IoSliceMut {
     @RustRefOut public T[]? as_array();
     @MutSelf @RustRefOut public T[]? as_mut_array();
     @MutSelf public void swap(uint a, uint b);
-    @MutSelf public unsafe void swap_unchecked(uint a, uint b);
     @MutSelf public void reverse();
     @RustBorrowsSelf public Iter<T> iter();
     @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
@@ -2093,35 +1553,22 @@ public class IoSliceMut {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? split_once<F>((T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? rsplit_once<F>((T) -> bool pred);
     public bool contains(&T x);
     public bool starts_with(T[] needle);
     public bool ends_with(T[] needle);
     @RustRefOut public T[]? strip_prefix<P>(&P prefix);
     @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    @RustRefOut public T[]? strip_circumfix<S, P>(&P prefix, &S suffix);
-    @RustRefOut public T[] trim_prefix<P>(&P prefix);
-    @RustRefOut public T[] trim_suffix<P>(&P suffix);
     public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @MutSelf public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public void partial_sort_unstable<R>(R range);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by<F, R>(R range, (T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by_key<K, F, R>(R range, (T) -> K f);
     @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
-    @MutSelf public (T[], T[]) partition_dedup();
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by_key<K, F>((T) -> K key);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public T[] shift_left(T[] inserted);
-    @MutSelf public T[] shift_right(T[] inserted);
     @MutSelf public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
     @MutSelf public void clone_from_slice(T[] src);
@@ -2130,8 +1577,6 @@ public class IoSliceMut {
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public (T[], Simd<T>[], T[]) as_simd();
-    @MutSelf public (T[], Simd<T>[], T[]) as_simd_mut();
     public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
@@ -2145,14 +1590,7 @@ public class IoSliceMut {
     @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
     @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public Range<uint>? subslice_range(T[] subslice);
-    @RustRefOut public T[] as_slice();
-    @MutSelf @RustRefOut public T[] as_mut_slice();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
     public bool eq_ignore_ascii_case(ubyte[] other);
     @MutSelf public void make_ascii_uppercase();
     @MutSelf public void make_ascii_lowercase();
@@ -2160,19 +1598,18 @@ public class IoSliceMut {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @MutSelf public void sort_floats();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public void sort_floats();
-    @RustRefOut public String as_str();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** An IP address, either IPv4 or IPv6. */
@@ -2183,15 +1620,10 @@ public enum IpAddr {
 
     public bool is_unspecified();
     public bool is_loopback();
-    public bool is_global();
     public bool is_multicast();
-    public bool is_documentation();
-    public bool is_benchmarking();
     public bool is_ipv4();
     public bool is_ipv6();
     public IpAddr to_canonical();
-    @RustRefOut public ubyte[] as_octets();
-    public static IpAddr parse_ascii(ubyte[] b) throws AddrParseError;
 }
 
 /** An IPv4 address. */
@@ -2203,21 +1635,15 @@ public class Ipv4Addr {
     public static Ipv4Addr from_bits(u32 bits);
     public ubyte[4] octets();
     public static Ipv4Addr from_octets(ubyte[4] octets);
-    @RustRefOut public ubyte[4] as_octets();
     public bool is_unspecified();
     public bool is_loopback();
     public bool is_private();
     public bool is_link_local();
-    public bool is_global();
-    public bool is_shared();
-    public bool is_benchmarking();
-    public bool is_reserved();
     public bool is_multicast();
     public bool is_broadcast();
     public bool is_documentation();
     public Ipv6Addr to_ipv6_compatible();
     public Ipv6Addr to_ipv6_mapped();
-    public static Ipv4Addr parse_ascii(ubyte[] b) throws AddrParseError;
 }
 
 /** An IPv6 address. */
@@ -2231,30 +1657,14 @@ public class Ipv6Addr {
     public static Ipv6Addr from_segments(ushort[8] segments);
     public bool is_unspecified();
     public bool is_loopback();
-    public bool is_global();
     public bool is_unique_local();
-    public bool is_unicast();
     public bool is_unicast_link_local();
-    public bool is_documentation();
-    public bool is_benchmarking();
-    public bool is_unicast_global();
-    public Ipv6MulticastScope? multicast_scope();
     public bool is_multicast();
-    public bool is_ipv4_mapped();
     public Ipv4Addr? to_ipv4_mapped();
     public Ipv4Addr? to_ipv4();
     public IpAddr to_canonical();
     public ubyte[16] octets();
     public static Ipv6Addr from_octets(ubyte[16] octets);
-    @RustRefOut public ubyte[16] as_octets();
-    public static Ipv6Addr parse_ascii(ubyte[] b) throws AddrParseError;
-}
-
-/** Scope of an [IPv6 multicast address] as defined in [IETF RFC 7346 section 2], */
-@rust("std::net::Ipv6MulticastScope")
-@RustClone
-public enum Ipv6MulticastScope {
-    InterfaceLocal = 1, LinkLocal = 2, RealmLocal = 3, AdminLocal = 4, SiteLocal = 5, Unassigned6 = 6, Unassigned7 = 7, OrganizationLocal = 8, Unassigned9 = 9, UnassignedA = 10, UnassignedB = 11, UnassignedC = 12, UnassignedD = 13, Global = 14
 }
 
 /** Trait to determine if a descriptor/handle refers to a terminal/tty. */
@@ -2276,13 +1686,6 @@ public class Iter<T> implements RustIterator, ToOwned {
 public class IterMut<T> implements RustIterator {
     @RustDefault public IterMut();
     @MutSelf @RustRefOut public T? next();
-}
-
-/** Helper trait for [`[T]::join`](slice::join) */
-@rust("std::slice::Join")
-@RustImplementedBy("[]")
-public interface Join<Separator> {
-    @RustStatic public Self.Output join(&Self slice, Separator sep);
 }
 
 /** An owned permission to join on a thread (block on its termination). */
@@ -2319,18 +1722,12 @@ public class Keys<K, V> implements RustIterator, ToOwned {
 public class Layout {
     public Layout();
     public static Layout from_size_align(uint size, uint align) throws LayoutError;
-    public static Layout from_size_alignment(uint size, Alignment alignment) throws LayoutError;
     public static unsafe Layout from_size_align_unchecked(uint size, uint align);
-    public static unsafe Layout from_size_alignment_unchecked(uint size, Alignment alignment);
     public uint size();
     public uint align();
-    public Alignment alignment();
     public static Layout for_value<T>(&T t);
-    public static unsafe Layout for_value_raw<T>(T* t);
     public NonNull<ubyte> dangling_ptr();
     public Layout align_to(uint align) throws LayoutError;
-    public Layout adjust_alignment_to(Alignment alignment) throws LayoutError;
-    public uint padding_needed_for(Alignment alignment);
     public Layout pad_to_align();
     public (Layout, uint) repeat(uint n) throws LayoutError;
     public (Layout, uint) extend(Layout next) throws LayoutError;
@@ -2344,7 +1741,6 @@ public class Layout {
 public class LazyLock<T, F> {
     public LazyLock(F f);
     @RustDefault public LazyLock();
-    public static T into_inner(LazyLock this) throws F;
     @RustRefOut public static T force_mut(&mut LazyLock<T, F> this);
     @RustRefOut public static T force(&LazyLock<T, F> this);
     @RustRefOut public static T? get_mut(&mut LazyLock<T, F> this);
@@ -2381,13 +1777,8 @@ public class LinesAny implements RustIterator {
 public class LinkedList<T, A> implements ToOwned {
     public LinkedList();
     @MutSelf public void append(&mut LinkedList other);
-    public static LinkedList new_in(A alloc);
     @RustBorrowsSelf public Iter<T> iter();
     @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
-    @RustBorrowsSelf public Cursor<T, A> cursor_front();
-    @MutSelf @RustBorrowsSelf public CursorMut<T, A> cursor_front_mut();
-    @RustBorrowsSelf public Cursor<T, A> cursor_back();
-    @MutSelf @RustBorrowsSelf public CursorMut<T, A> cursor_back_mut();
     public bool is_empty();
     public uint len();
     @MutSelf public void clear();
@@ -2403,8 +1794,6 @@ public class LinkedList<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T push_back_mut(T elt);
     @MutSelf public T? pop_back();
     @MutSelf public LinkedList<T, A> split_off(uint at);
-    @MutSelf public T remove(uint at);
-    @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
 }
 
@@ -2420,28 +1809,6 @@ public class LocalKey<T> {
     public void update((T) -> T f);
     @RustClosureRefs("0") public R with_borrow<F, R>((T) -> R f);
     @RustClosureRefs("0") public R with_borrow_mut<F, R>((T) -> R f);
-}
-
-/** An analogous trait to `Wake` but used to construct a `LocalWaker`. */
-@rust("std::task::LocalWake")
-public interface LocalWake {
-    public void wake();
-    public void wake_by_ref();
-}
-
-/** A `LocalWaker` is analogous to a [`Waker`], but it does not implement [`Send`] or [`Sync`]. */
-@rust("std::task::LocalWaker")
-@RustClone
-public class LocalWaker {
-    public LocalWaker(Object* data, &RawWakerVTable vtable);
-    public void wake();
-    public void wake_by_ref();
-    public bool will_wake(&LocalWaker other);
-    public static unsafe LocalWaker from_raw(RawWaker waker);
-    @RustRefOut public static LocalWaker noop();
-    public Object* data();
-    @RustRefOut public RawWakerVTable vtable();
-    public static LocalWaker from_fn_ptr(() -> void f);
 }
 
 /** A struct containing information about the location of a panic. */
@@ -2473,34 +1840,6 @@ public class Map<I, F> implements RustIterator {
 @RustClone
 public class MapWhile<I, P> implements RustIterator {
     @MutSelf public B? next();
-}
-
-/** An iterator over the mapped windows of another iterator. */
-@rust("std::iter::MapWindows")
-@RustClone
-public class MapWindows<I, F> implements RustIterator {
-    @MutSelf public R? next();
-}
-
-/** An RAII mutex guard returned by `MutexGuard::map`, which can point to a */
-@rust("std::sync::MappedMutexGuard")
-public class MappedMutexGuard<T> implements ToString {
-    @RustClosureRefs("1") public static MappedMutexGuard<U> map<U, F>(MappedMutexGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedMutexGuard<U> filter_map<U, F>(MappedMutexGuard orig, (T) -> U? f) throws MappedMutexGuard;
-}
-
-/** RAII structure used to release the shared read access of a lock when */
-@rust("std::sync::MappedRwLockReadGuard")
-public class MappedRwLockReadGuard<T> implements ToString {
-    @RustClosureRefs("1") public static MappedRwLockReadGuard<U> map<U, F>(MappedRwLockReadGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedRwLockReadGuard<U> filter_map<U, F>(MappedRwLockReadGuard orig, (T) -> U? f) throws MappedRwLockReadGuard;
-}
-
-/** RAII structure used to release the exclusive write access of a lock when */
-@rust("std::sync::MappedRwLockWriteGuard")
-public class MappedRwLockWriteGuard<T> implements ToString {
-    @RustClosureRefs("1") public static MappedRwLockWriteGuard<U> map<U, F>(MappedRwLockWriteGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedRwLockWriteGuard<U> filter_map<U, F>(MappedRwLockWriteGuard orig, (T) -> U? f) throws MappedRwLockWriteGuard;
 }
 
 /** Created with the method [`match_indices`]. */
@@ -2570,23 +1909,17 @@ public interface MetadataExt {
 public class Mutex<T> {
     public Mutex(T t);
     @RustDefault public Mutex();
-    public T get_cloned() throws PoisonError<void>;
-    public void set(T value) throws PoisonError<T>;
-    public T replace(T value) throws PoisonError<T>;
     @RustBorrowsSelf public MutexGuard<T> lock() throws PoisonError<T>;
     @RustBorrowsSelf public MutexGuard<T> try_lock() throws TryLockError<Guard>;
     public bool is_poisoned();
     public void clear_poison();
     public T into_inner() throws PoisonError<T>;
     @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
-    public T* data_ptr();
 }
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
 @rust("std::sync::MutexGuard")
 public class MutexGuard<T> implements ToString {
-    @RustClosureRefs("1") public static MappedMutexGuard<U> map<U, F>(MutexGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedMutexGuard<U> filter_map<U, F>(MutexGuard orig, (T) -> U? f) throws MutexGuard;
 }
 
 /** `*mut T` but non-zero and [covariant]. */
@@ -2596,15 +1929,10 @@ public class NonNull<T> {
     public static NonNull without_provenance(NonZero<uint> addr);
     public static NonNull dangling();
     public static NonNull with_exposed_provenance(NonZero<uint> addr);
-    @RustRefOut public unsafe MaybeUninit<T> as_uninit_ref();
-    @RustRefOut public unsafe MaybeUninit<T> as_uninit_mut();
-    public NonNull<T[]> cast_array();
     public static unsafe NonNull new_unchecked(T* ptr);
     public static NonNull? new(T* ptr);
     public static NonNull from_ref(&T r);
     public static NonNull from_mut(&mut T r);
-    public static NonNull<T> from_raw_parts(NonNull<Thin> data_pointer, T.Metadata metadata);
-    public (NonNull<void>, T.Metadata) to_raw_parts();
     public NonZero<uint> addr();
     public NonZero<uint> expose_provenance();
     public NonNull with_addr(NonZero<uint> addr);
@@ -2613,7 +1941,6 @@ public class NonNull<T> {
     @RustRefOut public unsafe T as_ref();
     @MutSelf @RustRefOut public unsafe T as_mut();
     public NonNull<U> cast<U>();
-    public NonNull<U>? try_cast_aligned<U>();
     public unsafe NonNull offset(int count);
     public unsafe NonNull byte_offset(int count);
     public unsafe NonNull add(uint count);
@@ -2640,9 +1967,6 @@ public class NonNull<T> {
     public unsafe void swap(NonNull<T> with);
     public uint align_offset(uint align);
     public bool is_aligned();
-    public bool is_aligned_to(uint align);
-    public NonNull<MaybeUninit<T>> cast_uninit();
-    public NonNull<T[]> cast_slice(uint len);
     public NonNull<T> cast_init();
     public static NonNull slice_from_raw_parts(NonNull<T> data, uint len);
     public uint len();
@@ -2660,27 +1984,14 @@ public class NonNull<T> {
 public class NonZero<T> {
     public static NonZero? new(T n);
     public static unsafe NonZero new_unchecked(T n);
-    @RustRefOut public static NonZero? from_mut(&mut T n);
-    @RustRefOut public static unsafe NonZero from_mut_unchecked(&mut T n);
     public T get();
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZero isolate_highest_one();
-    public NonZero isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZero rotate_left(u32 n);
-    public NonZero rotate_right(u32 n);
-    public NonZero swap_bytes();
-    public NonZero reverse_bits();
     public static NonZero from_be(NonZero x);
     public static NonZero from_le(NonZero x);
-    public NonZero to_be();
-    public NonZero to_le();
     public NonZero? checked_add(ubyte other);
     public NonZero saturating_add(ubyte other);
-    public unsafe NonZero unchecked_add(ubyte other);
     public NonZero? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -2688,10 +1999,8 @@ public class NonZero<T> {
     public bool is_power_of_two();
     public NonZero isqrt();
     public NonZero<byte> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZero? checked_mul(NonZero other);
     public NonZero saturating_mul(NonZero other);
-    public unsafe NonZero unchecked_mul(NonZero other);
     public NonZero? checked_pow(u32 other);
     public NonZero saturating_pow(u32 other);
     public static NonZero from_ascii(ubyte[] src) throws ParseIntError;
@@ -2718,19 +2027,7 @@ public class NonZero<T> {
 public class NonZeroI128 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroI128 isolate_highest_one();
-    public NonZeroI128 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroI128 rotate_left(u32 n);
-    public NonZeroI128 rotate_right(u32 n);
-    public NonZeroI128 swap_bytes();
-    public NonZeroI128 reverse_bits();
-    public static NonZeroI128 from_be(NonZeroI128 x);
-    public static NonZeroI128 from_le(NonZeroI128 x);
-    public NonZeroI128 to_be();
-    public NonZeroI128 to_le();
     public NonZeroI128 abs();
     public NonZeroI128? checked_abs();
     public (NonZeroI128, bool) overflowing_abs();
@@ -2746,12 +2043,8 @@ public class NonZeroI128 {
     public NonZero<u128> cast_unsigned();
     public NonZeroI128? checked_mul(NonZeroI128 other);
     public NonZeroI128 saturating_mul(NonZeroI128 other);
-    public unsafe NonZeroI128 unchecked_mul(NonZeroI128 other);
     public NonZeroI128? checked_pow(u32 other);
     public NonZeroI128 saturating_pow(u32 other);
-    public static NonZeroI128 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroI128 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroI128 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** An [`i16`] that is known not to equal zero. */
@@ -2759,19 +2052,7 @@ public class NonZeroI128 {
 public class NonZeroI16 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroI16 isolate_highest_one();
-    public NonZeroI16 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroI16 rotate_left(u32 n);
-    public NonZeroI16 rotate_right(u32 n);
-    public NonZeroI16 swap_bytes();
-    public NonZeroI16 reverse_bits();
-    public static NonZeroI16 from_be(NonZeroI16 x);
-    public static NonZeroI16 from_le(NonZeroI16 x);
-    public NonZeroI16 to_be();
-    public NonZeroI16 to_le();
     public NonZeroI16 abs();
     public NonZeroI16? checked_abs();
     public (NonZeroI16, bool) overflowing_abs();
@@ -2787,12 +2068,8 @@ public class NonZeroI16 {
     public NonZero<ushort> cast_unsigned();
     public NonZeroI16? checked_mul(NonZeroI16 other);
     public NonZeroI16 saturating_mul(NonZeroI16 other);
-    public unsafe NonZeroI16 unchecked_mul(NonZeroI16 other);
     public NonZeroI16? checked_pow(u32 other);
     public NonZeroI16 saturating_pow(u32 other);
-    public static NonZeroI16 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroI16 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroI16 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** An [`i32`] that is known not to equal zero. */
@@ -2800,19 +2077,7 @@ public class NonZeroI16 {
 public class NonZeroI32 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroI32 isolate_highest_one();
-    public NonZeroI32 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroI32 rotate_left(u32 n);
-    public NonZeroI32 rotate_right(u32 n);
-    public NonZeroI32 swap_bytes();
-    public NonZeroI32 reverse_bits();
-    public static NonZeroI32 from_be(NonZeroI32 x);
-    public static NonZeroI32 from_le(NonZeroI32 x);
-    public NonZeroI32 to_be();
-    public NonZeroI32 to_le();
     public NonZeroI32 abs();
     public NonZeroI32? checked_abs();
     public (NonZeroI32, bool) overflowing_abs();
@@ -2828,12 +2093,8 @@ public class NonZeroI32 {
     public NonZero<u32> cast_unsigned();
     public NonZeroI32? checked_mul(NonZeroI32 other);
     public NonZeroI32 saturating_mul(NonZeroI32 other);
-    public unsafe NonZeroI32 unchecked_mul(NonZeroI32 other);
     public NonZeroI32? checked_pow(u32 other);
     public NonZeroI32 saturating_pow(u32 other);
-    public static NonZeroI32 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroI32 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroI32 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** An [`i64`] that is known not to equal zero. */
@@ -2841,19 +2102,7 @@ public class NonZeroI32 {
 public class NonZeroI64 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroI64 isolate_highest_one();
-    public NonZeroI64 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroI64 rotate_left(u32 n);
-    public NonZeroI64 rotate_right(u32 n);
-    public NonZeroI64 swap_bytes();
-    public NonZeroI64 reverse_bits();
-    public static NonZeroI64 from_be(NonZeroI64 x);
-    public static NonZeroI64 from_le(NonZeroI64 x);
-    public NonZeroI64 to_be();
-    public NonZeroI64 to_le();
     public NonZeroI64 abs();
     public NonZeroI64? checked_abs();
     public (NonZeroI64, bool) overflowing_abs();
@@ -2869,12 +2118,8 @@ public class NonZeroI64 {
     public NonZero<ulong> cast_unsigned();
     public NonZeroI64? checked_mul(NonZeroI64 other);
     public NonZeroI64 saturating_mul(NonZeroI64 other);
-    public unsafe NonZeroI64 unchecked_mul(NonZeroI64 other);
     public NonZeroI64? checked_pow(u32 other);
     public NonZeroI64 saturating_pow(u32 other);
-    public static NonZeroI64 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroI64 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroI64 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** An [`i8`] that is known not to equal zero. */
@@ -2882,19 +2127,7 @@ public class NonZeroI64 {
 public class NonZeroI8 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroI8 isolate_highest_one();
-    public NonZeroI8 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroI8 rotate_left(u32 n);
-    public NonZeroI8 rotate_right(u32 n);
-    public NonZeroI8 swap_bytes();
-    public NonZeroI8 reverse_bits();
-    public static NonZeroI8 from_be(NonZeroI8 x);
-    public static NonZeroI8 from_le(NonZeroI8 x);
-    public NonZeroI8 to_be();
-    public NonZeroI8 to_le();
     public NonZeroI8 abs();
     public NonZeroI8? checked_abs();
     public (NonZeroI8, bool) overflowing_abs();
@@ -2910,12 +2143,8 @@ public class NonZeroI8 {
     public NonZero<ubyte> cast_unsigned();
     public NonZeroI8? checked_mul(NonZeroI8 other);
     public NonZeroI8 saturating_mul(NonZeroI8 other);
-    public unsafe NonZeroI8 unchecked_mul(NonZeroI8 other);
     public NonZeroI8? checked_pow(u32 other);
     public NonZeroI8 saturating_pow(u32 other);
-    public static NonZeroI8 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroI8 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroI8 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** An [`isize`] that is known not to equal zero. */
@@ -2923,19 +2152,7 @@ public class NonZeroI8 {
 public class NonZeroIsize {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroIsize isolate_highest_one();
-    public NonZeroIsize isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroIsize rotate_left(u32 n);
-    public NonZeroIsize rotate_right(u32 n);
-    public NonZeroIsize swap_bytes();
-    public NonZeroIsize reverse_bits();
-    public static NonZeroIsize from_be(NonZeroIsize x);
-    public static NonZeroIsize from_le(NonZeroIsize x);
-    public NonZeroIsize to_be();
-    public NonZeroIsize to_le();
     public NonZeroIsize abs();
     public NonZeroIsize? checked_abs();
     public (NonZeroIsize, bool) overflowing_abs();
@@ -2951,12 +2168,8 @@ public class NonZeroIsize {
     public NonZero<uint> cast_unsigned();
     public NonZeroIsize? checked_mul(NonZeroIsize other);
     public NonZeroIsize saturating_mul(NonZeroIsize other);
-    public unsafe NonZeroIsize unchecked_mul(NonZeroIsize other);
     public NonZeroIsize? checked_pow(u32 other);
     public NonZeroIsize saturating_pow(u32 other);
-    public static NonZeroIsize from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroIsize from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroIsize from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** A [`u128`] that is known not to equal zero. */
@@ -2964,22 +2177,9 @@ public class NonZeroIsize {
 public class NonZeroU128 {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroU128 isolate_highest_one();
-    public NonZeroU128 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroU128 rotate_left(u32 n);
-    public NonZeroU128 rotate_right(u32 n);
-    public NonZeroU128 swap_bytes();
-    public NonZeroU128 reverse_bits();
-    public static NonZeroU128 from_be(NonZeroU128 x);
-    public static NonZeroU128 from_le(NonZeroU128 x);
-    public NonZeroU128 to_be();
-    public NonZeroU128 to_le();
     public NonZeroU128? checked_add(u128 other);
     public NonZeroU128 saturating_add(u128 other);
-    public unsafe NonZeroU128 unchecked_add(u128 other);
     public NonZeroU128? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -2987,15 +2187,10 @@ public class NonZeroU128 {
     public bool is_power_of_two();
     public NonZeroU128 isqrt();
     public NonZero<i128> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroU128? checked_mul(NonZeroU128 other);
     public NonZeroU128 saturating_mul(NonZeroU128 other);
-    public unsafe NonZeroU128 unchecked_mul(NonZeroU128 other);
     public NonZeroU128? checked_pow(u32 other);
     public NonZeroU128 saturating_pow(u32 other);
-    public static NonZeroU128 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroU128 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroU128 from_str_radix(&String src, u32 radix) throws ParseIntError;
     public NonZeroU128 div_ceil(NonZeroU128 rhs);
 }
 
@@ -3005,22 +2200,9 @@ public class NonZeroU16 {
     public NonZeroU16 div_ceil(NonZeroU16 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroU16 isolate_highest_one();
-    public NonZeroU16 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroU16 rotate_left(u32 n);
-    public NonZeroU16 rotate_right(u32 n);
-    public NonZeroU16 swap_bytes();
-    public NonZeroU16 reverse_bits();
-    public static NonZeroU16 from_be(NonZeroU16 x);
-    public static NonZeroU16 from_le(NonZeroU16 x);
-    public NonZeroU16 to_be();
-    public NonZeroU16 to_le();
     public NonZeroU16? checked_add(ushort other);
     public NonZeroU16 saturating_add(ushort other);
-    public unsafe NonZeroU16 unchecked_add(ushort other);
     public NonZeroU16? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -3028,38 +2210,21 @@ public class NonZeroU16 {
     public bool is_power_of_two();
     public NonZeroU16 isqrt();
     public NonZero<short> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroU16? checked_mul(NonZeroU16 other);
     public NonZeroU16 saturating_mul(NonZeroU16 other);
-    public unsafe NonZeroU16 unchecked_mul(NonZeroU16 other);
     public NonZeroU16? checked_pow(u32 other);
     public NonZeroU16 saturating_pow(u32 other);
-    public static NonZeroU16 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroU16 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroU16 from_str_radix(&String src, u32 radix) throws ParseIntError;
 }
 
 /** A [`u32`] that is known not to equal zero. */
 @rust("std::num::NonZeroU32")
 public class NonZeroU32 {
+    public NonZeroU32 div_ceil(NonZeroU32 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroU32 isolate_highest_one();
-    public NonZeroU32 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroU32 rotate_left(u32 n);
-    public NonZeroU32 rotate_right(u32 n);
-    public NonZeroU32 swap_bytes();
-    public NonZeroU32 reverse_bits();
-    public static NonZeroU32 from_be(NonZeroU32 x);
-    public static NonZeroU32 from_le(NonZeroU32 x);
-    public NonZeroU32 to_be();
-    public NonZeroU32 to_le();
     public NonZeroU32? checked_add(u32 other);
     public NonZeroU32 saturating_add(u32 other);
-    public unsafe NonZeroU32 unchecked_add(u32 other);
     public NonZeroU32? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -3067,39 +2232,21 @@ public class NonZeroU32 {
     public bool is_power_of_two();
     public NonZeroU32 isqrt();
     public NonZero<i32> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroU32? checked_mul(NonZeroU32 other);
     public NonZeroU32 saturating_mul(NonZeroU32 other);
-    public unsafe NonZeroU32 unchecked_mul(NonZeroU32 other);
     public NonZeroU32? checked_pow(u32 other);
     public NonZeroU32 saturating_pow(u32 other);
-    public static NonZeroU32 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroU32 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroU32 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU32 div_ceil(NonZeroU32 rhs);
 }
 
 /** A [`u64`] that is known not to equal zero. */
 @rust("std::num::NonZeroU64")
 public class NonZeroU64 {
+    public NonZeroU64 div_ceil(NonZeroU64 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroU64 isolate_highest_one();
-    public NonZeroU64 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroU64 rotate_left(u32 n);
-    public NonZeroU64 rotate_right(u32 n);
-    public NonZeroU64 swap_bytes();
-    public NonZeroU64 reverse_bits();
-    public static NonZeroU64 from_be(NonZeroU64 x);
-    public static NonZeroU64 from_le(NonZeroU64 x);
-    public NonZeroU64 to_be();
-    public NonZeroU64 to_le();
     public NonZeroU64? checked_add(ulong other);
     public NonZeroU64 saturating_add(ulong other);
-    public unsafe NonZeroU64 unchecked_add(ulong other);
     public NonZeroU64? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -3107,39 +2254,21 @@ public class NonZeroU64 {
     public bool is_power_of_two();
     public NonZeroU64 isqrt();
     public NonZero<long> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroU64? checked_mul(NonZeroU64 other);
     public NonZeroU64 saturating_mul(NonZeroU64 other);
-    public unsafe NonZeroU64 unchecked_mul(NonZeroU64 other);
     public NonZeroU64? checked_pow(u32 other);
     public NonZeroU64 saturating_pow(u32 other);
-    public static NonZeroU64 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroU64 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroU64 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU64 div_ceil(NonZeroU64 rhs);
 }
 
 /** A [`u8`] that is known not to equal zero. */
 @rust("std::num::NonZeroU8")
 public class NonZeroU8 {
+    public NonZeroU8 div_ceil(NonZeroU8 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroU8 isolate_highest_one();
-    public NonZeroU8 isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroU8 rotate_left(u32 n);
-    public NonZeroU8 rotate_right(u32 n);
-    public NonZeroU8 swap_bytes();
-    public NonZeroU8 reverse_bits();
-    public static NonZeroU8 from_be(NonZeroU8 x);
-    public static NonZeroU8 from_le(NonZeroU8 x);
-    public NonZeroU8 to_be();
-    public NonZeroU8 to_le();
     public NonZeroU8? checked_add(ubyte other);
     public NonZeroU8 saturating_add(ubyte other);
-    public unsafe NonZeroU8 unchecked_add(ubyte other);
     public NonZeroU8? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -3147,16 +2276,10 @@ public class NonZeroU8 {
     public bool is_power_of_two();
     public NonZeroU8 isqrt();
     public NonZero<byte> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroU8? checked_mul(NonZeroU8 other);
     public NonZeroU8 saturating_mul(NonZeroU8 other);
-    public unsafe NonZeroU8 unchecked_mul(NonZeroU8 other);
     public NonZeroU8? checked_pow(u32 other);
     public NonZeroU8 saturating_pow(u32 other);
-    public static NonZeroU8 from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroU8 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroU8 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU8 div_ceil(NonZeroU8 rhs);
 }
 
 /** A [`usize`] that is known not to equal zero. */
@@ -3164,22 +2287,9 @@ public class NonZeroU8 {
 public class NonZeroUsize {
     public u32 leading_zeros();
     public u32 trailing_zeros();
-    public NonZeroUsize isolate_highest_one();
-    public NonZeroUsize isolate_lowest_one();
-    public u32 highest_one();
-    public u32 lowest_one();
     public NonZero<u32> count_ones();
-    public NonZeroUsize rotate_left(u32 n);
-    public NonZeroUsize rotate_right(u32 n);
-    public NonZeroUsize swap_bytes();
-    public NonZeroUsize reverse_bits();
-    public static NonZeroUsize from_be(NonZeroUsize x);
-    public static NonZeroUsize from_le(NonZeroUsize x);
-    public NonZeroUsize to_be();
-    public NonZeroUsize to_le();
     public NonZeroUsize? checked_add(uint other);
     public NonZeroUsize saturating_add(uint other);
-    public unsafe NonZeroUsize unchecked_add(uint other);
     public NonZeroUsize? checked_next_power_of_two();
     public u32 ilog2();
     public u32 ilog10();
@@ -3187,21 +2297,11 @@ public class NonZeroUsize {
     public bool is_power_of_two();
     public NonZeroUsize isqrt();
     public NonZero<int> cast_signed();
-    public NonZero<u32> bit_width();
     public NonZeroUsize? checked_mul(NonZeroUsize other);
     public NonZeroUsize saturating_mul(NonZeroUsize other);
-    public unsafe NonZeroUsize unchecked_mul(NonZeroUsize other);
     public NonZeroUsize? checked_pow(u32 other);
     public NonZeroUsize saturating_pow(u32 other);
-    public static NonZeroUsize from_ascii(ubyte[] src) throws ParseIntError;
-    public static NonZeroUsize from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    public static NonZeroUsize from_str_radix(&String src, u32 radix) throws ParseIntError;
     public NonZeroUsize div_ceil(NonZeroUsize rhs);
-}
-
-/** An error returned from [`Path::normalize_lexically`] if a `..` parent reference */
-@rust("std::path::NormalizeError")
-public class NormalizeError implements ToString {
 }
 
 /** An error indicating that an interior nul byte was found. */
@@ -3256,14 +2356,6 @@ public class OccupiedEntry<K, V, A> {
     public V remove();
 }
 
-/** The error returned by [`try_insert`](BTreeMap::try_insert) when the key already exists. */
-@rust("std::collections::btree_map::OccupiedError")
-public struct OccupiedError<K, V, A> {
-    public OccupiedEntry<K, V, A> entry;
-    public K key;
-    public V value;
-}
-
 /** A low-level synchronization primitive for one-time global execution. */
 @rust("std::sync::Once")
 public class Once {
@@ -3284,11 +2376,7 @@ public class OnceLock<T> implements ToOwned {
     @MutSelf @RustRefOut public T? get_mut();
     @RustRefOut public T wait();
     public void set(T value) throws T;
-    @RustRefOut public T try_insert(T value) throws Error;
     @RustRefOut public T get_or_init<F>(() -> T f);
-    @MutSelf @RustRefOut public T get_mut_or_init<F>(() -> T f);
-    @RustRefOut public T get_or_try_init<F, E>(() -> Result<T, E> f) throws E;
-    @MutSelf @RustRefOut public T get_mut_or_try_init<F, E>(() -> Result<T, E> f) throws E;
     public T? into_inner();
     @MutSelf public T? take();
 }
@@ -3318,12 +2406,6 @@ public class OpenOptions implements OpenOptionsExt, OpenOptionsExt2, ToOwned {
 public interface OpenOptionsExt {
     @MutSelf @RustRefOut public Self mode(u32 mode);
     @MutSelf @RustRefOut public Self custom_flags(i32 flags);
-}
-
-@rust("std::os::windows::fs::OpenOptionsExt2")
-public interface OpenOptionsExt2 {
-    @MutSelf @RustRefOut public Self freeze_last_access_time(bool freeze);
-    @MutSelf @RustRefOut public Self freeze_last_write_time(bool freeze);
 }
 
 /** An `Ordering` is the result of a comparison between two values. */
@@ -3360,7 +2442,6 @@ public class OsStr implements OsStrExt, ToOwned {
     public (OsStr, OsStr) split_at(uint mid);
     public (OsStr, OsStr)? split_at_checked(uint mid);
     @RustRefOut public ubyte[] as_encoded_bytes();
-    @RustRefOut public OsStr slice_encoded_bytes<R>(R range);
     @MutSelf public void make_ascii_lowercase();
     @MutSelf public void make_ascii_uppercase();
     public OsString to_ascii_lowercase();
@@ -3368,7 +2449,6 @@ public class OsStr implements OsStrExt, ToOwned {
     public bool is_ascii();
     public bool eq_ignore_ascii_case<S>(S other);
     @RustBorrowsSelf public Display display();
-    @RustRefOut public OsStr as_os_str();
 }
 
 /** Platform-specific extensions to [`OsStr`]. */
@@ -3401,7 +2481,6 @@ public class OsString implements OsStringExt, ToOwned, Write {
     @MutSelf public void shrink_to(uint min_capacity);
     public OsStr into_boxed_os_str();
     @RustRefOut public OsStr leak();
-    @MutSelf public void truncate(uint len);
     @RustRefOut public String? to_str();
     @RustBorrowsSelf public Cow<String> to_string_lossy();
     public OsString to_os_string();
@@ -3411,7 +2490,6 @@ public class OsString implements OsStringExt, ToOwned, Write {
     public (OsStr, OsStr) split_at(uint mid);
     public (OsStr, OsStr)? split_at_checked(uint mid);
     @RustRefOut public ubyte[] as_encoded_bytes();
-    @RustRefOut public Self slice_encoded_bytes<R>(R range);
     @MutSelf public void make_ascii_lowercase();
     @MutSelf public void make_ascii_uppercase();
     public OsString to_ascii_lowercase();
@@ -3435,7 +2513,6 @@ public class Output implements ToOwned {
     public ExitStatus status;
     public Vec<ubyte> stdout;
     public Vec<ubyte> stderr;
-    public Output exit_ok() throws ExitStatusError;
 }
 
 /** An owned file descriptor. */
@@ -3462,7 +2539,6 @@ public class PanicHookInfo implements ToString {
     @RustRefOut public Any payload();
     @RustRefOut public String? payload_as_str();
     @RustRefOut public Location? location();
-    public bool can_unwind();
 }
 
 /** An error which can be returned when parsing a float. */
@@ -3496,16 +2572,11 @@ public class Path implements ToOwned {
     @RustBorrowsSelf public Ancestors ancestors();
     @RustRefOut public OsStr? file_name();
     @RustRefOut public Path strip_prefix<P>(P base) throws StripPrefixError;
-    @RustRefOut public Path trim_prefix<P>(P base);
     public bool starts_with<P>(P base);
     public bool ends_with<P>(P child);
-    public bool is_empty();
     @RustRefOut public OsStr? file_stem();
     @RustRefOut public OsStr? file_prefix();
     @RustRefOut public OsStr? extension();
-    public bool has_trailing_sep();
-    @RustBorrowsSelf public Cow<Path> with_trailing_sep();
-    @RustRefOut public Path trim_trailing_sep();
     public PathBuf join<P>(P path);
     public PathBuf with_file_name<S>(S file_name);
     public PathBuf with_extension<S>(S extension);
@@ -3513,12 +2584,9 @@ public class Path implements ToOwned {
     @RustBorrowsSelf public Components components();
     @RustBorrowsSelf public Iter iter();
     @RustBorrowsSelf public Display display();
-    @RustRefOut public Path as_path();
     public Metadata metadata() throws Error;
     public Metadata symlink_metadata() throws Error;
     public PathBuf canonicalize() throws Error;
-    public PathBuf absolute() throws Error;
-    public PathBuf normalize_lexically() throws NormalizeError;
     public PathBuf read_link() throws Error;
     public ReadDir read_dir() throws Error;
     public bool exists();
@@ -3541,9 +2609,6 @@ public class PathBuf implements ToOwned {
     @RustRefOut public Path leak();
     @MutSelf public void push<P>(P path);
     @MutSelf public bool pop();
-    @MutSelf public void set_trailing_sep(bool trailing_sep);
-    @MutSelf public void push_trailing_sep();
-    @MutSelf public void pop_trailing_sep();
     @MutSelf public void set_file_name<S>(S file_name);
     @MutSelf public bool set_extension<S>(S extension);
     @MutSelf public bool add_extension<S>(S extension);
@@ -3571,16 +2636,11 @@ public class PathBuf implements ToOwned {
     @RustBorrowsSelf public Ancestors ancestors();
     @RustRefOut public OsStr? file_name();
     @RustRefOut public Path strip_prefix<P>(P base) throws StripPrefixError;
-    @RustRefOut public Path trim_prefix<P>(P base);
     public bool starts_with<P>(P base);
     public bool ends_with<P>(P child);
-    public bool is_empty();
     @RustRefOut public OsStr? file_stem();
     @RustRefOut public OsStr? file_prefix();
     @RustRefOut public OsStr? extension();
-    public bool has_trailing_sep();
-    @RustBorrowsSelf public Cow<Path> with_trailing_sep();
-    @RustRefOut public Path trim_trailing_sep();
     public PathBuf join<P>(P path);
     public PathBuf with_file_name<S>(S file_name);
     public PathBuf with_extension<S>(S extension);
@@ -3591,8 +2651,6 @@ public class PathBuf implements ToOwned {
     public Metadata metadata() throws Error;
     public Metadata symlink_metadata() throws Error;
     public PathBuf canonicalize() throws Error;
-    public PathBuf absolute() throws Error;
-    public PathBuf normalize_lexically() throws NormalizeError;
     public PathBuf read_link() throws Error;
     public ReadDir read_dir() throws Error;
     public bool exists();
@@ -3681,15 +2739,6 @@ public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRaw
     public PipeWriter try_clone() throws Error;
 }
 
-/** A type of error which can be returned whenever a lock is acquired. */
-@rust("std::sync::poison::PoisonError")
-public class PoisonError<T> implements ToString {
-    public PoisonError(T data);
-    public T into_inner();
-    @RustRefOut public T get_ref();
-    @MutSelf @RustRefOut public T get_mut();
-}
-
 /** Windows path prefixes, e.g., `C:` or `\\server\share`. */
 @rust("std::path::Prefix")
 @RustClone
@@ -3705,21 +2754,6 @@ public enum Prefix implements ToOwned {
 public class PrefixComponent implements ToOwned {
     @RustBorrowsSelf public Prefix kind();
     @RustRefOut public OsStr as_os_str();
-}
-
-/** A wrapper around windows [`ProcThreadAttributeList`][1]. */
-@rust("std::os::windows::process::ProcThreadAttributeList")
-public class ProcThreadAttributeList {
-    public static ProcThreadAttributeListBuilder build();
-}
-
-/** Builder for constructing a [`ProcThreadAttributeList`]. */
-@rust("std::os::windows::process::ProcThreadAttributeListBuilder")
-@RustClone
-public class ProcThreadAttributeListBuilder implements ToOwned {
-    public ProcThreadAttributeListBuilder attribute<T>(uint attribute, &T value);
-    public unsafe ProcThreadAttributeListBuilder raw_attribute<T>(uint attribute, T* value_ptr, uint value_size);
-    @RustBorrowsSelf public ProcThreadAttributeList finish() throws Error;
 }
 
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
@@ -3821,47 +2855,22 @@ public class Rc<T, A> implements ToOwned, ToString {
     @RustClosureRefs("0") public static T new_cyclic<F>((Weak<T>) -> T data_fn);
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
-    public static T try_new(T value) throws AllocError;
-    public static MaybeUninit<T> try_new_uninit() throws AllocError;
-    public static MaybeUninit<T> try_new_zeroed() throws AllocError;
     public static Pin<T> pin(T value);
-    @RustClosureRefs("1") public static U map<U>(Rc this, (T) -> U f);
-    @RustClosureRefs("1") public static Self.TryType try_map<R>(Rc this, (T) -> R f);
-    public static T new_in(T value, A alloc);
-    public static MaybeUninit<T> new_uninit_in(A alloc);
-    public static MaybeUninit<T> new_zeroed_in(A alloc);
-    @RustClosureRefs("0") public static T new_cyclic_in<F>((Weak<T, A>) -> T data_fn, A alloc);
-    public static Rc try_new_in(T value, A alloc) throws AllocError;
-    public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
-    public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
-    public static Pin<Rc> pin_in(T value, A alloc);
     public static T try_unwrap(Rc this) throws Rc;
     public static T? into_inner(Rc this);
     public static MaybeUninit<T>[] new_uninit_slice(uint len);
     public static MaybeUninit<T>[] new_zeroed_slice(uint len);
-    public static MaybeUninit<T>[] new_uninit_slice_in(uint len, A alloc);
-    public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
     public T[] into_array() throws Rc;
     public unsafe T assume_init();
-    public static T clone_from_ref(&T value);
-    public static T try_clone_from_ref(&T value) throws AllocError;
-    public static T clone_from_ref_in(&T value, A alloc);
-    public static T try_clone_from_ref_in(&T value, A alloc) throws AllocError;
     public static unsafe Rc from_raw(T* ptr);
     public static T* into_raw(Rc this);
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
-    @RustRefOut public static A allocator(&Rc this);
-    public static (T*, A) into_raw_with_allocator(Rc this);
     public static T* as_ptr(&Rc this);
-    public static unsafe Rc from_raw_in(T* ptr, A alloc);
     public static Weak<T, A> downgrade(&Rc this);
     public static uint weak_count(&Rc this);
     public static uint strong_count(&Rc this);
-    public static unsafe void increment_strong_count_in(T* ptr, A alloc);
-    public static unsafe void decrement_strong_count_in(T* ptr, A alloc);
     @RustRefOut public static T? get_mut(&mut Rc this);
-    @RustRefOut public static unsafe T get_mut_unchecked(&mut Rc this);
     public static bool ptr_eq(&Rc this, &Rc other);
     @RustRefOut public static T make_mut(&mut Rc this);
     public static T unwrap_or_clone(Rc this);
@@ -3895,24 +2904,6 @@ public class ReadDir implements RustIterator {
     @MutSelf public DirEntry? next() throws Error;
 }
 
-/** The receiving half of Rust's [`channel`] (or [`sync_channel`]) type. */
-@rust("std::sync::mpmc::Receiver")
-@RustClone
-public class Receiver<T> implements ToOwned {
-    public T try_recv() throws TryRecvError;
-    public T recv() throws RecvError;
-    public T recv_timeout(Duration timeout) throws RecvTimeoutError;
-    public T recv_deadline(Instant deadline) throws RecvTimeoutError;
-    @RustBorrowsSelf public TryIter<T> try_iter();
-    public bool is_empty();
-    public bool is_full();
-    public uint len();
-    public uint? capacity();
-    public bool same_channel(&Receiver<T> other);
-    @RustBorrowsSelf public Iter<T> iter();
-    public bool is_disconnected();
-}
-
 /** An error returned from the [`recv`] function on a [`Receiver`]. */
 @rust("std::sync::mpsc::RecvError")
 @RustClone
@@ -3926,44 +2917,9 @@ public enum RecvTimeoutError implements ToOwned, ToString {
     Timeout, Disconnected
 }
 
-/** A re-entrant mutual exclusion lock */
-@rust("std::sync::ReentrantLock")
-public class ReentrantLock<T> {
-    public ReentrantLock(T t);
-    @RustDefault public ReentrantLock();
-    public T into_inner();
-    @RustBorrowsSelf public ReentrantLockGuard<T> lock();
-    @MutSelf @RustRefOut public T get_mut();
-    public T* data_ptr();
-}
-
-/** An RAII implementation of a "scoped lock" of a re-entrant lock. When this */
-@rust("std::sync::ReentrantLockGuard")
-public class ReentrantLockGuard<T> implements ToString {
-}
-
 /** A reader which yields one byte over and over and over and over and over and... */
 @rust("std::io::Repeat")
 public class Repeat {
-}
-
-/** An error reporter that prints an error and its sources. */
-@rust("std::error::Report")
-public class Report<E> implements ToString {
-    public Report(E error);
-    public Report pretty(bool pretty);
-    public Report show_backtrace(bool show_backtrace);
-}
-
-/** `Request` supports generic, type-driven access to data. Its use is currently restricted to the */
-@rust("std::error::Request")
-public class Request {
-    @MutSelf @RustRefOut public Request provide_value<T>(T value);
-    @MutSelf @RustRefOut public Request provide_value_with<T>(() -> T fulfil);
-    @MutSelf @RustRefOut public Request provide_ref<T>(&T value);
-    @MutSelf @RustRefOut public Request provide_ref_with<T>(() -> T fulfil);
-    public bool would_be_satisfied_by_value_of<T>();
-    public bool would_be_satisfied_by_ref_of<T>();
 }
 
 /** A double-ended iterator with the direction inverted. */
@@ -3971,7 +2927,6 @@ public class Request {
 @RustClone
 public class Rev<T> implements RustIterator {
     @RustDefault public Rev();
-    public T into_inner();
     @MutSelf public I.Item? next();
 }
 
@@ -4061,9 +3016,6 @@ public interface RustIterator {
 public class RwLock<T> {
     public RwLock(T t);
     @RustDefault public RwLock();
-    public T get_cloned() throws PoisonError<void>;
-    public void set(T value) throws PoisonError<T>;
-    public T replace(T value) throws PoisonError<T>;
     @RustBorrowsSelf public RwLockReadGuard<T> read() throws PoisonError<T>;
     @RustBorrowsSelf public RwLockReadGuard<T> try_read() throws TryLockError<Guard>;
     @RustBorrowsSelf public RwLockWriteGuard<T> write() throws PoisonError<T>;
@@ -4072,29 +3024,18 @@ public class RwLock<T> {
     public void clear_poison();
     public T into_inner() throws PoisonError<T>;
     @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
-    public T* data_ptr();
 }
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::RwLockReadGuard")
 public class RwLockReadGuard<T> implements ToString {
-    @RustClosureRefs("1") public static MappedRwLockReadGuard<U> map<U, F>(RwLockReadGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedRwLockReadGuard<U> filter_map<U, F>(RwLockReadGuard orig, (T) -> U? f) throws RwLockReadGuard;
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::RwLockWriteGuard")
 public class RwLockWriteGuard<T> implements ToString {
     public static RwLockReadGuard<T> downgrade(RwLockWriteGuard s);
-    @RustClosureRefs("1") public static MappedRwLockWriteGuard<U> map<U, F>(RwLockWriteGuard orig, (T) -> U f);
-    @RustClosureRefs("1") public static MappedRwLockWriteGuard<U> filter_map<U, F>(RwLockWriteGuard orig, (T) -> U? f) throws RwLockWriteGuard;
 }
-
-@rust("std::path::SEPARATORS")
-public const char[] SEPARATORS;
-
-@rust("std::path::SEPARATORS_STR")
-public const String[] SEPARATORS_STR;
 
 @rust("std::sys::pal::windows::c::windows_sys::SOCKADDR")
 public struct SOCKADDR {
@@ -4199,79 +3140,11 @@ public enum SeekFrom implements ToOwned {
 public class SendError<T> implements ToOwned, ToString {
 }
 
-/** An error returned from the [`send_timeout`] method. */
-@rust("std::sync::mpmc::SendTimeoutError")
-@RustClone
-public enum SendTimeoutError<T> implements ToOwned, ToString {
-    Timeout(T), Disconnected(T)
-}
-
-/** The sending-half of Rust's synchronous [`channel`] type. */
-@rust("std::sync::mpmc::Sender")
-@RustClone
-public class Sender<T> implements ToOwned {
-    public void try_send(T msg) throws TrySendError<T>;
-    public void send(T msg) throws SendError<T>;
-    public void send_timeout(T msg, Duration timeout) throws SendTimeoutError<T>;
-    public void send_deadline(T msg, Instant deadline) throws SendTimeoutError<T>;
-    public bool is_empty();
-    public bool is_full();
-    public uint len();
-    public uint? capacity();
-    public bool same_channel(&Sender<T> other);
-    public bool is_disconnected();
-}
-
 /** Possible values which can be passed to the [`TcpStream::shutdown`] method. */
 @rust("std::net::Shutdown")
 @RustClone
 public enum Shutdown implements ToOwned {
     Read, Write, Both
-}
-
-/** A SIMD vector with the shape of `[T; N]` but the operations of `T`. */
-@rust("std::simd::Simd")
-@RustClone
-public class Simd<T> {
-    @RustDefault public Simd();
-    public Simd reverse();
-    public Simd rotate_elements_left();
-    public Simd rotate_elements_right();
-    public Simd shift_elements_left(T padding);
-    public Simd shift_elements_right(T padding);
-    public (Simd, Simd) interleave(Simd other);
-    public (Simd, Simd) deinterleave(Simd other);
-    public Simd<T> resize(T value);
-    public Simd<T> extract();
-    public Simd swizzle_dyn(Simd<ubyte> idxs);
-    public uint len();
-    public static Simd splat(T value);
-    @RustRefOut public T[] as_array();
-    @MutSelf @RustRefOut public T[] as_mut_array();
-    public static Simd from_array(T[] array);
-    public T[] to_array();
-    public static Simd from_slice(T[] slice);
-    public void copy_to_slice(&mut T[] slice);
-    public static Simd load_or_default(T[] slice);
-    public static Simd load_or(T[] slice, Simd or);
-    public static Simd load_select_or_default(T[] slice, Mask<T.Mask> enable);
-    public static Simd load_select(T[] slice, Mask<T.Mask> enable, Simd or);
-    public static unsafe Simd load_select_unchecked(T[] slice, Mask<T.Mask> enable, Simd or);
-    public static unsafe Simd load_select_ptr(T* ptr, Mask<T.Mask> enable, Simd or);
-    public static Simd gather_or(T[] slice, Simd<uint> idxs, Simd or);
-    public static Simd gather_or_default(T[] slice, Simd<uint> idxs);
-    public static Simd gather_select(T[] slice, Mask<int> enable, Simd<uint> idxs, Simd or);
-    public static unsafe Simd gather_select_unchecked(T[] slice, Mask<int> enable, Simd<uint> idxs, Simd or);
-    public static unsafe Simd gather_ptr(Simd<T*> source);
-    public static unsafe Simd gather_select_ptr(Simd<T*> source, Mask<int> enable, Simd or);
-    public void store_select(&mut T[] slice, Mask<T.Mask> enable);
-    public unsafe void store_select_unchecked(&mut T[] slice, Mask<T.Mask> enable);
-    public unsafe void store_select_ptr(T* ptr, Mask<T.Mask> enable);
-    public void scatter(&mut T[] slice, Simd<uint> idxs);
-    public void scatter_select(&mut T[] slice, Mask<int> enable, Simd<uint> idxs);
-    public unsafe void scatter_select_unchecked(&mut T[] slice, Mask<int> enable, Simd<uint> idxs);
-    public unsafe void scatter_ptr(Simd<T*> dest);
-    public unsafe void scatter_select_ptr(Simd<T*> dest, Mask<int> enable);
 }
 
 /** A writer which will move data into the void. */
@@ -4320,7 +3193,6 @@ public interface SocketAddrExt {
 @RustClone
 public class SocketAddrV4 {
     public SocketAddrV4(Ipv4Addr ip, ushort port);
-    public static SocketAddrV4 parse_ascii(ubyte[] b) throws AddrParseError;
     @RustRefOut public Ipv4Addr ip();
     @MutSelf public void set_ip(Ipv4Addr new_ip);
     public ushort port();
@@ -4332,7 +3204,6 @@ public class SocketAddrV4 {
 @RustClone
 public class SocketAddrV6 {
     public SocketAddrV6(Ipv6Addr ip, ushort port, u32 flowinfo, u32 scope_id);
-    public static SocketAddrV6 parse_ascii(ubyte[] b) throws AddrParseError;
     @RustRefOut public Ipv6Addr ip();
     @MutSelf public void set_ip(Ipv6Addr new_ip);
     public ushort port();
@@ -4378,7 +3249,6 @@ public class Split<B> implements RustIterator {
 @rust("std::str::SplitAsciiWhitespace")
 @RustClone
 public class SplitAsciiWhitespace implements RustIterator {
-    @RustRefOut public String? remainder();
     @MutSelf @RustRefOut public String? next();
 }
 
@@ -4418,29 +3288,7 @@ public class SplitTerminator<P> implements RustIterator {
 @rust("std::str::SplitWhitespace")
 @RustClone
 public class SplitWhitespace implements RustIterator {
-    @RustRefOut public String? remainder();
     @MutSelf @RustRefOut public String? next();
-}
-
-/** This trait provides a possibly-temporary implementation of float functions */
-@rust("std::simd::StdFloat")
-public interface StdFloat {
-    public Self mul_add(Self a, Self b);
-    public Self sqrt();
-    public Self sin();
-    public Self cos();
-    public Self exp();
-    public Self exp2();
-    public Self ln();
-    public Self log(Self base);
-    public Self log2();
-    public Self log10();
-    public Self ceil();
-    public Self floor();
-    public Self round();
-    public Self trunc();
-    public Self round_ties_even();
-    public Self fract();
 }
 
 /** A handle to the standard error stream of a process. */
@@ -4473,7 +3321,6 @@ public class Stdio implements FromRawFd, FromRawHandle {
     public static Stdio piped();
     public static Stdio inherit();
     public static Stdio null();
-    public bool makes_pipe();
 }
 
 @rust("std::os::unix::io::StdioExt")
@@ -4509,16 +3356,10 @@ public class StepBy<I> implements RustIterator {
 public class String implements ToOwned, ToString, Write {
     public String();
     public static String with_capacity(uint capacity);
-    public static String try_with_capacity(uint capacity) throws TryReserveError;
     public static String from_utf8(Vec<ubyte> vec) throws FromUtf8Error;
     public static Cow<String> from_utf8_lossy(ubyte[] v);
-    public static String from_utf8_lossy_owned(Vec<ubyte> v);
     public static String from_utf16(ushort[] v) throws FromUtf16Error;
     public static String from_utf16_lossy(ushort[] v);
-    public static String from_utf16le(ubyte[] v) throws FromUtf16Error;
-    public static String from_utf16le_lossy(ubyte[] v);
-    public static String from_utf16be(ubyte[] v) throws FromUtf16Error;
-    public static String from_utf16be_lossy(ubyte[] v);
     public (ubyte*, uint, uint) into_raw_parts();
     public static unsafe String from_raw_parts(ubyte* buf, uint length, uint capacity);
     public static unsafe String from_utf8_unchecked(Vec<ubyte> bytes);
@@ -4539,7 +3380,6 @@ public class String implements ToOwned, ToString, Write {
     @MutSelf public void truncate(uint new_len);
     @MutSelf public char? pop();
     @MutSelf public char remove(uint idx);
-    @MutSelf public void remove_matches<P>(P pat);
     @MutSelf public void retain<F>((char) -> bool f);
     @MutSelf public void insert(uint idx, char ch);
     @MutSelf public void insert_str(uint idx, &String string);
@@ -4549,23 +3389,9 @@ public class String implements ToOwned, ToString, Write {
     @MutSelf public String split_off(uint at);
     @MutSelf public void clear();
     @MutSelf @RustBorrowsSelf public Drain drain<R>(R range);
-    public IntoChars into_chars();
     @MutSelf public void replace_range<R>(R range, &String replace_with);
-    @MutSelf public void replace_first<P>(P from, &String to);
-    @MutSelf public void replace_last<P>(P from, &String to);
     public String into_boxed_str();
     @RustRefOut public String leak();
-    public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
-    public String word_to_titlecase();
-    public String to_uppercase();
-    public String to_casefold_unnormalized();
-    public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -4617,16 +3443,11 @@ public class String implements ToOwned, ToString, Write {
     @RustRefOut public String trim_start_matches<P>(P pat);
     @RustRefOut public String? strip_prefix<P>(P prefix);
     @RustRefOut public String? strip_suffix<P>(P suffix);
-    @RustRefOut public String? strip_circumfix<P, S>(P prefix, S suffix);
-    @RustRefOut public String trim_prefix<P>(P prefix);
-    @RustRefOut public String trim_suffix<P>(P suffix);
     @RustRefOut public String trim_end_matches<P>(P pat);
     @RustRefOut public String trim_left_matches<P>(P pat);
     @RustRefOut public String trim_right_matches<P>(P pat);
     public F parse<F>() throws Error;
     public bool is_ascii();
-    @RustRefOut public AsciiChar[]? as_ascii();
-    @RustRefOut public unsafe AsciiChar[] as_ascii_unchecked();
     public bool eq_ignore_ascii_case(&String other);
     public bool eq_ignore_case_unnormalized(&String other);
     @MutSelf public void make_ascii_uppercase();
@@ -4637,7 +3458,17 @@ public class String implements ToOwned, ToString, Write {
     @RustBorrowsSelf public EscapeDebug escape_debug();
     @RustBorrowsSelf public EscapeDefault escape_default();
     @RustBorrowsSelf public EscapeUnicode escape_unicode();
-    public Range<uint>? substr_range(&String substr);
+    public ubyte[] into_boxed_bytes();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String word_to_titlecase();
+    public String to_uppercase();
+    public String to_casefold_unnormalized();
+    public String into_string();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -4659,19 +3490,6 @@ public class SymmetricDifference<T> implements RustIterator, ToOwned {
 public class SyncSender<T> implements ToOwned {
     public void send(T t) throws SendError<T>;
     public void try_send(T t) throws TrySendError<T>;
-}
-
-/** `SyncView` provides _mutable_ access, also referred to as _exclusive_ */
-@rust("std::sync::SyncView")
-@RustClone
-public class SyncView<T> {
-    public SyncView(T t);
-    @RustDefault public SyncView();
-    public T into_inner();
-    @RustRefOut public Pin<T> as_pin_mut();
-    @RustRefOut public static SyncView<T> from_mut(&mut T r);
-    @RustRefOut public static Pin<SyncView<T>> from_pin_mut(Pin<T> r);
-    @RustRefOut public Pin<T> as_pin_ref();
 }
 
 /** The default memory allocator provided by the operating system. */
@@ -4697,9 +3515,6 @@ public class SystemTime implements ToOwned {
     public Duration elapsed() throws SystemTimeError;
     public SystemTime? checked_add(Duration duration);
     public SystemTime? checked_sub(Duration duration);
-    public SystemTime saturating_add(Duration duration);
-    public SystemTime saturating_sub(Duration duration);
-    public Duration saturating_duration_since(SystemTime earlier);
 }
 
 /** An error returned from the `duration_since` and `elapsed` methods on */
@@ -4724,7 +3539,6 @@ public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRa
     public TcpListener try_clone() throws Error;
     public (TcpStream, SocketAddr) accept() throws Error;
     @RustBorrowsSelf public Incoming incoming();
-    public IntoIncoming into_incoming();
     public void set_ttl(u32 ttl) throws Error;
     public u32 ttl() throws Error;
     public void set_only_v6(bool only_v6) throws Error;
@@ -4747,8 +3561,6 @@ public class TcpStream implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawF
     public Duration? read_timeout() throws Error;
     public Duration? write_timeout() throws Error;
     public uint peek(&mut ubyte[] buf) throws Error;
-    public void set_linger(Duration? linger) throws Error;
-    public Duration? linger() throws Error;
     public void set_keepalive(bool keepalive) throws Error;
     public bool keepalive() throws Error;
     public void set_nodelay(bool nodelay) throws Error;
@@ -4773,14 +3585,6 @@ public interface Termination {
     public ExitCode report();
 }
 
-/** ThinBox. */
-@rust("std::boxed::ThinBox")
-public class ThinBox<T> implements ToString {
-    public ThinBox(T value);
-    public static ThinBox try_new(T value) throws AllocError;
-    public static ThinBox new_unsize<T>(T value);
-}
-
 /** A handle to a thread. */
 @rust("std::thread::Thread")
 @RustClone
@@ -4788,15 +3592,12 @@ public class Thread implements ToOwned {
     public void unpark();
     public ThreadId id();
     @RustRefOut public String? name();
-    public Object* into_raw();
-    public static unsafe Thread from_raw(Object* ptr);
 }
 
 /** A unique identifier for a running thread. */
 @rust("std::thread::ThreadId")
 @RustClone
 public class ThreadId implements ToOwned {
-    public NonZero<ulong> as_u64();
 }
 
 /** Returns an iterator that yields the case-folded equivalent of a `char`. */
@@ -4837,13 +3638,6 @@ public interface ToString {
     public String to_string();
 }
 
-/** Returns an iterator that yields the titlecase equivalent of a `char`. */
-@rust("std::char::ToTitlecase")
-@RustClone
-public class ToTitlecase implements RustIterator {
-    @MutSelf public char? next();
-}
-
 /** Returns an iterator that yields the uppercase equivalent of a `char`. */
 @rust("std::char::ToUppercase")
 @RustClone
@@ -4864,12 +3658,6 @@ public class TryFromIntError {
     @RustRefOut public IntErrorKind kind();
 }
 
-/** An iterator that attempts to yield all pending values for a [`Receiver`], */
-@rust("std::sync::mpmc::TryIter")
-public class TryIter<T> implements RustIterator {
-    @MutSelf public T? next();
-}
-
 /** An enumeration of possible errors which can occur while trying to acquire a lock */
 @rust("std::fs::TryLockError")
 public enum TryLockError implements ToString {
@@ -4887,14 +3675,6 @@ public enum TryRecvError implements ToOwned, ToString {
 @rust("std::collections::TryReserveError")
 @RustClone
 public class TryReserveError implements ToOwned, ToString {
-    public TryReserveErrorKind kind();
-}
-
-/** Details of the allocation that caused a `TryReserveError` */
-@rust("std::collections::TryReserveErrorKind")
-@RustClone
-public enum TryReserveErrorKind implements ToOwned {
-    CapacityOverflow, AllocError
 }
 
 /** This enumeration is the list of the possible error outcomes for the */
@@ -4948,28 +3728,6 @@ public class UdpSocket implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawF
 @RustClone
 public class Union<T> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
-}
-
-/** A uniquely owned [`Arc`]. */
-@rust("std::sync::UniqueArc")
-public class UniqueArc<T, A> implements ToString {
-    public UniqueArc(T value);
-    public static UniqueArc<U> map<U>(UniqueArc this, (T) -> U f);
-    public static Self.TryType try_map<R>(UniqueArc this, (T) -> R f);
-    public static UniqueArc new_in(T data, A alloc);
-    public static T into_arc(UniqueArc this);
-    public static Weak<T, A> downgrade(&UniqueArc this);
-}
-
-/** A uniquely owned [`Rc`]. */
-@rust("std::rc::UniqueRc")
-public class UniqueRc<T, A> implements ToString {
-    public UniqueRc(T value);
-    public static UniqueRc<U> map<U>(UniqueRc this, (T) -> U f);
-    public static Self.TryType try_map<R>(UniqueRc this, (T) -> R f);
-    public static UniqueRc new_in(T value, A alloc);
-    public static T into_rc(UniqueRc this);
-    public static Weak<T, A> downgrade(&UniqueRc this);
 }
 
 /** A Unix datagram socket. */
@@ -5047,12 +3805,6 @@ public class UnixStream implements AsFd, AsRawFd, FromRawFd, IntoRawFd, Read, Un
     public uint send_vectored_with_ancillary(IoSlice[] bufs, &mut SocketAncillary ancillary) throws Error;
 }
 
-/** Error type returned by [`CursorMut::insert_before`] and */
-@rust("std::collections::btree_map::UnorderedKeyError")
-@RustClone
-public class UnorderedKeyError implements ToOwned, ToString {
-}
-
 /** An iterator used to decode a slice of mostly UTF-8 bytes to string slices */
 @rust("std::str::Utf8Chunks")
 @RustClone
@@ -5066,13 +3818,6 @@ public class Utf8Chunks implements RustIterator {
 public class Utf8Error {
     public uint valid_up_to();
     public uint? error_len();
-}
-
-/** A variable argument list, ABI-compatible with `va_list` in C. */
-@rust("std::ffi::VaList")
-@RustClone
-public class VaList {
-    @MutSelf public unsafe T next_arg<T>();
 }
 
 /** A view into a vacant entry in a `BTreeMap`. */
@@ -5126,22 +3871,10 @@ public class VarsOs implements RustIterator {
 public class Vec<T, A> implements ToOwned {
     public Vec();
     public static Vec with_capacity(uint capacity);
-    public static Vec try_with_capacity(uint capacity) throws TryReserveError;
     public static unsafe Vec from_raw_parts(T* ptr, uint length, uint capacity);
-    public static unsafe Vec from_parts(NonNull<T> ptr, uint length, uint capacity);
-    public static Vec from_fn<F>(uint length, (uint) -> T f);
     public (T*, uint, uint) into_raw_parts();
-    public (NonNull<T>, uint, uint) into_parts();
-    @RustRefOut public T[] const_make_global();
-    public static Vec with_capacity_in(uint capacity, A alloc);
     @MutSelf public void push(T value);
     @MutSelf @RustRefOut public T push_mut(T value);
-    public static Vec new_in(A alloc);
-    public static Vec try_with_capacity_in(uint capacity, A alloc) throws TryReserveError;
-    public static unsafe Vec from_raw_parts_in(T* ptr, uint length, uint capacity, A alloc);
-    public static unsafe Vec from_parts_in(NonNull<T> ptr, uint length, uint capacity, A alloc);
-    public (T*, uint, uint, A) into_raw_parts_with_alloc();
-    public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
     @MutSelf public void reserve(uint additional);
     @MutSelf public void reserve_exact(uint additional);
@@ -5149,8 +3882,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void try_reserve_exact(uint additional) throws TryReserveError;
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
-    @MutSelf public void try_shrink_to_fit() throws TryReserveError;
-    @MutSelf public void try_shrink_to(uint min_capacity) throws TryReserveError;
     public T[] into_boxed_slice();
     public T[] into_array() throws Vec;
     @MutSelf public void truncate(uint len);
@@ -5158,22 +3889,17 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T[] as_mut_slice();
     public T* as_ptr();
     @MutSelf public T* as_mut_ptr();
-    @MutSelf public NonNull<T> as_non_null();
-    @RustRefOut public A allocator();
     @MutSelf public unsafe void set_len(uint new_len);
     @MutSelf public T swap_remove(uint index);
     @MutSelf public void insert(uint index, T element);
     @MutSelf @RustRefOut public T insert_mut(uint index, T element);
     @MutSelf public T remove(uint index);
-    @MutSelf public T? try_remove(uint index);
     @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
     @MutSelf @RustClosureRefs("0") public void retain_mut<F>((T) -> bool f);
     @MutSelf @RustClosureRefs("0") public void dedup_by_key<F, K>((T) -> K key);
     @MutSelf @RustClosureRefs("0") public void dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustRefOut public T push_within_capacity(T value) throws T;
     @MutSelf public T? pop();
     @MutSelf @RustClosureRefs("0") public T? pop_if((T) -> bool predicate);
-    @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
     @MutSelf public void append(&mut Vec other);
     @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
     @MutSelf public void clear();
@@ -5183,9 +3909,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void resize_with<F>(uint new_len, () -> T f);
     @RustRefOut public T[] leak();
     @MutSelf @RustRefOut public MaybeUninit<T>[] spare_capacity_mut();
-    @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
-    public Vec<T[]> into_chunks();
-    public Vec<U> recycle<U>();
     @MutSelf public void resize(uint new_len, T value);
     @MutSelf public void extend_from_slice(T[] other);
     @MutSelf public void extend_from_within<R>(R src);
@@ -5193,7 +3916,10 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void dedup();
     @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -5219,7 +3945,6 @@ public class Vec<T, A> implements ToOwned {
     @RustRefOut public T[]? as_array();
     @MutSelf @RustRefOut public T[]? as_mut_array();
     @MutSelf public void swap(uint a, uint b);
-    @MutSelf public unsafe void swap_unchecked(uint a, uint b);
     @MutSelf public void reverse();
     @RustBorrowsSelf public Iter<T> iter();
     @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
@@ -5257,35 +3982,22 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? split_once<F>((T) -> bool pred);
-    @RustClosureRefs("0") public (T[], T[])? rsplit_once<F>((T) -> bool pred);
     public bool contains(&T x);
     public bool starts_with(T[] needle);
     public bool ends_with(T[] needle);
     @RustRefOut public T[]? strip_prefix<P>(&P prefix);
     @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    @RustRefOut public T[]? strip_circumfix<S, P>(&P prefix, &S suffix);
-    @RustRefOut public T[] trim_prefix<P>(&P prefix);
-    @RustRefOut public T[] trim_suffix<P>(&P suffix);
     public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @MutSelf public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public void partial_sort_unstable<R>(R range);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by<F, R>(R range, (T, T) -> Ordering compare);
-    @MutSelf @RustClosureRefs("1") public void partial_sort_unstable_by_key<K, F, R>(R range, (T) -> K f);
     @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
-    @MutSelf public (T[], T[]) partition_dedup();
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by<F>((T, T) -> bool same_bucket);
-    @MutSelf @RustClosureRefs("0") public (T[], T[]) partition_dedup_by_key<K, F>((T) -> K key);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public T[] shift_left(T[] inserted);
-    @MutSelf public T[] shift_right(T[] inserted);
     @MutSelf public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
     @MutSelf public void clone_from_slice(T[] src);
@@ -5294,8 +4006,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public (T[], Simd<T>[], T[]) as_simd();
-    @MutSelf public (T[], Simd<T>[], T[]) as_simd_mut();
     public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
@@ -5308,9 +4018,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
     @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public Range<uint>? subslice_range(T[] subslice);
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public bool is_ascii();
     @RustRefOut public Char[]? as_ascii();
     @RustRefOut public unsafe Char[] as_ascii_unchecked();
@@ -5321,19 +4028,17 @@ public class Vec<T, A> implements ToOwned {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public void sort_floats();
-    @RustRefOut public String as_str();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */
@@ -5342,11 +4047,7 @@ public class Vec<T, A> implements ToOwned {
 @RustCollection
 public class VecDeque<T, A> implements ToOwned {
     public VecDeque();
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     public static VecDeque<T> with_capacity(uint capacity);
-    public static VecDeque<T> try_with_capacity(uint capacity) throws TryReserveError;
-    public static VecDeque<T, A> new_in(A alloc);
-    public static VecDeque<T, A> with_capacity_in(uint capacity, A alloc);
     @RustRefOut public T? get(uint index);
     @MutSelf @RustRefOut public T? get_mut(uint index);
     @MutSelf public void swap(uint i, uint j);
@@ -5358,8 +4059,6 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
     @MutSelf public void truncate(uint len);
-    @MutSelf public void truncate_front(uint len);
-    @RustRefOut public A allocator();
     @RustBorrowsSelf public Iter<T> iter();
     @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
     public (T[], T[]) as_slices();
@@ -5369,7 +4068,6 @@ public class VecDeque<T, A> implements ToOwned {
     @RustBorrowsSelf public Iter<T> range<R>(R range);
     @MutSelf @RustBorrowsSelf public IterMut<T> range_mut<R>(R range);
     @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
-    @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf public void clear();
     public bool contains(&T x);
     @RustRefOut public T? front();
@@ -5384,8 +4082,6 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T push_front_mut(T value);
     @MutSelf public void push_back(T value);
     @MutSelf @RustRefOut public T push_back_mut(T value);
-    @MutSelf public void prepend<I>(I other);
-    @MutSelf public void extend_front<I>(I iter);
     @MutSelf public T? swap_remove_front(uint index);
     @MutSelf public T? swap_remove_back(uint index);
     @MutSelf public void insert(uint index, T value);
@@ -5404,8 +4100,6 @@ public class VecDeque<T, A> implements ToOwned {
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
     @MutSelf public void resize(uint new_len, T value);
-    @MutSelf public void extend_from_within<R>(R src);
-    @MutSelf public void prepend_from_within<R>(R src);
 }
 
 /** A type indicating whether a timed wait on a condition variable returned */
@@ -5434,7 +4128,6 @@ public class Waker {
     @RustRefOut public static Waker noop();
     public Object* data();
     @RustRefOut public RawWakerVTable vtable();
-    public static Waker from_fn_ptr(() -> void f);
 }
 
 /** `Weak` is a version of [`Rc`] that holds a non-owning reference to the */
@@ -5442,13 +4135,9 @@ public class Waker {
 @RustClone
 public class Weak<T, A> implements ToOwned {
     public Weak();
-    public static Weak<T, A> new_in(A alloc);
     public static unsafe Weak from_raw(T* ptr);
     public T* into_raw();
-    @RustRefOut public A allocator();
     public T* as_ptr();
-    public (T*, A) into_raw_with_allocator();
-    public static unsafe Weak from_raw_in(T* ptr, A alloc);
     public T? upgrade();
     public uint strong_count();
     public uint weak_count();
@@ -5462,35 +4151,18 @@ public class Windows<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
-/** A lock could not be acquired at this time because the operation would otherwise block. */
-@rust("std::sync::nonpoison::WouldBlock")
-public class WouldBlock implements ToString {
-}
-
 /** Provides intentionally-wrapped arithmetic on `T`. */
 @rust("std::num::Wrapping")
 @RustClone
 public class Wrapping<T> {
     @RustDefault public Wrapping();
-    public u32 count_ones();
-    public u32 count_zeros();
-    public u32 trailing_zeros();
-    public Wrapping rotate_left(u32 n);
-    public Wrapping rotate_right(u32 n);
-    public Wrapping swap_bytes();
     public Wrapping reverse_bits();
     public static Wrapping from_be(Wrapping x);
     public static Wrapping from_le(Wrapping x);
-    public Wrapping to_be();
-    public Wrapping to_le();
-    public Wrapping pow(u32 exp);
-    public u32 leading_zeros();
     public Wrapping<int> abs();
     public Wrapping<int> signum();
     public bool is_positive();
     public bool is_negative();
-    public bool is_power_of_two();
-    public Wrapping next_power_of_two();
 }
 
 /** A trait for objects which are byte-oriented sinks. */
@@ -5532,14 +4204,8 @@ public never abort();
 @rust("std::process::abort_immediate")
 public never abort_immediate();
 
-@rust("std::panic::abort_unwind")
-public R abort_unwind<F, R>(() -> R f);
-
 @rust("std::path::absolute")
 public PathBuf absolute<P>(P path) throws Error;
-
-@rust("std::thread::add_spawn_hook")
-@RustClosureRefs("0") public void add_spawn_hook<F, G>((Thread) -> G hook);
 
 @rust("std::mem::align_of")
 public uint align_of<T>();
@@ -5552,9 +4218,6 @@ public unsafe ubyte* alloc(Layout layout);
 
 @rust("std::alloc::alloc_zeroed")
 public unsafe ubyte* alloc_zeroed(Layout layout);
-
-@rust("std::panic::always_abort")
-public void always_abort();
 
 @rust("std::env::args")
 public Args args();
@@ -5579,8 +4242,6 @@ public type blksize_t = ulong;
 public class bool_methods {
     public T? then_some<T>(T t);
     public T? then<T, F>(() -> T f);
-    public void ok_or<E>(E err) throws E;
-    public void ok_or_else<E, F>(() -> E f) throws E;
 }
 
 /** Equivalent to C's `void` type when used as a [pointer]. */
@@ -5597,9 +4258,6 @@ public PathBuf canonicalize<P>(P path) throws Error;
 
 @rust("std::panic::catch_unwind")
 public R catch_unwind<F, R>(() -> R f) throws Error;
-
-@rust("std::sync::mpmc::channel")
-public (Sender<T>, Receiver<T>) channel<T>();
 
 @rust("char")
 @RustPrimitive("char")
@@ -5618,23 +4276,16 @@ public class char_methods {
     @RustRefOut public String encode_utf8(&mut ubyte[] dst);
     @RustRefOut public ushort[] encode_utf16(&mut ushort[] dst);
     public bool is_alphabetic();
-    public bool is_cased();
-    public CharCase? case();
     public bool is_lowercase();
-    public bool is_titlecase();
     public bool is_uppercase();
     public bool is_numeric();
     public bool is_alphanumeric();
     public bool is_whitespace();
     public bool is_control();
-    public bool is_case_ignorable();
     public ToLowercase to_lowercase();
-    public ToTitlecase to_titlecase();
     public ToUppercase to_uppercase();
     public ToCasefold to_casefold_unnormalized();
     public bool is_ascii();
-    public AsciiChar? as_ascii();
-    public unsafe AsciiChar as_ascii_unchecked();
     public char to_ascii_uppercase();
     public char to_ascii_lowercase();
     public bool eq_ignore_ascii_case(&char other);
@@ -5645,7 +4296,6 @@ public class char_methods {
     public bool is_ascii_lowercase();
     public bool is_ascii_alphanumeric();
     public bool is_ascii_digit();
-    public bool is_ascii_octdigit();
     public bool is_ascii_hexdigit();
     public bool is_ascii_punctuation();
     public bool is_ascii_graphic();
@@ -5682,9 +4332,6 @@ public PathBuf current_dir() throws Error;
 
 @rust("std::env::current_exe")
 public PathBuf current_exe() throws Error;
-
-@rust("std::thread::current_id")
-public ThreadId current_id();
 
 @rust("std::os::unix::xdg::data_dirs")
 public XdgDirsIter data_dirs();
@@ -5753,10 +4400,6 @@ public class f32_methods {
     public float asinh();
     public float acosh();
     public float atanh();
-    public float gamma();
-    public (float, i32) ln_gamma();
-    public float erf();
-    public float erfc();
     public bool is_nan();
     public bool is_infinite();
     public bool is_finite();
@@ -5772,8 +4415,6 @@ public class f32_methods {
     public float to_radians();
     public float max(float other);
     public float min(float other);
-    public float maximum(float other);
-    public float minimum(float other);
     public float midpoint(float other);
     public unsafe Int to_int_unchecked<Int>();
     public u32 to_bits();
@@ -5786,15 +4427,9 @@ public class f32_methods {
     public static float from_ne_bytes(ubyte[4] bytes);
     public Ordering total_cmp(&float other);
     public float clamp(float min, float max);
-    public float clamp_magnitude(float limit);
     public float abs();
     public float signum();
     public float copysign(float sign);
-    public float algebraic_add(float rhs);
-    public float algebraic_sub(float rhs);
-    public float algebraic_mul(float rhs);
-    public float algebraic_div(float rhs);
-    public float algebraic_rem(float rhs);
 }
 
 @rust("f64")
@@ -5837,10 +4472,6 @@ public class f64_methods {
     public double asinh();
     public double acosh();
     public double atanh();
-    public double gamma();
-    public (double, i32) ln_gamma();
-    public double erf();
-    public double erfc();
     public bool is_nan();
     public bool is_infinite();
     public bool is_finite();
@@ -5856,8 +4487,6 @@ public class f64_methods {
     public double to_radians();
     public double max(double other);
     public double min(double other);
-    public double maximum(double other);
-    public double minimum(double other);
     public double midpoint(double other);
     public unsafe Int to_int_unchecked<Int>();
     public ulong to_bits();
@@ -5870,15 +4499,9 @@ public class f64_methods {
     public static double from_ne_bytes(ubyte[8] bytes);
     public Ordering total_cmp(&double other);
     public double clamp(double min, double max);
-    public double clamp_magnitude(double limit);
     public double abs();
     public double signum();
     public double copysign(double sign);
-    public double algebraic_add(double rhs);
-    public double algebraic_sub(double rhs);
-    public double algebraic_mul(double rhs);
-    public double algebraic_div(double rhs);
-    public double algebraic_rem(double rhs);
 }
 
 @rust("std::os::unix::fs::fchown")
@@ -5889,9 +4512,6 @@ public String format(Arguments args);
 
 @rust("std::str::from_boxed_utf8_unchecked")
 public unsafe String from_boxed_utf8_unchecked(ubyte[] v);
-
-@rust("std::panic::get_backtrace_style")
-public BacktraceStyle? get_backtrace_style();
 
 public type gid_t = u32;
 
@@ -5905,9 +4525,6 @@ public void hard_link<P, Q>(P original, Q link) throws Error;
 @rust("std::env::home_dir")
 public PathBuf? home_dir();
 
-@rust("std::net::hostname")
-public OsString hostname() throws Error;
-
 @rust("i16")
 @RustPrimitive("i16")
 public class i16_methods {
@@ -5917,10 +4534,6 @@ public class i16_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public short isolate_highest_one();
-    public short isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public ushort cast_unsigned();
     public ushort saturating_cast_unsigned();
     public ushort? checked_cast_unsigned();
@@ -5950,9 +4563,6 @@ public class i16_methods {
     public short strict_div(short rhs);
     public short? checked_div_euclid(short rhs);
     public short strict_div_euclid(short rhs);
-    public short? checked_div_exact(short rhs);
-    public short? div_exact(short rhs);
-    public unsafe short unchecked_div_exact(short rhs);
     public short? checked_rem(short rhs);
     public short strict_rem(short rhs);
     public short? checked_rem_euclid(short rhs);
@@ -5964,14 +4574,10 @@ public class i16_methods {
     public short strict_shl(u32 rhs);
     public unsafe short unchecked_shl(u32 rhs);
     public short unbounded_shl(u32 rhs);
-    public short? shl_exact(u32 rhs);
-    public unsafe short unchecked_shl_exact(u32 rhs);
     public short? checked_shr(u32 rhs);
     public short strict_shr(u32 rhs);
     public unsafe short unchecked_shr(u32 rhs);
     public short unbounded_shr(u32 rhs);
-    public short? shr_exact(u32 rhs);
-    public unsafe short unchecked_shr_exact(u32 rhs);
     public short? checked_abs();
     public short strict_abs();
     public short? checked_pow(u32 exp);
@@ -6002,14 +4608,10 @@ public class i16_methods {
     public ushort unsigned_abs();
     public short wrapping_pow(u32 exp);
     public (short, bool) overflowing_add(short rhs);
-    public (short, bool) carrying_add(short rhs, bool carry);
     public (short, bool) overflowing_add_unsigned(ushort rhs);
     public (short, bool) overflowing_sub(short rhs);
-    public (short, bool) borrowing_sub(short rhs, bool borrow);
     public (short, bool) overflowing_sub_unsigned(ushort rhs);
     public (short, bool) overflowing_mul(short rhs);
-    public (ushort, short) carrying_mul(short rhs, short carry);
-    public (ushort, short) carrying_mul_add(short rhs, short carry, short add);
     public (short, bool) overflowing_div(short rhs);
     public (short, bool) overflowing_div_euclid(short rhs);
     public (short, bool) overflowing_rem(short rhs);
@@ -6023,10 +4625,6 @@ public class i16_methods {
     public short isqrt();
     public short div_euclid(short rhs);
     public short rem_euclid(short rhs);
-    public short div_floor(short rhs);
-    public short div_ceil(short rhs);
-    public short next_multiple_of(short rhs);
-    public short? checked_next_multiple_of(short rhs);
     public u32 ilog(short base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6046,10 +4644,6 @@ public class i16_methods {
     public static short from_ne_bytes(ubyte[2] bytes);
     public static short min_value();
     public static short max_value();
-    public short clamp_magnitude(ushort limit);
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6057,11 +4651,7 @@ public class i16_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public short midpoint(short rhs);
-    public i32 widening_mul(short rhs);
     public static short from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static short from_ascii(ubyte[] src) throws ParseIntError;
-    public static short from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<short> buf);
 }
 
 @rust("i32")
@@ -6073,10 +4663,6 @@ public class i32_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public i32 isolate_highest_one();
-    public i32 isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public u32 cast_unsigned();
     public u32 saturating_cast_unsigned();
     public u32? checked_cast_unsigned();
@@ -6106,9 +4692,6 @@ public class i32_methods {
     public i32 strict_div(i32 rhs);
     public i32? checked_div_euclid(i32 rhs);
     public i32 strict_div_euclid(i32 rhs);
-    public i32? checked_div_exact(i32 rhs);
-    public i32? div_exact(i32 rhs);
-    public unsafe i32 unchecked_div_exact(i32 rhs);
     public i32? checked_rem(i32 rhs);
     public i32 strict_rem(i32 rhs);
     public i32? checked_rem_euclid(i32 rhs);
@@ -6120,14 +4703,10 @@ public class i32_methods {
     public i32 strict_shl(u32 rhs);
     public unsafe i32 unchecked_shl(u32 rhs);
     public i32 unbounded_shl(u32 rhs);
-    public i32? shl_exact(u32 rhs);
-    public unsafe i32 unchecked_shl_exact(u32 rhs);
     public i32? checked_shr(u32 rhs);
     public i32 strict_shr(u32 rhs);
     public unsafe i32 unchecked_shr(u32 rhs);
     public i32 unbounded_shr(u32 rhs);
-    public i32? shr_exact(u32 rhs);
-    public unsafe i32 unchecked_shr_exact(u32 rhs);
     public i32? checked_abs();
     public i32 strict_abs();
     public i32? checked_pow(u32 exp);
@@ -6158,14 +4737,10 @@ public class i32_methods {
     public u32 unsigned_abs();
     public i32 wrapping_pow(u32 exp);
     public (i32, bool) overflowing_add(i32 rhs);
-    public (i32, bool) carrying_add(i32 rhs, bool carry);
     public (i32, bool) overflowing_add_unsigned(u32 rhs);
     public (i32, bool) overflowing_sub(i32 rhs);
-    public (i32, bool) borrowing_sub(i32 rhs, bool borrow);
     public (i32, bool) overflowing_sub_unsigned(u32 rhs);
     public (i32, bool) overflowing_mul(i32 rhs);
-    public (u32, i32) carrying_mul(i32 rhs, i32 carry);
-    public (u32, i32) carrying_mul_add(i32 rhs, i32 carry, i32 add);
     public (i32, bool) overflowing_div(i32 rhs);
     public (i32, bool) overflowing_div_euclid(i32 rhs);
     public (i32, bool) overflowing_rem(i32 rhs);
@@ -6179,10 +4754,6 @@ public class i32_methods {
     public i32 isqrt();
     public i32 div_euclid(i32 rhs);
     public i32 rem_euclid(i32 rhs);
-    public i32 div_floor(i32 rhs);
-    public i32 div_ceil(i32 rhs);
-    public i32 next_multiple_of(i32 rhs);
-    public i32? checked_next_multiple_of(i32 rhs);
     public u32 ilog(i32 base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6202,10 +4773,6 @@ public class i32_methods {
     public static i32 from_ne_bytes(ubyte[4] bytes);
     public static i32 min_value();
     public static i32 max_value();
-    public i32 clamp_magnitude(u32 limit);
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6213,11 +4780,7 @@ public class i32_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public i32 midpoint(i32 rhs);
-    public long widening_mul(i32 rhs);
     public static i32 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static i32 from_ascii(ubyte[] src) throws ParseIntError;
-    public static i32 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<i32> buf);
 }
 
 @rust("i64")
@@ -6229,10 +4792,6 @@ public class i64_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public long isolate_highest_one();
-    public long isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public ulong cast_unsigned();
     public ulong saturating_cast_unsigned();
     public ulong? checked_cast_unsigned();
@@ -6262,9 +4821,6 @@ public class i64_methods {
     public long strict_div(long rhs);
     public long? checked_div_euclid(long rhs);
     public long strict_div_euclid(long rhs);
-    public long? checked_div_exact(long rhs);
-    public long? div_exact(long rhs);
-    public unsafe long unchecked_div_exact(long rhs);
     public long? checked_rem(long rhs);
     public long strict_rem(long rhs);
     public long? checked_rem_euclid(long rhs);
@@ -6276,14 +4832,10 @@ public class i64_methods {
     public long strict_shl(u32 rhs);
     public unsafe long unchecked_shl(u32 rhs);
     public long unbounded_shl(u32 rhs);
-    public long? shl_exact(u32 rhs);
-    public unsafe long unchecked_shl_exact(u32 rhs);
     public long? checked_shr(u32 rhs);
     public long strict_shr(u32 rhs);
     public unsafe long unchecked_shr(u32 rhs);
     public long unbounded_shr(u32 rhs);
-    public long? shr_exact(u32 rhs);
-    public unsafe long unchecked_shr_exact(u32 rhs);
     public long? checked_abs();
     public long strict_abs();
     public long? checked_pow(u32 exp);
@@ -6314,14 +4866,10 @@ public class i64_methods {
     public ulong unsigned_abs();
     public long wrapping_pow(u32 exp);
     public (long, bool) overflowing_add(long rhs);
-    public (long, bool) carrying_add(long rhs, bool carry);
     public (long, bool) overflowing_add_unsigned(ulong rhs);
     public (long, bool) overflowing_sub(long rhs);
-    public (long, bool) borrowing_sub(long rhs, bool borrow);
     public (long, bool) overflowing_sub_unsigned(ulong rhs);
     public (long, bool) overflowing_mul(long rhs);
-    public (ulong, long) carrying_mul(long rhs, long carry);
-    public (ulong, long) carrying_mul_add(long rhs, long carry, long add);
     public (long, bool) overflowing_div(long rhs);
     public (long, bool) overflowing_div_euclid(long rhs);
     public (long, bool) overflowing_rem(long rhs);
@@ -6335,10 +4883,6 @@ public class i64_methods {
     public long isqrt();
     public long div_euclid(long rhs);
     public long rem_euclid(long rhs);
-    public long div_floor(long rhs);
-    public long div_ceil(long rhs);
-    public long next_multiple_of(long rhs);
-    public long? checked_next_multiple_of(long rhs);
     public u32 ilog(long base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6358,10 +4902,6 @@ public class i64_methods {
     public static long from_ne_bytes(ubyte[8] bytes);
     public static long min_value();
     public static long max_value();
-    public long clamp_magnitude(ulong limit);
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6369,11 +4909,7 @@ public class i64_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public long midpoint(long rhs);
-    public i128 widening_mul(long rhs);
     public static long from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static long from_ascii(ubyte[] src) throws ParseIntError;
-    public static long from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<long> buf);
 }
 
 @rust("i8")
@@ -6385,10 +4921,6 @@ public class i8_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public byte isolate_highest_one();
-    public byte isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public ubyte cast_unsigned();
     public ubyte saturating_cast_unsigned();
     public ubyte? checked_cast_unsigned();
@@ -6418,9 +4950,6 @@ public class i8_methods {
     public byte strict_div(byte rhs);
     public byte? checked_div_euclid(byte rhs);
     public byte strict_div_euclid(byte rhs);
-    public byte? checked_div_exact(byte rhs);
-    public byte? div_exact(byte rhs);
-    public unsafe byte unchecked_div_exact(byte rhs);
     public byte? checked_rem(byte rhs);
     public byte strict_rem(byte rhs);
     public byte? checked_rem_euclid(byte rhs);
@@ -6432,14 +4961,10 @@ public class i8_methods {
     public byte strict_shl(u32 rhs);
     public unsafe byte unchecked_shl(u32 rhs);
     public byte unbounded_shl(u32 rhs);
-    public byte? shl_exact(u32 rhs);
-    public unsafe byte unchecked_shl_exact(u32 rhs);
     public byte? checked_shr(u32 rhs);
     public byte strict_shr(u32 rhs);
     public unsafe byte unchecked_shr(u32 rhs);
     public byte unbounded_shr(u32 rhs);
-    public byte? shr_exact(u32 rhs);
-    public unsafe byte unchecked_shr_exact(u32 rhs);
     public byte? checked_abs();
     public byte strict_abs();
     public byte? checked_pow(u32 exp);
@@ -6470,14 +4995,10 @@ public class i8_methods {
     public ubyte unsigned_abs();
     public byte wrapping_pow(u32 exp);
     public (byte, bool) overflowing_add(byte rhs);
-    public (byte, bool) carrying_add(byte rhs, bool carry);
     public (byte, bool) overflowing_add_unsigned(ubyte rhs);
     public (byte, bool) overflowing_sub(byte rhs);
-    public (byte, bool) borrowing_sub(byte rhs, bool borrow);
     public (byte, bool) overflowing_sub_unsigned(ubyte rhs);
     public (byte, bool) overflowing_mul(byte rhs);
-    public (ubyte, byte) carrying_mul(byte rhs, byte carry);
-    public (ubyte, byte) carrying_mul_add(byte rhs, byte carry, byte add);
     public (byte, bool) overflowing_div(byte rhs);
     public (byte, bool) overflowing_div_euclid(byte rhs);
     public (byte, bool) overflowing_rem(byte rhs);
@@ -6491,10 +5012,6 @@ public class i8_methods {
     public byte isqrt();
     public byte div_euclid(byte rhs);
     public byte rem_euclid(byte rhs);
-    public byte div_floor(byte rhs);
-    public byte div_ceil(byte rhs);
-    public byte next_multiple_of(byte rhs);
-    public byte? checked_next_multiple_of(byte rhs);
     public u32 ilog(byte base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6514,10 +5031,6 @@ public class i8_methods {
     public static byte from_ne_bytes(ubyte[1] bytes);
     public static byte min_value();
     public static byte max_value();
-    public byte clamp_magnitude(ubyte limit);
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6525,11 +5038,7 @@ public class i8_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public byte midpoint(byte rhs);
-    public short widening_mul(byte rhs);
     public static byte from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static byte from_ascii(ubyte[] src) throws ParseIntError;
-    public static byte from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<byte> buf);
 }
 
 @rust("std::process::id")
@@ -6550,10 +5059,6 @@ public class isize_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public int isolate_highest_one();
-    public int isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public uint cast_unsigned();
     public uint saturating_cast_unsigned();
     public uint? checked_cast_unsigned();
@@ -6583,9 +5088,6 @@ public class isize_methods {
     public int strict_div(int rhs);
     public int? checked_div_euclid(int rhs);
     public int strict_div_euclid(int rhs);
-    public int? checked_div_exact(int rhs);
-    public int? div_exact(int rhs);
-    public unsafe int unchecked_div_exact(int rhs);
     public int? checked_rem(int rhs);
     public int strict_rem(int rhs);
     public int? checked_rem_euclid(int rhs);
@@ -6597,14 +5099,10 @@ public class isize_methods {
     public int strict_shl(u32 rhs);
     public unsafe int unchecked_shl(u32 rhs);
     public int unbounded_shl(u32 rhs);
-    public int? shl_exact(u32 rhs);
-    public unsafe int unchecked_shl_exact(u32 rhs);
     public int? checked_shr(u32 rhs);
     public int strict_shr(u32 rhs);
     public unsafe int unchecked_shr(u32 rhs);
     public int unbounded_shr(u32 rhs);
-    public int? shr_exact(u32 rhs);
-    public unsafe int unchecked_shr_exact(u32 rhs);
     public int? checked_abs();
     public int strict_abs();
     public int? checked_pow(u32 exp);
@@ -6635,14 +5133,10 @@ public class isize_methods {
     public uint unsigned_abs();
     public int wrapping_pow(u32 exp);
     public (int, bool) overflowing_add(int rhs);
-    public (int, bool) carrying_add(int rhs, bool carry);
     public (int, bool) overflowing_add_unsigned(uint rhs);
     public (int, bool) overflowing_sub(int rhs);
-    public (int, bool) borrowing_sub(int rhs, bool borrow);
     public (int, bool) overflowing_sub_unsigned(uint rhs);
     public (int, bool) overflowing_mul(int rhs);
-    public (uint, int) carrying_mul(int rhs, int carry);
-    public (uint, int) carrying_mul_add(int rhs, int carry, int add);
     public (int, bool) overflowing_div(int rhs);
     public (int, bool) overflowing_div_euclid(int rhs);
     public (int, bool) overflowing_rem(int rhs);
@@ -6656,10 +5150,6 @@ public class isize_methods {
     public int isqrt();
     public int div_euclid(int rhs);
     public int rem_euclid(int rhs);
-    public int div_floor(int rhs);
-    public int div_ceil(int rhs);
-    public int next_multiple_of(int rhs);
-    public int? checked_next_multiple_of(int rhs);
     public u32 ilog(int base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6679,10 +5169,6 @@ public class isize_methods {
     public static int from_ne_bytes(ubyte[8] bytes);
     public static int min_value();
     public static int max_value();
-    public int clamp_magnitude(uint limit);
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6691,22 +5177,13 @@ public class isize_methods {
     public unsafe T unchecked_cast<T>();
     public int midpoint(int rhs);
     public static int from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static int from_ascii(ubyte[] src) throws ParseIntError;
-    public static int from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<int> buf);
 }
 
 @rust("std::env::join_paths")
 public OsString join_paths<I, T>(I paths) throws JoinPathsError;
 
-@rust("std::os::windows::fs::junction_point")
-public void junction_point<P, Q>(P original, Q link) throws Error;
-
 @rust("std::os::unix::fs::lchown")
 public void lchown<P>(P dir, u32? uid, u32? gid) throws Error;
-
-@rust("std::task::local_waker_fn")
-public LocalWaker local_waker_fn<F>(() -> void f);
 
 @rust("std::fs::metadata")
 public Metadata metadata<P>(P path) throws Error;
@@ -6747,9 +5224,6 @@ public type pid_t = i32;
 @rust("std::io::pipe")
 public (PipeReader, PipeWriter) pipe() throws Error;
 
-@rust("std::random::random")
-public T random<T>(Distribution dist);
-
 @rust("std::fs::read")
 public Vec<ubyte> read<P>(P path) throws Error;
 
@@ -6783,23 +5257,11 @@ public void rename<P, Q>(P from, Q to) throws Error;
 @rust("std::io::repeat")
 public Repeat repeat(ubyte byte);
 
-@rust("std::error::request_ref")
-@RustRefOut public T? request_ref<T>(&Error err);
-
-@rust("std::error::request_value")
-public T? request_value<T>(&Error err);
-
 @rust("std::panic::resume_unwind")
 public never resume_unwind(Any payload);
 
 @rust("std::thread::scope")
 @RustClosureRefs("0") public T scope<F, T>((Scope) -> T f);
-
-@rust("std::alloc::set_alloc_error_hook")
-public void set_alloc_error_hook((Layout) -> void hook);
-
-@rust("std::panic::set_backtrace_style")
-public void set_backtrace_style(BacktraceStyle style);
 
 @rust("std::env::set_current_dir")
 public void set_current_dir<P>(P path) throws Error;
@@ -6809,15 +5271,6 @@ public void set_hook(Fn hook);
 
 @rust("std::fs::set_permissions")
 public void set_permissions<P>(P path, Permissions perm) throws Error;
-
-@rust("std::fs::set_permissions_nofollow")
-public void set_permissions_nofollow<P>(P path, Permissions perm) throws Error;
-
-@rust("std::fs::set_times")
-public void set_times<P>(P path, FileTimes times) throws Error;
-
-@rust("std::fs::set_times_nofollow")
-public void set_times_nofollow<P>(P path, FileTimes times) throws Error;
 
 @rust("std::env::set_var")
 public unsafe void set_var<K, V>(K key, V value);
@@ -6836,9 +5289,6 @@ public void sleep(Duration dur);
 
 @rust("std::thread::sleep_ms")
 public void sleep_ms(u32 ms);
-
-@rust("std::thread::sleep_until")
-public void sleep_until(Instant deadline);
 
 @rust("std::fs::soft_link")
 public void soft_link<P, Q>(P original, Q link) throws Error;
@@ -6902,12 +5352,6 @@ public Metadata symlink_metadata<P>(P path) throws Error;
 @rust("std::os::wasi::fs::symlink_path")
 public void symlink_path<P, U>(P old_path, U new_path) throws Error;
 
-@rust("std::sync::mpmc::sync_channel")
-public (Sender<T>, Receiver<T>) sync_channel<T>(uint cap);
-
-@rust("std::alloc::take_alloc_error_hook")
-public (Layout) -> void take_alloc_error_hook();
-
 @rust("std::panic::take_hook")
 public Fn take_hook();
 
@@ -6926,25 +5370,13 @@ public class u16_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public u32 bit_width();
-    public ushort isolate_highest_one();
-    public ushort isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public short cast_signed();
     public short saturating_cast_signed();
     public short? checked_cast_signed();
     public short strict_cast_signed();
     public ushort rotate_left(u32 n);
     public ushort rotate_right(u32 n);
-    public ushort funnel_shl(ushort rhs, u32 n);
-    public ushort funnel_shr(ushort rhs, u32 n);
-    public unsafe ushort unchecked_funnel_shl(ushort low, u32 n);
-    public unsafe ushort unchecked_funnel_shr(ushort low, u32 n);
-    public ushort carryless_mul(ushort rhs);
     public ushort swap_bytes();
-    public ushort extract_bits(ushort mask);
-    public ushort deposit_bits(ushort mask);
     public ushort reverse_bits();
     public static ushort from_be(ushort x);
     public static ushort from_le(ushort x);
@@ -6968,14 +5400,10 @@ public class u16_methods {
     public ushort strict_div(ushort rhs);
     public ushort? checked_div_euclid(ushort rhs);
     public ushort strict_div_euclid(ushort rhs);
-    public ushort? checked_div_exact(ushort rhs);
-    public ushort? div_exact(ushort rhs);
-    public unsafe ushort unchecked_div_exact(ushort rhs);
     public ushort? checked_rem(ushort rhs);
     public ushort strict_rem(ushort rhs);
     public ushort? checked_rem_euclid(ushort rhs);
     public ushort strict_rem_euclid(ushort rhs);
-    public unsafe ushort unchecked_disjoint_bitor(ushort other);
     public u32 ilog(ushort base);
     public u32 ilog2();
     public u32 ilog10();
@@ -6988,14 +5416,10 @@ public class u16_methods {
     public ushort strict_shl(u32 rhs);
     public unsafe ushort unchecked_shl(u32 rhs);
     public ushort unbounded_shl(u32 rhs);
-    public ushort? shl_exact(u32 rhs);
-    public unsafe ushort unchecked_shl_exact(u32 rhs);
     public ushort? checked_shr(u32 rhs);
     public ushort strict_shr(u32 rhs);
     public unsafe ushort unchecked_shr(u32 rhs);
     public ushort unbounded_shr(u32 rhs);
-    public ushort? shr_exact(u32 rhs);
-    public unsafe ushort unchecked_shr_exact(u32 rhs);
     public ushort? checked_pow(u32 exp);
     public ushort strict_pow(u32 exp);
     public ushort saturating_add(ushort rhs);
@@ -7040,7 +5464,6 @@ public class u16_methods {
     public ushort isqrt();
     public ushort div_euclid(ushort rhs);
     public ushort rem_euclid(ushort rhs);
-    public ushort div_floor(ushort rhs);
     public ushort div_ceil(ushort rhs);
     public ushort next_multiple_of(ushort rhs);
     public ushort? checked_next_multiple_of(ushort rhs);
@@ -7048,7 +5471,6 @@ public class u16_methods {
     public bool is_power_of_two();
     public ushort next_power_of_two();
     public ushort? checked_next_power_of_two();
-    public ushort wrapping_next_power_of_two();
     public ubyte[2] to_be_bytes();
     public ubyte[2] to_le_bytes();
     public ubyte[2] to_ne_bytes();
@@ -7057,9 +5479,6 @@ public class u16_methods {
     public static ushort from_ne_bytes(ubyte[2] bytes);
     public static ushort min_value();
     public static ushort max_value();
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -7067,14 +5486,7 @@ public class u16_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public ushort midpoint(ushort rhs);
-    public u32 widening_mul(ushort rhs);
-    public u32 widening_carryless_mul(ushort rhs);
-    public (ushort, ushort) carrying_carryless_mul(ushort rhs, ushort carry);
-    public bool is_utf16_surrogate();
     public static ushort from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static ushort from_ascii(ubyte[] src) throws ParseIntError;
-    public static ushort from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<ushort> buf);
 }
 
 @rust("u32")
@@ -7086,25 +5498,13 @@ public class u32_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public u32 bit_width();
-    public u32 isolate_highest_one();
-    public u32 isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public i32 cast_signed();
     public i32 saturating_cast_signed();
     public i32? checked_cast_signed();
     public i32 strict_cast_signed();
     public u32 rotate_left(u32 n);
     public u32 rotate_right(u32 n);
-    public u32 funnel_shl(u32 rhs, u32 n);
-    public u32 funnel_shr(u32 rhs, u32 n);
-    public unsafe u32 unchecked_funnel_shl(u32 low, u32 n);
-    public unsafe u32 unchecked_funnel_shr(u32 low, u32 n);
-    public u32 carryless_mul(u32 rhs);
     public u32 swap_bytes();
-    public u32 extract_bits(u32 mask);
-    public u32 deposit_bits(u32 mask);
     public u32 reverse_bits();
     public static u32 from_be(u32 x);
     public static u32 from_le(u32 x);
@@ -7128,14 +5528,10 @@ public class u32_methods {
     public u32 strict_div(u32 rhs);
     public u32? checked_div_euclid(u32 rhs);
     public u32 strict_div_euclid(u32 rhs);
-    public u32? checked_div_exact(u32 rhs);
-    public u32? div_exact(u32 rhs);
-    public unsafe u32 unchecked_div_exact(u32 rhs);
     public u32? checked_rem(u32 rhs);
     public u32 strict_rem(u32 rhs);
     public u32? checked_rem_euclid(u32 rhs);
     public u32 strict_rem_euclid(u32 rhs);
-    public unsafe u32 unchecked_disjoint_bitor(u32 other);
     public u32 ilog(u32 base);
     public u32 ilog2();
     public u32 ilog10();
@@ -7148,14 +5544,10 @@ public class u32_methods {
     public u32 strict_shl(u32 rhs);
     public unsafe u32 unchecked_shl(u32 rhs);
     public u32 unbounded_shl(u32 rhs);
-    public u32? shl_exact(u32 rhs);
-    public unsafe u32 unchecked_shl_exact(u32 rhs);
     public u32? checked_shr(u32 rhs);
     public u32 strict_shr(u32 rhs);
     public unsafe u32 unchecked_shr(u32 rhs);
     public u32 unbounded_shr(u32 rhs);
-    public u32? shr_exact(u32 rhs);
-    public unsafe u32 unchecked_shr_exact(u32 rhs);
     public u32? checked_pow(u32 exp);
     public u32 strict_pow(u32 exp);
     public u32 saturating_add(u32 rhs);
@@ -7200,7 +5592,6 @@ public class u32_methods {
     public u32 isqrt();
     public u32 div_euclid(u32 rhs);
     public u32 rem_euclid(u32 rhs);
-    public u32 div_floor(u32 rhs);
     public u32 div_ceil(u32 rhs);
     public u32 next_multiple_of(u32 rhs);
     public u32? checked_next_multiple_of(u32 rhs);
@@ -7208,7 +5599,6 @@ public class u32_methods {
     public bool is_power_of_two();
     public u32 next_power_of_two();
     public u32? checked_next_power_of_two();
-    public u32 wrapping_next_power_of_two();
     public ubyte[4] to_be_bytes();
     public ubyte[4] to_le_bytes();
     public ubyte[4] to_ne_bytes();
@@ -7217,9 +5607,6 @@ public class u32_methods {
     public static u32 from_ne_bytes(ubyte[4] bytes);
     public static u32 min_value();
     public static u32 max_value();
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -7227,13 +5614,7 @@ public class u32_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public u32 midpoint(u32 rhs);
-    public ulong widening_mul(u32 rhs);
-    public ulong widening_carryless_mul(u32 rhs);
-    public (u32, u32) carrying_carryless_mul(u32 rhs, u32 carry);
     public static u32 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static u32 from_ascii(ubyte[] src) throws ParseIntError;
-    public static u32 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<u32> buf);
 }
 
 @rust("u64")
@@ -7245,25 +5626,13 @@ public class u64_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public u32 bit_width();
-    public ulong isolate_highest_one();
-    public ulong isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public long cast_signed();
     public long saturating_cast_signed();
     public long? checked_cast_signed();
     public long strict_cast_signed();
     public ulong rotate_left(u32 n);
     public ulong rotate_right(u32 n);
-    public ulong funnel_shl(ulong rhs, u32 n);
-    public ulong funnel_shr(ulong rhs, u32 n);
-    public unsafe ulong unchecked_funnel_shl(ulong low, u32 n);
-    public unsafe ulong unchecked_funnel_shr(ulong low, u32 n);
-    public ulong carryless_mul(ulong rhs);
     public ulong swap_bytes();
-    public ulong extract_bits(ulong mask);
-    public ulong deposit_bits(ulong mask);
     public ulong reverse_bits();
     public static ulong from_be(ulong x);
     public static ulong from_le(ulong x);
@@ -7287,14 +5656,10 @@ public class u64_methods {
     public ulong strict_div(ulong rhs);
     public ulong? checked_div_euclid(ulong rhs);
     public ulong strict_div_euclid(ulong rhs);
-    public ulong? checked_div_exact(ulong rhs);
-    public ulong? div_exact(ulong rhs);
-    public unsafe ulong unchecked_div_exact(ulong rhs);
     public ulong? checked_rem(ulong rhs);
     public ulong strict_rem(ulong rhs);
     public ulong? checked_rem_euclid(ulong rhs);
     public ulong strict_rem_euclid(ulong rhs);
-    public unsafe ulong unchecked_disjoint_bitor(ulong other);
     public u32 ilog(ulong base);
     public u32 ilog2();
     public u32 ilog10();
@@ -7307,14 +5672,10 @@ public class u64_methods {
     public ulong strict_shl(u32 rhs);
     public unsafe ulong unchecked_shl(u32 rhs);
     public ulong unbounded_shl(u32 rhs);
-    public ulong? shl_exact(u32 rhs);
-    public unsafe ulong unchecked_shl_exact(u32 rhs);
     public ulong? checked_shr(u32 rhs);
     public ulong strict_shr(u32 rhs);
     public unsafe ulong unchecked_shr(u32 rhs);
     public ulong unbounded_shr(u32 rhs);
-    public ulong? shr_exact(u32 rhs);
-    public unsafe ulong unchecked_shr_exact(u32 rhs);
     public ulong? checked_pow(u32 exp);
     public ulong strict_pow(u32 exp);
     public ulong saturating_add(ulong rhs);
@@ -7359,7 +5720,6 @@ public class u64_methods {
     public ulong isqrt();
     public ulong div_euclid(ulong rhs);
     public ulong rem_euclid(ulong rhs);
-    public ulong div_floor(ulong rhs);
     public ulong div_ceil(ulong rhs);
     public ulong next_multiple_of(ulong rhs);
     public ulong? checked_next_multiple_of(ulong rhs);
@@ -7367,7 +5727,6 @@ public class u64_methods {
     public bool is_power_of_two();
     public ulong next_power_of_two();
     public ulong? checked_next_power_of_two();
-    public ulong wrapping_next_power_of_two();
     public ubyte[8] to_be_bytes();
     public ubyte[8] to_le_bytes();
     public ubyte[8] to_ne_bytes();
@@ -7376,9 +5735,6 @@ public class u64_methods {
     public static ulong from_ne_bytes(ubyte[8] bytes);
     public static ulong min_value();
     public static ulong max_value();
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -7386,13 +5742,7 @@ public class u64_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public ulong midpoint(ulong rhs);
-    public u128 widening_mul(ulong rhs);
-    public u128 widening_carryless_mul(ulong rhs);
-    public (ulong, ulong) carrying_carryless_mul(ulong rhs, ulong carry);
     public static ulong from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static ulong from_ascii(ubyte[] src) throws ParseIntError;
-    public static ulong from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<ulong> buf);
 }
 
 @rust("u8")
@@ -7404,25 +5754,13 @@ public class u8_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public u32 bit_width();
-    public ubyte isolate_highest_one();
-    public ubyte isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public byte cast_signed();
     public byte saturating_cast_signed();
     public byte? checked_cast_signed();
     public byte strict_cast_signed();
     public ubyte rotate_left(u32 n);
     public ubyte rotate_right(u32 n);
-    public ubyte funnel_shl(ubyte rhs, u32 n);
-    public ubyte funnel_shr(ubyte rhs, u32 n);
-    public unsafe ubyte unchecked_funnel_shl(ubyte low, u32 n);
-    public unsafe ubyte unchecked_funnel_shr(ubyte low, u32 n);
-    public ubyte carryless_mul(ubyte rhs);
     public ubyte swap_bytes();
-    public ubyte extract_bits(ubyte mask);
-    public ubyte deposit_bits(ubyte mask);
     public ubyte reverse_bits();
     public static ubyte from_be(ubyte x);
     public static ubyte from_le(ubyte x);
@@ -7446,14 +5784,10 @@ public class u8_methods {
     public ubyte strict_div(ubyte rhs);
     public ubyte? checked_div_euclid(ubyte rhs);
     public ubyte strict_div_euclid(ubyte rhs);
-    public ubyte? checked_div_exact(ubyte rhs);
-    public ubyte? div_exact(ubyte rhs);
-    public unsafe ubyte unchecked_div_exact(ubyte rhs);
     public ubyte? checked_rem(ubyte rhs);
     public ubyte strict_rem(ubyte rhs);
     public ubyte? checked_rem_euclid(ubyte rhs);
     public ubyte strict_rem_euclid(ubyte rhs);
-    public unsafe ubyte unchecked_disjoint_bitor(ubyte other);
     public u32 ilog(ubyte base);
     public u32 ilog2();
     public u32 ilog10();
@@ -7466,14 +5800,10 @@ public class u8_methods {
     public ubyte strict_shl(u32 rhs);
     public unsafe ubyte unchecked_shl(u32 rhs);
     public ubyte unbounded_shl(u32 rhs);
-    public ubyte? shl_exact(u32 rhs);
-    public unsafe ubyte unchecked_shl_exact(u32 rhs);
     public ubyte? checked_shr(u32 rhs);
     public ubyte strict_shr(u32 rhs);
     public unsafe ubyte unchecked_shr(u32 rhs);
     public ubyte unbounded_shr(u32 rhs);
-    public ubyte? shr_exact(u32 rhs);
-    public unsafe ubyte unchecked_shr_exact(u32 rhs);
     public ubyte? checked_pow(u32 exp);
     public ubyte strict_pow(u32 exp);
     public ubyte saturating_add(ubyte rhs);
@@ -7518,7 +5848,6 @@ public class u8_methods {
     public ubyte isqrt();
     public ubyte div_euclid(ubyte rhs);
     public ubyte rem_euclid(ubyte rhs);
-    public ubyte div_floor(ubyte rhs);
     public ubyte div_ceil(ubyte rhs);
     public ubyte next_multiple_of(ubyte rhs);
     public ubyte? checked_next_multiple_of(ubyte rhs);
@@ -7526,7 +5855,6 @@ public class u8_methods {
     public bool is_power_of_two();
     public ubyte next_power_of_two();
     public ubyte? checked_next_power_of_two();
-    public ubyte wrapping_next_power_of_two();
     public ubyte[1] to_be_bytes();
     public ubyte[1] to_le_bytes();
     public ubyte[1] to_ne_bytes();
@@ -7535,9 +5863,6 @@ public class u8_methods {
     public static ubyte from_ne_bytes(ubyte[1] bytes);
     public static ubyte min_value();
     public static ubyte max_value();
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -7545,12 +5870,7 @@ public class u8_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public ubyte midpoint(ubyte rhs);
-    public ushort widening_mul(ubyte rhs);
-    public ushort widening_carryless_mul(ubyte rhs);
-    public (ubyte, ubyte) carrying_carryless_mul(ubyte rhs, ubyte carry);
     public bool is_ascii();
-    public AsciiChar? as_ascii();
-    public unsafe AsciiChar as_ascii_unchecked();
     public ubyte to_ascii_uppercase();
     public ubyte to_ascii_lowercase();
     public bool eq_ignore_ascii_case(&ubyte other);
@@ -7561,7 +5881,6 @@ public class u8_methods {
     public bool is_ascii_lowercase();
     public bool is_ascii_alphanumeric();
     public bool is_ascii_digit();
-    public bool is_ascii_octdigit();
     public bool is_ascii_hexdigit();
     public bool is_ascii_punctuation();
     public bool is_ascii_graphic();
@@ -7569,16 +5888,10 @@ public class u8_methods {
     public bool is_ascii_control();
     public EscapeDefault escape_ascii();
     public static ubyte from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static ubyte from_ascii(ubyte[] src) throws ParseIntError;
-    public static ubyte from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<ubyte> buf);
 }
 
 public type uid_t = u32;
 
-
-@rust("std::panic::update_hook")
-@RustClosureRefs("0") public void update_hook<F>((Fn, PanicHookInfo) -> void hook_fn);
 
 @rust("usize")
 @RustPrimitive("usize")
@@ -7589,25 +5902,13 @@ public class usize_methods {
     public u32 trailing_zeros();
     public u32 leading_ones();
     public u32 trailing_ones();
-    public u32 bit_width();
-    public uint isolate_highest_one();
-    public uint isolate_lowest_one();
-    public u32? highest_one();
-    public u32? lowest_one();
     public int cast_signed();
     public int saturating_cast_signed();
     public int? checked_cast_signed();
     public int strict_cast_signed();
     public uint rotate_left(u32 n);
     public uint rotate_right(u32 n);
-    public uint funnel_shl(uint rhs, u32 n);
-    public uint funnel_shr(uint rhs, u32 n);
-    public unsafe uint unchecked_funnel_shl(uint low, u32 n);
-    public unsafe uint unchecked_funnel_shr(uint low, u32 n);
-    public uint carryless_mul(uint rhs);
     public uint swap_bytes();
-    public uint extract_bits(uint mask);
-    public uint deposit_bits(uint mask);
     public uint reverse_bits();
     public static uint from_be(uint x);
     public static uint from_le(uint x);
@@ -7631,14 +5932,10 @@ public class usize_methods {
     public uint strict_div(uint rhs);
     public uint? checked_div_euclid(uint rhs);
     public uint strict_div_euclid(uint rhs);
-    public uint? checked_div_exact(uint rhs);
-    public uint? div_exact(uint rhs);
-    public unsafe uint unchecked_div_exact(uint rhs);
     public uint? checked_rem(uint rhs);
     public uint strict_rem(uint rhs);
     public uint? checked_rem_euclid(uint rhs);
     public uint strict_rem_euclid(uint rhs);
-    public unsafe uint unchecked_disjoint_bitor(uint other);
     public u32 ilog(uint base);
     public u32 ilog2();
     public u32 ilog10();
@@ -7651,14 +5948,10 @@ public class usize_methods {
     public uint strict_shl(u32 rhs);
     public unsafe uint unchecked_shl(u32 rhs);
     public uint unbounded_shl(u32 rhs);
-    public uint? shl_exact(u32 rhs);
-    public unsafe uint unchecked_shl_exact(u32 rhs);
     public uint? checked_shr(u32 rhs);
     public uint strict_shr(u32 rhs);
     public unsafe uint unchecked_shr(u32 rhs);
     public uint unbounded_shr(u32 rhs);
-    public uint? shr_exact(u32 rhs);
-    public unsafe uint unchecked_shr_exact(u32 rhs);
     public uint? checked_pow(u32 exp);
     public uint strict_pow(u32 exp);
     public uint saturating_add(uint rhs);
@@ -7703,7 +5996,6 @@ public class usize_methods {
     public uint isqrt();
     public uint div_euclid(uint rhs);
     public uint rem_euclid(uint rhs);
-    public uint div_floor(uint rhs);
     public uint div_ceil(uint rhs);
     public uint next_multiple_of(uint rhs);
     public uint? checked_next_multiple_of(uint rhs);
@@ -7711,7 +6003,6 @@ public class usize_methods {
     public bool is_power_of_two();
     public uint next_power_of_two();
     public uint? checked_next_power_of_two();
-    public uint wrapping_next_power_of_two();
     public ubyte[8] to_be_bytes();
     public ubyte[8] to_le_bytes();
     public ubyte[8] to_ne_bytes();
@@ -7720,9 +6011,6 @@ public class usize_methods {
     public static uint from_ne_bytes(ubyte[8] bytes);
     public static uint min_value();
     public static uint max_value();
-    public Target truncate<Target>();
-    public Target saturating_truncate<Target>();
-    public Target? checked_truncate<Target>();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -7730,11 +6018,7 @@ public class usize_methods {
     public T strict_cast<T>();
     public unsafe T unchecked_cast<T>();
     public uint midpoint(uint rhs);
-    public (uint, uint) carrying_carryless_mul(uint rhs, uint carry);
     public static uint from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public static uint from_ascii(ubyte[] src) throws ParseIntError;
-    public static uint from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
-    @RustRefOut public String format_into(&mut NumBuffer<uint> buf);
 }
 
 @rust("std::env::var")
@@ -7748,9 +6032,6 @@ public Vars vars();
 
 @rust("std::env::vars_os")
 public VarsOs vars_os();
-
-@rust("std::task::waker_fn")
-public Waker waker_fn<F>(() -> void f);
 
 @rust("std::fs::write")
 public void write<P, C>(P path, C contents) throws Error;

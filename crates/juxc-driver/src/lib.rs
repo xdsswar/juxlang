@@ -224,6 +224,7 @@ pub mod manifest;
 mod package_check;
 pub mod project;
 mod source_map;
+mod stability;
 mod stdlib;
 mod stdlib_embedded;
 pub mod stubs;
