@@ -491,7 +491,7 @@ if-stmt           = 'if' '(' expression ')' statement
                     ( 'else' ( block | if-stmt ) )?                -- compile-time
 
 switch-stmt       = 'switch' '(' expression ')' '{' switch-case+ '}'
-switch-case       = 'case' pattern guard? '->' switch-body
+switch-case       = 'case' pattern ( ',' pattern )* guard? '->' switch-body
                   | 'default' '->' switch-body
 switch-body       = expression ';'                      -- single-expression body
                   | block                                -- multi-statement body
@@ -788,6 +788,7 @@ Resolution rules:
 
 - Bindings introduced by `var`-bindings, type-patterns with name, or record/enum sub-patterns are visible in the case body and any guard.
 - Or-patterns require all alternatives to bind the same set of names with the same types (`E0447`).
+- A `case` may list several patterns separated by commas, `case OK, CREATED, ACCEPTED ->` (JUX-LANG-V1 §7.5). The list means exactly what the or-pattern `OK | CREATED | ACCEPTED` means: the arm runs when any of them matches, it covers what each of them covers, and any names it binds follow the or-pattern rule above. A guard after the list applies to the whole arm.
 - A pattern is **irrefutable** if it always matches its scrutinee. Local-variable destructuring (`var (x, y) = ...`) requires an irrefutable pattern (`E0271`); switch cases admit refutable patterns.
 - Exhaustiveness checking (sealed types, ranges of integer types) follows the rules of JUX-LANG-V1 §7.5 and §6.9.7.
 

@@ -102,19 +102,19 @@ pub enum Pattern {
         /// Span of the whole variant pattern.
         span: Span,
     },
-    /// Numeric range pattern — `case 0..10 ->`, `case 'a'..='z' ->`,
-    /// etc. Maps directly to Rust's `start..=end` / `start..end`
-    /// match-arm syntax. Both endpoints must be literal values
-    /// (variables aren't allowed in a Rust pattern position).
+    /// Range pattern (M.6.4): `case 0..10 ->`, `case 'a'..='z' ->`, and the
+    /// open forms `case 100.. ->` (100 or more), `case ..0 ->` (below 0) and
+    /// `case ..=0 ->` (0 or less). Maps to Rust's range patterns. Endpoints
+    /// are literals (a variable is not a pattern), possibly negative.
     Range {
-        /// Lower bound (always inclusive).
-        start: Literal,
-        /// Upper bound — inclusive when `inclusive == true` (`..=`),
-        /// exclusive when `inclusive == false` (`..`).
-        end: Literal,
+        /// Lower bound, always inclusive; `None` for `..x` / `..=x`.
+        start: Option<Literal>,
+        /// Upper bound, inclusive when `inclusive` (`..=`) and exclusive
+        /// otherwise (`..`); `None` for the open `x..`.
+        end: Option<Literal>,
         /// `..=` (true) or `..` (false).
         inclusive: bool,
-        /// Span covering the whole `start..[=]end` form.
+        /// Span covering the whole range form.
         span: Span,
     },
     /// Type-test bind pattern — `case Sub ident ->`. A bare

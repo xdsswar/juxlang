@@ -510,11 +510,11 @@ switch (n) {
     case 0..10  -> "small";
     case 10..100 -> "medium";
     case 100..  -> "large";        // open-ended, "100 or more"
-    case ..0    -> "negative or zero";
+    case ..0    -> "negative";         // open-ended, "below 0"
 }
 ```
 
-Open-ended range patterns (`x..`, `..x`, `..=x`) are permitted in patterns only, not as iterable values.
+Open-ended range patterns (`x..`, `..x`, `..=x`) are permitted in patterns only, not as iterable values. The bounds follow the closed forms: `x..` is `x` or more, `..x` is below `x`, and `..=x` is `x` or less. A bound may be negative (`case -10..0 ->`, `case ..=-1 ->`); a single negative number is a pattern too (`case -1 ->`). A `switch` over an integer is exhaustive when its arms cover the type's whole range, so the four arms above need no `default` (JUX-TYPE-SYSTEM-ADDENDUM §T.5.2).
 
 ---
 

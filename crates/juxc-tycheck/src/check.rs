@@ -7498,6 +7498,11 @@ impl<'a> Checker<'a> {
     /// remains the user's catchall there.
     fn check_switch_exhaustive(&mut self, s: &SwitchExpr) {
         let scrut_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
+        // An integer, `bool`, `char`, float or `String` (§T.5.2): its own
+        // interval and value rules, in `pattern_check`.
+        if self.check_scalar_switch_exhaustive(s, &scrut_ty) {
+            return;
+        }
         // Two scrutinee shapes drive exhaustiveness: enums (every
         // variant) and sealed classes (every permitted subclass).
         // Resolve to one of them, or bail.
@@ -13989,15 +13994,30 @@ mod tests {
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
-    /// Non-enum scrutinees (numeric, string) aren't checked for
-    /// exhaustiveness — the wildcard arm remains the user's tool.
+    /// An integer scrutinee is one interval (§T.5.2): arms that leave a value
+    /// out are E0440 naming the lowest one, and arms covering the whole range
+    /// (open ranges included) need no `default`.
     #[test]
-    fn switch_over_int_does_not_check_exhaustiveness() {
+    fn switch_over_int_checks_the_whole_range() {
         let d = run(r#"public void main() {
                    var n = 1;
                    switch (n) {
                        case 0 -> {}
                        case 1 -> {}
+                   }
+               }"#);
+        let msg = d
+            .iter()
+            .find(|x| x.code == code::Code::E0440_NotExhaustive)
+            .map(|x| x.message.clone())
+            .unwrap_or_default();
+        assert!(msg.contains("-9223372036854775808"), "got: {d:?}");
+        let d = run(r#"public void main() {
+                   var n = 1;
+                   switch (n) {
+                       case ..0 -> {}
+                       case 0..=9 -> {}
+                       case 10.. -> {}
                    }
                }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");

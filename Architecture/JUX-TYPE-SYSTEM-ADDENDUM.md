@@ -475,6 +475,16 @@ The "value set" is conceptual; for any type with finite or sealed structure, it 
 | Integer types              | The full range, as a single interval                            |
 | Other types                | Cannot be exhaustively matched; switch requires `default`       |
 
+The integer rule applies to every integer type, each over its own range
+(`byte` is `[-128, 127]`, `uint` is `[0, 2^64 - 1]`); literal and range
+patterns carve that interval, and the witness is the lowest value left. `char`,
+`float`, `double` and `String` are "other types": only an arm that matches every
+value (`default`, `_`, `var x`) completes a `switch` over them. A `switch`
+statement follows the same rule as a `switch` expression (a statement with no
+`default` and an uncovered value is `E0440`), which is where Jux differs from
+Java's colon-form statement switch: an arm list that silently skips a value is
+the bug the check exists to catch.
+
 ### T.5.3. Per-Pattern Coverage
 
 | Pattern                     | Covered values                                              |
@@ -487,6 +497,8 @@ The "value set" is conceptual; for any type with finite or sealed structure, it 
 | Range pattern `0..10`       | Integers in `[0, 10)`                                       |
 | Range pattern `0..=10`      | Integers in `[0, 10]`                                       |
 | Open range `100..`          | Integers in `[100, ∞)`                                      |
+| Open range `..0`            | Integers in `(-∞, 0)`                                       |
+| Open range `..=0`           | Integers in `(-∞, 0]`                                       |
 | Or-pattern `A | B`          | `cover(A) ∪ cover(B)`                                       |
 | Pattern with guard `p when c` | `cover(p)` minus the values where `c` is statically known false (which is "no values" in general — guards reduce coverage but the compiler doesn't try to prove guard satisfaction) |
 

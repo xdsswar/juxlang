@@ -796,6 +796,24 @@ is `E0489`.
 
 ---
 
+## E29. An open range pattern's bound, and a `switch` over an integer
+
+**Conflict.** JUX-MISSING-DEFS-ADDENDUM §M.6.4 labelled `case ..0 ->`
+"negative or zero", while `..` excludes its bound everywhere else (§M.6.1, and
+JUX-TYPE-SYSTEM-ADDENDUM §T.5.3 reads `0..10` as `[0, 10)`). §T.5.2 said an
+integer scrutinee is one interval to cover, but the compiler checked nothing
+for it, so a `switch` over an `int` missing a value failed inside rustc.
+
+**Resolution.** `..0` is "below 0" and `..=0` is "0 or less", as the closed
+forms read. A `switch` over an integer is checked against the type's range and
+reports the lowest missing value; `char`, floats and `String` need an arm that
+matches everything. Statements are checked like expressions (§T.5).
+
+**Spec status:** §M.6.4's example and prose are corrected; §T.5.2 and §T.5.3
+state the rules.
+
+---
+
 ## E32. The enum lookups and `cases()`
 
 **Conflict.** JUX-LANG-V1 §7.7.3 listed `fromName`, `fromOrdinal` and
