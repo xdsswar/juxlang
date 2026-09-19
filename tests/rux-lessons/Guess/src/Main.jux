@@ -1,0 +1,83 @@
+// A guessing game: the program picks a number, you try to find it, and it says
+// higher or lower until you do.
+//
+// It is the first program here that keeps going until something happens rather
+// than running a fixed number of steps: a loop whose ending depends on the
+// person using it.
+
+import rust.std.stdin;
+import rust.std.stdout;
+
+// Random numbers come from the `rand` crate, bound through `rust.rand` in
+// jux.toml. Its API is Rust's, names and all.
+import rust.rand.StepRng;
+
+// Leaves the cursor after the question, as the Circle lesson explains.
+void prompt(String text) {
+    var out = stdout();
+    out.write_all(text.as_bytes());
+    out.flush();
+}
+
+// One guess, or `null` when there is no line or it is not a whole number.
+long? readGuess() {
+    prompt("your guess: ");
+    var line = "";
+    if (stdin().read_line(line) == 0) {
+        return null;
+    }
+    try {
+        return line.trim().parse<long>();
+    } catch (Exception e) {
+        return null;
+    }
+}
+
+int main() {
+    // A real game seeds from entropy, so the answer differs every run:
+    // `rust.rand.rng()` hands back a generator seeded by the operating system.
+    // A fixed seed makes the game the same game every time, which is useless
+    // for playing it and exactly right for testing it, so this lesson fixes
+    // one.
+    //
+    // The seeded generator the lesson wants is `Pcg64` from `rand_pcg`, made
+    // with `Pcg64.seed_from_u64(seed)`. Its seeding and drawing methods come
+    // from traits the binder does not find on that type yet (B43), so this uses
+    // `StepRng`, the one seedable generator `rand` itself exposes. The game
+    // does not care which generator picked the number.
+    var generator = new StepRng(0x5C28F5C28F5C28F6uL, 0x9E3779B97F4A7C15uL);
+
+    // `random_range` takes a Rust range, and Jux's `..=` is that range.
+    final long secret = generator.random_range(1L..=100L);
+
+    print("I am thinking of a number between 1 and 100.");
+    print("You have 7 guesses, which is enough if you halve the range each time.");
+    print("");
+
+    int remaining = 7;
+    while (remaining > 0) {
+        final long? guess = readGuess();
+        if (guess == null) {
+            print("I need a number. Stopping here.");
+            return 1;
+        }
+        remaining -= 1;
+
+        if (guess == secret) {
+            print($"That is it: ${secret} was the number.");
+            print($"You had ${remaining} guesses to spare.");
+            return 0;
+        }
+
+        // The hint is what makes seven guesses enough: each answer removes
+        // half of what is left, and seven halvings covers a hundred.
+        final String hint = guess < secret ? "higher" : "lower";
+
+        // Jux has no caveat here: a text conditional can go straight into the
+        // interpolation, where Rux had to bind it to a name first.
+        print($"${hint}  (${remaining} guess${remaining == 1 ? "" : "es"} left)");
+    }
+
+    print($"Out of guesses. It was ${secret}.");
+    return 0;
+}

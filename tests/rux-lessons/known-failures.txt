@@ -5,13 +5,17 @@
 
 Algorithm: `for (var i : 0..items.len())` binds `i` as usize and leaks rustc E0308 when assigned to an int local or returned as int?; a nullable narrowed inside a ternary branch leaks E0308 when interpolated
 Callback: a free function named as a value (`applyAll(numbers, doubled)`, `(int) -> int f = doubled;`) passes juxc and leaks rustc E0308 (fn item vs Rc<dyn Fn>)
+Circle: `int main()` is emitted as Rust `fn main() -> isize` and leaks rustc E0277 (B40); `(Pi * radius * radius).toFixed(4)` with a `const double` on the left leaks E0599 (B41)
 Directory: iterating `read_dir(dir)` binds each item as `DirEntry` but emits the raw io::Result (rustc E0308, B28); `?:` on `OsString.to_str()` emits `.cloned()` on Option<&str> (E0599, B29)
+Extern: a String passed to an `unsafe native` function is moved into its CString, so any other use of it (`WriteFile(file, text, text.byteLength() as u32, ...)`) leaks rustc E0382 (B46)
 File: a `PathBuf` or `Vec` held in a local and passed to a foreign static method (`File.create(path)`, `String.from_utf8(bytes)`) leaks its Rc<JuxCell> handle (rustc E0277/E0308, B27)
+Guess: `int main()` leaks rustc E0277 (B40)
 Json: the generated serde_json stub declares `public void? as_null();` and does not parse (E0200, B17); for-each over a map yields references that leak E0308 when passed on (B18)
 Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)
 Password: rand_pcg's generators are stubbed without their rand_core `RngCore`/`SeedableRng` impls, so `seed_from_u64` and `random_range` are missing (E0413, B22)
 Path: `import rust.std.Component;` and `MAIN_SEPARATOR` emit `use rust::std::...` (B21); `new Path(...)` makes an unsized local (B30); a foreign enum variant pattern is emitted unqualified (E0531, B31)
 Propagate: `switch` on a Result with `case Ok(var v)` / `case Err(var e)` lowers to std::result::Result and leaks rustc E0308 against jux.std Result
+Quadratic: `int main()` leaks rustc E0277 (B40)
 Random: `Pcg64Dxsm.seed_from_u64` through a crate type alias leaks E0423 (B20); `import rust.rand.SliceRandom;` emits the wrong path (B21); cross-crate and blanket trait impls are not surfaced, so `shuffle` on a Vec is E0413 (B22)
 Result: same Result-switch lowering leak as Propagate; the inner switch on the bound error then also loses its enum path (E0531)
 Slice: record static call `Span.of(...)` leaks E0423; a user method named `length()` is rewritten to the `.len() as isize` intrinsic (E0214); indexing an array component inside a record leaks E0608

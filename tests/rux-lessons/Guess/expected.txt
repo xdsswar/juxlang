@@ -1,0 +1,11 @@
+I am thinking of a number between 1 and 100.
+You have 7 guesses, which is enough if you halve the range each time.
+
+your guess: lower  (6 guesses left)
+your guess: higher  (5 guesses left)
+your guess: lower  (4 guesses left)
+your guess: higher  (3 guesses left)
+your guess: higher  (2 guesses left)
+your guess: higher  (1 guess left)
+your guess: That is it: 37 was the number.
+You had 0 guesses to spare.

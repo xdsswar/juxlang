@@ -1,0 +1,46 @@
+🚀  JUX MISSION CONTROL  🚀
+========================
+
+Jux has no garbage collector. It has reference counting, which is
+  a garbage collector that counts on its fingers.  🗑️
+
+`if cfg` runs at compile time, `if` runs at run time, and a branch
+  that is never built is the fastest code you will ever write.  📖
+
+There is one `print`. It always ends the line. There is no second
+  `print` that does not, which is a story for another release.  🤔
+
+`final` is immutable and `var` is mutable. The compiler will remind
+  you of this. Warmly. Repeatedly.  💛
+
+Pre-1.0 means the language is younger than some of its bug reports,
+  and moves faster than all of them.  🏃
+
+Press Enter to launch  👇
+   T minus 10...
+   T minus 9...
+   T minus 8...
+   T minus 7...
+   T minus 6...
+   T minus 5...
+   T minus 4...
+   T minus 3...
+   T minus 2...
+   T minus 1...
+
+   🔥 IGNITION 🔥
+                    🚀
+                  🚀
+                🚀
+              🚀
+            🚀
+          🚀
+        🚀
+      🚀
+    🚀
+  🚀
+
+   ⭐  🌍  ⭐      👨‍🚀 waves from the window
+
+   Liftoff. Somewhere above you, a `final` local is still
+   exactly what it was when it launched.  🛰️

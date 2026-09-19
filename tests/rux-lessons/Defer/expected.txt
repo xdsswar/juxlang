@@ -1,0 +1,13 @@
+ordering:
+    body starts
+    body ends
+    deferred B
+    deferred A
+normal path:
+    releasing the block
+    sum of 1..5 is 15
+early exit:
+    leaving early
+    releasing the block
+    result 0
+done

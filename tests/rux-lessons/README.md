@@ -197,20 +197,20 @@ library gap, listed too), **TODO** (a later wave).
 | Directory | 2 | FAIL | B28, B29; names are sorted, since listing order is the file system's |
 | Path | 2 | FAIL | B21, B30, B31; `is_empty` goes through `as_os_str()` because of B32 |
 | Binary | 2 | PASS | byte order by shifts, `to_le_bytes` is unreachable (B14); `read` typed through `var` (B33) |
-| Circle | 3 | TODO | |
-| Guess | 3 | TODO | |
-| Launch | 3 | TODO | |
-| Quadratic | 3 | TODO | |
-| Melody | 3 | TODO | |
-| Defer | 3 | TODO | |
-| Memory | 3 | TODO | |
-| Pointer | 3 | TODO | |
-| Config | 3 | TODO | |
-| Version | 3 | TODO | |
-| Extern | 3 | TODO | |
-| Union | 3 | TODO | |
-| Asm | 3 | TODO | |
-| Allocator | 3 | TODO | |
+| Circle | 3 | FAIL | B40 (`int main()`), B41 (`const` operand loses `toFixed`); rest checked with `void main` |
+| Guess | 3 | FAIL | B40; seeded `StepRng` from `rust.rand`, since `Pcg64` has no trait methods (B43) |
+| Launch | 3 | PASS | pauses divided by 100; `sleep_ms` because `Duration` is unreachable (B44) |
+| Quadratic | 3 | FAIL | B40; all four branches checked with `void main`; bad input dies silently (B42) |
+| Melody | 3 | PASS | prints the notes; `Beep` only under `--features sound` on Windows |
+| Defer | 3 | PASS | nested `try`/`finally` for ordering, a `drop` block for the release |
+| Memory | 3 | PASS | C `malloc`/`free` through FFI (Jux has no `delete`, E0507); alignment printed, not the address |
+| Pointer | 3 | PASS | one pointer type `T*`, no read-only form; `public unsafe` order (B45) |
+| Config | 3 | PASS | `@cfg` / `if cfg`; no `#source` query (gap), function name passed by hand |
+| Version | 3 | GAP | no compiler-version query; stand-in version record ordered with `<=>` |
+| Extern | 3 | FAIL | B46: a String passed to a native function is moved; rest checked |
+| Union | 3 | GAP | no `union`; stand-in rereads one `i32` through cast pointers |
+| Asm | 3 | GAP | no inline `asm` (E0301); bodies in Jux, `@cfg(arch)` selection kept |
+| Allocator | 3 | GAP | no allocator parameter or arena; the arena strategy built by hand over a `Vec` |
 
 Wave 1 totals: 32 PASS, 6 FAIL, 1 GAP.
 
@@ -572,3 +572,208 @@ indexing and `len()` on it are fine.
 **B14 again.** The Rust integer methods are unreachable on primitives in the
 same way as the `f64` ones: `value.to_le_bytes()` on a `u32` is E0413. The
 Binary lesson does the byte order with shifts.
+
+## Wave 3: scripted input, Jux idiom, gaps
+
+Wave 3 (14 lessons) was run on 2026-09-18 against the release `jux`.
+Wave 3 totals: 6 PASS, 4 FAIL, 4 GAP. The FAIL lessons keep the natural
+code, and each was also run with the one failing construct rewritten, so the
+rest of it is known to work: every FAIL below is that one bug and nothing
+else.
+
+How the lessons map, beyond the rules above:
+
+- **Input.** `stdin().read_line(line)` from `rust.std` returns the byte
+  count, zero at end of input. A prompt is written with
+  `stdout().write_all(...)` and `flush()`, so it stays on the line the answer
+  is typed on, as Rux's `Print` does. Piped input is not echoed, so the next
+  output lands on the prompt's line: `Circle radius: Circumference: 15.7080`.
+- **Parsing.** `text.parse<double>()` is Rust's `str::parse`. A Rust `Result`
+  reaches Jux as `throws`, so a bad number is a `catch`, and a nullable
+  `double?` return replaces Rux's out-parameter plus `bool`. The scripted
+  inputs are all valid, because the `catch` does not work yet (B42).
+- **`defer`** becomes nested `try`/`finally` for statement ordering, and a
+  class with a `drop` block for releasing memory (Defer).
+- **`Alloc`/`Free`** become C's `malloc`/`free` declared in an `unsafe native`
+  block (`msvcrt` on Windows, `c` elsewhere, picked by `@cfg`). The mapping
+  rule above says `new`/`delete`, but Jux has no `delete` (`delete p;` is
+  E0507 by design); memory from C goes back to C. `new` and reference
+  counting are the managed heap, which needs no release at all.
+- **Pointers.** Jux has one pointer type, `T*`, always writable; there is
+  no read-only `*T` beside Rux's `*var T`. `&x`, `*p` and `p[i]` need
+  `unsafe`; comparing with `null` does not. Addresses change every run, so
+  Memory prints the alignment instead.
+- **`when` / `#target` / `#build`** become `@cfg` declarations and
+  `if cfg(...)` (Config, Melody, Asm). Jux has predicates, not values, so the
+  target is described by declaring one answer per case. `debug` and
+  `release` also stand for Rux's optimization mode.
+- **Emoji** are written as `\u{1F680}` escapes (Launch).
+
+### Gaps
+
+These have no Jux spelling today. Each lesson is written as far as Jux goes,
+with a stand-in for the missing part whose output matches the Rux original.
+The GAP lessons pass with their stand-ins, so they are not in
+`known-failures.txt`.
+
+- **Compiler-version query** (Version). `@cfg` knows the target, build mode,
+  profile and features, but not the version of `juxc`, and no constant
+  carries it. The stand-in is a version record ordered with `<=>` and
+  compared at run time, where Rux decides it while compiling.
+- **Source-location query** (Config). Nothing like `#source.fileName`,
+  `.line` or `.function`. The lesson's trace helper takes the function name
+  by hand. (The Config lesson passes otherwise.)
+- **`union`** (Union). `union` is not a keyword. A declaration is read as a
+  function returning a type named `union`, and fails with E0417 plus E0460
+  and three E0200s rather than one message saying unions are not supported.
+  The stand-in rereads one `i32` through `u32*` and `ubyte*` casts inside
+  `unsafe`, which is the reinterpretation a union exists for.
+- **Inline assembly** (Asm). `asm("...")` inside `unsafe` is E0301, "cannot
+  find `asm` in this scope". The spec reserves it for the `embedded` and
+  `core` profiles and it is not implemented; there is no `asm` function form.
+  The stand-in writes both functions in Jux, with the assembly in comments.
+- **Allocators** (Allocator). No `Allocator` interface, no allocator
+  parameter, no arena, no allocator-taking `Box<T>`: every `new` uses the one
+  global heap. The stand-in builds the arena strategy by hand over a
+  `Vec<long>`, which only covers values put through it on purpose.
+
+## Bugs found by wave 3
+
+Numbered from B40; wave 2 uses B16-B39.
+
+**B40. `int main()` leaks E0277.** (Circle, Guess, Quadratic) Entry Points
+§E lists `int main()` for a program that returns an exit code, but it is
+emitted as a plain Rust `fn main() -> isize`, which rustc rejects (`main`
+can only return a `Termination` type). Same in project mode and with
+`juxc --run`.
+
+```jux
+int main() {
+    print("hi");
+    return 3;
+}
+```
+
+**B41. A `const` on the left of a product loses its type for a method
+call.** (Circle) `(2.0 * Pi * r).toFixed(2)` works; with the constant first
+the call is emitted as a real Rust method `toFixed` on `f64` (E0599). Binding
+the product to a `double` local first also works.
+
+```jux
+const double Pi = 3.14;
+void main() {
+    double r = 2.0;
+    print($"${(Pi * r).toFixed(2)}");        // rustc: no method `toFixed` on f64
+}
+```
+
+**B42. An error thrown by a Rust call cannot be caught.** (Circle, Guess,
+Quadratic, not failing only because their input is valid) A Rust `Result`
+becomes `throws` (Bindgen §G.5.4) and the `Err` is raised with
+`panic_any(err)`, but every `catch` downcasts to a Jux exception class, so
+`catch (Exception e)` and `catch (Error e)` both miss it. The program exits
+with 101 and prints nothing, because the panic hook only prints string
+payloads.
+
+```jux
+void main() {
+    String text = "abc";
+    try {
+        double d = text.parse<double>();
+        print(d);
+    } catch (Exception e) {
+        print("not a number");                  // never reached; exit 101, no message
+    }
+}
+```
+
+**B43. `rand_pcg` generators have no `SeedableRng`/`RngCore` methods.**
+(Guess) The stub for `Lcg128Xsl64` (`Pcg64`) lists its constructor and
+`advance` only; the trait impls that come from `rand_core` are not
+discovered, so `seed_from_u64`, `next_u64` and `random_range` are all E0413
+on it. Through the alias the call is not even checked:
+`Pcg64.seed_from_u64(1uL)` passes juxc and leaks E0423 (`Pcg64.` on a Rust
+type alias). `rand`'s own `StepRng` does get `Rng`, which is what Guess uses.
+
+```jux
+import rust.rand_pcg.Pcg64;
+void main() {
+    var rng = Pcg64.seed_from_u64(2026uL);     // rustc E0423
+    print(rng.next_u64());
+}
+```
+
+**B44. `Duration` is not reachable.** (Launch) The `rust.std` stub declares
+`sleep(Duration dur)` and a dozen methods taking a `Duration`, but the type
+itself (`core::time::Duration`, re-exported as `std::time::Duration`) has
+no declaration: `import rust.std.Duration;` is E0301. Launch uses the older
+`sleep_ms(u32)`.
+
+**B45. A declaration that starts with `unsafe` does not parse.** (Pointer)
+Layout-ABI §L.5 gives `unsafe-fn = 'unsafe' function-decl` and the example
+`unsafe public void mmio_write(...)`, but at top level a leading `unsafe` is
+read as an `unsafe { }` statement: E0200 "top-level statements have nowhere
+to run", then E0301 at every call. `public unsafe void f(...)` works, and the
+lesson uses it.
+
+```jux
+unsafe void bump(long* p) {       // E0200
+    p[0] += 1;
+}
+void main() {
+    long v = 1;
+    unsafe { bump(&v); }           // E0301: cannot find `bump`
+    print(v);
+}
+```
+
+**B46. A String passed to a native function is moved.** (Extern) The
+marshalling emits `CString::new(text)`, which consumes the `String`, so any
+later use of it, in the same call or after it, leaks E0382.
+
+```jux
+@extern(lib = "kernel32")
+unsafe native {
+    i32 lstrlenA(String s);
+}
+void main() {
+    String text = "hello";
+    unsafe {
+        i32 n = lstrlenA(text);
+        print($"${n} ${text}");       // rustc E0382: borrow of moved value `text`
+    }
+}
+```
+
+**B47. `sizeof` is typed `int`, not `uint`, and emitted as `usize`.**
+(Union, Memory, Allocator) JUX-LANG-V1 §5.9.1 says `sizeof(T)` is a `uint`.
+juxc types it as `int`, so `count * sizeof(ulong)` with a `ulong` count is
+E0410 (a `uint` would widen), while the Rust it emits is a `usize`, so every
+`int` context leaks E0308: `int s = sizeof(i32);`, `f(sizeof(long))` for an
+`int` parameter, a `sizeof` among `int...` arguments. Printing works, and an
+explicit `as` cast works everywhere, which is what the lessons use.
+
+```jux
+int one(int a) { return a; }
+void main() {
+    int s = sizeof(i32);            // rustc E0308: expected isize, found usize
+    print(one(sizeof(long)));       // same
+}
+```
+
+**B48. Smaller issues.**
+- A throwing Rust method called on a string LITERAL is not unwrapped:
+  `double d = "abc".parse<double>();` is emitted as `let d: f64 =
+  "abc".to_string().parse::<f64>();` and leaks E0308 (a `Result` where an
+  `f64` is expected). The same call on a `String` local is unwrapped.
+- A Rust method returning `Option<&str>` leaks: `String? s =
+  temp_dir().join("x").to_str();` is emitted with `.cloned()` on the
+  `Option<&str>` (E0599). `$"${path.display()}"` gives the text instead
+  (Extern).
+- Pointers guide §5.8 shows `var p = unsafe { malloc(bytes) };`, but
+  Layout-ABI §L.5 allows `unsafe { }` only as a statement, and the compiler
+  follows §L.5 (E0200). The guide's example should declare first and assign
+  inside the block.
+- `jux run --manifest-path` builds under `<project>/target` even with
+  `CARGO_TARGET_DIR` set (B15 again), so each staged lesson has its own
+  cargo target.

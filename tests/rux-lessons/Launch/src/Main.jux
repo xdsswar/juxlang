@@ -1,0 +1,103 @@
+// A small program that waits for you, counts down, and launches something.
+//
+// Nothing new is introduced here. It is console input from Circle, an array
+// from Array, a loop from Loop, and a pause from Rust's `std::thread`, put
+// together into something that does one whole thing.
+
+import rust.std.stdin;
+import rust.std.stdout;
+
+// `std::thread::sleep` takes a `Duration`, which lives in Rust's `core` and is
+// not reachable from Jux yet (B44). `sleep_ms` is the older spelling of the
+// same pause, taking the milliseconds directly.
+import rust.std.sleep_ms;
+
+// The pauses in the original are a few hundred milliseconds each, which is
+// right for watching and slow for a test. Every pause here is divided by
+// this, so the rhythm is the same, only faster.
+const int SPEEDUP = 100;
+
+void pause(int milliseconds) {
+    sleep_ms((milliseconds / SPEEDUP) as u32);
+}
+
+// Leaves the cursor after the question, as the Circle lesson explains.
+void prompt(String text) {
+    var out = stdout();
+    out.write_all(text.as_bytes());
+    out.flush();
+}
+
+void main() {
+    // `\u{...}` names a character by its code point, so the emoji can be
+    // written without pasting them into the source. A ZWJ (`\u{200D}`) glues
+    // two of them into one picture, which is how the astronaut below is made.
+    final String[] jokes = {
+        "Jux has no garbage collector. It has reference counting, which is",
+        "  a garbage collector that counts on its fingers.  \u{1F5D1}\u{FE0F}",
+        "",
+        "`if cfg` runs at compile time, `if` runs at run time, and a branch",
+        "  that is never built is the fastest code you will ever write.  \u{1F4D6}",
+        "",
+        "There is one `print`. It always ends the line. There is no second",
+        "  `print` that does not, which is a story for another release.  \u{1F914}",
+        "",
+        "`final` is immutable and `var` is mutable. The compiler will remind",
+        "  you of this. Warmly. Repeatedly.  \u{1F49B}",
+        "",
+        "Pre-1.0 means the language is younger than some of its bug reports,",
+        "  and moves faster than all of them.  \u{1F3C3}"
+    };
+
+    print("");
+    print("\u{1F680}  JUX MISSION CONTROL  \u{1F680}");
+    print("========================");
+    print("");
+    for (var line : jokes) {
+        print(line);
+    }
+    print("");
+    prompt("Press Enter to launch  \u{1F447}  ");
+
+    // The same input idiom as Circle. Nothing is done with the text: it is the
+    // Enter that counts.
+    var answer = "";
+    stdin().read_line(answer);
+
+    print("");
+    int count = 10;
+    while (count > 0) {
+        print($"   T minus ${count}...");
+        pause(300);
+        count -= 1;
+    }
+
+    print("");
+    print("   \u{1F525} IGNITION \u{1F525}");
+    pause(500);
+
+    // Each frame is one line, so the rocket climbs the terminal as it prints.
+    final String[] frames = {
+        "                    \u{1F680}",
+        "                  \u{1F680}",
+        "                \u{1F680}",
+        "              \u{1F680}",
+        "            \u{1F680}",
+        "          \u{1F680}",
+        "        \u{1F680}",
+        "      \u{1F680}",
+        "    \u{1F680}",
+        "  \u{1F680}"
+    };
+    for (var frame : frames) {
+        print(frame);
+        pause(120);
+    }
+
+    print("");
+    print("   \u{2B50}  \u{1F30D}  \u{2B50}      \u{1F468}\u{200D}\u{1F680} waves from the window");
+    print("");
+    print("   Liftoff. Somewhere above you, a `final` local is still");
+    print("   exactly what it was when it launched.  \u{1F6F0}\u{FE0F}");
+    print("");
+}

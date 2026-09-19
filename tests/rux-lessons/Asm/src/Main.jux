@@ -1,0 +1,100 @@
+// Underneath every function is machine code. Occasionally you need to write
+// that directly: for an instruction the language has no way to express, for a
+// system call, or to stop the optimizer removing something it thinks is dead.
+//
+// Rux has `asm func`, a function whose body is instructions rather than
+// statements. The compiler emits it as written and does not look inside,
+// which is the point and also the danger: nothing there is checked for you.
+//
+// GAP: Jux has no inline assembly in the full profile. The spec reserves
+// `asm(...)` inside `unsafe { }` for the `embedded` and `core` profiles
+// (Pointers guide §5.11), and it is not implemented: `asm("mov rax, rcx");`
+// is E0301, "cannot find `asm` in this scope". There is no `asm` function
+// declaration form at all.
+//
+// So the two functions are written here in Jux, one statement per
+// instruction where that is possible, with the assembly Rux used alongside.
+// What survives is the lesson's other half: assembly is written for one
+// architecture, and `@cfg(arch = ...)` is how Jux picks a body per
+// architecture while compiling.
+
+// x86-64 under the Win64 convention: the first two integers arrive in rcx and
+// rdx, and the result goes back in rax.
+//
+//     mov rax, rcx
+//     add rax, rdx
+//     ret
+//
+// AArch64: arguments in x0 and x1, the result back in x0.
+//
+//     add x0, x0, x1
+//     ret
+long add(long a, long b) {
+    return a + b;
+}
+
+// A loop, with a label and a conditional jump: the shapes `while` and `if`
+// are built from. The x86-64 body, next to the Jux that mirrors it:
+//
+//         xor rax, rax        long total = 0;
+//         mov rdx, rcx        long n = count;
+//     next:
+//         test rdx, rdx       while (n > 0) {
+//         jle done
+//         add rax, rdx            total += n;
+//         dec rdx                 n--;
+//         jmp next            }
+//     done:
+//         ret                 return total;
+long sumTo(long count) {
+    long total = 0;
+    long n = count;
+    while (n > 0) {
+        total += n;
+        n--;
+    }
+    return total;
+}
+
+// The architecture choice Rux made with `when #target.arch`. With assembly,
+// each branch would hold a different body; here the bodies are the same Jux,
+// and only the name differs, so the compile-time selection is still visible.
+// Rux stopped any other build with `#Error`; Jux has no compile-time error
+// statement, so a third declaration covers everything else.
+@cfg(arch = "x86_64")
+String architecture() {
+    return "x86-64";
+}
+
+@cfg(arch = "aarch64")
+String architecture() {
+    return "AArch64";
+}
+
+@cfg(not(any(arch = "x86_64", arch = "aarch64")))
+String architecture() {
+    return "another architecture";
+}
+
+void main() {
+    // Called exactly like any other function. Nothing at the call site would
+    // say they were unusual, in Rux or in Jux.
+    print($"Add(20, 22)    ${add(20, 22)}");
+    print($"SumTo(10)      ${sumTo(10)}");
+    print($"SumTo(100)     ${sumTo(100)}");
+
+    // Only printed as a check that exactly one `architecture()` was compiled;
+    // both machines this lesson runs on are one of the first two.
+    print($"built for a known architecture: ${architecture() != "another architecture"}");
+
+    // The cost of writing assembly is everything the compiler stops doing for
+    // you: no type checking inside the body, no register allocation, no
+    // adapting when the calling convention differs, and a separate body for
+    // every architecture you support. That is why such functions are rare.
+    //
+    // Rux also shows `intrinsic func`, a function the compiler itself
+    // provides with no body. Jux's nearest equivalents are the numeric
+    // intrinsics in Core lib §K: `+%` wrapping arithmetic, `checkedAdd` and
+    // `saturatingAdd` reach the processor's overflow handling without a body
+    // anyone writes by hand.
+}
