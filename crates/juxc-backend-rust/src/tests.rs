@@ -57,15 +57,19 @@ fn hello_world_lowers_to_idiomatic_println() {
     );
 }
 
-/// `int main()` lowers to `fn main() -> isize` because Jux `int`
-/// is **platform-sized** per §5.1. The trailing `return 0;` elides
-/// to a bare `0` tail expression per the trailing-return cosmetic;
-/// the unsuffixed `0` is inferred to `isize` by Rust from the
-/// function's return type.
+/// `int main()` returns the exit code (Entry Points E.1.3). Rust's own
+/// `main` cannot return an integer, so the user's function is emitted as
+/// `__jux_args_main() -> isize` (Jux `int` is platform-sized, §5.1) and the
+/// entry shim exits with its result. The trailing `return 0;` elides to a
+/// bare `0` tail expression per the trailing-return cosmetic.
 #[test]
 fn int_main_returns_isize() {
     let rust = emit("public int main() { return 0; }");
-    assert!(rust.contains("fn main() -> isize"), "got: {rust}");
+    assert!(rust.contains("fn __jux_args_main() -> isize"), "got: {rust}");
+    assert!(
+        rust.contains("std::process::exit(__jux_args_main() as i32);"),
+        "the shim must exit with the code: {rust}"
+    );
     assert!(!rust.contains("return 0;"), "tail return should be elided: {rust}");
     assert!(rust.contains("\n    0\n}"), "expected bare-tail `0`, got: {rust}");
 }
