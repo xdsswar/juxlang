@@ -242,6 +242,19 @@ private fun PsiBuilder.atRecordPatternHead(): Boolean {
  * LOCAL_VARIABLE node.
  */
 private fun PsiBuilder.parseBindingPattern() {
+    // A nested pattern may repeat `var` before a record or tuple
+    // (`var Pt(ex, _)` inside a larger pattern, §5.4): the modifier only
+    // restates that the components bind, so skip it and parse the pattern.
+    var k = 0
+    while (lookAhead(k) === T.VAR_KW || lookAhead(k) === T.FINAL_KW) k++
+    if (k > 0) {
+        val next = lookAhead(k)
+        var i = k + 1
+        while (lookAhead(i) === T.DOT && lookAhead(i + 1) === T.IDENTIFIER) i += 2
+        if (next === T.LPAREN || (next === T.IDENTIFIER && lookAhead(i) === T.LPAREN)) {
+            repeat(k) { advanceLexer() }
+        }
+    }
     when {
         at(T.LPAREN) -> parseBindingList()
         atRecordPatternHead() -> {
