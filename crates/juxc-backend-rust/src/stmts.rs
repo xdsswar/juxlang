@@ -2721,11 +2721,17 @@ impl RustEmitter {
         if iter_is_place {
             if element_is_copy {
                 self.w.push('&');
-            } else if !body_moves_var {
+            } else if !body_moves_var && !snapshot {
                 // Borrow-iter: yields `&T`, so `x.method()` / `format!("{}", x)`
-                // / `x == y` all work through auto-deref / `Display` / `PartialEq`.
+                // all work through auto-deref / `Display`.
                 self.w.push('&');
             }
+            // A SNAPSHOT is already a private copy of the sequence, so it is
+            // walked by value and the loop variable is the `T` the Jux program
+            // wrote. Borrowing it yielded `&String`, which compares with
+            // nothing: `for (var held : carried) { if (held == item) }` on a
+            // `Vec<String>` field failed with "can't compare `&String` with
+            // `String`" (rustc E0277).
         }
         if snapshot {
             self.w.push_str("__jux_fe_iter");

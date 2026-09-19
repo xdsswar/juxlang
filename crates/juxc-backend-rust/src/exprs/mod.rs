@@ -2912,6 +2912,12 @@ impl RustEmitter {
             // keeps its parentheses: `*(p as *mut i32)`, not `*p as *mut i32`,
             // which Rust reads as a cast of `*p`.
             Expr::Cast(_) => parent_prec >= UNARY_PREC,
+            // A `? :` and a `switch` value lower to a Rust `if` / `match`,
+            // and Rust does not read either as the operand of a binary
+            // operator: `if d < 0.0 { -d } else { d } < 1e-6` is a type error
+            // about `()`, not a comparison. Parenthesized wherever an
+            // operator is above them.
+            Expr::Ternary(_) | Expr::Switch(_) => parent_prec > 0,
             // Atomic and postfix expressions never need parens — they
             // bind tighter than any binary operator.
             _ => false,

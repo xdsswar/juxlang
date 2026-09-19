@@ -1351,6 +1351,15 @@ impl RustEmitter {
         if self.symbols.lookup_method(&class, name).is_some() {
             return true;
         }
+        // The enclosing class is held by its BARE name, and a class in a
+        // package is keyed by its qualified one: `this.length()` inside
+        // `linalg.Vec3` found no `length` and was rewritten to the array
+        // intrinsic, `self.len() as isize()`.
+        if let Some(fqn) = self.resolve_bare_class_fqn(crate::backend_fqn::fqn_bare(&class)) {
+            if self.symbols.lookup_method(&fqn, name).is_some() {
+                return true;
+            }
+        }
         let bare = crate::backend_fqn::fqn_bare(&class);
         self.symbols
             .records
