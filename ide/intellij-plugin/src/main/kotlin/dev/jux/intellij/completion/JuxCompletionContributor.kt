@@ -240,7 +240,10 @@ class JuxCompletionContributor : CompletionContributor() {
                     )
                     // Values already in reach whose type fits: locals,
                     // parameters, members, and a receiver's members after `.`.
+                    // Every variable walked is kept as a chain start.
+                    val roots = ArrayList<LookupElement>()
                     val sink: (LookupElement) -> Unit = { item ->
+                        roots.add(item)
                         val type = JuxCompletionRanking.typeOf(item)
                         if (type !is dev.jux.intellij.resolve.JuxType.Static &&
                             JuxCompletionRanking.bestFit(type, expected) == 0
@@ -254,6 +257,8 @@ class JuxCompletionContributor : CompletionContributor() {
                     }
                     addVisibleDeclarations(parameters, sink, typesOnly = false, includeTypes = false)
                     JuxSmartCompletion.addTypeFitting(parameters, expected, result::addElement)
+                    // Chains from those variables that reach the wanted type.
+                    JuxChainCompletion.addTo(expected, roots, result::addElement)
                 }
             },
         )

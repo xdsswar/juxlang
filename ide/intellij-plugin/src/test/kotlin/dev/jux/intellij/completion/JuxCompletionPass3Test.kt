@@ -56,6 +56,49 @@ class JuxCompletionPass3Test : BasePlatformTestCase() {
         assertFalse(o.toString(), o.any { it.startsWith("Circle") })
     }
 
+    // ---- chains ---------------------------------------------------------------
+
+    private fun smart(code: String): List<String> {
+        myFixture.configureByText("a.jux", code.trimIndent())
+        return myFixture.complete(com.intellij.codeInsight.completion.CompletionType.SMART)?.map { it.lookupString } ?: emptyList()
+    }
+
+    fun testChainsReachTheWantedType() {
+        val o = smart(
+            """
+            class Address { public String city = "x"; }
+            class Customer {
+                public Address home = new Address();
+                public Address work() { return new Address(); }
+            }
+            class Order { public Customer customer = new Customer(); }
+            void main() {
+                Order order = new Order();
+                Address a = <caret>
+            }
+            """,
+        )
+        assertTrue(o.toString(), "order.customer.home" in o)
+        assertTrue(o.toString(), "order.customer.work()" in o)
+    }
+
+    fun testChainsSkipMethodsWithArgumentsAndVoid() {
+        val o = smart(
+            """
+            class Address { }
+            class Customer {
+                public Address at(int i) { return new Address(); }
+                public void touch() { }
+            }
+            void main() {
+                Customer c = new Customer();
+                Address a = <caret>
+            }
+            """,
+        )
+        assertFalse(o.toString(), o.any { it.startsWith("c.at") || it.startsWith("c.touch") })
+    }
+
     fun testPayloadVariantGetsItsBinders() {
         val o = offered(
             """
