@@ -64,6 +64,20 @@ pub fn generate_merged_with_pool(
     pool_only: &[(&str, &str)],
     package: &str,
 ) -> Result<StubFile, serde_json::Error> {
+    generate_merged_with_sources(jsons, pool_only, &[], package)
+}
+
+/// [`generate_merged_with_pool`], plus Rust SOURCE files read for the inherent
+/// impls rustdoc JSON leaves out (§G.6.4.4): `alloc`'s `impl<T> [T]` and
+/// `impl str`. `sources` are `(path, text)` pairs; see [`crate::source`] for
+/// what is taken from them. Their methods join the same shape-keyed pool as
+/// the JSON's, so they reach `Vec` and `String` through `Deref` like `core`'s.
+pub fn generate_merged_with_sources(
+    jsons: &[(&str, &str)],
+    pool_only: &[(&str, &str)],
+    sources: &[(&str, &str)],
+    package: &str,
+) -> Result<StubFile, serde_json::Error> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut collected: Vec<(String, StubItem)> = Vec::new();
     let mut format_version = 0;
@@ -75,9 +89,17 @@ pub fn generate_merged_with_pool(
     // built. Only the mapped methods are kept, so the parsed crates do not have
     // to be held alive together.
     let mut pool = InherentPool::new();
+    let mut sources_pooled = sources.is_empty();
     for (_crate_name, json) in jsons.iter().chain(pool_only.iter()) {
         let krate: Crate = serde_json::from_str(json)?;
         collect_inherent_pool(&krate, &mut pool);
+        // The source-built signatures are mapped once, with any parsed crate
+        // as the (unused) lookup context. After the JSON's own methods, so a
+        // name both sources know keeps rustdoc's reading.
+        if !sources_pooled {
+            crate::source::collect_source_pool(sources, &krate, &mut pool);
+            sources_pooled = true;
+        }
     }
 
     // Pass 2: ingest, now able to resolve a deref target across crates.
@@ -674,6 +696,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                         rust_path: None,
                         doc: None,
                         closure_ref_params: Vec::new(),
+                        bounds: Vec::new(),
                     });
                 }
                 dedup_methods_by_name(&mut methods);
@@ -1244,7 +1267,7 @@ fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
 // Function / parameter mapping (§G.5)
 // ============================================================================
 
-fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
+pub(crate) fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
     let (ret, throws) = map_return(krate, &f.sig.output);
     let closure_ref_params = f
         .sig
@@ -1274,7 +1297,39 @@ fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
         // method leaves this `None` (it's dispatched on its `@rust`-pathed type).
         rust_path: None,
         doc: None,
+        bounds: type_param_bounds(&f.generics),
     }
+}
+
+/// The trait bounds a method puts on its TYPE's parameters, written
+/// `T: Ord`: `sort` on `[T]` says `where T: Ord`. A bound on the method's own
+/// generics, on `Self`, or a closure/`Sized` bound is not one: those are
+/// settled at the call (Bindgen G.6.4.4).
+fn type_param_bounds(g: &Generics) -> Vec<String> {
+    let own: HashSet<&str> = g.params.iter().map(|p| p.name.as_str()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for wp in &g.where_predicates {
+        let WherePredicate::BoundPredicate { type_: Type::Generic(param), bounds, .. } = wp else {
+            continue;
+        };
+        if param == "Self" || own.contains(param.as_str()) {
+            continue;
+        }
+        for b in bounds {
+            let GenericBound::TraitBound { trait_, modifier, .. } = b else { continue };
+            let name = last_segment(&trait_.path);
+            if matches!(modifier, rustdoc_types::TraitBoundModifier::Maybe)
+                || matches!(name, "Sized" | "Fn" | "FnMut" | "FnOnce")
+            {
+                continue;
+            }
+            let bound = format!("{param}: {name}");
+            if !out.contains(&bound) {
+                out.push(bound);
+            }
+        }
+    }
+    out
 }
 
 fn map_params(f: &Function) -> Vec<StubParam> {
@@ -1779,6 +1834,7 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
         rust_path: None,
         doc: None,
         closure_ref_params: Vec::new(),
+        bounds: Vec::new(),
     })
 }
 

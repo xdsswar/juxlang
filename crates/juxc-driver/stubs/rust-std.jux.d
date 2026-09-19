@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 40
+// juxc rust.std stub cache-version 42
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -58,7 +58,7 @@ public class Arc<T, A> implements ToOwned, ToString {
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
     public static T* as_ptr(&Arc this);
-    public static Weak<T, A> downgrade(&Arc this);
+    @RustBounds("A: Clone") public static Weak<T, A> downgrade(&Arc this);
     public static uint weak_count(&Arc this);
     public static uint strong_count(&Arc this);
     public static bool ptr_eq(&Arc this, &Arc other);
@@ -160,28 +160,28 @@ public class AssertUnwindSafe<T> {
 public class BTreeMap<K, V, A> implements ToOwned {
     public BTreeMap();
     @MutSelf public void clear();
-    @RustRefOut public V? get<Q>(&Q key);
-    public (K, V)? get_key_value<Q>(&Q k);
-    public (K, V)? first_key_value();
-    @MutSelf @RustBorrowsSelf public OccupiedEntry<K, V, A>? first_entry();
-    @MutSelf public (K, V)? pop_first();
-    public (K, V)? last_key_value();
-    @MutSelf @RustBorrowsSelf public OccupiedEntry<K, V, A>? last_entry();
-    @MutSelf public (K, V)? pop_last();
-    public bool contains_key<Q>(&Q key);
-    @MutSelf @RustRefOut public V? get_mut<Q>(&Q key);
-    @MutSelf public V? insert(K key, V value);
-    @MutSelf @RustBorrowsSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
-    @MutSelf public V? remove<Q>(&Q key);
-    @MutSelf public (K, V)? remove_entry<Q>(&Q key);
-    @MutSelf @RustClosureRefs("0") public void retain<F>((K, V) -> bool f);
-    @MutSelf public void append(&mut BTreeMap other);
-    @MutSelf @RustClosureRefs("1") public void merge(BTreeMap other, (K, V, V) -> V conflict);
-    @RustBorrowsSelf public Range<K, V> range<T, R>(R range);
-    @MutSelf @RustBorrowsSelf public RangeMut<K, V> range_mut<T, R>(R range);
-    @MutSelf @RustBorrowsSelf public Entry<K, V, A> entry(K key);
-    @MutSelf public BTreeMap split_off<Q>(&Q key);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<K, V, R, F, A> extract_if<F, R>(R range, (K, V) -> bool pred);
+    @RustRefOut @RustBounds("K: Borrow, K: Ord") public V? get<Q>(&Q key);
+    @RustBounds("K: Borrow, K: Ord") public (K, V)? get_key_value<Q>(&Q k);
+    @RustBounds("K: Ord") public (K, V)? first_key_value();
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Ord") public OccupiedEntry<K, V, A>? first_entry();
+    @MutSelf @RustBounds("K: Ord") public (K, V)? pop_first();
+    @RustBounds("K: Ord") public (K, V)? last_key_value();
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Ord") public OccupiedEntry<K, V, A>? last_entry();
+    @MutSelf @RustBounds("K: Ord") public (K, V)? pop_last();
+    @RustBounds("K: Borrow, K: Ord") public bool contains_key<Q>(&Q key);
+    @MutSelf @RustRefOut @RustBounds("K: Borrow, K: Ord") public V? get_mut<Q>(&Q key);
+    @MutSelf @RustBounds("K: Ord") public V? insert(K key, V value);
+    @MutSelf @RustBorrowsSelf @RustRefOut @RustBounds("K: Ord") public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
+    @MutSelf @RustBounds("K: Borrow, K: Ord") public V? remove<Q>(&Q key);
+    @MutSelf @RustBounds("K: Borrow, K: Ord") public (K, V)? remove_entry<Q>(&Q key);
+    @MutSelf @RustClosureRefs("0") @RustBounds("K: Ord") public void retain<F>((K, V) -> bool f);
+    @MutSelf @RustBounds("K: Ord, A: Clone") public void append(&mut BTreeMap other);
+    @MutSelf @RustClosureRefs("1") @RustBounds("K: Ord, A: Clone") public void merge(BTreeMap other, (K, V, V) -> V conflict);
+    @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public Range<K, V> range<T, R>(R range);
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public RangeMut<K, V> range_mut<T, R>(R range);
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Ord") public Entry<K, V, A> entry(K key);
+    @MutSelf @RustBounds("K: Borrow, K: Ord, A: Clone") public BTreeMap split_off<Q>(&Q key);
+    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") @RustBounds("K: Ord") public ExtractIf<K, V, R, F, A> extract_if<F, R>(R range, (K, V) -> bool pred);
     public IntoKeys<K, V, A> into_keys();
     public IntoValues<K, V, A> into_values();
     @RustBorrowsSelf public Iter<K, V> iter();
@@ -191,10 +191,10 @@ public class BTreeMap<K, V, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf public ValuesMut<K, V> values_mut();
     public uint len();
     public bool is_empty();
-    @RustBorrowsSelf public Cursor<K, V> lower_bound<Q>(Bound<Q> bound);
-    @MutSelf @RustBorrowsSelf public CursorMut<K, V, A> lower_bound_mut<Q>(Bound<Q> bound);
-    @RustBorrowsSelf public Cursor<K, V> upper_bound<Q>(Bound<Q> bound);
-    @MutSelf @RustBorrowsSelf public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public Cursor<K, V> lower_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public CursorMut<K, V, A> lower_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public Cursor<K, V> upper_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
 }
 
 /** An ordered set based on a B-Tree. */
@@ -203,29 +203,29 @@ public class BTreeMap<K, V, A> implements ToOwned {
 @RustCollection
 public class BTreeSet<T, A> implements ToOwned {
     public BTreeSet();
-    @RustBorrowsSelf public Range<T> range<K, R>(R range);
-    @RustBorrowsSelf public Difference<T, A> difference(&Set<T> other);
-    @RustBorrowsSelf public SymmetricDifference<T> symmetric_difference(&Set<T> other);
-    @RustBorrowsSelf public Intersection<T, A> intersection(&Set<T> other);
-    @RustBorrowsSelf public Union<T> union(&Set<T> other);
-    @MutSelf public void clear();
-    public bool contains<Q>(&Q value);
-    @RustRefOut public T? get<Q>(&Q value);
-    public bool is_disjoint(&Set<T> other);
-    public bool is_subset(&Set<T> other);
-    public bool is_superset(&Set<T> other);
-    @RustRefOut public T? first();
-    @RustRefOut public T? last();
-    @MutSelf public T? pop_first();
-    @MutSelf public T? pop_last();
-    @MutSelf public bool insert(T value);
-    @MutSelf public T? replace(T value);
-    @MutSelf public bool remove<Q>(&Q value);
-    @MutSelf public T? take<Q>(&Q value);
-    @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
-    @MutSelf public void append(&mut BTreeSet other);
-    @MutSelf public BTreeSet split_off<Q>(&Q value);
-    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<T, R, F, A> extract_if<F, R>(R range, (T) -> bool pred);
+    @RustBorrowsSelf @RustBounds("T: Borrow, T: Ord") public Range<T> range<K, R>(R range);
+    @RustBorrowsSelf @RustBounds("T: Ord") public Difference<T, A> difference(&Set<T> other);
+    @RustBorrowsSelf @RustBounds("T: Ord") public SymmetricDifference<T> symmetric_difference(&Set<T> other);
+    @RustBorrowsSelf @RustBounds("T: Ord") public Intersection<T, A> intersection(&Set<T> other);
+    @RustBorrowsSelf @RustBounds("T: Ord") public Union<T> union(&Set<T> other);
+    @MutSelf @RustBounds("A: Clone") public void clear();
+    @RustBounds("T: Borrow, T: Ord") public bool contains<Q>(&Q value);
+    @RustRefOut @RustBounds("T: Borrow, T: Ord") public T? get<Q>(&Q value);
+    @RustBounds("T: Ord") public bool is_disjoint(&Set<T> other);
+    @RustBounds("T: Ord") public bool is_subset(&Set<T> other);
+    @RustBounds("T: Ord") public bool is_superset(&Set<T> other);
+    @RustRefOut @RustBounds("T: Ord") public T? first();
+    @RustRefOut @RustBounds("T: Ord") public T? last();
+    @MutSelf @RustBounds("T: Ord") public T? pop_first();
+    @MutSelf @RustBounds("T: Ord") public T? pop_last();
+    @MutSelf @RustBounds("T: Ord") public bool insert(T value);
+    @MutSelf @RustBounds("T: Ord") public T? replace(T value);
+    @MutSelf @RustBounds("T: Borrow, T: Ord") public bool remove<Q>(&Q value);
+    @MutSelf @RustBounds("T: Borrow, T: Ord") public T? take<Q>(&Q value);
+    @MutSelf @RustClosureRefs("0") @RustBounds("T: Ord") public void retain<F>((T) -> bool f);
+    @MutSelf @RustBounds("T: Ord, A: Clone") public void append(&mut BTreeSet other);
+    @MutSelf @RustBounds("T: Borrow, T: Ord, A: Clone") public BTreeSet split_off<Q>(&Q value);
+    @MutSelf @RustBorrowsSelf @RustClosureRefs("1") @RustBounds("T: Ord") public ExtractIf<T, R, F, A> extract_if<F, R>(R range, (T) -> bool pred);
     @RustBorrowsSelf public Iter<T> iter();
     public uint len();
     public bool is_empty();
@@ -322,7 +322,7 @@ public enum Bound<T> {
     @RustRefOut public Bound<T> as_ref();
     public Bound<U> map<U, F>((T) -> U f);
     public Bound<T> copied();
-    public Bound<T> cloned();
+    @RustBounds("T: Clone") public Bound<T> cloned();
 }
 
 /** A pointer type that uniquely owns a heap allocation of type `T`. */
@@ -678,9 +678,9 @@ public class CursorMut<T, A> {
     @MutSelf public void insert_after(T item);
     @MutSelf public void insert_before(T item);
     @MutSelf public T? remove_current();
-    @MutSelf public LinkedList<T, A>? remove_current_as_list();
-    @MutSelf public LinkedList<T, A> split_after();
-    @MutSelf public LinkedList<T, A> split_before();
+    @MutSelf @RustBounds("A: Clone") public LinkedList<T, A>? remove_current_as_list();
+    @MutSelf @RustBounds("A: Clone") public LinkedList<T, A> split_after();
+    @MutSelf @RustBounds("A: Clone") public LinkedList<T, A> split_before();
     @MutSelf public void push_front(T elt);
     @MutSelf public void push_back(T elt);
     @MutSelf public T? pop_front();
@@ -1179,16 +1179,16 @@ public class HashMap<K, V, S, A> implements ToOwned {
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
     @MutSelf @RustBorrowsSelf public Entry<K, V, A> entry(K key);
-    @RustRefOut public V? get<Q>(&Q k);
-    public (K, V)? get_key_value<Q>(&Q k);
-    @MutSelf public V?[] get_disjoint_mut<Q>(Q[] ks);
-    @MutSelf public unsafe V?[] get_disjoint_unchecked_mut<Q>(Q[] ks);
-    public bool contains_key<Q>(&Q k);
-    @MutSelf @RustRefOut public V? get_mut<Q>(&Q k);
+    @RustRefOut @RustBounds("K: Borrow") public V? get<Q>(&Q k);
+    @RustBounds("K: Borrow") public (K, V)? get_key_value<Q>(&Q k);
+    @MutSelf @RustBounds("K: Borrow") public V?[] get_disjoint_mut<Q>(Q[] ks);
+    @MutSelf @RustBounds("K: Borrow") public unsafe V?[] get_disjoint_unchecked_mut<Q>(Q[] ks);
+    @RustBounds("K: Borrow") public bool contains_key<Q>(&Q k);
+    @MutSelf @RustRefOut @RustBounds("K: Borrow") public V? get_mut<Q>(&Q k);
     @MutSelf public V? insert(K k, V v);
     @MutSelf @RustBorrowsSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
-    @MutSelf public V? remove<Q>(&Q k);
-    @MutSelf public (K, V)? remove_entry<Q>(&Q k);
+    @MutSelf @RustBounds("K: Borrow") public V? remove<Q>(&Q k);
+    @MutSelf @RustBounds("K: Borrow") public (K, V)? remove_entry<Q>(&Q k);
 }
 
 /** A [hash set] implemented as a `HashMap` where the value is `()`. */
@@ -1217,15 +1217,15 @@ public class HashSet<T, S, A> implements ToOwned {
     @RustBorrowsSelf public SymmetricDifference<T, S, A> symmetric_difference(&Set<T> other);
     @RustBorrowsSelf public Intersection<T, S, A> intersection(&Set<T> other);
     @RustBorrowsSelf public Union<T, S, A> union(&Set<T> other);
-    public bool contains<Q>(&Q value);
-    @RustRefOut public T? get<Q>(&Q value);
+    @RustBounds("T: Borrow") public bool contains<Q>(&Q value);
+    @RustRefOut @RustBounds("T: Borrow") public T? get<Q>(&Q value);
     public bool is_disjoint(&Set<T> other);
     public bool is_subset(&Set<T> other);
     public bool is_superset(&Set<T> other);
     @MutSelf public bool insert(T value);
     @MutSelf public T? replace(T value);
-    @MutSelf public bool remove<Q>(&Q value);
-    @MutSelf public T? take<Q>(&Q value);
+    @MutSelf @RustBounds("T: Borrow") public bool remove<Q>(&Q value);
+    @MutSelf @RustBounds("T: Borrow") public T? take<Q>(&Q value);
 }
 
 /** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
@@ -1347,10 +1347,18 @@ public class IoSlice {
     public IoSlice(ubyte[] buf);
     @MutSelf public void advance(uint n);
     public static void advance_slices(&mut IoSlice[] bufs, uint n);
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @MutSelf @RustBounds("T: Ord") public void sort();
+    @MutSelf @RustClosureRefs("0") public void sort_by<F>((T, T) -> Ordering compare);
+    @MutSelf @RustClosureRefs("0") public void sort_by_key<K, F>((T) -> K f);
+    @MutSelf @RustClosureRefs("0") public void sort_by_cached_key<K, F>((T) -> K f);
+    @RustBounds("T: Clone") public Vec<T> to_vec();
+    @RustBounds("T: Copy") public Vec<T> repeat(uint n);
+    public Self.Output concat<Item>();
+    public Self.Output join<Separator>(Separator sep);
+    public Self.Output connect<Separator>(Separator sep);
+    public Vec<ubyte> to_ascii_uppercase();
+    public Vec<ubyte> to_ascii_lowercase();
+    @MutSelf public void sort_floats();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1417,31 +1425,31 @@ public class IoSlice {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    public bool contains(&T x);
-    public bool starts_with(T[] needle);
-    public bool ends_with(T[] needle);
-    @RustRefOut public T[]? strip_prefix<P>(&P prefix);
-    @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    public uint binary_search(&T x) throws Error;
+    @RustBounds("T: PartialEq") public bool contains(&T x);
+    @RustBounds("T: PartialEq") public bool starts_with(T[] needle);
+    @RustBounds("T: PartialEq") public bool ends_with(T[] needle);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_prefix<P>(&P prefix);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_suffix<P>(&P suffix);
+    @RustBounds("T: Ord") public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
-    @MutSelf public void sort_unstable();
+    @MutSelf @RustBounds("T: Ord") public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
+    @MutSelf @RustBounds("T: Ord") public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public void fill(T value);
+    @MutSelf @RustBounds("T: Clone") public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
-    @MutSelf public void clone_from_slice(T[] src);
-    @MutSelf public void copy_from_slice(T[] src);
-    @MutSelf public void copy_within<R>(R src, uint dest);
+    @MutSelf @RustBounds("T: Clone") public void clone_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_within<R>(R src, uint dest);
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public bool is_sorted();
+    @RustBounds("T: PartialOrd") public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
     @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
@@ -1462,17 +1470,20 @@ public class IoSlice {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf public void sort_floats();
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
@@ -1483,10 +1494,18 @@ public class IoSliceMut {
     public IoSliceMut(&mut ubyte[] buf);
     @MutSelf public void advance(uint n);
     public static void advance_slices(&mut IoSliceMut[] bufs, uint n);
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @MutSelf @RustBounds("T: Ord") public void sort();
+    @MutSelf @RustClosureRefs("0") public void sort_by<F>((T, T) -> Ordering compare);
+    @MutSelf @RustClosureRefs("0") public void sort_by_key<K, F>((T) -> K f);
+    @MutSelf @RustClosureRefs("0") public void sort_by_cached_key<K, F>((T) -> K f);
+    @RustBounds("T: Clone") public Vec<T> to_vec();
+    @RustBounds("T: Copy") public Vec<T> repeat(uint n);
+    public Self.Output concat<Item>();
+    public Self.Output join<Separator>(Separator sep);
+    public Self.Output connect<Separator>(Separator sep);
+    public Vec<ubyte> to_ascii_uppercase();
+    public Vec<ubyte> to_ascii_lowercase();
+    @MutSelf public void sort_floats();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1553,31 +1572,31 @@ public class IoSliceMut {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    public bool contains(&T x);
-    public bool starts_with(T[] needle);
-    public bool ends_with(T[] needle);
-    @RustRefOut public T[]? strip_prefix<P>(&P prefix);
-    @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    public uint binary_search(&T x) throws Error;
+    @RustBounds("T: PartialEq") public bool contains(&T x);
+    @RustBounds("T: PartialEq") public bool starts_with(T[] needle);
+    @RustBounds("T: PartialEq") public bool ends_with(T[] needle);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_prefix<P>(&P prefix);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_suffix<P>(&P suffix);
+    @RustBounds("T: Ord") public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
-    @MutSelf public void sort_unstable();
+    @MutSelf @RustBounds("T: Ord") public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
+    @MutSelf @RustBounds("T: Ord") public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public void fill(T value);
+    @MutSelf @RustBounds("T: Clone") public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
-    @MutSelf public void clone_from_slice(T[] src);
-    @MutSelf public void copy_from_slice(T[] src);
-    @MutSelf public void copy_within<R>(R src, uint dest);
+    @MutSelf @RustBounds("T: Clone") public void clone_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_within<R>(R src, uint dest);
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public bool is_sorted();
+    @RustBounds("T: PartialOrd") public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
     @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
@@ -1598,17 +1617,20 @@ public class IoSliceMut {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf public void sort_floats();
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
@@ -1782,7 +1804,7 @@ public class LinkedList<T, A> implements ToOwned {
     public bool is_empty();
     public uint len();
     @MutSelf public void clear();
-    public bool contains(&T x);
+    @RustBounds("T: PartialEq") public bool contains(&T x);
     @RustRefOut public T? front();
     @MutSelf @RustRefOut public T? front_mut();
     @RustRefOut public T? back();
@@ -1793,7 +1815,7 @@ public class LinkedList<T, A> implements ToOwned {
     @MutSelf public void push_back(T elt);
     @MutSelf @RustRefOut public T push_back_mut(T elt);
     @MutSelf public T? pop_back();
-    @MutSelf public LinkedList<T, A> split_off(uint at);
+    @MutSelf @RustBounds("A: Clone") public LinkedList<T, A> split_off(uint at);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
 }
 
@@ -1803,10 +1825,10 @@ public class LocalKey<T> {
     @RustClosureRefs("0") public R with<F, R>((T) -> R f);
     @RustClosureRefs("0") public R try_with<F, R>((T) -> R f) throws AccessError;
     public void set(T value);
-    public T get();
-    public T take();
+    @RustBounds("T: Copy") public T get();
+    @RustBounds("T: Default") public T take();
     public T replace(T value);
-    public void update((T) -> T f);
+    @RustBounds("T: Copy") public void update((T) -> T f);
     @RustClosureRefs("0") public R with_borrow<F, R>((T) -> R f);
     @RustClosureRefs("0") public R with_borrow_mut<F, R>((T) -> R f);
 }
@@ -2175,6 +2197,7 @@ public class NonZeroIsize {
 /** A [`u128`] that is known not to equal zero. */
 @rust("std::num::NonZeroU128")
 public class NonZeroU128 {
+    public NonZeroU128 div_ceil(NonZeroU128 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2191,13 +2214,11 @@ public class NonZeroU128 {
     public NonZeroU128 saturating_mul(NonZeroU128 other);
     public NonZeroU128? checked_pow(u32 other);
     public NonZeroU128 saturating_pow(u32 other);
-    public NonZeroU128 div_ceil(NonZeroU128 rhs);
 }
 
 /** A [`u16`] that is known not to equal zero. */
 @rust("std::num::NonZeroU16")
 public class NonZeroU16 {
-    public NonZeroU16 div_ceil(NonZeroU16 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2214,12 +2235,12 @@ public class NonZeroU16 {
     public NonZeroU16 saturating_mul(NonZeroU16 other);
     public NonZeroU16? checked_pow(u32 other);
     public NonZeroU16 saturating_pow(u32 other);
+    public NonZeroU16 div_ceil(NonZeroU16 rhs);
 }
 
 /** A [`u32`] that is known not to equal zero. */
 @rust("std::num::NonZeroU32")
 public class NonZeroU32 {
-    public NonZeroU32 div_ceil(NonZeroU32 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2236,12 +2257,12 @@ public class NonZeroU32 {
     public NonZeroU32 saturating_mul(NonZeroU32 other);
     public NonZeroU32? checked_pow(u32 other);
     public NonZeroU32 saturating_pow(u32 other);
+    public NonZeroU32 div_ceil(NonZeroU32 rhs);
 }
 
 /** A [`u64`] that is known not to equal zero. */
 @rust("std::num::NonZeroU64")
 public class NonZeroU64 {
-    public NonZeroU64 div_ceil(NonZeroU64 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2258,12 +2279,12 @@ public class NonZeroU64 {
     public NonZeroU64 saturating_mul(NonZeroU64 other);
     public NonZeroU64? checked_pow(u32 other);
     public NonZeroU64 saturating_pow(u32 other);
+    public NonZeroU64 div_ceil(NonZeroU64 rhs);
 }
 
 /** A [`u8`] that is known not to equal zero. */
 @rust("std::num::NonZeroU8")
 public class NonZeroU8 {
-    public NonZeroU8 div_ceil(NonZeroU8 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2280,6 +2301,7 @@ public class NonZeroU8 {
     public NonZeroU8 saturating_mul(NonZeroU8 other);
     public NonZeroU8? checked_pow(u32 other);
     public NonZeroU8 saturating_pow(u32 other);
+    public NonZeroU8 div_ceil(NonZeroU8 rhs);
 }
 
 /** A [`usize`] that is known not to equal zero. */
@@ -2712,15 +2734,15 @@ public class Pin<Ptr> {
     public Pin(Ptr pointer);
     public static Ptr into_inner(Pin<Ptr> pin);
     public static unsafe Pin<Ptr> new_unchecked(Ptr pointer);
-    @RustRefOut public Pin<Ptr.Target> as_ref();
-    @MutSelf @RustRefOut public Pin<Ptr.Target> as_mut();
-    @RustRefOut public Pin<Ptr.Target> as_deref_mut();
+    @RustRefOut @RustBounds("Ptr: Deref") public Pin<Ptr.Target> as_ref();
+    @MutSelf @RustRefOut @RustBounds("Ptr: DerefMut") public Pin<Ptr.Target> as_mut();
+    @RustRefOut @RustBounds("Ptr: DerefMut") public Pin<Ptr.Target> as_deref_mut();
     @MutSelf public void set(Ptr.Target value);
     public static unsafe Ptr into_inner_unchecked(Pin<Ptr> pin);
     @RustRefOut @RustClosureRefs("0") public unsafe Pin<U> map_unchecked<U, F>((T) -> U func);
     @RustRefOut public T get_ref();
     @RustRefOut public Pin<T> into_ref();
-    @RustRefOut public T get_mut();
+    @RustRefOut @RustBounds("T: Unpin") public T get_mut();
     @RustRefOut public unsafe T get_unchecked_mut();
     @RustRefOut @RustClosureRefs("0") public unsafe Pin<U> map_unchecked_mut<U, F>((T) -> U func);
     @RustRefOut public static Pin<T> static_ref(&T r);
@@ -2867,7 +2889,7 @@ public class Rc<T, A> implements ToOwned, ToString {
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
     public static T* as_ptr(&Rc this);
-    public static Weak<T, A> downgrade(&Rc this);
+    @RustBounds("A: Clone") public static Weak<T, A> downgrade(&Rc this);
     public static uint weak_count(&Rc this);
     public static uint strong_count(&Rc this);
     @RustRefOut public static T? get_mut(&mut Rc this);
@@ -3392,6 +3414,13 @@ public class String implements ToOwned, ToString, Write {
     @MutSelf public void replace_range<R>(R range, &String replace_with);
     public String into_boxed_str();
     @RustRefOut public String leak();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String to_uppercase();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -3459,16 +3488,9 @@ public class String implements ToOwned, ToString, Write {
     @RustBorrowsSelf public EscapeDefault escape_default();
     @RustBorrowsSelf public EscapeUnicode escape_unicode();
     public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
     public String word_to_titlecase();
-    public String to_uppercase();
     public String to_casefold_unnormalized();
     public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -3905,7 +3927,7 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void clear();
     public uint len();
     public bool is_empty();
-    @MutSelf public Vec split_off(uint at);
+    @MutSelf @RustBounds("A: Clone") public Vec split_off(uint at);
     @MutSelf public void resize_with<F>(uint new_len, () -> T f);
     @RustRefOut public T[] leak();
     @MutSelf @RustRefOut public MaybeUninit<T>[] spare_capacity_mut();
@@ -3916,10 +3938,17 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void dedup();
     @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @MutSelf @RustBounds("T: Ord") public void sort();
+    @MutSelf @RustClosureRefs("0") public void sort_by<F>((T, T) -> Ordering compare);
+    @MutSelf @RustClosureRefs("0") public void sort_by_key<K, F>((T) -> K f);
+    @MutSelf @RustClosureRefs("0") public void sort_by_cached_key<K, F>((T) -> K f);
+    @RustBounds("T: Clone") public Vec<T> to_vec();
+    @RustBounds("T: Copy") public Vec<T> repeat(uint n);
+    public Self.Output concat<Item>();
+    public Self.Output join<Separator>(Separator sep);
+    public Self.Output connect<Separator>(Separator sep);
+    public Vec<ubyte> to_ascii_uppercase();
+    public Vec<ubyte> to_ascii_lowercase();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -3982,31 +4011,31 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
     @RustBorrowsSelf @RustClosureRefs("1") public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("1") public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
-    public bool contains(&T x);
-    public bool starts_with(T[] needle);
-    public bool ends_with(T[] needle);
-    @RustRefOut public T[]? strip_prefix<P>(&P prefix);
-    @RustRefOut public T[]? strip_suffix<P>(&P suffix);
-    public uint binary_search(&T x) throws Error;
+    @RustBounds("T: PartialEq") public bool contains(&T x);
+    @RustBounds("T: PartialEq") public bool starts_with(T[] needle);
+    @RustBounds("T: PartialEq") public bool ends_with(T[] needle);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_prefix<P>(&P prefix);
+    @RustRefOut @RustBounds("T: PartialEq") public T[]? strip_suffix<P>(&P suffix);
+    @RustBounds("T: Ord") public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
-    @MutSelf public void sort_unstable();
+    @MutSelf @RustBounds("T: Ord") public void sort_unstable();
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by<F>((T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("0") public void sort_unstable_by_key<K, F>((T) -> K f);
-    @MutSelf public (T[], T, T[]) select_nth_unstable(uint index);
+    @MutSelf @RustBounds("T: Ord") public (T[], T, T[]) select_nth_unstable(uint index);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by<F>(uint index, (T, T) -> Ordering compare);
     @MutSelf @RustClosureRefs("1") public (T[], T, T[]) select_nth_unstable_by_key<K, F>(uint index, (T) -> K f);
     @MutSelf public void rotate_left(uint mid);
     @MutSelf public void rotate_right(uint k);
-    @MutSelf public void fill(T value);
+    @MutSelf @RustBounds("T: Clone") public void fill(T value);
     @MutSelf public void fill_with<F>(() -> T f);
-    @MutSelf public void clone_from_slice(T[] src);
-    @MutSelf public void copy_from_slice(T[] src);
-    @MutSelf public void copy_within<R>(R src, uint dest);
+    @MutSelf @RustBounds("T: Clone") public void clone_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_from_slice(T[] src);
+    @MutSelf @RustBounds("T: Copy") public void copy_within<R>(R src, uint dest);
     @MutSelf public void swap_with_slice(&mut T[] other);
     public unsafe (T[], U[], T[]) align_to<U>();
     @MutSelf public unsafe (T[], U[], T[]) align_to_mut<U>();
-    public bool is_sorted();
+    @RustBounds("T: PartialOrd") public bool is_sorted();
     @RustClosureRefs("0") public bool is_sorted_by<F>((T, T) -> bool compare);
     @RustClosureRefs("0") public bool is_sorted_by_key<F, K>((T) -> K f);
     @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
@@ -4028,16 +4057,20 @@ public class Vec<T, A> implements ToOwned {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
     @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
@@ -4069,7 +4102,7 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf public IterMut<T> range_mut<R>(R range);
     @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
     @MutSelf public void clear();
-    public bool contains(&T x);
+    @RustBounds("T: PartialEq") public bool contains(&T x);
     @RustRefOut public T? front();
     @MutSelf @RustRefOut public T? front_mut();
     @RustRefOut public T? back();
@@ -4087,7 +4120,7 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf public void insert(uint index, T value);
     @MutSelf @RustRefOut public T insert_mut(uint index, T value);
     @MutSelf public T? remove(uint index);
-    @MutSelf public VecDeque split_off(uint at);
+    @MutSelf @RustBounds("A: Clone") public VecDeque split_off(uint at);
     @MutSelf public void append(&mut VecDeque other);
     @MutSelf @RustClosureRefs("0") public void retain<F>((T) -> bool f);
     @MutSelf @RustClosureRefs("0") public void retain_mut<F>((T) -> bool f);
@@ -4095,7 +4128,7 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T[] make_contiguous();
     @MutSelf public void rotate_left(uint n);
     @MutSelf public void rotate_right(uint n);
-    public uint binary_search(&T x) throws Error;
+    @RustBounds("T: Ord") public uint binary_search(&T x) throws Error;
     @RustClosureRefs("0") public uint binary_search_by<F>((T) -> Ordering f) throws Error;
     @RustClosureRefs("1") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @RustClosureRefs("0") public uint partition_point<P>((T) -> bool pred);
@@ -4138,7 +4171,7 @@ public class Weak<T, A> implements ToOwned {
     public static unsafe Weak from_raw(T* ptr);
     public T* into_raw();
     public T* as_ptr();
-    public T? upgrade();
+    @RustBounds("A: Clone") public T? upgrade();
     public uint strong_count();
     public uint weak_count();
     public bool ptr_eq(&Weak other);

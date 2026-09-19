@@ -1,0 +1,88 @@
+// Rust's slice and string methods on Jux collections, arrays and strings
+// (JUX-BINDGEN-ADDENDUM §G.6.4.4).
+//
+// A `Vec` reaches every method of the slice it derefs to, whether `core`
+// defines it (`sort_unstable`, `contains`, `binary_search`, `reverse`) or
+// `alloc` does (`sort`, `sort_by`, `sort_by_key`, `to_vec`, `concat`, `join`,
+// `repeat`). The `alloc` ones are read from the toolchain's own library source,
+// because no rustdoc JSON carries them. A Jux array is a slice too, and a
+// `String` reaches `str`'s methods the same way.
+
+record Person(String name, int age) {}
+
+// A type is ordered when it declares `operator<=>`, so `sort()` works on it.
+record Version(int major, int minor) {
+    public int operator <=>(Version other) {
+        if (major != other.major) {
+            return major <=> other.major;
+        }
+        return minor <=> other.minor;
+    }
+}
+
+public void main() {
+    // Sorting, searching and copying numbers.
+    var v = new Vec<int>();
+    v.push(5);
+    v.push(3);
+    v.push(9);
+    v.push(1);
+    v.sort();
+    print(v);
+    print(v.binary_search(5));
+    print(v.contains(9));
+
+    // A comparator returns an `int` (or an `Ordering`); `b <=> a` sorts
+    // largest first.
+    v.sort_by((a, b) -> b <=> a);
+    print(v);
+
+    // `to_vec` copies; reversing the copy leaves the original alone.
+    var copy = v.to_vec();
+    copy.reverse();
+    print(copy);
+    print(v);
+    print(v.repeat(2).len());
+
+    // Strings: sort, then join with a separator or concatenate.
+    var words = new Vec<String>();
+    words.push("pear");
+    words.push("fig");
+    words.push("apple");
+    words.sort();
+    print(words.join(", "));
+    String dashed = words.join("-");
+    print(dashed);
+    print(words.concat());
+
+    // Sort records by a key the lambda picks.
+    var people = new Vec<Person>();
+    people.push(new Person("Ann", 41));
+    people.push(new Person("Bob", 29));
+    people.push(new Person("Cid", 35));
+    people.sort_by_key((p) -> p.age);
+    for (var p : people) {
+        print($"${p.name} ${p.age}");
+    }
+
+    // Types with `operator<=>` sort with plain `sort()`.
+    var versions = new Vec<Version>();
+    versions.push(new Version(2, 0));
+    versions.push(new Version(1, 9));
+    versions.push(new Version(1, 10));
+    versions.sort();
+    for (var ver : versions) {
+        print($"${ver.major}.${ver.minor}");
+    }
+
+    // A Jux array is a slice too.
+    int[] arr = {4, 2, 8};
+    arr.sort();
+    print(arr);
+
+    // `str`'s methods from `alloc`, on a Jux `String`.
+    String s = "Mixed Case";
+    print(s.to_uppercase());
+    print(s.to_lowercase());
+    print(s.repeat(2));
+}

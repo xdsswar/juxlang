@@ -2762,6 +2762,16 @@ impl super::super::RustEmitter {
         method: &str,
         idx: usize,
     ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
+        self.foreign_method_sig(type_name, method).and_then(|m| m.params.get(idx))
+    }
+
+    /// The stub signature of the foreign method `type_name.method`: the type's
+    /// own, or one reached through a foreign trait.
+    fn foreign_method_sig(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
         let bare = type_name.rsplit('.').next().unwrap_or(type_name);
         let fqn = if self.symbols.classes.contains_key(type_name) {
             Some(type_name.to_string())
@@ -2769,11 +2779,47 @@ impl super::super::RustEmitter {
             self.resolve_bare_class_fqn(bare)
         };
         if let Some(m) = fqn.as_deref().and_then(|f| self.external_type_method(f, method)) {
-            return m.params.get(idx);
+            return Some(m);
         }
-        self.lookup_class_by_bare_or_fqn(bare)
-            .and_then(|c| c.methods.get(method))
-            .and_then(|m| m.params.get(idx))
+        self.lookup_class_by_bare_or_fqn(bare).and_then(|c| c.methods.get(method))
+    }
+
+    /// Whether foreign parameter `idx` is typed by one of the METHOD's own type
+    /// parameters (`join<Separator>(Separator sep)`), rather than by a concrete
+    /// type or the class's parameters. A Jux `String` goes into such a slot as
+    /// `&str` (Bindgen G.6.4.4).
+    pub(crate) fn external_param_is_method_generic(
+        &self,
+        type_name: &str,
+        method: &str,
+        idx: usize,
+    ) -> bool {
+        // Foreign methods only: a Jux generic method takes its argument as
+        // the Jux type says, `String` and all.
+        let bare = type_name.rsplit('.').next().unwrap_or(type_name);
+        if !self
+            .symbols
+            .classes
+            .get(type_name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(bare))
+            .is_some_and(|c| c.is_external)
+        {
+            return false;
+        }
+        let Some(m) = self.foreign_method_sig(type_name, method) else {
+            return false;
+        };
+        let Some(p) = m.params.get(idx) else {
+            return false;
+        };
+        // A slot the signature already borrows (`contains_key(&Q key)`) is
+        // lent by the borrow path: passing `&str` there would make it `&&str`.
+        p.ty.array_shape.is_none()
+            && p.ty.generic_args.is_empty()
+            && !p.is_ref
+            && !p.is_mut_ref
+            && p.ty.name.segments.len() == 1
+            && m.generic_params.iter().any(|g| g.name.text == p.ty.name.segments[0].text)
     }
 
     pub(crate) fn external_param_is_slice(

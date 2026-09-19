@@ -10781,6 +10781,68 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// E0446 for a bound a foreign method puts on its type's own parameters
+    /// (`@RustBounds("T: Ord")`, Bindgen G.6.4.4) that the call's receiver
+    /// does not meet. `people.sort()` on a `Vec<Person>` whose `Person`
+    /// declares no `operator<=>` used to reach rustc as E0277 ("the trait
+    /// bound `Person: Ord` is not satisfied"). The bound is read off the
+    /// discovered signature; what each Rust trait asks of a Jux type is the
+    /// operator rule the backend follows (ordering: `operator<=>`; hashing:
+    /// `operator hash`).
+    fn check_foreign_method_bounds(&mut self, c: &CallExpr, f: &juxc_ast::FieldExpr) {
+        let recv = match infer_expr(&f.object, &self.env, self.symbols) {
+            Ty::Nullable(inner) => *inner,
+            other => other,
+        };
+        let Ty::User { name, generic_args } = recv else { return };
+        let Some((fqn, class)) = self.symbols.resolve_class(&name) else { return };
+        if !class.is_external {
+            return;
+        }
+        let Some((method, _)) = self.symbols.lookup_method(fqn, &f.field.text) else { return };
+        let Some(list) = method.annotations.iter().find_map(|a| {
+            let named = a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustbounds");
+            match a.args.first() {
+                Some(juxc_ast::AnnotationArg::Positional(Expr::Literal(juxc_ast::Literal::String(s)))) if named => {
+                    Some(s.clone())
+                }
+                _ => None,
+            }
+        }) else {
+            return;
+        };
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
+        for bound in list.split(',') {
+            let Some((param, rust_trait)) = bound.split_once(':') else { continue };
+            let (param, rust_trait) = (param.trim(), rust_trait.trim());
+            let Some(idx) = class.generic_params.iter().position(|g| g.name.text == param) else { continue };
+            let Some(arg) = generic_args.get(idx) else { continue };
+            let why = match rust_trait {
+                "Ord" | "PartialOrd" => self.symbols.order_blocker(arg, rust_trait == "Ord").map(|why| {
+                    (why, "to be ordered", "declare `operator<=>` on it, or pass a comparator where the method takes one (`sort_by((a, b) -> a.key <=> b.key)`)")
+                }),
+                "Hash" => self.symbols.hash_blocker(arg).map(|why| {
+                    (why, "to have `operator hash`", "declare `operator hash` on it")
+                }),
+                _ => None,
+            };
+            if let Some((why, needs, help)) = why {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0446_GenericBoundNotSatisfied,
+                        format!(
+                            "`{}` needs the elements of `{bare}<{arg}>` {needs}, and {why}",
+                            f.field.text,
+                        ),
+                    )
+                    .with_span(c.span)
+                    .with_help(help),
+                );
+                return;
+            }
+        }
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
         // `transmute<A, B>(value)` (Layout-ABI §L.7.4), the built-in, when no
         // function of that name is declared.
@@ -10839,6 +10901,7 @@ impl<'a> Checker<'a> {
         }
         if let Expr::Field(f) = c.callee.as_ref() {
             self.check_nullable_receiver(f, true);
+            self.check_foreign_method_bounds(c, f);
         }
         // A call THROUGH a function pointer (§L.6.4): `f(x)` on a local or
         // parameter, `table.name(x)` on a field. It is checked here in full,

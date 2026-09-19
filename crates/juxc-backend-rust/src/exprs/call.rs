@@ -3315,6 +3315,9 @@ impl RustEmitter {
             self.emit_expr(arg);
             return;
         }
+        if self.emit_text_into_foreign_generic(call, i, arg) {
+            return;
+        }
         // An integer argument for an integer parameter of another width or
         // sign converts. Most calls into a crate need it: Jux counts in `int`
         // (`isize`) and a graphics API takes `u8` and `u32`.
@@ -6333,6 +6336,45 @@ impl RustEmitter {
         false
     }
 
+    /// Whether argument `i` of `callee` fills a foreign method's own type
+    /// parameter (`sep` of `join<Separator>(Separator sep)`), with the
+    /// receiver's type taken from the call itself.
+    fn callee_param_is_foreign_method_generic(&self, callee: &Expr, i: usize) -> bool {
+        let Expr::Field(f) = callee else { return false };
+        match self.receiver_ty_of(&f.object) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                self.external_param_is_method_generic(&name, &f.field.text, i)
+            }
+            _ => false,
+        }
+    }
+
+    /// A Jux `String` into one of a foreign method's OWN type parameters
+    /// (`words.join(", ")` against `join<Separator>(Separator sep)`) goes in as
+    /// `&str`. A Rust generic over text is written for borrowed text
+    /// (`Join<&str>`, `Pattern`, `AsRef<str>`), and the ones that convert
+    /// (`Into<String>`) take `&str` just as well; an owned `String` satisfies
+    /// far fewer of them (Bindgen G.6.4.4). A literal is written as the
+    /// literal itself. Returns whether it wrote the argument.
+    fn emit_text_into_foreign_generic(&mut self, call: &CallExpr, i: usize, arg: &Expr) -> bool {
+        if !self.callee_param_is_foreign_method_generic(&call.callee, i) {
+            return false;
+        }
+        if matches!(arg, Expr::Literal(Literal::String(_))) {
+            let prev_fmt = std::mem::replace(&mut self.emitting_format_arg, true);
+            self.emit_expr(arg);
+            self.emitting_format_arg = prev_fmt;
+            return true;
+        }
+        if self.operand_is_string_typed_for_print(arg) {
+            self.w.push('(');
+            self.emit_expr(arg);
+            self.w.push_str(").as_str()");
+            return true;
+        }
+        false
+    }
+
     fn emit_collection_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
         // A lambda flowing into a foreign `impl FnMut(..)` param lowers to a
         // BARE Rust closure, not the default `Rc<dyn Fn>` (§G.3). The generic
@@ -6352,6 +6394,9 @@ impl RustEmitter {
             && self.callee_param_type(&call.callee, i).is_some_and(|t| t.ptr_depth > 0)
         {
             self.w.push_str("std::ptr::null_mut()");
+            return;
+        }
+        if !self.collection_args_prehoisted && self.emit_text_into_foreign_generic(call, i, arg) {
             return;
         }
         if self.collection_args_prehoisted {

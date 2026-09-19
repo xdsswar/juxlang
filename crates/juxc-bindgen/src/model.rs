@@ -288,6 +288,11 @@ pub struct StubFn {
     /// `@RustClosureRefs("0")`; a Jux lambda in that slot takes owned values,
     /// so the backend clones each argument out of its reference.
     pub closure_ref_params: Vec<usize>,
+    /// What the method asks of the TYPE's own parameters, written `T: Ord`:
+    /// `sort` on `[T]` needs `where T: Ord`. Rendered as
+    /// `@RustBounds("T: Ord")`, so the checker can report an unmet bound in
+    /// Jux terms (E0446) instead of rustc's E0277 (Bindgen G.6.4.4).
+    pub bounds: Vec<String>,
 }
 
 /// A single parameter (`ty name`).

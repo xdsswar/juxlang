@@ -487,6 +487,7 @@ version = "0.0.1"
 dependencies = [
  "rustdoc-types",
  "serde_json",
+ "syn",
 ]
 
 [[package]]

@@ -496,7 +496,13 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
 
-One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity. The gap is rustdoc's, not the prebuilt file's: `alloc`'s `impl<T> [T]` is attached to the `slice` primitive, which `core` defines, so a JSON of `alloc` built from source (checked with the toolchain's own `rust-src`) omits it too. Closing it needs a second discovery source for those impls; until then the discoverable `sort_unstable_by` takes a Jux comparator (`(a, b) -> a <=> b`, Operators §O.2.1).
+**A second source: the toolchain's own library source.** rustdoc JSON leaves out `alloc`'s inherent impls on the primitives `core` defines: `alloc`'s `impl<T> [T]` (`sort`, `sort_by`, `sort_by_key`, `to_vec`, `repeat`, `concat`, `join`) and `impl str` (`to_uppercase`, `replace`, `repeat`) are attached to `core`'s `slice` and `str` pages, so no JSON carries them, not the prebuilt ones and not one built from source. They are discovered from the source instead:
+
+- **Where.** `<sysroot>/lib/rustlib/src/rust/library/alloc/src` of the default toolchain, the `rustc` that builds the program (the `rust-src` rustup component). Without it the surface simply lacks these methods.
+- **What.** Every file that holds an incoherent impl, marked by the `#[rustc_allow_incoherent_impl]` attribute Rust requires on such methods, is parsed. From each inherent `impl` whose self type is a slice or a primitive, every `pub` method that takes `&self` or `&mut self` and is marked `#[stable]` is kept; an `#[unstable]` or `#[doc(hidden)]` one is not. Its first doc line is kept too.
+- **How.** The signature is read as rustdoc would write it and pooled under the same shape as `core`'s impls (§G.6.2.2), so `Vec` reaches `sort` through `Deref` exactly as it reaches `first`, and `String` reaches `to_uppercase` as it reaches `trim`. A result written as a trait projection (`join` returns `<Self as Join<Sep>>::Output`) is an unknown type that takes the declared slot's type, like every projection (§G.6.4.2).
+
+No method name is written into bindgen: the attribute, the shape of the impl and the stability attribute decide what is kept. `sort_unstable_by` and the other `core` methods keep coming from rustdoc; a comparator lambda works on both (`(a, b) -> a <=> b`, Operators §O.2.1).
 
 ### G.6.5. First-Class `import rust.X`
 
