@@ -436,7 +436,7 @@ This is stricter than C++ (which makes drop-from-drop *undefined behavior*) and 
 
 ### S.5.3a. Phase-1 Implementation Notes
 
-`drop { }` lowers onto Rust's `Drop` trait — for reference-semantics classes it lands on the refcounted payload, so the block runs exactly once, when the last strong reference releases (§S.5.5 for free). Deviations, to be closed later: fields inside an aggregate are destroyed in **declaration** order (Rust's order) rather than the reverse order specified in §S.5.2; an exception thrown from a `drop` block aborts instead of aggregating per §S.5.3; and within a reference-semantics class's `drop` block, calls to the instance's own methods are not available — keep destructor bodies to field access plus free/static calls.
+`drop { }` lowers onto Rust's `Drop` trait — for reference-semantics classes it lands on the refcounted payload, so the block runs exactly once, when the last strong reference releases (§S.5.5 for free). Fields inside an aggregate are destroyed in the reverse order §S.5.2 specifies, parent slice last, wherever the order is observable (two or more owned parts whose destruction runs a `drop` block); the emitted struct then lists them in that order, and a `@layout(c)` struct never reorders. Deviations, to be closed later: an exception thrown from a `drop` block aborts instead of aggregating per §S.5.3 (a `MultipleDropException` has no definition yet, and unwinding out of Rust's `Drop` during a cascade aborts the process); and within a reference-semantics class's `drop` block, calls to the instance's own methods are not available — keep destructor bodies to field access plus free/static calls.
 
 ### S.5.4. Drop During Move
 

@@ -1,0 +1,17 @@
+open log
+open db
+open cache
+using the service
+drop Service
+close cache
+close db
+drop Base
+close log
+--
+open first
+open second
+using the pair
+close second
+close first
+--
+done
