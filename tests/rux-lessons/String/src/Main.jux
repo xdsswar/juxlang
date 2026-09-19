@@ -1,0 +1,67 @@
+// Text has appeared in every lesson without being explained. A Jux `String`
+// is UTF-8 text, immutable, and a reference type (Core lib §K.7): assigning
+// one shares it, and since it can never change, sharing is always safe.
+//
+// Rux divides the work between three types (a borrowed view, an owned
+// `String`, a builder) and asks for an allocator. Jux has the one `String`,
+// and the allocator is the program's own.
+
+// Reports whether `byteIndex` falls on the start of a character. UTF-8 marks
+// the bytes that continue a character: their top two bits are `10`. Any other
+// byte starts a character, so the question is answered by looking at one
+// byte.
+bool isBoundary(String text, int byteIndex) {
+    var position = 0;
+    for (var b : text.bytes()) {
+        if (position == byteIndex) {
+            return ((int) b & 0xC0) != 0x80;
+        }
+        position += 1;
+    }
+    // The end of the text counts as a boundary too.
+    return position == byteIndex;
+}
+
+void main() {
+    // A literal, with two accented letters in it.
+    final var literal = "héllo wörld";
+
+    // Here is the distinction worth taking away. A string has two lengths.
+    // `byteLength()` counts bytes, which is what the text occupies.
+    // `charLength()` counts characters, which is what a reader sees. They
+    // differ whenever the text leaves ASCII: é and ö take two bytes each, so
+    // eleven characters occupy thirteen bytes.
+    print($"text            ${literal}");
+    print($"bytes           ${literal.byteLength()}");
+    print($"characters      ${literal.charLength()}");
+
+    // Neither number is the wrong one; they answer different questions. Use
+    // bytes for how much room it takes, characters for how much there is to
+    // read. There is no `literal[i]` in Jux for exactly this reason: a
+    // program has to say which unit it means (`bytes()` or `chars()`).
+    print($"byte 1 starts a character  ${isBoundary(literal, 1)}");
+    print($"byte 2 starts a character  ${isBoundary(literal, 2)}");
+
+    // The characters can be walked one at a time. Each is a whole `char`,
+    // never half of one.
+    var accented = 0;
+    for (var c : literal.chars()) {
+        if ((int) c > 127) {
+            accented += 1;
+        }
+    }
+    print($"non-ASCII chars ${accented}");
+
+    // A `String` never changes, so building text a piece at a time makes a
+    // new `String` for each piece. `+=` does exactly that and rebinds the
+    // local to the result. For a handful of pieces that is fine.
+    var built = "one";
+    built += " two";
+    built += " three";
+    print($"built           ${built}");
+    print($"built length    ${built.charLength()}");
+
+    // Nothing releases any of this by hand. Each string is freed when its
+    // last reference goes away, the same rule the Ownership lesson showed for
+    // a class.
+}
