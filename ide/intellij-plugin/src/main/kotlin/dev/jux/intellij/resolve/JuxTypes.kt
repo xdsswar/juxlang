@@ -123,6 +123,11 @@ object JuxTypeEngine {
             E.SUPER_EXPRESSION -> PsiTreeUtil.getParentOfType(expr, JuxTypeDeclaration::class.java)
                 ?.let { supertypes(selfType(it)).firstOrNull() } ?: JuxType.Unknown
             E.FIELD_ACCESS_EXPRESSION -> {
+                // `Iface.super` (a default method of that interface) and
+                // `Outer.this`: a value of the named type, not the type.
+                if (expr.node.findChildByType(T.SUPER_KW) != null || expr.node.findChildByType(T.THIS_KW) != null) {
+                    return classOf(typeOf(firstExpressionChild(expr))) ?: JuxType.Unknown
+                }
                 val member = resolveMemberAccess(expr) ?: return JuxType.Unknown
                 if (member.element.elementType === E.METHOD_DECLARATION) JuxType.Unknown
                 else memberType(member)
@@ -221,7 +226,7 @@ object JuxTypeEngine {
         val argCount = argumentCount(call)
         return when (callee.elementType) {
             E.FIELD_ACCESS_EXPRESSION -> {
-                val member = resolveMemberAccess(callee, argCount) ?: return JuxType.Unknown
+                val member = resolveMemberAccess(callee, argCount) ?: return enumBuiltinCallType(callee)
                 if (member.element.elementType === E.METHOD_DECLARATION) returnType(member) else JuxType.Unknown
             }
             E.REFERENCE_EXPRESSION -> when (val target = resolveReferenceExpression(callee, argCount)) {
@@ -236,6 +241,19 @@ object JuxTypeEngine {
             }
             else -> JuxType.Unknown
         }
+    }
+
+    /**
+     * `Color.fromName("red")`, `c.ordinal()`: a call of an enum's built-in
+     * helper (§7.7.3), which no declaration backs. Unknown for anything else.
+     */
+    private fun enumBuiltinCallType(callee: PsiElement): JuxType {
+        val name = memberName(callee) ?: return JuxType.Unknown
+        val receiver = typeOf(firstExpressionChild(callee))
+        val enum = classOf(receiver)?.decl ?: return JuxType.Unknown
+        val static = stripNullable(receiver) is JuxType.Static
+        val builtin = JuxEnumBuiltins.find(enum, name, static) ?: return JuxType.Unknown
+        return JuxEnumBuiltins.returnType(enum, builtin, callee)
     }
 
     private fun literalType(expr: PsiElement): JuxType = when (expr.firstChild?.elementType) {
@@ -305,6 +323,7 @@ object JuxTypeEngine {
             E.METHOD_DECLARATION -> return typeOfDeclarationTypeRef(decl)
         }
         decl.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { return typeOfTypeReference(it) }
+        if (decl.elementType === E.LOCAL_VARIABLE) binderType(decl)?.let { return it }
         // `var x = <expr>` / a field or property initializer.
         val initializer = initializerOf(decl)
         if (initializer != null) return typeOf(initializer)
@@ -331,6 +350,75 @@ object JuxTypeEngine {
             c = c.nextSibling
         }
         return null
+    }
+
+    /**
+     * The type of a name a pattern binds, or null when [local] is no binder:
+     *  - `x => Dog d`: `d` is a `Dog`;
+     *  - `case Circle(var r)` / `var Pt(a, b) = p`: the record component the
+     *    binder sits in the place of;
+     *  - `case var v`: the switch subject.
+     */
+    private fun binderType(local: PsiElement): JuxType? {
+        val parent = local.parent ?: return null
+        when (parent.elementType) {
+            E.BINARY_EXPRESSION -> return parent.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { typeOfTypeReference(it) }
+            E.PATTERN -> {
+                val outer = parent.parent ?: return null
+                if (outer.elementType === E.SWITCH_CASE) {
+                    // `case var v ->` binds the subject itself.
+                    val switch = outer.parent ?: return null
+                    return typeOf(firstExpressionChild(switch))
+                }
+                if (outer.elementType !== E.PATTERN) return null
+                val head = patternHeadName(outer) ?: return null
+                val index = outer.children.filter { it.elementType === E.PATTERN }.indexOf(parent)
+                return componentType(outer, head, index)
+            }
+            E.DESTRUCTURING_DECLARATION -> {
+                // The binders sit flat among the tokens: count the commas back
+                // to the `(` that opens this binder's list, whose head names
+                // the record.
+                var depth = 0
+                var index = 0
+                var c: PsiElement? = local.prevSibling
+                while (c != null) {
+                    when (c.elementType) {
+                        T.RPAREN -> depth++
+                        T.LPAREN -> if (depth == 0) {
+                            var head = c.prevSibling
+                            while (head is com.intellij.psi.PsiWhiteSpace) head = head.prevSibling
+                            if (head?.elementType !== E.TYPE_REFERENCE) return null
+                            val name = patternHeadName(head) ?: return null
+                            return componentType(head, name, index)
+                        } else depth--
+                        T.COMMA -> if (depth == 0) index++
+                    }
+                    c = c.prevSibling
+                }
+                return null
+            }
+        }
+        return null
+    }
+
+    /** The last name before a pattern's `(`: `Circle` of `geo.Circle(var r)`. */
+    private fun patternHeadName(pattern: PsiElement): String? {
+        var name: String? = null
+        var c = pattern.node.firstChildNode
+        while (c != null && c.elementType !== T.LPAREN) {
+            if (c.elementType === T.IDENTIFIER) name = c.text
+            c = c.treeNext
+        }
+        return name
+    }
+
+    /** The type of component [index] of the record named [recordName], seen from [context]. */
+    private fun componentType(context: PsiElement, recordName: String, index: Int): JuxType? {
+        if (index < 0) return null
+        val record = resolveTypeName(context, recordName) as? JuxTypeDeclaration ?: return null
+        val component = JuxHierarchy.recordComponents(record).getOrNull(index) ?: return null
+        return declaredType(component)
     }
 
     // ------------------------------------------------------------ type refs
@@ -592,9 +680,13 @@ object JuxTypeEngine {
     fun resolveReferenceExpression(ref: PsiElement, argCount: Int? = null, nameOverride: String? = null): PsiElement? {
         val name = nameOverride ?: memberName(ref) ?: return null
         val offset = ref.textRange.startOffset
+        var child: PsiElement = ref
         var scope: PsiElement? = ref.parent
         while (scope != null) {
             ProgressManager.checkCanceled()
+            // Pattern binders: `case Circle(var r) -> r`, `if (x => Dog d) d`.
+            dev.jux.intellij.psi.JuxLocals.bindersInScope(scope, child)
+                .firstOrNull { (it as? JuxNamedElement)?.name == name }?.let { return it }
             when (scope.elementType) {
                 E.CODE_BLOCK -> for (child in dev.jux.intellij.psi.JuxLocals.blockLocals(scope)) {
                     if (child.elementType === E.LOCAL_VARIABLE && child.textRange.startOffset < offset &&
@@ -631,6 +723,7 @@ object JuxTypeEngine {
                     .firstOrNull { it.name == name && it !== scope }?.let { return it }
             }
             if (scope is PsiFile) break
+            child = scope
             scope = scope.parent
         }
         val file = ref.containingFile

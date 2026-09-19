@@ -51,6 +51,15 @@ abstract class JuxNamedElementImpl(node: ASTNode) : JuxCompositeElement(node), J
 
     override fun getName(): String? = nameIdentifier?.text
 
+    /**
+     * The offset of the name, as Java's PSI reports it. The platform finds
+     * "the declaration at the caret" by matching this offset against the
+     * leaf under the caret, and navigation puts the caret here, so a
+     * declaration that starts with modifiers or `var` (`public void run`,
+     * `case C(var r)`) must still point at its name.
+     */
+    override fun getTextOffset(): Int = nameIdentifier?.textRange?.startOffset ?: super.getTextOffset()
+
     override fun setName(name: String): PsiElement {
         val id = nameIdentifier
             ?: throw IncorrectOperationException("declaration has no name to rename")

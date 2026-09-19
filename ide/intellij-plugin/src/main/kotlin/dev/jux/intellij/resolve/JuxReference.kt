@@ -186,9 +186,14 @@ class JuxReference(element: PsiElement, range: TextRange) :
     fun resolveLocally(): PsiElement? {
         val name = value
         val refOffset = element.textOffset
+        var child: PsiElement = element
         var scope: PsiElement? = element.parent
         while (scope != null) {
+            // Pattern binders: `case Circle(var r) -> r`, `if (x => Dog d) d`.
+            dev.jux.intellij.psi.JuxLocals.bindersInScope(scope, child)
+                .firstOrNull { (it as? JuxNamedElement)?.name == name }?.let { return it }
             lookupInScope(scope, name, refOffset)?.let { return it }
+            child = scope
             scope = scope.parent
         }
         return null

@@ -419,14 +419,42 @@ private fun PsiBuilder.parseSwitchCase() {
 }
 
 /**
- * A lenient pattern: optional `var`/`final`, then a literal (with optional
- * range), or a qualified name optionally followed by a nested-pattern list
- * `(…)` or a binding identifier.
+ * A lenient pattern (Grammar §A.3): `var name`, a literal (with optional
+ * range), a tuple `(p, q)`, a qualified name optionally followed by a
+ * sub-pattern list `Circle(var r, _)`, or a type test `Dog d`.
+ *
+ * Every name a pattern binds (`var r`, the `d` of `Dog d`) is a
+ * LOCAL_VARIABLE node, so an arm's binders resolve, rename, complete and
+ * find their usages like any local. Sub-patterns are PATTERN nodes of their
+ * own, which is what lets a `var` binder find the record component it binds.
+ * A pattern's head name (`Circle`, `Color.Red`, a bare `Sat`) stays plain
+ * tokens: it may name a type or an enum variant of the subject, which only
+ * the subject's type decides.
  */
 private fun PsiBuilder.parsePattern() {
     val m = mark()
     while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
+    // `var name`: a binder.
+    if (at(T.VAR_KW) && lookAhead(1) === T.IDENTIFIER) {
+        val binder = mark()
+        advanceLexer()
+        advanceLexer()
+        binder.done(E.LOCAL_VARIABLE)
+        m.done(E.PATTERN)
+        return
+    }
     if (at(T.VAR_KW)) advanceLexer()
+    // `Dog d`: a type test with a binder. The type is a real type reference.
+    if (at(T.IDENTIFIER) && lookAhead(1) === T.IDENTIFIER) {
+        val binder = mark()
+        val type = mark()
+        advanceLexer()
+        type.done(E.TYPE_REFERENCE)
+        advanceLexer()
+        binder.done(E.LOCAL_VARIABLE)
+        m.done(E.PATTERN)
+        return
+    }
     // A literal bound, allowing a leading minus (`-5`).
     fun literalBound(): Boolean {
         if (at(T.MINUS) && T.LITERALS.contains(lookAhead(1))) { advanceLexer(); advanceLexer(); return true }
@@ -448,14 +476,30 @@ private fun PsiBuilder.parsePattern() {
             // qualified name
             advanceLexer()
             while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) { advanceLexer(); advanceLexer() }
-            if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // record/enum sub-patterns
-            else if (at(T.IDENTIFIER)) advanceLexer()         // type-pattern binding
+            if (at(T.LPAREN)) parseSubPatterns()      // record/enum sub-patterns
+            else if (at(T.IDENTIFIER)) advanceLexer() // `a.B x`: not in the grammar, kept lenient
         }
         // tuple pattern `(p, q)`
-        at(T.LPAREN) -> skipMatched(T.LPAREN, T.RPAREN)
+        at(T.LPAREN) -> parseSubPatterns()
         else -> if (!at(T.ARROW) && !at(T.FAT_ARROW) && !at(T.WHEN_KW)) advanceLexer()
     }
     m.done(E.PATTERN)
+}
+
+/**
+ * `(p, q, …)`: the sub-patterns of a record, enum variant or tuple pattern,
+ * each a PATTERN of its own. Stops at `)`, or at a token that cannot continue
+ * a pattern list so a half-typed arm never swallows the rest of the switch.
+ */
+private fun PsiBuilder.parseSubPatterns() {
+    advanceLexer() // `(`
+    while (!eof() && !at(T.RPAREN)) {
+        val before = currentOffset
+        parsePattern()
+        if (at(T.COMMA)) advanceLexer()
+        else if (currentOffset == before || at(T.ARROW) || at(T.LBRACE) || at(T.SEMICOLON)) break
+    }
+    expectOrError(T.RPAREN, "')' expected")
 }
 
 /**

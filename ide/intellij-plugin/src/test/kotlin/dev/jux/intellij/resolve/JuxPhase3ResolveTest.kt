@@ -203,6 +203,74 @@ class JuxPhase3ResolveTest : BasePlatformTestCase() {
         myFixture.checkResult("record Pt(int x, int y) {}\nvoid main() { var p = new Pt(1, 2); var Pt(left, b) = p; print(left + b); }")
     }
 
+    fun testRecordPatternBinderResolves() {
+        val (name, type) = target(
+            """
+            sealed interface Shape {}
+            record Circle(double r) implements Shape {}
+            double area(Shape s) { return switch (s) { case Circle(var rad) -> 3.0 * ra<caret>d; default -> 0.0; }; }
+            """.trimIndent(),
+        )
+        assertEquals("rad", name)
+        assertEquals(E.LOCAL_VARIABLE, type)
+    }
+
+    fun testTypePatternBinderResolvesInGuard() {
+        val (name, _) = target(
+            """
+            class Animal {}
+            class Dog extends Animal { public bool loud() { return true; } }
+            String f(Animal a) { return switch (a) { case Dog d when <caret>d.loud() -> "loud"; default -> "quiet"; }; }
+            """.trimIndent(),
+        )
+        assertEquals("d", name)
+    }
+
+    fun testTypeTestBinderResolvesInThenBranch() {
+        val (name, type) = target(
+            """
+            class Animal {}
+            class Dog extends Animal { public void bark() {} }
+            void main() { Animal a = new Dog(); if (a => Dog d && <caret>d != null) { d.bark(); } }
+            """.trimIndent(),
+        )
+        assertEquals("d", name)
+        assertEquals(E.LOCAL_VARIABLE, type)
+    }
+
+    fun testTypeTestBinderMethodResolves() {
+        val (name, _) = target(
+            """
+            class Animal {}
+            class Dog extends Animal { public void bark() {} }
+            void main() { Animal a = new Dog(); if (a => Dog d) { d.ba<caret>rk(); } }
+            """.trimIndent(),
+        )
+        assertEquals("bark", name)
+    }
+
+    fun testInterfaceSuperCallResolves() {
+        val (name, type) = target(
+            """
+            interface A { default String hi() { return "A"; } }
+            class C implements A { public String hi() { return A.super.h<caret>i(); } }
+            """.trimIndent(),
+        )
+        assertEquals("hi", name)
+        assertEquals(E.METHOD_DECLARATION, type)
+    }
+
+    fun testRenamePatternBinder() {
+        myFixture.configureByText(
+            "a.jux",
+            "record C(double r) {}\ndouble f(Object o) { return switch (o) { case C(var r<caret>ad) -> rad * rad; default -> 0.0; }; }",
+        )
+        myFixture.renameElement(myFixture.elementAtCaret, "radius")
+        myFixture.checkResult(
+            "record C(double r) {}\ndouble f(Object o) { return switch (o) { case C(var radius) -> radius * radius; default -> 0.0; }; }",
+        )
+    }
+
     fun testFreeOperatorIsAFunctionInStructure() {
         myFixture.configureByText("a.jux", "record V(int x) {}\nV operator*(int k, V v) { return new V(k * v.x); }")
         val ops = com.intellij.psi.util.PsiTreeUtil.collectElements(myFixture.file) { it.elementType === E.OPERATOR_DECLARATION }

@@ -154,7 +154,13 @@ private fun PsiBuilder.parseBinary(minPrec: Int): PsiBuilder.Marker? {
             T.AS_KW -> { parseAsType(); E.CAST_EXPRESSION }
             T.FAT_ARROW -> { // type-test `e => Type [binding]`
                 parseType()
-                if (at(T.IDENTIFIER)) advanceLexer()
+                // The binder of `x => Dog d` is a local of its own, so it
+                // resolves, renames and completes (JuxLocals.bindersInScope).
+                if (at(T.IDENTIFIER)) {
+                    val binder = mark()
+                    advanceLexer()
+                    binder.done(E.LOCAL_VARIABLE)
+                }
                 E.BINARY_EXPRESSION
             }
             T.DOT_DOT, T.DOT_DOT_EQ -> {
