@@ -1,0 +1,1 @@
+closure_refinement_not_carried.jux:11:27: [E0418] error: `maybe` may be null here (its type is `User?`), so `.name` has no value to reach

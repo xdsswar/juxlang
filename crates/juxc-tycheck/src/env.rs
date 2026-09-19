@@ -217,6 +217,17 @@ impl TypeEnv {
         None
     }
 
+    /// The type `name` was DECLARED with, when an inner scope has since
+    /// rebound it to a refinement (a null check, a type test, a guard clause
+    /// narrows a name by declaring it again with the narrower type). `None`
+    /// when the name is bound once, or not at all: nothing is refined.
+    pub fn declared_type_under_refinement(&self, name: &str) -> Option<&Ty> {
+        let mut bindings = self.scopes.iter().rev().filter_map(|scope| scope.get(name));
+        let innermost = bindings.next()?;
+        let outermost = bindings.last()?;
+        (outermost != innermost).then_some(outermost)
+    }
+
     /// Enter a class context. Replaces any previous `current_class`.
     pub fn set_class(&mut self, name: &str) {
         self.current_class = Some(name.to_string());

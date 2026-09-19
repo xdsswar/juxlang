@@ -1,0 +1,16 @@
+class User {
+    public String name = "u";
+}
+
+void later(() -> void f) { f(); }
+
+public void main() {
+    User? maybe = new User();
+    if (maybe != null) {
+        // The null check does not reach the closure (T.6.4).
+        later(() -> print(maybe.name));
+        // A fresh local keeps it: `u` is a User.
+        var u = maybe;
+        later(() -> print(u.name));
+    }
+}

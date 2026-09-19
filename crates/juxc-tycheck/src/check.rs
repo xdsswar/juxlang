@@ -7407,6 +7407,30 @@ impl<'a> Checker<'a> {
                 self.env.push_scope();
                 let slot_params = self.lambda_slot_params.take();
                 let comparator = std::mem::take(&mut self.lambda_is_comparator);
+                // A refinement made outside the lambda does not hold inside it
+                // (Type system §T.6.4): the closure may run later, after the
+                // variable changed. Every refined name the body reads is bound
+                // back to its declared type for the body; copying the refined
+                // value to a fresh local first is how to keep it.
+                let mut restore: Vec<(String, Ty)> = Vec::new();
+                let mut note = |qn: &juxc_ast::QualifiedName| {
+                    if let [only] = qn.segments.as_slice() {
+                        if l.params.iter().any(|p| p.name.text == only.text) || restore.iter().any(|(n, _)| *n == only.text) {
+                            return;
+                        }
+                        if let Some(declared) = self.env.declared_type_under_refinement(&only.text) {
+                            restore.push((only.text.clone(), declared.clone()));
+                        }
+                    }
+                };
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(e) => collect_bare_name_reads(e, &mut note),
+                    juxc_ast::LambdaBody::Block(b) => {
+                        for s in &b.statements {
+                            collect_bare_name_reads_stmt(s, &mut note);
+                        }
+                    }
+                }
                 for (i, p) in l.params.iter().enumerate() {
                     let ty = match &p.ty {
                         Some(t) => ty_from_ref(t, &self.env, self.symbols),
@@ -7419,6 +7443,11 @@ impl<'a> Checker<'a> {
                         },
                     };
                     self.env.declare(&p.name.text, ty);
+                }
+                for (name, declared) in restore {
+                    if !l.params.iter().any(|p| p.name.text == name) {
+                        self.env.declare(&name, declared);
+                    }
                 }
                 let saved_return = self.current_return.take();
                 // A lambda introduces its OWN async context: an async lambda
