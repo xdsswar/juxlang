@@ -305,9 +305,12 @@ impl RustEmitter {
                     // still needs the cast.
                     let widen = arm_widen.filter(|p| {
                         let float_target = juxc_tycheck::ty::is_float_primitive(*p);
-                        self.operand_primitive(e) != Some(*p)
-                            && !(juxc_tycheck::infer::untyped_int_literal(e) && !float_target)
-                            && !(juxc_tycheck::infer::untyped_float_literal(e) && float_target)
+                        let adapts = if float_target {
+                            juxc_tycheck::infer::untyped_float_literal(e)
+                        } else {
+                            juxc_tycheck::infer::untyped_int_literal(e)
+                        };
+                        self.operand_primitive(e) != Some(*p) && !adapts
                     });
                     if widen.is_some() {
                         self.w.push('(');
