@@ -201,6 +201,12 @@
     <lang.foldingBuilder
         language="Jux"
         implementationClass="dev.jux.intellij.folding.JuxFoldingBuilder"/>
+    <!-- Which Jux regions start collapsed: the "Jux" group of
+         Settings | Editor | General | Code Folding, beside Java's. -->
+    <applicationService
+        serviceImplementation="dev.jux.intellij.folding.JuxCodeFoldingSettings"/>
+    <codeFoldingOptionsProvider
+        instance="dev.jux.intellij.folding.JuxCodeFoldingOptionsProvider"/>
 
     <!-- PSI semantic highlighting: declaration names, reference uses
          (call sites, params, locals, type parameters, enum constants),
