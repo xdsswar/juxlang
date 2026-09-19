@@ -1304,6 +1304,31 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
+            // `InterfaceName.staticMethod(args)`: an interface's statics live
+            // on its own signature. Untyped, the result of `Shapes.all()` was
+            // Unknown, and a for-each over a returned iterator lost its
+            // element type.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1 {
+                    let bare = qn.segments[0].text.as_str();
+                    let iface = symbols.interfaces.get_key_value(bare).or_else(|| {
+                        symbols
+                            .interfaces
+                            .iter()
+                            .find(|(k, _)| k.rsplit('.').next() == Some(bare))
+                    });
+                    if let Some((iface_fqn, iface)) = iface {
+                        if let Some(method) = iface.methods.get(method_name).filter(|m| m.is_static) {
+                            return return_type_in_method(
+                                &method.return_type,
+                                iface_fqn,
+                                &method.generic_params,
+                                symbols,
+                            );
+                        }
+                    }
+                }
+            }
             // `Stream.<ctor>` statics (§18.6.4) — `Stream` is a builtin,
             // not a class, so the class-static path above can't type it.
             // The element type comes from an explicit type arg
@@ -3045,7 +3070,7 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
                 let _ = infer_expr(arg, env, symbols);
             }
         }
-        Stmt::Throw(e, _) => {
+        Stmt::Throw(e, _) | Stmt::Yield(e, _) => {
             let _ = infer_expr(e, env, symbols);
         }
         Stmt::Try(t) => {

@@ -1020,6 +1020,36 @@ behaviour and stands.
 
 ---
 
+## E50. A `? super T` argument whose `T` another argument fixes
+
+**Conflict.** JUX-TYPE-SYSTEM-ADDENDUM §T.2.6 has
+`copyAll<T>(List<? extends T> source, List<? super T> dest)` take a
+`List<Dog>` and a `List<Animal>`: `T` is `Dog`, and the destination holds a
+supertype of it. Phase 1 lowers a type parameter to one Rust type, so both
+parameters became `Vec<T>` with the same `T`. A `Vec<Dog>` and a
+`Vec<Animal>` (whose elements are `Rc<dyn AnimalKind>` handles) are two
+different Rust types, and the call reached rustc as a mismatch.
+
+Doing it soundly needs a second, hidden element type for the destination
+plus a conversion from `T` to it at every write through the wildcard: the
+same upcast an assignment `Animal a = dog;` performs, but threaded through
+generic code as a bound (`D: From<T>`) the program never wrote. That is
+readable for this one shape and not for the next (a `? super T` handed on to
+a second generic function, or a wildcard inside a field), so it is not done
+piecemeal.
+
+**Resolution.** Phase-1 restriction, now diagnosed: when a `? super T`
+parameter's `T` is fixed by another argument, the argument passed for it must
+be a container of exactly `T`; a container of a strict supertype is `E0410`,
+naming both types and this entry. Everything else about wildcards stands: a
+concrete lower bound (`List<? super Dog>`, no type parameter) takes a
+container of any supertype and writes through it, and `? extends` reads work
+through a polymorphic base.
+
+**Spec status:** §T.2.6 describes the intended behaviour and stands.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

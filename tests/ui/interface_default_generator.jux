@@ -1,0 +1,17 @@
+// A default method only borrows the object it runs on, and the iterator a
+// generator returns would outlive that borrow (§M.2.4). The help names the two
+// shapes that work.
+
+interface Counter {
+    int limit();
+
+    default Iterator<int> count() {
+        for (var i = 0; i < limit(); i++) {
+            yield i;
+        }
+    }
+}
+
+public void main() {
+    print(1);
+}

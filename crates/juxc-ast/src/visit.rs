@@ -178,7 +178,7 @@ fn walk_try(t: &crate::TryStmt, f: &mut dyn FnMut(Node<'_>)) {
 fn walk_stmt(st: &Stmt, f: &mut dyn FnMut(Node<'_>)) {
     f(Node::Stmt(st));
     match st {
-        Stmt::Expr(e) | Stmt::Throw(e, _) => walk_expr(e, f),
+        Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Yield(e, _) => walk_expr(e, f),
         Stmt::Return(value, _) => {
             if let Some(e) = value {
                 walk_expr(e, f);

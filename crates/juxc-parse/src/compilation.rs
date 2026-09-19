@@ -58,6 +58,8 @@ impl<'a> Parser<'a> {
                 } else {
                     self.recover_to_stmt_boundary();
                 }
+            } else if self.at_annotation_block() {
+                items.extend(self.parse_annotation_block());
             } else {
                 let diags_before = self.diagnostics.len();
                 if let Some(item) = self.parse_top_level_decl() {
@@ -445,7 +447,8 @@ impl<'a> Parser<'a> {
         // then the decl body. We consume both prefixes here and
         // thread the captured annotations into whichever decl
         // dispatch arm fires.
-        let annotations = self.parse_annotations();
+        let mut annotations = self.block_annotations.clone();
+        annotations.extend(self.parse_annotations());
         let visibility = self.parse_visibility();
 
         // `@extern(lib = "…") unsafe native { … }` — a foreign-function block
@@ -765,6 +768,76 @@ impl<'a> Parser<'a> {
     /// top-level declaration (a visibility modifier, a type-decl keyword,
     /// `import`, `package`, or EOF). This is the recovery anchor for a
     /// failed `parse_top_level_decl`.
+    /// True at `@ qualified-name {`: a block-form annotation (grammar
+    /// A.2.3). The form takes no arguments, so `@export(name = "f")` never
+    /// matches, and neither does an annotation followed by a declaration.
+    fn at_annotation_block(&self) -> bool {
+        let kind = |k: usize| self.tokens.get(self.pos + k).map(|t| &t.kind);
+        if !matches!(kind(0), Some(TokenKind::At)) || !matches!(kind(1), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        let mut k = 2;
+        while matches!(kind(k), Some(TokenKind::Dot)) && matches!(kind(k + 1), Some(TokenKind::Ident(_))) {
+            k += 2;
+        }
+        matches!(kind(k), Some(TokenKind::LBrace))
+    }
+
+    /// `'@' qualified-name '{' top-level-decl* '}'` (grammar A.2.3): the
+    /// annotation applies to every declaration inside the braces, which do
+    /// not open a scope. The declarations come back as ordinary top-level
+    /// items, each with the annotation ahead of its own list, so every later
+    /// phase sees exactly what the one-at-a-time spelling would give it.
+    /// Blocks nest, outermost annotation first.
+    fn parse_annotation_block(&mut self) -> Vec<TopLevelDecl> {
+        let start = self.peek_span();
+        self.advance(); // `@`
+        let name = self.parse_qualified_name();
+        let annotation = juxc_ast::Annotation { name, args: Vec::new(), span: start.join(self.last_consumed_span()) };
+        self.expect(&TokenKind::LBrace, "'{' to open the annotation block");
+        self.block_annotations.push(annotation);
+        let mut items = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            let before = self.pos;
+            if self.at_annotation_block() {
+                items.extend(self.parse_annotation_block());
+                continue;
+            }
+            match self.parse_top_level_decl() {
+                Some(item) => items.push(item),
+                None => {
+                    // Only declarations belong here. Skip to the next thing
+                    // that can start one, or to the closing brace.
+                    self.pos = before.max(self.pos);
+                    self.advance();
+                    while !self.at_eof()
+                        && !self.at(&TokenKind::RBrace)
+                        && !self.at(&TokenKind::At)
+                        && !matches!(
+                            self.peek(),
+                            TokenKind::Kw(
+                                Keyword::Public
+                                    | Keyword::Internal
+                                    | Keyword::Protected
+                                    | Keyword::Private
+                                    | Keyword::Class
+                                    | Keyword::Interface
+                                    | Keyword::Struct
+                                    | Keyword::Record
+                                    | Keyword::Enum
+                            )
+                        )
+                    {
+                        self.advance();
+                    }
+                }
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' to close the annotation block");
+        self.block_annotations.pop();
+        items
+    }
+
     pub(crate) fn recover_to_top_level(&mut self) {
         while !self.at_eof() {
             match self.peek() {

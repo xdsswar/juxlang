@@ -1,0 +1,9 @@
+// A lambda cannot be a generator (§M.2.1): the `yield` belongs to it, not to
+// the function around it.
+
+public void main() {
+    () -> void emit = () -> {
+        yield 1;
+    };
+    emit();
+}

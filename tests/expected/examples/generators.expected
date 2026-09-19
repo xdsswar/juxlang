@@ -1,0 +1,26 @@
+0 1 1 2 3 5 8 13 21 34
+countdown 3
+countdown 2
+countdown 1
+countdown 0
+even 4
+even 2
+even 0
+even 2
+even 0
+ha
+ha
+ha
+1 2 3 4 5 6
+#1 outro
+#2 verse
+#3 intro
+#4 outro
+#5 verse
+#6 intro
+played 6
+resumed at 6
+step 0
+step 1
+guarded: done
+examples/generators.jux:52:12: [W0457] warning: field `left` forms a reference cycle on class `Node` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)

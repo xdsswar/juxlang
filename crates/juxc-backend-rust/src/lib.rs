@@ -889,6 +889,11 @@ struct RustEmitter {
     /// `return "literal".to_string();` so the `&str` → owned `String`
     /// gap doesn't surface as an E0308 at rustc time.
     pub(crate) current_return_type: Option<ReturnType>,
+    /// The element type `T` of the generator whose body is being emitted
+    /// (§M.2): the `T` of its `Iterator<T>` / `Stream<T>` return. A `yield`
+    /// shapes its value for this slot the way a `return` shapes one for the
+    /// function's return type. `None` outside a generator body.
+    pub(crate) generator_element: Option<juxc_ast::TypeRef>,
     /// Optional original [`SourceFile`] for emitting `// JUX:file:line:col`
     /// source-map markers. `None` (the default) skips markers, keeping
     /// the emitted Rust unchanged from the pre-markers shape — this is
@@ -1975,7 +1980,7 @@ pub(crate) fn compute_aliased_classes(
         match s {
             // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
             Stmt::IfCfg(_) => {}
-            Stmt::Expr(e) => walk_expr(e, aliased, mark),
+            Stmt::Expr(e) | Stmt::Yield(e, _) => walk_expr(e, aliased, mark),
             Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     // A class-typed return ESCAPES the function but is not, by
@@ -2159,7 +2164,7 @@ pub(crate) fn compute_aliased_classes(
             match s {
                 // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
                 Stmt::IfCfg(_) => {}
-                Stmt::Expr(e) => mark_lambda_captures(e, aliased, mark),
+                Stmt::Expr(e) | Stmt::Yield(e, _) => mark_lambda_captures(e, aliased, mark),
                 Stmt::Return(Some(e), _) => mark_lambda_captures(e, aliased, mark),
                 Stmt::Return(None, _) => {}
                 Stmt::VarDecl(v) => {
@@ -2857,7 +2862,7 @@ pub(crate) fn compute_mutated_classes(
         match s {
             // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
             Stmt::IfCfg(_) => {}
-            Stmt::Expr(e) => walk_expr(e, et, um, out),
+            Stmt::Expr(e) | Stmt::Yield(e, _) => walk_expr(e, et, um, out),
             Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_expr(e, et, um, out);
@@ -3622,7 +3627,7 @@ fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
     match s {
         // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
         Stmt::IfCfg(_) => {}
-        Stmt::Expr(e) => cast_targets_expr(e, out),
+        Stmt::Expr(e) | Stmt::Yield(e, _) => cast_targets_expr(e, out),
         Stmt::Return(Some(e), _) => cast_targets_expr(e, out),
         Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
         Stmt::Labeled { stmt, .. } => cast_targets_stmt(stmt, out),
@@ -4944,6 +4949,101 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::chain(self.take_inner(), other.take_inner())))\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Generator runtime — JUX-MISSING-DEFS §M.2. A generator's body is
+        // an `async` block that suspends at every `yield`, and
+        // `JuxGenerator` owns it: each `next()` runs it to its next
+        // `yield` (a value) or to its end (`None`). The suspended locals
+        // live inside that future, so dropping the iterator drops them
+        // (§M.2.4). A sync generator is driven with a no-op waker; an async
+        // one is a `Stream`, driven by whoever awaits it.
+        w.push_str(concat!(
+            "pub struct JuxYield<T>(std::rc::Rc<std::cell::Cell<Option<T>>>);\n",
+            "impl<T> JuxYield<T> {\n",
+            "    /// Hand `value` to the consumer, then pause until it asks again.\n",
+            "    pub fn yield_(&self, value: T) -> JuxYieldPoint {\n",
+            "        self.0.set(Some(value));\n",
+            "        JuxYieldPoint(false)\n",
+            "    }\n",
+            "}\n",
+            "pub struct JuxYieldPoint(bool);\n",
+            "impl std::future::Future for JuxYieldPoint {\n",
+            "    type Output = ();\n",
+            "    fn poll(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {\n",
+            "        if self.0 {\n",
+            "            std::task::Poll::Ready(())\n",
+            "        } else {\n",
+            "            self.0 = true;\n",
+            "            std::task::Poll::Pending\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "pub struct JuxGenerator<T> {\n",
+            "    slot: std::rc::Rc<std::cell::Cell<Option<T>>>,\n",
+            "    body: std::cell::RefCell<Option<std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ()>>>>>,\n",
+            "}\n",
+            "impl<T: 'static> JuxGenerator<T> {\n",
+            "    pub fn new<F: std::future::Future<Output = ()> + 'static>(body: impl FnOnce(JuxYield<T>) -> F) -> Self {\n",
+            "        let slot = std::rc::Rc::new(std::cell::Cell::new(None));\n",
+            "        let body = body(JuxYield(slot.clone()));\n",
+            "        JuxGenerator { slot, body: std::cell::RefCell::new(Some(::std::boxed::Box::pin(body))) }\n",
+            "    }\n",
+            "    /// Run the body to its next `yield` or to its end.\n",
+            "    fn resume(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<T>> {\n",
+            "        let mut body = self.body.borrow_mut();\n",
+            "        let Some(running) = body.as_mut() else {\n",
+            "            return std::task::Poll::Ready(None);\n",
+            "        };\n",
+            "        // A throw escaping the body ends the generator: the exception\n",
+            "        // reaches the consumer, and later `next()` calls answer null.\n",
+            "        let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| running.as_mut().poll(cx)));\n",
+            "        let step = match step {\n",
+            "            Ok(step) => step,\n",
+            "            Err(payload) => {\n",
+            "                *body = None;\n",
+            "                drop(body);\n",
+            "                std::panic::resume_unwind(payload);\n",
+            "            }\n",
+            "        };\n",
+            "        match step {\n",
+            "            std::task::Poll::Ready(()) => {\n",
+            "                *body = None;\n",
+            "                std::task::Poll::Ready(None)\n",
+            "            }\n",
+            "            std::task::Poll::Pending => match self.slot.take() {\n",
+            "                Some(value) => std::task::Poll::Ready(Some(value)),\n",
+            "                // An async generator waiting on something it awaited.\n",
+            "                None => std::task::Poll::Pending,\n",
+            "            },\n",
+            "        }\n",
+            "    }\n",
+            "    pub fn next(&self) -> Option<T> {\n",
+            "        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());\n",
+            "        match self.resume(&mut cx) {\n",
+            "            std::task::Poll::Ready(value) => value,\n",
+            "            std::task::Poll::Pending => unreachable!(\"a synchronous generator never awaits\"),\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "impl<T> std::fmt::Debug for JuxGenerator<T> {\n",
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n",
+            "        f.write_str(\"generator\")\n",
+            "    }\n",
+            "}\n",
+            "impl<T> JuxIdentity for JuxGenerator<T> {\n",
+            "    fn __jux_identity(&self) -> *const () { (self as *const Self).cast::<()>() }\n",
+            "}\n",
+            "impl<T: Clone + std::fmt::Debug + 'static> crate::jux::std::collections::Iterator<T> for JuxGenerator<T> {\n",
+            "    fn next(&self) -> Option<T> {\n",
+            "        JuxGenerator::next(self)\n",
+            "    }\n",
+            "}\n",
+            "impl<T: 'static> futures::stream::Stream for JuxGenerator<T> {\n",
+            "    type Item = T;\n",
+            "    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<T>> {\n",
+            "        self.resume(cx)\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // AsyncMutex runtime — §18.3. `await m.lock()` suspends until
         // acquired; the returned guard is the only handle to the
         // protected value (`guard.value` reads/writes deref it) and
@@ -5099,6 +5199,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,
             current_return_type: None,
+            generator_element: None,
             source: None,
             symbols: symbols.clone(),
             expr_types,

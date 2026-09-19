@@ -1,0 +1,103 @@
+// Generator pipelines (Missing-defs §M.2): stages that pull from each other
+// lazily, a generic stage, a stage that throws part way, and nested loops
+// over generators with a labeled `continue`. The Java twin chains
+// hand-written Iterator classes.
+
+Iterator<int> range(int from, int to) {
+    for (var i = from; i < to; i++) {
+        yield i;
+    }
+}
+
+Iterator<int> mapped(Iterator<int> source, (int) -> int f) {
+    for (var x : source) {
+        yield f(x);
+    }
+}
+
+Iterator<int> filtered(Iterator<int> source, (int) -> bool keep) {
+    for (var x : source) {
+        if (keep(x)) {
+            yield x;
+        }
+    }
+}
+
+// Stops pulling from `source` after `n` values.
+Iterator<int> take(Iterator<int> source, int n) {
+    var taken = 0;
+    for (var x : source) {
+        if (taken == n) {
+            return;
+        }
+        taken++;
+        yield x;
+    }
+}
+
+<T> Iterator<T> cycle(T a, T b, int times) {
+    for (var i = 0; i < times; i++) {
+        yield a;
+        yield b;
+    }
+}
+
+// Counts how often the source is pulled, to show the laziness.
+class Probe {
+    public int pulls = 0;
+
+    public Iterator<int> numbers() {
+        var n = 0;
+        while (true) {
+            pulls++;
+            yield n;
+            n++;
+        }
+    }
+}
+
+Iterator<int> checked(Iterator<int> source, int limit) {
+    for (var x : source) {
+        if (x > limit) {
+            throw new IllegalArgumentException("too big: " + x);
+        }
+        yield x;
+    }
+}
+
+public void main() {
+    var squaresOfOdds = mapped(filtered(range(0, 10), (x) -> x % 2 == 1), (x) -> x * x);
+    for (var v : squaresOfOdds) {
+        print("odd square " + v);
+    }
+
+    var probe = new Probe();
+    for (var v : take(probe.numbers(), 3)) {
+        print("taken " + v);
+    }
+    print("pulls " + probe.pulls);
+
+    for (var s : cycle("tick", "tock", 2)) {
+        print(s);
+    }
+
+    var total = 0;
+    try {
+        for (var v : checked(range(1, 10), 4)) {
+            total = total + v;
+        }
+    } catch (IllegalArgumentException e) {
+        print("stopped: " + e.getMessage());
+    }
+    print("total " + total);
+
+    outer:
+    for (var row : range(0, 3)) {
+        for (var col : range(0, 3)) {
+            if (col > row) {
+                continue outer;
+            }
+            print("cell " + row + "," + col);
+        }
+    }
+}

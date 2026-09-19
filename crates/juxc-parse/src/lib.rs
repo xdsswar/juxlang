@@ -154,6 +154,10 @@ pub(crate) struct Parser<'a> {
     /// statement so the extras land in source order at the same
     /// scope level.
     pub(crate) pending_stmts: Vec<juxc_ast::Stmt>,
+    /// Annotations of the enclosing block-form annotations (`@export { … }`,
+    /// grammar A.2.3), outermost first. Every top-level declaration parsed
+    /// inside the braces carries them ahead of its own.
+    pub(crate) block_annotations: Vec<juxc_ast::Annotation>,
     /// Monotonic counter for `__jux_tup{N}` destructuring temps —
     /// unique per compilation unit so nested/sibling destructures
     /// never collide.
@@ -194,6 +198,7 @@ impl<'a> Parser<'a> {
             switch_arm_arrow: None,
             diagnostics: Vec::new(),
             pending_stmts: Vec::new(),
+            block_annotations: Vec::new(),
             tuple_tmp_counter: 0,
             foreign_mode: false,
             depth: 0,

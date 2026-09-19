@@ -1,0 +1,153 @@
+// Generators (JUX-MISSING-DEFS §M.2): a function whose body yields returns
+// an `Iterator<T>`, and its body runs only as far as the caller asks.
+
+// An endless sequence is fine: nothing runs past the value asked for.
+Iterator<long> fibonacci() {
+    long a = 0;
+    long b = 1;
+    while (true) {
+        yield a;
+        var next = a + b;
+        a = b;
+        b = next;
+    }
+}
+
+// `return;` ends the sequence early.
+Iterator<int> countdown(int from) {
+    var n = from;
+    while (true) {
+        if (n < 0) {
+            return;
+        }
+        yield n;
+        n--;
+    }
+}
+
+// `yield*` hands over to another iterator until it runs out.
+Iterator<int> concat(Iterator<int> first, Iterator<int> second) {
+    yield* first;
+    yield* second;
+}
+
+// A lazy pipeline stage: pull from `source`, pass on what matches.
+Iterator<int> evens(Iterator<int> source) {
+    for (var n : source) {
+        if (n % 2 == 0) {
+            yield n;
+        }
+    }
+}
+
+// Generic over the element.
+<T> Iterator<T> repeat(T value, int times) {
+    for (var i = 0; i < times; i++) {
+        yield value;
+    }
+}
+
+class Node {
+    public int value;
+    public Node? left;
+    public Node? right;
+
+    public Node(int value, Node? left, Node? right) {
+        this.value = value;
+        this.left = left;
+        this.right = right;
+    }
+}
+
+// The textbook case: an in-order walk with no explicit stack.
+Iterator<int> inOrder(Node? node) {
+    if (node == null) {
+        return;
+    }
+    yield* inOrder(node.left);
+    yield node.value;
+    yield* inOrder(node.right);
+}
+
+class Playlist {
+    private String[] songs;
+    private int plays = 0;
+
+    public Playlist(String[] songs) {
+        this.songs = songs;
+    }
+
+    // A generator method reads (and writes) its object between steps.
+    public Iterator<String> shuffle(int rounds) {
+        for (var r = 0; r < rounds; r++) {
+            for (var i = songs.length - 1; i >= 0; i--) {
+                plays = plays + 1;
+                yield "#" + plays + " " + songs[i];
+            }
+        }
+    }
+
+    public int played() {
+        return plays;
+    }
+}
+
+// A `finally` runs when the body finishes.
+Iterator<String> guarded(int n) {
+    try {
+        for (var i = 0; i < n; i++) {
+            yield "step " + i;
+        }
+    } finally {
+        print("guarded: done");
+    }
+}
+
+public void main() {
+    var fib = fibonacci();
+    var line = "";
+    for (var i = 0; i < 10; i++) {
+        line = line + (i == 0 ? "" : " ") + fib.next();
+    }
+    print(line);
+
+    for (var n : countdown(3)) {
+        print("countdown " + n);
+    }
+
+    for (var n : evens(concat(countdown(5), countdown(3)))) {
+        print("even " + n);
+    }
+
+    for (var s : repeat("ha", 3)) {
+        print(s);
+    }
+
+    var tree = new Node(4,
+        new Node(2, new Node(1, null, null), new Node(3, null, null)),
+        new Node(6, new Node(5, null, null), null));
+    var sorted = "";
+    for (var v : inOrder(tree)) {
+        sorted = sorted + (sorted == "" ? "" : " ") + v;
+    }
+    print(sorted);
+
+    var list = new Playlist(new String[] {"intro", "verse", "outro"});
+    for (var song : list.shuffle(2)) {
+        print(song);
+    }
+    print("played " + list.played());
+
+    // Breaking out leaves the iterator where it stopped.
+    var it = countdown(9);
+    for (var n : it) {
+        if (n == 7) {
+            break;
+        }
+    }
+    print("resumed at " + it.next());
+
+    for (var step : guarded(2)) {
+        print(step);
+    }
+}

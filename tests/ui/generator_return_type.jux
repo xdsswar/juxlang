@@ -1,0 +1,11 @@
+// A function that yields is a generator, and a generator returns
+// `Iterator<T>` (§M.2.1).
+
+public int count() {
+    yield 1;
+    yield 2;
+}
+
+public void main() {
+    print(count());
+}

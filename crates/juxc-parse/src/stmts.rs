@@ -122,21 +122,10 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }
-        // `yield expr;` -- reserved for generator semantics (JUX-LANG-V1 lists
-        // it beside `await` and `move` as language-defined), with no generator
-        // form in Phase 1. Parse it in the `return` shape so the block still
-        // has statements and any errors after it are the program's own.
+        // `yield expr;` and `yield* iter;` (JUX-MISSING-DEFS-ADDENDUM §M.2.3):
+        // the statements that make a function a generator.
         if self.at_kw(Keyword::Yield) {
-            let span = self.peek_span();
-            self.reserved_not_implemented(
-                span,
-                "`yield`",
-                "reserved in JUX-LANG-V1 for generator semantics",
-            );
-            self.advance(); // `yield`
-            let value = self.parse_expr();
-            self.expect(&TokenKind::Semicolon, "';' after `yield`");
-            return Some(Stmt::Return(value, span.join(self.last_consumed_span())));
+            return self.parse_yield_stmt();
         }
         // Leading `final` or `const` modifier on a local declaration
         // (per `JUX-LANG-V1.md` §549–565). Both forms are accepted in
@@ -1602,6 +1591,38 @@ impl<'a> Parser<'a> {
             elements,
             fixed,
             span: start.join(end),
+        }))
+    }
+
+    /// `yield expr ;` or `yield * expr ;` (§M.2.3).
+    ///
+    /// `yield* iter;` means "yield every value of `iter`", so it is parsed
+    /// straight into that loop: `for (var __jux_yielded : iter) { yield
+    /// __jux_yielded; }`. Everything downstream (the element type, the
+    /// iteration protocol, the check that each value fits the generator's
+    /// element type) is then the ordinary `for` and `yield` path.
+    fn parse_yield_stmt(&mut self) -> Option<Stmt> {
+        let start = self.peek_span();
+        self.advance(); // `yield`
+        let delegate = self.eat(&TokenKind::Star);
+        let value = self.parse_expr()?;
+        self.expect(&TokenKind::Semicolon, "';' after `yield`");
+        let span = start.join(self.last_consumed_span());
+        if !delegate {
+            return Some(Stmt::Yield(value, span));
+        }
+        let binder = juxc_ast::Ident {
+            text: juxc_ast::ForEachStmt::YIELD_DELEGATE_BINDER.to_string(),
+            span,
+        };
+        let element = Expr::Path(juxc_ast::QualifiedName { segments: vec![binder.clone()], span });
+        Some(Stmt::ForEach(juxc_ast::ForEachStmt {
+            is_await: false,
+            var_type: None,
+            var_name: binder,
+            iter: value,
+            body: juxc_ast::Block { statements: vec![Stmt::Yield(element, span)], span },
+            span,
         }))
     }
 

@@ -119,7 +119,8 @@ construct IS specified, and says it is not implemented here. Each site then
 consumes the construct so nothing cascades behind it: an `annotation`
 declaration skips its brace-balanced body, `volatile` is dropped from the
 modifier list and the field parses as a field, `move` reports and then parses
-its operand, and `yield` parses in the `return` shape.
+its operand. (`yield` was on this list until generators landed, Missing-defs
+§M.2; a `yield` outside a generator is now `E0990`.)
 
 ```
 error[E0203]: the `move` operator is not implemented yet
@@ -371,7 +372,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
 | `E0202`  | Numeric literal out of range for its storage: beyond 64 bits, or not fitting the integer slot it flows into (`byte b = 300;`, `u32 x = -1;`) | Grammar §A.1.4 / Semantics §S.2.6 |
-| `E0203`  | Reserved keyword that this phase does not implement (`annotation`, `move`, `volatile`, `yield`) | see below |
+| `E0203`  | Reserved keyword that this phase does not implement (`annotation`, `move`, `volatile`) | see below |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
@@ -627,6 +628,11 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |
 | `E0993`  | Local classes not supported                                 | Missing-defs §M.9.2            |
+| `E0990`  | `yield` outside a generator's own body: in a lambda, a constructor, or a switch expression's arm (Java's arm-value `yield`) | Missing-defs §M.2.1 |
+| `E0994`  | `return` with a value inside a generator                     | Missing-defs §M.2.4            |
+| `E0995`  | An interface's default method is a generator (its iterator would outlive the object it borrows) | Missing-defs §M.2.4 |
+| `E0996`  | A generator's return type is not `Iterator<T>` (`Stream<T>` when `async`) | Missing-defs §M.2.1 |
+| `E0997`  | `yield` inside an `unsafe { }` block                         | Missing-defs §M.2.4            |
 
 > **These three do not describe the compiler as it stands (checked 2026-09-09).**
 >

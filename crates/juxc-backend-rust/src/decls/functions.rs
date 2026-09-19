@@ -354,7 +354,11 @@ impl RustEmitter {
         // `async T` return type in Jux maps to a Rust `async fn`
         // returning `T`. The keyword sits BEFORE `fn` per Rust
         // syntax, so we emit it ahead of the function header.
-        if matches!(fn_decl.return_type, ReturnType::AsyncType(_)) {
+        // An async GENERATOR (§M.2.2) is not itself a future: it hands back
+        // its `Stream<T>` at once, and the stream does the awaiting.
+        if matches!(fn_decl.return_type, ReturnType::AsyncType(_))
+            && !fn_decl.body.as_ref().is_some_and(juxc_tycheck::generators::body_yields)
+        {
             self.w.push_str("async ");
         }
         // `unsafe T f()` → `unsafe fn f()` (§A.2.4 modifier). The keyword
@@ -1066,68 +1070,9 @@ impl RustEmitter {
         found
     }
 
-    pub(crate) fn emit_fn_body_at(&mut self, body: &Block, return_type: &ReturnType) {
-        // (Migrated to Writer indent-aware API)
-        // Callers have set the writer's indent level to the body depth
-        // before invoking. Body content emits via `self.w.emit_indent()`
-        // (statements) or via `emit_tail_stmt` (the elided trailing
-        // return).
-        //
-        // A REAL fn body types its try-return channels from
-        // `current_return_type` — clear the lambda marker so an
-        // anonymous-class method nested inside a lambda doesn't
-        // inherit inference-typed channels (S9).
-        let prev_lam = std::mem::take(&mut self.in_lambda_body);
-        // Every body gets its OWN `local_types` scope. Body statements emit at
-        // whatever scope is current, so without this a body's locals were
-        // inserted into the base scope and never removed: a later function or
-        // method that reused a name read the EARLIER body's type for it.
-        //
-        // The failure is action at a distance. A `Cursor c` local in one
-        // method made a `Connection c` parameter in a method emitted LATER
-        // resolve as `Cursor`, so its field read skipped the `.0.borrow()`
-        // rewrite and emitted a plain `c.timeout` against a newtype. Moving
-        // either method above the other made it compile again.
-        self.local_types.push(std::collections::HashMap::new());
-        // A `T[N]` local the body hands to a `T[]` slot is stored runtime-sized.
-        self.note_fixed_array_escapes(&body.statements);
-        // FnMut / mutable-capture closures: a local that is captured by a closure
-        // AND reassigned must lower to an `Rc<RefCell<T>>` shared cell. Compute
-        // the set for this body and register it in `ref_locals` (so reads/writes
-        // lower through the cell, reusing §M.13) and `forced_cell_locals` (so the
-        // var-decl wraps it). Save/restore for nested bodies; the trailing
-        // `ref_locals.remove` undoes the per-body additions.
-        let prev_forced = std::mem::take(&mut self.forced_cell_locals);
-        // Move-on-last-use: which reads of a local in THIS body still have a
-        // later reader, and so must copy rather than move (see `crate::lastuse`).
-        let prev_non_final =
-            std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
-        let prev_concrete_polybase = std::mem::take(&mut self.concrete_polybase_locals);
-        let prev_captures = std::mem::replace(
-            &mut self.captures_read_again,
-            crate::lastuse::captures_read_again(body, &self.current_fn_params),
-        );
-        let cell_locals =
-            crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
-        // A captured-and-reassigned PARAMETER has no declaration to wrap, so it
-        // is rebound as a cell before the first statement. The shadowing `let`
-        // is what a person would write, and every later use goes through the
-        // same `ref_locals` lowering a `var` cell does.
-        let mut cell_params: Vec<&String> = cell_locals
-            .iter()
-            .filter(|n| self.current_fn_params.contains(*n))
-            .collect();
-        cell_params.sort();
-        for p in cell_params {
-            let ident = to_rust_ident(p);
-            self.w.line(&format!(
-                "let {ident} = std::rc::Rc::new(std::cell::RefCell::new({ident}));"
-            ));
-        }
-        for n in &cell_locals {
-            self.ref_locals.insert(n.clone());
-        }
-        self.forced_cell_locals = cell_locals.clone();
+    /// The statements of an ordinary (non-generator) body, with the
+    /// trailing-return elision [`Self::emit_fn_body`] describes.
+    fn emit_body_statements(&mut self, body: &Block, return_type: &ReturnType) {
         let mut elide_tail = matches!(
             (body.statements.last(), return_type),
             // Non-void function with explicit trailing `return expr;`.
@@ -1192,6 +1137,135 @@ impl RustEmitter {
         {
             self.w
                 .line("unreachable!(\"function fell off the end of a try without returning\");");
+        }
+    }
+
+    /// A generator's body (JUX-MISSING-DEFS §M.2): the statements run inside
+    /// an `async` block that the prelude's `JuxGenerator` resumes once per
+    /// `next()`, each `yield` handing a value out and suspending there.
+    ///
+    ///     std::rc::Rc::new(crate::JuxGenerator::<T>::new(move |__jux_co| async move {
+    ///         ...body, with `yield v;` as `__jux_co.yield_(v).await;`...
+    ///     }))
+    ///
+    /// An async generator (§M.2.2) wraps the same machine as a `Stream<T>`.
+    /// The block owns everything it uses (`move`), so the iterator can
+    /// outlive the call: an instance method first takes its own share of
+    /// `this`. A bare `return;` ends the block, and so the sequence.
+    fn emit_generator_body(&mut self, body: &Block, return_type: &ReturnType) {
+        let (declared, is_async) = match return_type {
+            ReturnType::Type(t) => (Some(t), false),
+            ReturnType::AsyncType(t) => (Some(t), true),
+            ReturnType::Void => (None, false),
+        };
+        let element = declared.and_then(|t| match t.generic_args.first() {
+            Some(juxc_ast::GenericArg::Type(e)) => Some(e.clone()),
+            _ => None,
+        });
+        let prev_this = self.this_alias.clone();
+        if prev_this.as_deref() == Some("self") {
+            self.w.line("let __jux_this = self.clone();");
+            self.this_alias = Some("__jux_this".to_string());
+        }
+        self.w.emit_indent();
+        if is_async {
+            self.w.push_str("crate::JuxStream::from_stream(::std::boxed::Box::pin(");
+        } else {
+            self.w.push_str("std::rc::Rc::new(");
+        }
+        self.w.push_str("crate::JuxGenerator");
+        if let Some(e) = &element {
+            self.w.push_str("::<");
+            self.emit_element_type_as_rust(e);
+            self.w.push('>');
+        }
+        self.w.push_str("::new(move |__jux_co| async move {\n");
+        self.w.indent_inc();
+        // A `try` lowers to its own `async move` block, which would take the
+        // yield handle for itself: hand the body a reference, which copies.
+        if body_has_try(body) {
+            self.w.line("let __jux_co = &__jux_co;");
+        }
+        let prev_element = std::mem::replace(&mut self.generator_element, element);
+        let prev_return = self.current_return_type.replace(ReturnType::Void);
+        for stmt in &body.statements {
+            self.emit_source_marker(stmt_span(stmt));
+            self.w.emit_indent();
+            self.emit_stmt(stmt);
+        }
+        self.current_return_type = prev_return;
+        self.generator_element = prev_element;
+        self.w.indent_dec();
+        self.w.line(if is_async { "})))" } else { "}))" });
+        self.this_alias = prev_this;
+    }
+
+    pub(crate) fn emit_fn_body_at(&mut self, body: &Block, return_type: &ReturnType) {
+        // (Migrated to Writer indent-aware API)
+        // Callers have set the writer's indent level to the body depth
+        // before invoking. Body content emits via `self.w.emit_indent()`
+        // (statements) or via `emit_tail_stmt` (the elided trailing
+        // return).
+        //
+        // A REAL fn body types its try-return channels from
+        // `current_return_type` — clear the lambda marker so an
+        // anonymous-class method nested inside a lambda doesn't
+        // inherit inference-typed channels (S9).
+        let prev_lam = std::mem::take(&mut self.in_lambda_body);
+        // Every body gets its OWN `local_types` scope. Body statements emit at
+        // whatever scope is current, so without this a body's locals were
+        // inserted into the base scope and never removed: a later function or
+        // method that reused a name read the EARLIER body's type for it.
+        //
+        // The failure is action at a distance. A `Cursor c` local in one
+        // method made a `Connection c` parameter in a method emitted LATER
+        // resolve as `Cursor`, so its field read skipped the `.0.borrow()`
+        // rewrite and emitted a plain `c.timeout` against a newtype. Moving
+        // either method above the other made it compile again.
+        self.local_types.push(std::collections::HashMap::new());
+        // A `T[N]` local the body hands to a `T[]` slot is stored runtime-sized.
+        self.note_fixed_array_escapes(&body.statements);
+        // FnMut / mutable-capture closures: a local that is captured by a closure
+        // AND reassigned must lower to an `Rc<RefCell<T>>` shared cell. Compute
+        // the set for this body and register it in `ref_locals` (so reads/writes
+        // lower through the cell, reusing §M.13) and `forced_cell_locals` (so the
+        // var-decl wraps it). Save/restore for nested bodies; the trailing
+        // `ref_locals.remove` undoes the per-body additions.
+        let prev_forced = std::mem::take(&mut self.forced_cell_locals);
+        // Move-on-last-use: which reads of a local in THIS body still have a
+        // later reader, and so must copy rather than move (see `crate::lastuse`).
+        let prev_non_final =
+            std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
+        let prev_concrete_polybase = std::mem::take(&mut self.concrete_polybase_locals);
+        let prev_captures = std::mem::replace(
+            &mut self.captures_read_again,
+            crate::lastuse::captures_read_again(body, &self.current_fn_params),
+        );
+        let cell_locals =
+            crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
+        // A captured-and-reassigned PARAMETER has no declaration to wrap, so it
+        // is rebound as a cell before the first statement. The shadowing `let`
+        // is what a person would write, and every later use goes through the
+        // same `ref_locals` lowering a `var` cell does.
+        let mut cell_params: Vec<&String> = cell_locals
+            .iter()
+            .filter(|n| self.current_fn_params.contains(*n))
+            .collect();
+        cell_params.sort();
+        for p in cell_params {
+            let ident = to_rust_ident(p);
+            self.w.line(&format!(
+                "let {ident} = std::rc::Rc::new(std::cell::RefCell::new({ident}));"
+            ));
+        }
+        for n in &cell_locals {
+            self.ref_locals.insert(n.clone());
+        }
+        self.forced_cell_locals = cell_locals.clone();
+        if juxc_tycheck::generators::body_yields(body) {
+            self.emit_generator_body(body, return_type);
+        } else {
+            self.emit_body_statements(body, return_type);
         }
         for n in &cell_locals {
             self.ref_locals.remove(n);
@@ -1370,4 +1444,15 @@ fn c_abi_type_for_int(t: &juxc_ast::TypeRef) -> Option<&'static str> {
 fn jux_int_rust_type_for_export(t: &juxc_ast::TypeRef) -> Option<&'static str> {
     c_abi_type_for_int(t)?;
     crate::types::jux_primitive_to_rust(t)
+}
+
+/// True when `body` holds a `try` anywhere, nested blocks included.
+fn body_has_try(body: &Block) -> bool {
+    let mut found = false;
+    juxc_ast::visit::for_each_node(body, &mut |node| {
+        if matches!(node, juxc_ast::visit::Node::Stmt(Stmt::Try(_))) {
+            found = true;
+        }
+    });
+    found
 }

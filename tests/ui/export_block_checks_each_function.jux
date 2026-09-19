@@ -1,0 +1,20 @@
+// A block-form @export applies to each declaration in it, so each signature is
+// checked as a C signature (E0508): a class parameter cannot cross.
+
+class Session {
+    public int id = 1;
+}
+
+@export {
+    public int session_ok(int id) {
+        return id;
+    }
+
+    public int session_id(Session s) {
+        return s.id;
+    }
+}
+
+public void main() {
+    print(session_ok(3));
+}

@@ -1099,6 +1099,9 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
         Stmt::Block(b) | Stmt::Unsafe(b) => block_contains_await(b),
         Stmt::Break(..) | Stmt::Continue(..) => false,
         Stmt::Labeled { stmt, .. } => stmt_contains_await(stmt),
+        // A `yield` (§M.2) suspends the generator's body exactly like an
+        // `.await` does: a `try` around it takes the async lowering.
+        Stmt::Yield(..) => true,
     }
 }
 
@@ -1886,7 +1889,9 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
     match stmt {
         // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
         Stmt::IfCfg(_) => false,
-        Stmt::Expr(e) | Stmt::Return(Some(e), _) => expr_calls_mut_method_on_this(e, mut_methods),
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Yield(e, _) => {
+            expr_calls_mut_method_on_this(e, mut_methods)
+        }
         Stmt::Return(None, _) => false,
         Stmt::VarDecl(v) => v
             .init

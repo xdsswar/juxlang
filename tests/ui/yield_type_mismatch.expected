@@ -1,0 +1,1 @@
+yield_type_mismatch.jux:5:5: [E0410] error: yielded value of type String, but this generator yields int

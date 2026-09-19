@@ -611,7 +611,7 @@ impl Pass<'_> {
 
     fn stmt(&mut self, stmt: &mut Stmt) {
         match stmt {
-            Stmt::Expr(e) | Stmt::Throw(e, _) => self.expr(e),
+            Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Yield(e, _) => self.expr(e),
             Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);

@@ -1194,6 +1194,10 @@ pub struct MethodSig {
     pub params: Vec<ParamSig>,
     /// Declared return type (or `void`).
     pub return_type: ReturnType,
+    /// True when the body yields (JUX-MISSING-DEFS §M.2): the method is a
+    /// generator. An `async` one returns its `Stream<T>` straight away, so a
+    /// call to it is not an unawaited future (E0705 does not apply).
+    pub is_generator: bool,
     /// Span of the method declaration.
     pub span: Span,
 }
@@ -4936,6 +4940,7 @@ fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &E
         generic_params: Vec::new(),
         params: Vec::new(),
         return_type: ret,
+        is_generator: false,
         span,
     };
     methods
@@ -5041,6 +5046,7 @@ fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),
+        is_generator: method.body.as_ref().is_some_and(crate::generators::body_yields),
         span: method.span,
     }
 }

@@ -1,0 +1,30 @@
+// The block form of @export (JUX-LANG-V1 §8.4, grammar A.2.3): one @export in
+// front of a brace block applies to every declaration inside it. The braces do
+// not open a scope, so the functions are ordinary top-level functions, and a
+// declaration inside may add annotations of its own.
+
+@export {
+    public int counter_add(int a, int b) {
+        return a + b;
+    }
+
+    public long counter_scale(long value, int factor) {
+        return value * factor;
+    }
+
+    // Marshalled as `const char*` like any exported String (§L.3.2).
+    public String counter_label(int n) {
+        return $"count=$n";
+    }
+}
+
+// Nothing outside the block is exported.
+int helper(int n) {
+    return n + 1;
+}
+
+public void main() {
+    print(counter_add(2, 3));
+    print(counter_scale(7, 6));
+    print(counter_label(helper(41)));
+}

@@ -3522,3 +3522,49 @@ fn c_style_pointer_cast_parses_as_a_cast() {
     let parsed = crate::parse(&tokens);
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }
+
+/// `@export { … }` (grammar A.2.3): the annotation lands on every declaration
+/// in the braces, ahead of the declaration's own, and the braces open no
+/// scope, so the functions are ordinary top-level items. Blocks nest.
+#[test]
+fn annotation_block_applies_to_each_declaration() {
+    let unit = parse_clean(
+        r#"
+        @export {
+            public int a(int x) { return x; }
+            @inline public int b(int x) { return x; }
+            @Deprecated {
+                public int c() { return 1; }
+            }
+        }
+        int d() { return 2; }
+        "#,
+    );
+    let names_and_annotations: Vec<(String, Vec<String>)> = unit
+        .items
+        .iter()
+        .map(|item| {
+            let juxc_ast::TopLevelDecl::Function(f) = item else {
+                panic!("expected a function, got {item:?}");
+            };
+            let anns = f.annotations.iter().map(|a| a.name.segments[0].text.clone()).collect();
+            (f.name.text.clone(), anns)
+        })
+        .collect();
+    assert_eq!(
+        names_and_annotations,
+        vec![
+            ("a".to_string(), vec!["export".to_string()]),
+            ("b".to_string(), vec!["export".to_string(), "inline".to_string()]),
+            ("c".to_string(), vec!["export".to_string(), "Deprecated".to_string()]),
+            ("d".to_string(), vec![]),
+        ]
+    );
+}
+
+/// An annotation block with no closing brace is one error, not a cascade.
+#[test]
+fn unclosed_annotation_block_is_one_error() {
+    let (_, errors) = parse_with_errors("@export {\n    public int a() { return 1; }\n");
+    assert_eq!(errors, 1);
+}

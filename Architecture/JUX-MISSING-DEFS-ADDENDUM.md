@@ -206,12 +206,20 @@ public Iterator<int> chained(Iterator<int> a, Iterator<int> b) {
 }
 ```
 
+An async generator is not itself awaited: calling it hands back the `Stream<T>` at once, and each `for await` step runs the body to its next `yield`. Inside one, `yield* s` over a `Stream<T>` awaits each of `s`'s values; a synchronous generator may delegate only to an `Iterator<T>` or an iterable (`E0704`).
+
+`yield` is a statement of a named function or method. It is `E0990` in a lambda, in a constructor, and in the arm of a switch *expression*: Java uses `yield` there to give a block arm its value, and Jux does not (write the value as the arm's expression body, `case 1 -> 10;`).
+
 ### M.2.4. Restrictions
 
 A generator function's body may not:
 
-- Contain `return expr` with a value (use `yield`). `return;` (no value) is permitted and ends the iterator.
-- Cross an `unsafe { }` boundary that contains a `yield` (the state machine cannot reliably preserve `unsafe` invariants across suspension).
+- Contain `return expr` with a value (use `yield`), `E0994`. `return;` (no value) is permitted and ends the iterator.
+- Cross an `unsafe { }` boundary that contains a `yield` (the state machine cannot reliably preserve `unsafe` invariants across suspension), `E0997`.
+
+A generator's return type is `Iterator<T>`, or `Stream<T>` when it is `async` (`E0996`, reported once at the name). An interface's non-static default method may not be a generator (`E0995`): the body only borrows the implementing object, and the iterator would outlive the borrow. A `static` interface generator that takes the object as a parameter is fine.
+
+An exception thrown by the body reaches whoever called `next()`, and ends the generator: every later `next()` returns `null`. A `for` loop over an iterator (as opposed to an iterable) drains that same iterator, so after a `break` the next `next()` resumes where the loop stopped.
 
 A generator function's `Iterator<T>` value:
 
@@ -222,6 +230,8 @@ A generator function's `Iterator<T>` value:
 ### M.2.5. Lowering
 
 The compiler rewrites a generator into a struct holding the function's locals plus a state-machine PC. `next()` advances the state machine to the next `yield` and returns the yielded value, or null at exhaustion. This is exactly the C# / JavaScript / Python lowering, applied at compile time.
+
+Phase 1 lets rustc build that state machine: the body becomes an `async move` block in which `yield v;` is `__jux_co.yield_(v).await;`, owned by the prelude's `JuxGenerator<T>`. `next()` polls it once (with a no-op waker for a synchronous generator); an async generator's `JuxGenerator` is a `Stream` that the `for await` loop polls. The locals live inside that future, so dropping the iterator drops them. A generator method first takes its own share of `this`, so the iterator may outlive the call.
 
 ---
 
