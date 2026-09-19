@@ -3,10 +3,13 @@ package dev.jux.intellij.documentation
 import com.intellij.openapi.util.text.StringUtil
 
 /**
- * A doc comment split the way Javadoc splits one: the description, then the
- * block tags `@param name text`, `@return text`, `@throws Type text` (and
- * its synonym `@exception`), `@since text` and `@see ref`. A tag's text runs
- * until the next tag. Unknown tags are left in the description.
+ * A doc comment split the way `jux doc` splits one (juxc-driver docgen
+ * `parse_doc_comment`): the description, then the block tags `@param name
+ * text`, `@return text` (or `@returns`), `@throws Type text` (or
+ * `@exception`), `@deprecated reason`, `@since text` and `@see ref`. A tag's
+ * text runs until the next tag or a blank line. Unknown tags stay in the
+ * description, and nothing inside a ```` ``` ```` fenced block is a tag: an
+ * example's `@annotation` is code.
  */
 data class JuxDocComment(
     val description: String,
@@ -15,9 +18,10 @@ data class JuxDocComment(
     val throws: List<Pair<String, String>>,
     val since: String?,
     val see: List<String>,
+    val deprecated: String? = null,
 ) {
     companion object {
-        private val TAG = Regex("""^@(param|return|returns|throws|exception|since|see)\b\s*(.*)$""", RegexOption.DOT_MATCHES_ALL)
+        private val TAG = Regex("""^@(param|return|returns|throws|exception|deprecated|since|see)\b\s*(.*)$""", RegexOption.DOT_MATCHES_ALL)
 
         /** Split the cleaned text of a doc comment (markers already stripped). */
         fun parse(text: String): JuxDocComment {
@@ -27,12 +31,29 @@ data class JuxDocComment(
             val see = ArrayList<String>()
             var returns: String? = null
             var since: String? = null
-            // Group lines into the description and one chunk per block tag.
+            var deprecated: String? = null
+            // Group lines into the description and one chunk per block tag. A
+            // tag's chunk ends at a blank line; fenced blocks are never tags.
             val chunks = ArrayList<String>()
+            var open = false
+            var inFence = false
             for (line in text.lines()) {
-                if (line.trimStart().startsWith("@") && TAG.matches(line.trim())) chunks.add(line.trim())
-                else if (chunks.isEmpty()) description.append(line).append('\n')
-                else chunks[chunks.size - 1] = chunks.last() + "\n" + line
+                val trimmed = line.trim()
+                if (trimmed.startsWith("```")) {
+                    inFence = !inFence
+                    open = false
+                    description.append(line).append('\n')
+                    continue
+                }
+                if (!inFence && trimmed.startsWith("@") && TAG.matches(trimmed)) {
+                    chunks.add(trimmed)
+                    open = true
+                } else if (open && !inFence && trimmed.isNotEmpty()) {
+                    chunks[chunks.size - 1] = chunks.last() + "\n" + line
+                } else {
+                    open = false
+                    description.append(line).append('\n')
+                }
             }
             for (chunk in chunks) {
                 val m = TAG.matchEntire(chunk) ?: continue
@@ -41,11 +62,12 @@ data class JuxDocComment(
                     "param" -> params.add(splitFirstWord(body))
                     "return", "returns" -> returns = body
                     "throws", "exception" -> throws.add(splitFirstWord(body))
+                    "deprecated" -> deprecated = body
                     "since" -> since = body
                     "see" -> see.add(body)
                 }
             }
-            return JuxDocComment(description.toString().trim(), params, returns, throws, since, see)
+            return JuxDocComment(description.toString().trim('\n', ' '), params, returns, throws, since, see, deprecated)
         }
 
         /** `name the rest` as (`name`, `the rest`); `<T> text` keeps its brackets. */
@@ -54,24 +76,11 @@ data class JuxDocComment(
             return StringUtil.escapeXmlEntities(word) to body.drop(word.length).trim()
         }
 
-        private val INLINE_CODE = Regex("""\{@(code|literal)\s+([^}]*)}""")
-        private val INLINE_LINK = Regex("""\{@(link|linkplain)\s+([^}\s]*)(?:\s+([^}]*))?}""")
-        private val BACKTICKS = Regex("`([^`]+)`")
-
         /**
-         * Doc text as HTML: escaped, `{@code x}` and Markdown-style `` `x` ``
-         * as code, `{@link Type#member label}` as its label (or target) in
-         * code, and a blank line as a paragraph break.
+         * Doc text as HTML, the Markdown subset `jux doc` renders
+         * ([JuxDocMarkdown]); ```` ```jux ```` blocks through [highlight].
          */
-        fun toHtml(text: String): String {
-            var html = StringUtil.escapeXmlEntities(text)
-            html = INLINE_CODE.replace(html) { "<code>${it.groupValues[2]}</code>" }
-            html = INLINE_LINK.replace(html) { m ->
-                val label = m.groupValues[3].ifBlank { m.groupValues[2].replace('#', '.') }
-                "<code>$label</code>"
-            }
-            html = BACKTICKS.replace(html) { "<code>${it.groupValues[1]}</code>" }
-            return html.split(Regex("\n\\s*\n")).joinToString("</p><p>", "<p>", "</p>") { it.trim().replace("\n", " ") }
-        }
+        fun toHtml(text: String, highlight: JuxDocMarkdown.Highlighter = JuxDocMarkdown.PLAIN): String =
+            JuxDocMarkdown.toHtml(text, highlight)
     }
 }

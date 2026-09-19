@@ -1,0 +1,20 @@
+<html>
+<body>
+Reports <code>jux.toml</code> workspace problems the build would also stop at or warn about
+(JUX-BUILD-SYSTEM-ADDENDUM &sect;B.7):
+<ul>
+  <li>a key in <code>[workspace]</code> other than <code>members</code>, <code>exclude</code> and <code>default-members</code>;</li>
+  <li>a <code>members</code> entry whose directory does not exist or holds no <code>jux.toml</code>, and a pattern
+      (<code>tools/*</code>) that matches no package;</li>
+  <li>a <code>default-members</code> entry that is not a workspace member;</li>
+  <li>a <code>key.workspace = true</code> (or <code>{ workspace = true }</code>) entry whose key the workspace
+      root's <code>[workspace.package]</code> or <code>[workspace.dependencies]</code> does not declare, or that
+      has no workspace root above it.</li>
+</ul>
+<p>Example:</p>
+<pre><code>[package]
+name = "app"
+license.workspace = true   # the root declares no [workspace.package] license
+</code></pre>
+</body>
+</html>

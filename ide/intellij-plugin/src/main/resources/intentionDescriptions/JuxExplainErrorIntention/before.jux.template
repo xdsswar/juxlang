@@ -1,0 +1,4 @@
+public void main() {
+    var v = new Vec<int>();
+    v.<spot>add</spot>(1);   // [E0413] no method `add` on type `rust.std.Vec`
+}
