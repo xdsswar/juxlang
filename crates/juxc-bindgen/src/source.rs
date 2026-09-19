@@ -128,13 +128,11 @@ fn is_kept_stable(attrs: &[syn::Attribute]) -> bool {
     let mut stable = false;
     for a in attrs {
         let path = a.path();
-        if path.is_ident("stable") {
-            stable = true;
-        } else if path.is_ident("unstable") {
-            return false;
-        } else if path.is_ident("doc") && attr_list_mentions(a, "hidden") {
+        // `#[unstable]` is nightly-only, `#[doc(hidden)]` is not a surface.
+        if path.is_ident("unstable") || (path.is_ident("doc") && attr_list_mentions(a, "hidden")) {
             return false;
         }
+        stable |= path.is_ident("stable");
     }
     stable && !is_test_only(attrs)
 }
