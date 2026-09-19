@@ -37,7 +37,7 @@ void main() {
     try {
         throw new IllegalStateException("jux side");
     } catch (IllegalStateException e) {
-        print($"jux: ${e.getMessage()}");
+        print($"own clause: ${e.getMessage()}");
     } catch (Exception e) {
         print("never");
     }

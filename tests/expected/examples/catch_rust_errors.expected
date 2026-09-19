@@ -3,5 +3,5 @@ not a number: abc (invalid float literal)
 -1.0
 io error, kind entity not found
 caught: cannot parse integer from empty string
-jux: jux side
+own clause: jux side
 done
