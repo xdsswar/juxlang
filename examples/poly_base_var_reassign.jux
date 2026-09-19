@@ -1,0 +1,43 @@
+// A `var` local of a polymorphic base class that is assigned again
+// (JUX-LANG-V1 §5.2, JUX-OPERATORS-ADDENDUM §O.2.3).
+//
+// `Vec2` has a subclass, so a `Vec2` value may be any of them, and its
+// operators return that general handle. A `var` local holding one and assigned
+// later, `c *= 10.0` included, has to be able to take the result: it is typed
+// as the base, exactly as `Vec2 c = a;` would be. This used to fail in rustc
+// unless the type was written out.
+
+class Vec2 {
+    public double x;
+    public double y;
+    public Vec2(double x, double y) { this.x = x; this.y = y; }
+    public Vec2 operator*(double k) { return new Vec2(x * k, y * k); }
+    public Vec2 operator+(Vec2 o) { return new Vec2(x + o.x, y + o.y); }
+    public String operator string() { return $"(${x}, ${y})"; }
+}
+
+class Point extends Vec2 {
+    public Point(double x, double y) { super(x, y); }
+}
+
+public void main() {
+    // Copied from another local, then scaled: the operator makes a new
+    // object, so `a` is untouched.
+    var a = new Vec2(1.0, 2.0);
+    var c = a;
+    c *= 10.0;
+    print(c);
+    print(a);
+
+    // Built in place, then reassigned from an operator.
+    var d = new Vec2(0.5, 0.5);
+    d = d + new Vec2(1.0, 1.0);
+    print(d);
+
+    // Holding a subclass object through the base type.
+    Vec2 p = new Point(1.0, 1.0);
+    var q = p;
+    q *= 3.0;
+    print(q);
+    print(p);
+}

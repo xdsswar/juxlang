@@ -2990,6 +2990,42 @@ impl RustEmitter {
             self.emit_var_decl(&rewritten);
             return;
         }
+        // `var c = a; c *= 10.0;` where `a` is a polymorphic base class: the
+        // operator returns the base's `Rc<dyn <Base>Kind>` handle, so a local
+        // that is ASSIGNED later must be that handle too, exactly as the
+        // declared form `Vec2 c = a;` is. Without a written type the local
+        // took the initializer's concrete shape and the reassignment failed
+        // in rustc (E0308). Give it the type it was inferred to have.
+        if var.ty.is_none() && !var.is_ref && self.mutated_in_fn.contains(&var.name.text) {
+            if let Some(init) = &var.init {
+                if let Some(juxc_tycheck::Ty::User { name, generic_args }) =
+                    self.expr_types.get(&expr_span_of(init)).cloned()
+                {
+                    let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+                    if generic_args.is_empty() && self.is_poly_base_class(&bare) {
+                        let span = var.name.span;
+                        let mut typed = var.clone();
+                        typed.ty = Some(juxc_ast::TypeRef {
+                            name: juxc_ast::QualifiedName {
+                                segments: name
+                                    .split('.')
+                                    .map(|s| juxc_ast::Ident { text: s.to_string(), span })
+                                    .collect(),
+                                span,
+                            },
+                            generic_args: Vec::new(),
+                            nullable: false,
+                            array_shape: None,
+                            fn_shape: None,
+                            ptr_depth: 0,
+                            span,
+                        });
+                        self.emit_var_decl(&typed);
+                        return;
+                    }
+                }
+            }
+        }
         let holds_concrete_polybase = var.ty.is_none()
             && matches!(&var.init, Some(Expr::NewObject(n))
                 if n.class_name.segments.last().is_some_and(|s| self.is_poly_base_class(&s.text)));
