@@ -922,6 +922,7 @@ impl<'a> Parser<'a> {
             init,
             is_final: true,
             is_ref: false,
+            init_error: false,
             span,
         }))
     }
@@ -1004,6 +1005,7 @@ impl<'a> Parser<'a> {
                     init: Some(read),
                     is_final,
                     is_ref: false,
+                    init_error: false,
                     span: binder.span,
                 })),
                 RecordPatternPart::Nested(record, inner) => {
@@ -1015,6 +1017,7 @@ impl<'a> Parser<'a> {
                         init: Some(read),
                         is_final: true,
                         is_ref: false,
+                        init_error: false,
                         span: record.span,
                     }));
                     self.queue_record_part_reads(&inner_name, record.span, inner, is_final);
@@ -1093,6 +1096,7 @@ impl<'a> Parser<'a> {
                 init: Some(elem_init),
                 is_final: false,
                 is_ref: false,
+                init_error: false,
                 span: binder.span,
             }));
         }
@@ -1102,6 +1106,7 @@ impl<'a> Parser<'a> {
             init,
             is_final: false,
             is_ref: false,
+            init_error: false,
             span,
         }))
     }
@@ -1150,6 +1155,7 @@ impl<'a> Parser<'a> {
             init,
             is_final,
             is_ref: false,
+            init_error: false,
             span: start.join(end),
         })
     }
@@ -1486,6 +1492,7 @@ impl<'a> Parser<'a> {
         let ty_start = self.peek_span();
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
+        let mut init_error = false;
         let init = if self.eat(&TokenKind::Eq) {
             // Bare `{a, b, c}` initializer (Java-style) — only valid
             // when the LHS is an array type. The fixed/dynamic flag is
@@ -1496,7 +1503,9 @@ impl<'a> Parser<'a> {
             if self.at(&TokenKind::LBrace) && ty.array_shape.is_some() {
                 Some(self.parse_bare_array_initializer(&ty)?)
             } else if self.at(&TokenKind::LBrace) {
-                self.parse_brace_initializer_for_named_type(&ty)
+                let parsed = self.parse_brace_initializer_for_named_type(&ty);
+                init_error = parsed.is_none();
+                parsed
             } else if self.at(&TokenKind::LBracket) && ty.array_shape.is_some() {
                 // `["a", "b"]` out of habit from other languages: say once
                 // that Jux writes an array literal with braces, then read it
@@ -1518,7 +1527,15 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
-        Some(VarDecl { name, ty: Some(ty), init, is_final, is_ref: false, span: ty_start.join(end) })
+        Some(VarDecl {
+            name,
+            ty: Some(ty),
+            init,
+            is_final,
+            is_ref: false,
+            init_error,
+            span: ty_start.join(end),
+        })
     }
 
     /// A `{a, b, c}` initializer under a type written with no array shape.

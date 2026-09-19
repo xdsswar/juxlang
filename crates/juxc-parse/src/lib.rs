@@ -74,7 +74,32 @@ pub struct ParseResult {
 /// Parse a token stream into an AST. The token slice must end with an
 /// [`TokenKind::Eof`] token (the lexer guarantees this).
 pub fn parse(tokens: &[Token]) -> ParseResult {
+    parse_with_array_aliases(tokens, &std::collections::HashMap::new())
+}
+
+/// The array-type aliases a file declares at its top level
+/// (`type Bytes = ubyte[];`), by name: the shape a bare `{a, b}` initializer
+/// under that name needs. The driver gathers them from every file of a
+/// build first, so an alias declared in one file serves a `{...}` written in
+/// another (B13).
+pub fn array_aliases_in(tokens: &[Token]) -> std::collections::HashMap<String, juxc_ast::TypeRef> {
     let mut p = Parser::new(tokens);
+    p.scan_array_aliases()
+}
+
+/// [`parse`], with array aliases declared in the build's OTHER files visible
+/// to a bare `{...}` initializer. This file's own aliases win on a name both
+/// declare.
+pub fn parse_with_array_aliases(
+    tokens: &[Token],
+    workspace_aliases: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+) -> ParseResult {
+    let mut p = Parser::new(tokens);
+    let mut own = p.scan_array_aliases();
+    for (name, target) in workspace_aliases {
+        own.entry(name.clone()).or_insert_with(|| target.clone());
+    }
+    p.array_aliases = Some(own);
     let mut ast = p.parse_compilation_unit();
     // Desugar C#-style properties (JUX-MISSING-DEFS §M.7) into backing
     // fields + getter / setter methods so every downstream phase
@@ -224,29 +249,34 @@ impl<'a> Parser<'a> {
     /// the "write the array type" diagnostic.
     pub(crate) fn array_alias(&mut self, name: &str) -> Option<juxc_ast::TypeRef> {
         if self.array_aliases.is_none() {
-            let mut found = std::collections::HashMap::new();
-            let mut depth = 0usize;
-            for (i, tok) in self.tokens.iter().enumerate() {
-                match &tok.kind {
-                    TokenKind::LBrace => depth += 1,
-                    TokenKind::RBrace => depth = depth.saturating_sub(1),
-                    TokenKind::Kw(Keyword::Type) if depth == 0 => {
-                        // A throwaway parser positioned on the declaration;
-                        // its diagnostics are the real parse's to report.
-                        let mut probe = Parser::new(self.tokens);
-                        probe.pos = i;
-                        if let Some(alias) = probe.parse_type_alias_decl(Vec::new(), juxc_ast::Visibility::Package) {
-                            if alias.generic_params.is_empty() && alias.target.array_shape.is_some() {
-                                found.insert(alias.name.text, alias.target);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            self.array_aliases = Some(found);
+            self.array_aliases = Some(self.scan_array_aliases());
         }
         self.array_aliases.as_ref().and_then(|m| m.get(name).cloned())
+    }
+
+    /// Every non-generic top-level `type Name = T[];` in this file.
+    pub(crate) fn scan_array_aliases(&mut self) -> std::collections::HashMap<String, juxc_ast::TypeRef> {
+        let mut found = std::collections::HashMap::new();
+        let mut depth = 0usize;
+        for (i, tok) in self.tokens.iter().enumerate() {
+            match &tok.kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => depth = depth.saturating_sub(1),
+                TokenKind::Kw(Keyword::Type) if depth == 0 => {
+                    // A throwaway parser positioned on the declaration;
+                    // its diagnostics are the real parse's to report.
+                    let mut probe = Parser::new(self.tokens);
+                    probe.pos = i;
+                    if let Some(alias) = probe.parse_type_alias_decl(Vec::new(), juxc_ast::Visibility::Package) {
+                        if alias.generic_params.is_empty() && alias.target.array_shape.is_some() {
+                            found.insert(alias.name.text, alias.target);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
     }
 
     /// Take one unit of nesting budget, or report E0201 and refuse.

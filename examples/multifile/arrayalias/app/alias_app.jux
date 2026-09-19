@@ -1,0 +1,9 @@
+package arrayalias.app;
+
+import arrayalias.lib.Bytes;
+
+void main() {
+    final Bytes data = {1, 2, 3};
+    print(data.length);
+    print(data[2]);
+}

@@ -1,2 +1,1 @@
 brace_initializer_non_array.jux:4:21: [E0200] error: a `{...}` initializer needs an array type, and `Count` is not one
-brace_initializer_non_array.jux:5:11: [E0601] error: `c` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)

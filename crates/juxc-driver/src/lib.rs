@@ -283,14 +283,24 @@ fn lex_parse_resolve(
     // surfaces a real Rust API verbatim, so keyword-spelled member names are
     // accepted (parser) and the Rust-keyword reservation is skipped (resolver).
     let foreign: Vec<bool> = sources.iter().map(|s| stubs::is_stub_path(s.path())).collect();
-    for (idx, source) in sources.iter().enumerate() {
+    let lexed: Vec<juxc_lex::LexResult> = sources.iter().map(juxc_lex::lex).collect();
+    // Array-type aliases of every user file, so a `{a, b}` initializer under
+    // an alias declared in another file takes the alias's shape (B13).
+    let mut array_aliases = std::collections::HashMap::new();
+    for (idx, lex_result) in lexed.iter().enumerate() {
+        if !foreign[idx] {
+            for (name, target) in juxc_parse::array_aliases_in(&lex_result.tokens) {
+                array_aliases.entry(name).or_insert(target);
+            }
+        }
+    }
+    for (idx, lex_result) in lexed.into_iter().enumerate() {
         let before = diagnostics.len();
-        let lex_result = juxc_lex::lex(source);
         diagnostics.extend(lex_result.diagnostics);
         let parsed = if foreign[idx] {
             juxc_parse::parse_foreign(&lex_result.tokens)
         } else {
-            juxc_parse::parse(&lex_result.tokens)
+            juxc_parse::parse_with_array_aliases(&lex_result.tokens, &array_aliases)
         };
         diagnostics.extend(parsed.diagnostics);
         for d in &mut diagnostics[before..] {

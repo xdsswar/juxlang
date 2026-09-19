@@ -219,3 +219,14 @@ fn mf_polish() {
     ]);
     assert_eq!(got, ["Animal Rex", "Animal Spot", "Woof, Fido"]);
 }
+
+#[test]
+fn mf_array_alias() {
+    // A `{...}` initializer under an array alias declared in ANOTHER file
+    // takes the alias's shape; only a same-file alias used to be seen (B13).
+    let got = run("mf_array_alias", &[
+        "examples/multifile/arrayalias/app/alias_app.jux",
+        "examples/multifile/arrayalias/lib/Bytes.jux",
+    ]);
+    assert_eq!(got, ["3", "3"]);
+}
