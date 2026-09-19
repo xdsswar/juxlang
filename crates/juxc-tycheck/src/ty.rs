@@ -130,6 +130,10 @@ pub enum Ty {
     /// which means "inference gave up" and is accepted everywhere; `any` is a
     /// real type the checker holds a program to.
     Any,
+    /// `never` (JUX-CORE-LIB-ADDENDUM K.4.1): the bottom type, with no
+    /// values. A function returning it does not return; a `throw` has it. It
+    /// converts to every type, and nothing but itself converts to it.
+    Never,
     /// Inference failed for this position. Phase D may flag this; Phase
     /// C is silent.
     Unknown,
@@ -386,6 +390,7 @@ impl fmt::Display for Ty {
             Ty::Void => f.write_str("void"),
             Ty::Nullable(inner) => write!(f, "{inner}?"),
             Ty::Any => f.write_str("any"),
+            Ty::Never => f.write_str("never"),
             Ty::Unknown => f.write_str("<unknown>"),
         }
     }
@@ -729,7 +734,9 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     if t.name.segments.len() == 1
         && matches!(
             t.name.segments[0].text.as_str(),
-            "Channel" | "AsyncMutex" | "Stream",
+            "Channel" | "AsyncMutex" | "Stream"
+                // The range types, MISSING-DEFS M.6.1.
+                | "ExclusiveRange" | "InclusiveRange" | "SteppedRange",
         )
         && !symbols.classes.contains_key(t.name.segments[0].text.as_str())
     {
@@ -760,6 +767,10 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         // may still declare its own `any`, and then the name means that.
         if name == "any" && !symbols.classes.keys().chain(symbols.records.keys()).any(|k| k.rsplit('.').next() == Some("any")) {
             return Ty::Any;
+        }
+        // `never` (K.4.1) is built in the same way.
+        if name == "never" && !symbols.classes.keys().chain(symbols.records.keys()).any(|k| k.rsplit('.').next() == Some("never")) {
+            return Ty::Never;
         }
     }
 
@@ -959,6 +970,13 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
         for tp in &iface.generic_params {
             env.add_generic_param(&tp.name.text);
         }
+    } else if let Some(en) = symbols.enums.get(declaring_class) {
+        // A generic enum's `T` (`Option<T>`, `Result<T, E>`, §K.3/§K.4) is
+        // in scope in its members' signatures too; without it `(T) -> R`
+        // lowered `T` to Unknown and a lambda handed to `map` lost its type.
+        for tp in &en.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
     }
     ty_from_ref(ty_ref, &env, symbols)
 }
@@ -1002,6 +1020,13 @@ pub fn lower_member_type_in_method(
         }
     } else if let Some(iface) = symbols.interfaces.get(declaring_class) {
         for tp in &iface.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+    } else if let Some(en) = symbols.enums.get(declaring_class) {
+        // A generic enum's `T` (`Option<T>`, `Result<T, E>`, §K.3/§K.4) is
+        // in scope in its members' signatures too; without it `(T) -> R`
+        // lowered `T` to Unknown and a lambda handed to `map` lost its type.
+        for tp in &en.generic_params {
             env.add_generic_param(&tp.name.text);
         }
     }
@@ -1109,7 +1134,7 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
             return_ptr_depth: *return_ptr_depth,
         },
         Ty::Nullable(inner) => Ty::Nullable(Box::new(substitute_inner(inner, params, args))),
-        Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Any | Ty::Unknown => ty.clone(),
+        Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Any | Ty::Never | Ty::Unknown => ty.clone(),
     }
 }
 

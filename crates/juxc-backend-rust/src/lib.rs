@@ -4057,7 +4057,7 @@ pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
         ("jux.std.io", "File" | "Path" | "Console")
             | (
                 "jux.std.concurrent",
-                "Worker" | "Task" | "AtomicInt" | "AtomicLong"
+                "Worker" | "Task" | "AtomicInt" | "AtomicLong" | "Mutex"
             )
             | ("jux.std.time", "Clock" | "Instant")
     )
@@ -4845,8 +4845,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         //     emission works unchanged.
         //   - `task.blockingGet()` — drive to completion from sync
         //     code (consumes the handle).
-        //   - `task.cancel()`  — drop the handle; RemoteHandle
-        //     cancels the remote computation on drop (consumes).
+        //   - `task.cancel()`  — drop the RemoteHandle, which stops the
+        //     remote computation at its next suspension point (its next
+        //     `await`, LANG-V1 §10.1.9); the handle stays, and awaiting it
+        //     afterwards throws `CancellationException`.
         //
         // Spawned bodies run on pool threads, so captures must be
         // Send — tycheck's E0702 capture scan enforces the Jux-level
@@ -4861,7 +4863,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    // (orphaned, parked failure)\n");
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
         w.push_str("}\n");
-        w.push_str("pub struct JuxTask<T>(Option<futures::future::RemoteHandle<Result<T, ()>>>, std::sync::Arc<JuxTaskShared>);\n");
+        // The handle sits in a `Cell` so `cancel()` works through `&self`: a
+        // cancelled task is still a value the program may `await`.
+        w.push_str("pub struct JuxTask<T>(std::cell::Cell<Option<futures::future::RemoteHandle<Result<T, ()>>>>, std::sync::Arc<JuxTaskShared>);\n");
         w.push_str("impl<T: 'static> JuxTask<T> {\n");
         w.push_str("    /// The awaiter's side of a failed task: rethrow what it threw.\n");
         w.push_str("    fn settle(shared: &JuxTaskShared, result: Result<T, ()>) -> T {\n");
@@ -4873,18 +4877,20 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
+        w.push_str("    /// What awaiting a cancelled task gives: its CancellationException.\n");
+        w.push_str("    fn cancelled() -> ! {\n");
+        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(String::from(\"task was cancelled\")))\n");
+        w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    pub fn blockingGet(mut self) -> T {\n");
-        w.push_str("        let handle = self.0.take().expect(\"task already consumed\");\n");
+        w.push_str("    pub fn blockingGet(self) -> T {\n");
+        w.push_str("        let Some(handle) = self.0.take() else { Self::cancelled() };\n");
         w.push_str("        Self::settle(&self.1, futures::executor::block_on(handle))\n");
         w.push_str("    }\n");
-        w.push_str("    pub fn cancel(mut self) {\n");
-        w.push_str("        // Dropping the RemoteHandle cancels the remote\n");
-        w.push_str("        // computation (the Drop impl would FORGET it). A\n");
-        w.push_str("        // cancelled task has no failure to report.\n");
-        w.push_str("        if let Some(h) = self.0.take() {\n");
-        w.push_str("            std::mem::drop(h);\n");
-        w.push_str("        }\n");
+        w.push_str("    pub fn cancel(&self) {\n");
+        w.push_str("        // Dropping the RemoteHandle stops the remote computation\n");
+        w.push_str("        // at its next suspension point (the Drop impl would FORGET\n");
+        w.push_str("        // it instead). A cancelled task has no failure to report.\n");
+        w.push_str("        std::mem::drop(self.0.take());\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
@@ -4893,7 +4899,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // task); explicit `cancel()` drops the handle for real.
         w.push_str("impl<T> Drop for JuxTask<T> {\n");
         w.push_str("    fn drop(&mut self) {\n");
-        w.push_str("        if let Some(h) = self.0.take() {\n");
+        w.push_str("        if let Some(h) = self.0.get_mut().take() {\n");
         w.push_str("            h.forget();\n");
         w.push_str("            // Nobody will await it now: a failure already parked is\n");
         w.push_str("            // unhandled, and a later one will be reported by the task.\n");
@@ -4911,12 +4917,12 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("impl<T: 'static> std::future::Future for JuxTask<T> {\n");
         w.push_str("    type Output = T;\n");
         w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
-        w.push_str("        let h = self.0.as_mut().expect(\"awaiting a cancelled task\");\n");
+        w.push_str("        let Some(h) = self.0.get_mut().as_mut() else { Self::cancelled() };\n");
         w.push_str("        match std::pin::Pin::new(h).poll(cx) {\n");
         w.push_str("            std::task::Poll::Pending => std::task::Poll::Pending,\n");
         w.push_str("            std::task::Poll::Ready(result) => {\n");
         w.push_str("                // Consumed: the handle's drop must not orphan the task.\n");
-        w.push_str("                self.0 = None;\n");
+        w.push_str("                *self.0.get_mut() = None;\n");
         w.push_str("                std::task::Poll::Ready(Self::settle(&self.1, result))\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
@@ -4952,7 +4958,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        }\n");
         w.push_str("    };\n");
         w.push_str("    JuxTask(\n");
-        w.push_str("        Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\")),\n");
+        w.push_str("        std::cell::Cell::new(Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\"))),\n");
         w.push_str("        shared,\n");
         w.push_str("    )\n");
         w.push_str("}\n\n");
@@ -5202,6 +5208,77 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        self.inner.lock().await\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Stepped range runtime -- MISSING-DEFS M.6.1. `a..b step s` as a
+        // value: walks `start, start+step, ...` while the step's direction
+        // allows (`cur < end`, or `<=` for `..=`; the reverse for a negative
+        // step). A zero step throws ArithmeticException when the walk starts.
+        w.push_str(concat!(
+            "#[derive(Debug, Clone)]\n",
+            "pub struct JuxStepped<T> {\n",
+            "    pub start: T,\n",
+            "    pub end: T,\n",
+            "    pub step: i64,\n",
+            "    inclusive: bool,\n",
+            "    next: Option<T>,\n",
+            "}\n",
+            "impl<T: Clone> JuxStepped<T> {\n",
+            "    pub fn new(start: T, end: T, step: i64, inclusive: bool) -> Self {\n",
+            "        JuxStepped { next: Some(start.clone()), start, end, step, inclusive }\n",
+            "    }\n",
+            "}\n",
+            "impl<T: Clone + PartialOrd + TryFrom<i128> + TryInto<i128>> Iterator for JuxStepped<T> {\n",
+            "    type Item = T;\n",
+            "    fn next(&mut self) -> Option<T> {\n",
+            "        if self.step == 0 {\n",
+            "            std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"range step is zero\")));\n",
+            "        }\n",
+            "        let cur = self.next.take()?;\n",
+            "        let more = if self.step > 0 {\n",
+            "            if self.inclusive { cur <= self.end } else { cur < self.end }\n",
+            "        } else if self.inclusive {\n",
+            "            cur >= self.end\n",
+            "        } else {\n",
+            "            cur > self.end\n",
+            "        };\n",
+            "        // Past the end, or past the type's own range, the walk is over.\n",
+            "        more.then(|| {\n",
+            "            self.next = cur.clone().try_into().ok().and_then(|c: i128| T::try_from(c + self.step as i128).ok());\n",
+            "            cur\n",
+            "        })\n",
+            "    }\n",
+            "}\n\n",
+        ));
+        // Synchronous Mutex runtime -- JUX-LANG-V1 10.3.3. `lock(f)` holds
+        // the std mutex while `f` maps the value to its replacement, so the
+        // value is never reachable outside a held lock. A panic inside `f`
+        // (an uncaught Jux exception) poisons the std mutex; the value it
+        // guards is still whole, so the next `lock` takes it back.
+        w.push_str(concat!(
+            "pub struct JuxMutex<T> {\n",
+            "    inner: std::sync::Arc<std::sync::Mutex<T>>,\n",
+            "}\n",
+            "impl<T> Clone for JuxMutex<T> {\n",
+            "    fn clone(&self) -> Self {\n",
+            "        JuxMutex { inner: self.inner.clone() }\n",
+            "    }\n",
+            "}\n",
+            "impl<T> std::fmt::Debug for JuxMutex<T> {\n",
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n",
+            "        f.write_str(\"Mutex\")\n",
+            "    }\n",
+            "}\n",
+            "impl<T: Clone> JuxMutex<T> {\n",
+            "    pub fn new(v: T) -> Self {\n",
+            "        JuxMutex { inner: std::sync::Arc::new(std::sync::Mutex::new(v)) }\n",
+            "    }\n",
+            "    pub fn lock(&self, update: std::rc::Rc<dyn Fn(T) -> T>) -> T {\n",
+            "        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());\n",
+            "        let next = update((*guard).clone());\n",
+            "        *guard = next.clone();\n",
+            "        next\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
         // runs `f` on a real OS thread from the system's thread
         // pool and returns a `Task<T>` (a Future yielding the
@@ -6830,6 +6907,60 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         if let Some(path) = self.foreign_trait_providing(&fqn, f.field.text.as_str()) {
             self.needed_trait_uses.insert(path);
         }
+    }
+
+    /// Record that this call reaches a `Self: Sized` default method of a Jux
+    /// interface (a generic one such as `Iterator.map`, Core lib K.5) through
+    /// an interface-typed receiver. Such a method lives on the `Rc<dyn Iface>`
+    /// handle's impl, not on the trait object, and Rust looks there only with
+    /// the trait in scope; [`Self::splice_foreign_trait_uses`] brings it in as
+    /// `use path as _;`, which takes no name a program could clash with.
+    pub(crate) fn note_jux_interface_trait_use(&mut self, callee: &juxc_ast::Expr) {
+        let juxc_ast::Expr::Field(f) = callee else { return };
+        let Some(juxc_tycheck::Ty::User { name, .. }) =
+            self.expr_types.get(&crate::exprs::expr_span_of(&f.object)).cloned()
+        else {
+            return;
+        };
+        let Some(owner) = self.interface_declaring_sized_default(&name, &f.field.text, 0) else {
+            return;
+        };
+        let (pkg, _) = owner.rsplit_once('.').unwrap_or(("", owner.as_str()));
+        if pkg == self.current_package_path() {
+            // Declared in this very module: already in scope.
+            return;
+        }
+        self.needed_trait_uses.insert(format!("crate::{}", juxc_lex::to_rust_path(&owner)));
+    }
+
+    /// The FQN of the interface, `fqn` or one it extends, whose default method
+    /// `method` needs a `Sized` receiver, if there is one.
+    fn interface_declaring_sized_default(&self, fqn: &str, method: &str, depth: usize) -> Option<String> {
+        if depth > 16 {
+            return None;
+        }
+        let (full, sig) = self.lookup_interface_by_bare_or_fqn(fqn)?;
+        if sig.is_external {
+            return None;
+        }
+        let full = full.to_string();
+        let bare = full.rsplit('.').next().unwrap_or(full.as_str()).to_string();
+        let decl = self.interface_ast_by_bare(&bare)?;
+        if decl
+            .methods
+            .iter()
+            .any(|m| m.name.text == method && crate::decls::interfaces::default_method_needs_sized_self(m))
+        {
+            return Some(full);
+        }
+        let parents: Vec<String> = decl
+            .extends
+            .iter()
+            .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+            .collect();
+        parents
+            .iter()
+            .find_map(|p| self.interface_declaring_sized_default(p, method, depth + 1))
     }
 
     fn emit_top_level_decl(&mut self, item: &TopLevelDecl) {

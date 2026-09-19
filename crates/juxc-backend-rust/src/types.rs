@@ -163,6 +163,25 @@ impl RustEmitter {
         self.bound_position_classes.contains(bare) || self.is_dispatch_relevant_class(bare)
     }
 
+    /// The Rust spelling of the `Option` a nullable `T?` lowers to.
+    ///
+    /// Plain `Option` everywhere, except in a unit that has a Jux type of its
+    /// own named `Option` in scope (the core `jux.std.option.Option` enum's
+    /// own file, or one that imports it): there the bare name is that enum,
+    /// so `T?` spells out Rust's `std::option::Option`.
+    pub(crate) fn nullable_option_path(&self) -> &'static str {
+        let shadowed = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .and_then(|ctx| ctx.unqualified.get("Option"))
+            .is_some_and(|fqn| !fqn.starts_with("rust."));
+        if shadowed {
+            "std::option::Option<"
+        } else {
+            "Option<"
+        }
+    }
+
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // A function pointer (Layout-ABI §L.6.4) is the same Rust type in every
         // position: a nullable C code address.
@@ -329,6 +348,14 @@ impl RustEmitter {
                 "AsyncMutex" if !self.symbols.classes.contains_key("AsyncMutex") => {
                     Some("crate::JuxAsyncMutex")
                 }
+                // The synchronous `Mutex<T>` (JUX-LANG-V1 10.3.3), when the
+                // name means Jux's own and not an imported `rust.std.Mutex`.
+                "Mutex" if self.resolve_bare_class_fqn("Mutex").as_deref() == Some("jux.std.concurrent.Mutex") => Some("crate::JuxMutex"),
+                // The range types (MISSING-DEFS §M.6.1): Rust's own ranges,
+                // and the prelude's `JuxStepped` for a range with a `step`.
+                "ExclusiveRange" if !self.symbols.classes.contains_key("ExclusiveRange") => Some("std::ops::Range"),
+                "InclusiveRange" if !self.symbols.classes.contains_key("InclusiveRange") => Some("std::ops::RangeInclusive"),
+                "SteppedRange" if !self.symbols.classes.contains_key("SteppedRange") => Some("crate::JuxStepped"),
                 // Async streams (§18.6) — same builtin-helper mapping.
                 "Stream" if !self.symbols.classes.contains_key("Stream") => {
                     Some("crate::JuxStream")
@@ -418,7 +445,7 @@ impl RustEmitter {
             // to the element below.)
             if ty.nullable {
                 let inner = juxc_ast::TypeRef { nullable: false, ..ty.clone() };
-                self.w.push_str("Option<");
+                self.w.push_str(self.nullable_option_path());
                 self.emit_type_as_rust(&inner);
                 self.w.push('>');
                 return;
@@ -502,7 +529,7 @@ impl RustEmitter {
                 ptr_depth: 0,
                 span: ty.span,
             };
-            self.w.push_str("Option<");
+            self.w.push_str(self.nullable_option_path());
             self.emit_type_as_rust(&inner);
             self.w.push('>');
             return;
@@ -539,6 +566,13 @@ impl RustEmitter {
                 // `any` (§T.1.2): the prelude's `JuxAny`.
                 "any" if ty.generic_args.is_empty() => {
                     self.w.push_str("crate::JuxAny");
+                    return;
+                }
+                // `never` (K.4.1) as a value type (`Result<int, never>`):
+                // Rust's uninhabited `Infallible`. A function's `never`
+                // return is `!`, see `emit_return_type_as_rust`.
+                "never" if ty.generic_args.is_empty() && !self.never_is_user_type() => {
+                    self.w.push_str("std::convert::Infallible");
                     return;
                 }
                 _ => {}
@@ -1342,6 +1376,16 @@ impl RustEmitter {
     /// `String`, so this is a plain forward. Kept named for call-site
     /// readability and to leave room for a future divergence (e.g.
     /// borrow-thread `&'a str` returns when borrow inference lands).
+    /// Whether the program declares a type of its own named `never`, which
+    /// then takes the name over from the built-in bottom type (as `any` can).
+    pub(crate) fn never_is_user_type(&self) -> bool {
+        self.symbols
+            .classes
+            .keys()
+            .chain(self.symbols.records.keys())
+            .any(|k| k.rsplit('.').next() == Some("never"))
+    }
+
     pub(crate) fn emit_return_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // `async void` synthesizes a sentinel `void`-named TypeRef in
         // `parse_return_type` — emit Rust's unit `()` so the produced
@@ -1358,6 +1402,12 @@ impl RustEmitter {
             if let Some(seg) = ty.name.segments.last() {
                 if seg.text == "void" {
                     self.w.push_str("()");
+                    return;
+                }
+                // A `never` function (K.4.1) does not return: Rust's `!`,
+                // which rustc checks the same way.
+                if seg.text == "never" && !self.never_is_user_type() {
+                    self.w.push('!');
                     return;
                 }
             }
@@ -1633,6 +1683,7 @@ pub(crate) fn ty_to_type_ref(
         }
         juxc_tycheck::Ty::String => named("String", Vec::new(), false),
         juxc_tycheck::Ty::Any => named("any", Vec::new(), false),
+        juxc_tycheck::Ty::Never => named("never", Vec::new(), false),
         juxc_tycheck::Ty::Primitive(p) => {
             named(juxc_tycheck::ty::primitive_name(*p), Vec::new(), false)
         }

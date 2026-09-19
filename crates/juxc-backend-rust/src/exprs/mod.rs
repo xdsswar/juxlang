@@ -499,6 +499,21 @@ impl RustEmitter {
         // type (§18.3); lowers to the emitted JuxChannel
         // helper. Recognized before user-class resolution so
         // no stdlib stub is needed.
+        // `new Mutex<T>(v)` -- the synchronous mutex (JUX-LANG-V1 10.3.3).
+        if n.class_name.segments.len() == 1
+            && n.class_name.segments[0].text == "Mutex"
+            && self.resolve_bare_class_fqn("Mutex").as_deref() == Some("jux.std.concurrent.Mutex")
+        {
+            self.w.push_str("crate::JuxMutex::new(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            if let Some(v) = n.args.first() {
+                self.emit_expr(v);
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
         // `new AsyncMutex<T>(v)` — §18.3 runtime helper.
         if n.class_name.segments.len() == 1
             && n.class_name.segments[0].text == "AsyncMutex"
@@ -3134,6 +3149,13 @@ impl RustEmitter {
 /// real source span return [`juxc_source::Span::DUMMY`], which is the
 /// same value the recorder sentinels out — so `expr_types.get(...)`
 /// will simply miss and the caller falls back conservatively.
+/// Whether a type is `rust.std`'s `Duration` (`std::time::Duration`), the
+/// time span `withTimeout` and `Task.delay` accept besides milliseconds.
+pub(crate) fn expr_is_duration(ty: Option<&juxc_tycheck::Ty>) -> bool {
+    matches!(ty, Some(juxc_tycheck::Ty::User { name, .. })
+        if name.starts_with("rust.") && name.rsplit('.').next() == Some("Duration"))
+}
+
 pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     match e {
         Expr::Literal(_) => juxc_source::Span::DUMMY,

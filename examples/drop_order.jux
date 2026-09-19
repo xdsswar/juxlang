@@ -1,0 +1,64 @@
+// Destruction order inside an aggregate (JUX-SEMANTICS-ADDENDUM S.5.2):
+// the object's own `drop` block first, then its fields from the last
+// declared to the first, then its parent's `drop` block and the parent's
+// fields. The inverse of construction, as C++ does it.
+
+class Resource {
+    private String name;
+
+    public Resource(String name) {
+        this.name = name;
+        print("open " + name);
+    }
+
+    drop {
+        print("close " + name);
+    }
+}
+
+class Base {
+    private Resource log = new Resource("log");
+
+    drop {
+        print("drop Base");
+    }
+}
+
+class Service extends Base {
+    private Resource db;
+    private Resource cache;
+
+    public Service() {
+        super();
+        this.db = new Resource("db");
+        this.cache = new Resource("cache");
+    }
+
+    drop {
+        print("drop Service");
+    }
+}
+
+// Two fields and no parent: last declared goes first.
+class Pair {
+    private Resource first = new Resource("first");
+    private Resource second = new Resource("second");
+}
+
+void scope() {
+    var s = new Service();
+    print("using the service");
+}
+
+void pair() {
+    var p = new Pair();
+    print("using the pair");
+}
+
+public void main() {
+    scope();
+    print("--");
+    pair();
+    print("--");
+    print("done");
+}

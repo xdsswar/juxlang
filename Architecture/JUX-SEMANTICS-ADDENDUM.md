@@ -436,7 +436,7 @@ This is stricter than C++ (which makes drop-from-drop *undefined behavior*) and 
 
 ### S.5.3a. Phase-1 Implementation Notes
 
-`drop { }` lowers onto Rust's `Drop` trait — for reference-semantics classes it lands on the refcounted payload, so the block runs exactly once, when the last strong reference releases (§S.5.5 for free). Deviations, to be closed later: fields inside an aggregate are destroyed in **declaration** order (Rust's order) rather than the reverse order specified in §S.5.2; an exception thrown from a `drop` block aborts instead of aggregating per §S.5.3; and within a reference-semantics class's `drop` block, calls to the instance's own methods are not available — keep destructor bodies to field access plus free/static calls.
+`drop { }` lowers onto Rust's `Drop` trait — for reference-semantics classes it lands on the refcounted payload, so the block runs exactly once, when the last strong reference releases (§S.5.5 for free). Fields inside an aggregate are destroyed in the reverse order §S.5.2 specifies, parent slice last, wherever the order is observable (two or more owned parts whose destruction runs a `drop` block); the emitted struct then lists them in that order, and a `@layout(c)` struct never reorders. Deviations, to be closed later: an exception thrown from a `drop` block aborts instead of aggregating per §S.5.3 (a `MultipleDropException` has no definition yet, and unwinding out of Rust's `Drop` during a cascade aborts the process); and within a reference-semantics class's `drop` block, calls to the instance's own methods are not available — keep destructor bodies to field access plus free/static calls.
 
 ### S.5.4. Drop During Move
 
@@ -509,7 +509,7 @@ The default ordering for the no-argument methods is **SeqCst**. This is the safe
 
 There are no fence intrinsics in v1 (`atomic_thread_fence`-equivalent). If experience shows a need, they can be added in a later edition without changing the rest of the model.
 
-**Phase-1 implementation notes.** `AtomicInt` / `AtomicLong` and `MemoryOrder` are available (`jux.std.concurrent`), lowered onto `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc` — handles share the same cell across `spawn` / `Worker.spawn` boundaries. The `fetch*` family carries both the SeqCst-default and explicit-order overloads. Deferred: `compareAndSwap` (its `CasResult<T>` return type is referenced above but not yet specified — it needs a definition here before implementation) and `AtomicRef<T>`.
+**Phase-1 implementation notes.** `AtomicInt` / `AtomicLong` and `MemoryOrder` are available (`jux.std.concurrent`), lowered onto `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc` — handles share the same cell across `spawn` / `Worker.spawn` boundaries. The `fetch*` family carries both the SeqCst-default and explicit-order overloads. Deferred: `compareAndSwap` (its `CasResult<T>` return type is referenced above but not yet specified — it needs a definition here before implementation) and `AtomicRef<T>`, whose operations are not specified here either; and a lock-free swap of a reference-counted class handle has no safe primitive in Rust's standard library, so it would need a spec'd API and a runtime crate (or a lock, which the name promises not to take). For shared mutable state across threads today, `Mutex<T>` (JUX-LANG-V1 §10.3.3) is available.
 
 ### S.6.3. Volatile Access
 

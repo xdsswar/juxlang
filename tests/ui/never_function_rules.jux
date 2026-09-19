@@ -1,0 +1,24 @@
+// A `never` function (Core lib K.4.1) may not finish and may not `return`.
+
+never stop(int n) {
+    if (n > 0) {
+        throw new IllegalStateException("stop");
+    }
+}
+
+never quit() {
+    return;
+}
+
+// A return inside a lambda belongs to the lambda: fine.
+never loop() {
+    () -> int f = () -> {
+        return 1;
+    };
+    while (true) {
+        print(f());
+    }
+}
+
+public void main() {
+}

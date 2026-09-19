@@ -2656,13 +2656,88 @@ impl<'a> Checker<'a> {
         if is_void {
             return;
         }
-        if crate::return_check::body_can_fall_through(body) {
+        // A call to a `never` function (K.4.1) ends its path, as a `throw`
+        // does.
+        let can_complete = crate::return_check::body_can_fall_through_with(body, &|e| {
+            matches!(e, Expr::Call(_)) && infer_expr(e, &self.env, self.symbols) == Ty::Never
+        });
+        // A `never` function has no value to return and may not finish.
+        if let juxc_ast::ReturnType::Type(t) = return_type {
+            if ty_from_ref(t, &self.env, self.symbols) == Ty::Never {
+                self.check_never_function(body, fn_name, name_span, can_complete);
+                return;
+            }
+        }
+        if can_complete {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0460_MissingReturn,
                     format!(
                         "`{fn_name}` can finish without returning a value -- every path must \
                          `return` (or `throw`); add a return for the missing path",
+                    ),
+                )
+                .with_span(name_span),
+            );
+        }
+    }
+
+    /// A time span handed to `withTimeout` or `Task.delay` (JUX-ASYNC-ADDENDUM
+    /// 18.1.9, ERRATA E58) is a count of milliseconds, any integer type, or a
+    /// `rust.std` `Duration`. Anything else is E0487.
+    fn check_time_span_arg(&mut self, arg: &Expr, call_span: Span) {
+        let ty = infer_expr(arg, &self.env, self.symbols);
+        let ok = match &ty {
+            Ty::Unknown => true,
+            Ty::Primitive(p) => crate::ty::integer_bits(*p).is_some(),
+            Ty::User { name, .. } => name.starts_with("rust.") && name.rsplit('.').next() == Some("Duration"),
+            _ => false,
+        };
+        if !ok {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0487_NotATimeSpan,
+                    format!("a time span is milliseconds (an integer) or a `Duration`, found {ty}"),
+                )
+                // A literal carries no span of its own; the call does.
+                .with_span(if expr_span(arg).end == 0 { call_span } else { expr_span(arg) })
+                .with_help("write `Duration.from_secs(n)` / `Duration.from_millis(n)` (import rust.std.Duration), or a count of milliseconds"),
+            );
+        }
+    }
+
+    /// The rules a function whose return type is `never` obeys
+    /// (JUX-CORE-LIB-ADDENDUM K.4.1): no path may reach the end of its body
+    /// (E0485), and no `return` may appear in it (E0486). A `return` inside a
+    /// lambda written in the body belongs to the lambda and is left alone.
+    fn check_never_function(&mut self, body: &juxc_ast::Block, fn_name: &str, name_span: Span, can_complete: bool) {
+        let mut lambdas: Vec<Span> = Vec::new();
+        let mut returns: Vec<Span> = Vec::new();
+        juxc_ast::visit::for_each_node(body, &mut |n| match n {
+            juxc_ast::visit::Node::Expr(Expr::Lambda(l)) => lambdas.push(l.span),
+            juxc_ast::visit::Node::Stmt(juxc_ast::Stmt::Return(_, span)) => returns.push(*span),
+            _ => {}
+        });
+        for span in returns {
+            if lambdas.iter().any(|l| l.start <= span.start && span.end <= l.end) {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0486_ReturnInNeverFunction,
+                    format!("`{fn_name}` returns `never`, so it cannot `return`"),
+                )
+                .with_span(span)
+                .with_help("throw an exception instead, or change the return type"),
+            );
+        }
+        if can_complete {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0485_NeverFunctionCompletes,
+                    format!(
+                        "`{fn_name}` returns `never` but can reach the end of its body -- every \
+                         path must throw, loop forever, or call another `never` function",
                     ),
                 )
                 .with_span(name_span),
@@ -3461,6 +3536,10 @@ impl<'a> Checker<'a> {
             "AsyncMutex",
             "Stream",
             "Task",
+            // The range types of MISSING-DEFS §M.6.1 (`var r = 0..10;`).
+            "ExclusiveRange",
+            "InclusiveRange",
+            "SteppedRange",
         ];
         if INTRINSIC.contains(&bare) || bare == juxc_ast::TUPLE_SENTINEL {
             return false;
@@ -5918,6 +5997,10 @@ impl<'a> Checker<'a> {
                     (Some(t), None) if t.is_void() => {}
                     // Bare `return;` outside any function — fine.
                     (None, None) => {}
+                    // Any `return` in a `never` function is E0486, reported by
+                    // `check_never_function` with the reason; a type mismatch on
+                    // top of it would say the same thing twice.
+                    (Some(Ty::Never), _) => {}
                     // Bare `return;` in a value-returning function. Carry the
                     // statement span so the diagnostic reaches the IDE (a
                     // file-less diagnostic is dropped by the LSP).
@@ -6928,15 +7011,6 @@ impl<'a> Checker<'a> {
                                 format!("range `step` must be an int, found {st}"),
                             )
                             .with_span(expr_span(s)),
-                        );
-                    }
-                    if !self.in_foreach_iter {
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0410_TypeMismatch,
-                                "`step` ranges are only supported as for-each iterables in Phase 1 -- `for (var i : a..b step s)`",
-                            )
-                            .with_span(r.span),
                         );
                     }
                 }
@@ -8890,6 +8964,10 @@ impl<'a> Checker<'a> {
                 if self.symbols.lookup_interface_property(name, field_name).is_some() {
                     return;
                 }
+                // A range value's components (MISSING-DEFS §M.6.1).
+                if crate::infer::range_component_type(name, &Ty::Unknown, field_name).is_some() {
+                    return;
+                }
                 // Records: check components directly. Record
                 // components are always public per the spec (records
                 // are simple data carriers), so no visibility check.
@@ -10660,6 +10738,11 @@ impl<'a> Checker<'a> {
                 // `withTimeout(ms, f())`), so their args are
                 // future-consuming positions (E0705 exempt).
                 if BUILTINS.contains(&name.as_str()) {
+                    if name == "withTimeout" {
+                        if let Some(span) = c.args.first() {
+                            self.check_time_span_arg(span, c.span);
+                        }
+                    }
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
                     for arg in &c.args {
@@ -10936,6 +11019,11 @@ impl<'a> Checker<'a> {
                         && qn.segments[0].text == "Task"
                         && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay")
                     {
+                        if method_name == "delay" {
+                            if let Some(span) = c.args.first() {
+                                self.check_time_span_arg(span, c.span);
+                            }
+                        }
                         let prev_slot = self.in_future_slot;
                         self.in_future_slot = true;
                         for arg in &c.args {
@@ -11604,6 +11692,20 @@ impl<'a> Checker<'a> {
                 if let Some(enum_sig) = self.symbols.enums.get(&name) {
                     if let Some(method) = enum_sig.methods.get(method_name) {
                         let params = method.params.clone();
+                        // The enum's own type arguments and the method's
+                        // inferred ones, as for a record: a lambda handed to
+                        // `Option<String>.map((p) -> p.charLength())` needs
+                        // `p` to be the String, not an unresolved `T`.
+                        let method_generic_params = method.generic_params.clone();
+                        let mut subst_params = enum_sig.generic_params.clone();
+                        let mut subst_args = generic_args.clone();
+                        self.append_method_generic_inference(
+                            &method_generic_params,
+                            &params,
+                            &c.args,
+                            &mut subst_params,
+                            &mut subst_args,
+                        );
                         self.check_call_args(
                             method_name,
                             &params,
@@ -11611,8 +11713,8 @@ impl<'a> Checker<'a> {
                             &c.arg_names,
                             c.span,
                             Some(&name),
-                            &[],
-                            &[],
+                            &subst_params,
+                            &subst_args,
                         );
                         return;
                     }
@@ -13668,9 +13770,36 @@ fn function_into_any(expected: &Ty, value: &Expr) -> bool {
     matches!(slot, Ty::Any) && matches!(value, Expr::Lambda(_) | Expr::MethodRef(_))
 }
 
+/// Whether two function types have the same shape and agree position by
+/// position, where a position agrees when both sides are equal or either is
+/// still open (`Unknown`, or a type parameter awaiting substitution). Nested
+/// function types are compared the same way. Used by [`compatible`].
+fn fn_shapes_agree(expected: &Ty, found: &Ty) -> bool {
+    fn agree(a: &Ty, b: &Ty) -> bool {
+        a == b
+            || a.is_unknown()
+            || b.is_unknown()
+            || matches!(a, Ty::Param(_))
+            || matches!(b, Ty::Param(_))
+            || fn_shapes_agree(a, b)
+    }
+    match (expected, found) {
+        (
+            Ty::Fn { params: ep, return_type: er, is_async: ea },
+            Ty::Fn { params: fp, return_type: fr, is_async: fa },
+        ) => ea == fa && ep.len() == fp.len() && ep.iter().zip(fp).all(|(e, f)| agree(e, f)) && agree(er, fr),
+        _ => false,
+    }
+}
+
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
+        return true;
+    }
+    // `never` has no values, so a `never` expression (a call to a function
+    // that does not return, K.4.1) fits any slot: the slot is never filled.
+    if matches!(found, Ty::Never) {
         return true;
     }
     if matches!(expected, Ty::Param(_)) || matches!(found, Ty::Param(_)) {
@@ -13695,6 +13824,15 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     }
     // Exact match.
     if expected == found {
+        return true;
+    }
+    // Two function types of one shape whose positions differ only where one
+    // side is still to be inferred: a generic callee's `(A) -> B` slot,
+    // lowered before its own `A`/`B` are known, takes a caller's `(T) -> R`
+    // lambda (a default method handing its argument on, Core lib K.5).
+    // Positions that are both concrete must match exactly; function-type
+    // variance (T.3.6) is not implied.
+    if fn_shapes_agree(expected, found) {
         return true;
     }
     // `any` (§T.1.2 / §T.3.6): every value converts, except a nullable one

@@ -109,7 +109,7 @@ impl SymbolTable {
     fn hash_blocker_in(&self, ty: &Ty, visiting: &mut HashSet<String>) -> Option<String> {
         match ty {
             Ty::Nullable(inner) => self.hash_blocker_in(inner, visiting),
-            Ty::Primitive(_) | Ty::String | Ty::Param(_) | Ty::Unknown | Ty::Void | Ty::Wildcard(_) => None,
+            Ty::Primitive(_) | Ty::String | Ty::Param(_) | Ty::Unknown | Ty::Void | Ty::Wildcard(_) | Ty::Never => None,
             Ty::Array { .. } => Some("an array has no hash (it is a shared handle whose elements can change)".into()),
             Ty::Fn { .. } | Ty::FnPtr { .. } => Some("a function value has no hash".into()),
             // `any` supports only `===`, `=>` and its text (§T.1.2).

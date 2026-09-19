@@ -1851,6 +1851,7 @@ impl RustEmitter {
                                 c.as_str(),
                                 "Stream" | "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong",
                             )
+                            || c == "jux.std.concurrent.Mutex"
                     })
                     .unwrap_or(false)
             });
@@ -2614,8 +2615,15 @@ impl RustEmitter {
         // temporary must be iterated BY VALUE: notably an iterator expression
         // like `s.chars()` — `&Chars` is NOT `IntoIterator` (rustc E0277) — and
         // by-value also works for a function that returns a collection.
-        let iter_is_place =
-            snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
+        // A range VALUE (M.6.1) is its own iterator: walked from a copy, so
+        // the variable still holds the whole range afterwards.
+        let range_value = matches!(
+            self.receiver_ty_of(&f.iter),
+            Some(Ty::User { name, .. })
+                if matches!(name.as_str(), "ExclusiveRange" | "InclusiveRange" | "SteppedRange")
+        );
+        let iter_is_place = !range_value
+            && (snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_)));
         // **A map walks OWNED entries.** A foreign map (`HashMap`, `BTreeMap`,
         // a crate's `Map<K, V>`) iterated by reference yields `(&K, &V)`, and
         // Jux has no reference types to hold them: `show(entry.0, entry.1)`
@@ -2665,6 +2673,9 @@ impl RustEmitter {
         }
         if snapshot {
             self.w.push_str("__jux_fe_iter");
+        } else if range_value {
+            self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
+            self.w.push_str(".clone()");
         } else {
             self.emit_expr(&f.iter);
         }
@@ -5569,7 +5580,10 @@ impl RustEmitter {
     /// reach this line are ones the null test has already ruled out.
     fn emit_unwrap_shadow(&mut self, name: &str) {
         let ident = to_rust_ident(name);
-        self.w.line(&format!("let {ident} = {ident}.unwrap();"));
+        // A binding the body assigns again (`best = x;` in a max loop) needs
+        // its shadow mutable too.
+        let binding = if self.mutated_in_fn.contains(name) { "let mut" } else { "let" };
+        self.w.line(&format!("{binding} {ident} = {ident}.unwrap();"));
     }
 }
 

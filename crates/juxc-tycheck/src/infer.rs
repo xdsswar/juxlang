@@ -615,7 +615,24 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::Range(r) => {
             let kind = if r.inclusive { OperatorKind::RangeInclusive } else { OperatorKind::Range };
             let start = infer_expr(&r.start, env, symbols);
-            lookup_user_operator_return_type(&start, kind, env, symbols).unwrap_or(Ty::Unknown)
+            if let Some(t) = lookup_user_operator_return_type(&start, kind, env, symbols) {
+                return t;
+            }
+            // A range of numbers or chars is a value (MISSING-DEFS M.6.1):
+            // `ExclusiveRange<T>`, `InclusiveRange<T>`, or with a `step`,
+            // `SteppedRange<T>`, where `T` is the type the bounds meet in.
+            let end = infer_expr(&r.end, env, symbols);
+            let element = match (&start, &end) {
+                (Ty::Primitive(Primitive::Char), Ty::Primitive(Primitive::Char)) => Some(Primitive::Char),
+                _ => numeric_operands_type(&r.start, &start, &r.end, &end),
+            };
+            match element {
+                Some(p) => Ty::User {
+                    name: range_type_name(r.inclusive, r.step.is_some()).to_string(),
+                    generic_args: vec![Ty::Primitive(p)],
+                },
+                None => Ty::Unknown,
+            }
         }
         Expr::Unary(u) => infer_unary(u, env, symbols),
         Expr::Binary(b) => infer_binary(b, env, symbols),
@@ -1003,6 +1020,14 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // resolved no method at all and the whole chain typed as `Unknown` --
     // which then silently satisfied every later check.
     let object_ty = peel_safe_receiver(f.safe, infer_expr(&f.object, env, symbols));
+    // A range value's components (M.6.1).
+    if let Ty::User { name, generic_args } = &object_ty {
+        if let Some(element) = generic_args.first() {
+            if let Some(t) = range_component_type(name, element, &f.field.text) {
+                return t;
+            }
+        }
+    }
     let field_name = f.field.text.as_str();
 
     // AsyncMutex guard (§18.3): `guard.value` is the protected T.
@@ -3234,6 +3259,29 @@ fn infer_else_branch(branch: &ElseBranch, env: &mut TypeEnv, symbols: &SymbolTab
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// The built-in range type a range expression is (MISSING-DEFS M.6.1).
+pub fn range_type_name(inclusive: bool, stepped: bool) -> &'static str {
+    match (stepped, inclusive) {
+        (true, _) => "SteppedRange",
+        (false, true) => "InclusiveRange",
+        (false, false) => "ExclusiveRange",
+    }
+}
+
+/// The type of a component read from a built-in range value (M.6.1):
+/// `start` and `end` of an `ExclusiveRange<T>`, `start` and `endInclusive`
+/// of an `InclusiveRange<T>`, `start`, `end` and `step` of a
+/// `SteppedRange<T>` (`step` is an `int`, M.6.3). `None` for any other.
+pub fn range_component_type(range: &str, element: &Ty, field: &str) -> Option<Ty> {
+    match (range, field) {
+        ("ExclusiveRange", "start" | "end")
+        | ("InclusiveRange", "start" | "endInclusive")
+        | ("SteppedRange", "start" | "end") => Some(element.clone()),
+        ("SteppedRange", "step") => Some(Ty::Primitive(Primitive::Int)),
+        _ => None,
+    }
+}
 
 /// The result type of a §K.11 static built-in called on a primitive type name,
 /// or `None` when `c` is not one.

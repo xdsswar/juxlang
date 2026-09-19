@@ -21,6 +21,36 @@ use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // A range value's components (MISSING-DEFS §M.6.1). An exclusive
+        // range and a stepped one carry public fields; Rust's inclusive range
+        // reaches its bounds through accessors.
+        if let Some(juxc_tycheck::Ty::User { name, .. }) = self.receiver_ty_of(&f.object) {
+            let access = match (name.as_str(), f.field.text.as_str()) {
+                ("ExclusiveRange", "start" | "end") | ("SteppedRange", "start" | "end" | "step") => {
+                    Some((false, f.field.text.clone()))
+                }
+                ("InclusiveRange", "start") => Some((true, "start".to_string())),
+                ("InclusiveRange", "endInclusive") => Some((true, "end".to_string())),
+                _ => None,
+            };
+            if let Some((through_method, rust)) = access {
+                self.w.push('(');
+                if through_method {
+                    self.w.push('*');
+                }
+                self.emit_expr_with_parent_prec(&f.object, u8::MAX, false);
+                self.w.push('.');
+                self.w.push_str(&rust);
+                if through_method {
+                    self.w.push_str("()");
+                }
+                if name == "SteppedRange" && rust == "step" {
+                    self.w.push_str(" as isize");
+                }
+                self.w.push(')');
+                return;
+            }
+        }
         // A Java-style enum's per-variant field (JUX-LANG-V1 §7.7.4): the
         // values live in the enum's table, one row per variant, reached
         // through its `__field` accessor. `Planet.Earth.mass` and `this.mass`
@@ -1705,6 +1735,17 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::String) | Some(juxc_tycheck::Ty::Array { .. }) => true,
             // An `any` is a shared handle: re-reading it copies the handle.
             Some(juxc_tycheck::Ty::Any) => true,
+            // A range value (M.6.1) is a small `Clone` struct; handing one on
+            // while it is read again copies it.
+            Some(juxc_tycheck::Ty::User { name, .. })
+                if matches!(name.as_str(), "ExclusiveRange" | "InclusiveRange" | "SteppedRange") =>
+            {
+                true
+            }
+            // So is a function value (`Rc<dyn Fn>`): a lambda that hands its
+            // captured `f` on runs any number of times, and moving `f` out of
+            // it was rustc E0507.
+            Some(juxc_tycheck::Ty::Fn { .. }) => true,
             // A scanned type answers for itself: bindgen records `@RustClone`
             // from the type's real `Clone` impl, so a newly bound crate's
             // collection shares by clone without being named here. The list
@@ -1818,7 +1859,8 @@ impl RustEmitter {
                         if matches!(
                             bare,
                             "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong" | "Stream"
-                        ) {
+                        ) || name == "jux.std.concurrent.Mutex"
+                        {
                             return true;
                         }
                         return self.is_wrapper_class(bare);

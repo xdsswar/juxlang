@@ -125,6 +125,69 @@ fn export_needs_string_wrapper(fn_decl: &FnDecl) -> bool {
         })
 }
 
+/// The Rust trait bounds a list of `where T has operator ...` constraints
+/// (§O.5) lowers to: each Jux operator capability maps to its std trait, so
+/// a body using the operator on `T` compiles. Constraints with no Rust
+/// counterpart (`[]`, `()`, `in`, ranges) are call-site checked only (E0941)
+/// and add no bound. Duplicates are dropped; order follows the source.
+pub(crate) fn where_bounds(wheres: &[juxc_ast::WhereConstraint]) -> Vec<String> {
+    let mut bounds: Vec<String> = Vec::new();
+    for w in wheres {
+        let t = w.param.text.as_str();
+        let b = match w.kind {
+            juxc_ast::OperatorKind::Eq => Some(format!("{t}: PartialEq")),
+            juxc_ast::OperatorKind::Cmp => Some(format!("{t}: PartialOrd")),
+            juxc_ast::OperatorKind::Hash => Some(format!("{t}: std::hash::Hash")),
+            juxc_ast::OperatorKind::ToString => {
+                Some(format!("{t}: std::fmt::Display"))
+            }
+            juxc_ast::OperatorKind::Plus => {
+                Some(format!("{t}: std::ops::Add<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Minus => {
+                Some(format!("{t}: std::ops::Sub<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Mul => {
+                Some(format!("{t}: std::ops::Mul<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Div => {
+                Some(format!("{t}: std::ops::Div<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Rem => {
+                Some(format!("{t}: std::ops::Rem<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Neg => {
+                Some(format!("{t}: std::ops::Neg<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::BitAnd => {
+                Some(format!("{t}: std::ops::BitAnd<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::BitOr => {
+                Some(format!("{t}: std::ops::BitOr<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::BitXor => {
+                Some(format!("{t}: std::ops::BitXor<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::BitNot => {
+                Some(format!("{t}: std::ops::Not<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Shl => {
+                Some(format!("{t}: std::ops::Shl<Output = {t}>"))
+            }
+            juxc_ast::OperatorKind::Shr => {
+                Some(format!("{t}: std::ops::Shr<Output = {t}>"))
+            }
+            _ => None,
+        };
+        if let Some(b) = b {
+            if !bounds.contains(&b) {
+                bounds.push(b);
+            }
+        }
+    }
+    bounds
+}
+
 impl RustEmitter {
     /// Emit a Jux `@extern(lib = "…") unsafe native { … }` block as a Rust
     /// `#[link(name = "…")] extern "C" { … }` (Layout-ABI §L.7 / pipeline
@@ -525,65 +588,10 @@ impl RustEmitter {
         // use of the operator on `T` compiles; constraints without a
         // Rust counterpart (`[]`, `()`, `in`, ranges) are call-site
         // checked only (E0941) and add no bound here.
-        if !fn_decl.wheres.is_empty() {
-            let mut bounds: Vec<String> = Vec::new();
-            for w in &fn_decl.wheres {
-                let t = w.param.text.as_str();
-                let b = match w.kind {
-                    juxc_ast::OperatorKind::Eq => Some(format!("{t}: PartialEq")),
-                    juxc_ast::OperatorKind::Cmp => Some(format!("{t}: PartialOrd")),
-                    juxc_ast::OperatorKind::Hash => Some(format!("{t}: std::hash::Hash")),
-                    juxc_ast::OperatorKind::ToString => {
-                        Some(format!("{t}: std::fmt::Display"))
-                    }
-                    juxc_ast::OperatorKind::Plus => {
-                        Some(format!("{t}: std::ops::Add<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Minus => {
-                        Some(format!("{t}: std::ops::Sub<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Mul => {
-                        Some(format!("{t}: std::ops::Mul<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Div => {
-                        Some(format!("{t}: std::ops::Div<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Rem => {
-                        Some(format!("{t}: std::ops::Rem<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Neg => {
-                        Some(format!("{t}: std::ops::Neg<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::BitAnd => {
-                        Some(format!("{t}: std::ops::BitAnd<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::BitOr => {
-                        Some(format!("{t}: std::ops::BitOr<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::BitXor => {
-                        Some(format!("{t}: std::ops::BitXor<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::BitNot => {
-                        Some(format!("{t}: std::ops::Not<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Shl => {
-                        Some(format!("{t}: std::ops::Shl<Output = {t}>"))
-                    }
-                    juxc_ast::OperatorKind::Shr => {
-                        Some(format!("{t}: std::ops::Shr<Output = {t}>"))
-                    }
-                    _ => None,
-                };
-                if let Some(b) = b {
-                    if !bounds.contains(&b) {
-                        bounds.push(b);
-                    }
-                }
-            }
-            if !bounds.is_empty() {
-                self.w.push_str(" where ");
-                self.w.push_str(&bounds.join(", "));
-            }
+        let bounds = where_bounds(&fn_decl.wheres);
+        if !bounds.is_empty() {
+            self.w.push_str(" where ");
+            self.w.push_str(&bounds.join(", "));
         }
 
         self.w.push_str(" {\n");

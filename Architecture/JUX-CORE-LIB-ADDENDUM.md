@@ -222,6 +222,8 @@ Specified in `JUX-EXCEPTIONS-ADDENDUM.md` §X.4 — repeated here as part of the
 
 `never` is a compiler-recognized type, not a user-defined one. It can appear in any type position; assignment from `never` to any type is well-typed.
 
+A function whose return type is `never` must not complete normally: every path throws, loops forever, or calls another `never` function (`E0485`), and it contains no `return` (`E0486`). In exchange, a call to one ends its path for the missing-return rule the way a `throw` does, and its result fits any slot. A `never` return lowers to Rust's `!`; `never` in any other type position (`Result<int, never>`) lowers to `std::convert::Infallible`.
+
 ---
 
 ## §K.5 — `Iterator<T>` and `Iterable<T>`
@@ -624,8 +626,7 @@ The full set is too large to specify here exhaustively; the canonical list is in
 
 **Phase-1 implementation notes.** The instance-method surface above and the type-name constants (`int.MAX_VALUE`, `double.NAN`, `double.POSITIVE_INFINITY`, `double.EPSILON`, …; float `MIN_VALUE` is the smallest positive value, Java-style) lower to the matching Rust operations at the receiver's exact width — a `byte` `wrappingAdd` wraps at 8 bits. Deviations, to be closed in a later phase:
 
-- Integer `abs()` on `T.MIN_VALUE` follows the general overflow rule of `JUX-SEMANTICS-ADDENDUM.md` §S.2 (panic in debug, wrap in release) instead of throwing a catchable `ArithmeticException`. Use `saturatingAbs()` or `checkedAdd`-style guards where the edge matters.
-- The static constructors `fromBits(uint)` and `char.fromCodePoint(uint)` are not yet available.
+- Integer `abs()` on `T.MIN_VALUE` throws a catchable `ArithmeticException`, as specified; `saturatingAbs()` is the non-throwing form. `double.fromBits(b)`, `float.fromBits(b)` and `char.fromCodePoint(cp)` (which throws `IllegalArgumentException` for a value that is not a Unicode scalar) are available.
 - `bits()` returns `uint` for both `float` and `double` (the spec's `ulong` for `double` is width-identical on 64-bit targets).
 
 **`char` case and class tests.** `toUppercase()` and `toLowercase()` use the simple Unicode case mapping: one `char` in, one `char` out, so `'é'.toUppercase()` is `'É'`. A char whose full mapping is several chars (`'ß'` uppercases to `SS`) is returned unchanged; use the `String` methods for full mappings. `isAlphabetic()`, `isWhitespace()`, `isUppercase()` and `isLowercase()` test the Unicode properties of the same names. `isDigit()` is true for the ASCII digits `0` to `9` only.

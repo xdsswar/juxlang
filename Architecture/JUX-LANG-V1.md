@@ -4225,6 +4225,8 @@ public class SafeCounter {
 
 The sync `Mutex<T>` API forces lock acquisition before access — there is no way to access the protected value without going through the mutex. This eliminates "forgot to lock" bugs at compile time.
 
+`Mutex<T>` (in `jux.std.concurrent`) has one member besides its constructor `Mutex(T initial)`: `T lock((T) -> T update)`. It acquires the lock, replaces the protected value with `update(value)`, releases the lock, and returns the new value; `m.lock(v -> v)` reads it. Handles share one mutex, so a `Mutex` passed to `Worker.spawn` is the same mutex on every thread. An exception thrown by `update` leaves the value as it was and releases the lock. `update` must not lock the same mutex again (that deadlocks, as it would with any non-reentrant mutex).
+
 `AtomicInt`, `AtomicLong`, `AtomicRef<T>` provide lock-free primitives for simple cases.
 
 ### 10.4. Worked Example — Concurrent HTTP Aggregator

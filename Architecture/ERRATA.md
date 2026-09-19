@@ -1048,6 +1048,67 @@ through a polymorphic base.
 
 **Spec status:** §T.2.6 describes the intended behaviour and stands.
 
+## E56. `Result.ok`/`Result.err` are both statics and instance methods
+
+**Conflict.** JUX-CORE-LIB-ADDENDUM §K.4 lists, on `Result<T, E>`, the instance
+methods `Option<T> ok()` and `Option<E> err()` and ALSO the static constructors
+`Result<T, never> ok<T>(T value)` and `Result<never, E> err<E>(E error)`. One
+type cannot carry an instance method and a static of the same name with one
+lowering, and a call `r.ok()` next to `Result.ok(5)` reads as the same member.
+Separately, §K.4 and §X.4 write `unwrap() throws E` (an `Err` throws its own
+error), but `E` carries no `extends Exception` bound, so a `Result<int, String>`
+has nothing throwable to throw.
+
+**Resolution.** Construction uses the variant forms every example in the spec
+already uses, `Result.Ok(v)` and `Result.Err(e)`; the two statics are not
+provided. The instance `ok()` / `err()` stay. `unwrap()` on an `Err` throws
+`IllegalStateException`, as it did before; a `Result` whose error type is an
+exception can rethrow it explicitly with a `switch`. The combinators §K.3, §K.4
+and §X.4 name are provided as written (`map`, `mapErr`, `flatMap`,
+`unwrapOrElse`, `ok`, `err`; `Option.map`, `flatMap`, `toNullable`,
+`ofNullable`), plus the everyday companions `orElse`, `filter`,
+`isSomeAnd`/`isOkAnd` and `Option.unwrapOrElse`.
+
+**Spec status:** §K.4 should drop the two static constructors and say how
+`unwrap` fails for a non-exception `E`.
+
+## E57. The K.5 combinators are on `Iterator` too
+
+**Conflict.** JUX-CORE-LIB-ADDENDUM §K.5 declares the combinators (`map`,
+`filter`, `reduce`, `take`, `skip`, `zip`, `chain`, `count`, `any`, `all`,
+`firstOrNull`, `minOrNull`, `maxOrNull`) as default methods of `Iterable<T>`
+only. §K.5.4 and MISSING-DEFS §M.2 make a generator return an `Iterator<T>`,
+not an `Iterable<T>`, so the most natural source of a lazy sequence had none
+of them: `numbers().filter(...)` did not exist.
+
+**Resolution.** The same combinators, with the same names and signatures,
+are also default methods of `Iterator<T>`, returning `Iterator<R>` where the
+`Iterable` form returns `Iterable<R>`. An `Iterator` is single-pass: the lazy
+ones pull from their source as they are pulled, and the eager ones use it
+up. The `Iterable` forms are built on them and stay re-iterable: each walk of
+the result starts a fresh `iterator()` of the source (`LazyIterable<T>`). The
+lazy steps are generators in `jux.std.collections.Iterators`.
+
+**Spec status:** §K.5 should list the combinators on `Iterator<T>` as well.
+
+## E58. `seconds(n)` and `milliseconds(n)` are not specified
+
+**Conflict.** JUX-ASYNC-ADDENDUM §18.1.9 and JUX-LANG-V1 §10.1.9 write
+`withTimeout(seconds(5), ...)` and `sleep(milliseconds(10))`, and §18.1.4
+gives `Task.delay(Duration d)`. No addendum defines `Duration` or those
+constructor functions; JUX-GAPS-ROADMAP lists them as a future `std.time`
+tier. The standard library is Rust's (Core lib §K.12), which already has a
+`Duration`.
+
+**Resolution.** A time span is Rust's `std::time::Duration`, reached as
+`import rust.std.Duration;` and built with its own constructors
+(`Duration.from_secs(5)`, `Duration.from_millis(10)`). `withTimeout` and
+`Task.delay` take either that `Duration` or an integer count of
+milliseconds (the form Phase 1 always accepted); anything else is `E0487`.
+No free `seconds`/`milliseconds` functions are added.
+
+**Spec status:** §18.1.9 and §10.1.9 should write `Duration.from_secs(5)`.
+
 ---
 
 ## E61. `sizeof` in safe code, and the shape of `alignof`

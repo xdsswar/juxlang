@@ -504,6 +504,8 @@ public interface Steppable<T> {
 
 Integer types and `char` implement `Steppable`. User types can implement it to participate in `for` loops.
 
+**Phase-1 implementation notes.** A range of numbers or chars is a value of type `ExclusiveRange<T>`, `InclusiveRange<T>` or `SteppedRange<T>`: it can be stored, passed, returned and walked any number of times, and read as `start` / `end` (or `endInclusive`) and, for a stepped range, `step` (an `int`). A stepped range's `base` component is not readable, and `Range<T>` is not yet a type name. `Steppable<T>` is not yet available; a user type takes part in ranges through `operator..` / `operator..=` (JUX-OPERATORS-ADDENDUM §O.2.4). A stepped range walks integer types; a zero step throws `ArithmeticException` when the walk starts.
+
 ### M.6.3. `step` Grammar
 
 `step` is a contextual keyword (per `JUX-GRAMMAR-ADDENDUM.md` §A.1.3) and binds tighter than other operators on the right of a range expression but looser than primary expressions:

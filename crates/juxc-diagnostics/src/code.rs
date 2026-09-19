@@ -623,6 +623,19 @@ pub enum Code {
     /// such operator, when no free-function operator takes the operands
     /// either (§O.2.3, §O.2.6). Declare the operator on the type.
     E0484_OperatorNotDefined,
+    /// E0485 -- A function whose return type is `never` can finish: some path
+    /// reaches the end of its body. A `never` function does not return
+    /// (JUX-CORE-LIB-ADDENDUM K.4.1); every path must throw, loop forever, or
+    /// call another `never` function.
+    E0485_NeverFunctionCompletes,
+    /// E0486 -- A `return` inside a function whose return type is `never`
+    /// (K.4.1). There is no value to return, and returning at all is what
+    /// `never` rules out.
+    E0486_ReturnInNeverFunction,
+    /// E0487 -- The time span given to `withTimeout` or `Task.delay` is
+    /// neither a count of milliseconds (an integer) nor a `rust.std`
+    /// `Duration` (JUX-ASYNC-ADDENDUM 18.1.9).
+    E0487_NotATimeSpan,
     /// E0489 -- An `any` used for something other than `===`, the `=>` type
     /// test or its text: a member, a call, an operator, indexing, `==`, a hash
     /// (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Test it with `=>` first.
@@ -1145,6 +1158,9 @@ impl Code {
             Code::E0482_InterfaceSuperMisplaced  => "E0482",
             Code::E0483_InterfaceSuperNoDefault  => "E0483",
             Code::E0484_OperatorNotDefined       => "E0484",
+            Code::E0485_NeverFunctionCompletes   => "E0485",
+            Code::E0486_ReturnInNeverFunction    => "E0486",
+            Code::E0487_NotATimeSpan             => "E0487",
             Code::E0489_AnyHasNoOperation        => "E0489",
             Code::E0490_EnumPermitsMismatch      => "E0490",
             Code::E0491_CompactConstructorMisuse => "E0491",

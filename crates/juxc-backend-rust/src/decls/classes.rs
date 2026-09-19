@@ -63,6 +63,7 @@ impl RustEmitter {
             || class_decl.name.text == "Task"
             || class_decl.name.text == "AtomicInt"
             || class_decl.name.text == "AtomicLong"
+            || class_decl.name.text == "Mutex"
         {
             let pkg = self.current_package_path();
             if pkg == "jux.std.concurrent" {
@@ -279,18 +280,27 @@ impl RustEmitter {
             .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
             .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
             .is_some_and(sealed_lowers_to_enum);
-        if let Some(parent_ty) = &class_decl.extends {
-            if !parent_is_sealed {
-                self.w.emit_indent();
-                // `pub` so cross-package consumers can reach the
-                // slice — catch-clause upcasts (`(*payload).__parent`)
-                // run in the CATCHING package, not the declaring one.
-                self.w.push_str("pub __parent: ");
-                self.emit_type_as_rust(parent_ty);
-                self.w.push_str(",\n");
+        // Rust drops fields in declaration order; §S.5.2 asks for the
+        // reverse, parent last. Where that is observable (see
+        // `fields_drop_in_reverse`) the struct lists them the other way.
+        let reverse = self.fields_drop_in_reverse(class_decl);
+        let emit_parent = |this: &mut Self| {
+            if let Some(parent_ty) = &class_decl.extends {
+                if !parent_is_sealed {
+                    this.w.emit_indent();
+                    // `pub` so cross-package consumers can reach the
+                    // slice — catch-clause upcasts (`(*payload).__parent`)
+                    // run in the CATCHING package, not the declaring one.
+                    this.w.push_str("pub __parent: ");
+                    this.emit_type_as_rust(parent_ty);
+                    this.w.push_str(",\n");
+                }
             }
+        };
+        if !reverse {
+            emit_parent(self);
         }
-        for field in &class_decl.fields {
+        for field in field_drop_order(&class_decl.fields, reverse) {
             // Static fields live on the class, not the instance —
             // skip them here. They land below as `pub const` /
             // `pub static` items inside the `impl Foo { … }`.
@@ -328,6 +338,9 @@ impl RustEmitter {
             // Field-position type mapping (String → owned `String`).
             self.emit_field_type_as_rust(&fty);
             self.w.push_str(",\n");
+        }
+        if reverse {
+            emit_parent(self);
         }
         // PhantomData for type params used only in method/sub-param bounds
         // (`Registry<K, V, N>` where `K` constrains `V` but appears in no
@@ -1004,24 +1017,30 @@ impl RustEmitter {
         // through any alias is visible through all of them and through
         // inherited-field access. (Embedding the wrapper would give the
         // parent slice its OWN `Rc<RefCell<...>>`, splitting identity.)
-        if let Some(parent_ty) = &class_decl.extends {
-            if let Some(seg) = parent_ty.name.segments.last() {
-                self.w.emit_indent();
-                // `pub` for the same cross-package reach as the plain
-                // class shape (catch upcasts, subclass chains).
-                self.w.push_str("pub __parent: ");
-                self.emit_parent_inner_path(&seg.text);
-                // Thread the parent's generic args onto its inner type
-                // (`extends Container<int>` → `__parent: Container_Inner<isize>`).
-                // Without this, a child that binds its parent's type
-                // parameter to a concrete type (`IntBox extends
-                // Container<int>`) would reference a bare `Container_Inner`
-                // and rustc would demand the missing `<…>`.
-                self.emit_parent_inner_generic_args(parent_ty);
-                self.w.push_str(",\n");
+        let reverse = self.fields_drop_in_reverse(class_decl);
+        let emit_parent = |this: &mut Self| {
+            if let Some(parent_ty) = &class_decl.extends {
+                if let Some(seg) = parent_ty.name.segments.last() {
+                    this.w.emit_indent();
+                    // `pub` for the same cross-package reach as the plain
+                    // class shape (catch upcasts, subclass chains).
+                    this.w.push_str("pub __parent: ");
+                    this.emit_parent_inner_path(&seg.text);
+                    // Thread the parent's generic args onto its inner type
+                    // (`extends Container<int>` → `__parent: Container_Inner<isize>`).
+                    // Without this, a child that binds its parent's type
+                    // parameter to a concrete type (`IntBox extends
+                    // Container<int>`) would reference a bare `Container_Inner`
+                    // and rustc would demand the missing `<…>`.
+                    this.emit_parent_inner_generic_args(parent_ty);
+                    this.w.push_str(",\n");
+                }
             }
+        };
+        if !reverse {
+            emit_parent(self);
         }
-        for field in &class_decl.fields {
+        for field in field_drop_order(&class_decl.fields, reverse) {
             // Static fields live on the class, not the instance — they
             // emit as `pub const` / module-scope `LazyLock<Mutex<T>>`
             // below, same as the legacy path.
@@ -1073,6 +1092,9 @@ impl RustEmitter {
                 self.emit_field_type_as_rust(&fty);
             }
             self.w.push_str(",\n");
+        }
+        if reverse {
+            emit_parent(self);
         }
         // Observable-property storage (§P.3.3): two lazy observer vecs
         // + a binding keep-alive per writable property. `None` until
@@ -1869,6 +1891,15 @@ impl RustEmitter {
                 if ancestor_has_inherent {
                     continue;
                 }
+                // A default constrained by `where T has operator...` (§O.5)
+                // forwards only where the bound can hold for this class's
+                // type argument; elsewhere the trait default stays reachable
+                // and the call site's own check (E0941) reports the misuse.
+                let Some(forwarder_bounds) =
+                    self.inherited_default_where_bounds(&iface_name.text, name, &type_subst, class_decl)
+                else {
+                    continue;
+                };
                 // Mark provided so a later interface's same-named default
                 // doesn't emit a duplicate forwarder.
                 provided.insert(name.clone());
@@ -1888,6 +1919,12 @@ impl RustEmitter {
                 }
                 self.w.push_str("fn ");
                 self.w.push_str(&to_rust_ident(name));
+                // A generic default (`<R> Iterable<R> map(...)`, Core lib
+                // K.5) forwards with its own type parameters.
+                if !sig.generic_params.is_empty() {
+                    let none = std::collections::HashSet::new();
+                    self.emit_generic_params_with_clone_bound_plus_display(&sig.generic_params, &none, &none);
+                }
                 self.w.push_str("(&self");
                 for param in &sig.params {
                     self.w.push_str(", ");
@@ -1904,6 +1941,10 @@ impl RustEmitter {
                         let rsub = substitute_type_ref(t, &type_subst);
                         self.emit_return_type_as_rust(&rsub);
                     }
+                }
+                if !forwarder_bounds.is_empty() {
+                    self.w.push_str(" where ");
+                    self.w.push_str(&forwarder_bounds.join(", "));
                 }
                 self.w.push_str(" { ");
                 // Body: `<Self as <FQ-trait-path><args>>::<name>(self, …)`.
@@ -1931,6 +1972,70 @@ impl RustEmitter {
                 self.w.push_str(" }\n");
             }
         }
+    }
+
+    /// The `where` bounds an inherited default method's forwarder carries,
+    /// or `None` when its `where T has operator ...` constraints (§O.5)
+    /// cannot hold for the type argument this class gives `T`.
+    ///
+    /// A constraint on a type parameter of the class itself moves onto the
+    /// forwarder, renamed (`Box<E> implements Iterator<E>` forwards
+    /// `maxOrNull` with `where E: PartialOrd`). A concrete argument must
+    /// already have the operator: a primitive or `String` for the comparison
+    /// and equality family, or a user type that declares it. A forwarder
+    /// whose bound could not hold would not compile, so it is left out.
+    fn inherited_default_where_bounds(
+        &self,
+        iface_bare: &str,
+        method: &str,
+        subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> Option<Vec<String>> {
+        let Some(iface) = self.interface_ast_by_bare(iface_bare) else {
+            return Some(Vec::new());
+        };
+        let Some(decl) = iface.methods.iter().find(|m| m.name.text == method) else {
+            return Some(Vec::new());
+        };
+        let mut out = Vec::new();
+        for w in &decl.wheres {
+            let arg = subst.get(&w.param.text)?;
+            let bare = arg.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            if arg.generic_args.is_empty()
+                && class_decl.generic_params.iter().any(|p| p.name.text == bare)
+            {
+                let mut renamed = w.clone();
+                renamed.param.text = bare.to_string();
+                out.extend(crate::decls::functions::where_bounds(&[renamed]));
+                continue;
+            }
+            let holds = match juxc_tycheck::ty_from_ref_in_env(arg, &self.symbols) {
+                juxc_tycheck::Ty::Primitive(p) => {
+                    // Floats have no total order or hash in Rust.
+                    let float = matches!(p, juxc_tycheck::Primitive::Float | juxc_tycheck::Primitive::Double);
+                    !(float && matches!(w.kind, juxc_ast::OperatorKind::Hash))
+                }
+                juxc_tycheck::Ty::String => matches!(
+                    w.kind,
+                    juxc_ast::OperatorKind::Eq
+                        | juxc_ast::OperatorKind::Cmp
+                        | juxc_ast::OperatorKind::Hash
+                        | juxc_ast::OperatorKind::ToString
+                        | juxc_ast::OperatorKind::Plus
+                ),
+                juxc_tycheck::Ty::User { name, .. } => {
+                    let symbols = &self.symbols;
+                    symbols.classes.get(&name).is_some_and(|c| c.operators.contains_key(&w.kind))
+                        || symbols.records.get(&name).is_some_and(|r| r.operators.contains_key(&w.kind))
+                        || symbols.enums.get(&name).is_some_and(|e| e.operators.contains_key(&w.kind))
+                }
+                _ => false,
+            };
+            if !holds {
+                return None;
+            }
+        }
+        Some(out)
     }
 
     /// Emit a `fn __jux_super_<m>(&self, …)` inherent shim for every method
@@ -5745,6 +5850,67 @@ impl RustEmitter {
         self.w.push_str("));\n");
     }
 
+    /// Whether this class's instance fields are listed in REVERSE in the
+    /// emitted struct (and its parent slice last), so Rust's declaration-order
+    /// field drop gives §S.5.2's order: own `drop` block, own fields last to
+    /// first, then the parent.
+    ///
+    /// Only where the order can be seen: at least two owned parts (fields,
+    /// and the parent slice) whose destruction runs a `drop` block somewhere.
+    /// Everywhere else the struct keeps the source order, which is what a
+    /// person reading the emitted Rust expects. A `@layout(c)` struct never
+    /// reorders: its field order is its C ABI.
+    pub(crate) fn fields_drop_in_reverse(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        if crate::is_layout_c_struct(class_decl) {
+            return false;
+        }
+        let own = class_decl
+            .fields
+            .iter()
+            .filter(|f| !f.is_static && !f.is_weak)
+            .filter(|f| self.type_drop_observable(&juxc_tycheck::resolved_field_type(f), 0))
+            .count();
+        let parent = class_decl
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.last())
+            .and_then(|seg| self.class_ast_named(&seg.text))
+            .is_some_and(|p| self.class_drop_observable(&p, 1));
+        own + usize::from(parent) >= 2
+    }
+
+    /// Whether dropping a value of this type can run a `drop` block: a class
+    /// or struct that has one, or owns (through a field, a parent, an array
+    /// element or a type argument) something that does.
+    fn type_drop_observable(&self, ty: &juxc_ast::TypeRef, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if ty.generic_args.iter().filter_map(|a| a.as_type()).any(|a| self.type_drop_observable(a, depth + 1)) {
+            return true;
+        }
+        let Some(seg) = ty.name.segments.last() else { return false };
+        self.class_ast_named(&seg.text).is_some_and(|c| self.class_drop_observable(&c, depth + 1))
+    }
+
+    fn class_drop_observable(&self, class_decl: &juxc_ast::ClassDecl, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        !class_decl.drop_blocks.is_empty()
+            || class_decl
+                .fields
+                .iter()
+                .filter(|f| !f.is_static && !f.is_weak)
+                .any(|f| self.type_drop_observable(&juxc_tycheck::resolved_field_type(f), depth + 1))
+            || class_decl
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last())
+                .and_then(|seg| self.class_ast_named(&seg.text))
+                .is_some_and(|p| self.class_drop_observable(&p, depth + 1))
+    }
+
     /// Emit `impl Drop for <target>` from the class's `drop { }`
     /// block (§6.6 / §S.5). `target` is the struct that owns the
     /// fields — the class itself for inline classes, `<C>_Inner` for
@@ -6928,4 +7094,15 @@ pub(crate) fn type_holds_closure(t: &juxc_ast::TypeRef) -> bool {
             juxc_ast::GenericArg::Type(inner) => type_holds_closure(inner),
             juxc_ast::GenericArg::Wildcard(_) => false,
         })
+}
+
+/// The instance fields of a class in the order its struct lists them:
+/// declaration order, or reversed when [`RustEmitter::fields_drop_in_reverse`]
+/// says the drop order is observable (§S.5.2).
+fn field_drop_order(fields: &[juxc_ast::FieldDecl], reverse: bool) -> Vec<&juxc_ast::FieldDecl> {
+    let mut out: Vec<&juxc_ast::FieldDecl> = fields.iter().collect();
+    if reverse {
+        out.reverse();
+    }
+    out
 }

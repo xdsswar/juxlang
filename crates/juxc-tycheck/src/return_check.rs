@@ -17,26 +17,36 @@ use juxc_ast::{Block, ElseBranch, Expr, IfStmt, Literal, Stmt, SwitchBody};
 /// `return`/`throw` on at least one path. A non-void function for which this
 /// holds is missing a return (E0451).
 pub fn body_can_fall_through(body: &Block) -> bool {
-    !block_diverges(body)
+    body_can_fall_through_with(body, &|_| false)
+}
+
+/// [`body_can_fall_through`], with `diverging_call` saying which expression
+/// statements never complete: a call to a function whose return type is
+/// `never` (JUX-CORE-LIB-ADDENDUM K.4.1). The checker knows the signatures;
+/// this module only sees the syntax.
+pub fn body_can_fall_through_with(body: &Block, diverging_call: &dyn Fn(&Expr) -> bool) -> bool {
+    !block_diverges(body, diverging_call)
 }
 
 /// True when executing `block` never falls through to the statement after it —
 /// every path `return`s, `throw`s, or loops forever. A block diverges as soon
 /// as one of its (reachable) statements diverges, since everything after an
 /// unconditional divergence is unreachable.
-fn block_diverges(block: &Block) -> bool {
-    block.statements.iter().any(stmt_diverges)
+fn block_diverges(block: &Block, dc: &dyn Fn(&Expr) -> bool) -> bool {
+    block.statements.iter().any(|s| stmt_diverges(s, dc))
 }
 
 /// True when `stmt` definitely does not complete normally (it returns, throws,
 /// or loops forever). Conservative: unknown shapes answer `false`.
-fn stmt_diverges(stmt: &Stmt) -> bool {
+fn stmt_diverges(stmt: &Stmt, dc: &dyn Fn(&Expr) -> bool) -> bool {
     match stmt {
         // An explicit `return` / `throw` is the canonical divergence.
         Stmt::Return(_, _) | Stmt::Throw(..) => true,
+        // A call to a `never` function (K.4.1) does not come back.
+        Stmt::Expr(e) if dc(e) => true,
         // `if` diverges only when it has an `else` AND both arms diverge —
         // otherwise the missing/short arm provides a fall-through path.
-        Stmt::If(i) => if_diverges(i),
+        Stmt::If(i) => if_diverges(i, dc),
         // `while (true) { … }` with no `break` never completes. Any other
         // loop may run zero times (or break out), so it can fall through.
         Stmt::While(w) => is_true_literal(&w.condition) && !block_has_break(&w.body),
@@ -46,31 +56,31 @@ fn stmt_diverges(stmt: &Stmt) -> bool {
         // `do { … } while (…)` runs its body at least once, so if the body
         // diverges, so does the statement.
         Stmt::DoWhile(d) => {
-            block_diverges(&d.body) || (is_true_literal(&d.condition) && !block_has_break(&d.body))
+            block_diverges(&d.body, dc) || (is_true_literal(&d.condition) && !block_has_break(&d.body))
         }
         // A `switch` used as a statement diverges when EVERY arm diverges.
         // Statement-form switches over sealed types are exhaustiveness-checked
         // (E0440) elsewhere, so all-arms-diverge implies the whole switch does.
         Stmt::Expr(Expr::Switch(sw)) => {
-            !sw.arms.is_empty() && sw.arms.iter().all(|a| switch_body_diverges(&a.body))
+            !sw.arms.is_empty() && sw.arms.iter().all(|a| switch_body_diverges(&a.body, dc))
         }
         // Transparent wrappers — recurse into the inner statement / block.
         // A labeled BLOCK is the exception: `break name;` inside it finishes
         // the block normally, so it diverges only when nothing leaves it.
         Stmt::Labeled { label, stmt } => match stmt.as_ref() {
-            Stmt::Block(b) => block_diverges(b) && !block_breaks_to(b, &label.text),
-            _ => stmt_diverges(stmt),
+            Stmt::Block(b) => block_diverges(b, dc) && !block_breaks_to(b, &label.text),
+            _ => stmt_diverges(stmt, dc),
         },
-        Stmt::Unsafe(b) => block_diverges(b),
+        Stmt::Unsafe(b) => block_diverges(b, dc),
         // `try` diverges when a `finally` diverges, or when the try body and
         // every catch body diverge (no normal-completion path remains).
         Stmt::Try(t) => {
             if let Some(fin) = &t.finally {
-                if block_diverges(fin) {
+                if block_diverges(fin, dc) {
                     return true;
                 }
             }
-            block_diverges(&t.body) && t.catches.iter().all(|c| block_diverges(&c.body))
+            block_diverges(&t.body, dc) && t.catches.iter().all(|c| block_diverges(&c.body, dc))
         }
         // Everything else (plain expression, local decl, break, continue,
         // super-call) can complete normally.
@@ -79,15 +89,15 @@ fn stmt_diverges(stmt: &Stmt) -> bool {
 }
 
 /// An `if`/`else` diverges iff it has an `else` branch and both arms diverge.
-fn if_diverges(i: &IfStmt) -> bool {
-    let then_div = block_diverges(&i.then_block);
+fn if_diverges(i: &IfStmt, dc: &dyn Fn(&Expr) -> bool) -> bool {
+    let then_div = block_diverges(&i.then_block, dc);
     match &i.else_branch {
         None => false,
         Some(eb) => {
             then_div
                 && match eb.as_ref() {
-                    ElseBranch::Block(b) => block_diverges(b),
-                    ElseBranch::If(inner) => if_diverges(inner),
+                    ElseBranch::Block(b) => block_diverges(b, dc),
+                    ElseBranch::If(inner) => if_diverges(inner, dc),
                 }
         }
     }
@@ -96,22 +106,22 @@ fn if_diverges(i: &IfStmt) -> bool {
 /// A switch arm diverges when its body never completes normally: a `-> expr`
 /// arm whose expression is itself a diverging `throw`/`switch`, or a `-> { … }`
 /// block that diverges.
-fn switch_body_diverges(body: &SwitchBody) -> bool {
+fn switch_body_diverges(body: &SwitchBody, dc: &dyn Fn(&Expr) -> bool) -> bool {
     match body {
-        SwitchBody::Block(b) => block_diverges(b),
-        SwitchBody::Expr(e) => expr_diverges(e),
+        SwitchBody::Block(b) => block_diverges(b, dc),
+        SwitchBody::Expr(e) => expr_diverges(e, dc),
     }
 }
 
 /// True when an expression in value position never yields (so an arm `-> e`
 /// using it can't fall through): a `throw` expression, or a `switch` all of
 /// whose arms diverge. Conservative: anything else answers `false`.
-fn expr_diverges(e: &Expr) -> bool {
+fn expr_diverges(e: &Expr, dc: &dyn Fn(&Expr) -> bool) -> bool {
     match e {
         Expr::Switch(sw) => {
-            !sw.arms.is_empty() && sw.arms.iter().all(|a| switch_body_diverges(&a.body))
+            !sw.arms.is_empty() && sw.arms.iter().all(|a| switch_body_diverges(&a.body, dc))
         }
-        _ => false,
+        other => dc(other),
     }
 }
 

@@ -1,0 +1,2 @@
+never_function_rules.jux:3:7: [E0485] error: `stop` returns `never` but can reach the end of its body -- every path must throw, loop forever, or call another `never` function
+never_function_rules.jux:10:5: [E0486] error: `quit` returns `never`, so it cannot `return`

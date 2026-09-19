@@ -21,6 +21,34 @@ use crate::analysis::collect_mutated_names;
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
+/// Whether a default body reads `this` as a VALUE: passes it on, stores it,
+/// returns it. `this.m()` and `this.f` only use it as a receiver.
+pub(crate) fn default_body_uses_this_as_value(body: &juxc_ast::Block) -> bool {
+    let mut total = 0usize;
+    let mut as_receiver = 0usize;
+    juxc_ast::visit::for_each_expr(body, &mut |e| match e {
+        juxc_ast::Expr::This(_) => total += 1,
+        juxc_ast::Expr::Field(f) if matches!(f.object.as_ref(), juxc_ast::Expr::This(_)) => {
+            as_receiver += 1
+        }
+        _ => {}
+    });
+    total > as_receiver
+}
+
+/// Whether a default interface method has to be `where Self: Sized + Clone +
+/// 'static` (Core lib K.5): one with type parameters of its own, which would
+/// otherwise make the trait unusable as the `Rc<dyn Iface>` every
+/// interface-typed value is, or one that hands `this` on as a value, which
+/// needs an owned handle to it. The trait stays dyn-compatible; such a method
+/// is reached through the `Rc` handle, which is `Sized` and `Clone`.
+pub(crate) fn default_method_needs_sized_self(method: &juxc_ast::FnDecl) -> bool {
+    match &method.body {
+        Some(body) => !method.generic_params.is_empty() || default_body_uses_this_as_value(body),
+        None => false,
+    }
+}
+
 impl RustEmitter {
     /// Emit `impl<T: ?Sized + Iface> Iface for Rc<T>` — see the call site.
     ///
@@ -33,6 +61,10 @@ impl RustEmitter {
             .methods
             .iter()
             .filter(|m| !m.modifiers.iter().any(|x| matches!(x, juxc_ast::FnModifier::Static)))
+            // A `Self: Sized` default runs on the handle itself: the handle is
+            // `Sized`, the value behind it may not be, and the default body
+            // reaches the value through the forwarded abstract methods.
+            .filter(|m| !default_method_needs_sized_self(m))
             .cloned()
             .collect();
         let hooks = self.interface_hook_targets(&iface_bare);
@@ -88,6 +120,11 @@ impl RustEmitter {
                     self.emit_return_type_as_rust(&t);
                     self.w.push_str("> + '_>>");
                 }
+            }
+            let bounds = crate::decls::functions::where_bounds(&m.wheres);
+            if !bounds.is_empty() {
+                self.w.push_str(" where ");
+                self.w.push_str(&bounds.join(", "));
             }
             self.w.push_str(" { (**self).");
             self.w.push_str(&to_rust_ident(&m.name.text));
@@ -347,7 +384,24 @@ impl RustEmitter {
             } else {
                 self.w.push_str(&to_rust_ident(&method.name.text));
             }
-            self.emit_generic_params(&method.generic_params);
+            // A default method's own type parameters carry the bounds a class
+            // method's get: `Clone` for the value model, `Display` where a
+            // value is formatted.
+            if method.generic_params.is_empty() {
+                self.emit_generic_params(&method.generic_params);
+            } else {
+                let displayed = self.fn_displayed_generic_params(method);
+                let defaulted = crate::analysis::new_array_element_params(
+                    &method.generic_params,
+                    &method.body.iter().collect::<Vec<_>>(),
+                    &[],
+                );
+                self.emit_generic_params_with_clone_bound_plus_display(
+                    &method.generic_params,
+                    &displayed,
+                    &defaulted,
+                );
+            }
             // `&self` — interface methods take a shared receiver so the
             // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
             // which only ever yields `&self`, never `&mut self`). This is
@@ -381,6 +435,18 @@ impl RustEmitter {
                     self.emit_return_type_as_rust(t);
                     self.w.push_str("> + '_>>");
                 }
+            }
+            let sized_self = default_method_needs_sized_self(method);
+            // `where T has operator<=>(T) -> int` on the method (§O.5) bounds
+            // the interface's own `T` for this method only, as Rust allows.
+            let mut bounds: Vec<String> = Vec::new();
+            if sized_self {
+                bounds.push("Self: Sized + Clone + 'static".to_string());
+            }
+            bounds.extend(crate::decls::functions::where_bounds(&method.wheres));
+            if !bounds.is_empty() {
+                self.w.push_str(" where ");
+                self.w.push_str(&bounds.join(", "));
             }
             // Two shapes: abstract signature (`;`) vs. default
             // body (`{ … }`). The presence of `method.body`
@@ -422,6 +488,13 @@ impl RustEmitter {
                 // emits correctly.
                 let prev_alias = self.this_alias.take();
                 self.this_alias = Some("self".to_string());
+                // `this` handed on as a value is the interface value an
+                // `Rc<dyn Iface>` slot takes: an owned handle to this object,
+                // made once (`Self` is a class handle, so the clone shares).
+                if sized_self && default_body_uses_this_as_value(body) {
+                    self.w.line("let __jux_this_rc = std::rc::Rc::new(self.clone());");
+                    self.this_alias = Some("__jux_this_rc".to_string());
+                }
                 // Track the enclosing interface so a bare-name
                 // method call inside the default body (Java rule:
                 // `foo()` ≡ `self.foo()` when `foo` is declared on

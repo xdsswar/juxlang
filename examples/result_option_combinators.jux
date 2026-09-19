@@ -1,0 +1,71 @@
+// Option and Result combinators (JUX-CORE-LIB-ADDENDUM §K.3, §K.4;
+// JUX-EXCEPTIONS-ADDENDUM §X.4).
+//
+// Each combinator is an ordinary method on the core enum: it takes a lambda,
+// runs it only when there is something to run it on, and passes the empty or
+// failed case through untouched. That is how a chain of steps stays one
+// expression without an `if` at every stage.
+
+Result<int, String> parsePort(String s) {
+    if (s == "80") {
+        return Result.Ok(80);
+    }
+    if (s == "8080") {
+        return Result.Ok(8080);
+    }
+    return Result.Err("bad port: " + s);
+}
+
+Result<int, String> checkRange(int port) {
+    if (port > 1024) {
+        return Result.Err($"port ${port} needs no root");
+    }
+    return Result.Ok(port);
+}
+
+Option<String> lookup(String key) {
+    if (key == "home") {
+        return Option.Some("/home/jux");
+    }
+    return Option.None;
+}
+
+public void main() {
+    // Option: map, flatMap, filter, orElse, unwrapOr, unwrapOrElse.
+    Option<String> home = lookup("home");
+    Option<int> length = home.map((p) -> p.charLength());
+    print(length.unwrapOr(-1));
+    print(lookup("nope").map((p) -> p.charLength()).unwrapOr(-1));
+
+    Option<String> nested = home.flatMap((p) -> lookup("nope"));
+    print(nested.isNone());
+
+    print(home.filter((p) -> p.startsWith("/home")).isSome());
+    print(home.filter((p) -> p.startsWith("/tmp")).isSome());
+    print(lookup("nope").orElse(Option.Some("/fallback")).unwrap());
+    print(lookup("nope").unwrapOrElse(() -> "computed"));
+    print(home.isSomeAnd((p) -> p.endsWith("jux")));
+
+    // Option and T? convert only explicitly (§K.3.1).
+    String? maybe = home.toNullable();
+    print(maybe != null);
+    String? missing = null;
+    print(Option.ofNullable(missing).isNone());
+    print(Option.ofNullable(maybe).unwrap());
+
+    // Result: map, mapErr, flatMap, orElse, unwrapOrElse, isOkAnd.
+    Result<int, String> ok = parsePort("80");
+    print(ok.map((p) -> p + 1).unwrap());
+    print(parsePort("x").map((p) -> p + 1).isErr());
+    print(parsePort("x").mapErr((e) -> e.charLength()).err().unwrap());
+
+    // flatMap chains a second step that can fail on its own.
+    print(parsePort("80").flatMap((p) -> checkRange(p)).unwrap());
+    print(parsePort("8080").flatMap((p) -> checkRange(p)).err().unwrap());
+
+    // orElse recovers from an error with another step that may fail.
+    Result<int, String> recovered = parsePort("x").orElse((e) -> parsePort("8080"));
+    print(recovered.unwrap());
+    print(parsePort("x").unwrapOrElse((e) -> e.charLength()));
+    print(ok.isOkAnd((p) -> p < 1024));
+}

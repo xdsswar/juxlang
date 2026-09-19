@@ -1036,6 +1036,22 @@ impl crate::RustEmitter {
             self.w.push_str("pub fn ");
         }
         self.w.push_str(&to_rust_ident(&method.name.text));
+        // The method's own type parameters (`<R> Option<R> map((T) -> R f)`,
+        // Core lib §K.3), bounded the way a class method's are: `Clone` for
+        // the value model, `Display` when a value reaches a format position.
+        if !method.generic_params.is_empty() {
+            let displayed = self.fn_displayed_generic_params(method);
+            let defaulted = crate::analysis::new_array_element_params(
+                &method.generic_params,
+                &method.body.iter().collect::<Vec<_>>(),
+                &[],
+            );
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &method.generic_params,
+                &displayed,
+                &defaulted,
+            );
+        }
         self.w.push('(');
         if !is_static {
             self.w.push_str("&self");
@@ -1068,11 +1084,31 @@ impl crate::RustEmitter {
             let mut muts = std::collections::HashSet::new();
             crate::analysis::collect_mutated_names(body, &mut muts, &self.user_mut_methods);
             self.mutated_in_fn = muts;
+            // Nullable params start out `Option<T>` shaped, as in a class
+            // method: without them here a guard clause (`if (v == null)
+            // return ...;`) never shadowed `v` with its contents, and
+            // `v!!` after it reached rustc as the whole `Option`.
+            self.nullable_locals.clear();
+            for p in &method.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
             self.current_fn_params =
                 method.params.iter().map(|p| p.name.text.clone()).collect();
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
+            // The method's own type parameters are in scope for its body,
+            // on top of the enum's.
+            let prev_type_params = self.current_type_params.clone();
+            self.current_type_params
+                .extend(crate::collect_type_param_names(&method.generic_params));
+            let prev_type_param_bounds = self.type_param_bounds.clone();
+            self.type_param_bounds
+                .extend(crate::collect_type_param_bounds(&method.generic_params));
             self.emit_fn_body_at(body, &method.return_type);
+            self.current_type_params = prev_type_params;
+            self.type_param_bounds = prev_type_param_bounds;
             self.current_return_type = saved;
             self.current_fn_params.clear();
             self.this_alias = prev_alias;

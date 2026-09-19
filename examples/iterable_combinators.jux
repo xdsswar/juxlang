@@ -1,0 +1,87 @@
+// Iterator and Iterable combinators (JUX-CORE-LIB-ADDENDUM K.5).
+//
+// `map`, `filter`, `take`, `skip`, `zip` and `chain` are lazy: they describe
+// a sequence and run nothing until it is walked (K.5.3). `reduce`, `count`,
+// `any`, `all`, `firstOrNull`, `minOrNull` and `maxOrNull` walk it, now.
+//
+// A generator returns an Iterator, which is single-pass. A class that
+// implements Iterable hands out a fresh Iterator each time, so a lazy chain
+// over it can be walked again.
+
+// An endless sequence: fine, because nothing pulls more than it needs.
+Iterator<int> naturals() {
+    int n = 1;
+    while (true) {
+        yield n;
+        n++;
+    }
+}
+
+Iterator<String> words() {
+    yield "pear";
+    yield "fig";
+    yield "banana";
+    yield "kiwi";
+}
+
+// A re-iterable range of ints, written the long way.
+class Span implements Iterable<int> {
+    private int from;
+    private int to;
+
+    public Span(int from, int to) {
+        this.from = from;
+        this.to = to;
+    }
+
+    public Iterator<int> iterator() {
+        return Span.walk(from, to);
+    }
+
+    private static Iterator<int> walk(int from, int to) {
+        for (int i = from; i < to; i++) {
+            yield i;
+        }
+    }
+}
+
+String joined(Iterator<String> items) {
+    return items.reduce("", (acc, s) -> acc == "" ? s : acc + " " + s);
+}
+
+public void main() {
+    // Lazy steps over an endless generator: take is what makes it finish.
+    var squares = naturals().map((n) -> n * n).filter((n) -> n % 2 == 1).take(4);
+    print(squares.reduce(0, (sum, n) -> sum + n));
+
+    print(joined(words().filter((w) -> w.charLength() > 3)));
+    print(joined(words().skip(2)));
+    print(joined(words().map((w) -> w.to_uppercase()).take(2)));
+
+    // zip pairs two sequences up, chain runs one after the other.
+    for (var pair : words().zip(naturals())) {
+        print($"${pair.1}. ${pair.0}");
+    }
+    print(joined(words().take(1).chain(words().skip(3))));
+
+    // The eager ones.
+    print(words().count());
+    print(words().any((w) -> w.startsWith("b")));
+    print(words().all((w) -> w.charLength() >= 3));
+    print(words().firstOrNull((w) -> w.charLength() == 4));
+    print(words().firstOrNull());
+    print(words().firstOrNull((w) -> w == "plum") == null);
+    print(words().minOrNull());
+    print(naturals().take(5).maxOrNull());
+
+    // An Iterable can be walked again: each walk starts a new Iterator.
+    var span = new Span(1, 6);
+    var evens = span.filter((n) -> n % 2 == 0);
+    print(evens.count());
+    print(evens.map((n) -> n * 10).reduce(0, (a, b) -> a + b));
+    print(span.skip(3).minOrNull());
+    print(span.all((n) -> n > 0));
+    for (var n : span.take(2)) {
+        print("take " + n);
+    }
+}
