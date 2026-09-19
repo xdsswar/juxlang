@@ -1,0 +1,35 @@
+// Integer `/` and `%` over two different integer types promote first, the
+// way every other arithmetic operator does (JUX-SEMANTICS-ADDENDUM §S.2.6),
+// and a tuple element or a map entry's value takes part with its own type.
+//
+// The checked division helper (a zero divisor throws ArithmeticException,
+// ERRATA E1) took both operands at one type, so `long / int` failed in rustc.
+
+public void main() {
+    long total = 100;
+    int parts = 7;
+    print(total / parts);
+    print(total % parts);
+    print(parts / total);
+    short small = 9;
+    print(small / parts);
+    print(small % parts);
+
+    var pair = (45L, "units");
+    print(pair.0 / parts);
+
+    var spend = new BTreeMap<String, long>();
+    spend.insert("food", 1250L);
+    spend.insert("rent", 9000L);
+    int months = 4;
+    for (var e : spend) {
+        print(e.0 + " per month " + (e.1 / months) + ", left over " + (e.1 % months));
+    }
+
+    try {
+        int zero = 0;
+        print(total / zero);
+    } catch (ArithmeticException ex) {
+        print("caught " + ex.getMessage());
+    }
+}

@@ -1,0 +1,17 @@
+// Java's utility classes and statics that Jux does not have. Each used to
+// pass the checker and fail in rustc; each is now a Jux error with the Jux way.
+enum Color { Red, Green }
+
+record Pt(int x) {}
+
+public void main() {
+    double d = -2.5;
+    print(Math.abs(d));
+    print(Integer.parseInt("42"));
+    print(String.valueOf(5));
+    print(String.join(",", "a"));
+    print(Objects.equals(d, d));
+    print(Color.missing());
+    print(Pt.nothing());
+    print(Frobnicator.run());
+}

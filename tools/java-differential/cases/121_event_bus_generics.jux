@@ -1,0 +1,104 @@
+// A typed event bus: a generic interface for listeners, a generic bus that
+// dispatches to them in order, listeners as classes and as lambdas, a nested
+// helper class, and static state initialized in declaration order.
+
+interface Listener<E> {
+    void on(E event);
+}
+
+record Order(String id, long cents) {}
+record Refund(String id, long cents) {}
+
+class Bus<E> {
+    private Vec<Listener<E>> listeners = new Vec<Listener<E>>();
+    public int delivered = 0;
+
+    public void subscribe(Listener<E> l) {
+        listeners.push(l);
+    }
+
+    public void publish(E event) {
+        for (var l : listeners) {
+            l.on(event);
+            delivered++;
+        }
+    }
+}
+
+class Ledger implements Listener<Order> {
+    public long total = 0;
+    public Vec<String> ids = new Vec<String>();
+
+    public void on(Order o) {
+        total += o.cents;
+        ids.push(o.id);
+    }
+}
+
+class Stats {
+    public static int created = 0;
+    public static String first = "unset";
+    public static final int LIMIT = 3;
+
+    // A nested helper: only Stats uses it.
+    static class Counter {
+        public int n = 0;
+        public void hit() { n++; }
+    }
+
+    public static Counter counter = new Counter();
+
+    public static void note(String what) {
+        created++;
+        if (first == "unset") {
+            first = what;
+        }
+        counter.hit();
+    }
+}
+
+class Alarm implements Listener<Refund> {
+    public int raised = 0;
+
+    public void on(Refund r) {
+        if (r.cents > 5000) {
+            raised++;
+            print("alarm: large refund " + r.id);
+        }
+        Stats.note("refund " + r.id);
+    }
+}
+
+public void main() {
+    var orders = new Bus<Order>();
+    var ledger = new Ledger();
+    orders.subscribe(ledger);
+    var big = new Vec<String>();
+    orders.subscribe((o) -> {
+        if (o.cents >= 10000) {
+            big.push(o.id);
+        }
+        Stats.note("order " + o.id);
+    });
+
+    var refunds = new Bus<Refund>();
+    var alarm = new Alarm();
+    refunds.subscribe(alarm);
+
+    orders.publish(new Order("A1", 2500));
+    orders.publish(new Order("A2", 12000));
+    refunds.publish(new Refund("R1", 800));
+    orders.publish(new Order("A3", 15000));
+    refunds.publish(new Refund("R2", 9000));
+
+    print("ledger total " + ledger.total + " from " + ledger.ids.len() + " orders");
+    var bigLine = "";
+    for (var id : big) {
+        bigLine += id + " ";
+    }
+    print("big orders: " + bigLine.trim());
+    print("alarms " + alarm.raised);
+    print("delivered " + orders.delivered + " + " + refunds.delivered);
+    print("stats created=" + Stats.created + " first=" + Stats.first + " counter=" + Stats.counter.n);
+    print("over limit: " + (Stats.created > Stats.LIMIT));
+}

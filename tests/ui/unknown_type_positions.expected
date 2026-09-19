@@ -1,0 +1,6 @@
+unknown_type_positions.jux:9:21: [E0417] error: unknown type `Snark`: no class, record, enum, interface or primitive of that name is visible here
+unknown_type_positions.jux:10:18: [E0417] error: unknown type `Crab`: no class, record, enum, interface or primitive of that name is visible here
+unknown_type_positions.jux:11:14: [E0417] error: unknown type `Dolphin`: no class, record, enum, interface or primitive of that name is visible here
+unknown_type_positions.jux:12:19: [E0417] error: unknown type `Kraken`: no class, record, enum, interface or primitive of that name is visible here
+unknown_type_positions.jux:13:19: [E0417] error: unknown type `Gleep`: no class, record, enum, interface or primitive of that name is visible here
+unknown_type_positions.jux:16:14: [E0417] error: unknown type `Oyster`: no class, record, enum, interface or primitive of that name is visible here -- did you mean `OsStr`?

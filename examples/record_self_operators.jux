@@ -1,0 +1,42 @@
+// A record's own operators used on `this` inside the record (JUX-OPERATORS-
+// ADDENDUM §O.2), and a static field whose type is a nested class
+// (JUX-LANG-V1, nested types; JUX-MISSING-DEFS-ADDENDUM §M.9).
+//
+// `this * this` inside `operator<=>` was emitted on the `&Self` receiver,
+// which the operator traits are not implemented for; and a static of a nested
+// class type was stored in a thread-safe static it cannot live in. Both
+// failed in rustc.
+
+record Money(long cents) {
+    public Money operator+(Money o) { return new Money(cents + o.cents); }
+    public Money operator*(long k) { return new Money(cents * k); }
+    public int operator<=>(Money o) { return cents <=> o.cents; }
+    public Money doubled() { return this + this; }
+    public Money tripled() { return this * 3; }
+    public bool bigger(Money o) { return this > o; }
+    public String operator string() { return $"${cents}c"; }
+}
+
+class Wallet {
+    static class Tally {
+        public int n = 0;
+        public void add() { n++; }
+    }
+
+    public static Tally opened = new Tally();
+
+    public static Money open(long cents) {
+        opened.add();
+        return new Money(cents);
+    }
+}
+
+public void main() {
+    var m = Wallet.open(250);
+    print(m.doubled());
+    print(m.tripled());
+    print(m.bigger(new Money(100)));
+    print(m.bigger(new Money(900)));
+    Wallet.open(10);
+    print("opened " + Wallet.opened.n);
+}

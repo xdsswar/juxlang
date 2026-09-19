@@ -436,7 +436,7 @@ pub(crate) struct TryLoopCtl {
 }
 
 /// Emission region for a [`TryLoopCtl`] channel.
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum LoopCtlRegion {
     /// Inside the try body's `catch_unwind` closure — escape via
     /// `{ flag = N; return …; }`.
@@ -444,6 +444,12 @@ pub(crate) enum LoopCtlRegion {
     /// Inside a catch arm (the `'__jux_catch` dispatch block) —
     /// escape via `{ flag = N; break '__jux_catch; }`.
     Catch,
+    /// Inside a PROTECTED catch body: the arm's own `catch_unwind`
+    /// closure, used when the try has a `finally` so a throw from the
+    /// body still runs it first. Escape via `{ flag = N; return …; }`
+    /// like the try body, but through the channel's original flag
+    /// (the closure runs outside any `async move` block).
+    CatchClosure,
     /// Machinery / `finally` — no interception by this channel
     /// (an enclosing channel may still apply).
     Off,
@@ -529,6 +535,7 @@ impl RustEmitter {
         // block they were declared in.
         let outer_nullable = self.nullable_locals.clone();
         self.note_fixed_array_escapes(&block.statements);
+        self.note_reassigned_vars(&block.statements);
         for stmt in &block.statements {
             // Per-statement source-map marker (only when `source` is
             // attached on the emitter — see `lower_with_source`).
@@ -540,6 +547,27 @@ impl RustEmitter {
             self.emit_stmt(stmt);
         }
         self.nullable_locals = outer_nullable;
+    }
+
+    /// Record every untyped `var x = init;` declared directly in `statements`
+    /// that a later statement of the same block (its whole scope) assigns as
+    /// a whole name (`x = ..`, `x *= ..`, `x++`), keyed by the declaration's
+    /// span. Writing through the object (`x.field = ..`) does not count: the
+    /// binding still holds the same object. Read by [`Self::emit_var_decl`].
+    pub(crate) fn note_reassigned_vars(&mut self, statements: &[Stmt]) {
+        for (i, stmt) in statements.iter().enumerate() {
+            if let Stmt::VarDecl(v) = stmt {
+                if v.ty.is_some() || v.init.is_none() {
+                    continue;
+                }
+                let rest = Block { statements: statements[i + 1..].to_vec(), span: juxc_source::Span::DUMMY };
+                let mut assigned = std::collections::HashSet::new();
+                crate::analysis::collect_whole_name_reassigned(&rest, &mut assigned);
+                if assigned.contains(&v.name.text) {
+                    self.reassigned_var_decls.insert(v.span);
+                }
+            }
+        }
     }
 
     /// Record, for every `T[N]` local declared directly in `statements`,
@@ -1287,10 +1315,32 @@ impl RustEmitter {
         let returns = block_contains_fn_return(body);
         let prev_arm = std::mem::replace(&mut self.in_catch_arm, false);
         let prev_try = std::mem::replace(&mut self.in_try_closure, returns);
+        // A `break` / `continue` out of the body leaves this closure through
+        // the try's loop-control channel (region `CatchClosure`): set the
+        // flag, `return` from the closure, and the dispatch after `finally`
+        // makes the real jump. The closure returns `Option<R>` exactly when
+        // the body has a `return`, so the escape's `return` follows that.
+        let saved_channel = match self.try_loopctl.last_mut() {
+            Some(ch) if ch.region == LoopCtlRegion::Catch => {
+                let saved = (ch.region, ch.closure_has_ret);
+                ch.region = LoopCtlRegion::CatchClosure;
+                ch.closure_has_ret = returns;
+                Some(saved)
+            }
+            _ => None,
+        };
+        // A body that `await`s runs as an `async` block awaited in place
+        // (its own `catch_unwind` from `futures::FutureExt`): `return`
+        // leaves it the same way it leaves a closure, so the return and
+        // loop-control channels work unchanged.
+        let awaits = crate::analysis::block_contains_await(body);
         self.w.emit_indent();
         self.w.push_str(if returns { "match " } else { "if let Err(__jux_q) = " });
-        self.w
-            .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+        self.w.push_str(if awaits {
+            "futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {\n"
+        } else {
+            "std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n"
+        });
         self.w.indent_inc();
         self.emit_block_contents(body);
         // The closure's value when the body falls off its end: no return.
@@ -1300,16 +1350,21 @@ impl RustEmitter {
         self.w.indent_dec();
         self.in_try_closure = prev_try;
         self.in_catch_arm = prev_arm;
+        if let (Some((region, has_ret)), Some(ch)) = (saved_channel, self.try_loopctl.last_mut()) {
+            ch.region = region;
+            ch.closure_has_ret = has_ret;
+        }
         self.w.emit_indent();
+        let close = if awaits { "})).await {\n" } else { "})) {\n" };
         if returns {
-            self.w.push_str("})) {\n");
+            self.w.push_str(close);
             self.w.indent_inc();
             self.w.line("Ok(__jux_catch_ret) => { __jux_ret = __jux_catch_ret; }");
             self.w.line("Err(__jux_q) => { __jux_unhandled = Some(__jux_q); }");
             self.w.indent_dec();
             self.w.line("}");
         } else {
-            self.w.push_str("})) {\n");
+            self.w.push_str(close);
             self.w.indent_inc();
             self.w.line("__jux_unhandled = Some(__jux_q);");
             self.w.indent_dec();
@@ -1632,23 +1687,24 @@ impl RustEmitter {
                 (
                     ch.flag.clone(),
                     code,
+                    matches!(ch.region, LoopCtlRegion::Body | LoopCtlRegion::CatchClosure),
                     ch.region == LoopCtlRegion::Body,
                     ch.closure_has_ret,
                     ch.is_async,
                 )
             });
-        if let Some((flag, code, in_body, has_ret, is_async)) = intercept {
+        if let Some((flag, code, in_body, in_try_body, has_ret, is_async)) = intercept {
             self.w.push_str("{ ");
             if is_async {
                 // Atomic store (O9). Body region writes through the
                 // `_`-prefixed clone moved into the `async move`
-                // block; catch arms emit outside it and use the
-                // original handle.
-                if in_body {
+                // block; catch arms (protected or not) emit outside it
+                // and use the original handle.
+                if in_try_body {
                     self.w.push('_');
                 }
                 self.w.push_str(&flag);
-                if in_body {
+                if in_try_body {
                     self.w.push_str("_body");
                 }
                 self.w.push_str(".store(");
@@ -2011,12 +2067,12 @@ impl RustEmitter {
                 // (§X.3.2).** With a `finally` present the body runs under
                 // its own `catch_unwind`, so an exception it raises (a
                 // `throw`, a `?: throw`, or a call that throws) parks in
-                // `__jux_unhandled` like an unmatched payload does. A body
-                // with a `break`/`continue` or an `await` keeps the inline
-                // form: a closure can carry neither.
+                // `__jux_unhandled` like an unmatched payload does. A
+                // `break`/`continue` out of the body leaves the closure
+                // through the try's loop-control channel, and a body that
+                // `await`s is protected as an awaited `async` block.
                 let protect = t.finally.is_some()
-                    && !block_contains_jump(&clause.body)
-                    && !crate::analysis::block_contains_await(&clause.body);
+                    && (wants_loopctl || !block_contains_jump(&clause.body));
                 for ty in clause_tys {
                     let arm_fqn = self.resolve_catch_ty_fqn(ty);
                     let depth = match (&arm_fqn, &binder_fqn) {
@@ -3000,6 +3056,42 @@ impl RustEmitter {
             }
             self.emit_var_decl(&rewritten);
             return;
+        }
+        // `var c = a; c *= 10.0;` where `a` is a polymorphic base class: the
+        // operator returns the base's `Rc<dyn <Base>Kind>` handle, so a local
+        // that is ASSIGNED later must be that handle too, exactly as the
+        // declared form `Vec2 c = a;` is. Without a written type the local
+        // took the initializer's concrete shape and the reassignment failed
+        // in rustc (E0308). Give it the type it was inferred to have.
+        if var.ty.is_none() && !var.is_ref && self.reassigned_var_decls.contains(&var.span) {
+            if let Some(init) = &var.init {
+                if let Some(juxc_tycheck::Ty::User { name, generic_args }) =
+                    self.expr_types.get(&expr_span_of(init)).cloned()
+                {
+                    let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+                    if generic_args.is_empty() && self.is_poly_base_class(&bare) {
+                        let span = var.name.span;
+                        let mut typed = var.clone();
+                        typed.ty = Some(juxc_ast::TypeRef {
+                            name: juxc_ast::QualifiedName {
+                                segments: name
+                                    .split('.')
+                                    .map(|s| juxc_ast::Ident { text: s.to_string(), span })
+                                    .collect(),
+                                span,
+                            },
+                            generic_args: Vec::new(),
+                            nullable: false,
+                            array_shape: None,
+                            fn_shape: None,
+                            ptr_depth: 0,
+                            span,
+                        });
+                        self.emit_var_decl(&typed);
+                        return;
+                    }
+                }
+            }
         }
         let holds_concrete_polybase = var.ty.is_none()
             && matches!(&var.init, Some(Expr::NewObject(n))

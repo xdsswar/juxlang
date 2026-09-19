@@ -1,0 +1,36 @@
+// A record is a value: passing a record local where an interface is expected
+// hands over a copy, and the local stays usable (JUX-LANG-V1 §7.6).
+//
+// The local used to be moved into the interface handle, so any later read of
+// it failed in rustc.
+
+interface Priced {
+    long cents();
+}
+
+record Lamp(String name, long base, int warranty) implements Priced {
+    public long cents() { return warranty >= 24 ? base + 1500 : base; }
+}
+
+struct Coin implements Priced {
+    public long value = 25;
+    public long cents() { return value; }
+}
+
+long priceOf(Priced p) { return p.cents(); }
+
+public void main() {
+    var lamp = new Lamp("desk", 2500, 12);
+    print(priceOf(lamp));
+    print(lamp.name + " " + lamp.warranty);
+
+    var better = lamp.with(warranty: 24);
+    Priced shown = better;
+    print(shown.cents());
+    print(better.warranty);
+    print(priceOf(lamp) + priceOf(better));
+
+    var coin = new Coin(25);
+    print(priceOf(coin));
+    print(coin.value);
+}

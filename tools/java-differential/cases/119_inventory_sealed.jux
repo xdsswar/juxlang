@@ -1,0 +1,72 @@
+// An inventory of a sealed hierarchy of records: pricing by pattern
+// matching with guards, a stock ledger in a sorted BTreeMap, records as map
+// keys, record equality, and with() to reprice.
+
+sealed interface Item permits Book, Gadget, Food {}
+record Book(String title, long cents, int pages) implements Item {}
+record Gadget(String name, long cents, int warrantyMonths) implements Item {}
+record Food(String name, long cents, int daysLeft) implements Item {}
+
+record Sku(String kind, int number) {}
+
+long price(Item item) {
+    return switch (item) {
+        case Book(var t, var c, var p) when p > 500 -> c - c / 10;
+        case Book(var t, var c, var p) -> c;
+        case Gadget(var n, var c, var w) when w >= 24 -> c + 1500;
+        case Gadget(var n, var c, var w) -> c;
+        case Food(var n, var c, var d) when d <= 1 -> c / 2;
+        case Food(var n, var c, var d) -> c;
+    };
+}
+
+String label(Item item) {
+    return switch (item) {
+        case Book b -> "book " + b.title;
+        case Gadget g -> "gadget " + g.name;
+        case Food f -> "food " + f.name;
+    };
+}
+
+String money(long cents) {
+    var rest = cents % 100;
+    return (cents / 100) + "." + (rest < 10 ? "0" : "") + rest;
+}
+
+public void main() {
+    var stock = new BTreeMap<String, int>();
+    var catalog = new Vec<Item>();
+    catalog.push(new Book("Dune", 1899, 688));
+    catalog.push(new Book("Poems", 1200, 90));
+    catalog.push(new Gadget("Drill", 8900, 36));
+    catalog.push(new Gadget("Lamp", 2500, 12));
+    catalog.push(new Food("Bread", 350, 1));
+    catalog.push(new Food("Rice", 900, 300));
+
+    long total = 0;
+    for (var item : catalog) {
+        var p = price(item);
+        total += p;
+        print(label(item) + ": " + money(p));
+        var key = label(item);
+        stock.insert(key, (stock.get(key) ?? 0) + 1);
+    }
+    print("total " + money(total));
+
+    // Records compare by value, so two separately built SKUs are one key.
+    var bins = new HashMap<Sku, String>();
+    bins.insert(new Sku("book", 1), "A1");
+    bins.insert(new Sku("food", 7), "C3");
+    print("sku book-1 in " + bins.get(new Sku("book", 1))!!);
+    print("same sku: " + (new Sku("food", 7) == new Sku("food", 7)));
+
+    // Reprice by copy: the original is untouched.
+    var lamp = new Gadget("Lamp", 2500, 12);
+    var better = lamp.with(warrantyMonths: 24);
+    print("lamp " + money(price(lamp)) + " -> " + money(price(better)));
+    print("original warranty " + lamp.warrantyMonths);
+
+    for (var entry : stock) {
+        print(entry.0 + " x" + entry.1);
+    }
+}

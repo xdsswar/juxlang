@@ -1,0 +1,27 @@
+ok 0
+finally 0
+after 0
+finally 1
+ok 2
+finally 2
+after 2
+finally 3
+ok 4
+finally 4
+after 4
+finally 5
+walk done
+ok 0
+finally 0
+after 0
+finally 1
+ok 2
+finally 2
+after 2
+finally 3
+caught gave up at 3
+checked 2
+checked 101
+checked 4
+checked 7
+7

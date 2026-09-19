@@ -1,0 +1,71 @@
+// A catch body that can `break`, `continue`, `return` or throw, with a
+// `finally` (JUX-EXCEPTIONS-ADDENDUM §X.3.2, JUX-LANG-V1 §7.9).
+//
+// However the catch body ends, `finally` runs first. A throw from a call
+// inside the body used to skip it when the same body also had a `break` or
+// `continue`, because that body was not protected like the others.
+
+class Boom extends RuntimeException {
+    Boom(String m) { super(m); }
+}
+
+void fail(String why) {
+    throw new Boom(why);
+}
+
+void risky(int i) {
+    if (i % 2 == 1) {
+        throw new IllegalStateException("odd " + i);
+    }
+}
+
+// Every exit of the catch body in one loop: continue, break, and a call that
+// throws, each followed by its `finally`.
+void walk(int stopAt, int failAt) {
+    for (var i : 0..10) {
+        try {
+            risky(i);
+            print("ok " + i);
+        } catch (IllegalStateException e) {
+            if (i == stopAt) {
+                break;
+            }
+            if (i == failAt) {
+                fail("gave up at " + i);
+            }
+            continue;
+        } finally {
+            print("finally " + i);
+        }
+        print("after " + i);
+    }
+    print("walk done");
+}
+
+// A `return` from the catch body still runs `finally` first, and the jump
+// out of the inner loop lands where it should.
+int firstOdd(int[] values) {
+    for (var v : values) {
+        try {
+            risky(v);
+        } catch (IllegalStateException e) {
+            if (v > 100) {
+                continue;
+            }
+            return v;
+        } finally {
+            print("checked " + v);
+        }
+    }
+    return -1;
+}
+
+public void main() {
+    walk(5, 99);
+    try {
+        walk(99, 3);
+    } catch (Boom b) {
+        print("caught " + b.getMessage());
+    }
+    print(firstOdd(new int[]{2, 101, 4, 7, 9}));
+}

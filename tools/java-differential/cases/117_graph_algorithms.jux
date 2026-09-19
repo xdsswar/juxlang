@@ -1,0 +1,174 @@
+// Graph algorithms over adjacency lists: breadth-first distances with a
+// VecDeque, a recursive depth-first topological sort with cycle detection,
+// Dijkstra's shortest paths with a sorted frontier, and connected components.
+
+record Edge(int to, int weight) {}
+
+class Graph {
+    public int n;
+    public Vec<Vec<Edge>> adj = new Vec<Vec<Edge>>();
+
+    public Graph(int n) {
+        this.n = n;
+        for (var i = 0; i < n; i++) {
+            adj.push(new Vec<Edge>());
+        }
+    }
+
+    public void add(int from, int to, int weight) {
+        adj[from].push(new Edge(to, weight));
+    }
+
+    public void addBoth(int a, int b, int weight) {
+        add(a, b, weight);
+        add(b, a, weight);
+    }
+}
+
+int[] bfs(Graph g, int start) {
+    int[] dist = new int[g.n];
+    for (var i = 0; i < g.n; i++) {
+        dist[i] = -1;
+    }
+    var queue = new VecDeque<int>();
+    dist[start] = 0;
+    queue.push_back(start);
+    while (!queue.is_empty()) {
+        int at = queue.pop_front()!!;
+        for (var e : g.adj[at]) {
+            if (dist[e.to] == -1) {
+                dist[e.to] = dist[at] + 1;
+                queue.push_back(e.to);
+            }
+        }
+    }
+    return dist;
+}
+
+class Topo {
+    private Graph g;
+    private int[] state;
+    public Vec<int> order = new Vec<int>();
+    public bool cyclic = false;
+
+    public Topo(Graph g) {
+        this.g = g;
+        this.state = new int[g.n];
+    }
+
+    public void visit(int v) {
+        if (state[v] == 2) { return; }
+        if (state[v] == 1) {
+            cyclic = true;
+            return;
+        }
+        state[v] = 1;
+        for (var e : g.adj[v]) {
+            visit(e.to);
+        }
+        state[v] = 2;
+        order.push(v);
+    }
+
+    public String run() {
+        for (var v = 0; v < g.n; v++) {
+            visit(v);
+        }
+        if (cyclic) { return "cycle"; }
+        var out = "";
+        for (var k = order.len(); k > 0; k--) {
+            out += order[k - 1] + " ";
+        }
+        return out.trim();
+    }
+}
+
+long[] dijkstra(Graph g, int source) {
+    final long inf = 1000000000L;
+    long[] dist = new long[g.n];
+    bool[] done = new bool[g.n];
+    for (var i = 0; i < g.n; i++) {
+        dist[i] = inf;
+    }
+    dist[source] = 0;
+    for (var round = 0; round < g.n; round++) {
+        var best = -1;
+        for (var v = 0; v < g.n; v++) {
+            if (!done[v] && dist[v] < inf && (best == -1 || dist[v] < dist[best])) {
+                best = v;
+            }
+        }
+        if (best == -1) { break; }
+        done[best] = true;
+        for (var e : g.adj[best]) {
+            var cand = dist[best] + e.weight;
+            if (cand < dist[e.to]) {
+                dist[e.to] = cand;
+            }
+        }
+    }
+    return dist;
+}
+
+int components(Graph g) {
+    bool[] seen = new bool[g.n];
+    var count = 0;
+    for (var s = 0; s < g.n; s++) {
+        if (seen[s]) { continue; }
+        count++;
+        var stack = new Vec<int>();
+        stack.push(s);
+        seen[s] = true;
+        while (stack.len() > 0) {
+            int v = stack.pop()!!;
+            for (var e : g.adj[v]) {
+                if (!seen[e.to]) {
+                    seen[e.to] = true;
+                    stack.push(e.to);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+String joinInts(int[] xs) {
+    var out = "";
+    for (var i = 0; i < xs.length; i++) {
+        if (i > 0) { out += " "; }
+        out += xs[i];
+    }
+    return out;
+}
+
+public void main() {
+    var roads = new Graph(7);
+    roads.addBoth(0, 1, 7);
+    roads.addBoth(0, 2, 9);
+    roads.addBoth(0, 5, 14);
+    roads.addBoth(1, 2, 10);
+    roads.addBoth(1, 3, 15);
+    roads.addBoth(2, 3, 11);
+    roads.addBoth(2, 5, 2);
+    roads.addBoth(3, 4, 6);
+    roads.addBoth(4, 5, 9);
+    print("bfs from 0: " + joinInts(bfs(roads, 0)));
+    var d = dijkstra(roads, 0);
+    var line = "";
+    for (var i = 0; i < d.length; i++) {
+        line += i + "=" + (d[i] == 1000000000L ? "inf" : "" + d[i]) + " ";
+    }
+    print("dijkstra: " + line.trim());
+    print("components: " + components(roads));
+
+    var tasks = new Graph(6);
+    tasks.add(5, 2, 1);
+    tasks.add(5, 0, 1);
+    tasks.add(4, 0, 1);
+    tasks.add(4, 1, 1);
+    tasks.add(2, 3, 1);
+    tasks.add(3, 1, 1);
+    print("topo: " + new Topo(tasks).run());
+    tasks.add(1, 5, 1);
+    print("topo with cycle: " + new Topo(tasks).run());
+}

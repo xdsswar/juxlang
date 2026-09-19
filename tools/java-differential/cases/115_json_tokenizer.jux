@@ -1,0 +1,199 @@
+// A JSON-like tokenizer and a recursive-descent reader over it: characters to
+// tokens (an enum with payloads), tokens to a tree of values (a sealed
+// interface of records), then the tree printed back and summed.
+
+enum Tok {
+    LBrace, RBrace, LBracket, RBracket, Colon, Comma,
+    Str(String),
+    Num(long),
+    Bool(bool),
+    Null,
+    End
+}
+
+class Lexer {
+    private String text;
+    private int pos = 0;
+
+    public Lexer(String text) { this.text = text; }
+
+    private char peek() {
+        return pos < text.charLength() ? text.charAt(pos) : '\0';
+    }
+
+    private bool isDigit(char c) { return c >= '0' && c <= '9'; }
+    private bool isLetter(char c) { return c >= 'a' && c <= 'z'; }
+
+    public Vec<Tok> tokens() {
+        var out = new Vec<Tok>();
+        while (pos < text.charLength()) {
+            char c = peek();
+            if (c == ' ' || c == '\n') {
+                pos++;
+            } else if (c == '{') {
+                out.push(Tok.LBrace); pos++;
+            } else if (c == '}') {
+                out.push(Tok.RBrace); pos++;
+            } else if (c == '[') {
+                out.push(Tok.LBracket); pos++;
+            } else if (c == ']') {
+                out.push(Tok.RBracket); pos++;
+            } else if (c == ':') {
+                out.push(Tok.Colon); pos++;
+            } else if (c == ',') {
+                out.push(Tok.Comma); pos++;
+            } else if (c == '"') {
+                pos++;
+                var s = "";
+                while (peek() != '"') {
+                    s += peek();
+                    pos++;
+                }
+                pos++;
+                out.push(Tok.Str(s));
+            } else if (isDigit(c) || c == '-') {
+                var neg = c == '-';
+                if (neg) {
+                    pos++;
+                }
+                long n = 0;
+                while (isDigit(peek())) {
+                    n = n * 10 + (peek() - '0');
+                    pos++;
+                }
+                out.push(Tok.Num(neg ? -n : n));
+            } else if (isLetter(c)) {
+                var word = "";
+                while (isLetter(peek())) {
+                    word += peek();
+                    pos++;
+                }
+                if (word == "true") {
+                    out.push(Tok.Bool(true));
+                } else if (word == "false") {
+                    out.push(Tok.Bool(false));
+                } else {
+                    out.push(Tok.Null);
+                }
+            } else {
+                pos++;
+            }
+        }
+        out.push(Tok.End);
+        return out;
+    }
+}
+
+sealed interface Value permits JStr, JNum, JBool, JNull, JArr, JObj {}
+record JStr(String s) implements Value {}
+record JNum(long n) implements Value {}
+record JBool(bool b) implements Value {}
+record JNull() implements Value {}
+record JArr(Vec<Value> items) implements Value {}
+record JObj(Vec<String> keys, Vec<Value> vals) implements Value {}
+
+class Parser {
+    private Vec<Tok> toks;
+    private int i = 0;
+
+    public Parser(Vec<Tok> toks) { this.toks = toks; }
+
+    private Tok next() {
+        var t = toks[i];
+        i++;
+        return t;
+    }
+
+    private bool at(Tok t) { return toks[i] == t; }
+
+    public Value value() {
+        var t = next();
+        switch (t) {
+            case Tok.Str(var s) -> { return new JStr(s); }
+            case Tok.Num(var n) -> { return new JNum(n); }
+            case Tok.Bool(var b) -> { return new JBool(b); }
+            case Tok.LBracket -> {
+                var items = new Vec<Value>();
+                while (!at(Tok.RBracket)) {
+                    items.push(value());
+                    if (at(Tok.Comma)) { next(); }
+                }
+                next();
+                return new JArr(items);
+            }
+            case Tok.LBrace -> {
+                var keys = new Vec<String>();
+                var vals = new Vec<Value>();
+                while (!at(Tok.RBrace)) {
+                    var key = next();
+                    switch (key) {
+                        case Tok.Str(var k) -> keys.push(k);
+                        default -> keys.push("?");
+                    }
+                    next();
+                    vals.push(value());
+                    if (at(Tok.Comma)) { next(); }
+                }
+                next();
+                return new JObj(keys, vals);
+            }
+            default -> { return new JNull(); }
+        }
+    }
+}
+
+// A switch arm's value is an expression, so the arms with a loop call a
+// helper that does the work.
+String show(Value v) {
+    return switch (v) {
+        case JStr(var s) -> "\"" + s + "\"";
+        case JNum(var n) -> "" + n;
+        case JBool(var b) -> b ? "true" : "false";
+        case JNull() -> "null";
+        case JArr(var items) -> showArr(items);
+        case JObj(var keys, var vals) -> showObj(keys, vals);
+    };
+}
+
+String showArr(Vec<Value> items) {
+    var out = "[";
+    for (var k = 0; k < items.len(); k++) {
+        if (k > 0) { out += ","; }
+        out += show(items[k]);
+    }
+    return out + "]";
+}
+
+String showObj(Vec<String> keys, Vec<Value> vals) {
+    var out = "{";
+    for (var k = 0; k < keys.len(); k++) {
+        if (k > 0) { out += ","; }
+        out += keys[k] + ":" + show(vals[k]);
+    }
+    return out + "}";
+}
+
+long total(Value v) {
+    return switch (v) {
+        case JNum(var n) -> n;
+        case JArr(var items) -> totalAll(items);
+        case JObj(var keys, var vals) -> totalAll(vals);
+        default -> 0;
+    };
+}
+
+long totalAll(Vec<Value> items) {
+    long sum = 0;
+    for (var item : items) { sum += total(item); }
+    return sum;
+}
+
+public void main() {
+    var src = "{\"name\": \"jux\", \"tags\": [\"fast\", \"small\"], \"sizes\": [3, -4, 10],\n"
+        + " \"nested\": {\"ok\": true, \"none\": null, \"deep\": [[1, 2], [30]]}}";
+    var toks = new Lexer(src).tokens();
+    print("tokens: " + toks.len());
+    var tree = new Parser(toks).value();
+    print(show(tree));
+    print("sum of numbers: " + total(tree));
+}

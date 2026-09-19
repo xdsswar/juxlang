@@ -129,6 +129,44 @@ pub fn system_out_hint(stream: &str, method: &str) -> Option<&'static str> {
     }
 }
 
+/// Help for a Java static on `String` that Jux's `String` (Rust's) lacks.
+pub fn string_static_hint(method: &str) -> Option<&'static str> {
+    match method {
+        "valueOf" => Some("a value's text is interpolation, `$\"${x}\"`"),
+        "format" => Some("format with interpolation, `$\"${a} and ${b}\"`"),
+        "join" => Some("build the text in a loop, `text += part`, or with interpolation"),
+        _ => None,
+    }
+}
+
+/// Help for a static-looking call on a Java utility class Jux does not have
+/// (`Math.abs(x)`, `Integer.parseInt(s)`), or `None` for any other name. The
+/// caller has already established that nothing called `class` is visible.
+pub fn java_class_hint(class: &str, method: &str) -> Option<&'static str> {
+    match class {
+        "Math" | "StrictMath" => Some(
+            "Jux has no `Math` class: numbers carry these as methods, `x.abs()`, `x.sqrt()`, `x.powf(y)`, `a.max(b)` on a double",
+        ),
+        "Integer" | "Long" | "Short" | "Byte" | "Double" | "Float" => Some(match method {
+            m if m.starts_with("parse") || m == "valueOf" => {
+                "Jux has no boxed number classes: parse text with `s.parse<int>()` (or `<long>`, `<double>`)"
+            }
+            "toString" => "Jux has no boxed number classes: a number's text is `$\"${x}\"`",
+            _ => "Jux has no boxed number classes: the primitives carry their own methods and constants, `x.abs()`, `int.MAX_VALUE`",
+        }),
+        "Character" => Some("Jux has no `Character` class: `char` carries its own methods, `c.is_alphabetic()`, `c.toUppercase()`"),
+        "Boolean" => Some("Jux has no `Boolean` class: parse text with `s.parse<bool>()`"),
+        "Objects" => Some("Jux has no `Objects` class: `Objects.equals(a, b)` is `a == b`, and `requireNonNull(x)` is `x!!`"),
+        "Arrays" | "Collections" => Some(
+            "Jux has no `Arrays` / `Collections` helpers: the Rust std collections carry their own methods, `v.sort_unstable()`, `v.len()`, `v.contains(x)`",
+        ),
+        "List" | "Map" | "Set" => Some(
+            "Jux collections are the Rust std ones: `new Vec<T>()`, `new HashMap<K, V>()`, `new HashSet<T>()`",
+        ),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

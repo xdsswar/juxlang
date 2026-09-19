@@ -2647,6 +2647,23 @@ A captured variable stays usable after the lambda that captures it, as in Java. 
 
 A lambda whose body is a single expression may fill a function type returning `void` (`() -> void`, `(T) -> void`) whatever the expression's type: the value is computed and discarded. This holds wherever the slot appears: an argument, a local declaration, an assignment, or a `return`.
 
+#### 7.9.1. Lambdas as Single-Method Interfaces
+
+A lambda may also fill a slot whose type is a Jux interface with exactly one abstract method (its other methods, if any, have default bodies or are static), as in Java:
+
+```java
+interface Listener<E> { void on(E event); }
+
+var seen = new Vec<String>();
+bus.subscribe((o) -> seen.push(o.id));      // a Listener<Order>
+Pricer p = (item, qty) -> item.charLength() * qty;
+```
+
+- The lambda is that method. Its parameters, in order, are the method's parameters; an untyped lambda parameter takes the method's parameter type, with the interface's type parameters replaced by the slot's type arguments (`Listener<Order>` gives `o` the type `Order`). The parameter counts must match.
+- An expression body is the method's `return` value; for a `void` method it is a statement whose value is discarded.
+- The result is an ordinary value of the interface type: it dispatches, compares by identity, and captures exactly as the lambda would (§7.9), and it is the same as writing the anonymous class `new Listener<Order>() { public void on(Order o) { … } }`.
+- The conversion applies to Jux interfaces that do not extend another interface. A foreign (`@rust`) trait, an interface with no or several abstract methods, and an `async` lambda keep their existing rules; a lambda there is a type error.
+
 ### 7.10. Nullable Types
 
 ```java
