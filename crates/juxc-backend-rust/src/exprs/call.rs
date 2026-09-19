@@ -384,8 +384,10 @@ impl RustEmitter {
                 // Inherited methods count: `e.getSuppressed()` on an
                 // `IllegalStateException` is declared on `Exception`, and
                 // already hands back an array handle.
-                // A record, enum or interface declares methods as much as a
-                // class does. Asking only the class map made a record's
+                // A record or interface declares methods as much as a class
+                // does. An ENUM is left out on purpose: its synthesized
+                // helpers (`values()`) hand back a bare sequence, which the
+                // caller still has to wrap. Asking only the class map made a record's
                 // `char[] letters()` look foreign, so its array result -- a
                 // handle already -- was wrapped in a second one.
                 let receiver_type_fqn = match &*f.object {
@@ -408,17 +410,12 @@ impl RustEmitter {
                         .records
                         .get(fqn)
                         .is_some_and(|r| r.methods.contains_key(method));
-                    let in_enum = self
-                        .symbols
-                        .enums
-                        .get(fqn)
-                        .is_some_and(|e| e.methods.contains_key(method));
                     let in_iface = self
                         .symbols
                         .interfaces
                         .get(fqn)
                         .is_some_and(|i| !i.is_external && i.methods.contains_key(method));
-                    if in_record || in_enum || in_iface {
+                    if in_record || in_iface {
                         return false;
                     }
                 }
