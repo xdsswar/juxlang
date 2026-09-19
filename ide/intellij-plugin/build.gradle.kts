@@ -85,6 +85,17 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.1</h3>
+            <p>The editor catches up with the newest Jux: the standard library, <b>never</b>, ranges as values, and the layout and ABI features.</p>
+            <ul>
+              <li><b>The standard library ships with the plugin</b>: <b>Option</b>, <b>Result</b>, the iterator combinators, <b>Mutex</b> and the exceptions complete, navigate (Ctrl+B) and show Quick Documentation with their real signatures.</li>
+              <li><b>Lambda parameters know their type</b>: <b>opt.map((p) -&gt; p.</b> completes the element's members, and a lambda passed for a single-method interface gets that method's parameter types.</li>
+              <li><b>Ranges</b> type as values (<b>start</b>, <b>end</b>, <b>endInclusive</b>, <b>step</b>), and a for-each over a map binds a <b>(K, V)</b> entry read as <b>e.0</b> / <b>e.1</b>.</li>
+              <li><b>never</b>: a call to a never function ends its path, so no false "Missing return"; the never rules themselves are checked as you type.</li>
+              <li><b>Layout and ABI</b> checks for <b>@align</b>, <b>array as T*</b>, <b>transmute</b> and free operators; a <b>// SAFETY:</b> comment check on unsafe blocks, with a fix.</li>
+              <li><b>Java library calls</b> (<b>Math.abs</b>, <b>Integer.parseInt</b>, <b>Objects.equals</b>, <b>String.valueOf</b>) are reported with a one-click Jux rewrite.</li>
+            </ul>
+
             <h3>0.1.0</h3>
             <p>More of IntelliJ's Java intelligence, in Jux's own terms.</p>
             <ul>
