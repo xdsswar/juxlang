@@ -900,67 +900,33 @@ impl<'a> Parser<'a> {
     /// with the record and one `var` per binder reading its component by
     /// POSITION (see `juxc_ast::record_destructure_temp` for why positions,
     /// and for how the checker and driver turn them into names). A binder is
-    /// a name, `var name`, or `_` to skip a component; nested patterns are
-    /// not supported yet.
+    /// a name, `var name`, `_` to skip a component, or a nested record
+    /// pattern (`var Line(Pt(x1, y1), var end) = l;`), which takes its
+    /// component apart the same way through a temporary of its own:
+    ///
+    /// ```text
+    /// Line __jux_rec0_2 = l;
+    /// Pt __jux_rec1_2 = __jux_rec0_2.__jux_component_0;
+    /// var x1 = __jux_rec1_2.__jux_component_0;
+    /// var y1 = __jux_rec1_2.__jux_component_1;
+    /// var end = __jux_rec0_2.__jux_component_1;
+    /// ```
+    ///
+    /// Each temporary is checked like a top-level one, so a component that
+    /// is not always that record (a supertype, a nullable) is E0271 there.
     fn parse_var_record_destructure(&mut self, is_final: bool) -> Option<Stmt> {
         let start = self.peek_span();
         self.advance(); // 'var'
         let record = self.parse_type_ref()?;
-        self.expect(&TokenKind::LParen, "'(' to open the record pattern");
-        let mut binders: Vec<juxc_ast::Ident> = Vec::new();
-        if !self.at(&TokenKind::RParen) {
-            loop {
-                // `var x` is accepted for symmetry with `case Pt(var x, …)`.
-                self.eat_kw(Keyword::Var);
-                if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LParen)) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0200_UnexpectedToken,
-                            "nested record patterns aren't supported in a declaration yet -- destructure the outer record first, then the component",
-                        )
-                        .with_span(self.peek_span()),
-                    );
-                    return None;
-                }
-                binders.push(self.parse_ident()?);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-            }
-        }
-        self.expect(&TokenKind::RParen, "')' to close the record pattern");
+        let parts = self.parse_record_pattern_parts()?;
         self.expect(&TokenKind::Eq, "'=' in record destructuring");
         let init = self.parse_expr();
         self.expect(&TokenKind::Semicolon, "';' after record destructuring");
         let span = start.join(self.last_consumed_span());
 
-        let tmp_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, binders.len());
+        let tmp_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, parts.len());
         self.tuple_tmp_counter += 1;
-        for (i, binder) in binders.iter().enumerate() {
-            if binder.text == "_" {
-                continue;
-            }
-            // The component READ gets the binder's span, which is also what
-            // the checker keys the position-to-name rewrite on; the temporary
-            // gets the statement's.
-            let read = Expr::Field(juxc_ast::FieldExpr {
-                object: Box::new(Expr::Path(juxc_ast::QualifiedName {
-                    segments: vec![juxc_ast::Ident { text: tmp_name.clone(), span: start }],
-                    span: start,
-                })),
-                field: juxc_ast::Ident { text: juxc_ast::record_component_marker(i), span: binder.span },
-                safe: false,
-                span: binder.span,
-            });
-            self.pending_stmts.push(Stmt::VarDecl(VarDecl {
-                name: binder.clone(),
-                ty: None,
-                init: Some(read),
-                is_final,
-                is_ref: false,
-                span: binder.span,
-            }));
-        }
+        self.queue_record_part_reads(&tmp_name, start, &parts, is_final);
         Some(Stmt::VarDecl(VarDecl {
             name: juxc_ast::Ident { text: tmp_name, span: start },
             ty: Some(record),
@@ -969,6 +935,103 @@ impl<'a> Parser<'a> {
             is_ref: false,
             span,
         }))
+    }
+
+    /// `( part (',' part)* )` of a record pattern in a declaration, the
+    /// cursor on the `(`. A part is a binder (`x`, `var x`, `_`) or a nested
+    /// record pattern (`Pt(a, b)`, `var Pt(a, b)`, `geo.Pt(a, b)`).
+    fn parse_record_pattern_parts(&mut self) -> Option<Vec<RecordPatternPart>> {
+        self.expect(&TokenKind::LParen, "'(' to open the record pattern");
+        let mut parts = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                // `var x` is accepted for symmetry with `case Pt(var x, …)`.
+                self.eat_kw(Keyword::Var);
+                if self.at_nested_record_pattern() {
+                    let record = self.parse_type_ref()?;
+                    let inner = self.parse_record_pattern_parts()?;
+                    parts.push(RecordPatternPart::Nested(record, inner));
+                } else {
+                    parts.push(RecordPatternPart::Bind(self.parse_ident()?));
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&TokenKind::RParen, "')' to close the record pattern");
+        Some(parts)
+    }
+
+    /// At `Name(` or `a.b.Name(` inside a record pattern: a nested record
+    /// pattern rather than a binder.
+    fn at_nested_record_pattern(&self) -> bool {
+        let mut i = self.pos;
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        i += 1;
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot))
+            && matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+        {
+            i += 2;
+        }
+        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
+    }
+
+    /// Queue the reads that take the record in `tmp_name` apart: one `var`
+    /// per binder, and for a nested pattern a typed temporary holding the
+    /// component followed, recursively, by that temporary's own reads. The
+    /// statements land in source order on [`crate::Parser::pending_stmts`].
+    fn queue_record_part_reads(
+        &mut self,
+        tmp_name: &str,
+        tmp_span: juxc_source::Span,
+        parts: &[RecordPatternPart],
+        is_final: bool,
+    ) {
+        for (i, part) in parts.iter().enumerate() {
+            // The component READ gets the binder's (or the nested pattern's)
+            // span, which is also what the checker keys the position-to-name
+            // rewrite on; a temporary gets the span of what it destructures.
+            let read_span = match part {
+                RecordPatternPart::Bind(binder) if binder.text == "_" => continue,
+                RecordPatternPart::Bind(binder) => binder.span,
+                RecordPatternPart::Nested(record, _) => record.span,
+            };
+            let read = Expr::Field(juxc_ast::FieldExpr {
+                object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: tmp_name.to_string(), span: tmp_span }],
+                    span: tmp_span,
+                })),
+                field: juxc_ast::Ident { text: juxc_ast::record_component_marker(i), span: read_span },
+                safe: false,
+                span: read_span,
+            });
+            match part {
+                RecordPatternPart::Bind(binder) => self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                    name: binder.clone(),
+                    ty: None,
+                    init: Some(read),
+                    is_final,
+                    is_ref: false,
+                    span: binder.span,
+                })),
+                RecordPatternPart::Nested(record, inner) => {
+                    let inner_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, inner.len());
+                    self.tuple_tmp_counter += 1;
+                    self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                        name: juxc_ast::Ident { text: inner_name.clone(), span: record.span },
+                        ty: Some(record.clone()),
+                        init: Some(read),
+                        is_final: true,
+                        is_ref: false,
+                        span: record.span,
+                    }));
+                    self.queue_record_part_reads(&inner_name, record.span, inner, is_final);
+                }
+            }
+        }
     }
 
     fn parse_var_tuple_destructure(&mut self) -> Option<Stmt> {
@@ -1681,4 +1744,12 @@ fn smart_cast_bare_type_test(condition: &mut juxc_ast::Expr, then_block: &juxc_a
     if !assigned {
         t.binder = Some(name);
     }
+}
+
+/// One position of a record pattern in a destructuring declaration (§5.4).
+enum RecordPatternPart {
+    /// `x`, `var x`, or `_` (skip the component).
+    Bind(juxc_ast::Ident),
+    /// `Pt(a, b)`: the component is a record, taken apart in turn.
+    Nested(juxc_ast::TypeRef, Vec<RecordPatternPart>),
 }

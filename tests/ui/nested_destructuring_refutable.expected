@@ -1,0 +1,4 @@
+nested_destructuring_refutable.jux:7:16: [E0271] error: `var Pt(...)` needs a value that is always a `Pt`, and this one is a `Shape`: the pattern could fail to match, and a declaration has nowhere to go if it does
+nested_destructuring_refutable.jux:8:19: [E0271] error: `var Pt(...)` needs a value that is always a `Pt`, and this one is a `Pt?`: the pattern could fail to match, and a declaration has nowhere to go if it does
+nested_destructuring_refutable.jux:9:19: [E0271] error: `var Pt(...)` needs a value that is always a `Pt`, and this one is a `Pt?`: the pattern could fail to match, and a declaration has nowhere to go if it does
+nested_destructuring_refutable.jux:9:19: [E0439] error: `Pt` has 2 components, and this pattern gives 1

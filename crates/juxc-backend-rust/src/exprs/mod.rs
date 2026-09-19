@@ -1643,7 +1643,13 @@ impl RustEmitter {
         if own_string || !matches!(arm, Expr::Literal(_)) {
             self.emitting_format_arg = false;
         }
-        self.emit_expr(arm);
+        if widen_to.is_some() {
+            // `as` binds tighter than any binary operator: `(n * 2) as i64`,
+            // never `n * 2 as i64`, which casts only the `2`.
+            self.emit_expr_with_parent_prec(arm, crate::exprs::UNARY_PREC, false);
+        } else {
+            self.emit_expr(arm);
+        }
         self.emitting_format_arg = prev_format_arg;
         // A class handle read out of a place SHARES it (§CR.4.1); it does not
         // move out of it. Without this, `midnight ? dark : light` moved both

@@ -497,11 +497,19 @@ impl Resolver {
             juxc_ast::Pattern::Wildcard(_)
             | juxc_ast::Pattern::Literal(_, _)
             | juxc_ast::Pattern::Range { .. } => {}
-            // Or-alternatives can't introduce bindings (parser-level
-            // rule); walk them for nested variant paths only.
+            // The alternatives of an or-pattern bind the same names (§A.3;
+            // tycheck proves it, E0447), and `n` in `Num(var n) | Neg(var n)`
+            // is ONE variable whichever alternative matched. Declare each
+            // name once, from the first alternative that binds it, so the
+            // second copy isn't taken for a redeclaration (E0304).
             juxc_ast::Pattern::Or(alts, _) => {
+                let mut seen = std::collections::HashSet::new();
                 for alt in alts {
-                    self.declare_pattern_bindings(alt);
+                    for name in alt.binders() {
+                        if seen.insert(name.text.as_str()) {
+                            self.declare_at(&name.text, name.span);
+                        }
+                    }
                 }
             }
             juxc_ast::Pattern::Bind(name) => self.declare(&name.text),

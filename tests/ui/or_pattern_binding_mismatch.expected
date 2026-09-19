@@ -1,0 +1,3 @@
+or_pattern_binding_mismatch.jux:10:32: [E0447] error: `s` is bound by the first alternative but not by this one
+or_pattern_binding_mismatch.jux:17:32: [E0447] error: `s` is `String` in the first alternative and `int` in this one
+or_pattern_binding_mismatch.jux:24:31: [E0447] error: `n` is bound by the first alternative but not by this one

@@ -553,10 +553,25 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),
         Expr::InterpString(_) => Ty::String,
         Expr::Switch(s) => {
-            // The arm-unification work is Phase D's job. For now we
-            // pick the first arm's body type as a representative —
-            // good enough for downstream code that just wants *some*
-            // type to forward.
+            // Numeric arms meet in one type (§S.2.6), as the arms of `? :`
+            // do: `switch (k) { case 1 -> aLong; default -> anInt; }` is a
+            // `long`. Anything else takes the first arm's type. Arm bindings
+            // are not in scope here, so an arm that reads one types as
+            // `Unknown` and takes no part; the checker, which has them,
+            // records the real arm types.
+            let arm_types: Vec<(&Expr, Ty)> = s
+                .arms
+                .iter()
+                .filter_map(|a| match &a.body {
+                    SwitchBody::Expr(e) => Some((&**e, infer_expr(e, env, symbols))),
+                    SwitchBody::Block(_) => None,
+                })
+                .collect();
+            if arm_types.len() == s.arms.len() && arm_types.len() > 1 {
+                if let ArmsNumeric::Meet(p) = unify_numeric_arms(&arm_types) {
+                    return Ty::Primitive(p);
+                }
+            }
             if let Some(first) = s.arms.first() {
                 match &first.body {
                     SwitchBody::Expr(e) => infer_expr(e, env, symbols),
@@ -2564,6 +2579,49 @@ fn strip_nullable(ty: Ty) -> Ty {
 /// `i32`), which is also what Rust infers for the unsuffixed literal the backend
 /// emits; everything else goes through [`crate::ty::promote_numeric`], the rule
 /// the backend's operand casts follow.
+/// How the value arms of a `? :` or a `switch` expression meet (§S.2.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmsNumeric {
+    /// Every arm is numeric and they meet in this type.
+    Meet(Primitive),
+    /// Two arms, a signed and an unsigned integer, that no one type holds:
+    /// `E0410`, and a cast says which meaning is wanted.
+    NoCommonType(Primitive, Primitive),
+    /// An arm is not a number (or there is none): promotion does not apply.
+    NotNumeric,
+}
+
+/// The type the numeric arms of a `? :` or a `switch` expression meet in, by
+/// the binary numeric promotion of §S.2.6, applied arm by arm. An arm typed
+/// `Unknown` (a `throw`, a value the checker could not type) takes no part.
+/// An untyped literal arm adopts the others' type, as a literal operand does.
+pub fn unify_numeric_arms(arms: &[(&Expr, Ty)]) -> ArmsNumeric {
+    let mut acc: Option<(Primitive, bool)> = None;
+    for (expr, ty) in arms {
+        let p = match ty {
+            Ty::Unknown => continue,
+            Ty::Primitive(p) if !matches!(p, Primitive::Bool) => *p,
+            _ => return ArmsNumeric::NotNumeric,
+        };
+        let literal = untyped_int_literal(expr) || untyped_float_literal(expr);
+        acc = Some(match acc {
+            None => (p, literal),
+            // A literal so far adopts the typed arm's type.
+            Some((_, true)) if !literal => (p, false),
+            Some((a, al)) if literal || a == p => (a, al),
+            Some((a, _)) => match crate::ty::promote_numeric(a, p) {
+                crate::ty::NumericPromotion::To(t) => (t, false),
+                crate::ty::NumericPromotion::NoCommonType => return ArmsNumeric::NoCommonType(a, p),
+                crate::ty::NumericPromotion::NotNumeric => return ArmsNumeric::NotNumeric,
+            },
+        });
+    }
+    match acc {
+        Some((p, _)) => ArmsNumeric::Meet(p),
+        None => ArmsNumeric::NotNumeric,
+    }
+}
+
 pub(crate) fn numeric_operands_type(left: &Expr, l: &Ty, right: &Expr, r: &Ty) -> Option<Primitive> {
     let (Ty::Primitive(lp), Ty::Primitive(rp)) = (l, r) else {
         return None;

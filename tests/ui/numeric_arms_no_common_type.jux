@@ -1,0 +1,15 @@
+int pick(String s, int k) {
+    return switch (k) {
+        case 1 -> s.len();
+        default -> k * 10;
+    };
+}
+
+int choose(String s, int k) {
+    return k == 1 ? s.len() : k * 10;
+}
+
+public void main() {
+    print(pick("abc", 1));
+    print(choose("abc", 2));
+}

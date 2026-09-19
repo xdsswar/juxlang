@@ -17,7 +17,35 @@ impl RustEmitter {
     ///
     /// Each arm becomes `pattern => body,`. Block bodies emit as
     /// `pattern => { stmts… },`. Expression-bodies emit naked.
+    /// The type a switch expression's numeric arms meet in (§S.2.6), when
+    /// they are all value arms and not all one type already; `None` when no
+    /// arm needs a cast. The arm types are the checker's, recorded with each
+    /// arm's bindings in scope.
+    fn switch_arm_widen_target(&self, s: &juxc_ast::SwitchExpr) -> Option<juxc_tycheck::Primitive> {
+        let mut arms: Vec<(&juxc_ast::Expr, juxc_tycheck::Ty)> = Vec::new();
+        for arm in &s.arms {
+            let juxc_ast::SwitchBody::Expr(e) = &arm.body else { return None };
+            let ty = match self.operand_primitive(e) {
+                Some(p) => juxc_tycheck::Ty::Primitive(p),
+                // A `throw` arm never produces a value.
+                None if matches!(&**e, juxc_ast::Expr::Throw(..)) => juxc_tycheck::Ty::Unknown,
+                None => return None,
+            };
+            arms.push((e, ty));
+        }
+        if arms.len() < 2 {
+            return None;
+        }
+        match juxc_tycheck::infer::unify_numeric_arms(&arms) {
+            juxc_tycheck::infer::ArmsNumeric::Meet(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub(crate) fn emit_switch(&mut self, s: &juxc_ast::SwitchExpr) {
+        // Numeric arms meet in one type (§S.2.6), as a `? :`'s do: a narrower
+        // arm is cast up to it, since a Rust `match` needs every arm to agree.
+        let arm_widen = self.switch_arm_widen_target(s);
         // When the surrounding context requires `Option<T>` (the
         // `emitting_nullable_target` flag is set, currently fired
         // by `emit_tail_stmt` for a `T?`-returning fn), push the
@@ -129,12 +157,22 @@ impl RustEmitter {
                 }
                 _ => None,
             };
+            // `case Circle(var r) | Ring(var r, _)` over a trait object: one
+            // runtime test per alternative, tried in source order (§A.3).
+            let or_type_tests = match (&arm.pattern, &dyn_scrutinee) {
+                (juxc_ast::Pattern::Or(alts, _), Some(source))
+                    if !any_scrutinee && alts.iter().all(|alt| self.is_runtime_type_alt(alt, source)) =>
+                {
+                    self.or_runtime_type_tests(alts)
+                }
+                _ => Vec::new(),
+            };
             // Whether the runtime test's `Some(..)` can fail on its own: a
             // record pattern with a literal inside (`Circle(0.0)`) can, a bare
             // binder cannot.
             let refutable_inner = matches!(&arm.pattern, juxc_ast::Pattern::EnumVariant { .. })
                 && runtime_type_test.is_some();
-            if runtime_type_test.is_some() {
+            if runtime_type_test.is_some() || !or_type_tests.is_empty() {
                 self.w.push_str("ref __jux_subject");
             } else if scrut_nullable.is_some() {
                 self.emit_nullable_scrutinee_pattern(&arm.pattern);
@@ -206,6 +244,10 @@ impl RustEmitter {
                     }
                 }
             }
+            if !or_type_tests.is_empty() {
+                self.w.push_str(" if ");
+                self.emit_or_type_test_guard(&or_type_tests, arm.guard.as_ref());
+            }
             let string_guards = if runtime_type_test.is_some() { Vec::new() } else { string_guards };
             for (i, (binder, literal)) in string_guards.iter().enumerate() {
                 self.w.push_str(if i == 0 { " if " } else { " && " });
@@ -213,7 +255,7 @@ impl RustEmitter {
                 self.w.push_str(" == ");
                 self.emit_rust_string_literal(literal);
             }
-            if let Some(guard) = arm.guard.as_ref().filter(|_| runtime_type_test.is_none()) {
+            if let Some(guard) = arm.guard.as_ref().filter(|_| runtime_type_test.is_none() && or_type_tests.is_empty()) {
                 if string_guards.is_empty() {
                     self.w.push_str(" if ");
                     self.emit_expr(guard);
@@ -229,9 +271,10 @@ impl RustEmitter {
             // (the decl boxed the self-referential slot to avoid E0072).
             let rebinds = self.boxed_recursive_binders(&arm.pattern);
             // The arm matched, so the hook answers `Some`: bind its value.
-            let downcast_let = runtime_type_test.as_ref().map(|(getter, binder)| {
-                format!("let Some({binder}) = {getter} else {{ unreachable!() }};")
-            });
+            let downcast_let = runtime_type_test
+                .as_ref()
+                .map(|(getter, binder)| format!("let Some({binder}) = {getter} else {{ unreachable!() }};"))
+                .or_else(|| or_type_test_let(&or_type_tests, &binders));
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {
                     // Per-arm nullable wrap: skip when the value
@@ -257,7 +300,31 @@ impl RustEmitter {
                     if wrap {
                         self.w.push_str("Some(");
                     }
-                    self.emit_expr(e);
+                    // An untyped literal adapts to an arm type of its own kind
+                    // (Rust infers it); an integer literal in a float switch
+                    // still needs the cast.
+                    let widen = arm_widen.filter(|p| {
+                        let float_target = juxc_tycheck::ty::is_float_primitive(*p);
+                        let adapts = if float_target {
+                            juxc_tycheck::infer::untyped_float_literal(e)
+                        } else {
+                            juxc_tycheck::infer::untyped_int_literal(e)
+                        };
+                        self.operand_primitive(e) != Some(*p) && !adapts
+                    });
+                    if widen.is_some() {
+                        self.w.push('(');
+                        // `as` binds tighter than any binary operator:
+                        // `(n * 2) as i64`, never `n * 2 as i64`.
+                        self.emit_expr_with_parent_prec(e, crate::exprs::UNARY_PREC, false);
+                    } else {
+                        self.emit_expr(e);
+                    }
+                    if let Some(p) = widen {
+                        self.w.push_str(" as ");
+                        self.w.push_str(crate::exprs::rust_primitive_name(p));
+                        self.w.push(')');
+                    }
                     if wrap {
                         self.w.push(')');
                     }
@@ -313,6 +380,7 @@ impl RustEmitter {
             s.arms.iter().any(|arm| match &arm.pattern {
                 juxc_ast::Pattern::TypeBind { type_name, .. } => &type_name.text != source,
                 juxc_ast::Pattern::EnumVariant { span, .. } => self.symbols.record_patterns.contains_key(span),
+                juxc_ast::Pattern::Or(alts, _) => alts.iter().all(|alt| self.is_runtime_type_alt(alt, source)),
                 _ => false,
             })
         });
@@ -374,7 +442,115 @@ impl RustEmitter {
                     self.collect_typed_binders(part, out);
                 }
             }
+            // Every alternative binds the same names at the same types (§A.3,
+            // E0447), so the first one speaks for all.
+            juxc_ast::Pattern::Or(alts, _) => {
+                if let Some(first) = alts.first() {
+                    self.collect_typed_binders(first, out);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Whether `alt`, one alternative of an or-pattern over a trait object
+    /// whose static type is `source`, asks for a runtime type: a type pattern
+    /// naming another type (`Circle c`), or a record pattern (`Circle(var r)`).
+    fn is_runtime_type_alt(&self, alt: &juxc_ast::Pattern, source: &str) -> bool {
+        match alt {
+            juxc_ast::Pattern::TypeBind { type_name, .. } => type_name.text != source,
+            juxc_ast::Pattern::EnumVariant { span, .. } => self.symbols.record_patterns.contains_key(span),
+            _ => false,
+        }
+    }
+
+    /// One runtime type test per or-pattern alternative over a trait object,
+    /// in source order (see [`RuntimeTypeAlt`]).
+    fn or_runtime_type_tests(&mut self, alts: &[juxc_ast::Pattern]) -> Vec<RuntimeTypeAlt> {
+        let outer_guards = std::mem::take(&mut self.pattern_string_guards);
+        let mut tests = Vec::new();
+        for alt in alts {
+            match alt {
+                juxc_ast::Pattern::TypeBind { type_name, binder, .. } => tests.push(RuntimeTypeAlt {
+                    getter: format!("__jux_subject.__jux_as_{}()", type_name.text),
+                    destructure: to_rust_ident(&binder.text),
+                    compares: String::new(),
+                    refutable: false,
+                }),
+                juxc_ast::Pattern::EnumVariant { span, args, .. } => {
+                    let fqn = self.symbols.record_patterns[span].clone();
+                    let bare = fqn.rsplit('.').next().unwrap_or(&fqn).to_string();
+                    let mark = self.w.len();
+                    self.emit_pattern(alt);
+                    let destructure = self.w.split_off_from(mark);
+                    // A string literal nested in the record came back as a
+                    // binder; its comparison belongs to this alternative only.
+                    let mut compares = String::new();
+                    for (b, lit) in std::mem::take(&mut self.pattern_string_guards) {
+                        if !compares.is_empty() {
+                            compares.push_str(" && ");
+                        }
+                        let mark = self.w.len();
+                        self.emit_rust_string_literal(&lit);
+                        let text = self.w.split_off_from(mark);
+                        compares.push_str(&format!("{b} == {text}"));
+                    }
+                    tests.push(RuntimeTypeAlt {
+                        getter: format!("__jux_subject.__jux_as_{bare}()"),
+                        destructure,
+                        compares,
+                        refutable: args.iter().any(pattern_can_fail),
+                    });
+                }
+                _ => {}
+            }
+        }
+        self.pattern_string_guards = outer_guards;
+        tests
+    }
+
+    /// The match guard of an or-pattern arm over a trait object. With no
+    /// `when`, any alternative's test passing is enough:
+    ///
+    /// ```text
+    /// __jux_subject.__jux_as_Circle().is_some() || __jux_subject.__jux_as_Ring().is_some()
+    /// ```
+    ///
+    /// A `when` guard reads the bindings, so it runs under the FIRST
+    /// alternative that matches, whose bindings are the ones in scope:
+    ///
+    /// ```text
+    /// match __jux_subject.__jux_as_Circle() { Some(Circle { r }) => r > 1.0, _ => match … }
+    /// ```
+    fn emit_or_type_test_guard(&mut self, tests: &[RuntimeTypeAlt], guard: Option<&juxc_ast::Expr>) {
+        let Some(guard) = guard else {
+            for (i, t) in tests.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(" || ");
+                }
+                let (getter, destructure) = (&t.getter, &t.destructure);
+                if t.compares.is_empty() && !t.refutable {
+                    self.w.push_str(&format!("{getter}.is_some()"));
+                } else if t.compares.is_empty() {
+                    self.w.push_str(&format!("matches!({getter}, Some({destructure}))"));
+                } else {
+                    self.w.push_str(&format!("matches!({getter}, Some({destructure}) if {})", t.compares));
+                }
+            }
+            return;
+        };
+        for t in tests {
+            self.w.push_str(&format!("match {} {{ Some({})", t.getter, t.destructure));
+            if !t.compares.is_empty() {
+                self.w.push_str(&format!(" if {}", t.compares));
+            }
+            self.w.push_str(" => ");
+            self.emit_expr(guard);
+            self.w.push_str(", _ => ");
+        }
+        self.w.push_str("false");
+        for _ in tests {
+            self.w.push_str(" }");
         }
     }
 
@@ -921,4 +1097,63 @@ impl RustEmitter {
             }
         }
     }
+}
+
+/// One alternative of an or-pattern over a trait object (`case Circle(var r)
+/// | Ring(var r, _)`), as a runtime type test.
+struct RuntimeTypeAlt {
+    /// The `__jux_as_<T>` hook call: `Some` when the value is a `T`.
+    getter: String,
+    /// The pattern the hook's `Some` takes apart: a record's struct pattern,
+    /// or the binder of a type pattern.
+    destructure: String,
+    /// The comparisons for string literals nested in this alternative, `&&`
+    /// joined; empty when there are none.
+    compares: String,
+    /// Whether the destructure can fail on its own, a literal or range inside
+    /// it (`Circle(0.0)`); a plain binder or `_` cannot.
+    refutable: bool,
+}
+
+/// Whether a sub-pattern can fail to match a value of its own type: a literal
+/// or a range can, and so can any shape holding one.
+fn pattern_can_fail(p: &juxc_ast::Pattern) -> bool {
+    match p {
+        juxc_ast::Pattern::Literal(..) | juxc_ast::Pattern::Range { .. } => true,
+        juxc_ast::Pattern::EnumVariant { args: parts, .. }
+        | juxc_ast::Pattern::Tuple(parts, _)
+        | juxc_ast::Pattern::Or(parts, _) => parts.iter().any(pattern_can_fail),
+        juxc_ast::Pattern::Wildcard(_) | juxc_ast::Pattern::Bind(_) | juxc_ast::Pattern::TypeBind { .. } => false,
+    }
+}
+
+/// The `let` that binds an or-pattern arm's names in its body over a trait
+/// object, taken from the first alternative that matches (the guard already
+/// proved one does):
+///
+/// ```text
+/// let r = match __jux_subject.__jux_as_Circle() { Some(Circle { r }) => r, _ => match … };
+/// ```
+///
+/// `None` when the arm binds nothing.
+fn or_type_test_let(tests: &[RuntimeTypeAlt], binders: &[(String, juxc_tycheck::Ty)]) -> Option<String> {
+    if tests.is_empty() || binders.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = binders.iter().map(|(n, _)| to_rust_ident(n)).collect();
+    let value = if names.len() == 1 { names[0].clone() } else { format!("({})", names.join(", ")) };
+    let mut text = format!("let {value} = ");
+    for t in tests {
+        text.push_str(&format!("match {} {{ Some({})", t.getter, t.destructure));
+        if !t.compares.is_empty() {
+            text.push_str(&format!(" if {}", t.compares));
+        }
+        text.push_str(&format!(" => {value}, _ => "));
+    }
+    text.push_str("unreachable!()");
+    for _ in tests {
+        text.push_str(" }");
+    }
+    text.push(';');
+    Some(text)
 }

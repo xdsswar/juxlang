@@ -1,0 +1,11 @@
+interface Shape {}
+record Pt(int x, int y) implements Shape {}
+record Holder(Shape s, Pt? maybe) {}
+
+public void main() {
+    var h = new Holder(new Pt(1, 2), null);
+    var Holder(Pt(a, b), _) = h;
+    var Holder(_, Pt(c, d)) = h;
+    var Holder(_, Pt(e)) = h;
+    print(a);
+}

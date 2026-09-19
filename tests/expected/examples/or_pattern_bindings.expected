@@ -1,0 +1,15 @@
+text hi
+text bob
+num 3
+end
+3
+4
+10
+1.5
+25.0
+4.0
+axis 7
+axis 9
+diag 3
+other
+comma stmt

@@ -1,0 +1,73 @@
+// Or-patterns whose alternatives bind the same names (Grammar §A.3): the arm
+// body has one `n` whichever alternative matched. Works over enum variants,
+// records behind an interface (sealed or not), tuples, and the comma form.
+
+enum Tok {
+    Word(String),
+    Name(String),
+    Num(int),
+    End
+}
+
+sealed interface Expr permits Num, Neg, Twice {}
+record Num(int v) implements Expr {}
+record Neg(int v) implements Expr {}
+record Twice(int v) implements Expr {}
+
+interface Shape {}
+record Circle(double r) implements Shape {}
+record Ring(double r, double inner) implements Shape {}
+record Square(double side) implements Shape {}
+
+String text(Tok t) {
+    return switch (t) {
+        case Tok.Word(var s) | Tok.Name(var s) -> "text " + s;
+        case Tok.Num(var n) -> "num " + n;
+        case Tok.End -> "end";
+    };
+}
+
+int magnitude(Expr e) {
+    return switch (e) {
+        case Num(var n) | Neg(var n) -> n;
+        case Twice(var n) -> 2 * n;
+    };
+}
+
+double size(Shape s) {
+    return switch (s) {
+        case Circle(var r) | Ring(var r, _) when r > 2.0 -> r * 10.0;
+        case Circle(var r) | Ring(var r, _) -> r;
+        case Square(var side) -> side;
+        default -> 0.0;
+    };
+}
+
+String pair((int, int) p) {
+    return switch (p) {
+        case (0, var y) | (var y, 0) -> "axis " + y;
+        case (var a, var b) when a == b -> "diag " + a;
+        default -> "other";
+    };
+}
+
+public void main() {
+    print(text(Tok.Word("hi")));
+    print(text(Tok.Name("bob")));
+    print(text(Tok.Num(3)));
+    print(text(Tok.End));
+    print(magnitude(new Num(3)));
+    print(magnitude(new Neg(4)));
+    print(magnitude(new Twice(5)));
+    print(size(new Circle(1.5)));
+    print(size(new Ring(2.5, 1.0)));
+    print(size(new Square(4.0)));
+    print(pair((0, 7)));
+    print(pair((9, 0)));
+    print(pair((3, 3)));
+    print(pair((1, 2)));
+    switch (Tok.Name("stmt")) {
+        case Tok.Word(var w), Tok.Name(var w) -> print("comma " + w);
+        default -> print("none");
+    }
+}
