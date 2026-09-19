@@ -843,4 +843,4 @@ Status: FIXED in 9cb64a3.
   `CARGO_TARGET_DIR` set (B15 again), so each staged lesson has its own
   cargo target.
 
-Status: the string-literal receiver FIXED in 1c3483c; `to_str()` on a `PathBuf` FIXED in 29be156; the pointers guide example rewritten to statement-form `unsafe { }` (this commit); `jux run` in project mode does build under `CARGO_TARGET_DIR` since 177cdcc, and only copies the finished binary into the project.
+Status: the string-literal receiver FIXED in 1c3483c; `to_str()` on a `PathBuf` FIXED in 29be156; the pointers guide example rewritten to statement-form `unsafe { }` (208521a); `jux run` in project mode does build under `CARGO_TARGET_DIR` since 177cdcc, and only copies the finished binary into the project.
