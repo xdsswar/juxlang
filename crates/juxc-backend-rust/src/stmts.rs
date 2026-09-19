@@ -436,7 +436,7 @@ pub(crate) struct TryLoopCtl {
 }
 
 /// Emission region for a [`TryLoopCtl`] channel.
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum LoopCtlRegion {
     /// Inside the try body's `catch_unwind` closure — escape via
     /// `{ flag = N; return …; }`.
@@ -444,6 +444,12 @@ pub(crate) enum LoopCtlRegion {
     /// Inside a catch arm (the `'__jux_catch` dispatch block) —
     /// escape via `{ flag = N; break '__jux_catch; }`.
     Catch,
+    /// Inside a PROTECTED catch body: the arm's own `catch_unwind`
+    /// closure, used when the try has a `finally` so a throw from the
+    /// body still runs it first. Escape via `{ flag = N; return …; }`
+    /// like the try body, but through the channel's original flag
+    /// (the closure runs outside any `async move` block).
+    CatchClosure,
     /// Machinery / `finally` — no interception by this channel
     /// (an enclosing channel may still apply).
     Off,
@@ -1287,6 +1293,20 @@ impl RustEmitter {
         let returns = block_contains_fn_return(body);
         let prev_arm = std::mem::replace(&mut self.in_catch_arm, false);
         let prev_try = std::mem::replace(&mut self.in_try_closure, returns);
+        // A `break` / `continue` out of the body leaves this closure through
+        // the try's loop-control channel (region `CatchClosure`): set the
+        // flag, `return` from the closure, and the dispatch after `finally`
+        // makes the real jump. The closure returns `Option<R>` exactly when
+        // the body has a `return`, so the escape's `return` follows that.
+        let saved_channel = match self.try_loopctl.last_mut() {
+            Some(ch) if ch.region == LoopCtlRegion::Catch => {
+                let saved = (ch.region, ch.closure_has_ret);
+                ch.region = LoopCtlRegion::CatchClosure;
+                ch.closure_has_ret = returns;
+                Some(saved)
+            }
+            _ => None,
+        };
         self.w.emit_indent();
         self.w.push_str(if returns { "match " } else { "if let Err(__jux_q) = " });
         self.w
@@ -1300,6 +1320,10 @@ impl RustEmitter {
         self.w.indent_dec();
         self.in_try_closure = prev_try;
         self.in_catch_arm = prev_arm;
+        if let (Some((region, has_ret)), Some(ch)) = (saved_channel, self.try_loopctl.last_mut()) {
+            ch.region = region;
+            ch.closure_has_ret = has_ret;
+        }
         self.w.emit_indent();
         if returns {
             self.w.push_str("})) {\n");
@@ -1632,23 +1656,24 @@ impl RustEmitter {
                 (
                     ch.flag.clone(),
                     code,
+                    matches!(ch.region, LoopCtlRegion::Body | LoopCtlRegion::CatchClosure),
                     ch.region == LoopCtlRegion::Body,
                     ch.closure_has_ret,
                     ch.is_async,
                 )
             });
-        if let Some((flag, code, in_body, has_ret, is_async)) = intercept {
+        if let Some((flag, code, in_body, in_try_body, has_ret, is_async)) = intercept {
             self.w.push_str("{ ");
             if is_async {
                 // Atomic store (O9). Body region writes through the
                 // `_`-prefixed clone moved into the `async move`
-                // block; catch arms emit outside it and use the
-                // original handle.
-                if in_body {
+                // block; catch arms (protected or not) emit outside it
+                // and use the original handle.
+                if in_try_body {
                     self.w.push('_');
                 }
                 self.w.push_str(&flag);
-                if in_body {
+                if in_try_body {
                     self.w.push_str("_body");
                 }
                 self.w.push_str(".store(");
@@ -2010,11 +2035,12 @@ impl RustEmitter {
                 // (§X.3.2).** With a `finally` present the body runs under
                 // its own `catch_unwind`, so an exception it raises (a
                 // `throw`, a `?: throw`, or a call that throws) parks in
-                // `__jux_unhandled` like an unmatched payload does. A body
-                // with a `break`/`continue` or an `await` keeps the inline
-                // form: a closure can carry neither.
+                // `__jux_unhandled` like an unmatched payload does. A
+                // `break`/`continue` out of the body leaves the closure
+                // through the try's loop-control channel; an `await` keeps
+                // the inline form, since a sync closure cannot carry one.
                 let protect = t.finally.is_some()
-                    && !block_contains_jump(&clause.body)
+                    && (wants_loopctl || !block_contains_jump(&clause.body))
                     && !crate::analysis::block_contains_await(&clause.body);
                 for ty in clause_tys {
                     let arm_fqn = self.resolve_catch_ty_fqn(ty);
