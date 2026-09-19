@@ -1,0 +1,19 @@
+String size(int n) {
+    return switch (n) {
+        case ..0 -> "negative";
+        case 1..100 -> "some";
+        case 100.. -> "many";
+    };
+}
+
+String name(String s) {
+    return switch (s) {
+        case "a" -> "first";
+        case "b" -> "second";
+    };
+}
+
+public void main() {
+    print(size(3));
+    print(name("a"));
+}

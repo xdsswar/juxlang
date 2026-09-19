@@ -7498,6 +7498,11 @@ impl<'a> Checker<'a> {
     /// remains the user's catchall there.
     fn check_switch_exhaustive(&mut self, s: &SwitchExpr) {
         let scrut_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
+        // An integer, `bool`, `char`, float or `String` (§T.5.2): its own
+        // interval and value rules, in `pattern_check`.
+        if self.check_scalar_switch_exhaustive(s, &scrut_ty) {
+            return;
+        }
         // Two scrutinee shapes drive exhaustiveness: enums (every
         // variant) and sealed classes (every permitted subclass).
         // Resolve to one of them, or bail.
@@ -7586,11 +7591,43 @@ impl<'a> Checker<'a> {
                 (label, permits.clone(), *name)
             }
         };
-        let missing: Vec<String> = all.into_iter().filter(|v| !covered.contains(v)).collect();
+        // A permitted RECORD is covered by what its record patterns cover, not
+        // by being named: `case Circle(0.0)` alone leaves every other circle
+        // (§T.5.7). Type patterns (`case Circle c`) still cover all of it.
+        let unguarded: Vec<&Pattern> = s.arms.iter().filter(|a| a.guard.is_none()).map(|a| &a.pattern).collect();
+        let missing: Vec<String> = all
+            .into_iter()
+            .filter(|v| {
+                if matches!(kind, SealedKind::Enum { .. }) {
+                    return !covered.contains(v);
+                }
+                let record = self.pattern_record_fqn(&juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: v.clone(), span: s.span }],
+                    span: s.span,
+                });
+                match record {
+                    Some(fqn) => !self.permitted_record_covered(&unguarded, &fqn),
+                    None => !covered.contains(v),
+                }
+            })
+            .collect();
         if missing.is_empty() {
             return;
         }
-        let names = missing.join(", ");
+        // A record some arm names but does not cover whole (`case Circle(0.0)`
+        // alone) is reported as such, so the message does not read as if the
+        // arm were not there.
+        let names = missing
+            .iter()
+            .map(|v| {
+                if matches!(kind, SealedKind::Class { .. }) && covered.contains(v) {
+                    format!("every `{v}` (an arm covers only some of them)")
+                } else {
+                    v.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         self.diagnostics.push(
             Diagnostic::error(
                 code::Code::E0440_NotExhaustive,
@@ -13989,15 +14026,30 @@ mod tests {
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
-    /// Non-enum scrutinees (numeric, string) aren't checked for
-    /// exhaustiveness — the wildcard arm remains the user's tool.
+    /// An integer scrutinee is one interval (§T.5.2): arms that leave a value
+    /// out are E0440 naming the lowest one, and arms covering the whole range
+    /// (open ranges included) need no `default`.
     #[test]
-    fn switch_over_int_does_not_check_exhaustiveness() {
+    fn switch_over_int_checks_the_whole_range() {
         let d = run(r#"public void main() {
                    var n = 1;
                    switch (n) {
                        case 0 -> {}
                        case 1 -> {}
+                   }
+               }"#);
+        let msg = d
+            .iter()
+            .find(|x| x.code == code::Code::E0440_NotExhaustive)
+            .map(|x| x.message.clone())
+            .unwrap_or_default();
+        assert!(msg.contains("-9223372036854775808"), "got: {d:?}");
+        let d = run(r#"public void main() {
+                   var n = 1;
+                   switch (n) {
+                       case ..0 -> {}
+                       case 0..=9 -> {}
+                       case 10.. -> {}
                    }
                }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");

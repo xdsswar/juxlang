@@ -1,0 +1,80 @@
+// In Rux an array's length is part of its type, and a slice `T[..]` is a view
+// of part of one. Jux arrays are simpler on the first point: `int[]` is every
+// int array, whatever its length, so one function already serves arrays of any
+// size.
+//
+// The second point, a view of *part* of an array without copying it, has no
+// syntax in Jux (there is no `numbers[1..4]`). It is still easy to build,
+// because an array is a reference: a view is that reference plus the bounds,
+// and it never owns or copies an element. This lesson writes that view as a
+// small record.
+
+// A window onto `items`, from `start` up to but not including `end`. The
+// record holds the same array the caller has, not a copy of it.
+record Span(int[] items, int start, int end) {
+    // Builds a view of the whole array.
+    static Span of(int[] items) {
+        return new Span(items, 0, items.length);
+    }
+
+    // How many elements the view covers.
+    int length() {
+        return end - start;
+    }
+
+    // Reads the element at `index`, counted from the start of the view.
+    int get(int index) {
+        return items[start + index];
+    }
+
+    // A narrower view over the same array: `from` and `to` count from this
+    // view's start, and `to` is excluded, the same rule as a `..` range.
+    Span range(int from, int to) {
+        return new Span(items, start + from, start + to);
+    }
+}
+
+// This takes a view, so every call below reaches it through the same function.
+int total(Span values) {
+    int sum = 0;
+    for (var i : 0..values.length()) {
+        sum += values.get(i);
+    }
+    return sum;
+}
+
+void main() {
+    // An array of five values. Its type is `int[]`; the length belongs to the
+    // value, not the type.
+    final int[] numbers = {10, 20, 30, 40, 50};
+    final var all = Span.of(numbers);
+
+    print($"all of it       ${total(all)}");
+
+    // A view of part of it. As everywhere else the upper bound is excluded,
+    // so this is elements 1, 2 and 3.
+    final var middle = all.range(1, 4);
+    print($"numbers[1..4]   ${total(middle)}   over ${middle.length()} elements");
+
+    // "From here to the end" and "from the start to here" are the same call
+    // with one bound fixed.
+    final var tail = all.range(2, numbers.length);
+    final var head = all.range(0, 2);
+    print($"numbers[2..]    ${total(tail)}");
+    print($"numbers[..2]    ${total(head)}");
+
+    // A view knows its own length, and that is the only thing distinguishing
+    // one view from another over the same array.
+    print($"lengths         ${numbers.length} ${middle.length()} ${tail.length()} ${head.length()}");
+
+    // Nothing was copied to make those. Every view holds the same array, so
+    // all four calls above read the same five numbers in place. Writing
+    // through the array shows it: the view sees the change at once.
+    numbers[2] = 35;
+    print($"after a write   ${total(middle)}");
+
+    // A `String` knows its length too, in two units: `charLength()` counts
+    // characters and `byteLength()` bytes, the same number for ASCII text.
+    final var greeting = "hello";
+    print($"\"${greeting}\" is ${greeting.charLength()} characters");
+}

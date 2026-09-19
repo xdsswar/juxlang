@@ -1,0 +1,6 @@
+mixed: first even is 8
+odds:  no even number
+mixed has one  true
+odds has none  true
+mixed or -1    8
+odds or -1     -1

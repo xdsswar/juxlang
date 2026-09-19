@@ -1,0 +1,10 @@
+February has 28 days
+March has 31 days
+Low    -> take your time
+High   -> deal with it now
+March == March  true
+March == April  false
+January is 1
+April is   4
+Level.High is 2
+level name Medium

@@ -1,0 +1,6 @@
+widen       int8 100 becomes int32 100
+narrow      int32 300 becomes int8 44
+sign        int32 -1 becomes uint8 255   11111111
+float->int  3.9 becomes 3
+int->float  7 becomes 7.0
+char->uint  A becomes 65

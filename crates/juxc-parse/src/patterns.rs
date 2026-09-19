@@ -59,16 +59,22 @@ impl<'a> Parser<'a> {
             return None;
         };
 
-        // Or-pattern alternatives: `case A | B | C ->` (§A.3). Folded
-        // into Pattern::Or when at least one `|` follows.
-        let pattern = if self.at(&TokenKind::Pipe) {
-            let pstart = self.last_consumed_span();
+        // Or-pattern alternatives: `case A | B | C ->` (§A.3), and the
+        // comma list `case A, B, C ->` (JUX-LANG-V1 §7.5), which the grammar
+        // defines as the same thing. Both fold into one Pattern::Or, so the
+        // checker, exhaustiveness and the backend see a single shape. A
+        // pattern's own commas (`Point(var x, 0)`, `(a, b)`) sit inside its
+        // parentheses and are consumed by `parse_pattern`, so a comma here
+        // always separates two whole patterns.
+        let pattern = if self.at(&TokenKind::Pipe) || self.at(&TokenKind::Comma) {
+            let pstart = pattern.span();
             let mut alts = vec![pattern];
-            while self.eat(&TokenKind::Pipe) {
-                if let Some(next) = self.parse_pattern() {
-                    alts.push(next);
-                } else {
-                    break;
+            while self.eat(&TokenKind::Pipe) || self.eat(&TokenKind::Comma) {
+                match self.parse_pattern() {
+                    // `case A | B, C` is one flat list of three alternatives.
+                    Some(Pattern::Or(inner, _)) => alts.extend(inner),
+                    Some(next) => alts.push(next),
+                    None => break,
                 }
             }
             let pend = self.last_consumed_span();
@@ -178,6 +184,34 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let name = self.parse_ident()?;
                 Some(Pattern::Bind(name))
+            }
+            // `-5`, `-1.5`, and the range `-10..0`: a minus sign is part of a
+            // numeric literal pattern (a pattern has no operators).
+            TokenKind::Minus
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Int(_) | TokenKind::Float(_))
+                ) =>
+            {
+                let first_lit = self.parse_range_bound()?;
+                let first_span = start.join(self.last_consumed_span());
+                if let Some(range) = self.try_parse_range_tail(&first_lit, first_span) {
+                    return Some(range);
+                }
+                Some(Pattern::Literal(first_lit, first_span))
+            }
+            // `..x` (below x) and `..=x` (x or less): ranges open at the
+            // bottom (M.6.4).
+            TokenKind::DotDot | TokenKind::DotDotEq => {
+                let inclusive = matches!(self.peek(), TokenKind::DotDotEq);
+                self.advance();
+                let end = self.parse_range_bound()?;
+                Some(Pattern::Range {
+                    start: None,
+                    end: Some(end),
+                    inclusive,
+                    span: start.join(self.last_consumed_span()),
+                })
             }
             // Literal patterns. Both Int and Float can optionally
             // start a range pattern (`0..10`, `'a'..='z'`) when
@@ -369,51 +403,65 @@ impl<'a> Parser<'a> {
             _ => return None,
         };
         self.advance(); // consume `..` / `..=`
-        // The end literal must be Int / Float to keep the pattern
-        // a valid Rust range. We restrict to numeric literals at
-        // Phase 1 (string / bool ranges aren't a thing).
+        // `x..` with nothing after it is open at the top ("x or more",
+        // M.6.4). Only `..` can be open: `x..=` would be a closed range with
+        // its end missing.
+        let at_bound = matches!(
+            self.peek(),
+            TokenKind::Int(_) | TokenKind::Float(_) | TokenKind::Char(_) | TokenKind::Minus
+        );
+        if !at_bound && !inclusive {
+            return Some(Pattern::Range {
+                start: Some(start_lit.clone()),
+                end: None,
+                inclusive: false,
+                span: start_span.join(self.last_consumed_span()),
+            });
+        }
+        let end_lit = self.parse_range_bound()?;
+        Some(Pattern::Range {
+            start: Some(start_lit.clone()),
+            end: Some(end_lit),
+            inclusive,
+            span: start_span.join(self.last_consumed_span()),
+        })
+    }
+
+    /// One endpoint of a range pattern: an integer, float or character
+    /// literal, a number possibly negative (`-10`). Reports anything else.
+    fn parse_range_bound(&mut self) -> Option<Literal> {
+        let negative = self.eat(&TokenKind::Minus);
         match self.peek().clone() {
             TokenKind::Int(text) => {
                 self.advance();
-                let lit = parse_int_literal_text(&text);
-                let end_lit = Literal::Int(lit);
-                let end_span = self.last_consumed_span();
-                Some(Pattern::Range {
-                    start: start_lit.clone(),
-                    end: end_lit,
-                    inclusive,
-                    span: start_span.join(end_span),
-                })
+                let mut lit = parse_int_literal_text(&text);
+                if negative {
+                    // Written in decimal from here on: `-0x10` is -16, and the
+                    // backend prints a negative value in base 10.
+                    lit.value = lit.value.wrapping_neg();
+                    lit.radix = juxc_ast::IntRadix::Decimal;
+                }
+                Some(Literal::Int(lit))
             }
             TokenKind::Float(text) => {
                 self.advance();
-                let lit = parse_float_literal_text(&text);
-                let end_lit = Literal::Float(lit);
-                let end_span = self.last_consumed_span();
-                Some(Pattern::Range {
-                    start: start_lit.clone(),
-                    end: end_lit,
-                    inclusive,
-                    span: start_span.join(end_span),
-                })
+                let mut lit = parse_float_literal_text(&text);
+                if negative {
+                    lit.value = -lit.value;
+                }
+                Some(Literal::Float(lit))
             }
-            TokenKind::Char(raw) => {
+            TokenKind::Char(raw) if !negative => {
                 self.advance();
-                let end_span = self.last_consumed_span();
-                let end_lit = Literal::Char(self.pattern_char(&raw, end_span));
-                Some(Pattern::Range {
-                    start: start_lit.clone(),
-                    end: end_lit,
-                    inclusive,
-                    span: start_span.join(end_span),
-                })
+                let span = self.last_consumed_span();
+                Some(Literal::Char(self.pattern_char(&raw, span)))
             }
             _ => {
                 let here = self.peek_span();
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "expected a numeric or character literal after `..[=]` in a range pattern",
+                        "expected a number or a character literal as a range pattern's bound",
                     )
                     .with_span(here),
                 );

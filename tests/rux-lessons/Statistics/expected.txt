@@ -1,0 +1,9 @@
+readings    12.5 9.0 15.25 11.0 8.75 14.0 10.5 13.25 11.75
+count      9
+total      106.0000
+mean       11.7778
+variance   4.3117
+deviation  2.0765
+smallest   8.75
+largest    15.25
+median     11.75

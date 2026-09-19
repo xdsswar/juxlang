@@ -1,0 +1,7 @@
+all of it       150
+numbers[1..4]   90   over 3 elements
+numbers[2..]    120
+numbers[..2]    30
+lengths         5 3 3 2
+after a write   95
+"hello" is 5 characters

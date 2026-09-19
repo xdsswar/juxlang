@@ -1,0 +1,61 @@
+// A tuple groups a few values without declaring a type for them. Its type is
+// written as the list of its members' types, `(int, bool)`, and a value is
+// written the same way, so nothing has to be declared before it is used.
+//
+// The main use is returning more than one thing from a function.
+
+// Two results from one call: the answer, and whether it means anything. There
+// is no way to divide by zero and still return a number, so this returns both.
+// (Jux would more often throw an exception or return `int?` here; the tuple
+// is the point of this lesson, not the best way to report failure.)
+(int, bool) divide(int numerator, int denominator) {
+    if (denominator == 0) {
+        return (0, false);
+    }
+    return (numerator / denominator, true);
+}
+
+// The members need not share a type.
+(double, double, String) origin() {
+    return (0.0, 0.0, "origin");
+}
+
+void main() {
+    // Written out in full: the type, then the value.
+    final (int, double) pair = (1, 2.5);
+
+    // Members are reached by position, counting from zero.
+    print($"pair.0 is ${pair.0} and pair.1 is ${pair.1}");
+
+    // Or the whole tuple can be unpacked into names in one step, which reads
+    // better than using `.0` and `.1` through a long function.
+    var (count, ratio) = pair;
+    print($"count ${count} ratio ${ratio}");
+
+    // Unpacking is what makes multiple return values comfortable.
+    var (result, ok) = divide(17, 5);
+    if (ok) {
+        print($"17 / 5 is ${result}");
+    }
+
+    // The second member is what says whether the first one means anything,
+    // so it has to be checked before the value is used.
+    var (bad, valid) = divide(1, 0);
+    if (!valid) {
+        print($"1 / 0 has no answer, and the value returned was ${bad}");
+    }
+
+    var (x, y, label) = origin();
+    print($"${label} at ${x}, ${y}");
+
+    // A tuple is a value like any other: it can be passed, returned, and
+    // compared, and it may contain another tuple.
+    final ((int, int), String) nested = ((3, 4), "point");
+    var (position, name) = nested;
+    print($"${name} is at ${position.0}, ${position.1}");
+
+    // Tuples are structural: two tuples are the same type when their members
+    // are, and nothing names them. When a group of values starts being passed
+    // around and its members deserve names, that is the point to declare a
+    // struct or a record instead, which is the next lesson.
+}

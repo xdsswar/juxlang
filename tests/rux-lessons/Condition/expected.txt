@@ -1,0 +1,5 @@
+warm enough
+warm enough, with parentheses
+cool
+take an umbrella
+temperature is not zero

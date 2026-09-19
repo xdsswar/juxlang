@@ -1,0 +1,41 @@
+// A local names a value while the program runs. `const` names one while it is
+// being compiled: the value is worked out once, by the compiler, and every use
+// is replaced by the answer.
+//
+// It sits outside functions, which is the other half of the point: a constant
+// is available to the whole file rather than to one body.
+
+// The type is written, as it is for any Jux declaration.
+const int Limit = 100;
+const String Greeting = "a constant string";
+const double Pi = 3.141592653589793;
+
+// A constant may be built from other constants, because all of it is worked
+// out before the program runs. Nothing here costs anything at run time.
+const int Doubled = Limit * 2;
+const int Half = Limit / 2;
+
+String describe(int value) {
+    // Constants are ordinary values wherever they are used.
+    if (value > Limit) {
+        return "over the limit";
+    }
+    return "within the limit";
+}
+
+void main() {
+    print($"Limit     ${Limit}");
+    print($"Doubled   ${Doubled}");
+    print($"Half      ${Half}");
+    print($"Pi        ${Pi}");
+    print($"Greeting  ${Greeting}");
+
+    print($"50 is     ${describe(50)}");
+    print($"150 is    ${describe(150)}");
+
+    // Why bother, when a local at the top of `main` would also work? Three
+    // reasons. The value is shared by every function in the file rather than
+    // one. It is computed once at compile time, so `Limit * 2` costs nothing.
+    // And naming it puts the number in one place: the reason to write `Limit`
+    // rather than `100` in three separate comparisons.
+}

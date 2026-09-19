@@ -1,0 +1,54 @@
+// Some functions cannot say in advance how many arguments they take. A
+// parameter written `T... name` collects everything left at the call into one
+// array, so a single function serves every count.
+
+// `any` accepts a value of any type (Type System §T.1.2), and it can always be
+// turned into text. So this takes any number of values of any type.
+int count(any... values) {
+    // The collected values are an ordinary array, and an array knows its own
+    // length.
+    return values.length;
+}
+
+// It is indexed like an array too, so the body can walk what it was given.
+// `print` ends its line, so the pieces are gathered into one `String` first.
+void line(any... values) {
+    var text = "";
+    for (var i : 0..values.length) {
+        text += $"[${values[i]}]";
+    }
+    print(text);
+}
+
+// A variadic parameter must be the last one, but ordinary parameters may come
+// before it: that is how a label sits in front of its values.
+void labelled(String label, int... values) {
+    var text = $"${label}:";
+    for (var value : values) {
+        text += $" ${value}";
+    }
+    print(text);
+}
+
+void main() {
+    // The same function, called with three arguments, then with none.
+    print($"three arguments -> ${count(1, 2, 3)}");
+    print($"no arguments    -> ${count()}");
+
+    // The values need not share a type. Each only has to know how to render
+    // itself, which every value held in an `any` does.
+    line(1, 2.5, true, "text");
+
+    // A fixed parameter first, then as many as you like.
+    labelled("scores", 10, 20, 30);
+    labelled("empty");
+
+    // `T...` is sugar for `T[]`, so a caller that already has an array can
+    // pass it where the loose values would go.
+    final int[] ready = {7, 8, 9};
+    labelled("array", ready);
+
+    // Jux spells this `T... name`, with a type. C's untyped `...`, which
+    // carries no type information at all, exists only for talking to C and
+    // belongs to a `native` block.
+}

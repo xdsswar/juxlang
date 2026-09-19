@@ -1,0 +1,39 @@
+// `for` walks a range, binding each value in turn. A range written `..` stops
+// before its upper bound and one written `..=` includes it, a difference worth
+// being deliberate about every time a loop is written.
+
+void main() {
+    // A factorial multiplies every number from 1 up to and including n, so the
+    // inclusive form is the one that matches the definition.
+    final var n = 10;
+    var result = 1;
+    for (var i : 1..=n) {
+        result *= i;
+        print($"${i}! = ${result}");
+    }
+
+    // The same bounds written both ways, to make the difference concrete.
+    // `print` ends its line, so each row is collected into a `String` first.
+    var exclusive = "1..5  gives ";
+    for (var i : 1..5) {
+        exclusive += $"${i} ";
+    }
+    print(exclusive);
+
+    var inclusive = "1..=5 gives ";
+    for (var i : 1..=5) {
+        inclusive += $"${i} ";
+    }
+    print(inclusive);
+
+    // The loop variable belongs to the loop: it is bound afresh on each pass
+    // and is gone once the loop ends. To count in a way the body controls,
+    // use the `while` loop from the previous lesson instead, or the classic
+    // three-part `for (int i = 0; i < n; i++)` whose step you write yourself.
+
+    // Factorials outgrow their type quickly. 20! still fits in the 64 bits
+    // behind `int`, but 21! does not. Going past the top of a type is an
+    // overflow: a debug build stops with a panic and a release build wraps
+    // around (Semantics §S.2), so neither gives the right answer. Growth this
+    // fast is worth remembering before choosing a type.
+}

@@ -1,0 +1,7 @@
+Larger(3, 9)          9
+Larger(2.5, 1.5)      2.5
+Larger('a', 'z')      z
+Second(1, 2)          2
+Second("a", "b")      b
+CountOf(numbers)      3
+CountOf(words)        2

@@ -1,0 +1,2 @@
+switch_int_not_exhaustive.jux:2:12: [E0440] error: non-exhaustive `switch` on `int`: no arm matches `0`; add a `case` for it, or a `default ->` arm (§T.5.2)
+switch_int_not_exhaustive.jux:10:12: [E0440] error: non-exhaustive `switch` on `String`: its values cannot all be listed, so it needs a `default ->` arm (§T.5.2)

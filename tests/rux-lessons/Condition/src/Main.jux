@@ -1,0 +1,54 @@
+// `if` picks a branch while the program is running. Picking a branch while
+// the program is being compiled is a different tool, the `@cfg` annotation,
+// which comes much later.
+
+void main() {
+    final i32 temperature = 18;
+
+    // The condition always sits in parentheses, as in Java and C. (Rux lets
+    // you leave them out; Jux does not, so there is only one way to write it.)
+    if (temperature > 15) {
+        print("warm enough");
+    }
+    if ((temperature > 15)) {
+        print("warm enough, with parentheses");
+    }
+
+    // A chain tests each condition in turn and runs the first that holds, so
+    // at most one branch of the chain happens. A final `else` catches whatever
+    // none of the conditions matched.
+    if (temperature > 30) {
+        print("hot");
+    } else if (temperature > 20) {
+        print("mild");
+    } else if (temperature > 10) {
+        print("cool");
+    } else {
+        print("cold");
+    }
+
+    // Because only the first match runs, the order of a chain is part of its
+    // meaning. If the `> 10` test came first, nothing below it could ever be
+    // reached: every temperature above 30 is also above 10.
+
+    // A condition is an ordinary `bool` expression, so the logical operators
+    // combine them.
+    final var raining = true;
+    final var windy = false;
+    if (raining && !windy) {
+        print("take an umbrella");
+    } else if (raining && windy) {
+        print("take a coat instead");
+    }
+
+    // `if` accepts a `bool` and nothing else. A number is not a shortcut for
+    // "not zero", so this is an error rather than a test against zero:
+    //
+    //     if (temperature) { }
+    //         error: the condition must be a `bool`, found `i32`
+    //
+    // Write the comparison you mean instead.
+    if (temperature != 0) {
+        print("temperature is not zero");
+    }
+}

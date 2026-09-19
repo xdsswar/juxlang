@@ -73,3 +73,6 @@ tools/no-ice-fuzz/crashes/
 
 # Reference sources (IntelliJ Java plugin, cloned for study only)
 ide/reference/
+
+# JVM crash heap dumps (Gradle/Kotlin daemon out-of-memory). Several GB each.
+*.hprof

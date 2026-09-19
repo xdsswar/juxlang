@@ -1,0 +1,6 @@
+three arguments -> 3
+no arguments    -> 0
+[1][2.5][true][text]
+scores: 10 20 30
+empty:
+array: 7 8 9

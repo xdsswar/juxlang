@@ -1,0 +1,8 @@
+rent          120000 cents
+food           35050 cents
+total         155050 cents
+difference     84950 cents
+3 rents       360000 cents
+rent == 120000c  true
+food < rent      true
+running total    155050

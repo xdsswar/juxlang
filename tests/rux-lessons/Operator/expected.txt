@@ -1,0 +1,22 @@
+17 + 5 = 22
+17 - 5 = 12
+17 * 5 = 85
+17 / 5 = 3
+17 % 5 = 2
+17 < 5  is false
+17 >= 5 is true
+17 == 5 is false
+ready && !busy is true
+ready || busy  is true
+mask         00001100
+bits         00001010
+mask & bits  00001000
+mask | bits  00001110
+mask ^ bits  00000110
+~mask        11110011
+mask << 2    00110000  12 becomes 48
+mask >> 2    00000011  12 becomes 3
+total    27
+flags    00001011
+2 + 3 * 4   = 14
+(2 + 3) * 4 = 20

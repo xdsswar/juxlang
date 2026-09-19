@@ -2452,6 +2452,57 @@ fn switch_arm_or_pattern_parses() {
     assert!(alts.iter().all(|p| matches!(p, Pattern::Literal(_, _))));
 }
 
+/// A sealed type with no `permits` clause permits the types in its own file
+/// that extend or implement it (§A.2.5); a written clause is left alone.
+#[test]
+fn sealed_type_without_permits_permits_its_files_subtypes() {
+    let ast = parse_clean(
+        r#"sealed interface Animal {}
+           record Dog(String name) implements Animal {}
+           record Cat(int lives) implements Animal {}
+           class Robot {}
+           sealed class Vehicle {}
+           class Car extends Vehicle {}
+           sealed interface Listed permits Dog {}"#,
+    );
+    let names = |ids: &Vec<juxc_ast::Ident>| ids.iter().map(|i| i.text.clone()).collect::<Vec<_>>();
+    let TopLevelDecl::Interface(animal) = &ast.items[0] else { panic!() };
+    assert_eq!(names(&animal.permits), ["Dog", "Cat"]);
+    let TopLevelDecl::Class(vehicle) = &ast.items[4] else { panic!() };
+    assert_eq!(names(&vehicle.permits), ["Car"]);
+    let TopLevelDecl::Interface(listed) = &ast.items[6] else { panic!() };
+    assert_eq!(names(&listed.permits), ["Dog"]);
+}
+
+/// The comma list `case A, B ->` (JUX-LANG-V1 §7.5) is the same or-pattern,
+/// and mixing it with `|` gives one flat list. A record pattern's own commas
+/// stay inside it.
+#[test]
+fn switch_arm_comma_list_parses_as_or_pattern() {
+    use juxc_ast::Pattern;
+    let ast = parse_clean(
+        r#"public void main() {
+               var n = 5;
+               switch (n) {
+                   case 1, 2 | 3, 4 -> print("low");
+                   case Point(var x, 0), Point(0, var x) -> print("axis");
+                   default -> print("high");
+               }
+           }"#,
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Switch(s)) = &body.statements[1] else { panic!() };
+    let Pattern::Or(alts, _) = &s.arms[0].pattern else {
+        panic!("expected Or pattern, got {:?}", s.arms[0].pattern);
+    };
+    assert_eq!(alts.len(), 4);
+    let Pattern::Or(records, _) = &s.arms[1].pattern else {
+        panic!("expected Or pattern, got {:?}", s.arms[1].pattern);
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|p| matches!(p, Pattern::EnumVariant { args, .. } if args.len() == 2)));
+}
+
 // ---------------------------------------------------------------------------
 // Enums (§7.7)
 // ---------------------------------------------------------------------------

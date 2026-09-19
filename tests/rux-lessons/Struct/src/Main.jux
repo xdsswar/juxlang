@@ -1,0 +1,66 @@
+// A tuple groups values by position. A struct groups them by name, and gives
+// the group a type of its own, so `width` and `height` cannot be swapped by
+// accident the way `.0` and `.1` can.
+//
+// A struct is a *value*: assigning one, passing one or returning one copies
+// it. That is the difference from a class, whose instances are shared.
+
+struct Rectangle {
+    // Fields are declared with their types, each ending in a semicolon.
+    public double width;
+    public double height;
+
+    // A constructor has the type's name and no result type. (A struct that
+    // declares none gets one taking every field in order; this one is written
+    // out to show the shape.)
+    public Rectangle(double width, double height) {
+        this.width = width;
+        this.height = height;
+    }
+
+    // Methods live inside the type, next to the fields they read. A method
+    // sees the fields by name, as if they were locals.
+    public double area() {
+        return width * height;
+    }
+
+    public double perimeter() {
+        return 2.0 * (width + height);
+    }
+
+    // A method may also change the fields. It changes the value it was called
+    // on, in place.
+    public void scale(double factor) {
+        width *= factor;
+        height *= factor;
+    }
+}
+
+void main() {
+    // A struct is built with `new` and the constructor's arguments.
+    final var plain = new Rectangle(3.0, 4.0);
+    print($"plain      ${plain.width} x ${plain.height}   area ${plain.area()}");
+
+    final var built = new Rectangle(2.0, 5.0);
+    print($"built      ${built.width} x ${built.height}   area ${built.area()}");
+    print($"perimeter  ${built.perimeter()}");
+
+    // A method that writes needs a local it may change. `plain` above is
+    // `final`, so calling `scale` on it would be rejected the same way
+    // assigning to it would be.
+    var growing = new Rectangle(1.0, 2.0);
+    growing.scale(3.0);
+    print($"scaled     ${growing.width} x ${growing.height}");
+
+    // Assigning a struct copies it. `copy` and `growing` are two rectangles
+    // from here on, and changing one leaves the other alone.
+    var copy = growing;
+    copy.scale(2.0);
+    print($"copy       ${copy.width} x ${copy.height}");
+    print($"original   ${growing.width} x ${growing.height}");
+
+    // Had `Rectangle` been a `class`, `copy` would have been a second name for
+    // the same rectangle, and both lines above would print 6.0 x 12.0. Choose
+    // a struct for small values that are naturally copied (a point, a size, a
+    // colour) and a class for things with an identity.
+}

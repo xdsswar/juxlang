@@ -1,0 +1,27 @@
+plain      255
+binary     11111111
+octal      377
+hex        ff
+HEX        FF
+prefixed   0b11111111   0o377   0xff
+width 8    [     255]
+too narrow [255]
+left       [255     ]
+centre     [  255   ]
+right      [     255]
+dots       [.....255]
+stars      [**255***]
+zeros      [00000255]
+zeroed hex [000000ff]
+signed     +42  -42
+pi         3.14159265358979
+pi to 2    3.14
+pi to 5    3.14159
+pi to 0    3
+combined   [    3.1416]
+text       [Jux     ][  Jux   ][     Jux]
+
+item         count       value
+widgets         12        4.50
+sprockets        5       19.75
+cogs          1440        0.12

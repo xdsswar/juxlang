@@ -1,0 +1,47 @@
+// A binding gives a value a name. A `final` local names a value that never
+// changes, a plain one a value that does. Reach for `final` first: a name that
+// cannot change is one less thing to keep track of while reading the code.
+
+void main() {
+    // With `var` the type comes from the literal. A whole number is an `int`,
+    // a fraction is a `double`, and a character is a `char`.
+    final var whole = 5;
+    final var fraction = 2.5;
+    final var letter = 'A';
+    print($"inferred   ${whole}  ${fraction}  ${letter}");
+
+    // A declared type asks for a different one. An integer literal fits
+    // whatever integer type it is written into, but a fraction literal is a
+    // `double` already, so a `float` needs the `f` suffix.
+    final byte small = 5;
+    final float narrow = 2.5f;
+    print($"annotated  ${small}  ${narrow}");
+
+    // A local that is not `final` may be assigned again, either outright or
+    // through a compound operator.
+    var counter = 0;
+    counter = counter + 1;
+    counter += 10;
+    print($"counter    ${counter}");
+
+    // A local may also be declared now and given its value later, so long as
+    // it is assigned before anything reads it (definite assignment, §S.4.6).
+    int doubled;
+    doubled = counter * 2;
+    print($"doubled    ${doubled}");
+
+    // Two things the compiler refuses. Neither can appear in a program that
+    // builds, so they are written here rather than run:
+    //
+    //     final int total = 5;
+    //     total = 6;
+    //         error: cannot assign to `total`: it is final
+    //
+    //     int name = 1;
+    //     int name = 2;
+    //         error: `name` is already declared in this scope
+    //
+    // The second one is worth meeting early if you come from a language where
+    // redeclaring a name quietly shadows the old one. In Jux a name means one
+    // thing for the whole scope it is declared in.
+}

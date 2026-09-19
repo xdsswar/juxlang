@@ -1,0 +1,76 @@
+// `switch` compares one value against a series of patterns and runs the first
+// arm that fits. It says much the same as a long `if` / `else if` chain, but
+// names the value being tested once instead of repeating it in every branch.
+//
+// Rux calls this `match`; Jux keeps the Java name and the arrow-form cases,
+// which never fall through from one arm into the next.
+
+void main() {
+    // Literal patterns, and `default` for everything the arms did not name.
+    final i32 count = 2;
+    switch (count) {
+        case 0 -> print("none");
+        case 1 -> print("one");
+        case 2 -> print("a pair");
+        default -> print("several");
+    }
+
+    // An arm that needs more than one statement takes a block instead.
+    final i32 code = 404;
+    switch (code) {
+        case 200 -> print("ok");
+        case 404 -> {
+            print("not found");
+            print("check the address");
+        }
+        default -> print("something else");
+    }
+
+    // A pattern may be a range, which is where `switch` starts to read better
+    // than a chain of comparisons.
+    final i32 score = 73;
+    switch (score) {
+        case 0..=59 -> print("fail");
+        case 60..=79 -> print("pass");
+        case 80..=100 -> print("distinction");
+        default -> print("not a valid score");
+    }
+
+    // A `bool` switches the same way, and needs no `default`, because naming
+    // both `true` and `false` already covers every value it can hold.
+    final var ready = true;
+    switch (ready) {
+        case true -> print("ready");
+        case false -> print("not ready");
+    }
+
+    // One arm may list several values, separated by commas, when they all
+    // lead to the same place.
+    final i32 day = 6;
+    switch (day) {
+        case 6, 7 -> print("weekend");
+        default -> print("weekday");
+    }
+
+    // Here Jux parts company with Rux. In Rux a `match` on a number that fits
+    // no arm simply does nothing. In Jux every `switch` must cover every value
+    // it could be given (Type System §T.5.2), so leaving the `default` off is
+    // a compile error that names a value no arm handles:
+    //
+    //     switch (missed) {
+    //         case 1 -> print("one");
+    //         case 2 -> print("two");
+    //     }
+    //         error[E0440]: non-exhaustive `switch` on `i32`: no arm matches
+    //         `-2147483648`; add a `case` for it, or a `default ->` arm
+    //
+    // Silence is still available, but it has to be written down: an empty
+    // `default` arm says "the other values are deliberately ignored".
+    final i32 missed = 99;
+    switch (missed) {
+        case 1 -> print("one");
+        case 2 -> print("two");
+        default -> { }
+    }
+    print("the switch above matched nothing and did nothing, on purpose");
+}

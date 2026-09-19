@@ -52,6 +52,61 @@ pub fn setter_method_name(prop_name: &str) -> String {
 /// fields + getter / setter methods. Idempotent in practice (a class
 /// with no `properties` is left untouched), and recurses into nested
 /// class declarations so `Outer.Inner` properties desugar too.
+/// Fill in the `permits` list of every sealed class or interface that has
+/// none, from the types in the same file that extend or implement it.
+///
+/// Grammar §A.2.5: "`permits` lists are required on sealed types unless every
+/// permitted subtype is declared in the same file." So a file holding a whole
+/// sealed hierarchy may leave the clause out, as Java allows:
+///
+/// ```jux
+/// sealed interface Animal {}
+/// record Dog(String name) implements Animal {}
+/// record Cat(int lives) implements Animal {}
+/// ```
+///
+/// Filling the list here, once per file, means every later phase (the
+/// permitted-subtype check, `switch` exhaustiveness, the backend) sees the
+/// same `permits` it would for a written clause. A type in another file is
+/// not in the list, so it is refused (E0422) exactly as if the clause named
+/// the others. A written clause is never touched.
+pub fn infer_sealed_permits(unit: &mut CompilationUnit) {
+    // Each type in the file, with the bare names of the supertypes it lists.
+    let mut subtypes: Vec<(crate::common::Ident, Vec<String>)> = Vec::new();
+    let bare = |t: &crate::types::TypeRef| t.name.segments.last().map(|s| s.text.clone());
+    for item in &unit.items {
+        let (name, supers): (&crate::common::Ident, Vec<String>) = match item {
+            TopLevelDecl::Class(c) => (
+                &c.name,
+                c.extends.iter().chain(c.implements.iter()).filter_map(bare).collect(),
+            ),
+            TopLevelDecl::Record(r) => (&r.name, r.implements.iter().filter_map(bare).collect()),
+            TopLevelDecl::Enum(e) => (&e.name, e.implements.iter().filter_map(bare).collect()),
+            TopLevelDecl::Interface(i) => (&i.name, i.extends.iter().filter_map(bare).collect()),
+            _ => continue,
+        };
+        subtypes.push((name.clone(), supers));
+    }
+    let permitted = |sealed: &str| -> Vec<crate::common::Ident> {
+        subtypes
+            .iter()
+            .filter(|(_, supers)| supers.iter().any(|s| s == sealed))
+            .map(|(name, _)| name.clone())
+            .collect()
+    };
+    for item in &mut unit.items {
+        match item {
+            TopLevelDecl::Class(c) if c.is_sealed && c.permits.is_empty() => {
+                c.permits = permitted(&c.name.text);
+            }
+            TopLevelDecl::Interface(i) if i.is_sealed && i.permits.is_empty() => {
+                i.permits = permitted(&i.name.text);
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn desugar_properties(unit: &mut CompilationUnit) {
     for item in &mut unit.items {
         desugar_top_level(item);

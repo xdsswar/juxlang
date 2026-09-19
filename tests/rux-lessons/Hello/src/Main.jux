@@ -1,0 +1,10 @@
+// The smallest complete Jux program: an entry point and one line of output.
+// `jux run` in this directory builds the project and executes the result.
+
+// `main` is where every executable package starts. A free `main` needs no
+// `public` or `static` (Entry Points §E.1.2); returning `void` means the
+// process exits with status zero.
+void main() {
+    // `print` writes the text and ends the line, so no "\n" is needed.
+    print("Hello, World!");
+}

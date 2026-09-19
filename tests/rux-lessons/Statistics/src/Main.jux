@@ -1,0 +1,98 @@
+// Summarising a set of numbers: where the middle is, and how spread out they
+// are around it.
+//
+// Two passes are needed, and that is the point of the exercise. The mean has
+// to be known before the spread can be measured against it, so the data is
+// walked twice, which is why this reads as a program rather than a formula.
+
+// Sorts `values` into ascending order in place, by insertion: each value in
+// turn slides left past every larger one. Quadratic, and perfectly good for a
+// handful of readings.
+//
+// (A `Vec<int>` sorts with its own `sort_unstable()`. Doubles are different:
+// NaN is not smaller, larger or equal to anything, so Rust gives floats no
+// default order, and the ordering-closure forms are not reachable from Jux
+// yet. Writing the sort out keeps this lesson honest about that.)
+void sortAscending(Vec<double> values) {
+    for (var i : 1..values.len()) {
+        final double current = values[i];
+        var j = i;
+        while (j > 0 && values[j - 1] > current) {
+            values[j] = values[j - 1];
+            j -= 1;
+        }
+        values[j] = current;
+    }
+}
+
+void main() {
+    final double[] readings = {12.5, 9.0, 15.25, 11.0, 8.75, 14.0, 10.5, 13.25, 11.75};
+    var samples = new Vec<double>();
+    for (var reading : readings) {
+        samples.push(reading);
+    }
+
+    final var count = samples.len();
+    if (count == 0) {
+        print("nothing to summarise");
+        return;
+    }
+
+    var line = "readings   ";
+    for (var value : samples) {
+        line += $" ${value}";
+    }
+    print(line);
+    print($"count      ${count}");
+
+    // First pass: the total, and from it the mean.
+    double total = 0.0;
+    for (var value : samples) {
+        total += value;
+    }
+    final double mean = total / (double) count;
+    print($"total      ${total.toFixed(4)}");
+    print($"mean       ${mean.toFixed(4)}");
+
+    // Second pass: how far each reading sits from that mean. The differences
+    // are squared so that above and below both count as distance rather than
+    // cancelling each other out.
+    double sumOfSquares = 0.0;
+    for (var value : samples) {
+        final double difference = value - mean;
+        sumOfSquares += difference * difference;
+    }
+    final double variance = sumOfSquares / (double) count;
+    final double deviation = variance.sqrt();
+
+    // Squaring inflated the units, so the square root brings the answer back
+    // to the scale the readings are in, which is why standard deviation is
+    // quoted rather than variance.
+    print($"variance   ${variance.toFixed(4)}");
+    print($"deviation  ${deviation.toFixed(4)}");
+
+    // The extremes, found in one walk each.
+    double smallest = samples[0];
+    double largest = samples[0];
+    for (var value : samples) {
+        if (value < smallest) {
+            smallest = value;
+        }
+        if (value > largest) {
+            largest = value;
+        }
+    }
+    print($"smallest   ${smallest}");
+    print($"largest    ${largest}");
+
+    // The median needs the values in order, which means rearranging them, so
+    // it comes last, after everything that wanted them as they arrived.
+    // `samples` is a reference, so the sort rearranges this very `Vec`.
+    sortAscending(samples);
+    final var middle = count / 2;
+    if (count % 2 == 1) {
+        print($"median     ${samples[middle]}");
+    } else {
+        print($"median     ${((samples[middle - 1] + samples[middle]) / 2.0).toFixed(4)}");
+    }
+}

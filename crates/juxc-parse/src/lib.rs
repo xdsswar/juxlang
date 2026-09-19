@@ -82,6 +82,9 @@ pub fn parse(tokens: &[Token]) -> ParseResult {
     // machinery. The original `PropertyDecl` list stays on each class
     // for tycheck access-control and backend setter routing.
     juxc_ast::desugar_properties(&mut ast);
+    // A sealed type with no `permits` clause permits its own file's
+    // subtypes (Grammar §A.2.5).
+    juxc_ast::infer_sealed_permits(&mut ast);
     ParseResult { ast, diagnostics: p.diagnostics }
 }
 
@@ -95,6 +98,9 @@ pub fn parse_foreign(tokens: &[Token]) -> ParseResult {
     p.foreign_mode = true;
     let mut ast = p.parse_compilation_unit();
     juxc_ast::desugar_properties(&mut ast);
+    // A sealed type with no `permits` clause permits its own file's
+    // subtypes (Grammar §A.2.5).
+    juxc_ast::infer_sealed_permits(&mut ast);
     ParseResult { ast, diagnostics: p.diagnostics }
 }
 

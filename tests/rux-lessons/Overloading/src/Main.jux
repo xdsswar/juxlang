@@ -1,0 +1,104 @@
+// The operators from the Operator lesson are not reserved for the primitive
+// types. A type of your own can say what `+`, `==` and `<` mean for it, by
+// declaring methods named `operator` followed by the symbol.
+//
+// The point is not cleverness. Money adds to money, and `rent + food` says
+// that plainly where `new Money(rent.cents + food.cents)` buries it.
+
+// Money as a whole number of cents, so no fraction ever goes missing.
+struct Money {
+    public long cents;
+
+    public Money(long cents) {
+        this.cents = cents;
+    }
+
+    // An operator is a method whose name is `operator` and the symbol. `this`
+    // is the left operand; the parameter is the right one. Operators are
+    // always `public`: a symbol anyone can write has to mean something
+    // anyone can call.
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    public Money operator-(Money other) {
+        return new Money(cents - other.cents);
+    }
+
+    // The two sides need not be the same type. Multiplying money by a count
+    // makes sense; multiplying money by money does not, so only this exists.
+    public Money operator*(long factor) {
+        return new Money(cents * factor);
+    }
+
+    // Comparisons return `bool` rather than the type itself.
+    public bool operator==(Money other) {
+        return cents == other.cents;
+    }
+
+    // `==` comes with a duty: equal values must hash alike, so a type that
+    // defines one defines the other (E0931).
+    public int operator hash() {
+        return (int) cents;
+    }
+
+    // Ordering is one operator, the three-way `<=>`: negative when `this`
+    // is smaller, zero when equal, positive when larger. `<`, `<=`, `>` and
+    // `>=` all come from it, so they can never disagree with each other.
+    public int operator<=>(Money other) {
+        return cents <=> other.cents;
+    }
+}
+
+// Pads on the right with spaces to `width` characters.
+String padRight(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+// Pads on the left with spaces to `width` characters, right-aligning a number
+// in a column.
+String padLeft(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return " ".repeat(width - text.charLength()) + text;
+}
+
+void show(String label, Money amount) {
+    print($"${padRight(label, 11)}${padLeft($"${amount.cents}", 9)} cents");
+}
+
+void main() {
+    final var rent = new Money(120000);
+    final var food = new Money(35050);
+
+    // Each of these calls one of the operators above.
+    final var total = rent + food;
+    final var extra = rent - food;
+    final var quarterly = rent * 3;
+
+    show("rent", rent);
+    show("food", food);
+    show("total", total);
+    show("difference", extra);
+    show("3 rents", quarterly);
+
+    print($"rent == 120000c  ${rent == new Money(120000)}");
+    print($"food < rent      ${food < rent}");
+
+    // A compound assignment comes free with its operator: `+=` is `+`
+    // followed by storing the result back, so it needs no declaration.
+    var running = new Money(0);
+    running += rent;
+    running += food;
+    print($"running total    ${running.cents}");
+
+    // Only the operators that make sense need defining. `Money` has no `/`,
+    // and using it is an error rather than something invented on the type's
+    // behalf. Ordering is the one place Jux asks for all or nothing: a type
+    // may declare `<=>`, or all four of `<`, `<=`, `>`, `>=`, but not just
+    // `<` (E0930), so a sorted collection never meets a half-ordered type.
+}
