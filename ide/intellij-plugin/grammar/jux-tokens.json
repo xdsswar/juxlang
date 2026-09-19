@@ -298,6 +298,7 @@
     "parallel",
     "print",
     "spawn",
+    "transmute",
     "withTimeout",
     "yield_now"
   ],

@@ -554,6 +554,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0519`  | An `@align(N)` that cannot hold: `N` not an integer literal, not a power of two, above 2^29, or below an alignment a field already needs | Layout-ABI §L.1.4, ERRATA E62 |
 | `E0520`  | `@align` where it cannot apply: a field, an enum or an interface | Layout-ABI §L.1.4, ERRATA E62 |
 | `E0521`  | `array as T*` that cannot give a lasting pointer: a temporary array, a nested array, or a pointer-to-pointer target | Layout-ABI §L.6.3 |
+| `E0522`  | Invalid `transmute<A, B>(value)`: wrong argument count, or sizes not equal on every target | Layout-ABI §L.7.4, ERRATA E63 |
 
 ### Lowering (`E0600–E0699`)
 

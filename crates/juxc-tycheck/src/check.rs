@@ -111,6 +111,9 @@ pub const BUILTINS: &[&str] = &[
     "assert",
     "spawn",
     "withTimeout",
+    // `transmute<A, B>(value)` (Layout-ABI §L.7.4), checked by
+    // `check_transmute` and lowered to `std::mem::transmute`.
+    "transmute",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
     // Field call on Path("File"). Registering `File` in BUILTINS
@@ -4291,6 +4294,138 @@ impl<'a> Checker<'a> {
                 .with_span(span),
             );
         }
+    }
+
+    /// Whether `c` calls the built-in `transmute` (Layout-ABI §L.7.4): a bare
+    /// `transmute` that names no declared function, local or parameter.
+    fn is_builtin_transmute(&self, c: &CallExpr) -> bool {
+        matches!(c.callee.as_ref(), Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == "transmute")
+            && self.symbols.lookup_function("transmute").is_none()
+            && self.env.lookup("transmute").is_none()
+    }
+
+    /// `transmute<A, B>(value)` (Layout-ABI §L.7.4, ERRATA E63): reinterpret
+    /// the bits of an `A` as a `B`. It needs `unsafe` (E0506), exactly two
+    /// type arguments and one argument of type `A`, and both types must have
+    /// the same size on EVERY target: a size is a byte count for the
+    /// fixed-width primitives and for `@layout(c)` aggregates built from them,
+    /// and one machine word for `int`, `uint` and pointers. Anything whose
+    /// size is not fixed that way (a class, a `String`, a collection, an
+    /// aggregate holding a pointer) cannot be transmuted. All of these are
+    /// E0522.
+    fn check_transmute(&mut self, c: &CallExpr) {
+        for arg in &c.args {
+            self.check_expr(arg);
+        }
+        if !self.in_unsafe {
+            self.unsafe_pointer_op("`transmute`", c.span);
+        }
+        let [from, to] = c.explicit_generic_args.as_slice() else {
+            self.push_transmute_error(
+                c.span,
+                "it takes exactly two type arguments, the type it reads and the type it gives: `transmute<A, B>(value)`".to_string(),
+            );
+            return;
+        };
+        let [value] = c.args.as_slice() else {
+            self.push_transmute_error(c.span, "it takes exactly one argument, the value to reinterpret".to_string());
+            return;
+        };
+        let expected = ty_from_ref(from, &self.env, self.symbols);
+        let found = infer_expr(value, &self.env, self.symbols);
+        if !matches!(found, Ty::Unknown) && !compatible(&expected, &found, self.symbols) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!("`transmute<{}, ...>` reads a `{expected}`, and this value is `{found}`", type_ref_display(from)),
+                )
+                .with_span(expr_span(value)),
+            );
+        }
+        let sizes = (self.portable_size(from, 0), self.portable_size(to, 0));
+        let problem = match sizes {
+            (None, _) => Some(format!("`{}` has no size fixed on every target", type_ref_display(from))),
+            (_, None) => Some(format!("`{}` has no size fixed on every target", type_ref_display(to))),
+            (Some(a), Some(b)) if a.size_eq(b) => None,
+            (Some(a), Some(b)) => Some(format!(
+                "`{}` is {} and `{}` is {}",
+                type_ref_display(from),
+                a.describe(),
+                type_ref_display(to),
+                b.describe(),
+            )),
+        };
+        if let Some(problem) = problem {
+            self.push_transmute_error(c.span, format!("the two types must be the same size: {problem}"));
+        }
+    }
+
+    fn push_transmute_error(&mut self, span: Span, problem: String) {
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0522_InvalidTransmute, format!("invalid `transmute`: {problem} (§L.7.4)"))
+                .with_span(span)
+                .with_help(
+                    "transmute takes primitives, pointers and `@layout(c)` types; `int`, `uint` and pointers \
+                     are one machine word, so pair them with each other, and use `i32`/`long` for fixed widths",
+                ),
+        );
+    }
+
+    /// The size of `t` as a `transmute` must know it (ERRATA E63): a byte
+    /// count and alignment that hold on every target, or one machine word.
+    /// `None` when the size depends on anything else. A `@layout(c)`
+    /// aggregate is laid out by the C rules: each field at the next multiple
+    /// of its alignment, the whole rounded up to the largest alignment (or its
+    /// `@align(N)`); one holding a word-sized field has no fixed byte count,
+    /// since its padding moves with the word size.
+    fn portable_size(&self, t: &juxc_ast::TypeRef, depth: u32) -> Option<PortableSize> {
+        if depth > 16 || t.nullable || t.array_shape.is_some() {
+            return None;
+        }
+        if t.ptr_depth > 0 || t.fn_pointer_shape().is_some() {
+            return Some(PortableSize::Word);
+        }
+        if !t.generic_args.is_empty() || t.fn_shape.is_some() {
+            return None;
+        }
+        let name = t.name.segments.last()?.text.as_str();
+        if let Some(p) = crate::ty::primitive_from_name(name) {
+            if matches!(p, Primitive::Int | Primitive::Uint) {
+                return Some(PortableSize::Word);
+            }
+            let a = fixed_alignment(t)?;
+            return Some(PortableSize::Bytes { size: a, align: a });
+        }
+        let Ty::User { name, .. } = ty_from_ref(t, &self.env, self.symbols) else {
+            return None;
+        };
+        let (mut fields, declared_align): (Vec<juxc_ast::TypeRef>, Option<i64>) =
+            if let Some(class) = self.symbols.classes.get(&name).filter(|c| c.is_layout_c) {
+                let mut sorted: Vec<&crate::symbol_table::FieldSig> =
+                    class.fields.values().filter(|f| !f.is_static).collect();
+                sorted.sort_by_key(|f| (f.span.file, f.span.start));
+                let align = crate::symbol_table::align_annotation(&class.annotations).and_then(|(_, n)| n);
+                (sorted.into_iter().map(|f| f.ty.clone()).collect(), align)
+            } else if let Some(record) = self.symbols.records.get(&name).filter(|r| r.is_layout_c) {
+                (record.components.iter().map(|c| c.ty.clone()).collect(), record.align)
+            } else {
+                return None;
+            };
+        let mut offset: u64 = 0;
+        let mut align: u64 = 1;
+        for field in fields.drain(..) {
+            match self.portable_size(&field, depth + 1)? {
+                PortableSize::Bytes { size, align: a } => {
+                    offset = offset.div_ceil(a) * a + size;
+                    align = align.max(a);
+                }
+                PortableSize::Word => return None,
+            }
+        }
+        if let Some(n) = declared_align.filter(|n| *n > 0) {
+            align = align.max(n as u64);
+        }
+        Some(PortableSize::Bytes { size: offset.div_ceil(align) * align, align })
     }
 
     /// `array as T*` (Layout-ABI §L.6.3): the address of the array's first
@@ -10069,6 +10204,12 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // `transmute<A, B>(value)` (Layout-ABI §L.7.4), the built-in, when no
+        // function of that name is declared.
+        if self.is_builtin_transmute(c) {
+            self.check_transmute(c);
+            return;
+        }
         // `System.out.println(x)` out of Java habit: there is no `System`
         // (unless the program declares one), and it used to reach rustc as
         // "cannot find value `System`" (JUX-DIAGNOSTICS-ADDENDUM "Java Habits").
@@ -12706,6 +12847,33 @@ fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
         }
     }
     s
+}
+
+/// How big a value is on every target, for `transmute` (ERRATA E63): a byte
+/// count with its alignment, or exactly one machine word (`int`, `uint`, a
+/// pointer), whose byte count depends on the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortableSize {
+    Bytes { size: u64, align: u64 },
+    Word,
+}
+
+impl PortableSize {
+    /// Equal on every target: two byte counts that match, or two words.
+    fn size_eq(self, other: PortableSize) -> bool {
+        match (self, other) {
+            (PortableSize::Bytes { size: a, .. }, PortableSize::Bytes { size: b, .. }) => a == b,
+            (PortableSize::Word, PortableSize::Word) => true,
+            _ => false,
+        }
+    }
+
+    fn describe(self) -> String {
+        match self {
+            PortableSize::Bytes { size, .. } => format!("{size} byte{}", if size == 1 { "" } else { "s" }),
+            PortableSize::Word => "one machine word (4 or 8 bytes by target)".to_string(),
+        }
+    }
 }
 
 /// The alignment a field of type `t` needs on every target, in bytes, when

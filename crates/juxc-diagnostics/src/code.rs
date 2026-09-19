@@ -561,6 +561,11 @@ pub enum Code {
     /// nested (`int[][]`, whose elements are handles), or the target is a
     /// pointer to a pointer.
     E0521_ArrayToPointer,
+    /// E0522 -- An invalid `transmute<A, B>(value)` (Layout-ABI §L.7.4,
+    /// ERRATA E63): not exactly two type arguments and one argument, or two
+    /// types whose sizes are not equal on every target (including a type
+    /// with no size fixed that way, such as a class or a `String`).
+    E0522_InvalidTransmute,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -1110,6 +1115,7 @@ impl Code {
             Code::E0519_InvalidAlignment         => "E0519",
             Code::E0520_AlignNotApplicable       => "E0520",
             Code::E0521_ArrayToPointer           => "E0521",
+            Code::E0522_InvalidTransmute         => "E0522",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

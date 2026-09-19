@@ -916,14 +916,25 @@ The `asm(...)` form uses GCC's extended-asm syntax: template, output operands, i
 
 ### L.7.4. `transmute` Built-in
 
-`transmute<A, B>(value: A): B` reinterprets the bits of `value` (of type `A`) as a `B`. It is permitted only inside `unsafe` and only when `sizeof<A>() == sizeof<B>()`. Mismatched sizes are a compile error (`E0840`).
+`transmute<A, B>(value: A): B` reinterprets the bits of `value` (of type `A`) as a `B`. It is permitted only inside `unsafe` (E0506) and only when `A` and `B` are the same size on every target the program can be built for (ERRATA E63). Mismatched sizes are a compile error (`E0522`).
 
 ```jux
 unsafe {
     float f = 1.5f;
-    uint bits = transmute<float, uint>(f);          // 0x3FC00000
+    u32 bits = transmute<float, u32>(f);            // 0x3FC00000
 }
 ```
+
+**Implemented.** The fixed-width primitives, and `@layout(c)` structs and
+records made only of them (laid out by the C rules, `@align` included), have
+one byte count everywhere. `int`, `uint`, pointers and function pointers are
+exactly one machine word, so they pair only with each other
+(`transmute<int*, uint>(p)` is fine; `transmute<int, long>` is not, since the
+two differ on a 32-bit target). A class, a `String`, a collection or an
+aggregate holding a pointer has no size fixed that way. Each of these, and a
+call without exactly two type arguments and one value, is **E0522**. The call
+lowers to Rust's `std::mem::transmute::<A, B>(value)`. See
+`examples/transmute_bits.jux`.
 
 Most uses of `transmute` are wrong. Prefer typed conversions (the `as` operator, dedicated methods like `Float.toBits()`) when they exist. `transmute` is the last resort.
 

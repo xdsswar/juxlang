@@ -1097,6 +1097,31 @@ used as the field's type, gives the field that alignment. Type-level
 
 ---
 
+## E63. `transmute`: which size, and which code
+
+**Conflict.** Layout-ABI §L.7.4 permits `transmute<A, B>` "only when
+`sizeof<A>() == sizeof<B>()`" and reports a mismatch with `E0840`. `E0840`
+is already published for "const evaluation exceeded its resource limits"
+(§T.11.4). The size condition is also stated for "the current target", which
+the type checker does not see: a `jux build --target` for a 32-bit machine
+changes the size of `int`, `uint` and every pointer. The section's own
+example, `transmute<float, uint>(f)`, is wrong on a 64-bit target, where a
+`uint` is 8 bytes and a `float` is 4.
+
+**Resolution.** The mismatch is `E0522`, together with a wrong argument count
+and a type that has no size fixed on every target. The size check is
+*portable*: a transmute must be correct for every target the program can be
+built for. The fixed-width primitives and `@layout(c)` aggregates made only of
+them have one byte count everywhere; `int`, `uint`, pointers and function
+pointers are exactly one machine word and match only each other. A class, a
+`String`, a collection or an aggregate holding a pointer has no size fixed
+that way and cannot be transmuted. The example becomes
+`transmute<float, u32>(f)`.
+
+**Spec status:** §L.7.4 is updated to match.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

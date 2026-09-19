@@ -1137,6 +1137,26 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // `transmute<A, B>(value)` (Layout-ABI §L.7.4): Rust's own, with both
+        // types spelled out. Tycheck has required `unsafe`, the two type
+        // arguments, and sizes equal on every target (E0522).
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1
+                && qn.segments[0].text == "transmute"
+                && self.symbols.lookup_function("transmute").is_none()
+            {
+                if let ([from, to], [value]) = (call.explicit_generic_args.as_slice(), call.args.as_slice()) {
+                    self.w.push_str("std::mem::transmute::<");
+                    self.emit_type_as_rust(from);
+                    self.w.push_str(", ");
+                    self.emit_type_as_rust(to);
+                    self.w.push_str(">(");
+                    self.emit_expr(value);
+                    self.w.push(')');
+                    return;
+                }
+            }
+        }
         // `assert(cond)` / `assert(cond, msg)` (§S.7.2) → Rust's
         // `debug_assert!`: checked in debug builds, elided in release
         // — exactly the jux-full profile defaults. Under `jux test`

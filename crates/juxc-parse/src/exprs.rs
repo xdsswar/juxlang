@@ -752,6 +752,15 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Question)
                 | Some(TokenKind::Kw(Keyword::Extends))
                 | Some(TokenKind::Kw(Keyword::Super)) => saw_inner = true,
+                // A pointer type's `*` (`transmute<int*, uint>(p)`, §L.7.4),
+                // only right after a name or another `*`: an expression
+                // `a < b * c > (d)` would be a chained comparison, which Jux
+                // rejects anyway.
+                Some(TokenKind::Star)
+                    if matches!(
+                        self.tokens.get(i - 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_)) | Some(TokenKind::Star)
+                    ) => {}
                 // Anything else (operators, `(`, EOF, …) means this `<` is a
                 // comparison, not a type-arg list.
                 _ => return None,

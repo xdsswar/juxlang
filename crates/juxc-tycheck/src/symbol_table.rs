@@ -1469,6 +1469,9 @@ pub struct RecordSig {
     /// the FFI boundary by value or by pointer, exactly like a `@layout(c)
     /// struct`.
     pub is_layout_c: bool,
+    /// `@align(N)` on the record, when `N` is an integer literal (Layout-ABI
+    /// §L.1.4). Read by the `transmute` size check, which lays records out.
+    pub align: Option<i64>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -4838,6 +4841,7 @@ fn insert_record(
             methods,
             constructors,
             is_layout_c: is_layout_c_annotation(&record_decl.annotations),
+            align: align_annotation(&record_decl.annotations).and_then(|(_, n)| n),
             span: record_decl.span,
         },
     );
