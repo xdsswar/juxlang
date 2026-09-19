@@ -4192,8 +4192,49 @@ impl RustEmitter {
         ));
         w.push_str("pub trait JuxShowViaDebug { fn jux_show(self) -> String; }\n");
         w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &JuxShow<T> {\n");
-        w.push_str("    fn jux_show(self) -> String { format!(\"{:?}\", self.0) }\n");
+        w.push_str("    fn jux_show(self) -> String { jux_debug_text(&self.0) }\n");
         w.push_str("}\n");
+        // A value reaching the `Debug` tier inside GENERIC code (a class's
+        // `K` holding a `String`) is a type the emitter could not see, and
+        // `Debug` quotes a string or a char: `"c"`, `'x'`. A `String`, `str`
+        // or `char` prints as its text everywhere else, so the quotes and
+        // escapes `Debug` added are taken off again. `escape_debug` is
+        // one-to-one, so undoing it gives back exactly the original text.
+        w.push_str(r##"pub fn jux_debug_text<T: std::fmt::Debug + ?Sized>(v: &T) -> String {
+    let text = format!("{:?}", v);
+    let name = std::any::type_name_of_val(v).trim_start_matches('&');
+    let quoted = matches!(name, "alloc::string::String" | "str" | "char")
+        && text.len() >= 2
+        && (text.starts_with('"') || text.starts_with('\''));
+    if quoted { jux_unescape_debug(&text[1..text.len() - 1]) } else { text }
+}
+/// Undo `escape_debug` on the text between a `Debug` string's quotes.
+fn jux_unescape_debug(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('0') => out.push('\0'),
+            Some('u') => {
+                let code: String = chars.by_ref().skip(1).take_while(|c| *c != '}').collect();
+                if let Some(ch) = u32::from_str_radix(&code, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+"##);
         w.push_str("#[macro_export]\n");
         w.push_str("macro_rules! __jux_show {\n");
         w.push_str("    ($v:expr) => {{\n");
