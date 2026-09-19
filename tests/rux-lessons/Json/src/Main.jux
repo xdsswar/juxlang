@@ -1,0 +1,82 @@
+// JSON is a small format with a big job: it is how programs that share nothing
+// else agree on what a value is. This is parsing a document and walking what
+// comes back, which uses most of the course at once.
+//
+// A parsed document is a tree of values, and each one is a kind: text,
+// number, boolean, null, array, or object. The parser is the Rust crate
+// `serde_json`, declared in jux.toml as `rust.serde_json` and used under its
+// own names. Its `Value` is an enum with one variant per kind, each carrying
+// its payload, so reading one means switching on the kind before touching the
+// value: the same discipline `T?` and `Result` teach.
+
+import rust.serde_json.Value;
+import rust.serde_json.Error;
+import rust.serde_json.from_str;
+
+// Pads on the right up to `width` characters, which left-aligns a label.
+String alignLeft(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+// Asking the kind, then reading accordingly. Getting this wrong is not
+// possible by accident: each arm binds exactly the payload its kind carries,
+// and the switch must cover every kind (E0440 otherwise).
+void describe(String label, Value value) {
+    final String name = alignLeft(label, 10);
+    switch (value) {
+        case String(var text) -> print($"  ${name} text    ${text}");
+        // A JSON number may be an integer or a fraction, so asking for it as
+        // a `long` answers `long?`: null when it does not fit.
+        case Number(var number) -> print($"  ${name} number  ${number.as_i64() ?: 0}");
+        case Bool(var flag) -> print($"  ${name} boolean ${flag}");
+        case Array(var items) -> print($"  ${name} array of ${items.len()}");
+        case Object(var members) -> print($"  ${name} object of ${members.len()}");
+        case Null -> print($"  ${name} null");
+    }
+}
+
+void main() {
+    final String document = "{\"name\":\"Jux\",\"version\":4,\"stable\":false,\"tags\":[\"fast\",\"small\"]}";
+    print($"document: ${document}");
+
+    // Parsing either produces a document or throws the reason it is not one.
+    // `from_str` is generic over what to build, so the type argument says
+    // "a `Value`". A refused parse hands back no value at all, so there is no
+    // way to mistake a failure for a document that happened to say `null`.
+    try {
+        final Value root = from_str<Value>(document);
+        switch (root) {
+            case Object(var members) -> {
+                print($"parsed an object with ${members.len()} members");
+                // The members come back in document order because jux.toml
+                // turns on the crate's `preserve_order` feature; without it a
+                // map keeps its keys sorted. Each member is a (name, value)
+                // tuple.
+                for (var member : members) {
+                    describe(member.0, member.1);
+                }
+            }
+            default -> print("parsed something that is not an object");
+        }
+    } catch (Error reason) {
+        print($"refused at line ${reason.line()}, column ${reason.column()}");
+    }
+
+    // And a document that is not valid. The failure carries where it went
+    // wrong, which is what makes it useful in a message to a person.
+    try {
+        final Value broken = from_str<Value>("{\"broken\": }");
+        print("that parsed?");
+    } catch (Error reason) {
+        print($"bad document refused at line ${reason.line()}, column ${reason.column()}");
+    }
+
+    // Worth noticing how much of the course this one program leans on: a
+    // crate dependency, a generic call with its type argument written out, an
+    // enum switched on for every kind, nullable conversions, tuples
+    // destructured in a loop, and exceptions for the failure. None of it was
+    // introduced here; it is all being used.
+}

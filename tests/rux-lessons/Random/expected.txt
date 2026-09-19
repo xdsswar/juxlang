@@ -1,0 +1,10 @@
+from seed 12345  49 40 75 51 97
+the same again   49 40 75 51 97
+
+a die roll      5
+a fraction      0.1024
+
+shuffled         1 5 4 3 2
+a chosen index  2
+
+seeded by entropy, below 100: true

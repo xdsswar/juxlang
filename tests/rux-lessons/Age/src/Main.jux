@@ -1,0 +1,105 @@
+// Working out how old someone is, which sounds like subtraction and is not.
+//
+// Ages are counted in whole years, and a year is not a fixed number of days.
+// So the answer is "how many birthdays have happened", which means comparing
+// month and day as well as year, and that comparison is the whole program.
+//
+// The dates come from the Rust crate `chrono`: a `NaiveDate` is a calendar
+// date with no time zone attached, which is exactly what a birthday is. Its
+// `year()`, `month()` and `day()` come from chrono's `Datelike` interface.
+
+import rust.chrono.Datelike;
+import rust.chrono.NaiveDate;
+
+// An age, counted the way people count it. A record, because it is three
+// numbers that only mean something together.
+record Age(int years, int months, int days) {}
+
+// How many days a month has in a given year. chrono knows, including
+// February's leap-year rule, so nobody writes the table by hand.
+int daysInMonth(int year, int month) {
+    return NaiveDate.from_ymd_opt(year, month, 1)!!.num_days_in_month();
+}
+
+// Years, months and days between two dates.
+Age ageBetween(NaiveDate birth, NaiveDate today) {
+    var years = today.year() - birth.year();
+    var months = (int) today.month() - (int) birth.month();
+    var days = (int) today.day() - (int) birth.day();
+
+    // If the day of the month has not come round yet, borrow a month, and
+    // the number of days borrowed is however many the *previous* month had,
+    // which is why this cannot be done with a fixed 30.
+    if (days < 0) {
+        months -= 1;
+        var borrowedMonth = (int) today.month();
+        var borrowedYear = today.year();
+        if (borrowedMonth == 1) {
+            borrowedMonth = 12;
+            borrowedYear -= 1;
+        } else {
+            borrowedMonth -= 1;
+        }
+        days += daysInMonth(borrowedYear, borrowedMonth);
+    }
+
+    // If the month has not come round yet either, borrow a year.
+    if (months < 0) {
+        years -= 1;
+        months += 12;
+    }
+
+    return new Age(years, months, days);
+}
+
+// Pads on the right up to `width` characters, which left-aligns a label.
+String alignLeft(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+// `from_ymd_opt` answers `NaiveDate?`: null when the numbers name no real
+// day. So a birth date arrives here nullable and is checked before use.
+void report(String label, NaiveDate? birth, NaiveDate today) {
+    if (birth == null) {
+        print("not a date");
+        return;
+    }
+    final Age age = ageBetween(birth, today);
+    print($"${alignLeft(label, 22)} ${age.years} years, ${age.months} months, ${age.days} days");
+}
+
+// A year is a leap year exactly when chrono says its dates are in one.
+bool isLeapYear(int year) {
+    return NaiveDate.from_ymd_opt(year, 1, 1)!!.leap_year();
+}
+
+void main() {
+    // Pretend today is a fixed date, so the example prints the same thing
+    // every time it is run. A real program would ask the clock. The date is
+    // written by hand and known to exist, which is what `!!` asserts.
+    final NaiveDate today = NaiveDate.from_ymd_opt(2026, 9, 10)!!;
+    print($"today is ${today.year()}-${today.month()}-${today.day()}");
+    print("");
+
+    // A birthday that has already happened this year.
+    report("born 1990-03-15", NaiveDate.from_ymd_opt(1990, 3, 15), today);
+
+    // One still to come, where the year count is one less than subtracting.
+    report("born 1990-12-25", NaiveDate.from_ymd_opt(1990, 12, 25), today);
+
+    // Today's date exactly, which is a whole number of years.
+    report("born 2000-09-10", NaiveDate.from_ymd_opt(2000, 9, 10), today);
+
+    // The day after, where a month has to be borrowed.
+    report("born 2000-09-11", NaiveDate.from_ymd_opt(2000, 9, 11), today);
+
+    // The 29th of February, which only exists every fourth year. Someone born
+    // on one has a birthday most years only by agreement.
+    report("born 2004-02-29", NaiveDate.from_ymd_opt(2004, 2, 29), today);
+    print("");
+    print($"2004 was a leap year: ${isLeapYear(2004)}");
+    print($"2026 is not:          ${isLeapYear(2026)}");
+}

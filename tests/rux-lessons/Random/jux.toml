@@ -1,0 +1,10 @@
+[package]
+name = "rux.random"
+version = "0.1.0"
+
+# `rand` has the drawing methods, `rand_pcg` the seeded PCG generator. The
+# generated numbers are fixed by these versions: rand keeps a seeded sequence
+# stable within a minor version.
+[dependencies]
+"rust.rand" = "0.9"
+"rust.rand_pcg" = "0.9"

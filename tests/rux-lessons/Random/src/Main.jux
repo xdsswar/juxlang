@@ -1,0 +1,77 @@
+// A computer cannot produce randomness by arithmetic alone. What a generator
+// produces is a sequence that *looks* random but follows entirely from where
+// it started: its seed. Give it the same seed and you get the same numbers.
+//
+// That is a feature, not a shortcoming: a test that shuffles can be repeated,
+// and a bug that depended on the order can be reproduced.
+//
+// The generators come from two Rust crates declared in jux.toml: `rand`, which
+// has the drawing methods (`Rng`, `SliceRandom`), and `rand_pcg`, which has
+// the PCG generator itself. Both are used under their Rust names.
+
+import rust.rand.Rng;
+import rust.rand.SeedableRng;
+import rust.rand.SliceRandom;
+import rust.rand.rng;
+import rust.rand_pcg.Pcg64Dxsm;
+
+void main() {
+    // A generator built from a fixed seed. The ranges are `long`, not `int`:
+    // rand refuses to sample a platform-sized number, since the same seed
+    // would then give different answers on 32-bit and 64-bit machines.
+    var generator = Pcg64Dxsm.seed_from_u64(12345);
+    var line = "from seed 12345 ";
+    for (var i : 0..5) {
+        line += $" ${generator.random_range(0L..100L)}";
+    }
+    print(line);
+
+    // A second generator from the same seed produces the same run, exactly.
+    var again = Pcg64Dxsm.seed_from_u64(12345);
+    line = "the same again  ";
+    for (var i : 0..5) {
+        line += $" ${again.random_range(0L..100L)}";
+    }
+    print(line);
+    print("");
+
+    // Drawing within bounds. `random_range` takes a range, and the range
+    // says whether the top is included: `1..6` stops short of 6 while `1..=6`
+    // includes it. Worth checking before rolling a die with it.
+    print($"a die roll      ${generator.random_range(1L..=6L)}");
+    final double fraction = generator.random_range(0.0..1.0);
+    print($"a fraction      ${fraction.toFixed(4)}");
+
+    // Uniform means every value equally likely. Getting that right is harder
+    // than it looks (taking a remainder of a random number favours the low
+    // values slightly) which is a good reason not to write it yourself.
+    print("");
+
+    var cards = new Vec<int>();
+    for (var card : 1..=5) {
+        cards.push(card);
+    }
+    cards.shuffle(generator);
+    line = "shuffled        ";
+    for (var card : cards) {
+        line += $" ${card}";
+    }
+    print(line);
+
+    print($"a chosen index  ${generator.random_range(0L..5L)}");
+    print("");
+
+    // When unpredictability is the point rather than repeatability, the seed
+    // has to come from outside the program. `rng()` is a generator seeded
+    // from the operating system's source of genuine randomness, different on
+    // every run, so this lesson prints only that its draw is in range.
+    var unpredictable = rng();
+    final long draw = unpredictable.random_range(0L..100L);
+    print($"seeded by entropy, below 100: ${draw >= 0 && draw < 100}");
+
+    // One warning worth carrying away. A seeded generator is built for speed
+    // and for being reproducible, not for secrecy: watch enough of its output
+    // and the rest can be predicted. Anything protecting something (a
+    // password, a key, a token) needs the operating system's randomness
+    // directly, not a seeded generator.
+}

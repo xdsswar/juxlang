@@ -1,0 +1,18 @@
+text        Straße
+bytes       7
+characters  6
+
+scalars     3
+graphemes   2
+
+upper 'a'   A
+upper 'é'   É
+lower 'A'   a
+upper 'ß'   ß   (unchanged)
+upper text  STRASSE
+
+'a' alphabetic   true
+'ß' alphabetic   true
+'5' alphabetic   false
+'5' digit        true
+' ' whitespace   true

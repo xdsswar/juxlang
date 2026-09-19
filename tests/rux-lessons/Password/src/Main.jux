@@ -1,0 +1,63 @@
+// Building a password by drawing characters from an alphabet.
+//
+// The program is short. The care is all in one decision, where the randomness
+// comes from, and getting that wrong produces something that looks exactly as
+// random as the correct version and is not.
+
+import rust.rand.Rng;
+import rust.rand.SeedableRng;
+import rust.rand_pcg.Pcg64Dxsm;
+
+// Draws `length` characters from `letters`. Each draw is a position in the
+// alphabet, taken uniformly, so every character is equally likely.
+String draw(Pcg64Dxsm generator, Vec<char> letters, int length) {
+    var password = "";
+    for (var i : 0..length) {
+        final long pick = generator.random_range(0L..(long) letters.len());
+        password += $"${letters[(int) pick]}";
+    }
+    return password;
+}
+
+void main() {
+    // The characters a password may contain. Keeping them in one place makes
+    // the set easy to see and easy to change, and the count is what every
+    // draw is taken against.
+    final String alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+    // Note what is missing: l, I, O, 0 and 1. Characters that look like each
+    // other cost more in mistyped passwords than they add in strength.
+    //
+    // A `String` has no `alphabet[i]` (which of bytes or characters would it
+    // mean?), so the characters are collected into a `Vec<char>` once, and
+    // the draws index that.
+    var letters = new Vec<char>();
+    for (var letter : alphabet.chars()) {
+        letters.push(letter);
+    }
+    print($"alphabet has ${letters.len()} characters");
+
+    // This is the decision, and this lesson deliberately makes the wrong one
+    // so that its output can be checked: the generator starts from a FIXED
+    // seed, so it produces the same passwords every run. A password anyone can
+    // reproduce is not one. A real tool seeds from the operating system with
+    // `rand`'s `rng()` (the Random lesson shows it), or better, takes every
+    // character from the operating system's randomness directly.
+    var generator = Pcg64Dxsm.seed_from_u64(2026);
+
+    final int length = 16;
+    print($"password: ${draw(generator, letters, length)}");
+
+    // Two more, to show they differ.
+    for (var round : 0..2) {
+        print($"          ${draw(generator, letters, length)}");
+    }
+
+    // The honest caveat, which matters more than the code above. A generator
+    // like this one is built to be fast and repeatable, not unguessable: see
+    // enough of its output and the rest follows. Seeded from the operating
+    // system it is unpredictable to start with, and that is what carries the
+    // security; a fixed seed carries none.
+    //
+    // The lesson worth keeping: know which of the two you are using, and why.
+}
