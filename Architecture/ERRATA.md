@@ -451,8 +451,15 @@ implementation made the surface CLOSED, which turns a documentation
 inconsistency into a compile error. §K.7's declaration needs to grow the
 methods the language actually offers, or §S.3.3's sentence needs to go.
 
-**Spec status:** Unresolved. §K.7, §7.10 + E5, §S.3.3 and the gaps roadmap
-give four different answers.
+**Owner ruling (2026-09-19): keep `String.length()`.** It stays part of the
+surface and counts characters, exactly like `charLength()` (`"héllo".length()`
+is 5; `byteLength()` is 6). §K.7 now declares it, so §7.10's normative
+`?.length()` example is backed by the declaration. The rest of this entry
+(`toUpperCase` and the other compiler-known names, §S.3.3's `compareTo`)
+is unchanged.
+
+**Spec status:** Partly resolved (`length()`). §S.3.3 and the other
+compiler-known names remain open.
 
 ---
 

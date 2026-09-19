@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.3</h3>
+            <p>Function types, assigned lambdas, comparators and variance, and sturdier completion.</p>
+            <ul>
+              <li><b>Function types</b> are real types: a call through a function-typed local has the result type, and completion ranks function values by variance (parameters contravariant, result covariant).</li>
+              <li><b>Assigned lambdas</b> (<b>p = (a, b) -&gt; ...</b>, <b>this.f = ...</b>) take their parameter types from the interface they are assigned to.</li>
+              <li><b>Comparators</b>: a lambda passed where an <b>Ordering</b> is expected may return an integer; anything else is reported as the compiler does.</li>
+              <li><b>Variance</b>: a function value assigned the wrong way round is reported with the compiler's message.</li>
+              <li>A null check outside a lambda no longer counts inside it, as in the compiler.</li>
+              <li>Fixed: completing again in a reloaded file could fail on stale PSI.</li>
+            </ul>
             <h3>0.1.2</h3>
             <p>The build system comes to the IDE: profiles, examples, workspaces, doc examples and framed errors.</p>
             <ul>

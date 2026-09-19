@@ -306,6 +306,45 @@ The build-system wave of the toolchain (JUX-BUILD-SYSTEM-ADDENDUM §B.7,
   and copies its files; without one it writes the same templates. `src/` and
   `test/` become Jux source roots.
 
+### Added in 0.1.3
+
+The comparator, lambda-assignment and variance wave of the compiler
+(Operators O.2.1, LANG-V1 7.9.1, Type system T.3.6 and T.6.4), mirrored:
+
+- **Function types.** The type engine has a function type: `(A, B) -> R`
+  (and `async (A) -> R`) is read from its text, so a function-typed local,
+  parameter or field has a type, a call through it has the result type
+  (`make(1).` completes the result's members), and hints print it as written.
+- **Variance.** Completion ranks a function value by Type system T.3.6:
+  parameters contravariant, result covariant. The "Function value assigned
+  against its variance" inspection mirrors the compiler's E0410 with its
+  message ("type mismatch in declaration of `x`: expected (Animal) ->
+  String, found (Dog) -> String") for a declaration or an assignment whose
+  value's function type is fully known.
+- **Assigned lambdas.** A lambda assigned with `=` into a local, `this.f`,
+  `obj.f` or a bare field typed as a single-method interface takes its
+  parameter types from that interface (7.9.1), with the owner's type
+  arguments carried in, so completion inside the body knows them.
+- **Comparators.** A lambda given where the callee's signature expects a
+  function returning `Ordering` (the `rust.std` stub spells
+  `sort_unstable_by((T, T) -> Ordering compare)`) may return an integer or an
+  `Ordering`. The "Comparator result type" inspection reports anything else
+  with the compiler's message ("a comparator returns an `int` or an
+  `Ordering`, found String").
+- **Refinements stop at a lambda.** "Nullable value used without a check"
+  counts only checks made inside the innermost lambda around the use, as the
+  compiler's E0418 does (T.6.4); `var u = maybe;` checked inside the lambda
+  stays clean.
+- **Builtins.** `never`, the three range types and `@align` now come from
+  the lexer's generated lists; the IDE-side copies are gone.
+- **Robustness.** A sweep completes at 20 seeded-random identifier
+  positions in every example and every Jux lesson and requires no exception
+  and an answer within 3 seconds. It found completion handing out a type
+  cached on the non-physical completion copy that still named a field of a
+  discarded tree (`PsiInvalidElementAccessException` on the second
+  completion in a reloaded file); cached types naming dead PSI are now
+  recomputed.
+
 ### Known gaps against the Java plugin
 
 What the audit lists as not built yet, most valuable first: a real

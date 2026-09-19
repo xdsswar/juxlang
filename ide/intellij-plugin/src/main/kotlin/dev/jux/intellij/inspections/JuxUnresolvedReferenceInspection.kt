@@ -356,12 +356,8 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
             // `alignof(T)` / `alignof(expr)` (Layout-ABI §L.1.5, ERRATA E61):
             // a contextual word like `delete`, special only right before `(`.
             "alignof",
-            // Types the compiler binds structurally rather than through a
-            // declaration: the bottom type (Core lib K.4.1) and the three range
-            // types (MISSING-DEFS M.6.1). A user type of the same name wins in
-            // the compiler, and it wins here too, since in-file and project
-            // declarations are checked the same way.
-            "never", "ExclusiveRange", "InclusiveRange", "SteppedRange",
+            // `never` and the three range types come from the lexer's own
+            // builtin list now (JuxKeywords.BUILTINS), so they are not repeated.
         )
 
         /** Every name that is in scope everywhere — generated plus IDE-side. */

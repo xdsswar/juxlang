@@ -82,6 +82,9 @@ abstract class JuxIntention(private val family: String) : PsiElementBaseIntentio
             is JuxType.Primitive -> type.name != "void"
             is JuxType.TypeVar -> true
             is JuxType.TupleType -> type.elements.all { isKnown(it) }
+            // `(A, B) -> R` is written the way it presents; a `void` result is fine.
+            is JuxType.FunctionType -> type.params.all { isKnown(it) } &&
+                (type.ret == JuxType.Primitive("void") || isKnown(type.ret))
         }
 
         /** A local's initializer: the expression after its `=`, or null. */

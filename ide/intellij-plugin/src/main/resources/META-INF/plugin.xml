@@ -952,6 +952,24 @@
         enabledByDefault="true"
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxSafetyCommentInspection"/>
+    <!-- A comparator lambda returns an integer or an Ordering (Operators O.2.1): E0410. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxComparatorResult"
+        displayName="Comparator result type"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxComparatorResultInspection"/>
+    <!-- Function-type variance (Type system T.3.6): E0410. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxFunctionTypeVariance"
+        displayName="Function value assigned against its variance"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxFunctionTypeVarianceInspection"/>
     <!-- Time spans are milliseconds or a Duration (Async 18.1.9): E0487. -->
     <localInspection
         language="Jux"

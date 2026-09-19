@@ -318,6 +318,20 @@ object JuxCompletionRanking {
                 else -> 2
             }
             is JuxType.ArrayType -> if (expected is JuxType.ArrayType) fit(item.element, expected.element) else 2
+            // Function types (Type system §T.3.6): parameters contravariant,
+            // result covariant. `(Animal) -> R` fits a `(Dog) -> R` slot and
+            // `() -> Dog` fits `() -> Animal`; the reverse directions do not.
+            is JuxType.FunctionType -> when (expected) {
+                is JuxType.FunctionType -> {
+                    if (item.params.size != expected.params.size) 2
+                    else {
+                        val parts = item.params.zip(expected.params).map { (have, want) -> fit(want, have) } +
+                            fit(item.ret, expected.ret).let { if (expected.ret == JuxType.Primitive("void")) 0 else it }
+                        parts.maxOrNull() ?: 0
+                    }
+                }
+                else -> 2
+            }
             is JuxType.TypeVar -> if (expected is JuxType.TypeVar && expected.param == item.param) 0 else 1
             // A type name is the way to a value of it (`new Point(..)`,
             // `Color.RED`), so a type fitting the slot ranks with the values
