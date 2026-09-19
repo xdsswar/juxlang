@@ -66,6 +66,9 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         // lesson keeps its indexed loop on purpose, which is exactly what
         // the check reports (a for-each would do).
         "../tests/lessons/Callback/src/Main.jux:JuxIndexedLoop:37",
+        // `items[i]` on a record's bare array component is the thing this
+        // example exists to compile (Jux lesson bug B5), so it stays indexed.
+        "record_members.jux:JuxIndexedLoop:24",
     )
 
     fun testCorpusHasNoFindings() {
