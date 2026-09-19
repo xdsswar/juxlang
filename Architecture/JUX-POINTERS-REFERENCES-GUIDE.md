@@ -139,7 +139,7 @@ public void main() {
 
 ## 4. `unsafe { }` blocks — §L.5 ✅
 
-`unsafe { }` is an expression/statement block that unlocks the pointer
+`unsafe { }` is a statement block (Layout-ABI §L.5) that unlocks the pointer
 operations above (and `transmute`, inline `asm`, FFI calls). It does **not**
 disable the borrow checker for safe values, null-checks, or bounds checks —
 it only permits the specific unsafe *operations*. Keep blocks small and
@@ -337,15 +337,18 @@ public final class RawBuffer {
     private ulong size;
 
     public RawBuffer(ulong bytes) throws OutOfMemoryError {
-        var p = unsafe { malloc(bytes) };
+        void* p = null;
+        unsafe { p = malloc(bytes); }
         if (p == null) throw new OutOfMemoryError(bytes);
-        this.ptr = unsafe { p as byte* };
+        unsafe { this.ptr = p as byte*; }
         this.size = bytes;
     }
 
     public byte read(ulong i) {
         if (i >= size) throw new IndexOutOfBoundsException(i);
-        return unsafe { ptr[i] };               // bounds-checked, then unsafe read
+        byte value = 0;
+        unsafe { value = ptr[i]; }              // bounds-checked, then unsafe read
+        return value;
     }
 
     drop {

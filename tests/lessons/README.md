@@ -159,47 +159,47 @@ library gap, listed too), **TODO** (a later wave).
 | Ownership | 1 | PASS | `move` not implemented; shows sharing plus `drop` |
 | String | 1 | PASS | `substringBytes` added in 905442a (B11); the lesson still tests the boundary on bytes |
 | Format | 1 | PASS | helpers instead of specs; `0.125` ties to `0.12` |
-| Math | 1 | GAP | B14: Rust `f64` methods (`powf`, `ln`, `sin`, ...) not reachable on `double` |
+| Math | 1 | FIXED | B14: Rust `f64` methods reach `double` (8acb573) |
 | Prime | 1 | PASS | `Vec<bool>` |
 | Statistics | 1 | FIXED | B8: runtime panic, `for (i : 1..v.len())` held the Vec borrowed (d6b2b91) |
-| Algorithm | 1 | FIXED | B6, B7 (d6b2b91, fc4b7c8); iterator adaptors and `sort` missing (B14), written as helpers |
+| Algorithm | 1 | FIXED | B6, B7 (d6b2b91, fc4b7c8); iterator adaptors reachable since 8acb573 (B14); `sort` is not discoverable, `sort_unstable` is |
 | Console | 1 | PASS | |
 | Thanks | 1 | PASS | |
 | Module | 1 | PASS | three packages; package-private leak found (B9, now E0416 since 9065573) |
-| Vector | 2 | PASS | `Vec`; `get` gives `int?`, typed through `var` (B16); capacity follows Rust (0, then 4, then 8) |
+| Vector | 2 | PASS | `Vec`; `get` gives `int?` (B16, typed directly since 3e6be67); capacity follows Rust (0, then 4, then 8) |
 | Deque | 2 | PASS | `VecDeque`; `pop_front`/`pop_back` give `int?` |
 | HashMap | 2 | PASS | `HashMap`/`HashSet`; a set's `insert` returns whether the value was new |
 | TreeMap | 2 | PASS | `BTreeMap` |
-| Json | 2 | FAIL | B17 (the serde_json stub does not parse), B18; `Value` is switched on as an enum |
-| Random | 2 | FAIL | B20, B21, B22; expected output from a Rust oracle on rand 0.9.5 + rand_pcg 0.9.0 |
-| Password | 2 | FAIL | B22; a fixed seed keeps the output checkable, and the lesson says why that is wrong |
-| Unicode | 2 | FAIL | B23 (graphemes unreachable), B24 (`toUppercase` is ASCII-only, a wrong result) |
+| Json | 2 | FIXED | B17 (3c33bd6), B18 (991b1ef, 4ad77b3); `Value` is switched on as an enum |
+| Random | 2 | FIXED | B20, B22 (36bc3b2), B21 (4c3144f); expected output from a Rust oracle on rand 0.9.5 + rand_pcg 0.9.0 |
+| Password | 2 | FIXED | B22 (36bc3b2); a fixed seed keeps the output checkable, and the lesson says why that is wrong |
+| Unicode | 2 | FIXED | B23 (36bc3b2), B24 (a94b0f2) |
 | Age | 2 | PASS | chrono `NaiveDate`; the age is a record |
-| Time | 2 | FAIL | B25 (`Duration` unreachable), B26; the chrono half passes on its own |
-| File | 2 | FAIL | B27; temp dir, `File.create`/`open`, `write`/`read` byte counts |
-| Directory | 2 | FAIL | B28, B29; names are sorted, since listing order is the file system's |
-| Path | 2 | FAIL | B21, B30, B31; `is_empty` goes through `as_os_str()` because of B32 |
-| Binary | 2 | PASS | byte order by shifts, `to_le_bytes` is unreachable (B14); `read` typed through `var` (B33) |
-| Circle | 3 | FAIL | B40 (`int main()`), B41 (`const` operand loses `toFixed`); rest checked with `void main` |
-| Guess | 3 | FAIL | B40; seeded `StepRng` from `rust.rand`, since `Pcg64` has no trait methods (B43) |
-| Launch | 3 | PASS | pauses divided by 100; `sleep_ms` because `Duration` is unreachable (B44) |
-| Quadratic | 3 | FAIL | B40; all four branches checked with `void main`; bad input dies silently (B42) |
+| Time | 2 | FIXED | B25 (96110d8), B26 (9832be2) |
+| File | 2 | FIXED | B27 (3c33bd6); temp dir, `File.create`/`open`, `write`/`read` byte counts |
+| Directory | 2 | FIXED | B28 (3e6be67), B29 (29be156); names are sorted, since listing order is the file system's |
+| Path | 2 | FIXED | B21 (4c3144f), B30, B31 (29be156); `Path.is_empty()` is unstable, so not in rust.std (B32, f293812) |
+| Binary | 2 | PASS | byte order by shifts (`to_le_bytes` reachable since 8acb573, B14); `read` typed directly since 3c33bd6 (B33) |
+| Circle | 3 | FIXED | B40 (e609af8), B41 (f5dacbf) |
+| Guess | 3 | FIXED | B40 (e609af8); seeded `StepRng`; `Pcg64.seed_from_u64` works too since 36bc3b2 (B43) |
+| Launch | 3 | PASS | pauses divided by 100; sleeps with a `Duration` since 96110d8 (B44) |
+| Quadratic | 3 | FIXED | B40 (e609af8); bad input is a catchable exception since 1c3483c (B42) |
 | Melody | 3 | PASS | prints the notes; `Beep` only under `--features sound` on Windows |
 | Defer | 3 | PASS | nested `try`/`finally` for ordering, a `drop` block for the release |
 | Memory | 3 | PASS | C `malloc`/`free` through FFI (Jux has no `delete`, E0507); alignment printed, not the address |
-| Pointer | 3 | PASS | one pointer type `T*`, no read-only form; `public unsafe` order (B45) |
+| Pointer | 3 | PASS | one pointer type `T*`, no read-only form; `unsafe public` parses since 9274da2 (B45) |
 | Config | 3 | PASS | `@cfg` / `if cfg`; no `#source` query (gap), function name passed by hand |
 | Version | 3 | GAP | no compiler-version query; stand-in version record ordered with `<=>` |
-| Extern | 3 | FAIL | B46: a String passed to a native function is moved; rest checked |
+| Extern | 3 | FIXED | B46: a String passed to a native function is no longer moved (c6d09e2) |
 | Union | 3 | GAP | no `union`; stand-in rereads one `i32` through cast pointers |
 | Asm | 3 | GAP | no inline `asm` (E0301); bodies in Jux, `@cfg(arch)` selection kept |
 | Allocator | 3 | GAP | no allocator parameter or arena; the arena strategy built by hand over a `Vec` |
 
-Wave 1 totals: 32 PASS, 6 FIXED (were FAIL), 1 GAP.
+Wave 1 totals: 32 PASS, 7 FIXED (were FAIL or GAP), 0 GAP.
 
 Wave 2 (collections, crates and std I/O, 14 lessons) was run on 2026-09-18:
 6 PASS, 8 FAIL. Every failure is a compiler or binder bug with a repro below;
-none is a gap in the language itself.
+none is a gap in the language itself. All eight are FIXED now: 6 PASS, 8 FIXED.
 
 ## Bugs found by wave 1
 
@@ -356,7 +356,7 @@ Status: FIXED in 5f120f6. The cause was the literal receiver, not the interpolat
 works. Either the initializer should be accepted or the message should say
 that a `{...}` initializer needs the array type written out.
 
-Status: FIXED in 4ae3b24 for an alias declared in the same file; any other type gets one E0200 naming the fix.
+Status: FIXED in 4ae3b24 for an alias declared in the same file, and in 46fc6ca for one declared in another file of the build; the E0601 that followed an unreadable `{...}` is gone too (46fc6ca). A `uint` into an `int?` slot converts since b980847.
 
 **B14. Parts of the Rust std are not reachable.** (Math GAP, Algorithm,
 Statistics) The rule is that foreign APIs are discovered from rustdoc, so
@@ -371,7 +371,7 @@ each of these is a discovery gap rather than a list to extend by hand:
 - There is no way to sort a `Vec<double>`: `total_cmp` is missing and an
   ordering closure cannot produce a Rust `Ordering`.
 
-Status: OPEN. Needs rustdoc discovery of inherent primitive impls, `alloc` slice methods reached through `Deref`, and trait-provided `Iterator` methods; deferred as its own piece of work.
+Status: FIXED in 8acb573. Every integer, float, `char` and `bool` has Rust's methods (discovered per primitive from rustdoc), Rust's `Iterator` trait is surfaced as `RustIterator` with its adaptors, and `total_cmp` plus `sort_unstable_by` sort a `Vec<double>`. One part is the toolchain's: the prebuilt `alloc` rustdoc JSON omits `impl<T> [T]`, so `sort`/`sort_by` are not discoverable (Bindgen G.6.4.4). `import rust.std.f64.consts.PI` stays E0301: `rust.std` is one flat package and has no module path to import through.
 
 **B15. Smaller tooling and wording issues.**
 - `jux run` in project mode (`--manifest-path`) ignores `--emit-dir` and
@@ -414,6 +414,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 3e6be67 (a projection is an unknown type, not `std::process::Output`).
+
 **B17. `Option<()>` is stubbed as `void?`, which does not parse.** (Json)
 serde_json's `Value::as_null` returns `Option<()>`, and the generated stub
 says `public void? as_null();`. The parser stops there (E0200 "expected
@@ -425,6 +427,8 @@ B18.
 [dependencies]
 "rust.serde_json" = "1"      # any program importing rust.serde_json.Value
 ```
+
+Status: FIXED in 3c33bd6 (a member with no Jux spelling is left out).
 
 **B18. A for-each over a map yields references.** (Json) Iterating a
 `HashMap` (or serde_json's `Map`) binds each entry as a tuple of `&K, &V`, and
@@ -443,11 +447,15 @@ void main() {
 }
 ```
 
+Status: FIXED in 991b1ef (a foreign map walks owned entries); a collection bound from a foreign enum payload is a handle since 4ad77b3.
+
 **B19. A stub is not regenerated when a dependency's version changes.**
 Changing `"rust.rand" = "0.8"` to `"0.9"` in jux.toml kept the 0.8 stub
 (`gen_range`, no `Pcg64Dxsm`) while cargo linked 0.9; changing it back kept
 the 0.9 stub while cargo linked 0.8.8. Deleting `.jux-stubs/` is the only
 way out. BINDGEN §G.11.2 keys staleness on the dependency version.
+
+Status: FIXED in a976490 (the stub marker records the version requirement and features).
 
 **B20. A static call through a crate's type alias leaks E0423.** (Random)
 `Pcg64Dxsm` is `public type Pcg64Dxsm = Lcg128CmDxsm64;` in the rand_pcg stub.
@@ -462,6 +470,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 36bc3b2 (a crate alias of a class is that class).
+
 **B21. Importing a foreign interface, enum or constant emits the wrong
 path.** (Random, Path) A class import uses the stub's `@rust` path; the
 others use the Jux package path instead.
@@ -472,6 +482,8 @@ import rust.std.Component;        // `use rust::std::Component;`
 import rust.std.MAIN_SEPARATOR;   // `use rust::std::MAIN_SEPARATOR;`
 import rust.rand.SliceRandom;     // `use rand::SliceRandom;`, really rand::seq::SliceRandom
 ```
+
+Status: FIXED in 4c3144f.
 
 **B22. Trait impls from another crate, and blanket impls, are not
 surfaced.** (Random, Password) rand_pcg implements rand_core's `RngCore` and
@@ -489,10 +501,14 @@ void main() {
 }
 ```
 
+Status: FIXED in 36bc3b2 (traits from other crates, blanket impls, impls for slices; Bindgen G.6.4.3).
+
 **B23. A crate trait implemented for `str` is not reachable on `String`.**
 (Unicode) unicode-segmentation's `UnicodeSegmentation` is implemented for
 `str`; its stub declares the interface, but `"e\u{301}!".graphemes(true)` is
 E0413 "no method `graphemes` on `String`".
+
+Status: FIXED in 36bc3b2.
 
 **B24. `char.toUppercase()` and `toLowercase()` are ASCII-only.** (Unicode)
 Silent wrong result. They lower to `to_ascii_uppercase()` /
@@ -502,17 +518,23 @@ scalar) a `toUppercase()` returning one `char`, so the simple Unicode mapping
 is expected; `'ß'` staying `ß` is right. `isDigit` is ASCII-only in the same
 way.
 
+Status: FIXED in a94b0f2 (simple Unicode case mapping, core lib K.11).
+
 **B25. `std::time::Duration` is unreachable.** (Time) `Duration` is defined
 in `core` and re-exported by std, and the `rust.std` surface leaves `core` out
 (§G.6.2.1), so `import rust.std.Duration;` is E0301 and `sleep` cannot be
 called. `Instant` (defined in std) works, and `elapsed()` returns a value of
 the missing type.
 
+Status: FIXED in 96110d8 (what std re-exports from core is part of rust.std).
+
 **B26. Crate types are visible without an import.** (Time) With
 `rust.chrono` in jux.toml, a bare `NaiveDate` resolves with no import at all,
 and a bare `Duration` silently becomes chrono's `Duration` alias
 (`TimeDelta`): the program then fails with "no method `as_secs` on
 `rust.chrono.TimeDelta`", naming a type the programmer never wrote.
+
+Status: FIXED in 9832be2 (a bound crate's types need their import).
 
 **B27. A collection handle passed to a foreign static method leaks.** (File)
 `PathBuf` and `Vec` are reference types, held as a shared handle. Passed to a
@@ -532,11 +554,15 @@ void main() {
 `String.from_utf8(bytes)` with a `Vec<ubyte>` local, and
 `String.from_utf8_lossy(buffer)` with a `ubyte[]`, fail the same way (E0308).
 
+Status: FIXED in 3c33bd6.
+
 **B28. Iterating `read_dir` binds the item as `DirEntry` but emits a
 `Result`.** (Directory) Each item of `std::fs::ReadDir` is an
 `io::Result<DirEntry>`. juxc accepts `final DirEntry found = entry;` and
 emits the Result unchanged (rustc E0308). The item should either throw like
 every other `Result` from Rust (§G.5.4) or be refused.
+
+Status: FIXED in 3e6be67 (a Result item throws, Bindgen G.6.4.2).
 
 **B29. A nullable borrowed result of an unsized type leaks `.cloned()`.**
 (Directory, Path) `to_str()` on an `OsStr`/`OsString` and `extension()` on a
@@ -555,6 +581,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 29be156.
+
 **B30. `new Path(...)` makes an unsized local.** (Path) Rust's `Path` is
 unsized and only ever used behind a reference; the local is emitted as
 `let path: std::path::Path = std::path::Path::new(...)` (E0308 and E0277).
@@ -567,20 +595,28 @@ void main() {
 }
 ```
 
+Status: FIXED in 29be156 (a view is held as its owned form).
+
 **B31. A foreign enum variant pattern is emitted unqualified.** (Path)
 `switch (part) { case Normal(var name) -> ... }` over `std::path::Component`
 emits `Normal(name) =>` (E0531, "cannot find tuple struct or tuple variant
 `Normal`"). A user enum's variant is qualified; a foreign one is not.
+
+Status: FIXED in 29be156.
 
 **B32. The `rust.std` stub offers unstable APIs.** The vendored stub was
 generated from a nightly std and includes `Path.is_empty()`, which stable
 rustc rejects (E0658 `path_is_empty`); `normalize_lexically` and others are
 there too. The Path lesson asks `path.as_os_str().is_empty()` instead.
 
+Status: FIXED in f293812 (unstable APIs are probed with the build toolchain and left out, Bindgen G.6.2.3).
+
 **B33. A declared `Vec` from a foreign function leaks.** (Binary)
 `final Vec<ubyte> raw = read(path);` emits `let raw: JuxArr<Vec<u8>> =
 read(...)` and rustc rejects it (E0308). `var raw = read(path);` works, and
 indexing and `len()` on it are fine.
+
+Status: FIXED in 3c33bd6 (`Vec` keeps its name in stubs).
 
 **B14 again.** The Rust integer methods are unreachable on primitives in the
 same way as the `f64` ones: `value.to_le_bytes()` on a `u32` is E0413. The
@@ -589,7 +625,7 @@ Binary lesson does the byte order with shifts.
 ## Wave 3: scripted input, Jux idiom, gaps
 
 Wave 3 (14 lessons) was run on 2026-09-18 against the release `jux`.
-Wave 3 totals: 6 PASS, 4 FAIL, 4 GAP. The FAIL lessons keep the natural
+Wave 3 totals: 6 PASS, 4 FAIL, 4 GAP; the four FAIL lessons are FIXED now (6 PASS, 4 FIXED, 4 GAP). The FAIL lessons keep the natural
 code, and each was also run with the one failing construct rewritten, so the
 rest of it is known to work: every FAIL below is that one bug and nothing
 else.
@@ -667,6 +703,8 @@ int main() {
 }
 ```
 
+Status: FIXED in e609af8.
+
 **B41. A `const` on the left of a product loses its type for a method
 call.** (Circle) `(2.0 * Pi * r).toFixed(2)` works; with the constant first
 the call is emitted as a real Rust method `toFixed` on `f64` (E0599). Binding
@@ -679,6 +717,8 @@ void main() {
     print($"${(Pi * r).toFixed(2)}");        // rustc: no method `toFixed` on f64
 }
 ```
+
+Status: FIXED in f5dacbf (a top-level constant read by name has its type).
 
 **B42. An error thrown by a Rust call cannot be caught.** (Circle, Guess,
 Quadratic, not failing only because their input is valid) A Rust `Result`
@@ -700,6 +740,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 1c3483c (a Rust error is an exception; Bindgen G.5.4).
+
 **B43. `rand_pcg` generators have no `SeedableRng`/`RngCore` methods.**
 (Guess) The stub for `Lcg128Xsl64` (`Pcg64`) lists its constructor and
 `advance` only; the trait impls that come from `rand_core` are not
@@ -716,11 +758,15 @@ void main() {
 }
 ```
 
+Status: FIXED in 36bc3b2.
+
 **B44. `Duration` is not reachable.** (Launch) The `rust.std` stub declares
 `sleep(Duration dur)` and a dozen methods taking a `Duration`, but the type
 itself (`core::time::Duration`, re-exported as `std::time::Duration`) has
 no declaration: `import rust.std.Duration;` is E0301. Launch uses the older
 `sleep_ms(u32)`.
+
+Status: FIXED in 96110d8.
 
 **B45. A declaration that starts with `unsafe` does not parse.** (Pointer)
 Layout-ABI §L.5 gives `unsafe-fn = 'unsafe' function-decl` and the example
@@ -740,6 +786,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 9274da2.
+
 **B46. A String passed to a native function is moved.** (Extern) The
 marshalling emits `CString::new(text)`, which consumes the `String`, so any
 later use of it, in the same call or after it, leaks E0382.
@@ -758,6 +806,8 @@ void main() {
 }
 ```
 
+Status: FIXED in c6d09e2.
+
 **B47. `sizeof` is typed `int`, not `uint`, and emitted as `usize`.**
 (Union, Memory, Allocator) JUX-LANG-V1 §5.9.1 says `sizeof(T)` is a `uint`.
 juxc types it as `int`, so `count * sizeof(ulong)` with a `ulong` count is
@@ -773,6 +823,8 @@ void main() {
     print(one(sizeof(long)));       // same
 }
 ```
+
+Status: FIXED in 9cb64a3.
 
 **B48. Smaller issues.**
 - A throwing Rust method called on a string LITERAL is not unwrapped:
@@ -790,3 +842,5 @@ void main() {
 - `jux run --manifest-path` builds under `<project>/target` even with
   `CARGO_TARGET_DIR` set (B15 again), so each staged lesson has its own
   cargo target.
+
+Status: the string-literal receiver FIXED in 1c3483c; `to_str()` on a `PathBuf` FIXED in 29be156; the pointers guide example rewritten to statement-form `unsafe { }` (this commit); `jux run` in project mode does build under `CARGO_TARGET_DIR` since 177cdcc, and only copies the finished binary into the project.
