@@ -1,0 +1,2 @@
+function_type_variance_wrong_way.jux:12:5: [E0410] error: type mismatch in declaration of `anyAnimal`: expected (Animal) -> String, found (Dog) -> String
+function_type_variance_wrong_way.jux:16:5: [E0410] error: type mismatch in declaration of `makeDog`: expected () -> Dog, found () -> Animal

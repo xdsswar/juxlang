@@ -14284,6 +14284,15 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     if fn_shapes_agree(expected, found) {
         return true;
     }
+    // Function-type variance (T.3.6): contravariant in the parameters,
+    // covariant in the return. A `(Animal) -> String` takes every `Dog` a
+    // `(Dog) -> String` slot is handed, and a `() -> Dog` makes the `Animal`
+    // a `() -> Animal` slot promises. Only class and interface subtyping
+    // varies; a numeric or nullable difference in a position still has to
+    // match exactly.
+    if crate::ty::fn_types_vary_soundly(expected, found, symbols) {
+        return true;
+    }
     // `any` (§T.1.2 / §T.3.6): every value converts, except a nullable one
     // (that needs `any?`, handled by the nullable arm below) and a function
     // value, which has no identity and no string form.

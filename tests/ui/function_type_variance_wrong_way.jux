@@ -1,0 +1,17 @@
+class Animal {
+    public String name() { return "animal"; }
+}
+
+class Dog extends Animal {
+    public String bark() { return "woof"; }
+}
+
+public void main() {
+    (Dog) -> String dogsOnly = (d) -> d.bark();
+    // A slot that takes any Animal could be handed one that is not a Dog.
+    (Animal) -> String anyAnimal = dogsOnly;
+
+    () -> Animal makeAnimal = () -> new Animal();
+    // The result might not be a Dog.
+    () -> Dog makeDog = makeAnimal;
+}

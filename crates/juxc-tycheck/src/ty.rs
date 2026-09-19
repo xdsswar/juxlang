@@ -1679,6 +1679,31 @@ pub fn lower_generic_arg(
 /// Wildcards are NOT handled here — they live in
 /// [`crate::check::compatible`] which calls `is_subtype` to resolve
 /// the bound side.
+/// Whether function value `found` fits function slot `expected` by variance
+/// (T.3.6), with at least one position differing by subtyping and every
+/// other position identical. See `check::compatible`.
+pub fn fn_types_vary_soundly(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
+    let (
+        Ty::Fn { params: pe, return_type: re, is_async: ae },
+        Ty::Fn { params: pf, return_type: rf, is_async: af },
+    ) = (expected, found)
+    else {
+        return false;
+    };
+    if ae != af || pe.len() != pf.len() {
+        return false;
+    }
+    // A position varies soundly when it is the same type, or both sides are
+    // Jux object types related the right way round.
+    let object = |t: &Ty| matches!(t, Ty::User { .. });
+    let narrower = |sub: &Ty, sup: &Ty| sub == sup || (object(sub) && object(sup) && is_subtype(sub, sup, symbols));
+    // The slot's argument flows INTO the value's parameter.
+    let params_ok = pe.iter().zip(pf).all(|(slot, value)| narrower(slot, value));
+    // The value's result flows OUT to the slot's return.
+    let return_ok = narrower(rf, re);
+    params_ok && return_ok && expected != found
+}
+
 pub fn is_subtype(child: &Ty, parent: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcard escape hatches mirroring `compatible`.
     if matches!(child, Ty::Unknown | Ty::Param(_))

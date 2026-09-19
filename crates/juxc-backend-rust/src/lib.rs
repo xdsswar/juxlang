@@ -1467,6 +1467,11 @@ struct RustEmitter {
     /// whose result is an `int` (`(a, b) -> a <=> b`) turns it into an
     /// `Ordering` by its sign (Operators §O.2.1).
     pub(crate) lambda_int_to_ordering: bool,
+    /// Set while emitting a lambda written into a function slot whose return
+    /// type needs a conversion (an interface or polymorphic base, see
+    /// `IfaceCoercion::LambdaReturnUpcast`): the lambda's result is converted
+    /// to it. Take-and-cleared by [`Self::emit_lambda`].
+    pub(crate) lambda_return_slot: Option<juxc_ast::TypeRef>,
     /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
@@ -5511,6 +5516,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             lambda_bare_target: false,
             lambda_clone_params: false,
             lambda_int_to_ordering: false,
+            lambda_return_slot: None,
             worker_attach: Vec::new(),
         }
     }

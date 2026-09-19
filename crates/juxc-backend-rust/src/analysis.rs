@@ -164,7 +164,17 @@ pub(crate) enum IfaceCoercion {
     /// `crate::JuxAny`. Every coercion site routes it through
     /// [`RustEmitter::emit_expr_coerced_to_iface`], which owns the nullable
     /// wrap too.
-    IntoAny,
+    IntoAny,    /// A function value whose type differs from the slot's by variance
+    /// (Type system §T.3.6): a `(Animal) -> String` into a `(Dog) -> String`
+    /// slot, a `() -> Dog` into a `() -> Animal` one. Rust's closure types do
+    /// not vary, so the value is wrapped in a closure of the slot's shape that
+    /// upcasts each argument and the result.
+    FnVariance,
+    /// A lambda written into a function slot whose return type is an
+    /// interface or a polymorphic base (`() -> Dog makeDog = () -> new
+    /// Puppy();`): the lambda's result is converted to that return type, as a
+    /// `return` in a method returning it would be.
+    LambdaReturnUpcast,
 }
 
 /// A conservative "is this expression a place (lvalue) that may be used
@@ -3869,6 +3879,26 @@ impl crate::RustEmitter {
     ) -> Option<juxc_ast::TypeRef> {
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
+                // A call THROUGH a function value held in a local or a
+                // parameter (`onlyDogs(new Dog())`): its argument converts to
+                // the function type's own parameter, as a method's would. A
+                // `(Dog) -> String` whose `Dog` is a polymorphic base takes a
+                // `Rc<dyn DogKind>`, not the concrete `Dog`.
+                let local = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.get(&qn.segments[0].text))
+                    .cloned()
+                    .or_else(|| {
+                        self.current_fn_params
+                            .contains(&qn.segments[0].text)
+                            .then(|| self.expr_types.get(&qn.span).cloned())
+                            .flatten()
+                    });
+                if let Some(juxc_tycheck::Ty::Fn { params, .. }) = local.map(crate::exprs::field::strip_nullable) {
+                    return params.get(arg_idx).and_then(crate::analysis::ty_to_type_ref);
+                }
                 // An implicit-`this` call (`swap(i, j)` inside a method): the
                 // enclosing class's method (inherited ones included) is the
                 // callee, as for `this.swap(i, j)`. Without this the argument
@@ -4181,6 +4211,19 @@ impl crate::RustEmitter {
         if self.lambda_as_anonymous_class(target_ty, expr).is_some() {
             return IfaceCoercion::FromLambda;
         }
+        if self.fn_value_needs_variance_adapter(target_ty, expr) {
+            return IfaceCoercion::FnVariance;
+        }
+        if matches!(expr, Expr::Lambda(_)) && !target_ty.nullable {
+            if let Some(shape) = target_ty.closure_shape() {
+                let ret_bare = shape.return_type.name.segments.last().map(|seg| seg.text.as_str()).unwrap_or("");
+                let converts = shape.return_type.array_shape.is_none()
+                    && (self.lookup_interface_by_bare_or_fqn(ret_bare).is_some() || self.is_poly_base_class(ret_bare));
+                if converts {
+                    return IfaceCoercion::LambdaReturnUpcast;
+                }
+            }
+        }
         // Concrete subclass → its direct base class under the non-sealed,
         // non-polymorphic open hierarchy (the `From<Sub> for Parent` slicing
         // model, e.g. exception causes). Detected here so every coercion call
@@ -4208,9 +4251,19 @@ impl crate::RustEmitter {
         if !target_is_iface && !target_is_polybase {
             return IfaceCoercion::None;
         }
-        let Some(src_ty) = self.expr_types.get(&crate::exprs::expr_span_of(expr)) else {
+        // The checker's type for the expression; a name the backend bound
+        // itself (the arguments of a variance adapter, `__jux_a0`) has no
+        // span, and is typed by its local binding instead.
+        let bound_locally = match expr {
+            Expr::Path(qn) if qn.segments.len() == 1 && qn.span == juxc_source::Span::DUMMY => {
+                self.local_types.iter().rev().find_map(|s| s.get(&qn.segments[0].text)).cloned()
+            }
+            _ => None,
+        };
+        let Some(src_ty) = self.expr_types.get(&crate::exprs::expr_span_of(expr)).cloned().or(bound_locally) else {
             return IfaceCoercion::None;
         };
+        let src_ty = &src_ty;
         // A **generic-param** source (`T occ` returned into an `Animal` slot,
         // where `T extends Animal`) is a concrete value at runtime that must be
         // wrapped into the trait object exactly like a concrete subtype:
@@ -4359,6 +4412,107 @@ impl crate::RustEmitter {
         parent_bare == Some(target_bare)
     }
 
+    /// Whether `expr`, a function value, reaches the function-typed slot
+    /// `target` only by variance (T.3.6), so it needs
+    /// [`Self::emit_fn_variance_adapter`]. A lambda is not: it is written
+    /// for its slot's own types.
+    fn fn_value_needs_variance_adapter(&self, target: &TypeRef, expr: &Expr) -> bool {
+        if matches!(expr, Expr::Lambda(_) | Expr::MethodRef(_)) || target.closure_shape().is_none() {
+            return false;
+        }
+        let mut slot_ref = target.clone();
+        slot_ref.nullable = false;
+        let slot = juxc_tycheck::ty_from_ref_in_env(&slot_ref, &self.symbols);
+        let Some(found) = self.receiver_ty_of(expr) else { return false };
+        let found = crate::exprs::field::strip_nullable(found);
+        juxc_tycheck::ty::fn_types_vary_soundly(&slot, &found, &self.symbols)
+    }
+
+    /// Wrap function value `expr` in a closure of `slot`'s shape (T.3.6):
+    ///
+    /// ```text
+    /// { let __jux_f = describe.clone();
+    ///   std::rc::Rc::new(move |__jux_a0: Dog| (__jux_f)(<__jux_a0 as Animal>))
+    ///       as std::rc::Rc<dyn Fn(Dog) -> String> }
+    /// ```
+    ///
+    /// Each argument whose type differs is upcast to the value's parameter
+    /// type, and a differing result to the slot's return type, both through
+    /// the same conversion any other store into those types uses.
+    fn emit_fn_variance_adapter(&mut self, slot: &TypeRef, expr: &Expr) {
+        let slot_ty = juxc_tycheck::ty_from_ref_in_env(slot, &self.symbols);
+        let found = self.receiver_ty_of(expr).map(crate::exprs::field::strip_nullable);
+        let (
+            juxc_tycheck::Ty::Fn { params: slot_params, return_type: slot_ret, .. },
+            Some(juxc_tycheck::Ty::Fn { params: value_params, return_type: value_ret, .. }),
+        ) = (slot_ty, found)
+        else {
+            self.emit_expr(expr);
+            return;
+        };
+        let Some(shape) = slot.closure_shape().cloned() else {
+            self.emit_expr(expr);
+            return;
+        };
+        let local = |name: &str| {
+            Expr::Path(juxc_ast::QualifiedName {
+                segments: vec![juxc_ast::Ident { text: name.to_string(), span: juxc_source::Span::DUMMY }],
+                span: juxc_source::Span::DUMMY,
+            })
+        };
+        self.w.push_str("{ let __jux_f = ");
+        self.emit_expr(expr);
+        if expr_is_place(expr) {
+            self.w.push_str(".clone()");
+        }
+        self.w.push_str("; std::rc::Rc::new(move |");
+        let mut scope: std::collections::HashMap<String, juxc_tycheck::Ty> = std::collections::HashMap::new();
+        for (i, p) in shape.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let name = format!("__jux_a{i}");
+            self.w.push_str(&name);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(p);
+            if let Some(t) = slot_params.get(i) {
+                scope.insert(name, t.clone());
+            }
+        }
+        self.w.push_str("| ");
+        scope.insert("__jux_r".to_string(), (*value_ret).clone());
+        self.local_types.push(scope);
+        let converts_result = value_ret != slot_ret;
+        if converts_result {
+            self.w.push_str("{ let __jux_r = ");
+        }
+        self.w.push_str("(__jux_f)(");
+        for i in 0..shape.params.len() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let arg = local(&format!("__jux_a{i}"));
+            let differs = slot_params.get(i) != value_params.get(i);
+            match value_params.get(i).and_then(|t| crate::analysis::ty_to_type_ref(t)) {
+                Some(value_param) if differs => self.emit_expr_coerced_to_iface(&value_param, &arg),
+                _ => self.emit_expr(&arg),
+            }
+        }
+        self.w.push(')');
+        if converts_result {
+            self.w.push_str("; ");
+            match crate::analysis::ty_to_type_ref(&slot_ret) {
+                Some(slot_return) => self.emit_expr_coerced_to_iface(&slot_return, &local("__jux_r")),
+                None => self.w.push_str("__jux_r"),
+            }
+            self.w.push_str(" }");
+        }
+        self.local_types.pop();
+        self.w.push_str(") as ");
+        self.emit_value_type_as_rust(slot);
+        self.w.push_str(" }");
+    }
+
     pub(crate) fn emit_expr_coerced_to_iface(
         &mut self,
         target_ty: &TypeRef,
@@ -4383,6 +4537,16 @@ impl crate::RustEmitter {
         }
         match coercion {
             IfaceCoercion::None | IfaceCoercion::IntoAny => unreachable!("handled above"),
+            IfaceCoercion::LambdaReturnUpcast => {
+                self.lambda_return_slot = target_ty.closure_shape().map(|shape| shape.return_type.clone());
+                self.emit_expr(expr);
+                self.lambda_return_slot = None;
+            }
+            IfaceCoercion::FnVariance => {
+                let mut slot = target_ty.clone();
+                slot.nullable = false;
+                self.emit_fn_variance_adapter(&slot, expr);
+            }
             IfaceCoercion::FromLambda => {
                 if let (Some(anon), Expr::Lambda(l)) = (self.lambda_as_anonymous_class(target_ty, expr), expr) {
                     self.emit_lambda_as_anonymous_class(l, &anon);

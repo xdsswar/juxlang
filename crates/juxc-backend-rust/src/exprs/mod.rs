@@ -2646,6 +2646,7 @@ impl RustEmitter {
         let bare = std::mem::take(&mut self.lambda_bare_target);
         let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
         let int_to_ordering = std::mem::take(&mut self.lambda_int_to_ordering) && bare;
+        let return_slot = self.lambda_return_slot.take();
         let captures = self.collect_wrapper_captures(l);
         // **`this` captured by a lambda shares the handle too.** A closure that
         // reads `this` would otherwise borrow `&self`, and returning it from a
@@ -2769,6 +2770,10 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_expr(e);
                     self.w.push_str(").cmp(&0)");
+                } else if let Some(ret) = &return_slot {
+                    // The value converts to the slot's return type, the way
+                    // a `return` into that type would.
+                    self.emit_expr_coerced_to_iface(ret, e);
                 } else {
                     self.emit_expr(e);
                 }
@@ -2788,6 +2793,11 @@ impl RustEmitter {
                 self.in_lambda_body = prev_lam;
             }
             juxc_ast::LambdaBody::Block(b) => {
+                // A known slot return type is the body's return type, so each
+                // `return` converts its value to it.
+                let saved_return = return_slot
+                    .clone()
+                    .map(|ret| self.current_return_type.replace(juxc_ast::ReturnType::Type(ret)));
                 // Mark the body as lambda territory (S9): a `try`
                 // with returns in here can't type its return channel
                 // from `current_return_type` (that's the enclosing
@@ -2805,6 +2815,9 @@ impl RustEmitter {
                 self.w.emit_indent();
                 self.w.push('}');
                 self.in_lambda_body = prev_lam;
+                if let Some(prev) = saved_return {
+                    self.current_return_type = prev;
+                }
             }
         }
         if l.is_async {
