@@ -291,6 +291,7 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
     "byteLength",
     "charLength",
     "repeat",
+    "substringBytes",
 ];
 
 /// Field/property names we allow on **any array receiver** without a

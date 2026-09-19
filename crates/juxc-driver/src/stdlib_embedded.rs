@@ -385,6 +385,26 @@ public class FileNotFoundException extends IOException {
     }
 }
 "###),
+    ("exceptions/EncodingException.jux", r###"/**
+ * jux.std.exceptions.EncodingException
+ *
+ * Bytes that are not valid UTF-8 where a `String` was wanted, or a
+ * byte range that would split a multi-byte character (§K.7:
+ * `substringBytes`, `String.fromBytes`). Unchecked, like
+ * `IndexOutOfBoundsException`, the other failure those methods name.
+ */
+package jux.std.exceptions;
+
+public class EncodingException extends RuntimeException {
+    /**
+     * Construct an EncodingException with a message naming the
+     * offending bytes or byte offset.
+     */
+    public EncodingException(String message) {
+        super(message);
+    }
+}
+"###),
     ("exceptions/IllegalArgumentException.jux", r###"/**
  * jux.std.exceptions.IllegalArgumentException
  *

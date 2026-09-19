@@ -5791,6 +5791,21 @@ impl RustEmitter {
                 self.emitting_format_arg = prev;
                 true
             }
+            "substringBytes" => {
+                // `s.substringBytes(start, end)`: byte offsets, through the
+                // prelude's `jux_substring_bytes` (§K.7).
+                self.w.push_str("crate::jux_substring_bytes(&");
+                self.emit_stdlib_receiver(receiver);
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                for arg in call.args.iter().take(2) {
+                    self.w.push_str(", ");
+                    self.emit_index_as_isize(arg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+                true
+            }
             "charAt" => {
                 self.w.push_str("crate::jux_char_at(&");
                 self.emit_stdlib_receiver(receiver);

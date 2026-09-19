@@ -1,0 +1,23 @@
+// `substringBytes` (§K.7) slices a String by UTF-8 byte offsets, where
+// `substring` counts characters. A range that would cut a multi-byte
+// character in half throws `EncodingException`.
+
+void main() {
+    final String word = "héllo";
+    print(word.byteLength());
+    print(word.charLength());
+    print(word.substring(0, 2));
+    print(word.substringBytes(0, 3));
+    print(word.substringBytes(3, 6));
+
+    try {
+        print(word.substringBytes(0, 2));
+    } catch (EncodingException e) {
+        print("byte 2 is inside the é");
+    }
+    try {
+        print(word.substringBytes(4, 99));
+    } catch (IndexOutOfBoundsException e) {
+        print("past the end");
+    }
+}

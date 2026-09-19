@@ -1591,7 +1591,7 @@ fn infer_stdlib_method(
         Ty::String => match method_name {
             // String → String
             "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring" | "repeat"
-            | "to_string" | "clone" => Some(Ty::String),
+            | "substringBytes" | "to_string" | "clone" => Some(Ty::String),
             // String → uint. `len()` is the Rust `str::len()` byte count, which
             // returns `usize`; typing it `uint` keeps it consistent with the
             // emitted Rust (and with `Vec::len()`), so a mixed-type use coerces
