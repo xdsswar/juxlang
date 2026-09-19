@@ -1,0 +1,56 @@
+// A todo list driven from the command line.
+//
+//   jux run -- reset add "buy milk" done 1 list stats
+//
+// Each word is a command, and commands run left to right against a store kept
+// in the system's temporary directory, so the list survives between runs.
+import rust.std.temp_dir;
+import todo.model.Task;
+import todo.store.{TodoStore, NoSuchTask};
+import todo.cli.*;
+
+public void main(String[] args) {
+    final var store = new TodoStore(temp_dir().join("jux-app-todo.txt"));
+    final var reader = new CommandReader(args);
+
+    while (true) {
+        final Command? next = reader.next();
+        if (next == null) {
+            break;
+        }
+        try {
+            run(store, next);
+        } catch (NoSuchTask e) {
+            print($"error: ${e.getMessage()}");
+        }
+    }
+}
+
+/** Runs one command against the store and reports what it did. */
+void run(TodoStore store, Command command) {
+    switch (command) {
+        case Reset r -> {
+            store.reset();
+            print("list cleared");
+        }
+        case Add(var title) -> {
+            final Task t = store.add(title);
+            print($"added #${t.id}: ${t.title}");
+        }
+        case Done(var id) -> print($"done: ${store.mark(id, true).title}");
+        case Undo(var id) -> print($"reopened: ${store.mark(id, false).title}");
+        case Remove(var id) -> print($"removed: ${store.remove(id).title}");
+        case ListAll l -> {
+            print("--- todo ---");
+            for (var t : store.all()) {
+                print(t);
+            }
+        }
+        case Stats s -> {
+            final int total = store.all().len();
+            final int done = store.doneCount();
+            print($"${done} of ${total} done, ${total - done} open");
+        }
+        case Unknown(var word) -> print($"unknown command `${word}`");
+    }
+}

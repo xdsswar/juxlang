@@ -1,0 +1,114 @@
+// The list, kept in a plain text file so it survives between runs.
+//
+// Every change is written straight back: the file is the truth, and the
+// in-memory `Vec` is only a working copy. File errors are Rust's
+// `std::io::Error`, which a Jux caller catches like any other exception.
+package todo.store;
+
+import rust.std.PathBuf;
+import rust.std.read_to_string;
+import rust.std.write;
+import rust.std.remove_file;
+import todo.model.Task;
+
+public class TodoStore {
+    private PathBuf file;
+    private Vec<Task> tasks = new Vec<Task>();
+    private int nextId = 1;
+
+    /** Opens the store at `file`, reading whatever it already holds. */
+    public TodoStore(PathBuf file) {
+        this.file = file;
+        this.load();
+    }
+
+    /** Empties the list and deletes the file. */
+    public void reset() {
+        tasks.clear();
+        nextId = 1;
+        if (file.exists()) {
+            remove_file(file);
+        }
+    }
+
+    /** Adds a task and returns it. */
+    public Task add(String title) {
+        final Task task = new Task(nextId, title, false);
+        nextId++;
+        tasks.push(task);
+        this.save();
+        return task;
+    }
+
+    /** Marks task `id` done (or not done) and returns the new value. */
+    public Task mark(int id, bool done) {
+        final int at = this.indexOf(id);
+        final Task changed = tasks[at].finished(done);
+        tasks[at] = changed;
+        this.save();
+        return changed;
+    }
+
+    /** Removes task `id` and returns what it was. */
+    public Task remove(int id) {
+        final int at = this.indexOf(id);
+        final Task gone = tasks.remove((uint) at);
+        this.save();
+        return gone;
+    }
+
+    /** Every task, in the order they were added. */
+    public Vec<Task> all() {
+        return tasks;
+    }
+
+    /** How many tasks are done. */
+    public int doneCount() {
+        int n = 0;
+        for (var t : tasks) {
+            if (t.done) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private int indexOf(int id) {
+        for (var i = 0; i < tasks.len(); i++) {
+            if (tasks[i].id == id) {
+                return i;
+            }
+        }
+        throw new NoSuchTask(id);
+    }
+
+    /** Reads the file, one task per line. A missing file is an empty list. */
+    private void load() {
+        if (!file.exists()) {
+            return;
+        }
+        final String text = read_to_string(file);
+        for (var line : text.lines()) {
+            if (line.is_empty()) {
+                continue;
+            }
+            // `id|done|title`, split at most twice so the title may hold `|`.
+            final var parts = line.splitn(3, '|').collect<Vec<String>>();
+            final int id = parts[0].parse<int>();
+            final Task task = new Task(id, parts[2], parts[1] == "1");
+            tasks.push(task);
+            if (id >= nextId) {
+                nextId = id + 1;
+            }
+        }
+    }
+
+    /** Writes the whole list back. */
+    private void save() {
+        var text = "";
+        for (var t : tasks) {
+            text = text + t.toLine() + "\n";
+        }
+        write(file, text);
+    }
+}

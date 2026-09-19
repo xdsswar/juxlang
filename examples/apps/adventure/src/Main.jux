@@ -1,0 +1,137 @@
+// A small text adventure, played from standard input.
+//
+// One line per turn. The parser turns a line into a command value; the game
+// is a `switch` over the sealed set, so a new command cannot be forgotten.
+import rust.std.stdin;
+import world.{World, Room};
+
+public void main() {
+    final var game = new World();
+    print("You are in a dusty hall. Type `quit` to stop.");
+    look(game);
+
+    for (var line : stdin().lines()) {
+        final String input = line.trim().to_lowercase();
+        if (input.is_empty()) {
+            continue;
+        }
+        print($"> ${input}");
+        final String verb = word(input, 0);
+        final String noun = word(input, 1);
+
+        switch (verb) {
+            case "look" -> look(game);
+            case "go" -> go(game, noun);
+            case "take" -> take(game, noun);
+            case "inventory" -> inventory(game);
+            case "open" -> open(game, noun);
+            case "use" -> use(game, noun);
+            case "score" -> print($"${game.moves} moves, carrying ${game.inventory().len()}");
+            case "quit" -> {
+                print("Goodbye.");
+                return;
+            }
+            default -> print($"I do not know how to `${verb}`.");
+        }
+    }
+}
+
+/** Word number `index` of `line`, or an empty string. */
+String word(String line, int index) {
+    var at = 0;
+    var current = "";
+    for (var c : line.chars()) {
+        if (c == ' ') {
+            if (at == index) {
+                return current;
+            }
+            at++;
+            current = "";
+        } else {
+            current = current + c;
+        }
+    }
+    return at == index ? current : "";
+}
+
+void look(World game) {
+    final Room room = game.room();
+    print($"You are in ${room.description}.");
+    final Vec<String> items = game.itemsHere();
+    if (items.len() > 0) {
+        var list = "";
+        for (var item : items) {
+            list = list.is_empty() ? item : list + ", " + item;
+        }
+        print($"You can see: ${list}.");
+    }
+    var exits = "";
+    for (var direction : new String[] {"north", "south", "east", "west"}) {
+        if (room.exit(direction) != null) {
+            exits = exits.is_empty() ? direction : exits + ", " + direction;
+        }
+    }
+    print($"Exits: ${exits}.");
+}
+
+void go(World game, String direction) {
+    if (game.go(direction)) {
+        look(game);
+    } else {
+        print($"You cannot go ${direction}.");
+    }
+}
+
+void take(World game, String item) {
+    if (game.take(item)) {
+        print($"Taken: ${item}.");
+    } else {
+        print($"There is no ${item} here.");
+    }
+}
+
+void inventory(World game) {
+    final Vec<String> held = game.inventory();
+    if (held.len() == 0) {
+        print("You are carrying nothing.");
+        return;
+    }
+    var list = "";
+    for (var item : held) {
+        list = list.is_empty() ? item : list + ", " + item;
+    }
+    print($"You are carrying: ${list}.");
+}
+
+void open(World game, String what) {
+    if (what != "chest") {
+        print($"You cannot open the ${what}.");
+        return;
+    }
+    if (game.here != "cellar") {
+        print("There is no chest here.");
+        return;
+    }
+    if (!game.chestOpen) {
+        print("The chest is locked.");
+        return;
+    }
+    print("The chest is open. Inside is a small brass bell.");
+}
+
+void use(World game, String item) {
+    if (item != "key") {
+        print($"Nothing happens with the ${item}.");
+        return;
+    }
+    if (!game.carrying("key")) {
+        print("You are not carrying a key.");
+        return;
+    }
+    if (game.here != "cellar") {
+        print("There is nothing to unlock here.");
+        return;
+    }
+    game.chestOpen = true;
+    print("The key turns. The chest is unlocked.");
+}

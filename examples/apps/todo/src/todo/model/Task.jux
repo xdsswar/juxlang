@@ -1,0 +1,35 @@
+// One entry on the list. A record: its identity is its contents, and a
+// changed task is a new value made with `with(...)`, never an edit in place.
+package todo.model;
+
+public record Task(int id, String title, bool done) {
+
+    /** The task marked finished (or not), everything else unchanged. */
+    public Task finished(bool value) {
+        return this.with(done: value);
+    }
+
+    /** How the task reads in a listing: `[x]  3  call the plumber`. */
+    public String operator string() {
+        final String box = done ? "[x]" : "[ ]";
+        return $"${box} ${pad($"${id}", 3)}  ${title}";
+    }
+
+    /**
+     * The task as one line of the store file: `id|done|title`. The title goes
+     * last so a `|` inside it needs no escaping: the reader splits at most
+     * twice.
+     */
+    public String toLine() {
+        return $"${id}|${done ? 1 : 0}|${title}";
+    }
+}
+
+/** Left-pads `text` with spaces to `width` characters. */
+public String pad(String text, int width) {
+    var out = text;
+    while (out.charLength() < width) {
+        out = " " + out;
+    }
+    return out;
+}

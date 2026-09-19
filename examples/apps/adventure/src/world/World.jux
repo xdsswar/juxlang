@@ -1,0 +1,73 @@
+// The map, the items lying in it, and what the player is carrying.
+package world;
+
+public class World {
+    private HashMap<String, Room> rooms = new HashMap<String, Room>();
+    private HashMap<String, Vec<String>> floor = new HashMap<String, Vec<String>>();
+    private Vec<String> carried = new Vec<String>();
+
+    public String here = "hall";
+    public bool chestOpen = false;
+    public int moves = 0;
+
+    public World() {
+        this.place(new Room("hall", "a dusty hall", "study", "", "cellar", ""), "lamp");
+        this.place(new Room("study", "a study lined with books", "", "hall", "", ""), "key");
+        this.place(new Room("cellar", "a cold cellar with a locked chest", "", "", "", "hall"), "");
+    }
+
+    private void place(Room room, String item) {
+        rooms.insert(room.name, room);
+        var here = new Vec<String>();
+        if (!item.is_empty()) {
+            here.push(item);
+        }
+        floor.insert(room.name, here);
+    }
+
+    public Room room() {
+        return rooms.get(here)!!;
+    }
+
+    /** What is lying in the current room. */
+    public Vec<String> itemsHere() {
+        return floor.get(here)!!;
+    }
+
+    public Vec<String> inventory() {
+        return carried;
+    }
+
+    public bool carrying(String item) {
+        for (var held : carried) {
+            if (held == item) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Picks `item` up if it is here; says whether it worked. */
+    public bool take(String item) {
+        final Vec<String> here = this.itemsHere();
+        for (var i = 0; i < here.len(); i++) {
+            if (here[i] == item) {
+                here.remove((uint) i);
+                carried.push(item);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Walks `direction` if there is an exit; says whether it worked. */
+    public bool go(String direction) {
+        final String? target = this.room().exit(direction);
+        if (target == null) {
+            return false;
+        }
+        here = target;
+        moves++;
+        return true;
+    }
+}

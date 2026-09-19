@@ -1,0 +1,113 @@
+// A sales report: parse the CSV, group by region and by product, print both
+// tables and the outliers.
+//
+// `BTreeMap` keeps the groups in key order, so the report reads the same on
+// every run without a sort step.
+import report.csv.{Parser, Row, BadRow};
+import report.model.Totals;
+
+/** The input, embedded so the program has no file to find. */
+const String SALES = "region,product,units,unit_price\n"
+    + "north,widget,12,9.99\n"
+    + "north,gizmo,3,24.50\n"
+    + "south,widget,7,9.99\n"
+    + "south,gadget,20,4.75\n"
+    + "east,gizmo,11,24.50\n"
+    + "east,widget,2,9.99\n"
+    + "south,gizmo,1,24.50\n"
+    + "north,gadget,40,4.75\n";
+
+public void main() {
+    try {
+        final Vec<Row> rows = new Parser(SALES).rows();
+        print($"read ${rows.len()} rows");
+        print("");
+
+        report("region", group(rows, true));
+        print("");
+        report("product", group(rows, false));
+        print("");
+
+        best(rows);
+    } catch (BadRow e) {
+        print($"the file is broken: ${e.getMessage()}");
+    }
+
+    // The same reader, on a file with a bad number in it.
+    print("");
+    try {
+        new Parser("region,product,units,unit_price\nnorth,widget,many,9.99\n").rows();
+        print("no error, which is wrong");
+    } catch (BadRow e) {
+        print($"rejected: ${e.getMessage()}");
+    }
+}
+
+/** Rows folded into one accumulator per key. */
+BTreeMap<String, Totals> group(Vec<Row> rows, bool byRegion) {
+    var groups = new BTreeMap<String, Totals>();
+    for (var row : rows) {
+        final String key = byRegion ? row.region : row.product;
+        if (!groups.contains_key(key)) {
+            groups.insert(key, new Totals());
+        }
+        groups.get(key)!!.add(row.units, row.total());
+    }
+    return groups;
+}
+
+/** One table, with a total line. */
+void report(String heading, BTreeMap<String, Totals> groups) {
+    print($"${pad(heading, 8)} ${padLeft("units", 6)} ${padLeft("revenue", 10)} ${padLeft("avg", 7)}");
+    print("-------- ------ ---------- -------");
+    var units = 0;
+    var revenue = 0.0;
+    for (var entry : groups) {
+        final String key = entry.0;
+        final Totals t = entry.1;
+        units += t.units;
+        revenue += t.revenue;
+        print($"${pad(key, 8)} ${padLeft($"${t.units}", 6)} ${padLeft(money(t.revenue), 10)} ${padLeft(money(t.averagePrice()), 7)}");
+    }
+    print("-------- ------ ---------- -------");
+    print($"${pad("all", 8)} ${padLeft($"${units}", 6)} ${padLeft(money(revenue), 10)}");
+}
+
+/** The best and worst single line, by revenue. */
+void best(Vec<Row> rows) {
+    Row? top = null;
+    Row? bottom = null;
+    for (var row : rows) {
+        if (top == null || row.total() > top.total()) {
+            top = row;
+        }
+        if (bottom == null || row.total() < bottom.total()) {
+            bottom = row;
+        }
+    }
+    if (top != null && bottom != null) {
+        print($"best  ${top.region}/${top.product} ${money(top.total())}");
+        print($"worst ${bottom.region}/${bottom.product} ${money(bottom.total())}");
+    }
+}
+
+/** Two decimal places, as money reads. */
+String money(double value) {
+    return value.toFixed(2);
+}
+
+String pad(String text, int width) {
+    var out = text;
+    while (out.charLength() < width) {
+        out = out + " ";
+    }
+    return out;
+}
+
+String padLeft(String text, int width) {
+    var out = text;
+    while (out.charLength() < width) {
+        out = " " + out;
+    }
+    return out;
+}

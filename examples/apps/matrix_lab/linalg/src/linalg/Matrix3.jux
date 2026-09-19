@@ -1,0 +1,101 @@
+// A three-by-three matrix, stored row by row.
+//
+// Enough of one to be useful: multiplication by a vector and by another
+// matrix, the determinant, the inverse, and the solver built on them.
+package linalg;
+
+public class Matrix3 {
+    private double[][] cells;
+
+    public Matrix3(double[][] cells) {
+        this.cells = cells;
+    }
+
+    /** The identity matrix. */
+    public static Matrix3 identity() {
+        return new Matrix3(new double[][] {
+            {1.0, 0.0, 0.0},
+            {0.0, 1.0, 0.0},
+            {0.0, 0.0, 1.0}
+        });
+    }
+
+    /** A rotation about the z axis, by an angle in radians. */
+    public static Matrix3 rotationZ(double angle) {
+        final double c = angle.cos();
+        final double s = angle.sin();
+        return new Matrix3(new double[][] {
+            {c, -s, 0.0},
+            {s, c, 0.0},
+            {0.0, 0.0, 1.0}
+        });
+    }
+
+    public double at(int row, int column) {
+        return cells[row][column];
+    }
+
+    /** The vector this matrix maps `v` to. */
+    public Vec3 operator*(Vec3 v) {
+        return new Vec3(
+            cells[0][0] * v.x + cells[0][1] * v.y + cells[0][2] * v.z,
+            cells[1][0] * v.x + cells[1][1] * v.y + cells[1][2] * v.z,
+            cells[2][0] * v.x + cells[2][1] * v.y + cells[2][2] * v.z);
+    }
+
+    /** The product of two matrices: apply `other` first, then this one. */
+    public Matrix3 operator*(Matrix3 other) {
+        var out = new double[3][3];
+        for (var r : 0..3) {
+            for (var c : 0..3) {
+                var sum = 0.0;
+                for (var k : 0..3) {
+                    sum += cells[r][k] * other.at(k, c);
+                }
+                out[r][c] = sum;
+            }
+        }
+        return new Matrix3(out);
+    }
+
+    public double determinant() {
+        return cells[0][0] * (cells[1][1] * cells[2][2] - cells[1][2] * cells[2][1])
+             - cells[0][1] * (cells[1][0] * cells[2][2] - cells[1][2] * cells[2][0])
+             + cells[0][2] * (cells[1][0] * cells[2][1] - cells[1][1] * cells[2][0]);
+    }
+
+    /** The inverse, or null when the matrix has none. */
+    public Matrix3? inverse() {
+        final double det = this.determinant();
+        if (near(det, 0.0)) {
+            return null;
+        }
+        var out = new double[3][3];
+        for (var r : 0..3) {
+            for (var c : 0..3) {
+                // The cofactor of (c, r), which transposes as it goes.
+                final double minor = cells[(c + 1) % 3][(r + 1) % 3] * cells[(c + 2) % 3][(r + 2) % 3]
+                    - cells[(c + 1) % 3][(r + 2) % 3] * cells[(c + 2) % 3][(r + 1) % 3];
+                out[r][c] = minor / det;
+            }
+        }
+        return new Matrix3(out);
+    }
+
+    /** The `x` with `this * x == b`, or null when there is no single answer. */
+    public Vec3? solve(Vec3 b) {
+        final Matrix3? inv = this.inverse();
+        return inv == null ? null : inv * b;
+    }
+
+    public String operator string() {
+        var text = "";
+        for (var r : 0..3) {
+            text = text + $"[${round(cells[r][0])} ${round(cells[r][1])} ${round(cells[r][2])}]";
+            if (r < 2) {
+                text = text + "\n";
+            }
+        }
+        return text;
+    }
+}

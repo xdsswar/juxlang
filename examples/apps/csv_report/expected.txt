@@ -1,0 +1,22 @@
+read 8 rows
+
+region    units    revenue     avg
+-------- ------ ---------- -------
+east         13     289.48   22.27
+north        55     383.38    6.97
+south        28     189.43    6.77
+-------- ------ ---------- -------
+all          96     862.29
+
+product   units    revenue     avg
+-------- ------ ---------- -------
+gadget       60     285.00    4.75
+gizmo        15     367.50   24.50
+widget       21     209.79    9.99
+-------- ------ ---------- -------
+all          96     862.29
+
+best  east/gizmo 269.50
+worst east/widget 19.98
+
+rejected: line 2: `many` is not a whole number

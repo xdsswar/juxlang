@@ -1,0 +1,4 @@
+// One command word from the command line, as a value (see Command.jux).
+package todo.cli;
+
+public record Undo(int id) implements Command {}

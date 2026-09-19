@@ -1,0 +1,41 @@
+You are in a dusty hall. Type `quit` to stop.
+You are in a dusty hall.
+You can see: lamp.
+Exits: north, east.
+> look
+You are in a dusty hall.
+You can see: lamp.
+Exits: north, east.
+> take lamp
+Taken: lamp.
+> inventory
+You are carrying: lamp.
+> go north
+You are in a study lined with books.
+You can see: key.
+Exits: south.
+> take key
+Taken: key.
+> go south
+You are in a dusty hall.
+Exits: north, east.
+> go east
+You are in a cold cellar with a locked chest.
+Exits: west.
+> open chest
+The chest is locked.
+> use key
+The key turns. The chest is unlocked.
+> open chest
+The chest is open. Inside is a small brass bell.
+> inventory
+You are carrying: lamp, key.
+> go west
+You are in a dusty hall.
+Exits: north, east.
+> score
+4 moves, carrying 2
+> dance
+I do not know how to `dance`.
+> quit
+Goodbye.

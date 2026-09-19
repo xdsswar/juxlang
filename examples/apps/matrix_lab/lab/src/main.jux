@@ -1,0 +1,64 @@
+// The library put to work: solve a system, transform a shape, measure it.
+import linalg.{Vec3, Matrix3, sum, centroid};
+
+public void main() {
+    // Operators by operand type: `v * 2.0` scales, `v * w` is a dot product.
+    final var a = new Vec3(1.0, 2.0, 3.0);
+    final var b = new Vec3(4.0, 5.0, 6.0);
+    print($"a       ${a}");
+    print($"b       ${b}");
+    print($"a + b   ${a + b}");
+    print($"b - a   ${b - a}");
+    print($"a * 2   ${a * 2.0}");
+    print($"a . b   ${(a * b).toFixed(3)}");
+    print($"|a|     ${a.length().toFixed(3)}");
+    print($"unit a  ${a.normalized()}");
+    print("");
+
+    // A system of three equations, solved by inverting its matrix.
+    //   2x +  y -  z =  8
+    //  -3x -  y + 2z = -11
+    //  -2x +  y + 2z = -3
+    final var m = new Matrix3(new double[][] {
+        {2.0, 1.0, -1.0},
+        {-3.0, -1.0, 2.0},
+        {-2.0, 1.0, 2.0}
+    });
+    print("matrix");
+    print(m);
+    print($"det     ${m.determinant().toFixed(3)}");
+    final Vec3? x = m.solve(new Vec3(8.0, -11.0, -3.0));
+    print($"solved  ${x!!}");
+    print($"check   ${m * x!!}");
+    print("");
+
+    // A matrix with no inverse says so rather than guessing.
+    final var flat = new Matrix3(new double[][] {
+        {1.0, 2.0, 3.0},
+        {2.0, 4.0, 6.0},
+        {1.0, 1.0, 1.0}
+    });
+    print($"singular det ${flat.determinant().toFixed(3)}");
+    print($"solved       ${flat.solve(a) == null ? "no single answer" : "?"}");
+    print("");
+
+    // A quarter turn about z, applied to a square, then measured.
+    final var turn = Matrix3.rotationZ(1.5707963267948966);
+    var square = new Vec<Vec3>();
+    square.push(new Vec3(1.0, 1.0, 0.0));
+    square.push(new Vec3(-1.0, 1.0, 0.0));
+    square.push(new Vec3(-1.0, -1.0, 0.0));
+    square.push(new Vec3(1.0, -1.0, 0.0));
+
+    var turned = new Vec<Vec3>();
+    for (var corner : square) {
+        turned.push(turn * corner);
+    }
+    print($"corner 0 turned  ${turned[0]}");
+    print($"centroid         ${centroid(turned)}");
+    print($"sum of corners   ${sum(turned, new Vec3(0.0, 0.0, 0.0))}");
+    print($"identity holds   ${(Matrix3.identity() * a) == a}");
+    // Two quarter turns about z negate the x and y of a vector in that plane.
+    final var inPlane = new Vec3(1.0, 2.0, 0.0);
+    print($"turn twice = -v  ${(turn * (turn * inPlane)) == (inPlane * -1.0)}");
+}

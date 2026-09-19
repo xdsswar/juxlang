@@ -1,0 +1,24 @@
+--
+reset
+add
+buy milk
+add
+write the report
+add
+call the plumber
+done
+1
+list
+done
+3
+undo
+1
+remove
+2
+add
+water the plants
+list
+stats
+done
+9
+frobnicate

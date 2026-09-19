@@ -1,0 +1,11 @@
+// A line that could not be read, with the line number and why.
+package report.csv;
+
+public class BadRow extends Exception {
+    public int line;
+
+    public BadRow(int line, String why) {
+        super($"line ${line}: ${why}");
+        this.line = line;
+    }
+}

@@ -1,0 +1,8 @@
+# A sales report from a CSV file: parse, group, aggregate, print a table.
+#
+# The input is embedded in the program rather than read from disk, so the
+# output is the same everywhere. Parsing, the domain and the report are
+# three packages under src/.
+[package]
+name = "apps.csv_report"
+version = "0.1.0"
