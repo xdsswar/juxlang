@@ -536,6 +536,14 @@ This is the same rule as Java 21+ pattern-matching switches.
 
 ### T.5.7. Tuple and Record Scrutinees
 
+A record pattern may also match a value of an interface the record implements
+(`case Circle(var r)` on a `Shape`): it tests the runtime type, as the type
+pattern `case Circle c` does, and then takes the record apart. Over a sealed
+interface, each permitted record is covered by the product rule below applied
+to the arms that name it, and a type pattern covers all of it; so
+`case Circle(0.0)` alone leaves the other circles uncovered, and the `E0440`
+message says so.
+
 A `switch` over a tuple or a record value is checked by the product rule of
 §T.5.2, with the component value sets of that table: `bool` and a nested enum
 are finite, `T?` adds `null`, a nested tuple or record is a product again, and

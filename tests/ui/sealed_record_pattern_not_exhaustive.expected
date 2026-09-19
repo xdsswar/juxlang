@@ -1,0 +1,1 @@
+sealed_record_pattern_not_exhaustive.jux:6:12: [E0440] error: non-exhaustive `switch` on sealed interface `Shape`: no arm covers every `Circle` (an arm covers only some of them); add explicit `case` arms for each, or a `case _` wildcard at the end
