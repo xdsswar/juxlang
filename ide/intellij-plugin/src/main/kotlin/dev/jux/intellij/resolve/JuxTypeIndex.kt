@@ -7,6 +7,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.GlobalSearchScopesCore
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.util.CachedValue
 import com.intellij.psi.util.CachedValueProvider
@@ -117,7 +118,14 @@ object JuxTypeIndex {
      */
     fun projectNamePredicate(project: Project): (String) -> Boolean {
         if (DumbService.isDumb(project)) return { true }
-        val scope = GlobalSearchScope.allScope(project)
+        // The bundled `jux.std` sources are left out: their MEMBER names
+        // (`value`, `count`, `map`) must not make a bare name look declared.
+        // The std type names are in scope anyway, as the generated built-in
+        // names the callers check first.
+        val all = GlobalSearchScope.allScope(project)
+        val scope = JuxBundledStd.root()
+            ?.let { all.intersectWith(GlobalSearchScope.notScope(GlobalSearchScopesCore.directoryScope(project, it, true))) }
+            ?: all
         if (JuxDeclarationIndex.hasData(project)) {
             return { name -> JuxDeclarationIndex.isDeclared(name, project, scope) }
         }

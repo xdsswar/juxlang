@@ -194,6 +194,61 @@ well, with the rest of Java's refactoring set (see `plugin.xml` and
   line that produces at least two types, each line's type at its end
   (Settings | Editor | Inlay Hints | Method chains).
 
+### Added in 0.1.1
+
+- **The standard library, bundled.** The compiler's embedded `jux.std`
+  sources (`Option`, `Result`, the `Iterator` / `Iterable` combinators,
+  `Mutex`, `LazyIterable`, the exceptions, ...) are written out at build time
+  from `crates/juxc-driver/src/stdlib_embedded.rs` (the `generateJuxStd`
+  Gradle task) and indexed as the **Jux: jux.std** library. Every std member
+  completes, navigates and shows Quick Documentation with its real signature,
+  and there is no second copy to keep in step. The range types, which the
+  compiler binds structurally and never writes as source, are described in
+  `src/main/juxStdIde/` exactly as MISSING-DEFS M.6.1 declares them. The
+  bundled std is part of the build, so tests index it too. Its member names
+  never make a bare name look declared, and its types are never offered for
+  import (the compiler prepends `jux.std` to every unit).
+- **Lambda parameters are typed** (LANG-V1 §7.9.1): an untyped parameter
+  takes its type from the function type the lambda is given to, or from the
+  one abstract method of a single-method interface, with the receiver's type
+  arguments substituted. `opt.map((p) -> p.` completes the members of the
+  `Option`'s element; `bus.subscribe((o) -> ...)` with
+  `subscribe(Listener<Order>)` knows `o` is an `Order`. Call arguments,
+  declared variables and fields, and `return` in a method all count.
+- **Ranges and map entries.** `a..b`, `a..=b` and a `step` range type as
+  `ExclusiveRange<T>`, `InclusiveRange<T>`, `SteppedRange<T>`, so `start`,
+  `end`, `endInclusive` and `step` complete. A for-each over a `HashMap` /
+  `BTreeMap` binds a `(K, V)` tuple: `e.0` and `e.1` resolve, type and
+  complete.
+- **`never`** (Core lib K.4.1): a call to a `never` function ends its path
+  for "Missing return statement", "Unreachable code" and "Redundant else",
+  exactly as a `throw` does. A new inspection mirrors E0485 (the body can
+  reach its end; fix: end it with a `throw`) and E0486 (a `return` of its
+  own; one inside a lambda or anonymous class is fine).
+- **Layout and ABI rules**, where the source alone decides them: `@align(N)`
+  with a non-literal or non-power-of-two argument (E0519) or on a field, enum
+  or interface (E0520); `array as T*` from a temporary or nested array or to
+  `T**` (E0521); `transmute` without two type arguments or between primitives
+  of different sizes (E0522); a free operator declared twice (E0951) or only
+  on types no program declares (E0950). Sizes and module ownership stay with
+  `juxc`.
+- **W0820**: an `unsafe { }` block with no `// SAFETY:` comment, with the
+  compiler lint's exact placements (a comment run directly above, or at the
+  top of the block); the fix writes `// SAFETY: ` above it.
+- **E0487**: a time span for `withTimeout` / `Task.delay` whose type is
+  certainly neither an integer nor a `Duration`.
+- **Java utility classes** (E0301 / E0413, the compiler's wording):
+  `Math.abs(x)` becomes `x.abs()` (`pow` is `powf`, `log` is `ln`),
+  `Integer.parseInt(s)` becomes `s.parse<int>()`, `Objects.equals(a, b)`
+  becomes `a == b`, `Objects.requireNonNull(x)` becomes `x!!`,
+  `String.valueOf(x)` becomes `$"${x}"`. A program's own `Math` wins.
+- **Parser.** Explicit call type arguments (`foo<T>(...)`,
+  `transmute<A, B>(v)`) are a real `TYPE_ARGUMENT_LIST`, so each name
+  resolves, navigates and is checked (an unknown one is "Cannot resolve
+  type", as E0417 is in every body position).
+- **Names.** `alignof`, `never` and the three range types resolve; `alignof`
+  completes in expressions and `@align` in annotations.
+
 ### Known gaps against the Java plugin
 
 What the audit lists as not built yet, most valuable first: a real

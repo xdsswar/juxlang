@@ -52,7 +52,8 @@ class JuxUnreachableCodeInspection : LocalInspectionTool() {
                     )
                     break // one report per block; the fix clears the whole tail
                 }
-                if (t in TERMINAL_TYPES) terminalSeen = true
+                // A call to a `never` function does not come back (K.4.1).
+                if (t in TERMINAL_TYPES || JuxCodeFacts.callsNever(child)) terminalSeen = true
             }
         }
         return problems.toTypedArray()

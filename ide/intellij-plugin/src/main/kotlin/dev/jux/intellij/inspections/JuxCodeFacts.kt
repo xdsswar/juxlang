@@ -361,6 +361,8 @@ object JuxCodeFacts {
      */
     fun canCompleteNormally(stmt: PsiElement): Boolean = when (stmt.elementType) {
         E.RETURN_STATEMENT, E.THROW_STATEMENT, E.BREAK_STATEMENT, E.CONTINUE_STATEMENT -> false
+        // A call to a `never` function ends its path like a `throw` (K.4.1).
+        E.EXPRESSION_STATEMENT -> !callsNever(stmt)
         E.CODE_BLOCK, E.UNSAFE_STATEMENT -> {
             val block = if (stmt.elementType === E.CODE_BLOCK) stmt
             else stmt.node.findChildByType(E.CODE_BLOCK)?.psi
@@ -402,6 +404,7 @@ object JuxCodeFacts {
      */
     fun definitelyJumps(stmt: PsiElement): Boolean = when (stmt.elementType) {
         E.RETURN_STATEMENT, E.THROW_STATEMENT, E.BREAK_STATEMENT, E.CONTINUE_STATEMENT -> true
+        E.EXPRESSION_STATEMENT -> callsNever(stmt)
         E.CODE_BLOCK -> statementsOf(stmt).any { definitelyJumps(it) }
         E.IF_STATEMENT -> {
             val then = thenBranch(stmt)
@@ -409,6 +412,26 @@ object JuxCodeFacts {
             then != null && otherwise != null && definitelyJumps(then) && definitelyJumps(otherwise)
         }
         else -> false
+    }
+
+    /**
+     * True when [stmt] is an expression statement that only calls a function
+     * declared to return `never` (Core lib K.4.1): such a call does not come
+     * back, so it ends its path exactly as a `throw` does. Answers false
+     * whenever the callee cannot be found, which only ever means "may finish".
+     */
+    fun callsNever(stmt: PsiElement): Boolean {
+        if (stmt.elementType !== E.EXPRESSION_STATEMENT) return false
+        val call = JuxTypeEngine.firstExpressionChild(stmt)
+            ?.takeIf { it.elementType === E.CALL_EXPRESSION } ?: return false
+        return isNeverCall(call)
+    }
+
+    /** True when [call] invokes a function whose declared return type is `never`. */
+    fun isNeverCall(call: PsiElement): Boolean {
+        if (call.elementType !== E.CALL_EXPRESSION) return false
+        val target = dev.jux.intellij.quickfix.JuxCreateFromUsage.resolveCallee(call) ?: return false
+        return dev.jux.intellij.resolve.JuxHierarchy.returnTypeText(target) == "never"
     }
 
     private fun tryCanCompleteNormally(tryStmt: PsiElement): Boolean {

@@ -285,7 +285,11 @@ private fun PsiBuilder.parsePostfix(): PsiBuilder.Marker? {
                 val probe = mark()
                 skipAngleBalanced()
                 if (at(T.LPAREN)) {
-                    probe.drop()
+                    // It is a call: parse the arguments again as a real
+                    // TYPE_ARGUMENT_LIST, so each type name resolves,
+                    // navigates and is checked (`transmute<A, B>`, `f<Zork>()`).
+                    probe.rollbackTo()
+                    parseTypeArguments()
                     parseArgumentList()
                     m.done(E.CALL_EXPRESSION)
                     operand = m
