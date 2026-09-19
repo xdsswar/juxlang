@@ -3,7 +3,10 @@ package dev.jux.intellij.format
 import com.intellij.formatting.Block
 import com.intellij.formatting.Spacing
 import com.intellij.formatting.SpacingBuilder
+import com.intellij.lang.ASTNode
+import com.intellij.psi.TokenType
 import com.intellij.psi.codeStyle.CodeStyleSettings
+import com.intellij.psi.tree.IElementType
 import com.intellij.psi.codeStyle.CommonCodeStyleSettings
 import com.intellij.psi.tree.TokenSet
 import dev.jux.intellij.JuxLanguage
@@ -22,10 +25,13 @@ import dev.jux.intellij.psi.JuxElementTypes as E
  *   ⑤ unary  ⑥ parens/calls  ⑦ keywords  ⑧ braces (K&R)  ⑨ binary operators
  *   ⑩ arrows  ⑪ ternary/colons  ⑫ annotations.
  *
- * v1 wrap policy: **preserve the user's line breaks** — `spaces(n)` rules
- * normalize same-line spacing only; nothing joins or splits lines except the
- * package/import separator. The examples corpus has deliberate one-liner
- * interfaces that must survive reformat.
+ * Line-break policy: **preserve the user's line breaks** except where a
+ * Code Style option says otherwise, under Java's names: braces placement,
+ * `else`/`catch`/`finally`/`while` on a new line, the "Keep simple ... in
+ * one line" options, and the "Minimum blank lines" of the Blank Lines tab.
+ * Jux's defaults keep the layout as written (no minimum blank lines, simple
+ * bodies kept on one line), so the examples corpus's deliberate one-liner
+ * interfaces survive reformat.
  */
 object JuxSpacingRules {
 
@@ -122,53 +128,254 @@ object JuxSpacingRules {
         val l = (left as? JuxBlock)?.node ?: return null
         val r = (right as? JuxBlock)?.node ?: return null
         val p = parent.node.elementType
+        val common = ctx.common
 
-        // Cuddled keywords: `} else {`, `} catch`, `} finally`, `} while` —
-        // one space when on the same line, but a user's next-line style survives.
-        if ((p === E.IF_STATEMENT && r.elementType === T.ELSE_KW) ||
-            (p === E.TRY_STATEMENT &&
-                (r.elementType === E.CATCH_CLAUSE || r.elementType === E.FINALLY_CLAUSE)) ||
-            (p === E.DO_WHILE_STATEMENT && r.elementType === T.WHILE_KW)
-        ) {
-            return Spacing.createSpacing(1, 1, 0, true, 0)
+        // Cuddled keywords: `} else {`, `} catch`, `} finally`, `} while`.
+        // Java's "'else' on new line" and its kin: on, the keyword starts its
+        // own line; off, it joins the `}` before it. After a statement that is
+        // not a block (`if (x) a();\nelse b();`) a line break is kept.
+        cuddledKeywordOption(p, r, common)?.let { onNewLine ->
+            return when {
+                onNewLine -> Spacing.createSpacing(0, 0, 1, false, 0)
+                l.elementType === E.CODE_BLOCK || l.elementType === E.CATCH_CLAUSE -> Spacing.createSpacing(1, 1, 0, false, 0)
+                else -> Spacing.createSpacing(1, 1, 0, true, 0)
+            }
         }
 
-        // Headers: exactly one line break after `package` and each `import`
-        // (the only place v1 forces a newline), keeping intentional blanks.
-        // A trailing same-line comment (`import a.b.C; // why`) is exempt —
-        // forcing the break would tear the comment onto its own line.
+        // Braces placement: where the `{` of a body goes.
+        braceSpacing(parent.node, l, r, ctx)?.let { return it }
+
+        // Headers: at least one line break after `package` and each `import`,
+        // then the "After package", "Before imports" and "After imports"
+        // minimum blank lines. A trailing same-line comment
+        // (`import a.b.C; // why`) is exempt: forcing the break would tear
+        // the comment onto its own line.
         if (l.elementType === E.PACKAGE_STATEMENT || l.elementType === E.IMPORT_STATEMENT) {
-            if (r.elementType === T.LINE_COMMENT || r.elementType === T.BLOCK_COMMENT ||
-                r.elementType === T.DOC_COMMENT
-            ) {
-                return Spacing.createSpacing(1, 1, 0, true, ctx.common.KEEP_BLANK_LINES_IN_DECLARATIONS)
+            if (r.elementType in COMMENT_TOKENS) {
+                return Spacing.createSpacing(1, 1, 0, true, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
             }
-            return Spacing.createSpacing(
-                0, 0, 1, true, ctx.common.KEEP_BLANK_LINES_IN_DECLARATIONS,
-            )
+            val blank = when {
+                l.elementType === E.PACKAGE_STATEMENT && r.elementType === E.IMPORT_STATEMENT ->
+                    maxOf(common.BLANK_LINES_AFTER_PACKAGE, common.BLANK_LINES_BEFORE_IMPORTS)
+                l.elementType === E.PACKAGE_STATEMENT -> common.BLANK_LINES_AFTER_PACKAGE
+                r.elementType === E.IMPORT_STATEMENT -> 0
+                else -> common.BLANK_LINES_AFTER_IMPORTS
+            }
+            return blankLines(blank, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
+        }
+
+        // The edges of a body: "After class header", "Before class end",
+        // "Before method body", "Keep blank lines before '}'", and the
+        // "Keep simple ... in one line" options.
+        if (p === E.CLASS_BODY || p === E.CODE_BLOCK) edgeSpacing(parent.node, l, r, ctx)?.let { return it }
+
+        // Between declarations: "Around class", "Around method", "Around
+        // field" (and their interface variants), where the two are already
+        // on separate lines; a one-liner `interface A { a(); b(); }` stays.
+        if ((p === E.CLASS_BODY || p === dev.jux.intellij.psi.JUX_FILE) && hasLineBreak(l, r)) {
+            val min = minBlankLinesBetween(parent.node, l, r, common)
+            if (min > 0) return blankLines(min, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
         }
 
         // Blank-line clamping between members / statements. Punctuation pairs
         // (commas between enum constants, semicolons) stay with the builder.
         if (isClampablePair(l.elementType, r.elementType)) {
+            // Inside a one-line body that is not kept on one line, every
+            // member or statement takes a line of its own.
+            val split = (p === E.CLASS_BODY || p === E.CODE_BLOCK) && splitsOneLiner(parent.node, common)
             if (p === E.CLASS_BODY) {
-                return Spacing.createSpacing(
-                    1, 1, 0, true, ctx.common.KEEP_BLANK_LINES_IN_DECLARATIONS,
-                )
+                return if (split) blankLines(0, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
+                else Spacing.createSpacing(1, 1, 0, true, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
             }
             if (p === E.CODE_BLOCK) {
-                return Spacing.createSpacing(
-                    1, 1, 0, true, ctx.common.KEEP_BLANK_LINES_IN_CODE,
-                )
+                return if (split) blankLines(0, common.KEEP_BLANK_LINES_IN_CODE)
+                else Spacing.createSpacing(1, 1, 0, true, common.KEEP_BLANK_LINES_IN_CODE)
             }
         }
         return null
+    }
+
+    /**
+     * At least [min] blank lines between two lines, and at most [keep] (or
+     * [min], when more): the shape of every "Minimum blank lines" option.
+     */
+    private fun blankLines(min: Int, keep: Int): Spacing =
+        Spacing.createSpacing(0, 0, min + 1, true, maxOf(keep, min))
+
+    /** Whether the source already has a line break between [l] and [r]. */
+    private fun hasLineBreak(l: ASTNode, r: ASTNode): Boolean {
+        var n = l.treeNext
+        while (n != null && n !== r) {
+            if (n.elementType === TokenType.WHITE_SPACE && n.textContains('\n')) return true
+            n = n.treeNext
+        }
+        return false
+    }
+
+    /**
+     * The "... on new line" option for `else`, `catch`, `finally` and the
+     * `while` of `do ... while`, or null when [r] is none of them.
+     */
+    private fun cuddledKeywordOption(p: IElementType, r: ASTNode, common: CommonCodeStyleSettings): Boolean? = when {
+        p === E.IF_STATEMENT && r.elementType === T.ELSE_KW -> common.ELSE_ON_NEW_LINE
+        p === E.TRY_STATEMENT && r.elementType === E.CATCH_CLAUSE -> common.CATCH_ON_NEW_LINE
+        p === E.TRY_STATEMENT && r.elementType === E.FINALLY_CLAUSE -> common.FINALLY_ON_NEW_LINE
+        p === E.DO_WHILE_STATEMENT && r.elementType === T.WHILE_KW -> common.WHILE_ON_NEW_LINE
+        else -> null
+    }
+
+    // ---- braces placement ----------------------------------------------------
+
+    /**
+     * The spacing before a body's `{` under its brace style: a type body
+     * (class), a method, constructor, operator or accessor body (method), a
+     * lambda body (lambda), and every other statement body (others). A block
+     * that stands alone as a statement or a switch arm is left as it is.
+     */
+    private fun braceSpacing(parent: ASTNode, l: ASTNode, r: ASTNode, ctx: JuxFormatContext): Spacing? {
+        val p = parent.elementType
+        val style = when {
+            r.elementType === E.CLASS_BODY -> ctx.jux.CLASS_BRACE_STYLE
+            r.elementType === E.CODE_BLOCK -> when (p) {
+                in METHOD_LIKE -> ctx.jux.METHOD_BRACE_STYLE
+                E.LAMBDA_EXPRESSION -> ctx.jux.LAMBDA_BRACE_STYLE
+                in STATEMENT_OWNERS -> ctx.jux.BRACE_STYLE
+                else -> return null
+            }
+            r.elementType === T.LBRACE && (p === E.SWITCH_STATEMENT || p === E.SWITCH_EXPRESSION) -> ctx.jux.BRACE_STYLE
+            else -> return null
+        }
+        // `if (x)` over two lines is a wrapped header; so is a signature.
+        val nextLine = when (style) {
+            JuxCodeStyleSettings.NEXT_LINE -> true
+            JuxCodeStyleSettings.NEXT_LINE_IF_WRAPPED -> headerIsWrapped(parent, r)
+            else -> false
+        }
+        return if (nextLine) Spacing.createSpacing(0, 0, 1, false, 0)
+        else Spacing.createSpacing(1, 1, 0, false, 0)
+    }
+
+    /**
+     * Whether the header before [brace] spans several lines, not counting the
+     * annotations, modifiers and comments on lines of their own above it.
+     */
+    private fun headerIsWrapped(construct: ASTNode, brace: ASTNode): Boolean {
+        var start: ASTNode? = construct.firstChildNode
+        while (start != null && (start.elementType === TokenType.WHITE_SPACE || start.elementType in COMMENT_TOKENS ||
+                start.elementType === E.ANNOTATION || start.elementType === E.MODIFIER_LIST)
+        ) {
+            start = start.treeNext
+        }
+        start ?: return false
+        var n: ASTNode? = start
+        while (n != null && n !== brace) {
+            if (n.textContains('\n')) return true
+            n = n.treeNext
+        }
+        return false
+    }
+
+    // ---- the edges of a body -------------------------------------------------
+
+    /** Spacing right after a body's `{` and right before its `}`. */
+    private fun edgeSpacing(body: ASTNode, l: ASTNode, r: ASTNode, ctx: JuxFormatContext): Spacing? {
+        val common = ctx.common
+        val isClass = body.elementType === E.CLASS_BODY
+        // An empty body reads `{}`, as Java writes it; `{\n}` keeps its break.
+        if (l.elementType === T.LBRACE && r.elementType === T.RBRACE) return Spacing.createSpacing(0, 0, 0, true, 0)
+        val afterOpen = l.elementType === T.LBRACE && r.elementType !== T.RBRACE
+        val beforeClose = r.elementType === T.RBRACE && l.elementType !== T.LBRACE
+        if (!afterOpen && !beforeClose) return null
+        // A one-line body that is not to be kept so opens onto its own lines.
+        if (splitsOneLiner(body, common)) {
+            return blankLines(0, if (isClass) common.KEEP_BLANK_LINES_IN_DECLARATIONS else common.KEEP_BLANK_LINES_IN_CODE)
+        }
+        if (!hasLineBreak(l, r)) return null
+        return when {
+            afterOpen && isClass -> blankLines(common.BLANK_LINES_AFTER_CLASS_HEADER, common.KEEP_BLANK_LINES_IN_DECLARATIONS)
+            afterOpen && body.treeParent?.elementType in METHOD_LIKE ->
+                blankLines(common.BLANK_LINES_BEFORE_METHOD_BODY, common.KEEP_BLANK_LINES_IN_CODE)
+            beforeClose && isClass -> blankLines(common.BLANK_LINES_BEFORE_CLASS_END, common.KEEP_BLANK_LINES_BEFORE_RBRACE)
+            beforeClose -> blankLines(0, common.KEEP_BLANK_LINES_BEFORE_RBRACE)
+            else -> null
+        }
+    }
+
+    /**
+     * Whether [body] is written on one line and its "Keep simple ... in one
+     * line" option says to open it up: classes, methods (and accessors),
+     * lambdas, and every other block. An empty `{}` is left alone.
+     */
+    private fun splitsOneLiner(body: ASTNode, common: CommonCodeStyleSettings): Boolean {
+        if (body.textContains('\n')) return false
+        if (body.getChildren(null).none { it.elementType !== TokenType.WHITE_SPACE && it.elementType !== T.LBRACE && it.elementType !== T.RBRACE }) {
+            return false
+        }
+        val keep = when {
+            body.elementType === E.CLASS_BODY -> common.KEEP_SIMPLE_CLASSES_IN_ONE_LINE
+            body.treeParent?.elementType in METHOD_LIKE -> common.KEEP_SIMPLE_METHODS_IN_ONE_LINE
+            body.treeParent?.elementType === E.LAMBDA_EXPRESSION -> common.KEEP_SIMPLE_LAMBDAS_IN_ONE_LINE
+            else -> common.KEEP_SIMPLE_BLOCKS_IN_ONE_LINE
+        }
+        return !keep
+    }
+
+    // ---- blank lines between declarations -----------------------------------
+
+    /** What a declaration counts as for the "Around ..." options. */
+    private enum class DeclKind { CLASS, METHOD, FIELD }
+
+    private fun declKind(node: ASTNode): DeclKind? = when (node.elementType) {
+        in TYPE_DECLARATIONS -> DeclKind.CLASS
+        in METHOD_LIKE, E.INIT_BLOCK, E.STATIC_BLOCK, E.DROP_BLOCK -> DeclKind.METHOD
+        E.FIELD_DECLARATION, E.CONST_DECLARATION, E.PROPERTY_DECLARATION -> DeclKind.FIELD
+        else -> null
+    }
+
+    /**
+     * The fewest blank lines between declarations [l] and [r] in [container]
+     * (a class body or the file): the largest of the options that apply,
+     * with an interface's own "... in interface" variants.
+     */
+    private fun minBlankLinesBetween(container: ASTNode, l: ASTNode, r: ASTNode, common: CommonCodeStyleSettings): Int {
+        val kinds = setOf(declKind(l) ?: return 0, declKind(r) ?: return 0)
+        val inInterface = container.treeParent?.elementType === E.INTERFACE_DECLARATION
+        var min = 0
+        if (DeclKind.CLASS in kinds) min = maxOf(min, common.BLANK_LINES_AROUND_CLASS)
+        if (DeclKind.METHOD in kinds) {
+            min = maxOf(min, if (inInterface) common.BLANK_LINES_AROUND_METHOD_IN_INTERFACE else common.BLANK_LINES_AROUND_METHOD)
+        }
+        if (DeclKind.FIELD in kinds) {
+            min = maxOf(min, if (inInterface) common.BLANK_LINES_AROUND_FIELD_IN_INTERFACE else common.BLANK_LINES_AROUND_FIELD)
+        }
+        return min
     }
 
     private fun isClampablePair(l: com.intellij.psi.tree.IElementType, r: com.intellij.psi.tree.IElementType): Boolean =
         l !== T.LBRACE && r !== T.RBRACE &&
             l !== T.COMMA && r !== T.COMMA &&
             l !== T.SEMICOLON && r !== T.SEMICOLON
+
+    // ---- node groups ---------------------------------------------------------
+
+    private val COMMENT_TOKENS = setOf(T.LINE_COMMENT, T.BLOCK_COMMENT, T.DOC_COMMENT)
+
+    /** Declarations whose body follows the method brace style. */
+    private val METHOD_LIKE = setOf(
+        E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION, E.PROPERTY_ACCESSOR,
+    )
+
+    /** Statements whose block body follows the "Others" brace style. */
+    private val STATEMENT_OWNERS = setOf(
+        E.IF_STATEMENT, E.WHILE_STATEMENT, E.DO_WHILE_STATEMENT, E.FOR_STATEMENT, E.FOR_EACH_STATEMENT,
+        E.TRY_STATEMENT, E.CATCH_CLAUSE, E.FINALLY_CLAUSE, E.LABELED_STATEMENT, E.UNSAFE_STATEMENT,
+        E.INIT_BLOCK, E.STATIC_BLOCK, E.DROP_BLOCK,
+    )
+
+    private val TYPE_DECLARATIONS = setOf(
+        E.CLASS_DECLARATION, E.INTERFACE_DECLARATION, E.ENUM_DECLARATION, E.RECORD_DECLARATION,
+        E.STRUCT_DECLARATION, E.ANNOTATION_DECLARATION,
+    )
 
     // ---- operator groups (mirrors §A.4 / the expression parser) ------------
 

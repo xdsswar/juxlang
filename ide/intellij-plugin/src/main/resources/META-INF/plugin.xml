@@ -602,6 +602,10 @@
         implementationClass="dev.jux.intellij.format.JuxFormattingModelBuilder"/>
     <langCodeStyleSettingsProvider
         implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
+    <!-- Wrapping and Braces | Force braces: wraps single-statement bodies
+         after Reformat Code, as Java's brace enforcer does. -->
+    <postFormatProcessor
+        implementation="dev.jux.intellij.format.JuxBraceEnforcer"/>
 
     <!-- Alt+Enter intentions. -->
 

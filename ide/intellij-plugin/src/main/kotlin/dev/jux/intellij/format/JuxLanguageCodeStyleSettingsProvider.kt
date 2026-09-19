@@ -9,14 +9,20 @@ import com.intellij.psi.codeStyle.LanguageCodeStyleSettingsProvider
 import dev.jux.intellij.JuxLanguage
 
 /**
- * The Settings | Editor | Code Style | **Jux** page. Common-settings only for
- * v1 — Jux's K&R style is fixed (braces same line), so the exposed knobs are
- * the ones the formatter actually reads: indents, operator spacing, comma
- * spacing, and blank-line keeps.
+ * The Settings | Editor | Code Style | **Jux** page: Tabs and Indents,
+ * Spaces, Wrapping and Braces, Blank Lines and Imports, as Java's page has
+ * them. Every option shown is one the formatter reads, under Java's name
+ * (see [JuxSpacingRules]); Java options Jux's formatter does not implement
+ * (wrapping long lines, alignment) are not shown.
  */
 class JuxLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider() {
     override fun getLanguage(): Language = JuxLanguage
 
+    /**
+     * Java's defaults, except where Java's would rewrite code the Jux
+     * formatter has always left alone: no minimum blank lines are added, and
+     * a body written on one line is kept there.
+     */
     override fun customizeDefaults(
         commonSettings: CommonCodeStyleSettings,
         indentOptions: CommonCodeStyleSettings.IndentOptions,
@@ -25,6 +31,23 @@ class JuxLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
         indentOptions.CONTINUATION_INDENT_SIZE = 8
         indentOptions.TAB_SIZE = 4
         indentOptions.USE_TAB_CHARACTER = false
+
+        commonSettings.KEEP_SIMPLE_BLOCKS_IN_ONE_LINE = true
+        commonSettings.KEEP_SIMPLE_METHODS_IN_ONE_LINE = true
+        commonSettings.KEEP_SIMPLE_LAMBDAS_IN_ONE_LINE = true
+        commonSettings.KEEP_SIMPLE_CLASSES_IN_ONE_LINE = true
+
+        commonSettings.BLANK_LINES_AFTER_PACKAGE = 0
+        commonSettings.BLANK_LINES_BEFORE_IMPORTS = 0
+        commonSettings.BLANK_LINES_AFTER_IMPORTS = 0
+        commonSettings.BLANK_LINES_AROUND_CLASS = 0
+        commonSettings.BLANK_LINES_AROUND_FIELD = 0
+        commonSettings.BLANK_LINES_AROUND_METHOD = 0
+        commonSettings.BLANK_LINES_AROUND_FIELD_IN_INTERFACE = 0
+        commonSettings.BLANK_LINES_AROUND_METHOD_IN_INTERFACE = 0
+        commonSettings.BLANK_LINES_AFTER_CLASS_HEADER = 0
+        commonSettings.BLANK_LINES_BEFORE_CLASS_END = 0
+        commonSettings.BLANK_LINES_BEFORE_METHOD_BODY = 0
     }
 
     override fun getIndentOptionsEditor(): IndentOptionsEditor = SmartIndentOptionsEditor()
@@ -65,19 +88,125 @@ class JuxLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                 "SPACE_AFTER_COMMA",
             )
             SettingsType.BLANK_LINES_SETTINGS -> consumer.showStandardOptions(
+                // Keep maximum blank lines
                 "KEEP_BLANK_LINES_IN_DECLARATIONS",
                 "KEEP_BLANK_LINES_IN_CODE",
+                "KEEP_BLANK_LINES_BEFORE_RBRACE",
+                // Minimum blank lines
+                "BLANK_LINES_AFTER_PACKAGE",
+                "BLANK_LINES_BEFORE_IMPORTS",
+                "BLANK_LINES_AFTER_IMPORTS",
+                "BLANK_LINES_AROUND_CLASS",
+                "BLANK_LINES_AFTER_CLASS_HEADER",
+                "BLANK_LINES_BEFORE_CLASS_END",
+                "BLANK_LINES_AROUND_FIELD_IN_INTERFACE",
+                "BLANK_LINES_AROUND_FIELD",
+                "BLANK_LINES_AROUND_METHOD_IN_INTERFACE",
+                "BLANK_LINES_AROUND_METHOD",
+                "BLANK_LINES_BEFORE_METHOD_BODY",
             )
-            SettingsType.WRAPPING_AND_BRACES_SETTINGS -> consumer.showStandardOptions(
-                "KEEP_LINE_BREAKS",
-            )
+            SettingsType.WRAPPING_AND_BRACES_SETTINGS -> {
+                consumer.showStandardOptions(
+                    // Keep when reformatting
+                    "KEEP_LINE_BREAKS",
+                    "KEEP_FIRST_COLUMN_COMMENT",
+                    "KEEP_SIMPLE_BLOCKS_IN_ONE_LINE",
+                    "KEEP_SIMPLE_METHODS_IN_ONE_LINE",
+                    "KEEP_SIMPLE_LAMBDAS_IN_ONE_LINE",
+                    "KEEP_SIMPLE_CLASSES_IN_ONE_LINE",
+                    // 'if()' / 'do ... while()' / 'try' statements
+                    "ELSE_ON_NEW_LINE",
+                    "WHILE_ON_NEW_LINE",
+                    "CATCH_ON_NEW_LINE",
+                    "FINALLY_ON_NEW_LINE",
+                    // Force braces (JuxBraceEnforcer)
+                    "IF_BRACE_FORCE",
+                    "DOWHILE_BRACE_FORCE",
+                    "WHILE_BRACE_FORCE",
+                    "FOR_BRACE_FORCE",
+                )
+                // Braces placement, with the styles the formatter implements.
+                val group = "Braces placement"
+                val names = JuxCodeStyleSettings.BRACE_STYLE_NAMES
+                val values = JuxCodeStyleSettings.BRACE_STYLES
+                consumer.showCustomOption(JuxCodeStyleSettings::class.java, "CLASS_BRACE_STYLE", "In class declaration", group, names, values)
+                consumer.showCustomOption(JuxCodeStyleSettings::class.java, "METHOD_BRACE_STYLE", "In method declaration", group, names, values)
+                consumer.showCustomOption(JuxCodeStyleSettings::class.java, "LAMBDA_BRACE_STYLE", "In lambda declaration", group, names, values)
+                consumer.showCustomOption(JuxCodeStyleSettings::class.java, "BRACE_STYLE", "Others", group, names, values)
+            }
             else -> {}
         }
     }
 
-    override fun getCodeSample(settingsType: SettingsType): String = SAMPLE
+    override fun getCodeSample(settingsType: SettingsType): String = when (settingsType) {
+        SettingsType.WRAPPING_AND_BRACES_SETTINGS -> WRAPPING_SAMPLE
+        SettingsType.BLANK_LINES_SETTINGS -> BLANK_LINES_SAMPLE
+        else -> SAMPLE
+    }
 
     private companion object {
+        /** What the Wrapping and Braces options change: braces, cuddled keywords, one-liners. */
+        val WRAPPING_SAMPLE = """
+            public class Till implements Priced {
+                private int total;
+
+                public int Total { get; set; }
+
+                public int get() { return total; }
+
+                public void ring(int amount) throws Error {
+            // commented out at the first column
+                    if (amount > 0) {
+                        total = total + amount;
+                    } else {
+                        throw new Error("no sale");
+                    }
+                    try {
+                        print(total);
+                    } catch (Error e) {
+                        print("failed");
+                    } finally {
+                        print("done");
+                    }
+                    do {
+                        amount = amount - 1;
+                    } while (amount > 0);
+                    var twice = (int x) -> { return x * 2; };
+                    for (int i = 0; i < 3; i++) { print(i); }
+                }
+            }
+
+            interface Priced { double price(); }
+        """.trimIndent()
+
+        /** What the Blank Lines options change: headers, members, bodies. */
+        val BLANK_LINES_SAMPLE = """
+            package shop;
+            import jux.std.testing.*;
+            import shop.model.Item;
+            public class Cart {
+                private int count;
+                private double total;
+                public Cart() {
+                    count = 0;
+                }
+                public void add(Item item) {
+                    count = count + 1;
+
+
+                    total = total + item.price();
+                }
+                class Line {
+                    int qty;
+                }
+            }
+            interface Priced {
+                int SCALE = 100;
+                double price();
+                String label();
+            }
+        """.trimIndent()
+
         // Exercises everything the exposed knobs change: operators, commas,
         // generics, fat-arrow bodies, switch arms, chains, lambdas, interp.
         val SAMPLE = """

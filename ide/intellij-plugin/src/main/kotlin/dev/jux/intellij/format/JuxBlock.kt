@@ -35,11 +35,24 @@ class JuxBlock(
             // emits zero-width PsiErrorElements everywhere, and the engine
             // asserts on empty-range blocks.
             if (child.elementType !== TokenType.WHITE_SPACE && child.textLength > 0) {
-                out.add(JuxBlock(child, JuxIndentRules.childIndent(myNode, child), ctx))
+                val indent = if (keepsFirstColumn(child)) Indent.getAbsoluteNoneIndent()
+                else JuxIndentRules.childIndent(myNode, child)
+                out.add(JuxBlock(child, indent, ctx))
             }
             child = child.treeNext
         }
         return out
+    }
+
+    /**
+     * "Keep when reformatting: Comment at first column", as Java has it: a
+     * comment written at column 0 (code commented out, usually) stays there.
+     */
+    private fun keepsFirstColumn(child: ASTNode): Boolean {
+        if (!ctx.common.KEEP_FIRST_COLUMN_COMMENT) return false
+        if (child.elementType !== T.LINE_COMMENT && child.elementType !== T.BLOCK_COMMENT) return false
+        val before = com.intellij.psi.impl.source.tree.TreeUtil.prevLeaf(child) ?: return false
+        return before.elementType === TokenType.WHITE_SPACE && before.text.endsWith("\n")
     }
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? =
