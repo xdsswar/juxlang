@@ -1,0 +1,69 @@
+// A hash map finds an entry fast and keeps no order: its contents come back
+// arranged by whatever the hashing produced.
+//
+// A `BTreeMap<K, V>` keeps its keys sorted instead. Lookups cost a little more
+// (the map is searched rather than jumped into) and in exchange the contents
+// are always in order, and questions about ranges become answerable. It is
+// Rust's `BTreeMap`, imported from `rust.std` like `HashMap`.
+
+import rust.std.BTreeMap;
+
+void main() {
+    // Where a hash map wanted a hash and an equality test, a tree map wants
+    // one thing: a way to put two keys in order. For `int` that is built in;
+    // a class used as a key supplies it as `operator<=>`. That is the
+    // difference between the two structures, expressed in what each has to be
+    // told.
+    var scores = new BTreeMap<int, int>();
+
+    // Inserted in no particular order.
+    scores.insert(50, 1);
+    scores.insert(10, 2);
+    scores.insert(40, 3);
+    scores.insert(20, 4);
+    scores.insert(30, 5);
+    print($"entries        ${scores.len()}");
+
+    // Lookup reads the same as a hash map's: an `int?`, because the key may
+    // not be there.
+    final int? thirty = scores.get(30);
+    if (thirty != null) {
+        print($"key 30 holds   ${thirty}");
+    } else {
+        print("key 30 missing");
+    }
+    final int? thirtyFive = scores.get(35);
+    if (thirtyFive != null) {
+        print($"key 35 holds   ${thirtyFive}");
+    } else {
+        print("key 35 missing");
+    }
+
+    print($"contains 40    ${scores.contains_key(40)}");
+    final int? removed = scores.remove(40);
+    if (removed != null) {
+        print($"removed 40, which held ${removed}");
+    } else {
+        print("40 was not there");
+    }
+    print($"entries        ${scores.len()}");
+
+    // The keys were inserted as 50, 10, 40, 20, 30 and are held in sorted
+    // order, so walking the range finds them ascending regardless.
+    var key = 10;
+    while (key <= 50) {
+        final int? value = scores.get(key);
+        if (value != null) {
+            print($"  ${key} -> ${value}");
+        } else {
+            print($"  ${key} -> (removed)");
+        }
+        key += 10;
+    }
+
+    // Which to choose: a hash map when only "is it there, and what is it" is
+    // ever asked, a tree map when the answer needs to come out in order, or
+    // when questions like "the smallest key above this one" matter. The hash
+    // map is faster at the single lookup; the tree map is the one that knows
+    // where its keys sit relative to each other.
+}

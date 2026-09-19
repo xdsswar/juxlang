@@ -1,0 +1,7 @@
+empty      length 0  capacity 0
+5 pushes   length 5  capacity 8
+contents   10 20 30 40 50
+index 2    30
+index 99   out of range
+popped     50, leaving 4
+after Set  first is 999

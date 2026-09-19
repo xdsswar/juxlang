@@ -1,0 +1,4 @@
+built      0 1 2 3   (length 4)
+popped front 0
+popped back  3
+after      1 2   (length 2)

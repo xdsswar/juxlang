@@ -1,0 +1,11 @@
+entries        5
+key 30 holds   5
+key 35 missing
+contains 40    true
+removed 40, which held 3
+entries        4
+  10 -> 2
+  20 -> 4
+  30 -> 5
+  40 -> (removed)
+  50 -> 1

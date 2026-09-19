@@ -1,0 +1,69 @@
+// An array has its length fixed at the moment it is made: `new int[5]` is
+// five slots, now and forever.
+//
+// A `Vec<T>` is the one that grows. It owns a block of memory, hands out room
+// as values are pushed, takes a larger block when it runs out, and releases
+// everything when the last reference to it goes. It is Rust's `Vec`, used
+// under its own name with its own method names, and it needs no import.
+
+void main() {
+    // No allocator is passed: Jux uses the global heap. The `<int>` says what
+    // it holds.
+    var numbers = new Vec<int>();
+    print($"empty      length ${numbers.len()}  capacity ${numbers.capacity()}");
+
+    // Two different numbers, worth keeping apart. Length is how many values
+    // are in it. Capacity is how many would fit before another block is
+    // needed.
+    for (var i : 1..=5) {
+        numbers.push(i * 10);
+    }
+    print($"5 pushes   length ${numbers.len()}  capacity ${numbers.capacity()}");
+
+    // Capacity grew past what was asked for, on purpose. Taking a bigger block
+    // than needed means the next few pushes cost nothing, and growth happens a
+    // handful of times rather than once per value. The exact numbers are the
+    // Rust std's policy: nothing until the first push, then four, then
+    // doubling.
+
+    // A for-each loop walks the contents in order. Anything written against a
+    // `Vec` is written against the same type everywhere; there is no separate
+    // view type to convert to.
+    var line = "contents  ";
+    for (var value : numbers) {
+        line += $" ${value}";
+    }
+    print(line);
+
+    // `get` returns an `int?`, because an index may be out of range and there
+    // is no value to return when it is. The bounds check is in the type.
+    // (Indexing with `numbers[99]` would stop the program instead.) The type
+    // is left to `var`: spelling it `int?` is refused today (README, B16).
+    final var atTwo = numbers.get(2);
+    if (atTwo != null) {
+        print($"index 2    ${atTwo}");
+    } else {
+        print("index 2    out of range");
+    }
+    final var atNinetyNine = numbers.get(99);
+    if (atNinetyNine != null) {
+        print($"index 99   ${atNinetyNine}");
+    } else {
+        print("index 99   out of range");
+    }
+
+    // Taking the last value off. `pop` returns `int?` too: an empty vector
+    // has nothing to hand back, and `null` says so.
+    final int? popped = numbers.pop();
+    if (popped != null) {
+        print($"popped     ${popped}, leaving ${numbers.len()}");
+    }
+
+    // Writing by position is plain indexing.
+    numbers[0] = 999;
+    print($"after Set  first is ${numbers[0]}");
+
+    // Nothing here frees anything. The vector's memory is released when the
+    // last reference to it goes, which is the Ownership lesson doing its job:
+    // the memory belongs to the vector, so the vector gives it back.
+}

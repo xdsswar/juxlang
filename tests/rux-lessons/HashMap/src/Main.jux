@@ -1,0 +1,78 @@
+// A vector answers "what is at position 3". A hash map answers "what is stored
+// under this key", where the key is whatever suits: a number, a name, an id.
+//
+// It finds an entry by computing a number from the key and going straight to
+// where that number points, so a lookup costs about the same whether the map
+// holds ten entries or ten million.
+
+import rust.std.HashMap;
+import rust.std.HashSet;
+
+void main() {
+    // A hash map needs two things from its key type: a way to hash a key, and
+    // a way to tell two keys apart. Hashing finds the likely place; equality
+    // confirms the key found there is really the one wanted, since two
+    // different keys can hash to the same number.
+    //
+    // For `int` both come built in. A class used as a key supplies them as
+    // `operator hash` and `operator==`, which is why Jux asks for the pair
+    // together.
+    var ages = new HashMap<int, int>();
+
+    ages.insert(101, 34);
+    ages.insert(102, 28);
+    ages.insert(103, 45);
+    print($"entries        ${ages.len()}");
+
+    // `get` returns an `int?`, because a key may not be there: the same shape
+    // as asking a vector for an index out of range.
+    final int? known = ages.get(102);
+    if (known != null) {
+        print($"id 102 is      ${known}");
+    } else {
+        print("id 102 unknown");
+    }
+    final int? unknown = ages.get(999);
+    if (unknown != null) {
+        print($"id 999 is      ${unknown}");
+    } else {
+        print("id 999 unknown");
+    }
+
+    // Inserting an existing key replaces its value rather than adding a
+    // second entry: a key appears at most once.
+    ages.insert(101, 35);
+    print($"after replace  ${ages.len()} entries");
+    final int? replaced = ages.get(101);
+    if (replaced != null) {
+        print($"id 101 is now  ${replaced}");
+    } else {
+        print("id 101 unknown");
+    }
+
+    print($"contains 103   ${ages.contains_key(103)}");
+    // `remove` hands back the value it took out, or `null` if there was none.
+    final int? removed = ages.remove(103);
+    if (removed != null) {
+        print($"removed 103, who was ${removed}");
+    } else {
+        print("103 was not there");
+    }
+    print($"contains 103   ${ages.contains_key(103)}");
+
+    // A set is the same structure with the values left out: it answers only
+    // "is this one here", which is the question often actually being asked.
+    // `insert` returns whether the value was new.
+    var seen = new HashSet<int>();
+    print($"adding 1       new? ${seen.insert(1)}");
+    print($"adding 2       new? ${seen.insert(2)}");
+    print($"adding 1 again new? ${seen.insert(1)}");
+    print($"set size       ${seen.len()}");
+    print($"set has 2      ${seen.contains(2)}");
+    print($"set has 7      ${seen.contains(7)}");
+
+    // One thing a hash map does not give: order. Entries come back in
+    // whatever arrangement the hashing produced, which has nothing to do with
+    // the order they were inserted or the order of the keys. When order
+    // matters, the next lesson's `BTreeMap` keeps it.
+}
