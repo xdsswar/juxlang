@@ -367,12 +367,13 @@ impl RustEmitter {
             .iter()
             .map(|p| p.name.text.clone())
             .collect();
-        let display_ok = !has_string_override
-            && record_decl
-                .components
-                .iter()
-                .all(|c| crate::analysis::field_supports_display_in(&c.ty, &own_params));
-        if display_ok {
+        // Only an `operator string` of the record's own stops the derived
+        // one. A component that is not a plain value (an interface, a class,
+        // a collection) no longer does: it prints through the universal
+        // show helper instead, so EVERY record has a `Display` -- which an
+        // interface it implements now requires (§O.4.1: an interface-typed
+        // value prints as its object).
+        if !has_string_override {
             self.emit_record_display_impl(record_decl);
         }
         // A value's identity is its own address; interfaces it implements
@@ -599,6 +600,11 @@ impl RustEmitter {
     /// argument, since a formatted parameter carries that bound (§T.2.1).
     fn emit_record_display_impl(&mut self, record_decl: &juxc_ast::RecordDecl) {
         let name = &record_decl.name.text;
+        let own_params: std::collections::HashSet<String> = record_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.clone())
+            .collect();
         // Build the format string and arg list in one pass — keeping
         // them in lockstep is important so the `{}` count matches the
         // arg count exactly.
@@ -617,8 +623,13 @@ impl RustEmitter {
             let field = to_rust_ident(&comp.name.text);
             if crate::analysis::type_ref_is_float(&comp.ty) {
                 args.push(format!("crate::jux_float(self.{field})"));
-            } else {
+            } else if crate::analysis::field_supports_display_in(&comp.ty, &own_params) {
                 args.push(format!("self.{field}"));
+            } else {
+                // An object, a collection, a nullable: the helper picks the
+                // value's own text where it has one and its debug form
+                // otherwise, which is what `print` does everywhere else.
+                args.push(format!("crate::__jux_show!(self.{field})"));
             }
         }
         fmt_body.push(')');

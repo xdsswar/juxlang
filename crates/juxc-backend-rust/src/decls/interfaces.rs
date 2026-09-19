@@ -325,6 +325,15 @@ impl RustEmitter {
         // sealed lowerings all carry `#[derive(…, Debug)]`), so the bound is
         // always satisfiable.
         self.w.push_str(": std::fmt::Debug");
+        // `Display` too: printing an interface-typed value shows the OBJECT's
+        // text -- its `operator string`, a record's `Circle(r: 3.0)`, or the
+        // class identity `Plain@<addr>` (Operators §O.2, §O.4.1: "through a
+        // base-typed or interface-typed reference as well"). Without the
+        // supertrait `dyn Trait` had only `Debug`, and `print(shape)` showed
+        // the Rust struct, `Circle { r: 3.0 }`. Every Jux type emits a
+        // `Display` (a class at least its identity one), and so does the
+        // anonymous implementer, so the bound is always met.
+        self.w.push_str(" + std::fmt::Display");
         // `JuxIdentity`: an interface-typed handle still names one object, so
         // `===` and identity hashing reach it through the vtable.
         self.w.push_str(" + crate::JuxIdentity");

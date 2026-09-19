@@ -1,0 +1,56 @@
+// An interface-typed value prints as the OBJECT it holds
+// (JUX-OPERATORS-ADDENDUM §O.2, §O.4.1: "through a base-typed or
+// interface-typed reference as well").
+//
+// A record shows its components, a class its `operator string`, a class
+// without one its identity, and an anonymous implementer the same identity
+// shape under the interface it implements.
+
+interface Shape {
+    double area();
+}
+
+record Circle(double radius) implements Shape {
+    public double area() { return 3.0 * radius * radius; }
+}
+
+class Named implements Shape {
+    private String name;
+    public Named(String name) { this.name = name; }
+    public double area() { return 1.0; }
+    public String operator string() { return $"the ${name}"; }
+}
+
+class Plain implements Shape {
+    public double area() { return 0.0; }
+}
+
+void main() {
+    Shape circle = new Circle(2.0);
+    print(circle);
+    print($"area ${circle.area()}");
+
+    Shape named = new Named("square");
+    print(named);
+    print($"in text: ${named}");
+
+    // No `operator string`: the identity form, which ends in an address, so
+    // only its shape is printed here.
+    Shape plain = new Plain();
+    final String text = $"${plain}";
+    print(text.starts_with("Plain@"));
+
+    Shape anon = new Shape() {
+        public double area() { return 42.0; }
+    };
+    print($"${anon}".starts_with("Shape$anon@"));
+    print(anon.area());
+
+    // A collection of interface values prints each element the same way.
+    var shapes = new Vec<Shape>();
+    shapes.push(new Circle(1.0));
+    shapes.push(new Named("box"));
+    for (var s : shapes) {
+        print(s);
+    }
+}
