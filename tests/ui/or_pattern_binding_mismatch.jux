@@ -1,0 +1,33 @@
+enum Tok {
+    Word(String),
+    Num(int),
+    Pair(int, int),
+    End
+}
+
+String a(Tok t) {
+    return switch (t) {
+        case Tok.Word(var s) | Tok.End -> "x";
+        default -> "y";
+    };
+}
+
+String b(Tok t) {
+    return switch (t) {
+        case Tok.Word(var s) | Tok.Num(var s) -> "x";
+        default -> "y";
+    };
+}
+
+String c(Tok t) {
+    return switch (t) {
+        case Tok.Num(var n) | Tok.Pair(var m, _) -> "x";
+        default -> "y";
+    };
+}
+
+public void main() {
+    print(a(Tok.End));
+    print(b(Tok.End));
+    print(c(Tok.End));
+}

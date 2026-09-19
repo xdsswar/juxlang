@@ -331,6 +331,53 @@ impl Checker<'_> {
     /// Only the shapes this module owns are judged; an enum-variant or literal
     /// pattern is left to the checks that already exist, apart from typing
     /// the bindings inside it when it sits in a tuple or record.
+    /// E0447 when one or-pattern alternative binds a different set of names
+    /// than the first, or a shared name at another type (§A.3). Returns
+    /// whether it reported, so the caller stops at the first mismatch.
+    fn report_or_binding_mismatch(
+        &mut self,
+        first: &[(juxc_ast::Ident, Ty)],
+        other: &[(juxc_ast::Ident, Ty)],
+        alt: &Pattern,
+    ) -> bool {
+        let find = |set: &[(juxc_ast::Ident, Ty)], name: &str| {
+            set.iter().find(|(n, _)| n.text == name).map(|(_, t)| t.clone())
+        };
+        let (message, help) = if let Some((name, _)) =
+            first.iter().find(|(n, _)| find(other, &n.text).is_none())
+        {
+            (
+                format!("`{}` is bound by the first alternative but not by this one", name.text),
+                "every alternative of `|` binds the same names, so the arm can use them \
+                 whichever one matched: bind it here too, or split the arm",
+            )
+        } else if let Some((name, _)) = other.iter().find(|(n, _)| find(first, &n.text).is_none()) {
+            (
+                format!("`{}` is bound by this alternative but not by the first", name.text),
+                "every alternative of `|` binds the same names, so the arm can use them \
+                 whichever one matched: bind it in each, or split the arm",
+            )
+        } else if let Some((name, here, there)) = other.iter().find_map(|(n, t)| {
+            let there = find(first, &n.text)?;
+            let differs = t != &there && !matches!(t, Ty::Unknown) && !matches!(there, Ty::Unknown);
+            differs.then(|| (n.text.clone(), t.clone(), there))
+        }) {
+            (
+                format!("`{name}` is `{there}` in the first alternative and `{here}` in this one"),
+                "a name the alternatives share has one type in the arm: split the arm, \
+                 or match a shape where it has the same type",
+            )
+        } else {
+            return false;
+        };
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0447_OrPatternBinding, message)
+                .with_span(alt.span())
+                .with_help(help),
+        );
+        true
+    }
+
     pub(crate) fn check_pattern_shape(
         &mut self,
         pattern: &Pattern,
@@ -423,10 +470,36 @@ impl Checker<'_> {
                 }
             }
             Pattern::Or(alternatives, _) => {
-                // Bindings in alternatives are E0447 already; walk for shape.
-                let mut ignored = Vec::new();
-                for alt in alternatives {
-                    self.check_pattern_shape(alt, ty, &mut ignored);
+                // §A.3: every alternative binds the same names with the same
+                // types, so the arm body has one `n` whichever alternative
+                // matched. Type each alternative on its own, then hold the
+                // rest against the first.
+                let per_alt: Vec<Vec<(juxc_ast::Ident, Ty)>> = alternatives
+                    .iter()
+                    .map(|alt| {
+                        let mut own = Vec::new();
+                        self.check_pattern_shape(alt, ty, &mut own);
+                        own
+                    })
+                    .collect();
+                if let Some((first, rest)) = per_alt.split_first() {
+                    for (i, other) in rest.iter().enumerate() {
+                        if self.report_or_binding_mismatch(first, other, &alternatives[i + 1]) {
+                            break;
+                        }
+                    }
+                    // The arm sees the first alternative's binders, plus any
+                    // name only a later one binds (already an error above),
+                    // so a use in the body doesn't cascade into "unknown name".
+                    let mut declared: Vec<(juxc_ast::Ident, Ty)> = first.clone();
+                    for other in rest {
+                        for (name, bty) in other {
+                            if !declared.iter().any(|(d, _)| d.text == name.text) {
+                                declared.push((name.clone(), bty.clone()));
+                            }
+                        }
+                    }
+                    bindings.extend(declared);
                 }
             }
             // `case Ins i ->` binds the value AS an `Ins`, so `i.count` in

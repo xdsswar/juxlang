@@ -385,14 +385,15 @@ pub enum Code {
     /// the value through a parameter instead. Full covariant-container
     /// storage is deferred to a later phase.
     E0444_WildcardStorageUnsupported,
-    /// E0447 — An **or-pattern alternative introduces bindings** —
+    /// E0447 — The **alternatives of an or-pattern bind different
+    /// names**, or one name at different types —
     /// `case Circle(var r) | Square(var s) ->` or `case var x | 0 ->`.
-    /// Per grammar §A.3, the alternatives of `p1 | p2` must be
-    /// binding-free: an arm body can't use a name that only exists
-    /// when one specific alternative matched. (Rust surfaces this as
-    /// `E0408 variable not bound in all patterns`; we catch it first.)
-    /// Split the arm into one `case` per alternative, or drop the
-    /// binders and re-test inside the body.
+    /// Per grammar §A.3, every alternative of `p1 | p2` binds the same
+    /// names with the same types (`case Num(var n) | Neg(var n) ->` is
+    /// fine): the arm body can only use a name that exists whichever
+    /// alternative matched. (Rust surfaces this as `E0408 variable not
+    /// bound in all patterns`; we catch it first.) Bind the name in
+    /// every alternative, or split the arm into one `case` each.
     /// E0212 — A **variadic parameter that isn't last** —
     /// `void f(int... xs, int y)`. The call-site packer maps every
     /// trailing argument into the varargs slot, so no parameter can

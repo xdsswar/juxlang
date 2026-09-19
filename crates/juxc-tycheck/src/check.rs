@@ -6320,7 +6320,11 @@ impl<'a> Checker<'a> {
                         || matches!(&arm.pattern, Pattern::EnumVariant { path, .. }
                             if self.pattern_record_fqn(path).is_some())
                         || matches!(&arm.pattern, Pattern::EnumVariant { args, .. } if !args.is_empty())
-                        || matches!(&arm.pattern, Pattern::TypeBind { .. });
+                        || matches!(&arm.pattern, Pattern::TypeBind { .. })
+                        // `case Num(var n) | Neg(var n)`: the shape walk types
+                        // the shared binders and checks the alternatives agree.
+                        || matches!(&arm.pattern, Pattern::Or(alts, _)
+                            if alts.iter().any(pattern_introduces_bindings));
                     let mut bindings = Vec::new();
                     if destructures {
                         self.check_pattern_shape(&arm.pattern, &scrutinee_ty, &mut bindings);
@@ -6329,22 +6333,6 @@ impl<'a> Checker<'a> {
                     for (name, ty) in bindings {
                         self.expr_types.insert(name.span, ty.clone());
                         self.env.declare(&name.text, ty);
-                    }
-                    // Or-pattern alternatives must be binding-free
-                    // (§A.3): an arm body can't reference a name that
-                    // only exists when one alternative matched.
-                    if let Pattern::Or(alts, span) = &arm.pattern {
-                        if alts.iter().any(pattern_introduces_bindings) {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0447_OrPatternBinding,
-                                    "or-pattern alternatives can't introduce bindings: \
-                                     split into one `case` per alternative, or drop the \
-                                     `var` binders and re-test inside the body",
-                                )
-                                .with_span(*span),
-                            );
-                        }
                     }
                     // `when <cond>` guard (§A.2.8) — walk it for the
                     // usual diagnostics. Pattern bindings live in the

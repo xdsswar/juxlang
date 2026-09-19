@@ -127,9 +127,10 @@ pub enum Pattern {
     /// `tuple-pattern`). Matches a tuple value element by element.
     Tuple(Vec<Pattern>, Span),
     /// Or-pattern — `case A | B | C ->` (§A.3). Matches when ANY
-    /// alternative matches. Alternatives can't introduce bindings
-    /// (each branch would need identical binders; deferred), so
-    /// sub-patterns here are literal / wildcard / variant shapes.
+    /// alternative matches. Alternatives may bind names only when every
+    /// alternative binds the same names with the same types
+    /// (`case Num(var n) | Neg(var n) ->`), so the arm body sees one `n`
+    /// whichever alternative matched; tycheck raises E0447 otherwise.
     Or(Vec<Pattern>, Span),
     TypeBind {
         /// The class name being matched on.
@@ -153,6 +154,31 @@ impl Pattern {
             | Pattern::Range { span, .. }
             | Pattern::TypeBind { span, .. } => *span,
             Pattern::Bind(ident) => ident.span,
+        }
+    }
+
+    /// Every name this pattern binds, in source order and at any depth:
+    /// each `var x`, and the binder of a type pattern `Type t`. An
+    /// or-pattern contributes every alternative's binders, so the same
+    /// name can appear once per alternative; a caller that wants one copy
+    /// of each dedupes by text.
+    pub fn binders(&self) -> Vec<&Ident> {
+        let mut out = Vec::new();
+        self.collect_binders(&mut out);
+        out
+    }
+
+    /// The walk behind [`Pattern::binders`].
+    fn collect_binders<'a>(&'a self, out: &mut Vec<&'a Ident>) {
+        match self {
+            Pattern::Bind(name) => out.push(name),
+            Pattern::TypeBind { binder, .. } => out.push(binder),
+            Pattern::EnumVariant { args: parts, .. } | Pattern::Tuple(parts, _) | Pattern::Or(parts, _) => {
+                for part in parts {
+                    part.collect_binders(out);
+                }
+            }
+            Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::Range { .. } => {}
         }
     }
 }
