@@ -494,6 +494,8 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 **Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
 
+A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
+
 One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity.
 
 ### G.6.5. First-Class `import rust.X`

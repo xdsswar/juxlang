@@ -1,0 +1,50 @@
+// Comparators handed to Rust's sorting and searching APIs (Operators §O.2.1).
+//
+// Rust wants a closure returning `std::cmp::Ordering`. A Jux comparator may
+// return the `int` a comparison gives instead, and its sign picks the
+// `Ordering`: `(a, b) -> a <=> b`, or Java's `(a, b) -> a.age - b.age`.
+// A lambda that already returns an `Ordering` (`total_cmp`) is passed as is.
+
+record Person(String name, int age) {}
+
+public void main() {
+    // `<=>` on strings, expression body.
+    var names = new Vec<String>();
+    names.push("carol");
+    names.push("alice");
+    names.push("bob");
+    names.sort_unstable_by((a, b) -> a <=> b);
+    print(names[0] + " " + names[1] + " " + names[2]);
+
+    // Java-style subtraction on a record component, descending.
+    var people = new Vec<Person>();
+    people.push(new Person("ann", 31));
+    people.push(new Person("ben", 24));
+    people.push(new Person("cid", 45));
+    people.sort_unstable_by((a, b) -> b.age - a.age);
+    print(people[0].name + " " + people[1].name + " " + people[2].name);
+
+    // A block body: every `return` gives an int.
+    people.sort_unstable_by((a, b) -> {
+        if (a.name.len() != b.name.len()) {
+            return a.name.len() <=> b.name.len();
+        }
+        return a.name <=> b.name;
+    });
+    print(people[0].name);
+
+    // Already an Ordering: passed through untouched.
+    var readings = new Vec<double>();
+    readings.push(2.5);
+    readings.push(-1.0);
+    readings.push(0.5);
+    readings.sort_unstable_by((a, b) -> a.total_cmp(b));
+    print(readings[0]);
+
+    // Searching takes the same comparator shape.
+    var ages = new Vec<int>();
+    ages.push(18);
+    ages.push(30);
+    ages.push(65);
+    print(ages.binary_search_by((probe) -> probe <=> 30));
+}

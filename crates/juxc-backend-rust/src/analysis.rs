@@ -2897,6 +2897,22 @@ impl crate::RustEmitter {
         })
     }
 
+    /// Whether the foreign closure parameter `arg_idx` of `callee` returns
+    /// Rust's `Ordering` (`sort_unstable_by`'s comparator, `max_by`'s): a
+    /// Jux comparator may return an `int` there, converted by its sign
+    /// (Operators §O.2.1). Read off the discovered signature, not a list of
+    /// method names.
+    pub(crate) fn callee_closure_returns_ordering(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        self.foreign_callee_param(callee, arg_idx)
+            .and_then(|p| p.ty.closure_shape())
+            .is_some_and(|shape| {
+                let ret = &shape.return_type;
+                !ret.nullable
+                    && ret.array_shape.is_none()
+                    && ret.name.segments.last().is_some_and(|s| s.text == "Ordering")
+            })
+    }
+
     /// Resolve the **external** (`rust.std` / crate) method parameter that arg
     /// `arg_idx` of `callee` maps to, or `None` when `callee` is not a foreign
     /// method/static-method call. Shared by [`Self::callee_param_is_ref`] and

@@ -3411,6 +3411,7 @@ impl RustEmitter {
             if self.callee_param_is_foreign_fn(&call.callee, i) {
                 self.lambda_bare_target = true;
                 self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
+                self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
             }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
@@ -6316,6 +6317,7 @@ impl RustEmitter {
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
             self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
+            self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
         }
         // `null` for a raw-pointer parameter is a null pointer (§L.6.1), not the
         // `None` a nullable parameter takes: `count(null, 3)` on `int* p`, and

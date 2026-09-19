@@ -1462,6 +1462,11 @@ struct RustEmitter {
     /// called with references (`filter`'s `&Item`): the lambda clones each
     /// argument out, so its body sees the owned values a Jux lambda takes.
     pub(crate) lambda_clone_params: bool,
+    /// Set with [`Self::lambda_bare_target`] when the foreign closure slot
+    /// returns Rust's `Ordering` (`sort_unstable_by`, `max_by`): a lambda
+    /// whose result is an `int` (`(a, b) -> a <=> b`) turns it into an
+    /// `Ordering` by its sign (Operators §O.2.1).
+    pub(crate) lambda_int_to_ordering: bool,
     /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
@@ -5505,6 +5510,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
             lambda_clone_params: false,
+            lambda_int_to_ordering: false,
             worker_attach: Vec::new(),
         }
     }

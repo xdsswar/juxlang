@@ -2493,6 +2493,61 @@ impl RustEmitter {
         }
     }
 
+    /// Whether lambda `l` produces an integer: its expression body is one, or
+    /// the first `return` with a value in its block body returns one. Decides
+    /// the sign conversion of a comparator into an `Ordering` slot
+    /// (Operators §O.2.1); a lambda that already yields an `Ordering` answers
+    /// `false` and is emitted as written.
+    fn lambda_result_is_integer(&self, l: &juxc_ast::LambdaExpr) -> bool {
+        use juxc_ast::{ElseBranch, Stmt};
+        fn first_return(stmts: &[Stmt]) -> Option<&Expr> {
+            stmts.iter().find_map(|s| match s {
+                Stmt::Return(Some(e), _) => Some(e),
+                Stmt::Block(b) | Stmt::Unsafe(b) => first_return(&b.statements),
+                Stmt::If(i) => first_return_in_if(i),
+                _ => None,
+            })
+        }
+        fn first_return_in_if(i: &juxc_ast::IfStmt) -> Option<&Expr> {
+            first_return(&i.then_block.statements).or_else(|| {
+                i.else_branch.as_deref().and_then(|eb| match eb {
+                    ElseBranch::Block(b) => first_return(&b.statements),
+                    ElseBranch::If(elif) => first_return_in_if(elif),
+                })
+            })
+        }
+        let value = match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => Some(e.as_ref()),
+            juxc_ast::LambdaBody::Block(b) => first_return(&b.statements),
+        };
+        value
+            .and_then(|e| self.receiver_ty_of(e))
+            .is_some_and(|t| matches!(t, juxc_tycheck::Ty::Primitive(p) if juxc_tycheck::ty::integer_bits(p).is_some()))
+    }
+
+    /// Whether `e` is a built-in `<=>` whose two sides Rust totally orders:
+    /// integers, `char`, `bool` or `String`. Floats are left to the IEEE
+    /// total order `<=>` defines (§S.2.3), and a user type to its own
+    /// `operator<=>`.
+    fn is_plain_ordered_comparison(&self, e: &Expr) -> bool {
+        let Expr::Binary(b) = e else { return false };
+        if !matches!(b.op, juxc_ast::BinaryOp::Cmp) {
+            return false;
+        }
+        let ordered = |side: &Expr| match self.receiver_ty_of(side) {
+            Some(juxc_tycheck::Ty::String) => true,
+            Some(juxc_tycheck::Ty::Primitive(p)) => {
+                juxc_tycheck::ty::integer_bits(p).is_some()
+                    || matches!(p, juxc_tycheck::Primitive::Char | juxc_tycheck::Primitive::Bool)
+            }
+            _ => false,
+        };
+        // Both sides the same kind, so `cmp` type-checks without a cast.
+        ordered(&b.left)
+            && ordered(&b.right)
+            && self.receiver_ty_of(&b.left) == self.receiver_ty_of(&b.right)
+    }
+
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         // `move` is unconditional: Phase-1 lambdas wrap in
         // `Rc<dyn Fn>`, which often outlives the enclosing scope
@@ -2524,6 +2579,7 @@ impl RustEmitter {
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
         let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
+        let int_to_ordering = std::mem::take(&mut self.lambda_int_to_ordering) && bare;
         let captures = self.collect_wrapper_captures(l);
         // **`this` captured by a lambda shares the handle too.** A closure that
         // reads `this` would otherwise borrow `&self`, and returning it from a
@@ -2622,15 +2678,48 @@ impl RustEmitter {
                 self.w.push_str("{ ");
             }
         }
+        // A comparator returning an `int` into an `Ordering` slot (Operators
+        // §O.2.1): the value converts by its sign. An expression body is
+        // `(a <=> b).cmp(&0)`; a block body runs as its own `int` closure
+        // first, so a `return` inside it still returns the `int`.
+        let ordering_from_int = int_to_ordering && self.lambda_result_is_integer(l);
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => {
                 if void_target {
                     self.w.push_str("{ ");
                     self.emit_expr(e);
                     self.w.push_str("; }");
+                } else if ordering_from_int && self.is_plain_ordered_comparison(e) {
+                    // `(a, b) -> a <=> b` on integers or strings IS an
+                    // `Ordering` already in Rust: `a.cmp(&b)`, no round
+                    // trip through -1/0/+1.
+                    let juxc_ast::Expr::Binary(bin) = e.as_ref() else { unreachable!() };
+                    self.w.push('(');
+                    self.emit_expr(&bin.left);
+                    self.w.push_str(").cmp(&(");
+                    self.emit_expr(&bin.right);
+                    self.w.push_str("))");
+                } else if ordering_from_int {
+                    self.w.push('(');
+                    self.emit_expr(e);
+                    self.w.push_str(").cmp(&0)");
                 } else {
                     self.emit_expr(e);
                 }
+            }
+            juxc_ast::LambdaBody::Block(b) if ordering_from_int => {
+                let prev_lam = self.in_lambda_body;
+                self.in_lambda_body = true;
+                self.w.push_str("(|| {\n");
+                self.w.indent_inc();
+                for stmt in &b.statements {
+                    self.emit_stmt(stmt);
+                }
+                self.patch_lambda_tail_try(b);
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("})().cmp(&0)");
+                self.in_lambda_body = prev_lam;
             }
             juxc_ast::LambdaBody::Block(b) => {
                 // Mark the body as lambda territory (S9): a `try`
