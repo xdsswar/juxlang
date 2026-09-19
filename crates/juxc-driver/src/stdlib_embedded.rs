@@ -385,6 +385,26 @@ public class FileNotFoundException extends IOException {
     }
 }
 "###),
+    ("exceptions/EncodingException.jux", r###"/**
+ * jux.std.exceptions.EncodingException
+ *
+ * Bytes that are not valid UTF-8 where a `String` was wanted, or a
+ * byte range that would split a multi-byte character (§K.7:
+ * `substringBytes`, `String.fromBytes`). Unchecked, like
+ * `IndexOutOfBoundsException`, the other failure those methods name.
+ */
+package jux.std.exceptions;
+
+public class EncodingException extends RuntimeException {
+    /**
+     * Construct an EncodingException with a message naming the
+     * offending bytes or byte offset.
+     */
+    public EncodingException(String message) {
+        super(message);
+    }
+}
+"###),
     ("exceptions/IllegalArgumentException.jux", r###"/**
  * jux.std.exceptions.IllegalArgumentException
  *
@@ -1062,6 +1082,8 @@ public enum Option<T> {
  */
 package jux.std.result;
 
+import jux.std.option.Option;
+
 public enum Result<T, E> {
     Ok(T),
     Err(E);
@@ -1102,6 +1124,28 @@ public enum Result<T, E> {
         return switch (this) {
             case Result.Ok(var v) -> v;
             case Result.Err(var e) -> fallback;
+        };
+    }
+
+    /**
+     * The success value as an Option (§K.4): `Some(v)` for `Ok(v)`,
+     * `None` for an Err.
+     */
+    public Option<T> ok() {
+        return switch (this) {
+            case Result.Ok(var v) -> Option.Some(v);
+            case Result.Err(var e) -> Option.None;
+        };
+    }
+
+    /**
+     * The error as an Option (§K.4): `Some(e)` for `Err(e)`, `None` for
+     * an Ok.
+     */
+    public Option<E> err() {
+        return switch (this) {
+            case Result.Ok(var v) -> Option.None;
+            case Result.Err(var e) -> Option.Some(e);
         };
     }
 }

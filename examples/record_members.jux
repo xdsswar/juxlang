@@ -1,0 +1,51 @@
+// A record's static methods, a method of its own named `length`, and its
+// array component read by its bare name inside the record's methods.
+
+record Span(int lo, int hi) {
+    static Span zero() { return new Span(0, 0); }
+
+    static Span of(int lo, int hi) { return new Span(lo, hi); }
+
+    // A user `length()` is an ordinary method; the array `.length` built-in
+    // does not take it over.
+    int length() { return hi - lo; }
+}
+
+record Samples(int[] items) {
+    int first() { return items[0]; }
+
+    int count() { return items.length; }
+
+    // Passing the component on shares the array; the record keeps it too.
+    Samples again() { return new Samples(items); }
+
+    int total() {
+        var sum = 0;
+        for (var i : 0..items.length) {
+            sum += items[i];
+        }
+        return sum;
+    }
+}
+
+class Counter {
+    int n = 2;
+
+    int length() { return n; }
+}
+
+void main() {
+    print(Span.zero().length());
+    print(Span.of(3, 10).length());
+    final Span s = new Span(1, 4);
+    print(s.length());
+
+    final int[] xs = {4, 5, 6};
+    final Samples samples = new Samples(xs);
+    print(samples.first());
+    print(samples.count());
+    print(samples.total());
+    print(samples.again().first());
+
+    print(new Counter().length());
+}

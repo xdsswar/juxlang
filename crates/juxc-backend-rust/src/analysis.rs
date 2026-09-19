@@ -2369,6 +2369,13 @@ impl crate::RustEmitter {
         if let juxc_ast::Expr::Path(qn) = expr {
             if qn.segments.len() == 1 {
                 let name = &qn.segments[0].text;
+                // A surrounding `&&`, `||` or `?:` proved it non-null for the
+                // operand being emitted (§7.10), and the read emits the value
+                // itself. `n != null ? $"found ${n}" : "none"` otherwise
+                // matched the unwrapped `isize` as an `Option` (E0308).
+                if self.expr_narrowed.iter().any(|n| n == name) {
+                    return false;
+                }
                 // A nullable local/parameter (smart-cast aware — a narrowed
                 // local is popped from the set inside `if (x != null)`).
                 if self.nullable_locals.contains(name) {

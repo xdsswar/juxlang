@@ -335,7 +335,11 @@ impl Walker {
                 self.expr(&t.then_branch);
                 self.expr(&t.else_branch);
             }
-            Expr::Await(inner, _) | Expr::NotNullAssert(inner, _) => self.expr(inner),
+            // `f(text)?` reads `text` like `f(text)` does; unwalked, the
+            // read was invisible and an earlier one moved the value.
+            Expr::Await(inner, _) | Expr::NotNullAssert(inner, _) | Expr::ErrorProp(inner, _) => {
+                self.expr(inner)
+            }
             Expr::Switch(sw) => {
                 self.expr(&sw.scrutinee);
                 for arm in &sw.arms {

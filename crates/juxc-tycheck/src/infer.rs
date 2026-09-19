@@ -527,6 +527,22 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         };
                         return infer_field(&this_field, env, symbols);
                     }
+                    // A RECORD's component read by its bare name (§O.8.1) is
+                    // `this.items` too. Left Unknown, the backend could not
+                    // see that `items[0]` indexes an array handle (E0608).
+                    let is_component = symbols
+                        .records
+                        .get(class_fqn)
+                        .is_some_and(|r| r.components.iter().any(|c| c.name == *name));
+                    if is_component {
+                        let this_field = juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(qn.span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        };
+                        return infer_field(&this_field, env, symbols);
+                    }
                 }
             }
             Ty::Unknown
@@ -1329,6 +1345,37 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
+            // `RecordName.staticMethod(args)`: a record's statics live on
+            // `RecordSig`. Untyped, `Span.zero().length()` gave the backend
+            // no receiver class, and the user `length()` lost to the array
+            // built-in.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1 && env.lookup(&qn.segments[0].text).is_none() {
+                    let bare = qn.segments[0].text.as_str();
+                    let record_fqn = env
+                        .unqualified
+                        .get(bare)
+                        .filter(|fqn| symbols.records.contains_key(fqn.as_str()))
+                        .cloned()
+                        .or_else(|| {
+                            symbols
+                                .find_fqn_by_bare_in(bare, &env.current_package.join("."))
+                                .filter(|fqn| symbols.records.contains_key(fqn.as_str()))
+                        });
+                    if let Some(record_fqn) = record_fqn {
+                        if let Some(method) = symbols.records[&record_fqn].methods.get(method_name) {
+                            if method.is_static {
+                                return return_type_in_method(
+                                    &method.return_type,
+                                    &record_fqn,
+                                    &method.generic_params,
+                                    symbols,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             // `Stream.<ctor>` statics (§18.6.4) — `Stream` is a builtin,
             // not a class, so the class-static path above can't type it.
             // The element type comes from an explicit type arg
@@ -1598,7 +1645,7 @@ fn infer_stdlib_method(
         Ty::String => match method_name {
             // String → String
             "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring" | "repeat"
-            | "to_string" | "clone" => Some(Ty::String),
+            | "substringBytes" | "to_string" | "clone" => Some(Ty::String),
             // String → uint. `len()` is the Rust `str::len()` byte count, which
             // returns `usize`; typing it `uint` keeps it consistent with the
             // emitted Rust (and with `Vec::len()`), so a mixed-type use coerces
@@ -1924,6 +1971,13 @@ pub(crate) fn path_resolves_to_class(
         if let Some(fqn) = env.unqualified.get(bare) {
             if symbols.classes.contains_key(fqn) {
                 return Some(fqn.clone());
+            }
+            // The unit binds the name to a type that is not a class (an
+            // imported enum such as `jux.std.option.Option`): that binding
+            // wins over a same-named class elsewhere, here a user
+            // `class Option` in the root package.
+            if symbols.is_type_name(fqn) {
+                return None;
             }
         }
         if symbols.classes.contains_key(bare) {

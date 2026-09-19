@@ -185,6 +185,11 @@ pub(crate) struct Parser<'a> {
     /// arrow is never a lambda's; a lambda nested inside the guard
     /// (`when xs.any(x -> x > 0)`) has its own arrow and still parses.
     pub(crate) switch_arm_arrow: Option<usize>,
+    /// This file's aliases of ARRAY types (`type Bytes = ubyte[];`), name to
+    /// the aliased type, collected on first use by [`Self::array_alias`]. A
+    /// bare `{1, 2, 3}` initializer needs the array shape of the declared
+    /// type, and under an alias the shape is in the alias's declaration.
+    pub(crate) array_aliases: Option<std::collections::HashMap<String, juxc_ast::TypeRef>>,
 }
 
 impl<'a> Parser<'a> {
@@ -203,7 +208,40 @@ impl<'a> Parser<'a> {
             foreign_mode: false,
             depth: 0,
             depth_reported: false,
+            array_aliases: None,
         }
+    }
+
+    /// The array type `name` aliases, when this file declares
+    /// `type name = T[];` (at the top level, not generic). The whole file is
+    /// scanned once, so an alias declared below its use is found too. An
+    /// alias from another file is not visible here; the initializer then gets
+    /// the "write the array type" diagnostic.
+    pub(crate) fn array_alias(&mut self, name: &str) -> Option<juxc_ast::TypeRef> {
+        if self.array_aliases.is_none() {
+            let mut found = std::collections::HashMap::new();
+            let mut depth = 0usize;
+            for (i, tok) in self.tokens.iter().enumerate() {
+                match &tok.kind {
+                    TokenKind::LBrace => depth += 1,
+                    TokenKind::RBrace => depth = depth.saturating_sub(1),
+                    TokenKind::Kw(Keyword::Type) if depth == 0 => {
+                        // A throwaway parser positioned on the declaration;
+                        // its diagnostics are the real parse's to report.
+                        let mut probe = Parser::new(self.tokens);
+                        probe.pos = i;
+                        if let Some(alias) = probe.parse_type_alias_decl(Vec::new(), juxc_ast::Visibility::Package) {
+                            if alias.generic_params.is_empty() && alias.target.array_shape.is_some() {
+                                found.insert(alias.name.text, alias.target);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            self.array_aliases = Some(found);
+        }
+        self.array_aliases.as_ref().and_then(|m| m.get(name).cloned())
     }
 
     /// Take one unit of nesting budget, or report E0201 and refuse.

@@ -139,33 +139,33 @@ library gap, listed too), **TODO** (a later wave).
 | Range | 1 | PASS | overflow panics in debug instead of wrapping |
 | Function | 1 | PASS | |
 | Overload | 1 | PASS | |
-| Callback | 1 | FAIL | B1: a free function passed as a value leaks rustc E0308 |
+| Callback | 1 | FIXED | B1: a free function passed as a value leaked rustc E0308 (7cc5510) |
 | Generic | 1 | PASS | `where T has operator<=>(T) -> int` bound |
 | Variadic | 1 | PASS | `any...` for mixed types, `int...` accepts an array |
 | Array | 1 | PASS | |
-| Slice | 1 | FAIL | B3, B4, B5 (record static call, user `length()`, array component); no slice syntax, view built by hand |
+| Slice | 1 | FIXED | B3, B4, B5 (record static call, user `length()`, array component) (2d432c5); no slice syntax, view built by hand |
 | Tuple | 1 | PASS | |
 | Struct | 1 | PASS | |
 | Enum | 1 | PASS | C-layout enum for discriminants, `ordinal()` for plain |
 | Variant | 1 | PASS | enum payloads; printing derives `Range(low: 20.0, high: 24.0)` |
 | Match | 1 | PASS | exhaustive switch; `case 6, 7 ->` added |
 | Option | 1 | PASS | `int?`, null narrowing, `?:` |
-| Result | 1 | FAIL | B2: switching on a `Result` leaks rustc E0308 |
-| Propagate | 1 | FAIL | B2 again (the `?` path itself is fine) |
-| TypeAlias | 1 | PASS | `{...}` needs `new T[]` under an array alias (B13) |
+| Result | 1 | FIXED | B2: switching on a `Result` leaked rustc E0308 (182aa5c) |
+| Propagate | 1 | FIXED | B2 again, plus a moved `String` argument inside `f(x)?` (182aa5c) |
+| TypeAlias | 1 | PASS | `{...}` under an array alias works since 4ae3b24 (B13); the lesson still writes `new T[]` |
 | Interface | 1 | PASS | `operator==` needs `operator hash` |
 | Iterator | 1 | PASS | `Iterator<T>`/`Iterable<T>` classes |
 | Overloading | 1 | PASS | `operator<=>` instead of a lone `<` |
 | Ownership | 1 | PASS | `move` not implemented; shows sharing plus `drop` |
-| String | 1 | PASS | `substringBytes` missing (B11), boundary test done on bytes |
+| String | 1 | PASS | `substringBytes` added in 905442a (B11); the lesson still tests the boundary on bytes |
 | Format | 1 | PASS | helpers instead of specs; `0.125` ties to `0.12` |
 | Math | 1 | GAP | B14: Rust `f64` methods (`powf`, `ln`, `sin`, ...) not reachable on `double` |
 | Prime | 1 | PASS | `Vec<bool>` |
-| Statistics | 1 | FAIL | B8: runtime panic, `for (i : 1..v.len())` holds the Vec borrowed |
-| Algorithm | 1 | FAIL | B6, B7; iterator adaptors and `sort` missing (B14), written as helpers |
+| Statistics | 1 | FIXED | B8: runtime panic, `for (i : 1..v.len())` held the Vec borrowed (d6b2b91) |
+| Algorithm | 1 | FIXED | B6, B7 (d6b2b91, fc4b7c8); iterator adaptors and `sort` missing (B14), written as helpers |
 | Console | 1 | PASS | |
 | Thanks | 1 | PASS | |
-| Module | 1 | PASS | three packages; package-private leak found (B9) |
+| Module | 1 | PASS | three packages; package-private leak found (B9, now E0416 since 9065573) |
 | Vector | 2 | PASS | `Vec`; `get` gives `int?`, typed through `var` (B16); capacity follows Rust (0, then 4, then 8) |
 | Deque | 2 | PASS | `VecDeque`; `pop_front`/`pop_back` give `int?` |
 | HashMap | 2 | PASS | `HashMap`/`HashSet`; a set's `insert` returns whether the value was new |
@@ -195,7 +195,7 @@ library gap, listed too), **TODO** (a later wave).
 | Asm | 3 | GAP | no inline `asm` (E0301); bodies in Jux, `@cfg(arch)` selection kept |
 | Allocator | 3 | GAP | no allocator parameter or arena; the arena strategy built by hand over a `Vec` |
 
-Wave 1 totals: 32 PASS, 6 FAIL, 1 GAP.
+Wave 1 totals: 32 PASS, 6 FIXED (were FAIL), 1 GAP.
 
 Wave 2 (collections, crates and std I/O, 14 lessons) was run on 2026-09-18:
 6 PASS, 8 FAIL. Every failure is a compiler or binder bug with a repro below;
@@ -217,6 +217,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 7cc5510.
+
 **B2. `switch` on a `Result` lowers to Rust's own `Result`.** (Result,
 Propagate) The patterns are emitted as `Result::Ok(v)`, which rustc resolves
 to `std::result::Result`, not `jux::std::result::Result`. A nested switch on
@@ -235,6 +237,8 @@ void main() {
 }
 ```
 
+Status: FIXED in 182aa5c.
+
 **B3. A static method call on a record leaks E0423.** (Slice)
 
 ```jux
@@ -243,6 +247,8 @@ record P(int x) {
 }
 void main() { print(P.zero().x); }   // emitted as `P.zero()`, not `P::zero()`
 ```
+
+Status: FIXED in 2d432c5.
 
 **B4. A user method named `length()` is rewritten to the length intrinsic.**
 (Slice) Happens on records and classes alike; the emitted
@@ -256,6 +262,8 @@ class C {
 void main() { print(new C().length()); }
 ```
 
+Status: FIXED in 2d432c5.
+
 **B5. Indexing an array component inside a record leaks E0608.** (Slice)
 
 ```jux
@@ -264,6 +272,8 @@ record A(int[] items) {
 }
 void main() { final int[] xs = {4, 5}; print(new A(xs).first()); }
 ```
+
+Status: FIXED in 2d432c5.
 
 **B6. A range bounded by `Vec.len()` binds a usize.** (Algorithm) The loop
 variable's type leaks into an `int` assignment or an `int?` return.
@@ -278,6 +288,8 @@ int lastIndex(Vec<int> items) {
 }
 ```
 
+Status: FIXED in d6b2b91 (spec M.6.1 now types the range by its bounds: `0..v.len()` is a `uint` range) and fc4b7c8 (a `uint` returned into `int?`).
+
 **B7. A nullable narrowed inside a ternary branch leaks when interpolated.**
 (Algorithm) The narrowed value is unwrapped and then matched as an `Option`
 again.
@@ -289,6 +301,8 @@ void main() {
     print(n != null ? $"found ${n}" : "none");   // match &(n.unwrap()) { Some(..) }
 }
 ```
+
+Status: FIXED in fc4b7c8.
 
 **B8. A `for` over `0..v.len()` keeps the Vec borrowed for the whole loop.**
 (Statistics) Writing an element inside the loop panics at run time with
@@ -306,6 +320,8 @@ void main() {
 }
 ```
 
+Status: FIXED in d6b2b91.
+
 **B9. A package-private free function is visible from another package.**
 (Module) Language §4.4 makes a declaration with no modifier visible within its
 package only, and reaching it from elsewhere E0416. In the Module project,
@@ -313,24 +329,34 @@ package only, and reaching it from elsewhere E0416. In the Module project,
 `doubled(5)`, though `doubled` has no modifier; it compiles and prints `10`.
 The lesson follows the spec and does not rely on this.
 
+Status: FIXED in 9065573 (E0416).
+
 **B10. `Result.err()` is missing.** Core lib §K.4 lists `Option<E> err()`;
 `r.err()` is E0413 "no method `err` on type `jux.std.result.Result`".
+
+Status: FIXED in b2b6cd0.
 
 **B11. `String.substringBytes` is missing.** Core lib §K.7 lists
 `substringBytes(int, int) throws EncodingException, IndexOutOfBoundsException`;
 calling it is E0413. The String lesson tests the boundary on `bytes()`
 instead.
 
+Status: FIXED in 905442a.
+
 **B12. An error inside `${...}` on a parenthesized receiver is reported at
 1:1.** `print($"${(2.0).nosuch()}");` gives
 `file.jux:1:1: [E0413] no method nosuch on double`; the same call without
 the parentheses reports the right line and column.
+
+Status: FIXED in 5f120f6. The cause was the literal receiver, not the interpolation: `(2.0).nosuch()` was reported at 1:1 anywhere.
 
 **B13. `{...}` under an array type alias is a parse error.**
 `type Bytes = ubyte[]; final Bytes data = {1, 2, 3};` gives three E0200
 "expected expression" errors and a follow-on E0601. `new ubyte[] {1, 2, 3}`
 works. Either the initializer should be accepted or the message should say
 that a `{...}` initializer needs the array type written out.
+
+Status: FIXED in 4ae3b24 for an alias declared in the same file; any other type gets one E0200 naming the fix.
 
 **B14. Parts of the Rust std are not reachable.** (Math GAP, Algorithm,
 Statistics) The rule is that foreign APIs are discovered from rustdoc, so
@@ -345,6 +371,8 @@ each of these is a discovery gap rather than a list to extend by hand:
 - There is no way to sort a `Vec<double>`: `total_cmp` is missing and an
   ordering closure cannot produce a Rust `Ordering`.
 
+Status: OPEN. Needs rustdoc discovery of inherent primitive impls, `alloc` slice methods reached through `Deref`, and trait-provided `Iterator` methods; deferred as its own piece of work.
+
 **B15. Smaller tooling and wording issues.**
 - `jux run` in project mode (`--manifest-path`) ignores `--emit-dir` and
   builds under `<project>/target`, and its help still says project mode is
@@ -355,6 +383,8 @@ each of these is a discovery gap rather than a list to extend by hand:
   `byteLength()`). The lessons use the spec names.
 - E0931 on a struct says "class `Circle` defines `operator==` but no
   `operator hash`".
+
+Status: `--emit-dir` in project mode and the help text FIXED in 177cdcc; E0931 wording FIXED in 2966922. `String.length()` is DEFERRED: ERRATA E13 records that the String surface is unresolved and E5 makes `?.length()` normative, so removing it needs an owner ruling.
 
 ## Bugs found by wave 2
 

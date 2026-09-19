@@ -478,6 +478,8 @@ public struct SteppedRange<T>(Range<T> base, T step);
 
 `a..b` produces an `ExclusiveRange<T>`. `a..=b` produces an `InclusiveRange<T>`. `r step s` produces a `SteppedRange<T>` from any range `r` and a step value `s`.
 
+`T` is the type the two bounds meet in under the arithmetic promotion (JUX-SEMANTICS-ADDENDUM §S.2.6), and a `for` over the range binds its variable at `T`. An integer literal with no suffix takes the other bound's type, so `0..10` is an `int` range and `0..v.len()` is a `uint` range, because `Vec.len()` is a `uint`. Two `char` bounds give a `char` range. Bounds with no common type are rejected the way the same operands of `+` would be.
+
 For built-in numeric types, ranges are iterable:
 
 - `ExclusiveRange<int>` iterates `start, start+1, ..., end-1`.

@@ -59,7 +59,12 @@ impl RustEmitter {
         // Resolve the scrutinee's enum (if any) so bare `case Variant ->`
         // labels qualify to `Enum::Variant`. Saved/restored for nested switches.
         let prev_switch_enum = self.current_switch_enum.take();
-        self.current_switch_enum = self.scrutinee_enum_bare(&s.scrutinee);
+        let prev_switch_enum_path = self.current_switch_enum_path.take();
+        let scrutinee_enum = self.scrutinee_enum_fqn(&s.scrutinee);
+        self.current_switch_enum = scrutinee_enum
+            .as_ref()
+            .map(|fqn| fqn.rsplit('.').next().unwrap_or(fqn).to_string());
+        self.current_switch_enum_path = scrutinee_enum.map(|fqn| self.enum_pattern_path(&fqn));
         // A `String`-typed scrutinee matches against `&str` literal patterns
         // (`case "a" ->`), so we match on `.as_str()` — `match s.as_str() {
         // "a" => … }` — rather than the owned `String` (which Rust won't
@@ -397,6 +402,22 @@ impl RustEmitter {
         }
         self.emitting_nullable_target = prev_nullable_target;
         self.current_switch_enum = prev_switch_enum;
+        self.current_switch_enum_path = prev_switch_enum_path;
+    }
+
+    /// The Rust spelling of the enum `fqn` in a pattern. An enum of the
+    /// current package is in scope by its bare name; any other is crate-rooted
+    /// (`crate::jux::std::result::Result`), the rule a value-position
+    /// `Result.Ok(..)` already follows, because a bare `Result` or `Option`
+    /// is Rust's prelude type in the emitted module.
+    fn enum_pattern_path(&self, fqn: &str) -> String {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+        let pkg = fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+        if fqn.contains('.') && pkg != self.current_package_path() {
+            format!("crate::{}", juxc_lex::to_rust_path(fqn))
+        } else {
+            juxc_lex::to_rust_ident(bare)
+        }
     }
 
     /// The bare enum name a switch scrutinee resolves to, or `None` when the
@@ -574,7 +595,7 @@ impl RustEmitter {
         }
     }
 
-    fn scrutinee_enum_bare(&self, scrutinee: &juxc_ast::Expr) -> Option<String> {
+    fn scrutinee_enum_fqn(&self, scrutinee: &juxc_ast::Expr) -> Option<String> {
         // Gather every type the scrutinee might carry — `expr_types` (which can
         // be `Unknown` for a param) AND the name-keyed `local_types` — and
         // return the first that names a known enum.
@@ -606,7 +627,7 @@ impl RustEmitter {
                     .keys()
                     .any(|k| k.rsplit('.').next() == Some(bare.as_str()));
             if is_enum {
-                return Some(bare);
+                return Some(name);
             }
         }
         None
@@ -799,8 +820,8 @@ impl RustEmitter {
                 // this name is one of its variants, emit the qualified
                 // `Enum::Variant` pattern; otherwise it's a genuine binding.
                 if self.is_current_switch_variant(&name.text) {
-                    if let Some(enum_bare) = self.current_switch_enum.clone() {
-                        self.w.push_str(&enum_bare);
+                    if let Some(enum_path) = self.current_switch_enum_path.clone() {
+                        self.w.push_str(&enum_path);
                         self.w.push_str("::");
                     }
                 }
@@ -1037,8 +1058,8 @@ impl RustEmitter {
                 if path.segments.len() == 1
                     && self.is_current_switch_variant(&path.segments[0].text)
                 {
-                    if let Some(enum_bare) = self.current_switch_enum.clone() {
-                        self.w.push_str(&enum_bare);
+                    if let Some(enum_path) = self.current_switch_enum_path.clone() {
+                        self.w.push_str(&enum_path);
                         self.w.push_str("::");
                     }
                 }
@@ -1079,6 +1100,19 @@ impl RustEmitter {
                         self.w.push_str(&path);
                         self.w.push_str("::");
                         self.w.push_str(&juxc_lex::to_rust_ident(segs[segs.len() - 1]));
+                    }
+                    // `case Result.Ok(var v)`: the switch's own enum, named
+                    // through its crate-rooted spelling like a bare label.
+                    None if segs.len() == 2
+                        && self.current_switch_enum.as_deref() == Some(segs[0]) =>
+                    {
+                        let enum_path = self
+                            .current_switch_enum_path
+                            .clone()
+                            .unwrap_or_else(|| juxc_lex::to_rust_ident(segs[0]));
+                        self.w.push_str(&enum_path);
+                        self.w.push_str("::");
+                        self.w.push_str(&juxc_lex::to_rust_ident(segs[1]));
                     }
                     None => self.w.push_str(&juxc_lex::join_rust_path(&segs)),
                 }

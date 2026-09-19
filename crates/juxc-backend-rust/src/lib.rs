@@ -1010,6 +1010,12 @@ struct RustEmitter {
     /// emit the qualified `Enum::Variant` Rust pattern instead of a catch-all
     /// binding (rustc `E0170`). `None` outside an enum switch.
     current_switch_enum: Option<String>,
+    /// How a pattern SPELLS that enum in Rust: the bare name for an enum of
+    /// the current package, the crate-rooted path for any other. A bare
+    /// `Result::Ok(v)` resolved to Rust's prelude `Result`, not Jux's own
+    /// `jux.std.result.Result` the scrutinee has, so a `switch` on a Jux
+    /// `Result` failed to compile.
+    current_switch_enum_path: Option<String>,
     /// When `true`, the emitter is producing a `jux test` binary:
     /// the workspace shim is a test runner that invokes every
     /// `@Test`-annotated function instead of the user's `main()`.
@@ -4662,6 +4668,23 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "    }\n",
             "    s.chars().skip(begin as usize).take((end - begin) as usize).collect()\n",
             "}\n",
+            // `s.substringBytes(a, b)` (§K.7): a byte-indexed slice. A range
+            // outside the string throws `IndexOutOfBoundsException`, and one
+            // that would split a multi-byte character `EncodingException`.
+            "pub fn jux_substring_bytes(s: &str, begin: isize, end: isize) -> String {\n",
+            "    let length = s.len() as isize;\n",
+            "    if begin < 0 || end > length || begin > end {\n",
+            "        std::panic::panic_any(crate::jux::std::exceptions::IndexOutOfBoundsException::new(\n",
+            "            format!(\"Range [{begin}, {end}) out of bounds for length {length}\"),\n",
+            "        ));\n",
+            "    }\n",
+            "    match s.get(begin as usize..end as usize) {\n",
+            "        Some(part) => part.to_owned(),\n",
+            "        None => std::panic::panic_any(crate::jux::std::exceptions::EncodingException::new(\n",
+            "            format!(\"Range [{begin}, {end}) splits a multi-byte character\"),\n",
+            "        )),\n",
+            "    }\n",
+            "}\n",
             "pub fn jux_char_at(s: &str, at: isize) -> char {\n",
             "    match usize::try_from(at).ok().and_then(|i| s.chars().nth(i)) {\n",
             "        Some(c) => c,\n",
@@ -5216,6 +5239,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             in_enum_method: false,
             enclosing_enum_fields: std::collections::HashMap::new(),
             current_switch_enum: None,
+            current_switch_enum_path: None,
             test_mode: false,
             current_unit_idx: None,
             split_files: None,

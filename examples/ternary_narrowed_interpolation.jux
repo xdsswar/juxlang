@@ -1,0 +1,20 @@
+// A null test in a ternary's condition narrows the value inside the branch
+// it proves (§7.10), and an interpolation there reads the value itself.
+
+int? find(int x) {
+    if (x > 0) {
+        return x;
+    }
+    return null;
+}
+
+void main() {
+    final int? n = find(3);
+    print(n != null ? $"found ${n}" : "none");
+
+    final int? m = find(-1);
+    print(m != null ? $"found ${m}" : $"none, m is ${m}");
+
+    final String? name = null;
+    print(name == null ? "anonymous" : $"hello ${name}");
+}

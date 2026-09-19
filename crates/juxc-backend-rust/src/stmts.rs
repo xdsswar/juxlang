@@ -822,9 +822,16 @@ impl RustEmitter {
             // accepts the widening but Rust does not implicitly widen,
             // so the bare value would leak (rustc E0308). Only widens
             // (never narrows); skipped under nullable/sealed wraps.
-            let widen = if !do_some && !wrap_upcast {
+            // Under the `Some(...)` of an `int?` return the value
+            // converts to the inner `int` the same way: a `uint` loop
+            // index returned as an `int?` was `Some(usize)`.
+            let target = if do_some {
+                self.nullable_return_inner_primitive()
+            } else {
                 self.return_type_primitive()
-                    .and_then(|t| self.numeric_widen_or_arm(e, t))
+            };
+            let widen = if !wrap_upcast {
+                target.and_then(|t| self.numeric_widen_or_arm(e, t))
             } else {
                 None
             };
@@ -2298,6 +2305,35 @@ impl RustEmitter {
             self.emit_for_each_over_iterator(f, element);
             return;
         }
+        // **A range whose bounds read a shared container** (`0..v.len()` on
+        // a `Vec`, an array, a class field) borrows its `RefCell` to do so.
+        // Rust keeps the temporaries of a `for` head alive for the WHOLE
+        // loop, so `v[i] = 7` in the body panicked with "already borrowed".
+        // The range is evaluated first, in its own statement, which drops
+        // the guard before the first iteration:
+        //
+        //     let __jux_range = 0..v.borrow().len() as isize;
+        //     for i in __jux_range { .. }
+        //
+        // Only a head that actually takes a guard is hoisted, so an ordinary
+        // `for i in 0..n` keeps its plain form.
+        // The head is written once, here, and reused below either way.
+        let range_head: Option<String> = if matches!(&f.iter, Expr::Range(r) if r.step.is_none()) {
+            let saved = std::mem::replace(&mut self.w, crate::writer::Writer::new());
+            self.emit_expr(&f.iter);
+            let text = std::mem::replace(&mut self.w, saved).into_string();
+            if text.contains(".borrow") || text.contains(".lock()") {
+                self.w.push_str("let __jux_range = ");
+                self.w.push_str(&text);
+                self.w.push_str(";\n");
+                self.w.emit_indent();
+                Some("__jux_range".to_string())
+            } else {
+                Some(text)
+            }
+        } else {
+            None
+        };
         self.emit_pending_loop_label();
         // Stepped range (§M.6): sign-aware while loop — positive
         // steps count up to the bound, negative steps count down,
@@ -2356,7 +2392,10 @@ impl RustEmitter {
             self.w.push_str("for ");
             self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");
-            self.emit_expr(&f.iter);
+            match &range_head {
+                Some(head) => self.w.push_str(head),
+                None => self.emit_expr(&f.iter),
+            }
             self.w.push_str(" {\n");
             self.w.indent_inc();
             self.loop_emit_depth += 1;

@@ -1346,9 +1346,17 @@ impl RustEmitter {
                 // non-tail arm: `int` value into a `long`/`double` return slot
                 // needs an `as <T>` cast (tycheck accepts the widening; Rust does
                 // not implicitly widen). Widens only, never narrows.
-                let widen = if !wrap_some && !wrap_upcast {
+                // Inside the `Some(...)` of an `int?` return the value converts
+                // to the inner `int`, as in the non-tail arm.
+                let target = if wrap_some && !is_switch {
+                    self.nullable_return_inner_primitive()
+                } else if !wrap_some {
                     self.return_type_primitive()
-                        .and_then(|t| self.numeric_widen_or_arm(expr, t))
+                } else {
+                    None
+                };
+                let widen = if !wrap_upcast {
+                    target.and_then(|t| self.numeric_widen_or_arm(expr, t))
                 } else {
                     None
                 };

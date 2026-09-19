@@ -358,7 +358,13 @@ impl RustEmitter {
             });
             return;
         }
-        if f.field.text == "length" && !self.receiver_declares_member(&f.object, "length") {
+        // The intrinsic belongs to arrays. A class or record that declares
+        // its own `length()` method is called like any other method; the
+        // intrinsic used to take it over and emit `w.len() as isize()`.
+        if f.field.text == "length"
+            && !self.receiver_declares_member(&f.object, "length")
+            && !self.receiver_declares_method(&f.object, "length")
+        {
             // `xs.length` → `xs.len() as isize`. Wrap the receiver
             // in parens only when its shape might otherwise bind
             // looser than `.` (e.g. binary or range expression);
@@ -1273,6 +1279,29 @@ impl RustEmitter {
 
     /// Whether `recv` is an object of a user class or record that declares a
     /// field, property or component called `name` (inherited ones included).
+    /// Whether the receiver's own class or record declares a METHOD `name`,
+    /// inherited ones included. Built-in member spellings (`length` on an
+    /// array) must yield to it.
+    pub(crate) fn receiver_declares_method(&self, recv: &Expr, name: &str) -> bool {
+        let class = match recv {
+            Expr::This(_) => self
+                .enclosing_class
+                .clone()
+                .or_else(|| self.enclosing_record.as_ref().map(|r| r.name.text.clone())),
+            _ => self.receiver_class_key(recv),
+        };
+        let Some(class) = class else { return false };
+        if self.symbols.lookup_method(&class, name).is_some() {
+            return true;
+        }
+        let bare = crate::backend_fqn::fqn_bare(&class);
+        self.symbols
+            .records
+            .iter()
+            .filter(|(k, _)| k.as_str() == class || crate::backend_fqn::fqn_bare(k) == bare)
+            .any(|(_, r)| r.methods.contains_key(name))
+    }
+
     pub(crate) fn receiver_declares_member(&self, recv: &Expr, name: &str) -> bool {
         let class = match recv {
             Expr::This(_) => self.enclosing_class.clone(),
@@ -1641,7 +1670,19 @@ impl RustEmitter {
             other => other,
         };
         let Expr::Path(qn) = expr else { return false };
-        if qn.segments.len() != 1 || !self.non_final_uses.contains(&qn.span) {
+        // A record's own component read by its bare name is `self.items`,
+        // behind `&self`: every read of a non-`Copy` one copies, the last
+        // included, since the value stays in the record. Its type is the
+        // component's, recorded by the checker, and decides below.
+        let record_component = qn.segments.len() == 1
+            && self.this_alias.is_some()
+            && !self.current_fn_params.iter().any(|p| *p == qn.segments[0].text)
+            && !self.local_types.iter().any(|s| s.contains_key(qn.segments[0].text.as_str()))
+            && self
+                .enclosing_record
+                .as_ref()
+                .is_some_and(|r| r.components.iter().any(|c| c.name.text == qn.segments[0].text));
+        if !record_component && (qn.segments.len() != 1 || !self.non_final_uses.contains(&qn.span)) {
             return false;
         }
         let ty = self.expr_types.get(&expr_span_of(expr)).or_else(|| {

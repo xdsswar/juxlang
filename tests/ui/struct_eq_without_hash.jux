@@ -1,0 +1,9 @@
+struct Circle {
+    double radius;
+
+    public bool operator==(Circle other) { return radius == other.radius; }
+}
+
+void main() {
+    print(new Circle(1.0) == new Circle(1.0));
+}
