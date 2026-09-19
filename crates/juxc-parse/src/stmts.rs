@@ -1443,6 +1443,8 @@ impl<'a> Parser<'a> {
             // start with `{`.
             if self.at(&TokenKind::LBrace) && ty.array_shape.is_some() {
                 Some(self.parse_bare_array_initializer(&ty)?)
+            } else if self.at(&TokenKind::LBrace) {
+                self.parse_brace_initializer_for_named_type(&ty)
             } else if self.at(&TokenKind::LBracket) && ty.array_shape.is_some() {
                 // `["a", "b"]` out of habit from other languages: say once
                 // that Jux writes an array literal with braces, then read it
@@ -1465,6 +1467,53 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
         Some(VarDecl { name, ty: Some(ty), init, is_final, is_ref: false, span: ty_start.join(end) })
+    }
+
+    /// A `{a, b, c}` initializer under a type written with no array shape.
+    ///
+    /// Under an alias of an array type (`type Bytes = ubyte[];` then
+    /// `final Bytes data = {1, 2, 3};`) the alias supplies the shape and the
+    /// initializer reads as it would under `ubyte[]`. Any other type cannot
+    /// take one: that is reported once, the braces are skipped, and the local
+    /// is left uninitialized, where the expression parser used to report each
+    /// element as "expected expression".
+    pub(crate) fn parse_brace_initializer_for_named_type(&mut self, ty: &TypeRef) -> Option<Expr> {
+        let aliased = (ty.name.segments.len() == 1
+            && ty.generic_args.is_empty()
+            && ty.fn_shape.is_none()
+            && ty.ptr_depth == 0)
+            .then(|| self.array_alias(&ty.name.segments[0].text))
+            .flatten();
+        if let Some(target) = aliased {
+            return self.parse_bare_array_initializer(&target);
+        }
+        let name = ty.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0200_UnexpectedToken,
+                format!("a `{{...}}` initializer needs an array type, and `{name}` is not one"),
+            )
+            .with_span(self.peek_span())
+            .with_help("write the array type out, `new T[] {a, b}`, or declare the local with an array type"),
+        );
+        // Skip the balanced braces so nothing inside cascades.
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.advance();
+                        break;
+                    }
+                }
+                TokenKind::Eof => break,
+                _ => {}
+            }
+            self.advance();
+        }
+        None
     }
 
     /// Parse a bare `{a, b, c}` array initializer in typed-local RHS

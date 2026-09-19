@@ -1,0 +1,6 @@
+type Count = int;
+
+void main() {
+    final Count c = {1, 2};
+    print(c);
+}
