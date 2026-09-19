@@ -112,7 +112,11 @@ object JuxTypeEngine {
                 null -> JuxType.Unknown
                 is JuxTypeDeclaration -> JuxType.Static(target)
                 is JuxTypeParameter -> JuxType.Unknown
-                else -> declaredType(target)
+                else -> if (target.elementType === E.LOCAL_VARIABLE || target.elementType === E.PARAMETER) {
+                    narrowedType(expr, target) ?: declaredType(target)
+                } else {
+                    declaredType(target)
+                }
             }
             E.THIS_EXPRESSION -> PsiTreeUtil.getParentOfType(expr, JuxTypeDeclaration::class.java)
                 ?.let { selfType(it) } ?: JuxType.Unknown
@@ -143,6 +147,73 @@ object JuxTypeEngine {
             E.BINARY_EXPRESSION -> binaryType(expr)
             else -> JuxType.Unknown
         }
+    }
+
+    /**
+     * The type a bare type test proves for a local or parameter at [ref]
+     * (JUX-TYPE-SYSTEM-ADDENDUM §T.6.2): inside the then-branch of
+     * `if (x => Dog)`, the right side of `x => Dog && ...`, and the first arm
+     * of `x => Dog ? ... : ...`, `x` is a `Dog`. A test with a binder
+     * (`x => Dog d`) narrows the binder, not `x`. Null when nothing narrows.
+     */
+    private fun narrowedType(ref: PsiElement, target: PsiElement): JuxType? {
+        val name = (target as? JuxNamedElement)?.name ?: return null
+        var child: PsiElement = ref
+        var parent: PsiElement? = ref.parent
+        while (parent != null && parent !is PsiFile) {
+            when (parent.elementType) {
+                E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION, E.LAMBDA_EXPRESSION ->
+                    return null
+                E.IF_STATEMENT, E.WHILE_STATEMENT -> {
+                    val cond = firstExpressionChild(parent)
+                    if (cond != null && cond !== child && isThenBranch(parent, cond, child)) {
+                        testedType(cond, name)?.let { return it }
+                    }
+                }
+                E.BINARY_EXPRESSION -> {
+                    val ops = expressionChildren(parent)
+                    if (ops.size == 2 && ops[1] === child && parent.node.findChildByType(T.AND_AND) != null) {
+                        testedType(ops[0], name)?.let { return it }
+                    }
+                }
+                E.CONDITIONAL_EXPRESSION -> {
+                    val ops = expressionChildren(parent)
+                    if (ops.size >= 2 && ops[1] === child) testedType(ops[0], name)?.let { return it }
+                }
+            }
+            child = parent
+            parent = parent.parent
+        }
+        return null
+    }
+
+    /** Whether [child] is the branch run when [cond] holds: the statement right after it. */
+    private fun isThenBranch(stmt: PsiElement, cond: PsiElement, child: PsiElement): Boolean {
+        var c: PsiElement? = cond.nextSibling
+        while (c != null) {
+            if (c === child) return true
+            if (c.elementType === T.ELSE_KW) return false
+            c = c.nextSibling
+        }
+        return false
+    }
+
+    /** The type `cond` proves for `name`: `name => T`, or either side of an `&&`. */
+    private fun testedType(cond: PsiElement, name: String): JuxType? {
+        if (cond.elementType === E.PARENTHESIZED_EXPRESSION) return firstExpressionChild(cond)?.let { testedType(it, name) }
+        if (cond.elementType !== E.BINARY_EXPRESSION) return null
+        if (cond.node.findChildByType(T.AND_AND) != null) {
+            return expressionChildren(cond).firstNotNullOfOrNull { testedType(it, name) }
+        }
+        if (cond.node.findChildByType(T.FAT_ARROW) == null) return null
+        val left = firstExpressionChild(cond) ?: return null
+        if (left.elementType !== E.REFERENCE_EXPRESSION || memberName(left) != name) return null
+        // A binder after the type (`x => Dog d`) narrows the binder instead.
+        val typeRef = cond.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+        var after = typeRef.nextSibling
+        while (after is com.intellij.psi.PsiWhiteSpace) after = after.nextSibling
+        if (after != null && (after.elementType === T.IDENTIFIER || after.elementType === E.LOCAL_VARIABLE)) return null
+        return typeOfTypeReference(typeRef)
     }
 
     private fun typeOfCall(call: PsiElement): JuxType {
@@ -269,7 +340,7 @@ object JuxTypeEngine {
         val node = ref.node
         var name: String? = null
         var c = node.firstChildNode
-        while (c != null && c.elementType !== E.TYPE_ARGUMENT_LIST) {
+        while (c != null && c.elementType !== E.TYPE_ARGUMENT_LIST && c.elementType !== T.LBRACKET) {
             if (c.elementType === T.IDENTIFIER || c.elementType === T.VOID_KW) name = c.text
             c = c.treeNext
         }
@@ -307,7 +378,7 @@ object JuxTypeEngine {
 
     private fun qualifier(ref: PsiElement): String? {
         val ids = ref.node.getChildren(null)
-            .takeWhile { it.elementType !== E.TYPE_ARGUMENT_LIST }
+            .takeWhile { it.elementType !== E.TYPE_ARGUMENT_LIST && it.elementType !== T.LBRACKET }
             .filter { it.elementType === T.IDENTIFIER }
             .map { it.text }
         return if (ids.size > 1) ids.dropLast(1).joinToString(".") else null
@@ -518,8 +589,8 @@ object JuxTypeEngine {
      * What a bare name refers to at [ref]: a local, parameter, member (inherited
      * included), top-level declaration, native function, or a type.
      */
-    fun resolveReferenceExpression(ref: PsiElement, argCount: Int? = null): PsiElement? {
-        val name = memberName(ref) ?: return null
+    fun resolveReferenceExpression(ref: PsiElement, argCount: Int? = null, nameOverride: String? = null): PsiElement? {
+        val name = nameOverride ?: memberName(ref) ?: return null
         val offset = ref.textRange.startOffset
         var scope: PsiElement? = ref.parent
         while (scope != null) {
@@ -582,6 +653,23 @@ object JuxTypeEngine {
             }
         }
         return resolveTypeName(ref, name)
+    }
+
+    /**
+     * What `Type::new` refers to (§M.8): the type's constructor when it
+     * declares exactly one, else the type itself (overloads are picked by the
+     * expected function type, which is the compiler's job).
+     */
+    fun constructorReferenceTarget(ref: PsiElement): PsiElement? {
+        val qualifier = firstExpressionChild(ref) ?: ref.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+        val decl = when (val t = if (qualifier.elementType === E.TYPE_REFERENCE) typeOfTypeReference(qualifier) else typeOf(qualifier)) {
+            is JuxType.Static -> t.decl
+            is JuxType.ClassType -> t.decl
+            else -> null
+        } ?: return null
+        val ctors = PsiTreeUtil.findChildrenOfType(decl, JuxNamedElement::class.java)
+            .filter { it.elementType === E.CONSTRUCTOR_DECLARATION && PsiTreeUtil.getParentOfType(it, JuxTypeDeclaration::class.java) === decl }
+        return ctors.singleOrNull() ?: decl
     }
 
     // ------------------------------------------------------------ helpers

@@ -290,3 +290,9 @@ class JuxTypeParameter(node: ASTNode) : JuxNamedElementImpl(node)
 
 /** A local variable declaration. */
 class JuxLocalVariable(node: ASTNode) : JuxNamedElementImpl(node)
+
+/**
+ * `outer: while (...) { ... }` / `blk: { ... }` (Grammar §A.2.8): named by its
+ * label, so `break outer;` resolves to it and rename changes both.
+ */
+class JuxLabeledStatement(node: ASTNode) : JuxNamedElementImpl(node)
