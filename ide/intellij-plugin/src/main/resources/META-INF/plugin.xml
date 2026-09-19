@@ -1129,6 +1129,20 @@
             description="Generate a setter for each field">
       <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Getters"/>
     </action>
+    <!-- Properties over existing fields (§P.1): Jux's answer to getters and setters. -->
+    <action id="Jux.Generate.Properties"
+            class="dev.jux.intellij.actions.JuxGeneratePropertiesAction"
+            text="Properties"
+            description="Generate a property with get/set accessors for each chosen field">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+    </action>
+    <!-- Java's compareTo(), as the one three-way operator that gives < <= > >=. -->
+    <action id="Jux.Generate.OperatorCompare"
+            class="dev.jux.intellij.actions.JuxGenerateOperatorCompareAction"
+            text="operator&lt;=&gt;"
+            description="Generate operator&lt;=&gt; comparing the chosen fields in order">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Properties"/>
+    </action>
     <action id="Jux.Generate.OverrideMethods"
             class="dev.jux.intellij.actions.JuxOverrideMethodsAction"
             text="Override/Implement Methods"
