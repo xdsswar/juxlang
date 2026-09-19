@@ -1,0 +1,9 @@
+<html>
+<body>
+Reports a local variable whose written type repeats the type its initializer constructs.
+<!-- tooltip end -->
+<pre><code>Point p = new Point(1, 2);   // var p = new Point(1, 2);</code></pre>
+<p>A diamond (<code>new Vec&lt;&gt;()</code>) is left alone: with <code>var</code> it would have nothing to infer from.
+Off by default: it is a style choice. Quick-fix: replace the type with <code>var</code>.</p>
+</body>
+</html>
