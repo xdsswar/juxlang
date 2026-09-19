@@ -10555,7 +10555,16 @@ impl<'a> Checker<'a> {
                                 .classes
                                 .get(&class_fqn)
                                 .and_then(|c| c.methods.get(method_name))
-                                .cloned(),
+                                .cloned()
+                                // A foreign trait's associated function, on a
+                                // type the trait reaches (`seed_from_u64` from
+                                // `SeedableRng`), is called on the type too.
+                                .or_else(|| {
+                                    self.symbols
+                                        .lookup_method(&class_fqn, method_name)
+                                        .filter(|(m, _)| m.is_static)
+                                        .map(|(m, _)| m.clone())
+                                }),
                         };
                         if let Some(method) = class_method {
                             if method.is_static {
@@ -10771,12 +10780,19 @@ impl<'a> Checker<'a> {
                     // and everything else Rust's `String` carries resolves
                     // without this file naming them. Consulting the scan is
                     // what keeps the check honest as the std moves.
+                    // A trait whose impls reach the scanned `String` counts as
+                    // well: `graphemes` is unicode-segmentation's
+                    // `UnicodeSegmentation`, implemented for the `str` a
+                    // `String` derefs to (Bindgen G.6.4.3, B23).
                     if self
                         .symbols
                         .classes
                         .iter()
-                        .filter(|(k, _)| k.rsplit('.').next() == Some("String"))
-                        .any(|(_, c)| c.methods.contains_key(method_name))
+                        .filter(|(k, c)| k.rsplit('.').next() == Some("String") && c.is_external)
+                        .any(|(k, c)| {
+                            c.methods.contains_key(method_name)
+                                || self.symbols.lookup_method(k, method_name).is_some()
+                        })
                     {
                         return;
                     }

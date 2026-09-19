@@ -2970,7 +2970,12 @@ impl crate::RustEmitter {
                 if qn.segments.len() != 1 {
                     continue;
                 }
-                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut " {
+                // A foreign slot lent `&mut`, or a Jux parameter lowered to
+                // `&mut T` by the C6 rule (a foreign value the callee
+                // mutates): either way the caller's binding is lent mutably.
+                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut "
+                    || self.callee_byref_param(&call.callee, i)
+                {
                     out.insert(qn.segments[0].text.clone());
                 }
             }
@@ -3049,14 +3054,45 @@ impl crate::RustEmitter {
         if let Some(m) = sig.methods.get(name) {
             return Some(m);
         }
-        sig.implements.iter().find_map(|t| {
-            let bare = t.name.segments.last()?.text.as_str();
-            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
-            if !iface.is_external {
-                return None;
+        self.foreign_trait_with(class_fqn, name).map(|(_, iface)| &iface.methods[name])
+    }
+
+    /// The foreign trait (interface) that gives the foreign class `class_fqn`
+    /// its method `name`: one of the traits the class implements, or one whose
+    /// impls reach it without naming it (a blanket impl, or an impl for the
+    /// shape the class derefs to, Bindgen G.6.4.3).
+    ///
+    /// A trait name the class's stub writes is looked up in the class's own
+    /// package first: two bound crates may each declare a `RngCore`.
+    fn foreign_trait_with(
+        &self,
+        class_fqn: &str,
+        name: &str,
+    ) -> Option<(String, &juxc_tycheck::symbol_table::InterfaceSig)> {
+        let sig = self.symbols.classes.get(class_fqn)?;
+        let pkg = class_fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+        let mut chain: Vec<&str> = Vec::new();
+        for t in &sig.implements {
+            let Some(bare) = t.name.segments.last().map(|s| s.text.as_str()) else { continue };
+            chain.push(bare);
+            let own = format!("{pkg}.{bare}");
+            let found = self
+                .symbols
+                .interfaces
+                .get_key_value(&own)
+                .map(|(k, i)| (k.clone(), i))
+                .or_else(|| self.lookup_interface_by_bare_or_fqn(bare).map(|(k, i)| (k.to_string(), i)));
+            if let Some((key, iface)) = found {
+                if iface.is_external && iface.methods.contains_key(name) {
+                    return Some((key, iface));
+                }
             }
-            iface.methods.get(name)
-        })
+        }
+        self.symbols
+            .foreign_trait_reach(class_fqn, &chain)
+            .into_iter()
+            .find(|(_, iface)| iface.methods.contains_key(name))
+            .map(|(k, i)| (k.to_string(), i))
     }
 
     /// The foreign TRAIT that provides `name` for `class_fqn`, by its real Rust
@@ -3071,14 +3107,20 @@ impl crate::RustEmitter {
         if !sig.is_external || sig.methods.contains_key(name) {
             return None;
         }
-        sig.implements.iter().find_map(|t| {
-            let bare = t.name.segments.last()?.text.as_str();
-            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
-            if !iface.is_external || !iface.methods.contains_key(name) {
-                return None;
-            }
-            iface.rust_path.clone()
-        })
+        let (key, iface) = self.foreign_trait_with(class_fqn, name)?;
+        // The `use` has to name a crate the program depends on. A trait the
+        // unit IMPORTED is spelled through that crate (`rand::SeedableRng`),
+        // where the stub that declares it for the class may record the crate
+        // that defines it (`rand_core::SeedableRng`), which the program does
+        // not link by name.
+        let bare = key.rsplit('.').next().unwrap_or(&key);
+        let imported = self
+            .current_unit_idx
+            .and_then(|idx| self.symbols.units.get(idx))
+            .and_then(|ctx| ctx.unqualified.get(bare))
+            .and_then(|fqn| self.symbols.interfaces.get(fqn))
+            .and_then(|i| i.rust_path.clone());
+        imported.or_else(|| iface.rust_path.clone())
     }
 
     /// The FOREIGN method `callee` names, or `None` when the receiver is not a

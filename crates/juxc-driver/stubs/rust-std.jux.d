@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 28
+// juxc rust.std stub cache-version 29
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -9,25 +9,25 @@ public const String ARCH;
 /** An error returned by [`LocalKey::try_with`](struct.LocalKey.html#method.try_with). */
 @rust("std::thread::AccessError")
 @RustClone
-public class AccessError {
+public class AccessError implements ToOwned, ToString {
 }
 
 /** An error which can be returned when parsing an IP address or a socket address. */
 @rust("std::net::AddrParseError")
 @RustClone
-public class AddrParseError implements Any, Clone, CloneToUninit, Debug, Display, Eq, Error, StructuralPartialEq {
+public class AddrParseError {
 }
 
 /** The `AllocError` error indicates an allocation failure */
 @rust("std::alloc::AllocError")
 @RustClone
-public class AllocError implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Error, StructuralPartialEq {
+public class AllocError {
 }
 
 /** An iterator over [`Path`] and its ancestors. */
 @rust("std::path::Ancestors")
 @RustClone
-public class Ancestors {
+public class Ancestors implements ToOwned {
     @MutSelf public Path? next();
 }
 
@@ -118,7 +118,7 @@ public class ArgsOs {
 /** This structure represents a safely precompiled version of a format string */
 @rust("std::fmt::Arguments")
 @RustClone
-public class Arguments implements Any, Clone, CloneToUninit, Copy, Debug, Display {
+public class Arguments {
     public static Arguments from_str(&String s);
     @RustRefOut public String? as_str();
 }
@@ -126,7 +126,7 @@ public class Arguments implements Any, Clone, CloneToUninit, Copy, Debug, Displa
 /** A windowed iterator over a slice in overlapping chunks (`N` elements at a */
 @rust("std::slice::ArrayWindows")
 @RustClone
-public class ArrayWindows<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class ArrayWindows<T> {
     @MutSelf public T[]? next();
 }
 
@@ -169,7 +169,7 @@ public interface AsSocket {
 /** One of the 128 Unicode characters from U+0000 through U+007F, */
 @rust("std::ascii::Char")
 @RustClone
-public enum AsciiChar implements Any, Clone, CloneToUninit, Copy, Debug, Default, Display, Eq, Hash, Ord, Step, StructuralPartialEq, TrustedStep {
+public enum AsciiChar {
     Null = 0, StartOfHeading = 1, StartOfText = 2, EndOfText = 3, EndOfTransmission = 4, Enquiry = 5, Acknowledge = 6, Bell = 7, Backspace = 8, CharacterTabulation = 9, LineFeed = 10, LineTabulation = 11, FormFeed = 12, CarriageReturn = 13, ShiftOut = 14, ShiftIn = 15, DataLinkEscape = 16, DeviceControlOne = 17, DeviceControlTwo = 18, DeviceControlThree = 19, DeviceControlFour = 20, NegativeAcknowledge = 21, SynchronousIdle = 22, EndOfTransmissionBlock = 23, Cancel = 24, EndOfMedium = 25, Substitute = 26, Escape = 27, InformationSeparatorFour = 28, InformationSeparatorThree = 29, InformationSeparatorTwo = 30, InformationSeparatorOne = 31, Space = 32, ExclamationMark = 33, QuotationMark = 34, NumberSign = 35, DollarSign = 36, PercentSign = 37, Ampersand = 38, Apostrophe = 39, LeftParenthesis = 40, RightParenthesis = 41, Asterisk = 42, PlusSign = 43, Comma = 44, HyphenMinus = 45, FullStop = 46, Solidus = 47, Digit0 = 48, Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52, Digit5 = 53, Digit6 = 54, Digit7 = 55, Digit8 = 56, Digit9 = 57, Colon = 58, Semicolon = 59, LessThanSign = 60, EqualsSign = 61, GreaterThanSign = 62, QuestionMark = 63, CommercialAt = 64, CapitalA = 65, CapitalB = 66, CapitalC = 67, CapitalD = 68, CapitalE = 69, CapitalF = 70, CapitalG = 71, CapitalH = 72, CapitalI = 73, CapitalJ = 74, CapitalK = 75, CapitalL = 76, CapitalM = 77, CapitalN = 78, CapitalO = 79, CapitalP = 80, CapitalQ = 81, CapitalR = 82, CapitalS = 83, CapitalT = 84, CapitalU = 85, CapitalV = 86, CapitalW = 87, CapitalX = 88, CapitalY = 89, CapitalZ = 90, LeftSquareBracket = 91, ReverseSolidus = 92, RightSquareBracket = 93, CircumflexAccent = 94, LowLine = 95, GraveAccent = 96, SmallA = 97, SmallB = 98, SmallC = 99, SmallD = 100, SmallE = 101, SmallF = 102, SmallG = 103, SmallH = 104, SmallI = 105, SmallJ = 106, SmallK = 107, SmallL = 108, SmallM = 109, SmallN = 110, SmallO = 111, SmallP = 112, SmallQ = 113, SmallR = 114, SmallS = 115, SmallT = 116, SmallU = 117, SmallV = 118, SmallW = 119, SmallX = 120, SmallY = 121, SmallZ = 122, LeftCurlyBracket = 123, VerticalLine = 124, RightCurlyBracket = 125, Tilde = 126, Delete = 127;
 
     public static AsciiChar? from_u8(ubyte b);
@@ -200,6 +200,10 @@ public enum AsciiChar implements Any, Clone, CloneToUninit, Copy, Debug, Default
 
 /** Extension methods for ASCII-subset only operations. */
 @rust("std::ascii::AsciiExt")
+@RustImplementedBy("[]")
+@RustImplementedBy("char")
+@RustImplementedBy("str")
+@RustImplementedBy("u8")
 public interface AsciiExt {
     public bool is_ascii();
     public Self.Owned to_ascii_uppercase();
@@ -211,7 +215,7 @@ public interface AsciiExt {
 
 /** A simple wrapper around a type to assert that it is unwind safe. */
 @rust("std::panic::AssertUnwindSafe")
-public class AssertUnwindSafe<T> implements Any, AsyncIterator, Debug, Default, Deref, DerefMut, Future, IntoAsyncIterator, IntoFuture, Receiver, RefUnwindSafe, UnwindSafe {
+public class AssertUnwindSafe<T> {
     @RustDefault public AssertUnwindSafe();
 }
 
@@ -305,7 +309,7 @@ public class BTreeSet<T, A> implements ToOwned {
 
 /** A captured OS thread stack backtrace. */
 @rust("std::backtrace::Backtrace")
-public class Backtrace {
+public class Backtrace implements ToString {
     public static Backtrace capture();
     public static Backtrace force_capture();
     public static Backtrace disabled();
@@ -327,7 +331,7 @@ public enum BacktraceStatus {
 /** The configuration for whether and how the default panic hook will capture */
 @rust("std::panic::BacktraceStyle")
 @RustClone
-public enum BacktraceStyle {
+public enum BacktraceStyle implements ToOwned {
     Short, Full, Off
 }
 
@@ -384,7 +388,7 @@ public class BinaryHeap<T, A> implements ToOwned {
 
 /** A borrowed buffer of initially uninitialized elements, which is incrementally filled. */
 @rust("std::io::BorrowedBuf")
-public class BorrowedBuf<T> implements Any, Debug {
+public class BorrowedBuf<T> {
     public uint capacity();
     public uint len();
     public bool is_init();
@@ -399,7 +403,7 @@ public class BorrowedBuf<T> implements Any, Debug {
 
 /** A writeable view of the unfilled portion of a [`BorrowedBuf`]. */
 @rust("std::io::BorrowedCursor")
-public class BorrowedCursor<T> implements Any, Debug {
+public class BorrowedCursor<T> {
     @MutSelf @RustBorrowsSelf public BorrowedCursor<T> reborrow();
     public uint capacity();
     public uint written();
@@ -416,7 +420,7 @@ public class BorrowedCursor<T> implements Any, Debug {
 /** A borrowed file descriptor. */
 @rust("std::os::fd::BorrowedFd")
 @RustClone
-public class BorrowedFd implements AsFd, AsRawFd, IsTerminal {
+public class BorrowedFd implements AsFd, AsRawFd, IsTerminal, ToOwned {
     public static unsafe BorrowedFd borrow_raw(RawFd fd);
     public OwnedFd try_clone_to_owned() throws Error;
 }
@@ -424,7 +428,7 @@ public class BorrowedFd implements AsFd, AsRawFd, IsTerminal {
 /** A borrowed handle. */
 @rust("std::os::windows::io::BorrowedHandle")
 @RustClone
-public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal {
+public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal, ToOwned {
     public static unsafe BorrowedHandle borrow_raw(RawHandle handle);
     public OwnedHandle try_clone_to_owned() throws Error;
 }
@@ -432,7 +436,7 @@ public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal {
 /** A borrowed socket. */
 @rust("std::os::windows::io::BorrowedSocket")
 @RustClone
-public class BorrowedSocket implements AsRawSocket, AsSocket {
+public class BorrowedSocket implements AsRawSocket, AsSocket, ToOwned {
     public static unsafe BorrowedSocket borrow_raw(RawSocket socket);
     public OwnedSocket try_clone_to_owned() throws Error;
 }
@@ -440,7 +444,7 @@ public class BorrowedSocket implements AsRawSocket, AsSocket {
 /** An endpoint of a range of keys. */
 @rust("std::ops::Bound")
 @RustClone
-public enum Bound<T> implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, StructuralPartialEq {
+public enum Bound<T> {
     Included(T), Excluded(T), Unbounded;
 
     @RustRefOut public Bound<T> as_ref();
@@ -561,36 +565,27 @@ public class Builder {
 
 /** A wrapper for `&[u8]` representing a human-readable string that's conventionally, but not */
 @rust("std::bstr::ByteStr")
-public class ByteStr implements Any, CloneToUninit, Debug, Deref, DerefMut, DerefPure, Display, Eq, Hash, Ord, Receiver {
+@RustDerefs("[]")
+public class ByteStr {
     public ByteStr(&B bytes);
     @RustDefault public ByteStr();
     @RustRefOut public ByteStr as_byte_str();
     @MutSelf @RustRefOut public ByteStr as_mut_byte_str();
     @MutSelf public void sort_floats();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -713,20 +708,31 @@ public class ByteStr implements Any, CloneToUninit, Debug, Deref, DerefMut, Dere
     public Range<uint>? subslice_range(T[] subslice);
     @RustRefOut public T[] as_slice();
     @MutSelf @RustRefOut public T[] as_mut_slice();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
 }
 
 /** A wrapper for `Vec<u8>` representing a human-readable string that's conventionally, but not */
 @rust("std::bstr::ByteString")
 @RustClone
 @RustCollection
+@RustDerefs("Vec")
 public class ByteString implements ToOwned, ToString {
     @RustDefault public ByteString();
-    @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    public (T*, uint, uint) into_raw_parts();
-    public (NonNull<T>, uint, uint) into_parts();
-    @RustRefOut public T[] const_make_global();
+    @MutSelf public void push(T value);
+    @MutSelf @RustRefOut public T push_mut(T value);
+    @MutSelf public void resize(uint new_len, T value);
+    @MutSelf public void extend_from_slice(T[] other);
+    @MutSelf public void extend_from_within<R>(R src);
     public (T*, uint, uint, A) into_raw_parts_with_alloc();
     public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
@@ -773,12 +779,12 @@ public class ByteString implements ToOwned, ToString {
     @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
     public Vec<T[]> into_chunks();
     public Vec<U> recycle<U>();
+    public (T*, uint, uint) into_raw_parts();
+    public (NonNull<T>, uint, uint) into_parts();
+    @RustRefOut public T[] const_make_global();
     @MutSelf public void dedup();
-    @MutSelf public void push(T value);
-    @MutSelf @RustRefOut public T push_mut(T value);
-    @MutSelf public void resize(uint new_len, T value);
-    @MutSelf public void extend_from_slice(T[] other);
-    @MutSelf public void extend_from_within<R>(R src);
+    @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     public Vec<T> into_flattened();
 }
 
@@ -790,7 +796,7 @@ public class Bytes<R> {
 
 /** A dynamically-sized view of a C string. */
 @rust("std::ffi::CStr")
-public class CStr implements Any, CloneToUninit, Debug, Eq, Hash, Ord, StructuralPartialEq {
+public class CStr {
     @RustDefault public CStr();
     @RustRefOut public static unsafe CStr from_ptr(c_char* ptr);
     @RustRefOut public static CStr from_bytes_until_nul(ubyte[] bytes) throws FromBytesUntilNulError;
@@ -810,6 +816,7 @@ public class CStr implements Any, CloneToUninit, Debug, Eq, Hash, Ord, Structura
 /** A type representing an owned, C-compatible, nul-terminated string with no nul bytes in the */
 @rust("std::ffi::c_str::CString")
 @RustClone
+@RustDerefs("CStr")
 public class CString implements ToOwned {
     public CString(T t) throws NulError;
     @RustDefault public CString();
@@ -837,13 +844,13 @@ public class CString implements ToOwned {
 
 /** Compile-time type information about `char`. */
 @rust("std::mem::type_info::Char")
-public class Char implements Any, Debug {
+public class Char {
 }
 
 /** An iterator over the [`char`]s of a string slice, and their positions. */
 @rust("std::str::CharIndices")
 @RustClone
-public class CharIndices implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class CharIndices {
     @RustRefOut public String as_str();
     public uint offset();
     @MutSelf public (uint, char)? next();
@@ -852,7 +859,7 @@ public class CharIndices implements Any, Clone, CloneToUninit, Debug, DoubleEnde
 /** An iterator over the [`char`]s of a string slice. */
 @rust("std::str::Chars")
 @RustClone
-public class Chars implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class Chars {
     @RustRefOut public String as_str();
     @MutSelf public char? next();
 }
@@ -895,41 +902,41 @@ public class ChildStdout implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRa
 /** An iterator over slice in (non-overlapping) chunks separated by a predicate. */
 @rust("std::slice::ChunkBy")
 @RustClone
-public class ChunkBy<T, P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class ChunkBy<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over slice in (non-overlapping) mutable chunks separated */
 @rust("std::slice::ChunkByMut")
-public class ChunkByMut<T, P> implements Any, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class ChunkByMut<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::Chunks")
 @RustClone
-public class Chunks<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class Chunks<T> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::ChunksExact")
 @RustClone
-public class ChunksExact<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class ChunksExact<T> {
     @RustRefOut public T[] remainder();
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::ChunksExactMut")
-public class ChunksExactMut<T> implements Any, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, Send, Sync, TrustedLen {
+public class ChunksExactMut<T> {
     @RustRefOut public T[] into_remainder();
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::ChunksMut")
-public class ChunksMut<T> implements Any, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, Send, Sync, TrustedLen {
+public class ChunksMut<T> {
     @MutSelf public T[]? next();
 }
 
@@ -985,7 +992,7 @@ public class CommandResolvedEnvs {
 /** A single component of a path. */
 @rust("std::path::Component")
 @RustClone
-public enum Component {
+public enum Component implements ToOwned {
     Prefix(PrefixComponent), RootDir, CurDir, ParentDir, Normal(OsStr);
 
     @RustRefOut public OsStr as_os_str();
@@ -994,15 +1001,16 @@ public enum Component {
 /** An iterator over the [`Component`]s of a [`Path`]. */
 @rust("std::path::Components")
 @RustClone
-public class Components {
+public class Components implements ToOwned {
     @RustRefOut public Path as_path();
     @MutSelf public Component? next();
 }
 
 /** Helper trait for [`[T]::concat`](slice::concat). */
 @rust("std::slice::Concat")
+@RustImplementedBy("[]")
 public interface Concat<Item> {
-    public Self.Output concat(&Self slice);
+    @RustStatic public Self.Output concat(&Self slice);
 }
 
 /** A Condition Variable */
@@ -1102,7 +1110,7 @@ public const String DLL_SUFFIX;
 /** The default [`Hasher`] used by [`RandomState`]. */
 @rust("std::hash::DefaultHasher")
 @RustClone
-public class DefaultHasher {
+public class DefaultHasher implements ToOwned {
     public DefaultHasher();
 }
 
@@ -1158,7 +1166,7 @@ public interface DirEntryExt2 {
 
 /** Helper struct for safely printing paths with [`format!`] and `{}`. */
 @rust("std::path::Display")
-public class Display {
+public class Display implements ToString {
 }
 
 /** A draining iterator over the elements of a `BinaryHeap`. */
@@ -1178,7 +1186,7 @@ public class DrainSorted<T, A> {
 /** A `Duration` type to represent a span of time, typically used for system */
 @rust("std::time::Duration")
 @RustClone
-public class Duration implements Any, Clone, CloneToUninit, Copy, Debug, Default, Eq, Hash, Ord, StructuralPartialEq {
+public class Duration {
     public Duration(ulong secs, u32 nanos);
     @RustDefault public Duration();
     public static Duration from_secs(ulong secs);
@@ -1233,21 +1241,21 @@ public const String EXE_SUFFIX;
 /** `Empty` ignores any data written via [`Write`], and will always be empty */
 @rust("std::io::Empty")
 @RustClone
-public class Empty implements Any, Clone, CloneToUninit, Copy, Debug, Default {
+public class Empty {
     @RustDefault public Empty();
 }
 
 /** An iterator of [`u16`] over the string encoded as UTF-16. */
 @rust("std::str::EncodeUtf16")
 @RustClone
-public class EncodeUtf16 implements Any, Clone, CloneToUninit, Debug, FusedIterator, IntoIterator, Iterator {
+public class EncodeUtf16 {
     @MutSelf public ushort? next();
 }
 
 /** Iterator returned by [`OsStrExt::encode_wide`]. */
 @rust("std::os::windows::ffi::EncodeWide")
 @RustClone
-public class EncodeWide {
+public class EncodeWide implements ToOwned {
     @MutSelf public ushort? next();
 }
 
@@ -1269,7 +1277,7 @@ public enum Entry<K, V, A> {
 
 /** The error type for I/O operations of the [`Read`], [`Write`], [`Seek`], and */
 @rust("std::io::Error")
-public class Error {
+public class Error implements ToString {
     public Error(ErrorKind kind, E error);
     public static Error other<E>(E error);
     public static Error last_os_error();
@@ -1285,21 +1293,21 @@ public class Error {
 /** A list specifying general categories of I/O error. */
 @rust("std::io::ErrorKind")
 @RustClone
-public enum ErrorKind implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Hash, Ord, StructuralPartialEq {
+public enum ErrorKind {
     NotFound, PermissionDenied, ConnectionRefused, ConnectionReset, HostUnreachable, NetworkUnreachable, ConnectionAborted, NotConnected, AddrInUse, AddrNotAvailable, NetworkDown, BrokenPipe, AlreadyExists, WouldBlock, NotADirectory, IsADirectory, DirectoryNotEmpty, ReadOnlyFilesystem, FilesystemLoop, StaleNetworkFileHandle, InvalidInput, InvalidData, TimedOut, WriteZero, StorageFull, NotSeekable, QuotaExceeded, FileTooLarge, ResourceBusy, ExecutableFileBusy, Deadlock, CrossesDevices, TooManyLinks, InvalidFilename, ArgumentListTooLong, Interrupted, Unsupported, UnexpectedEof, OutOfMemory, InProgress, Other
 }
 
 /** An iterator over the escaped version of a byte slice. */
 @rust("std::slice::EscapeAscii")
 @RustClone
-public class EscapeAscii implements Any, Clone, CloneToUninit, Debug, Display, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class EscapeAscii {
     @MutSelf public ubyte? next();
 }
 
 /** This type represents the status code the current process can return */
 @rust("std::process::ExitCode")
 @RustClone
-public class ExitCode implements ExitCodeExt, Termination {
+public class ExitCode implements ExitCodeExt, Termination, ToOwned {
     @RustDefault public ExitCode();
     public never exit_process();
 }
@@ -1307,13 +1315,13 @@ public class ExitCode implements ExitCodeExt, Termination {
 /** Windows-specific extensions to [`process::ExitCode`]. */
 @rust("std::os::windows::process::ExitCodeExt")
 public interface ExitCodeExt {
-    public Self from_raw(u32 raw);
+    @RustStatic public Self from_raw(u32 raw);
 }
 
 /** Describes the result of a process after it has terminated. */
 @rust("std::process::ExitStatus")
 @RustClone
-public class ExitStatus implements ExitStatusExt {
+public class ExitStatus implements ExitStatusExt, ToOwned, ToString {
     @RustDefault public ExitStatus();
     public void exit_ok() throws ExitStatusError;
     public bool success();
@@ -1323,7 +1331,7 @@ public class ExitStatus implements ExitStatusExt {
 /** Describes the result of a process after it has failed */
 @rust("std::process::ExitStatusError")
 @RustClone
-public class ExitStatusError implements ExitStatusExt {
+public class ExitStatusError implements ExitStatusExt, ToOwned, ToString {
     public i32? code();
     public NonZero<i32>? code_nonzero();
     public ExitStatus into_status();
@@ -1332,7 +1340,7 @@ public class ExitStatusError implements ExitStatusExt {
 /** Unix-specific extensions to [`process::ExitStatus`] and */
 @rust("std::os::unix::process::ExitStatusExt")
 public interface ExitStatusExt {
-    public Self from_raw(i32 raw);
+    @RustStatic public Self from_raw(i32 raw);
     public i32? signal();
     public bool core_dumped();
     public i32? stopped_signal();
@@ -1389,7 +1397,7 @@ public interface FileExt {
 /** Representation of the various timestamps on a file. */
 @rust("std::fs::FileTimes")
 @RustClone
-public class FileTimes implements FileTimesExt {
+public class FileTimes implements FileTimesExt, ToOwned {
     public FileTimes();
     public FileTimes set_accessed(SystemTime t);
     public FileTimes set_modified(SystemTime t);
@@ -1404,7 +1412,7 @@ public interface FileTimesExt {
 /** A structure representing a type of file with accessors for each file type. */
 @rust("std::fs::FileType")
 @RustClone
-public class FileType implements FileTypeExt {
+public class FileType implements FileTypeExt, ToOwned {
     public bool is_dir();
     public bool is_file();
     public bool is_symlink();
@@ -1422,44 +1430,58 @@ public interface FileTypeExt {
 /** A classification of floating point numbers. */
 @rust("std::num::FpCategory")
 @RustClone
-public enum FpCategory implements Any, Clone, CloneToUninit, Copy, Debug, Eq, StructuralPartialEq {
+public enum FpCategory {
     Nan, Infinite, Zero, Subnormal, Normal
 }
 
 /** An error indicating that no nul byte was present. */
 @rust("std::ffi::FromBytesUntilNulError")
 @RustClone
-public class FromBytesUntilNulError implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Error, StructuralPartialEq {
+public class FromBytesUntilNulError {
 }
 
 /** An error indicating that a nul byte was not in the expected position. */
 @rust("std::ffi::FromBytesWithNulError")
 @RustClone
-public enum FromBytesWithNulError implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Error, StructuralPartialEq {
+public enum FromBytesWithNulError {
     InteriorNul, NotNulTerminated
 }
 
 /** Trait for types that can be converted from a fixed-size byte array with a specified endianness */
 @rust("std::io::FromEndianBytes")
+@RustImplementedBy("f32")
+@RustImplementedBy("f64")
+@RustImplementedBy("i128")
+@RustImplementedBy("i16")
+@RustImplementedBy("i32")
+@RustImplementedBy("i64")
+@RustImplementedBy("i8")
+@RustImplementedBy("isize")
+@RustImplementedBy("u128")
+@RustImplementedBy("u16")
+@RustImplementedBy("u32")
+@RustImplementedBy("u64")
+@RustImplementedBy("u8")
+@RustImplementedBy("usize")
 public interface FromEndianBytes {
 }
 
 /** A trait to express the ability to construct an object from a raw file */
 @rust("std::os::fd::FromRawFd")
 public interface FromRawFd {
-    public unsafe Self from_raw_fd(RawFd fd);
+    @RustStatic public unsafe Self from_raw_fd(RawFd fd);
 }
 
 /** Constructs I/O objects from raw handles. */
 @rust("std::os::windows::io::FromRawHandle")
 public interface FromRawHandle {
-    public unsafe Self from_raw_handle(RawHandle handle);
+    @RustStatic public unsafe Self from_raw_handle(RawHandle handle);
 }
 
 /** Creates I/O objects from raw sockets. */
 @rust("std::os::windows::io::FromRawSocket")
 public interface FromRawSocket {
-    public unsafe Self from_raw_socket(RawSocket sock);
+    @RustStatic public unsafe Self from_raw_socket(RawSocket sock);
 }
 
 /** A possible error value when converting a `String` from a UTF-16 byte slice. */
@@ -1488,7 +1510,7 @@ public class FromVecWithNulError implements ToOwned, ToString {
 /** The error type returned by [`get_disjoint_mut`][`slice::get_disjoint_mut`]. */
 @rust("std::slice::GetDisjointMutError")
 @RustClone
-public enum GetDisjointMutError implements Any, Clone, CloneToUninit, Debug, Display, Eq, Error, StructuralPartialEq {
+public enum GetDisjointMutError {
     IndexOutOfBounds, OverlappingIndices
 }
 
@@ -1521,7 +1543,7 @@ public class HandleOrNull {
 @RustIndexRef
 @RustClone
 @RustCollection
-public class HashMap<K, V, S, A> {
+public class HashMap<K, V, S, A> implements ToOwned {
     public HashMap();
     public static Map<K, V> with_capacity(uint capacity);
     public static HashMap new_in(A alloc);
@@ -1566,7 +1588,7 @@ public class HashMap<K, V, S, A> {
 @rust("std::collections::HashSet")
 @RustClone
 @RustCollection
-public class HashSet<T, S, A> {
+public class HashSet<T, S, A> implements ToOwned {
     public HashSet();
     public static Set<T> with_capacity(uint capacity);
     public static Set<T> new_in(A alloc);
@@ -1615,7 +1637,7 @@ public class Incoming {
 /** A measurement of a monotonically nondecreasing clock. */
 @rust("std::time::Instant")
 @RustClone
-public class Instant {
+public class Instant implements ToOwned {
     public static Instant now();
     public Duration duration_since(Instant earlier);
     public Duration? checked_duration_since(Instant earlier);
@@ -1628,7 +1650,7 @@ public class Instant {
 /** Enum to store the various types of errors that can cause parsing or converting an */
 @rust("std::num::IntErrorKind")
 @RustClone
-public enum IntErrorKind implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, StructuralPartialEq {
+public enum IntErrorKind {
     Empty, InvalidDigit, PosOverflow, NegOverflow, Zero, NotAPowerOfTwo
 }
 
@@ -1656,7 +1678,7 @@ public class IntoIncoming {
 
 /** An error returned by [`BufWriter::into_inner`] which combines an error that */
 @rust("std::io::IntoInnerError")
-public class IntoInnerError<W> {
+public class IntoInnerError<W> implements ToString {
     @RustRefOut public Error error();
     public W into_inner();
     public Error into_error();
@@ -1722,42 +1744,33 @@ public class IntoValues<K, V, A> {
 /** This is the error type used by [`HandleOrInvalid`] when attempting to */
 @rust("std::os::windows::io::InvalidHandleError")
 @RustClone
-public class InvalidHandleError {
+public class InvalidHandleError implements ToOwned, ToString {
 }
 
 /** A buffer type used with `Write::write_vectored`. */
 @rust("std::io::IoSlice")
 @RustClone
-public class IoSlice implements Any, Clone, CloneToUninit, Copy, Debug, Deref, Receiver, Send, Sync {
+@RustDerefs("[]")
+public class IoSlice {
     public IoSlice(ubyte[] buf);
     @MutSelf public void advance(uint n);
     public static void advance_slices(&mut IoSlice[] bufs, uint n);
     @RustRefOut public ubyte[] as_slice();
     @MutSelf public void sort_floats();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1879,18 +1892,7 @@ public class IoSlice implements Any, Clone, CloneToUninit, Copy, Debug, Deref, R
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
     @MutSelf @RustRefOut public T[] as_mut_slice();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-}
-
-/** A buffer type used with `Read::read_vectored`. */
-@rust("std::io::IoSliceMut")
-public class IoSliceMut implements Any, Debug, Deref, DerefMut, Receiver, Send, Sync {
-    public IoSliceMut(&mut ubyte[] buf);
-    @MutSelf public void advance(uint n);
-    public static void advance_slices(&mut IoSliceMut[] bufs, uint n);
-    @RustRefOut public ubyte[] into_slice();
-    @MutSelf public void sort_floats();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @RustRefOut public String as_str();
     public bool is_ascii();
     @RustRefOut public Char[]? as_ascii();
     @RustRefOut public unsafe Char[] as_ascii_unchecked();
@@ -1901,19 +1903,31 @@ public class IoSliceMut implements Any, Debug, Deref, DerefMut, Receiver, Send, 
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
+}
+
+/** A buffer type used with `Read::read_vectored`. */
+@rust("std::io::IoSliceMut")
+@RustDerefs("[]")
+public class IoSliceMut {
+    public IoSliceMut(&mut ubyte[] buf);
+    @MutSelf public void advance(uint n);
+    public static void advance_slices(&mut IoSliceMut[] bufs, uint n);
+    @RustRefOut public ubyte[] into_slice();
+    @MutSelf public void sort_floats();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -2036,13 +2050,23 @@ public class IoSliceMut implements Any, Debug, Deref, DerefMut, Receiver, Send, 
     public Range<uint>? subslice_range(T[] subslice);
     @RustRefOut public T[] as_slice();
     @MutSelf @RustRefOut public T[] as_mut_slice();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
 }
 
 /** An IP address, either IPv4 or IPv6. */
 @rust("std::net::IpAddr")
 @RustClone
-public enum IpAddr implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, FromStr, Hash, Ord, StructuralPartialEq {
+public enum IpAddr {
     V4(Ipv4Addr), V6(Ipv6Addr);
 
     public bool is_unspecified();
@@ -2061,7 +2085,7 @@ public enum IpAddr implements Any, Clone, CloneToUninit, Copy, Debug, Display, E
 /** An IPv4 address. */
 @rust("std::net::Ipv4Addr")
 @RustClone
-public class Ipv4Addr implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, FromStr, Hash, Not, Ord, Step, StructuralPartialEq, TrustedStep {
+public class Ipv4Addr {
     public Ipv4Addr(ubyte a, ubyte b, ubyte c, ubyte d);
     public u32 to_bits();
     public static Ipv4Addr from_bits(u32 bits);
@@ -2087,7 +2111,7 @@ public class Ipv4Addr implements Any, Clone, CloneToUninit, Copy, Debug, Display
 /** An IPv6 address. */
 @rust("std::net::Ipv6Addr")
 @RustClone
-public class Ipv6Addr implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, FromStr, Hash, Not, Ord, Step, StructuralPartialEq, TrustedStep {
+public class Ipv6Addr {
     public Ipv6Addr(ushort a, ushort b, ushort c, ushort d, ushort e, ushort f, ushort g, ushort h);
     public u128 to_bits();
     public static Ipv6Addr from_bits(u128 bits);
@@ -2117,7 +2141,7 @@ public class Ipv6Addr implements Any, Clone, CloneToUninit, Copy, Debug, Display
 /** Scope of an [IPv6 multicast address] as defined in [IETF RFC 7346 section 2], */
 @rust("std::net::Ipv6MulticastScope")
 @RustClone
-public enum Ipv6MulticastScope implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, Ord, StructuralPartialEq {
+public enum Ipv6MulticastScope {
     InterfaceLocal = 1, LinkLocal = 2, RealmLocal = 3, AdminLocal = 4, SiteLocal = 5, Unassigned6 = 6, Unassigned7 = 7, OrganizationLocal = 8, Unassigned9 = 9, UnassignedA = 10, UnassignedB = 11, UnassignedC = 12, UnassignedD = 13, Global = 14
 }
 
@@ -2144,8 +2168,9 @@ public class IterMut<T> {
 
 /** Helper trait for [`[T]::join`](slice::join) */
 @rust("std::slice::Join")
+@RustImplementedBy("[]")
 public interface Join<Separator> {
-    public Self.Output join(&Self slice, Separator sep);
+    @RustStatic public Self.Output join(&Self slice, Separator sep);
 }
 
 /** An owned permission to join on a thread (block on its termination). */
@@ -2165,7 +2190,7 @@ public interface JoinHandleExt {
 
 /** The error type for operations on the `PATH` variable. Possibly returned from */
 @rust("std::env::JoinPathsError")
-public class JoinPathsError {
+public class JoinPathsError implements ToString {
 }
 
 /** An iterator over the keys of a `BTreeMap`. */
@@ -2179,7 +2204,7 @@ public class Keys<K, V> implements ToOwned {
 /** Layout of a block of memory. */
 @rust("std::alloc::Layout")
 @RustClone
-public class Layout implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, StructuralPartialEq {
+public class Layout {
     public Layout();
     public static Layout from_size_align(uint size, uint align) throws LayoutError;
     public static Layout from_size_alignment(uint size, Alignment alignment) throws LayoutError;
@@ -2233,7 +2258,7 @@ public class Lines<B> {
 /** Created with the method [`lines_any`]. */
 @rust("std::str::LinesAny")
 @RustClone
-public class LinesAny implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class LinesAny {
     @MutSelf public String? next();
 }
 
@@ -2295,7 +2320,7 @@ public interface LocalWake {
 /** A `LocalWaker` is analogous to a [`Waker`], but it does not implement [`Send`] or [`Sync`]. */
 @rust("std::task::LocalWaker")
 @RustClone
-public class LocalWaker implements Any, Clone, CloneToUninit, Debug, Drop, Unpin {
+public class LocalWaker {
     public LocalWaker(Object* data, &RawWakerVTable vtable);
     public void wake();
     public void wake_by_ref();
@@ -2310,7 +2335,7 @@ public class LocalWaker implements Any, Clone, CloneToUninit, Debug, Drop, Unpin
 /** A struct containing information about the location of a panic. */
 @rust("std::panic::Location")
 @RustClone
-public class Location implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Hash, Ord, Send, Sync {
+public class Location {
     @RustRefOut public static Location caller();
     @RustRefOut public String file();
     @RustRefOut public CStr file_as_c_str();
@@ -2327,27 +2352,27 @@ public const String MAIN_SEPARATOR_STR;
 /** An iterator that maps the values of `iter` with `f`. */
 @rust("std::iter::Map")
 @RustClone
-public class Map<I, F> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class Map<I, F> {
     @MutSelf public B? next();
 }
 
 /** An RAII mutex guard returned by `MutexGuard::map`, which can point to a */
 @rust("std::sync::MappedMutexGuard")
-public class MappedMutexGuard<T> {
+public class MappedMutexGuard<T> implements ToString {
     public static MappedMutexGuard<U> map<U, F>(MappedMutexGuard orig, (T) -> U f);
     public static MappedMutexGuard<U> filter_map<U, F>(MappedMutexGuard orig, (T) -> U? f) throws MappedMutexGuard;
 }
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::MappedRwLockReadGuard")
-public class MappedRwLockReadGuard<T> {
+public class MappedRwLockReadGuard<T> implements ToString {
     public static MappedRwLockReadGuard<U> map<U, F>(MappedRwLockReadGuard orig, (T) -> U f);
     public static MappedRwLockReadGuard<U> filter_map<U, F>(MappedRwLockReadGuard orig, (T) -> U? f) throws MappedRwLockReadGuard;
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::MappedRwLockWriteGuard")
-public class MappedRwLockWriteGuard<T> {
+public class MappedRwLockWriteGuard<T> implements ToString {
     public static MappedRwLockWriteGuard<U> map<U, F>(MappedRwLockWriteGuard orig, (T) -> U f);
     public static MappedRwLockWriteGuard<U> filter_map<U, F>(MappedRwLockWriteGuard orig, (T) -> U? f) throws MappedRwLockWriteGuard;
 }
@@ -2355,14 +2380,14 @@ public class MappedRwLockWriteGuard<T> {
 /** Created with the method [`match_indices`]. */
 @rust("std::str::MatchIndices")
 @RustClone
-public class MatchIndices<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class MatchIndices<P> {
     @MutSelf public (uint, String)? next();
 }
 
 /** Created with the method [`matches`]. */
 @rust("std::str::Matches")
 @RustClone
-public class Matches<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class Matches<P> {
     @MutSelf public String? next();
 }
 
@@ -2375,7 +2400,7 @@ public class Messages {
 /** Metadata information about a file. */
 @rust("std::fs::Metadata")
 @RustClone
-public class Metadata implements MetadataExt {
+public class Metadata implements MetadataExt, ToOwned {
     public FileType file_type();
     public bool is_dir();
     public bool is_file();
@@ -2433,7 +2458,7 @@ public class Mutex<T> {
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
 @rust("std::sync::MutexGuard")
-public class MutexGuard<T> {
+public class MutexGuard<T> implements ToString {
     public static MappedMutexGuard<U> map<U, F>(MutexGuard orig, (T) -> U f);
     public static MappedMutexGuard<U> filter_map<U, F>(MutexGuard orig, (T) -> U? f) throws MutexGuard;
 }
@@ -2441,7 +2466,7 @@ public class MutexGuard<T> {
 /** `*mut T` but non-zero and [covariant]. */
 @rust("std::ptr::NonNull")
 @RustClone
-public class NonNull<T> implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, Ord, Pointer, UnwindSafe {
+public class NonNull<T> {
     public static NonNull without_provenance(NonZero<uint> addr);
     public static NonNull dangling();
     public static NonNull with_exposed_provenance(NonZero<uint> addr);
@@ -2506,7 +2531,7 @@ public class NonNull<T> implements Any, Clone, CloneToUninit, Copy, Debug, Eq, H
 /** A value that is known not to equal zero. */
 @rust("std::num::NonZero")
 @RustClone
-public class NonZero<T> implements Any, Binary, Clone, CloneToUninit, Copy, Debug, Display, Eq, Freeze, Hash, LowerExp, LowerHex, Octal, Ord, RefUnwindSafe, Send, StructuralPartialEq, Sync, Unpin, UnwindSafe, UpperExp, UpperHex, UseCloned {
+public class NonZero<T> {
     public static NonZero? new(T n);
     public static unsafe NonZero new_unchecked(T n);
     @RustRefOut public static NonZero? from_mut(&mut T n);
@@ -2811,6 +2836,7 @@ public class NonZeroIsize {
 /** A [`u128`] that is known not to equal zero. */
 @rust("std::num::NonZeroU128")
 public class NonZeroU128 {
+    public NonZeroU128 div_ceil(NonZeroU128 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZeroU128 isolate_highest_one();
@@ -2845,12 +2871,12 @@ public class NonZeroU128 {
     public static NonZeroU128 from_ascii(ubyte[] src) throws ParseIntError;
     public static NonZeroU128 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
     public static NonZeroU128 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU128 div_ceil(NonZeroU128 rhs);
 }
 
 /** A [`u16`] that is known not to equal zero. */
 @rust("std::num::NonZeroU16")
 public class NonZeroU16 {
+    public NonZeroU16 div_ceil(NonZeroU16 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZeroU16 isolate_highest_one();
@@ -2885,12 +2911,12 @@ public class NonZeroU16 {
     public static NonZeroU16 from_ascii(ubyte[] src) throws ParseIntError;
     public static NonZeroU16 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
     public static NonZeroU16 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU16 div_ceil(NonZeroU16 rhs);
 }
 
 /** A [`u32`] that is known not to equal zero. */
 @rust("std::num::NonZeroU32")
 public class NonZeroU32 {
+    public NonZeroU32 div_ceil(NonZeroU32 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZeroU32 isolate_highest_one();
@@ -2925,12 +2951,12 @@ public class NonZeroU32 {
     public static NonZeroU32 from_ascii(ubyte[] src) throws ParseIntError;
     public static NonZeroU32 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
     public static NonZeroU32 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU32 div_ceil(NonZeroU32 rhs);
 }
 
 /** A [`u64`] that is known not to equal zero. */
 @rust("std::num::NonZeroU64")
 public class NonZeroU64 {
+    public NonZeroU64 div_ceil(NonZeroU64 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZeroU64 isolate_highest_one();
@@ -2965,7 +2991,6 @@ public class NonZeroU64 {
     public static NonZeroU64 from_ascii(ubyte[] src) throws ParseIntError;
     public static NonZeroU64 from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
     public static NonZeroU64 from_str_radix(&String src, u32 radix) throws ParseIntError;
-    public NonZeroU64 div_ceil(NonZeroU64 rhs);
 }
 
 /** A [`u8`] that is known not to equal zero. */
@@ -3011,7 +3036,6 @@ public class NonZeroU8 {
 /** A [`usize`] that is known not to equal zero. */
 @rust("std::num::NonZeroUsize")
 public class NonZeroUsize {
-    public NonZeroUsize div_ceil(NonZeroUsize rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZeroUsize isolate_highest_one();
@@ -3046,11 +3070,12 @@ public class NonZeroUsize {
     public static NonZeroUsize from_ascii(ubyte[] src) throws ParseIntError;
     public static NonZeroUsize from_ascii_radix(ubyte[] src, u32 radix) throws ParseIntError;
     public static NonZeroUsize from_str_radix(&String src, u32 radix) throws ParseIntError;
+    public NonZeroUsize div_ceil(NonZeroUsize rhs);
 }
 
 /** An error returned from [`Path::normalize_lexically`] if a `..` parent reference */
 @rust("std::path::NormalizeError")
-public class NormalizeError {
+public class NormalizeError implements ToString {
 }
 
 /** An error indicating that an interior nul byte was found. */
@@ -3064,7 +3089,7 @@ public class NulError implements ToOwned, ToString {
 /** This is the error type used by [`HandleOrNull`] when attempting to convert */
 @rust("std::os::windows::io::NullHandleError")
 @RustClone
-public class NullHandleError {
+public class NullHandleError implements ToOwned, ToString {
 }
 
 @rust("std::sync::ONCE_INIT")
@@ -3121,7 +3146,7 @@ public class Once {
 /** A synchronization primitive which can nominally be written to only once. */
 @rust("std::sync::OnceLock")
 @RustClone
-public class OnceLock<T> {
+public class OnceLock<T> implements ToOwned {
     public OnceLock();
     @RustRefOut public T? get();
     @MutSelf @RustRefOut public T? get_mut();
@@ -3145,7 +3170,7 @@ public class OnceState {
 /** Options and flags which can be used to configure how a file is opened. */
 @rust("std::fs::OpenOptions")
 @RustClone
-public class OpenOptions implements OpenOptionsExt, OpenOptionsExt2 {
+public class OpenOptions implements OpenOptionsExt, OpenOptionsExt2, ToOwned {
     public OpenOptions();
     @MutSelf @RustRefOut public OpenOptions read(bool read);
     @MutSelf @RustRefOut public OpenOptions write(bool write);
@@ -3172,7 +3197,7 @@ public interface OpenOptionsExt2 {
 /** An `Ordering` is the result of a comparison between two values. */
 @rust("std::cmp::Ordering")
 @RustClone
-public enum Ordering implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash, Ord, StructuralPartialEq {
+public enum Ordering {
     Less = -1, Equal = 0, Greater = 1;
 
     public bool is_eq();
@@ -3190,7 +3215,7 @@ public enum Ordering implements Any, Clone, CloneToUninit, Copy, Debug, Eq, Hash
 @rust("std::ffi::os_str::OsStr")
 @RustClone
 @RustOwnedAs("OsString")
-public class OsStr implements OsStrExt {
+public class OsStr implements OsStrExt, ToOwned {
     public OsStr(&S s);
     @RustDefault public OsStr();
     @RustRefOut public static unsafe OsStr from_encoded_bytes_unchecked(ubyte[] bytes);
@@ -3217,7 +3242,7 @@ public class OsStr implements OsStrExt {
 /** Platform-specific extensions to [`OsStr`]. */
 @rust("std::os::unix::ffi::OsStrExt")
 public interface OsStrExt {
-    @RustRefOut public Self from_bytes(ubyte[] slice);
+    @RustStatic @RustRefOut public Self from_bytes(ubyte[] slice);
     @RustRefOut public ubyte[] as_bytes();
 }
 
@@ -3225,7 +3250,8 @@ public interface OsStrExt {
 @rust("std::ffi::os_str::OsString")
 @RustClone
 @RustCollection
-public class OsString implements OsStringExt {
+@RustDerefs("OsStr")
+public class OsString implements OsStringExt, ToOwned, Write {
     public OsString();
     public static unsafe OsString from_encoded_bytes_unchecked(Vec<ubyte> bytes);
     @RustRefOut public OsStr as_os_str();
@@ -3266,14 +3292,14 @@ public class OsString implements OsStringExt {
 /** Platform-specific extensions to [`OsString`]. */
 @rust("std::os::unix::ffi::OsStringExt")
 public interface OsStringExt {
-    public Self from_vec(Vec<ubyte> vec);
+    @RustStatic public Self from_vec(Vec<ubyte> vec);
     public Vec<ubyte> into_vec();
 }
 
 /** The output of a finished process. */
 @rust("std::process::Output")
 @RustClone
-public class Output {
+public class Output implements ToOwned {
     public ExitStatus status;
     public Vec<ubyte> stdout;
     public Vec<ubyte> stderr;
@@ -3300,7 +3326,7 @@ public class OwnedSocket implements AsRawSocket, AsSocket, FromRawSocket, IntoRa
 
 /** A struct providing information about a panic. */
 @rust("std::panic::PanicHookInfo")
-public class PanicHookInfo {
+public class PanicHookInfo implements ToString {
     @RustRefOut public Any payload();
     @RustRefOut public String? payload_as_str();
     @RustRefOut public Location? location();
@@ -3310,13 +3336,13 @@ public class PanicHookInfo {
 /** An error which can be returned when parsing a float. */
 @rust("std::num::ParseFloatError")
 @RustClone
-public class ParseFloatError implements Any, Clone, CloneToUninit, Debug, Display, Eq, Error, StructuralPartialEq {
+public class ParseFloatError {
 }
 
 /** An error which can be returned when parsing an integer. */
 @rust("std::num::ParseIntError")
 @RustClone
-public class ParseIntError implements Any, Clone, CloneToUninit, Debug, Display, Eq, Error, StructuralPartialEq {
+public class ParseIntError {
     @RustRefOut public IntErrorKind kind();
 }
 
@@ -3324,7 +3350,7 @@ public class ParseIntError implements Any, Clone, CloneToUninit, Debug, Display,
 @rust("std::path::Path")
 @RustClone
 @RustOwnedAs("PathBuf")
-public class Path {
+public class Path implements ToOwned {
     public Path(&S s);
     @RustRefOut public OsStr as_os_str();
     @MutSelf @RustRefOut public OsStr as_mut_os_str();
@@ -3375,7 +3401,8 @@ public class Path {
 @rust("std::path::PathBuf")
 @RustClone
 @RustCollection
-public class PathBuf {
+@RustDerefs("Path")
+public class PathBuf implements ToOwned {
     public PathBuf();
     public static PathBuf with_capacity(uint capacity);
     @RustRefOut public Path as_path();
@@ -3454,7 +3481,7 @@ public class PeekMut<T, A> {
 /** Representation of the various permissions on a file. */
 @rust("std::fs::Permissions")
 @RustClone
-public class Permissions implements PermissionsExt {
+public class Permissions implements PermissionsExt, ToOwned {
     public bool readonly();
     @MutSelf public void set_readonly(bool readonly);
 }
@@ -3464,7 +3491,7 @@ public class Permissions implements PermissionsExt {
 public interface PermissionsExt {
     public u32 mode();
     @MutSelf public void set_mode(u32 mode);
-    public Self from_mode(u32 mode);
+    @RustStatic public Self from_mode(u32 mode);
 }
 
 /** This type represents a file descriptor that refers to a process. */
@@ -3478,7 +3505,7 @@ public class PidFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
 /** A pointer which pins its pointee in place. */
 @rust("std::pin::Pin")
 @RustClone
-public class Pin<Ptr> implements Any, AsyncIterator, Clone, CloneToUninit, Copy, Debug, Deref, DerefMut, DerefPure, Display, Eq, Future, Hash, IntoAsyncIterator, IntoFuture, Ord, PinCoerceUnsized, Pointer, Receiver {
+public class Pin<Ptr> {
     public Pin(Ptr pointer);
     public static Ptr into_inner(Pin<Ptr> pin);
     public static unsafe Pin<Ptr> new_unchecked(Ptr pointer);
@@ -3511,7 +3538,7 @@ public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRaw
 
 /** A type of error which can be returned whenever a lock is acquired. */
 @rust("std::sync::poison::PoisonError")
-public class PoisonError<T> {
+public class PoisonError<T> implements ToString {
     public PoisonError(T data);
     public T into_inner();
     @RustRefOut public T get_ref();
@@ -3521,7 +3548,7 @@ public class PoisonError<T> {
 /** Windows path prefixes, e.g., `C:` or `\\server\share`. */
 @rust("std::path::Prefix")
 @RustClone
-public enum Prefix {
+public enum Prefix implements ToOwned {
     Verbatim(OsStr), VerbatimUNC(OsStr, OsStr), VerbatimDisk(ubyte), DeviceNS(OsStr), UNC(OsStr, OsStr), Disk(ubyte);
 
     public bool is_verbatim();
@@ -3530,7 +3557,7 @@ public enum Prefix {
 /** A structure wrapping a Windows path prefix as well as its unparsed string */
 @rust("std::path::PrefixComponent")
 @RustClone
-public class PrefixComponent {
+public class PrefixComponent implements ToOwned {
     @RustBorrowsSelf public Prefix kind();
     @RustRefOut public OsStr as_os_str();
 }
@@ -3544,7 +3571,7 @@ public class ProcThreadAttributeList {
 /** Builder for constructing a [`ProcThreadAttributeList`]. */
 @rust("std::os::windows::process::ProcThreadAttributeListBuilder")
 @RustClone
-public class ProcThreadAttributeListBuilder {
+public class ProcThreadAttributeListBuilder implements ToOwned {
     public ProcThreadAttributeListBuilder attribute<T>(uint attribute, &T value);
     public unsafe ProcThreadAttributeListBuilder raw_attribute<T>(uint attribute, T* value_ptr, uint value_size);
     @RustBorrowsSelf public ProcThreadAttributeList finish() throws Error;
@@ -3553,61 +3580,61 @@ public class ProcThreadAttributeListBuilder {
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::RChunks")
 @RustClone
-public class RChunks<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class RChunks<T> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::RChunksExact")
 @RustClone
-public class RChunksExact<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class RChunksExact<T> {
     @RustRefOut public T[] remainder();
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::RChunksExactMut")
-public class RChunksExactMut<T> implements Any, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, Send, Sync, TrustedLen {
+public class RChunksExactMut<T> {
     @RustRefOut public T[] into_remainder();
     @MutSelf public T[]? next();
 }
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::RChunksMut")
-public class RChunksMut<T> implements Any, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, Send, Sync, TrustedLen {
+public class RChunksMut<T> {
     @MutSelf public T[]? next();
 }
 
 /** Created with the method [`rmatch_indices`]. */
 @rust("std::str::RMatchIndices")
 @RustClone
-public class RMatchIndices<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class RMatchIndices<P> {
     @MutSelf public (uint, String)? next();
 }
 
 /** Created with the method [`rmatches`]. */
 @rust("std::str::RMatches")
 @RustClone
-public class RMatches<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class RMatches<P> {
     @MutSelf public String? next();
 }
 
 /** An iterator over the subslices of the vector which are separated */
 @rust("std::slice::RSplitMut")
-public class RSplitMut<T, P> implements Any, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class RSplitMut<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over subslices separated by elements that match a */
 @rust("std::slice::RSplitNMut")
-public class RSplitNMut<T, P> implements Any, Debug, FusedIterator, IntoIterator, Iterator {
+public class RSplitNMut<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** Created with the method [`rsplit_terminator`]. */
 @rust("std::str::RSplitTerminator")
 @RustClone
-public class RSplitTerminator<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class RSplitTerminator<P> {
     @RustRefOut public String? remainder();
     @MutSelf public String? next();
 }
@@ -3615,7 +3642,7 @@ public class RSplitTerminator<P> implements Any, Clone, CloneToUninit, Debug, Do
 /** `RandomState` is the default state for [`HashMap`] types. */
 @rust("std::hash::RandomState")
 @RustClone
-public class RandomState {
+public class RandomState implements ToOwned {
     public RandomState();
 }
 
@@ -3726,7 +3753,7 @@ public class ReadDir {
 /** The receiving half of Rust's [`channel`] (or [`sync_channel`]) type. */
 @rust("std::sync::mpmc::Receiver")
 @RustClone
-public class Receiver<T> {
+public class Receiver<T> implements ToOwned {
     public T try_recv() throws TryRecvError;
     public T recv() throws RecvError;
     public T recv_timeout(Duration timeout) throws RecvTimeoutError;
@@ -3744,13 +3771,13 @@ public class Receiver<T> {
 /** An error returned from the [`recv`] function on a [`Receiver`]. */
 @rust("std::sync::mpsc::RecvError")
 @RustClone
-public class RecvError {
+public class RecvError implements ToOwned, ToString {
 }
 
 /** This enumeration is the list of possible errors that made [`recv_timeout`] */
 @rust("std::sync::mpsc::RecvTimeoutError")
 @RustClone
-public enum RecvTimeoutError {
+public enum RecvTimeoutError implements ToOwned, ToString {
     Timeout, Disconnected
 }
 
@@ -3767,17 +3794,17 @@ public class ReentrantLock<T> {
 
 /** An RAII implementation of a "scoped lock" of a re-entrant lock. When this */
 @rust("std::sync::ReentrantLockGuard")
-public class ReentrantLockGuard<T> {
+public class ReentrantLockGuard<T> implements ToString {
 }
 
 /** A reader which yields one byte over and over and over and over and over and... */
 @rust("std::io::Repeat")
-public class Repeat implements Any, Debug {
+public class Repeat {
 }
 
 /** An error reporter that prints an error and its sources. */
 @rust("std::error::Report")
-public class Report<E> {
+public class Report<E> implements ToString {
     public Report(E error);
     public Report pretty(bool pretty);
     public Report show_backtrace(bool show_backtrace);
@@ -3785,7 +3812,7 @@ public class Report<E> {
 
 /** `Request` supports generic, type-driven access to data. Its use is currently restricted to the */
 @rust("std::error::Request")
-public class Request implements Any, Debug {
+public class Request {
     @MutSelf @RustRefOut public Request provide_value<T>(T value);
     @MutSelf @RustRefOut public Request provide_value_with<T>(() -> T fulfil);
     @MutSelf @RustRefOut public Request provide_ref<T>(&T value);
@@ -3815,14 +3842,14 @@ public class RwLock<T> {
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::RwLockReadGuard")
-public class RwLockReadGuard<T> {
+public class RwLockReadGuard<T> implements ToString {
     public static MappedRwLockReadGuard<U> map<U, F>(RwLockReadGuard orig, (T) -> U f);
     public static MappedRwLockReadGuard<U> filter_map<U, F>(RwLockReadGuard orig, (T) -> U? f) throws RwLockReadGuard;
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::RwLockWriteGuard")
-public class RwLockWriteGuard<T> {
+public class RwLockWriteGuard<T> implements ToString {
     public static RwLockReadGuard<T> downgrade(RwLockWriteGuard s);
     public static MappedRwLockWriteGuard<U> map<U, F>(RwLockWriteGuard orig, (T) -> U f);
     public static MappedRwLockWriteGuard<U> filter_map<U, F>(RwLockWriteGuard orig, (T) -> U? f) throws RwLockWriteGuard;
@@ -3855,7 +3882,7 @@ public const BorrowedFd STDOUT;
 /** Provides intentionally-saturating arithmetic on `T`. */
 @rust("std::num::Saturating")
 @RustClone
-public class Saturating<T> implements Any, Binary, Clone, CloneToUninit, Copy, Debug, Default, Display, Eq, Hash, LowerHex, Octal, Ord, StructuralPartialEq, UpperHex {
+public class Saturating<T> {
     @RustDefault public Saturating();
     public u32 count_ones();
     public u32 count_zeros();
@@ -3920,27 +3947,27 @@ public interface Seek {
 /** Enumeration of possible methods to seek within an I/O object. */
 @rust("std::io::SeekFrom")
 @RustClone
-public enum SeekFrom {
+public enum SeekFrom implements ToOwned {
     Start(ulong), End(long), Current(long)
 }
 
 /** An error returned from the [`Sender::send`] or [`SyncSender::send`] */
 @rust("std::sync::mpsc::SendError")
 @RustClone
-public class SendError<T> {
+public class SendError<T> implements ToOwned, ToString {
 }
 
 /** An error returned from the [`send_timeout`] method. */
 @rust("std::sync::mpmc::SendTimeoutError")
 @RustClone
-public enum SendTimeoutError<T> {
+public enum SendTimeoutError<T> implements ToOwned, ToString {
     Timeout(T), Disconnected(T)
 }
 
 /** The sending-half of Rust's synchronous [`channel`] type. */
 @rust("std::sync::mpmc::Sender")
 @RustClone
-public class Sender<T> {
+public class Sender<T> implements ToOwned {
     public void try_send(T msg) throws TrySendError<T>;
     public void send(T msg) throws SendError<T>;
     public void send_timeout(T msg, Duration timeout) throws SendTimeoutError<T>;
@@ -3956,14 +3983,14 @@ public class Sender<T> {
 /** Possible values which can be passed to the [`TcpStream::shutdown`] method. */
 @rust("std::net::Shutdown")
 @RustClone
-public enum Shutdown {
+public enum Shutdown implements ToOwned {
     Read, Write, Both
 }
 
 /** A SIMD vector with the shape of `[T; N]` but the operations of `T`. */
 @rust("std::simd::Simd")
 @RustClone
-public class Simd<T> implements Any, Clone, CloneToUninit, Copy, Debug, Default, Eq, Hash, Ord {
+public class Simd<T> {
     @RustDefault public Simd();
     public Simd reverse();
     public Simd rotate_elements_left();
@@ -4008,7 +4035,7 @@ public class Simd<T> implements Any, Clone, CloneToUninit, Copy, Debug, Default,
 /** A writer which will move data into the void. */
 @rust("std::io::Sink")
 @RustClone
-public class Sink implements Any, Clone, CloneToUninit, Copy, Debug, Default {
+public class Sink {
     @RustDefault public Sink();
 }
 
@@ -4019,7 +4046,7 @@ public class Socket {
 /** An address associated with a Unix socket. */
 @rust("std::os::unix::net::SocketAddr")
 @RustClone
-public class SocketAddr implements SocketAddrExt {
+public class SocketAddr implements SocketAddrExt, ToOwned {
     public static SocketAddr from_pathname<P>(P path) throws Error;
     public bool is_unnamed();
     @RustRefOut public Path? as_pathname();
@@ -4028,14 +4055,14 @@ public class SocketAddr implements SocketAddrExt {
 /** Platform-specific extensions to [`SocketAddr`]. */
 @rust("std::os::linux::net::SocketAddrExt")
 public interface SocketAddrExt {
-    public SocketAddr from_abstract_name<N>(N name) throws Error;
+    @RustStatic public SocketAddr from_abstract_name<N>(N name) throws Error;
     @RustRefOut public ubyte[]? as_abstract_name();
 }
 
 /** An IPv4 socket address. */
 @rust("std::net::SocketAddrV4")
 @RustClone
-public class SocketAddrV4 implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, FromStr, Hash, Ord, StructuralPartialEq {
+public class SocketAddrV4 {
     public SocketAddrV4(Ipv4Addr ip, ushort port);
     public static SocketAddrV4 parse_ascii(ubyte[] b) throws AddrParseError;
     @RustRefOut public Ipv4Addr ip();
@@ -4047,7 +4074,7 @@ public class SocketAddrV4 implements Any, Clone, CloneToUninit, Copy, Debug, Dis
 /** An IPv6 socket address. */
 @rust("std::net::SocketAddrV6")
 @RustClone
-public class SocketAddrV6 implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, FromStr, Hash, Ord, StructuralPartialEq {
+public class SocketAddrV6 {
     public SocketAddrV6(Ipv6Addr ip, ushort port, u32 flowinfo, u32 scope_id);
     public static SocketAddrV6 parse_ascii(ubyte[] b) throws AddrParseError;
     @RustRefOut public Ipv6Addr ip();
@@ -4076,7 +4103,7 @@ public class SocketAncillary {
 
 @rust("std::os::unix::net::SocketCred")
 @RustClone
-public class SocketCred {
+public class SocketCred implements ToOwned {
 }
 
 /** A splicing iterator for `Vec`. */
@@ -4094,26 +4121,26 @@ public class Split<B> {
 /** An iterator over the non-ASCII-whitespace substrings of a string, */
 @rust("std::str::SplitAsciiWhitespace")
 @RustClone
-public class SplitAsciiWhitespace implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class SplitAsciiWhitespace {
     @RustRefOut public String? remainder();
     @MutSelf public String? next();
 }
 
 /** An iterator over the mutable subslices of the vector which are separated */
 @rust("std::slice::SplitInclusiveMut")
-public class SplitInclusiveMut<T, P> implements Any, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class SplitInclusiveMut<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over the mutable subslices of the vector which are separated */
 @rust("std::slice::SplitMut")
-public class SplitMut<T, P> implements Any, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class SplitMut<T, P> {
     @MutSelf public T[]? next();
 }
 
 /** An iterator over subslices separated by elements that match a predicate */
 @rust("std::slice::SplitNMut")
-public class SplitNMut<T, P> implements Any, Debug, FusedIterator, IntoIterator, Iterator {
+public class SplitNMut<T, P> {
     @MutSelf public T[]? next();
 }
 
@@ -4126,7 +4153,7 @@ public class SplitPaths {
 /** Created with the method [`split_terminator`]. */
 @rust("std::str::SplitTerminator")
 @RustClone
-public class SplitTerminator<P> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class SplitTerminator<P> {
     @RustRefOut public String? remainder();
     @MutSelf public String? next();
 }
@@ -4134,7 +4161,7 @@ public class SplitTerminator<P> implements Any, Clone, CloneToUninit, Debug, Dou
 /** An iterator over the non-whitespace substrings of a string, */
 @rust("std::str::SplitWhitespace")
 @RustClone
-public class SplitWhitespace implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, FusedIterator, IntoIterator, Iterator {
+public class SplitWhitespace {
     @RustRefOut public String? remainder();
     @MutSelf public String? next();
 }
@@ -4215,7 +4242,8 @@ public class StdoutLock implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTermi
 @rust("std::string::String")
 @RustClone
 @RustCollection
-public class String implements ToOwned, ToString {
+@RustDerefs("str")
+public class String implements ToOwned, ToString, Write {
     public String();
     public static String with_capacity(uint capacity);
     public static String try_with_capacity(uint capacity) throws TryReserveError;
@@ -4264,17 +4292,6 @@ public class String implements ToOwned, ToString {
     @MutSelf public void replace_last<P>(P from, &String to);
     public String into_boxed_str();
     @RustRefOut public String leak();
-    public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
-    public String word_to_titlecase();
-    public String to_uppercase();
-    public String to_casefold_unnormalized();
-    public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -4347,12 +4364,23 @@ public class String implements ToOwned, ToString {
     @RustBorrowsSelf public EscapeDefault escape_default();
     @RustBorrowsSelf public EscapeUnicode escape_unicode();
     public Range<uint>? substr_range(&String substr);
+    public ubyte[] into_boxed_bytes();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String word_to_titlecase();
+    public String to_uppercase();
+    public String to_casefold_unnormalized();
+    public String into_string();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
 @rust("std::path::StripPrefixError")
 @RustClone
-public class StripPrefixError {
+public class StripPrefixError implements ToOwned, ToString {
 }
 
 /** A lazy iterator producing elements in the symmetric difference of `BTreeSet`s. */
@@ -4365,7 +4393,7 @@ public class SymmetricDifference<T> implements ToOwned {
 /** The sending-half of Rust's synchronous [`sync_channel`] type. */
 @rust("std::sync::mpsc::SyncSender")
 @RustClone
-public class SyncSender<T> {
+public class SyncSender<T> implements ToOwned {
     public void send(T t) throws SendError<T>;
     public void try_send(T t) throws TrySendError<T>;
 }
@@ -4373,7 +4401,7 @@ public class SyncSender<T> {
 /** `SyncView` provides _mutable_ access, also referred to as _exclusive_ */
 @rust("std::sync::SyncView")
 @RustClone
-public class SyncView<T> implements Any, Clone, CloneToUninit, Copy, Debug, Default, Eq, Future, Hash, IntoFuture, Ord, Pattern, StructuralPartialEq, Sync {
+public class SyncView<T> {
     public SyncView(T t);
     @RustDefault public SyncView();
     public T into_inner();
@@ -4386,21 +4414,21 @@ public class SyncView<T> implements Any, Clone, CloneToUninit, Copy, Debug, Defa
 /** The default memory allocator provided by the operating system. */
 @rust("std::alloc::System")
 @RustClone
-public class System {
+public class System implements ToOwned {
     @RustDefault public System();
 }
 
 /** The system random number generator. */
 @rust("std::random::SystemRng")
 @RustClone
-public class SystemRng {
+public class SystemRng implements ToOwned {
     @RustDefault public SystemRng();
 }
 
 /** A measurement of the system clock, useful for talking to */
 @rust("std::time::SystemTime")
 @RustClone
-public class SystemTime {
+public class SystemTime implements ToOwned {
     public static SystemTime now();
     public Duration duration_since(SystemTime earlier) throws SystemTimeError;
     public Duration elapsed() throws SystemTimeError;
@@ -4414,7 +4442,7 @@ public class SystemTime {
 /** An error returned from the `duration_since` and `elapsed` methods on */
 @rust("std::time::SystemTimeError")
 @RustClone
-public class SystemTimeError {
+public class SystemTimeError implements ToOwned, ToString {
     public Duration duration();
 }
 
@@ -4470,6 +4498,7 @@ public interface TcpStreamExt {
 
 /** A trait for implementing arbitrary return types in the `main` function. */
 @rust("std::process::Termination")
+@RustImplementedBy("never")
 public interface Termination {
     public ExitCode report();
 }
@@ -4485,7 +4514,7 @@ public class ThinBox<T> implements ToString {
 /** A handle to a thread. */
 @rust("std::thread::Thread")
 @RustClone
-public class Thread {
+public class Thread implements ToOwned {
     public void unpark();
     public ThreadId id();
     @RustRefOut public String? name();
@@ -4496,12 +4525,15 @@ public class Thread {
 /** A unique identifier for a running thread. */
 @rust("std::thread::ThreadId")
 @RustClone
-public class ThreadId {
+public class ThreadId implements ToOwned {
     public NonZero<ulong> as_u64();
 }
 
 /** A generalization of `Clone` to borrowed data. */
 @rust("std::borrow::ToOwned")
+@RustBlanket("Clone")
+@RustImplementedBy("[]")
+@RustImplementedBy("str")
 public interface ToOwned {
     public Self.Owned to_owned();
     public void clone_into(&mut Self.Owned target);
@@ -4509,12 +4541,14 @@ public interface ToOwned {
 
 /** A trait for objects which can be converted or resolved to one or more */
 @rust("std::net::ToSocketAddrs")
+@RustImplementedBy("str")
 public interface ToSocketAddrs {
     public Self.Iter to_socket_addrs() throws Error;
 }
 
 /** A trait for converting a value to a `String`. */
 @rust("std::string::ToString")
+@RustBlanket("Display")
 public interface ToString {
     public String to_string();
 }
@@ -4522,13 +4556,13 @@ public interface ToString {
 /** An error which can be returned when converting a floating-point value of seconds */
 @rust("std::time::TryFromFloatSecsError")
 @RustClone
-public class TryFromFloatSecsError implements Any, Clone, CloneToUninit, Debug, Display, Eq, Error, StructuralPartialEq {
+public class TryFromFloatSecsError {
 }
 
 /** The error type returned when a checked integral type conversion fails. */
 @rust("std::num::TryFromIntError")
 @RustClone
-public class TryFromIntError implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Error, StructuralPartialEq {
+public class TryFromIntError {
     @RustRefOut public IntErrorKind kind();
 }
 
@@ -4540,14 +4574,14 @@ public class TryIter<T> {
 
 /** An enumeration of possible errors which can occur while trying to acquire a lock */
 @rust("std::fs::TryLockError")
-public enum TryLockError {
+public enum TryLockError implements ToString {
     Error(Error), WouldBlock
 }
 
 /** This enumeration is the list of the possible reasons that [`try_recv`] could */
 @rust("std::sync::mpsc::TryRecvError")
 @RustClone
-public enum TryRecvError {
+public enum TryRecvError implements ToOwned, ToString {
     Empty, Disconnected
 }
 
@@ -4568,7 +4602,7 @@ public enum TryReserveErrorKind implements ToOwned {
 /** This enumeration is the list of the possible error outcomes for the */
 @rust("std::sync::mpsc::TrySendError")
 @RustClone
-public enum TrySendError<T> {
+public enum TrySendError<T> implements ToOwned, ToString {
     Full(T), Disconnected(T)
 }
 
@@ -4724,14 +4758,14 @@ public class UnorderedKeyError implements ToOwned, ToString {
 /** An iterator used to decode a slice of mostly UTF-8 bytes to string slices */
 @rust("std::str::Utf8Chunks")
 @RustClone
-public class Utf8Chunks implements Any, Clone, CloneToUninit, Debug, FusedIterator, IntoIterator, Iterator {
+public class Utf8Chunks {
     @MutSelf public Utf8Chunk? next();
 }
 
 /** Errors which can occur when attempting to interpret a sequence of [`u8`] */
 @rust("std::str::Utf8Error")
 @RustClone
-public class Utf8Error implements Any, Clone, CloneToUninit, Copy, Debug, Display, Eq, Error, StructuralPartialEq {
+public class Utf8Error {
     public uint valid_up_to();
     public uint? error_len();
 }
@@ -4739,7 +4773,7 @@ public class Utf8Error implements Any, Clone, CloneToUninit, Copy, Debug, Displa
 /** A variable argument list, ABI-compatible with `va_list` in C. */
 @rust("std::ffi::VaList")
 @RustClone
-public class VaList implements Any, Clone, CloneToUninit, Debug, Drop {
+public class VaList {
     @MutSelf public unsafe T next_arg<T>();
 }
 
@@ -4770,7 +4804,7 @@ public class ValuesMut<K, V> {
 /** The error type for operations interacting with environment variables. */
 @rust("std::env::VarError")
 @RustClone
-public enum VarError {
+public enum VarError implements ToOwned, ToString {
     NotPresent, NotUnicode(OsString)
 }
 
@@ -4790,6 +4824,7 @@ public class VarsOs {
 @rust("std::vec::Vec")
 @RustClone
 @RustCollection
+@RustDerefs("[]")
 public class Vec<T, A> implements ToOwned {
     public Vec();
     public static Vec with_capacity(uint capacity);
@@ -4861,30 +4896,20 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf public Splice<I.IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     @MutSelf public void sort_floats();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
     @MutSelf @RustRefOut public T[] write_filled(T value);
     @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
     @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
     @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -5000,7 +5025,17 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    @RustRefOut public String as_str();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */
@@ -5078,7 +5113,7 @@ public class VecDeque<T, A> implements ToOwned {
 /** A type indicating whether a timed wait on a condition variable returned */
 @rust("std::sync::WaitTimeoutResult")
 @RustClone
-public class WaitTimeoutResult {
+public class WaitTimeoutResult implements ToOwned {
     public bool timed_out();
 }
 
@@ -5092,7 +5127,7 @@ public interface Wake {
 /** A `Waker` is a handle for waking up a task by notifying its executor that it */
 @rust("std::task::Waker")
 @RustClone
-public class Waker implements Any, Clone, CloneToUninit, Debug, Drop, Send, Sync, Unpin {
+public class Waker {
     public Waker(Object* data, &RawWakerVTable vtable);
     public void wake();
     public void wake_by_ref();
@@ -5125,19 +5160,19 @@ public class Weak<T, A> implements ToOwned {
 /** An iterator over overlapping subslices of length `size`. */
 @rust("std::slice::Windows")
 @RustClone
-public class Windows<T> implements Any, Clone, CloneToUninit, Debug, DoubleEndedIterator, ExactSizeIterator, FusedIterator, IntoIterator, Iterator, TrustedLen {
+public class Windows<T> {
     @MutSelf public T[]? next();
 }
 
 /** A lock could not be acquired at this time because the operation would otherwise block. */
 @rust("std::sync::nonpoison::WouldBlock")
-public class WouldBlock {
+public class WouldBlock implements ToString {
 }
 
 /** Provides intentionally-wrapped arithmetic on `T`. */
 @rust("std::num::Wrapping")
 @RustClone
-public class Wrapping<T> implements Any, Binary, Clone, CloneToUninit, Copy, Debug, Default, Display, Eq, Hash, LowerHex, Octal, Ord, StructuralPartialEq, UpperHex {
+public class Wrapping<T> {
     @RustDefault public Wrapping();
     public u32 count_ones();
     public u32 count_zeros();
@@ -5175,14 +5210,14 @@ public interface Write {
 
 /** Error returned for the buffered data from `BufWriter::into_parts`, when the underlying */
 @rust("std::io::WriterPanicked")
-public class WriterPanicked {
+public class WriterPanicked implements ToString {
     public Vec<ubyte> into_inner();
 }
 
 /** An iterator that produces directory paths from XDG environment configuration. */
 @rust("std::os::unix::xdg::XdgDirsIter")
 @RustClone
-public class XdgDirsIter {
+public class XdgDirsIter implements ToOwned {
     @MutSelf public PathBuf? next();
 }
 
@@ -5236,7 +5271,7 @@ public type blksize_t = ulong;
 
 /** Equivalent to C's `void` type when used as a [pointer]. */
 @rust("std::ffi::c_void")
-public enum c_void implements Any, Debug {
+public enum c_void {
     // (variants not represented)
 }
 

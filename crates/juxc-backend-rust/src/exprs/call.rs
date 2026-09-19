@@ -2125,6 +2125,9 @@ impl RustEmitter {
                                 .get(&class_fqn)
                                 .and_then(|r| r.methods.get(f.field.text.as_str()))
                         })
+                        // A foreign trait's associated function on a type the
+                        // trait reaches (`Pcg64Dxsm.seed_from_u64(1)`).
+                        .or_else(|| self.external_type_method(&class_fqn, f.field.text.as_str()))
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {
@@ -5213,8 +5216,19 @@ impl RustEmitter {
         // loses the parameter types the callee's signature would have given
         // it (`sort_unstable_by((a, b) -> ...)` was E0282), and hoisting buys
         // nothing: what it captures is taken when it is built either way.
+        let recv_name = match recv_ty {
+            juxc_tycheck::Ty::User { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        // An argument lent by `&mut` stays in place too: it is the caller's
+        // own variable that the callee writes through, never a copy.
+        let lent = |this: &Self, i: usize| {
+            recv_name
+                .as_deref()
+                .is_some_and(|n| this.external_param_is_mut_ref(n, method, i))
+        };
         for (i, arg) in call.args.iter().enumerate() {
-            if matches!(arg, Expr::Lambda(_)) {
+            if matches!(arg, Expr::Lambda(_)) || lent(self, i) {
                 continue;
             }
             self.w.push_str("let __jux_carg");
@@ -5230,7 +5244,7 @@ impl RustEmitter {
             .iter()
             .enumerate()
             .map(|(i, arg)| {
-                if matches!(arg, Expr::Lambda(_)) {
+                if matches!(arg, Expr::Lambda(_)) || lent(self, i) {
                     return arg.clone();
                 }
                 Expr::Path(juxc_ast::QualifiedName {
@@ -5969,6 +5983,17 @@ impl RustEmitter {
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            // An exclusive borrow lends the caller's own place:
+            // `cards.shuffle(generator)` is `shuffle(&mut generator)`.
+            if self.external_param_is_mut_ref(recv_type, method, i) {
+                self.w.push_str("&mut ");
+                let prev_hoist = std::mem::take(&mut self.collection_args_prehoisted);
+                self.emitting_method_receiver = true;
+                self.emit_expr(arg);
+                self.emitting_method_receiver = false;
+                self.collection_args_prehoisted = prev_hoist;
+                continue;
             }
             // A slice slot needs the borrow just as much as a `&T` one does;
             // it simply has no `&` in the stub to say so.

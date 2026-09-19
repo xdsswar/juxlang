@@ -109,6 +109,13 @@ impl RustEmitter {
                 return sig.rust_path.clone();
             }
         }
+        // A crate's alias of one of its classes (`Pcg64Dxsm` for
+        // `Lcg128CmDxsm64`) is that class wherever a type is written.
+        if let Some(class) = self.symbols.alias_class(&fqn) {
+            if let Some(sig) = self.symbols.classes.get(&class).filter(|c| c.is_external) {
+                return sig.rust_path.clone();
+            }
+        }
         self.external_enum_real_path(&fqn)
     }
 

@@ -4,6 +4,3 @@
 # the same commit that fixes the bug. The README has a minimal repro for each.
 
 Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)
-Password: rand_pcg's generators are stubbed without their rand_core `RngCore`/`SeedableRng` impls, so `seed_from_u64` and `random_range` are missing (E0413, B22)
-Random: `Pcg64Dxsm.seed_from_u64` through a crate type alias leaks E0423 (B20); cross-crate and blanket trait impls are not surfaced, so `shuffle` on a Vec is E0413 (B22)
-Unicode: `graphemes` from unicode-segmentation (a trait on `str`) is not reachable on `String` (E0413, B23)

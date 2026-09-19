@@ -1999,6 +1999,11 @@ pub(crate) fn path_resolves_to_class(
             if symbols.classes.contains_key(fqn) {
                 return Some(fqn.clone());
             }
+            // An imported ALIAS of a class (`import rust.rand_pcg.Pcg64Dxsm;`)
+            // names that class, statics included (B20).
+            if let Some(class) = symbols.alias_class(fqn) {
+                return Some(class);
+            }
             // The unit binds the name to a type that is not a class (an
             // imported enum such as `jux.std.option.Option`): that binding
             // wins over a same-named class elsewhere, here a user

@@ -166,6 +166,21 @@ pub struct StubType {
     /// the backend stores a value of the view as the owned form, since the
     /// view itself is unsized. `None` for every type without such an impl.
     pub owned_as: Option<String>,
+    /// What the type derefs to, by shape: `[]` for `Vec<T>` (`Deref<Target =
+    /// [T]>`), `str` for `String`, a type name otherwise. Rendered as
+    /// `@RustDerefs("[]")`; a trait implemented for that target (`SliceRandom`
+    /// for `[T]`) is then callable on this type, as Rust's method lookup
+    /// allows.
+    pub derefs_to: Option<String>,
+    /// For a trait: the traits its BLANKET impls cover
+    /// (`impl<R: RngCore + ?Sized> Rng for R` gives `RngCore`). Rendered as
+    /// `@RustBlanket("RngCore")`: every type implementing the bound gets this
+    /// trait's methods.
+    pub blanket_over: Vec<String>,
+    /// For a trait: the primitive or slice shapes it is implemented for
+    /// (`impl<T> SliceRandom for [T]` gives `[]`, `impl UnicodeSegmentation for
+    /// str` gives `str`). Rendered as `@RustImplementedBy("[]")`.
+    pub implemented_by: Vec<String>,
 }
 
 impl StubType {
@@ -186,6 +201,9 @@ impl StubType {
             is_collection: false,
             implements: Vec::new(),
             owned_as: None,
+            derefs_to: None,
+            blanket_over: Vec::new(),
+            implemented_by: Vec::new(),
         }
     }
 }

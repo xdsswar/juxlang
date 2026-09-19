@@ -472,6 +472,16 @@ Three shapes of a Rust signature need a rule of their own, each discovered from 
 
 A member whose signature has no Jux spelling at all, such as `Option<()>` (`void?`), is left out of the stub, as `W0307` skips any un-mappable item. Constants carry their `@rust("...")` path like types, so an `import` of one, or of a foreign enum or trait, names the place it really lives.
 
+#### G.6.4.3. Traits That Reach a Type Without Naming It
+
+Rust's method lookup finds a trait's methods on more types than the ones that write `impl Trait for Type`, and so does Jux:
+
+- **A trait from another crate.** `rand_pcg`'s generators implement `rand_core::SeedableRng` and `RngCore`. The `implements` clause takes such a trait by name when the impl names it without type arguments, and keeps it when the stub declares an interface of that name.
+- **A blanket impl.** `impl<R: RngCore + ?Sized> Rng for R` gives every `RngCore` the methods of `Rng`. The trait is rendered `@RustBlanket("RngCore")`, and the checker gives its methods to every foreign type that has the bound, repeated until nothing new is reached.
+- **An impl for a slice or a primitive.** `impl<T> SliceRandom for [T]` and `impl UnicodeSegmentation for str` are rendered `@RustImplementedBy("[]")` / `@RustImplementedBy("str")`, and a type records what it derefs to (`@RustDerefs("[]")` on `Vec`, `@RustDerefs("str")` on `String`), so `cards.shuffle(rng)` and `text.graphemes(true)` resolve.
+
+A trait's associated function (no `self`) is marked `@RustStatic` and is called on the type, `Pcg64Dxsm.seed_from_u64(1)`, including through a crate's alias of the type. A call through a trait brings the trait into scope in the emitted crate, spelled through the crate the program imported it from. A foreign value a Jux function mutates through such a method is lent `&mut`, as any foreign value the callee mutates is.
+
 ### G.6.5. First-Class `import rust.X`
 
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**

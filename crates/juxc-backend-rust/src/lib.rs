@@ -5255,12 +5255,16 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // mutation analysis from the symbol table keeps `let mut`
         // promotion correct as the library surface evolves — no
         // hardcoded method-name lists.
+        // A foreign TRAIT's `@MutSelf` methods count as well: `random_range`
+        // comes from `rand::Rng`, not from the generator's own impl.
         let extern_mut_methods: HashSet<String> = symbols
             .classes
             .values()
             .filter(|c| c.is_external)
-            .flat_map(|c| {
-                c.methods.iter().filter_map(|(name, m)| {
+            .map(|c| &c.methods)
+            .chain(symbols.interfaces.values().filter(|i| i.is_external).map(|i| &i.methods))
+            .flat_map(|methods| {
+                methods.iter().filter_map(|(name, m)| {
                     if m.annotations
                         .iter()
                         .any(crate::exprs::field::annotation_is_mut_self)

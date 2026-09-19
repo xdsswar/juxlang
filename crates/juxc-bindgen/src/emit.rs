@@ -84,6 +84,17 @@ fn render_type(out: &mut String, t: &StubType) {
     if let Some(owned) = &t.owned_as {
         let _ = writeln!(out, "@RustOwnedAs(\"{owned}\")");
     }
+    // What the type derefs to, and which types a trait's impls reach beyond
+    // its explicit implementors (Bindgen G.6.4.3).
+    if let Some(target) = &t.derefs_to {
+        let _ = writeln!(out, "@RustDerefs(\"{target}\")");
+    }
+    for bound in &t.blanket_over {
+        let _ = writeln!(out, "@RustBlanket(\"{bound}\")");
+    }
+    for shape in &t.implemented_by {
+        let _ = writeln!(out, "@RustImplementedBy(\"{shape}\")");
+    }
 
     let keyword = match t.kind {
         TypeKind::Class => "class",
@@ -225,6 +236,11 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     // function (no `self`) is surfaced as a plain interface signature instead.
     if f.is_static && !in_interface {
         s.push_str("static ");
+    }
+    // ...but it is still called on the TYPE (`Pcg64.seed_from_u64(1)`), so
+    // the marker keeps that fact for the checker.
+    if f.is_static && in_interface {
+        s.insert_str(0, "@RustStatic ");
     }
     // An `unsafe` Rust fn surfaces with the Jux `unsafe` modifier (§A.2.4), so
     // the parser records it and the type checker demands an `unsafe` context at

@@ -117,6 +117,7 @@ pub fn generate_merged_with_pool(
     }
 
     collected.sort_by(|a, b| a.0.cmp(&b.0));
+    retain_declared_implements(&mut collected);
     // A plain alias is kept only when it ends somewhere this stub can name: a
     // primitive, or a type (or alias) the stub declares. Anything else would
     // be an alias to nothing.
@@ -307,6 +308,27 @@ impl PoolReexports {
     }
 }
 
+/// Keep in each type's `implements` clause only the traits this stub declares
+/// as interfaces with no type parameters. A trait taken by name from another
+/// crate (see `implemented_trait_names`) is dropped when the stub cannot name
+/// it, since an unresolvable name would help nothing.
+fn retain_declared_implements(collected: &mut [(String, StubItem)]) {
+    let interfaces: HashSet<String> = collected
+        .iter()
+        .filter_map(|(n, it)| match it {
+            StubItem::Type(t) if t.kind == TypeKind::Interface && t.generics.is_empty() => {
+                Some(n.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    for (_, item) in collected.iter_mut() {
+        if let StubItem::Type(t) = item {
+            t.implements.retain(|n| interfaces.contains(n));
+        }
+    }
+}
+
 /// Build a [`StubFile`] from an already-parsed rustdoc [`Crate`].
 ///
 /// Only public items of the local crate (`crate_id == 0`) are emitted, in a
@@ -316,6 +338,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
 
     // Deterministic order: by item name.
     collected.sort_by(|a, b| a.0.cmp(&b.0));
+    retain_declared_implements(&mut collected);
 
     StubFile {
         package: package.to_string(),
@@ -606,14 +629,14 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                 collected.push((
                     item.id.0,
                     name.clone(),
-                    StubItem::Type(build_trait(
-                        krate,
-                        name,
-                        &t.generics,
-                        &t.items,
-                        item,
-                        &public,
-                    )),
+                    StubItem::Type({
+                        let mut st =
+                            build_trait(krate, name, &t.generics, &t.items, item, &public);
+                        let (blanket, by) = trait_impl_reach(krate, &t.implementations);
+                        st.blanket_over = blanket;
+                        st.implemented_by = by;
+                        st
+                    }),
                 ));
             }
             ItemEnum::Function(f)
@@ -784,6 +807,7 @@ fn build_struct(
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
     st.owned_as = owned_counterpart(krate, &s.impls, name);
+    st.derefs_to = deref_target(krate, &s.impls).as_ref().and_then(shape_name);
     st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
     st.implements = implemented_trait_names(krate, item.id, &s.impls);
     st
@@ -1051,6 +1075,82 @@ fn deref_members(krate: &Crate, impls: &[rustdoc_types::Id], pool: &InherentPool
         return Vec::new();
     };
     pool.get(&key).cloned().unwrap_or_default()
+}
+
+/// The name a type's shape is written with in `@RustDerefs` /
+/// `@RustImplementedBy`: `[]` for a slice, the primitive's name (`str`), or a
+/// named type's last segment.
+fn shape_name(t: &Type) -> Option<String> {
+    match t {
+        Type::Slice(_) => Some("[]".to_string()),
+        Type::Primitive(p) => Some(p.clone()),
+        Type::ResolvedPath(p) => Some(last_segment(&p.path).to_string()),
+        _ => None,
+    }
+}
+
+/// How far a trait's impls reach beyond the types that name it
+/// (Bindgen G.6.4.3), from the impls rustdoc lists for the trait:
+///
+/// - a BLANKET impl over a type parameter bounded by one trait
+///   (`impl<R: RngCore + ?Sized> Rng for R`) gives that bound;
+/// - an impl for a slice or a primitive (`impl<T> SliceRandom for [T]`,
+///   `impl UnicodeSegmentation for str`) gives that shape.
+fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>, Vec<String>) {
+    let mut blanket: Vec<String> = Vec::new();
+    let mut shapes: Vec<String> = Vec::new();
+    for id in impls {
+        let Some(item) = krate.index.get(id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.is_synthetic || im.is_negative {
+            continue;
+        }
+        match &im.for_ {
+            Type::Generic(param) => {
+                let mut bounds: Vec<String> = Vec::new();
+                let mut take = |bs: &[GenericBound]| {
+                    for b in bs {
+                        if let GenericBound::TraitBound { trait_, modifier, .. } = b {
+                            let name = last_segment(&trait_.path);
+                            if !matches!(modifier, rustdoc_types::TraitBoundModifier::Maybe)
+                                && name != "Sized"
+                            {
+                                bounds.push(name.to_string());
+                            }
+                        }
+                    }
+                };
+                for gp in &im.generics.params {
+                    if &gp.name == param {
+                        if let GenericParamDefKind::Type { bounds: bs, .. } = &gp.kind {
+                            take(bs);
+                        }
+                    }
+                }
+                for wp in &im.generics.where_predicates {
+                    if let WherePredicate::BoundPredicate { type_: Type::Generic(g), bounds: bs, .. } = wp {
+                        if g == param {
+                            take(bs);
+                        }
+                    }
+                }
+                if let [only] = bounds.as_slice() {
+                    blanket.push(only.clone());
+                }
+            }
+            Type::Slice(_) | Type::Primitive(_) => {
+                if let Some(shape) = shape_name(&im.for_) {
+                    shapes.push(shape);
+                }
+            }
+            _ => {}
+        }
+    }
+    blanket.sort();
+    blanket.dedup();
+    shapes.sort();
+    shapes.dedup();
+    (blanket, shapes)
 }
 
 /// The `Target` of a type's `Deref` impl, if it has one.
@@ -1425,6 +1525,18 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             continue;
         }
         let Some(decl) = krate.index.get(&tr.id) else {
+            // A trait from ANOTHER crate (`rand_core::SeedableRng` on a
+            // `rand_pcg` generator). Its declaration is not in this JSON, so
+            // it is taken by name when the impl names it without type
+            // arguments; the finished stub keeps it only if it declares an
+            // interface of that name (`retain_declared_implements`).
+            let generic = matches!(
+                tr.args.as_deref(),
+                Some(GenericArgs::AngleBracketed { args, .. }) if !args.is_empty()
+            );
+            if !generic {
+                out.push(last_segment(&tr.path).to_string());
+            }
             continue;
         };
         let ItemEnum::Trait(t) = &decl.inner else {

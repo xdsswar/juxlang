@@ -219,6 +219,9 @@ impl crate::RustEmitter {
             // deterministic, user-preferring fallback). This keeps a bare
             // `Child` bound to THIS unit's package even when another package
             // (or a `rust.std` stub) declares a same-named class.
+            // An imported alias of a foreign class resolves to that class, so a
+            // static call through `Pcg64Dxsm` is one on the class it aliases
+            // (B20).
             return self.resolve_bare_class_fqn(&qn.segments[0].text);
         }
         None
@@ -283,7 +286,14 @@ impl crate::RustEmitter {
     pub(crate) fn resolve_bare_class_fqn(&self, name: &str) -> Option<String> {
         let ctx = self.current_unit_idx.and_then(|i| self.symbols.units.get(i));
         let pkg = ctx.map(|c| c.package.join(".")).unwrap_or_default();
-        resolve_class_name(&self.symbols, ctx, &pkg, name)
+        resolve_class_name(&self.symbols, ctx, &pkg, name).or_else(|| {
+            // A FOREIGN crate's alias of one of its classes (`Pcg64Dxsm` for
+            // `Lcg128CmDxsm64`) is that class; a Jux alias is expanded by the
+            // checker before the backend sees it.
+            ctx.and_then(|c| c.unqualified.get(name))
+                .and_then(|fqn| self.symbols.alias_class(fqn))
+                .filter(|class| self.symbols.classes.get(class).is_some_and(|c| c.is_external))
+        })
     }
 
     /// Whether the class `name` (bare, as written, or an FQN) lowers to a
