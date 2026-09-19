@@ -1644,6 +1644,11 @@ pub struct ConstSig {
     /// Declared type — the initializer must match (verified by
     /// tycheck's `check::Checker::check_unit`).
     pub ty: TypeRef,
+    /// Whether [`Self::ty`] is the constant's real type: written out, or
+    /// read off a literal initializer. An inferred constant with any other
+    /// initializer carries a placeholder `int` here, which is not a type a
+    /// read of the constant may be given.
+    pub ty_known: bool,
     /// The initializer expression, cloned so the const-eval pass can resolve a
     /// const NAME → value without re-walking the AST.
     pub init: juxc_ast::Expr,
@@ -2530,6 +2535,7 @@ fn insert_const(
         ConstSig {
             visibility: decl.visibility,
             ty: resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span),
+            ty_known: decl.ty.is_some() || infer_decl_type(Some(&decl.value), decl.span).is_some(),
             init: decl.value.clone(),
             span: decl.span,
         },

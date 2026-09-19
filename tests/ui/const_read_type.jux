@@ -1,0 +1,12 @@
+// A top-level constant read by name has its declared type.
+const double Pi = 3.14;
+const int Limit = 10;
+
+void main() {
+    String label = Pi;
+    long wide = Limit;
+    bool flag = Limit;
+    print(label);
+    print(wide);
+    print(flag);
+}

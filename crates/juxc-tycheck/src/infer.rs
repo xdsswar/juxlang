@@ -50,6 +50,23 @@ use crate::ty::{
 // Expression inference
 // ============================================================================
 
+/// The type of the top-level constant a bare `name` reads, when there is
+/// one: an import or the current package first, then a package-less constant.
+/// `None` when no constant has the name, or when its type is not known (an
+/// inferred constant whose initializer is not a literal).
+fn const_type(name: &str, env: &TypeEnv, symbols: &SymbolTable) -> Option<Ty> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(fqn) = env.unqualified.get(name) {
+        candidates.push(fqn.clone());
+    }
+    if !env.current_package.is_empty() {
+        candidates.push(format!("{}.{name}", env.current_package.join(".")));
+    }
+    candidates.push(name.to_string());
+    let sig = candidates.iter().find_map(|fqn| symbols.consts.get(fqn))?;
+    sig.ty_known.then(|| ty_from_ref(&sig.ty, env, symbols))
+}
+
 /// Method-overload pick (§T.3): count first, then ARGUMENT TYPES.
 ///
 /// Members whose acceptable-count range covers the call are the
@@ -527,6 +544,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         };
                         return infer_field(&this_field, env, symbols);
                     }
+                }
+                // A top-level constant (`const double Pi = 3.14;`) read by
+                // name has its declared type. It was Unknown, so `String s =
+                // Pi;` passed juxc and `(Pi * r).toFixed(2)` was not seen as a
+                // double: both reached rustc.
+                if let Some(ty) = const_type(name, env, symbols) {
+                    return ty;
                 }
             }
             Ty::Unknown
