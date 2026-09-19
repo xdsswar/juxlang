@@ -164,6 +164,10 @@ class JuxCompletionContributor : CompletionContributor() {
                         return
                     }
 
+                    // Right after `case` in a switch over an enum or a sealed
+                    // type: the constants and subtypes no arm names yet.
+                    if (JuxCaseCompletion.addTo(parameters, result::addElement)) return
+
                     // After `@` — only the builtin annotations exist in Phase 1
                     // (`@override` + the §TS.1 test/hook five), so nothing else
                     // belongs in the list.
@@ -236,7 +240,10 @@ class JuxCompletionContributor : CompletionContributor() {
                     )
                     // Values already in reach whose type fits: locals,
                     // parameters, members, and a receiver's members after `.`.
+                    // Every variable walked is kept as a chain start.
+                    val roots = ArrayList<LookupElement>()
                     val sink: (LookupElement) -> Unit = { item ->
+                        roots.add(item)
                         val type = JuxCompletionRanking.typeOf(item)
                         if (type !is dev.jux.intellij.resolve.JuxType.Static &&
                             JuxCompletionRanking.bestFit(type, expected) == 0
@@ -250,6 +257,8 @@ class JuxCompletionContributor : CompletionContributor() {
                     }
                     addVisibleDeclarations(parameters, sink, typesOnly = false, includeTypes = false)
                     JuxSmartCompletion.addTypeFitting(parameters, expected, result::addElement)
+                    // Chains from those variables that reach the wanted type.
+                    JuxChainCompletion.addTo(expected, roots, result::addElement)
                 }
             },
         )

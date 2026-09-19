@@ -37,6 +37,12 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         JuxIndexedLoopInspection(),
         JuxAbstractMethodInClassInspection(),
         JuxUnhandledExceptionInspection(),
+        // Not "Field may be 'final'": its findings on the corpus are correct
+        // advice (a field only set in constructors), not false alarms, as in
+        // Java. JuxDataflowInspectionsTest pins what it must leave alone.
+        JuxAssignedNeverReadInspection(),
+        JuxRedundantNullCheckInspection(),
+        JuxNullableAccessInspection(),
     )
 
     override fun setUp() {
