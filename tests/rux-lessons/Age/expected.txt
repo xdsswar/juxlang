@@ -1,0 +1,10 @@
+today is 2026-9-10
+
+born 1990-03-15        36 years, 5 months, 26 days
+born 1990-12-25        35 years, 8 months, 16 days
+born 2000-09-10        26 years, 0 months, 0 days
+born 2000-09-11        25 years, 11 months, 30 days
+born 2004-02-29        22 years, 6 months, 12 days
+
+2004 was a leap year: true
+2026 is not:          false

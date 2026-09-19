@@ -1,0 +1,14 @@
+entries        3
+id 102 is      28
+id 999 unknown
+after replace  3 entries
+id 101 is now  35
+contains 103   true
+removed 103, who was 45
+contains 103   false
+adding 1       new? true
+adding 2       new? true
+adding 1 again new? false
+set size       2
+set has 2      true
+set has 7      false

@@ -1,0 +1,63 @@
+// A vector is fast at the end and slow at the front: inserting at position
+// zero means shifting everything along to make room.
+//
+// A `VecDeque<T>`, a double-ended queue, is the container that is quick at
+// both ends. It keeps track of where its contents start as well as where they
+// end, so adding at the front moves a marker rather than the elements. It is
+// Rust's `VecDeque`, in the prelude like `Vec`, so it needs no import.
+//
+// The usual reason to want one is a queue: work arrives at the back and is
+// taken from the front, which is exactly the pair of operations a vector is
+// bad at.
+
+// Pads on the right up to `width` characters, which left-aligns a label.
+String alignLeft(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+// Prints the contents front to back. A for-each loop walks a deque in queue
+// order, whatever its internal layout.
+void show(String label, VecDeque<int> queue) {
+    var line = alignLeft(label, 10);
+    for (var value : queue) {
+        line += $" ${value}";
+    }
+    print($"${line}   (length ${queue.len()})");
+}
+
+void main() {
+    var queue = new VecDeque<int>();
+
+    // Built from both directions at once. The two pushed to the back arrive in
+    // order; the two pushed to the front arrive in reverse, because each goes
+    // in ahead of the one before it.
+    queue.push_back(2);
+    queue.push_back(3);
+    queue.push_front(1);
+    queue.push_front(0);
+    show("built", queue);
+
+    // Both ends come off as easily as they went on. Each returns an `int?`,
+    // since an empty deque has nothing to give.
+    final int? front = queue.pop_front();
+    if (front != null) {
+        print($"popped front ${front}");
+    } else {
+        print("empty");
+    }
+    final int? back = queue.pop_back();
+    if (back != null) {
+        print($"popped back  ${back}");
+    } else {
+        print("empty");
+    }
+    show("after", queue);
+
+    // Which to reach for: a `Vec` when values are only added and removed at
+    // the end, a `VecDeque` when either end is in play. A deque costs a little
+    // more per element for the bookkeeping, which is why it is not simply the
+    // default.
+}

@@ -1,0 +1,81 @@
+// Two different things get called time, and it pays to keep them apart.
+//
+// A *duration* and an *instant* are about measuring: how long something took.
+// Those are Rust's own `std::time::Instant` and `Duration`, reached through
+// `rust.std`. A *date* is about the calendar people use, which is a separate
+// and much messier problem (months of unequal length, leap years, arithmetic
+// that does not simply add), and that comes from the `chrono` crate.
+
+import rust.std.Duration;
+import rust.std.Instant;
+import rust.std.sleep;
+import rust.chrono.Datelike;
+import rust.chrono.NaiveDate;
+
+// How many days a month has in a given year, from chrono.
+int daysInMonth(int year, int month) {
+    return NaiveDate.from_ymd_opt(year, month, 1)!!.num_days_in_month();
+}
+
+// A year is a leap year exactly when chrono says its dates are in one.
+bool isLeapYear(int year) {
+    return NaiveDate.from_ymd_opt(year, 1, 1)!!.leap_year();
+}
+
+void main() {
+    // Measuring. An instant is a reading from a clock that only moves
+    // forward, meant for comparing against another reading rather than for
+    // telling anyone the time.
+    final Instant started = Instant.now();
+    sleep(Duration.from_millis(20));
+    final Duration waited = started.elapsed();
+
+    // A duration is whole seconds plus a nanosecond remainder, so a short one
+    // is entirely in the remainder. How long the sleep really took varies
+    // from run to run (a sleep promises at least what was asked, never
+    // exactly), so the lesson prints what is certain about it.
+    print($"slept for ${waited.as_secs()} whole seconds");
+    print($"the remainder is at least 20 ms: ${waited.subsec_nanos() >= 20000000}");
+
+    // Durations are built from whatever unit is convenient and converted
+    // freely, because underneath they are one count.
+    final Duration minute = Duration.from_secs(60);
+    print($"a minute is ${minute.as_secs()} seconds");
+    print("");
+
+    // The calendar. A date is a year, month and day, and building one can
+    // fail (the 30th of February is not a date) so `from_ymd_opt` returns a
+    // `NaiveDate?`.
+    final NaiveDate? maybeToday = NaiveDate.from_ymd_opt(2026, 9, 10);
+    if (maybeToday != null) {
+        final NaiveDate today = maybeToday;
+        print($"date        ${today.year()}-${today.month()}-${today.day()}");
+        print($"day of year ${today.ordinal()}");
+        print($"day of week ${today.weekday().num_days_from_sunday()}   (0 is Sunday)");
+
+        // Days since a fixed point is what makes date arithmetic possible:
+        // convert to a count, do ordinary arithmetic, convert back. chrono
+        // counts from 1970-01-01.
+        final int epochDays = today.to_epoch_days();
+        print($"days since epoch ${epochDays}");
+        final NaiveDate inAWeek = NaiveDate.from_epoch_days(epochDays + 7)!!;
+        print($"a week later ${inAWeek.year()}-${inAWeek.month()}-${inAWeek.day()}");
+    } else {
+        print("that is not a date");
+    }
+
+    if (NaiveDate.from_ymd_opt(2026, 2, 30) != null) {
+        print("30 February exists?");
+    } else {
+        print("30 February 2026 is correctly refused");
+    }
+    print("");
+
+    // The awkward parts of the calendar, which are why date arithmetic is not
+    // simply addition.
+    print($"2024 a leap year   ${isLeapYear(2024)}");
+    print($"1900 a leap year   ${isLeapYear(1900)}   (divisible by 100, not by 400)");
+    print($"2000 a leap year   ${isLeapYear(2000)}   (divisible by 400)");
+    print($"days in Feb 2024   ${daysInMonth(2024, 2)}");
+    print($"days in Feb 2026   ${daysInMonth(2026, 2)}");
+}

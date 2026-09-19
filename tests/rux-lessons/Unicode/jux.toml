@@ -1,0 +1,9 @@
+[package]
+name = "rux.unicode"
+version = "0.1.0"
+
+# The crate is published as `unicode-segmentation`; a Jux (and Rust) path
+# cannot spell the hyphen, so the dependency is named with an underscore and
+# `package` says what to fetch.
+[dependencies]
+"rust.unicode_segmentation" = { version = "1", package = "unicode-segmentation" }

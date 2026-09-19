@@ -1,0 +1,7 @@
+wrote     23 bytes
+read      23 bytes
+contents:
+first line
+second line
+
+removed the file

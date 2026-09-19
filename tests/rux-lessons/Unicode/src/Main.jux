@@ -1,0 +1,65 @@
+// The String lesson found two different lengths for the same text: bytes and
+// characters. There is a third, and it is the one a reader actually means.
+//
+// Text has three levels. Bytes are how it is stored. Scalars (code points)
+// are the characters the encoding defines; a Jux `char` is one scalar.
+// Graphemes are what a person would point at and call a single character, and
+// one of those can be made of several scalars. Counting them takes the Unicode
+// segmentation rules, which come from the Rust crate `unicode-segmentation`.
+
+import rust.unicode_segmentation.UnicodeSegmentation;
+
+void main() {
+    // Six characters, seven bytes, because ß takes two.
+    final String text = "Straße";
+    print($"text        ${text}");
+    print($"bytes       ${text.byteLength()}");
+    print($"characters  ${text.charLength()}");
+    print("");
+
+    // The third level. These three scalars are `e`, a combining acute accent,
+    // and `!`. The accent is not a character on its own: it attaches to the
+    // `e` before it, so a reader sees `é!`, two things, not three.
+    final String accented = "e\u{301}!";
+    print($"scalars     ${accented.charLength()}");
+    // `graphemes(true)` walks extended grapheme clusters, the kind a cursor
+    // moves over; `count()` counts them.
+    print($"graphemes   ${accented.graphemes(true).count()}");
+    print("");
+
+    // This is why "just index the string" goes wrong, and why Jux has no
+    // `text[i]` at all. Taking one byte can cut a character in half, and
+    // taking one scalar can separate a letter from the accent that belongs to
+    // it. Which level to count depends on the question: bytes for storage,
+    // scalars for encoding, graphemes for anything a person will see (a
+    // cursor, a column width, a character limit).
+
+    // Case is not a per-character table either. Most of it looks simple:
+    print($"upper 'a'   ${'a'.toUppercase()}");
+    print($"upper 'é'   ${'é'.toUppercase()}");
+    print($"lower 'A'   ${'A'.toLowercase()}");
+
+    // And then there is ß, whose uppercase is "SS": two characters from one.
+    // `char.toUppercase()` returns a single `char`, which has nowhere to put
+    // the second, so it returns the letter unchanged rather than being wrong:
+    print($"upper 'ß'   ${'ß'.toUppercase()}   (unchanged)");
+
+    // Uppercasing text correctly is not a loop over characters. Rust's own
+    // `str::to_uppercase`, reached on a `String`, applies the full mapping and
+    // may make the text longer:
+    print($"upper text  ${text.to_uppercase()}");
+    print("");
+
+    // Character properties are questions about a scalar, and they are defined
+    // for all of Unicode rather than just ASCII.
+    print($"'a' alphabetic   ${'a'.isAlphabetic()}");
+    print($"'ß' alphabetic   ${'ß'.isAlphabetic()}");
+    print($"'5' alphabetic   ${'5'.isAlphabetic()}");
+    print($"'5' digit        ${'5'.isDigit()}");
+    print($"' ' whitespace   ${' '.isWhitespace()}");
+
+    // The lesson underneath all of this: text is not an array of characters,
+    // however much it looks like one. It is bytes encoding scalars that group
+    // into graphemes, and code that assumes otherwise works perfectly until it
+    // meets someone's name.
+}

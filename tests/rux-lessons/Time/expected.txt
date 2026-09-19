@@ -1,0 +1,16 @@
+slept for 0 whole seconds
+the remainder is at least 20 ms: true
+a minute is 60 seconds
+
+date        2026-9-10
+day of year 253
+day of week 4   (0 is Sunday)
+days since epoch 20706
+a week later 2026-9-17
+30 February 2026 is correctly refused
+
+2024 a leap year   true
+1900 a leap year   false   (divisible by 100, not by 400)
+2000 a leap year   true   (divisible by 400)
+days in Feb 2024   29
+days in Feb 2026   28

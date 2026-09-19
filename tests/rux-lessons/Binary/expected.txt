@@ -1,0 +1,8 @@
+the value       0x12345678
+this machine is little endian: true
+
+little endian    78 56 34 12
+big endian       12 34 56 78
+
+wrote           4 bytes
+read back       4 bytes, value 0x12345678

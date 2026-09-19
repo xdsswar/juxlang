@@ -1,0 +1,66 @@
+// Files live in directories, and those can be made, listed and removed like
+// anything else. Listing is the interesting one: `read_dir` hands back the
+// entries one at a time, as an iterator, for the same reason a file is read
+// through a buffer. A directory can hold a great many names, and returning all
+// of them at once would mean allocating for all of them at once.
+//
+// Everything here is Rust's `std::fs`, reached through `rust.std`, and each
+// call that can fail `throws` its `std::io::Error`.
+
+import rust.std.DirEntry;
+import rust.std.Error;
+import rust.std.PathBuf;
+import rust.std.create_dir;
+import rust.std.read_dir;
+import rust.std.remove_dir;
+import rust.std.remove_file;
+import rust.std.temp_dir;
+import rust.std.write;
+
+void main() {
+    // The lesson works in a directory of its own under the system's temporary
+    // directory, so it never touches the project.
+    final PathBuf dir = temp_dir().join("rux-directory-lesson");
+
+    try {
+        // Making it. If it already exists this throws rather than failing
+        // silently, which is why the failure is worth handling in real code.
+        create_dir(dir);
+        print("made rux-directory-lesson");
+
+        // `join` builds a path one component at a time, with the platform's
+        // own separator. `write` creates (or truncates) a file and writes the
+        // whole text in one call.
+        final PathBuf one = dir.join("first.txt");
+        final PathBuf two = dir.join("second.txt");
+        write(one, "one");
+        write(two, "two");
+        print("made two files");
+
+        // Listing. Each step of the iterator is one entry. The order is the
+        // file system's business (it differs between systems) so the names
+        // are collected and sorted before they are shown.
+        var names = new Vec<String>();
+        for (var entry : read_dir(dir)) {
+            final DirEntry found = entry;
+            // A name is an `OsString`, not text: the operating system does not
+            // promise that a filename is valid text at all. So converting one
+            // answers `String?`, and there is a stand-in for a name that is
+            // not text.
+            names.push(found.file_name().to_str() ?: "(a name that is not text)");
+        }
+        names.sort_unstable();
+        for (var name : names) {
+            print($"  ${name}");
+        }
+        print($"found ${names.len()} entries");
+
+        // A directory must be empty before it can go, so the files come first.
+        remove_file(one);
+        remove_file(two);
+        remove_dir(dir);
+        print("cleaned up");
+    } catch (Error failure) {
+        print($"the directory work failed: ${failure}");
+    }
+}

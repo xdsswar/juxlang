@@ -1,0 +1,5 @@
+length in units  23
+is it empty      false
+components       [Bin] [reports] [summary.txt]
+equal to itself  true
+separator known  true

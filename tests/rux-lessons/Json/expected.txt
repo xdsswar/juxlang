@@ -1,0 +1,7 @@
+document: {"name":"Jux","version":4,"stable":false,"tags":["fast","small"]}
+parsed an object with 4 members
+  name       text    Jux
+  version    number  4
+  stable     boolean false
+  tags       array of 2
+bad document refused at line 1, column 12
