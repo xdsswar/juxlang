@@ -191,7 +191,7 @@ var saturated = n.saturatingToInt();   // returns int.MAX_VALUE
 
 ### S.2.6. Mixed-Type Arithmetic
 
-Operands of two different numeric types are brought to one type before the operation, the way Java's binary numeric promotion does it (JLS 5.6.2), with one refusal Java never needed because it has no unsigned types. The rule applies to the arithmetic operators (`+ - * / %`), the bitwise operators (`& | ^`), and the two arms of `? :`:
+Operands of two different numeric types are brought to one type before the operation, the way Java's binary numeric promotion does it (JLS 5.6.2), with one refusal Java never needed because it has no unsigned types. The rule applies to the arithmetic operators (`+ - * / %`), the bitwise operators (`& | ^`), the two arms of `? :`, and the value arms of a `switch` expression, which meet in one type arm by arm (a `throw` arm takes no part):
 
 1. If either operand is a `double` (`f64`), the other becomes a `double`. Otherwise, if either is a `float` (`f32`), the other becomes a `float`. This includes an integer operand: `count * 1.5` is a `double`.
 2. Two integers of the same type stay that type.

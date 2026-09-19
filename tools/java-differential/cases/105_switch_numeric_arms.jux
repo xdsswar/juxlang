@@ -1,0 +1,33 @@
+// Switch-expression arms of different numeric types meet in one type, as
+// the arms of `? :` do (§S.2.6, Java's binary numeric promotion).
+
+long total(int kind, int count, long big) {
+    return switch (kind) {
+        case 1 -> count;
+        case 2 -> big;
+        default -> count * 2;
+    };
+}
+
+double ratio(int kind, int n) {
+    return switch (kind) {
+        case 1 -> n;
+        case 2 -> n / 4.0;
+        default -> 7;
+    };
+}
+
+public void main() {
+    long big = 5000000000L;
+    print(total(1, 3, big));
+    print(total(2, 3, big));
+    print(total(9, 3, big));
+    print(ratio(1, 3));
+    print(ratio(2, 3));
+    print(ratio(9, 3));
+    int k = 2;
+    var mixed = switch (k) { case 2 -> big + 1; default -> k; };
+    print(mixed);
+    var chosen = k > 1 ? 1.5 : k;
+    print(chosen);
+}

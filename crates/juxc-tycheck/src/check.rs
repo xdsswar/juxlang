@@ -518,6 +518,11 @@ pub(crate) struct Checker<'a> {
     /// interpreter (spec phase 16) and would otherwise leak rustc's
     /// `generic_const_exprs` error.
     pub(crate) const_param_names: std::collections::HashSet<String>,
+    /// Set by the statement walker when a `switch` IS the whole statement, so
+    /// its arms' values are discarded and need not meet in one type. Taken
+    /// (reset) as soon as that switch starts, so a switch nested in an arm is
+    /// a value again.
+    pub(crate) statement_switch: bool,
 }
 
 /// Everything the checker hands downstream, all keyed by expression [`Span`]:
@@ -580,6 +585,7 @@ impl<'a> Checker<'a> {
             used_names: std::collections::HashSet::new(),
             poly_bases: crate::symbol_table::polymorphic_base_bare_names(symbols),
             const_param_names: std::collections::HashSet::new(),
+            statement_switch: false,
         }
     }
 
@@ -5408,7 +5414,9 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Expr(e) => {
+                self.statement_switch = matches!(e, Expr::Switch(_));
                 self.check_expr(e);
+                self.statement_switch = false;
                 // `assert(x != null);` (§T.6.2): the rest of the block runs only
                 // when the condition held, so the names it proves non-null are
                 // declared non-null in the enclosing scope, as a guard clause's
@@ -6275,6 +6283,11 @@ impl<'a> Checker<'a> {
             }
 
             Expr::Switch(s) => {
+                // A switch whose value is used: its numeric arms must meet in
+                // one type (§S.2.6). Collected per arm below, while the arm's
+                // bindings are in scope.
+                let value_switch = !std::mem::take(&mut self.statement_switch);
+                let mut arm_types: Vec<(&Expr, Ty)> = Vec::new();
                 self.check_expr(&s.scrutinee);
                 // A tuple or record value is taken apart by tuple and record
                 // patterns (§A.3), which get their shape checked and their
@@ -6354,7 +6367,12 @@ impl<'a> Checker<'a> {
                         }
                     }
                     match &arm.body {
-                        SwitchBody::Expr(e) => self.check_expr(e),
+                        SwitchBody::Expr(e) => {
+                            self.check_expr(e);
+                            if value_switch {
+                                arm_types.push((e, infer_expr(e, &self.env, self.symbols)));
+                            }
+                        }
                         SwitchBody::Block(b) => {
                             self.env.push_scope();
                             // Checked like any block, not only walked for its
@@ -6366,6 +6384,9 @@ impl<'a> Checker<'a> {
                         }
                     }
                     self.env.pop_scope();
+                }
+                if let crate::infer::ArmsNumeric::NoCommonType(a, b) = crate::infer::unify_numeric_arms(&arm_types) {
+                    self.report_arms_without_common_type("switch", a, b, s.span);
                 }
                 if product {
                     self.check_product_switch_exhaustive(s, &scrutinee_ty);
@@ -6497,6 +6518,15 @@ impl<'a> Checker<'a> {
                 let when_false = self.narrowings(&t.condition, false, &nothing_assigned);
                 self.check_narrowed(&when_true, |this| this.check_expr(&t.then_branch));
                 self.check_narrowed(&when_false, |this| this.check_expr(&t.else_branch));
+                // The arms meet in one type (§S.2.6).
+                let then_ty = infer_expr(&t.then_branch, &self.env, self.symbols);
+                let else_ty = infer_expr(&t.else_branch, &self.env, self.symbols);
+                if let crate::infer::ArmsNumeric::NoCommonType(a, b) = crate::infer::unify_numeric_arms(&[
+                    (&t.then_branch, then_ty),
+                    (&t.else_branch, else_ty),
+                ]) {
+                    self.report_arms_without_common_type("`? :`", a, b, t.span);
+                }
                 // Condition must be `bool`. Branches should
                 // unify; Phase 1 keeps the unification check
                 // permissive and lets rustc surface a real
@@ -7215,6 +7245,27 @@ impl<'a> Checker<'a> {
             return None;
         }
         crate::java_habits::system_out_hint(stream, method).map(|help| (head.span, help))
+    }
+
+    /// `E0410` for the arms of a `? :` or a `switch` expression that are a
+    /// signed and an unsigned integer no one type holds (§S.2.6).
+    fn report_arms_without_common_type(&mut self, what: &str, a: Primitive, b: Primitive, span: Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0410_TypeMismatch,
+                format!(
+                    "the arms of this {what} are `{}` and `{}`, and no one type holds both (§S.2.6)",
+                    Ty::Primitive(a),
+                    Ty::Primitive(b),
+                ),
+            )
+            .with_span(span)
+            .with_help(format!(
+                "cast one arm to say which is meant: `({}) x` or `({}) x`",
+                Ty::Primitive(a),
+                Ty::Primitive(b),
+            )),
+        );
     }
 
     /// Whether the type `type_name` declares or was scanned with a method

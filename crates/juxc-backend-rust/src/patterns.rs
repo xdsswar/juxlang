@@ -17,7 +17,35 @@ impl RustEmitter {
     ///
     /// Each arm becomes `pattern => body,`. Block bodies emit as
     /// `pattern => { stmts… },`. Expression-bodies emit naked.
+    /// The type a switch expression's numeric arms meet in (§S.2.6), when
+    /// they are all value arms and not all one type already; `None` when no
+    /// arm needs a cast. The arm types are the checker's, recorded with each
+    /// arm's bindings in scope.
+    fn switch_arm_widen_target(&self, s: &juxc_ast::SwitchExpr) -> Option<juxc_tycheck::Primitive> {
+        let mut arms: Vec<(&juxc_ast::Expr, juxc_tycheck::Ty)> = Vec::new();
+        for arm in &s.arms {
+            let juxc_ast::SwitchBody::Expr(e) = &arm.body else { return None };
+            let ty = match self.operand_primitive(e) {
+                Some(p) => juxc_tycheck::Ty::Primitive(p),
+                // A `throw` arm never produces a value.
+                None if matches!(&**e, juxc_ast::Expr::Throw(..)) => juxc_tycheck::Ty::Unknown,
+                None => return None,
+            };
+            arms.push((e, ty));
+        }
+        if arms.len() < 2 {
+            return None;
+        }
+        match juxc_tycheck::infer::unify_numeric_arms(&arms) {
+            juxc_tycheck::infer::ArmsNumeric::Meet(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub(crate) fn emit_switch(&mut self, s: &juxc_ast::SwitchExpr) {
+        // Numeric arms meet in one type (§S.2.6), as a `? :`'s do: a narrower
+        // arm is cast up to it, since a Rust `match` needs every arm to agree.
+        let arm_widen = self.switch_arm_widen_target(s);
         // When the surrounding context requires `Option<T>` (the
         // `emitting_nullable_target` flag is set, currently fired
         // by `emit_tail_stmt` for a `T?`-returning fn), push the
@@ -257,7 +285,28 @@ impl RustEmitter {
                     if wrap {
                         self.w.push_str("Some(");
                     }
-                    self.emit_expr(e);
+                    // An untyped literal adapts to an arm type of its own kind
+                    // (Rust infers it); an integer literal in a float switch
+                    // still needs the cast.
+                    let widen = arm_widen.filter(|p| {
+                        let float_target = juxc_tycheck::ty::is_float_primitive(*p);
+                        self.operand_primitive(e) != Some(*p)
+                            && !(juxc_tycheck::infer::untyped_int_literal(e) && !float_target)
+                            && !(juxc_tycheck::infer::untyped_float_literal(e) && float_target)
+                    });
+                    if widen.is_some() {
+                        self.w.push('(');
+                        // `as` binds tighter than any binary operator:
+                        // `(n * 2) as i64`, never `n * 2 as i64`.
+                        self.emit_expr_with_parent_prec(e, crate::exprs::UNARY_PREC, false);
+                    } else {
+                        self.emit_expr(e);
+                    }
+                    if let Some(p) = widen {
+                        self.w.push_str(" as ");
+                        self.w.push_str(crate::exprs::rust_primitive_name(p));
+                        self.w.push(')');
+                    }
                     if wrap {
                         self.w.push(')');
                     }

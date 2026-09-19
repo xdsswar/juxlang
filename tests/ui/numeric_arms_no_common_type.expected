@@ -1,0 +1,2 @@
+numeric_arms_no_common_type.jux:2:12: [E0410] error: the arms of this switch are `uint` and `int`, and no one type holds both (§S.2.6)
+numeric_arms_no_common_type.jux:9:12: [E0410] error: the arms of this `? :` are `uint` and `int`, and no one type holds both (§S.2.6)
