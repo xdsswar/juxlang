@@ -7651,6 +7651,130 @@ impl<'a> Checker<'a> {
     /// A `System.out.println(...)`-shaped call on an undeclared `System`:
     /// the span of `System` and the help to give. The parser reads the callee
     /// as the dotted path `System.out.println`, or as field accesses on it.
+    /// The head of a static-looking call (`Head.m(..)`, `Head.a.m(..)`) when
+    /// that head names nothing visible here: no local, parameter or member of
+    /// the enclosing type, no type, function, constant or package (any
+    /// declared or scanned FQN, which covers `rust.*` and `jux.*` paths), no
+    /// import and no built-in. Returns the head's span and text and the
+    /// method name. `System` is left to [`Self::java_system_out_call`].
+    fn unknown_call_head(&self, c: &CallExpr) -> Option<(juxc_source::Span, String, String)> {
+        let (head, method) = match c.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() >= 2 => (&qn.segments[0], qn.segments.last()?.text.clone()),
+            Expr::Field(f) => {
+                let mut root = f.object.as_ref();
+                while let Expr::Field(inner) = root {
+                    root = inner.object.as_ref();
+                }
+                match root {
+                    Expr::Path(p) if !p.segments.is_empty() => (&p.segments[0], f.field.text.clone()),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let name = head.text.as_str();
+        if name == "System" || self.name_is_visible(name) {
+            return None;
+        }
+        Some((head.span, name.to_string(), method))
+    }
+
+    /// The record or enum a receiver path names, as `("record" | "enum",
+    /// fqn)`: a dotted FQN as written, else the unit's import / package map,
+    /// else a unique bare-name match. A local or parameter of the same name
+    /// wins, so `pt.x()` on a variable is never read as a type.
+    fn value_type_named_by(&self, qn: &juxc_ast::QualifiedName) -> Option<(&'static str, String)> {
+        let written = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        if qn.segments.len() == 1 && self.env.lookup(&written).is_some() {
+            return None;
+        }
+        let candidates: Vec<String> = match self.env.unqualified.get(&written) {
+            Some(fqn) => vec![fqn.clone(), written.clone()],
+            None => vec![written.clone()],
+        };
+        for fqn in &candidates {
+            if self.symbols.records.contains_key(fqn) {
+                return Some(("record", fqn.clone()));
+            }
+            if self.symbols.enums.contains_key(fqn) {
+                return Some(("enum", fqn.clone()));
+            }
+        }
+        let suffix = format!(".{written}");
+        let mut hits = self
+            .symbols
+            .records
+            .keys()
+            .filter(|k| k.ends_with(&suffix))
+            .map(|k| ("record", k.clone()))
+            .chain(self.symbols.enums.keys().filter(|k| k.ends_with(&suffix)).map(|k| ("enum", k.clone())));
+        match (hits.next(), hits.next()) {
+            (Some(one), None) => Some(one),
+            _ => None,
+        }
+    }
+
+    /// `String.m(..)` where `String` is the built-in type (no local, no user
+    /// class of that name) and the scanned `rust.std.String` has no static
+    /// `m`. Returns the call's span and the method name. Without a scanned
+    /// `String` (no `rust.std` surface) nothing is claimed.
+    fn unknown_string_static(&self, c: &CallExpr) -> Option<(juxc_source::Span, String)> {
+        let Expr::Field(f) = c.callee.as_ref() else {
+            return None;
+        };
+        let Expr::Path(qn) = f.object.as_ref() else {
+            return None;
+        };
+        if qn.segments.len() != 1 || qn.segments[0].text != "String" || self.env.lookup("String").is_some() {
+            return None;
+        }
+        if self.symbols.classes.iter().any(|(k, cls)| k.rsplit('.').next() == Some("String") && !cls.is_external) {
+            return None;
+        }
+        let scanned = self.symbols.classes.keys().find(|k| k.as_str() == "rust.std.String")?.clone();
+        let method = f.field.text.clone();
+        let is_static = self
+            .symbols
+            .lookup_method(&scanned, &method)
+            .is_some_and(|(m, _)| m.is_static);
+        if is_static {
+            return None;
+        }
+        Some((c.span, method))
+    }
+
+    /// Whether the bare `name` can start an expression here (see
+    /// [`Self::unknown_call_head`] for the list of what counts).
+    fn name_is_visible(&self, name: &str) -> bool {
+        if self.env.lookup(name).is_some() || self.env.generic_params.contains(name) {
+            return true;
+        }
+        if juxc_lex::grammar_spec::BUILTIN_NAMES.contains(&name) || juxc_lex::PRIMITIVE_TYPE_NAMES.contains(&name) {
+            return true;
+        }
+        if let Some(cls) = self.env.current_class.as_deref() {
+            if self.symbols.lookup_field(cls, name).is_some()
+                || self.symbols.classes.get(cls).is_some_and(|c| c.properties.contains_key(name))
+                || self.symbols.records.get(cls).is_some_and(|r| r.components.iter().any(|comp| comp.name == name))
+            {
+                return true;
+            }
+        }
+        if self.env.unqualified.contains_key(name) {
+            return true;
+        }
+        let dotted = format!("{name}.");
+        let suffix = format!(".{name}");
+        let names_it = |k: &String| k == name || k.starts_with(&dotted) || k.ends_with(&suffix);
+        self.symbols.classes.keys().any(names_it)
+            || self.symbols.records.keys().any(names_it)
+            || self.symbols.enums.keys().any(names_it)
+            || self.symbols.interfaces.keys().any(names_it)
+            || self.symbols.aliases.keys().any(names_it)
+            || self.symbols.functions.keys().any(names_it)
+            || self.symbols.consts.keys().any(names_it)
+    }
+
     fn java_system_out_call(&self, c: &CallExpr) -> Option<(juxc_source::Span, &'static str)> {
         let (head, stream, method) = match c.callee.as_ref() {
             Expr::Path(qn) if qn.segments.len() == 3 => {
@@ -9965,6 +10089,35 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // `Math.abs(x)` / `Integer.parseInt(s)`: a static-looking call whose
+        // head names nothing visible used to pass the checker and fail in
+        // rustc as "cannot find value `Math`" (E0301 here, with the Jux way
+        // for the common Java utility classes).
+        // `String.valueOf(5)`: `String` is Rust's, and its statics are the
+        // ones the scanned `rust.std.String` has (`from_utf8`, `new`, ...).
+        // Anything else reached rustc as "expected value, found struct".
+        if let Some((span, method)) = self.unknown_string_static(c) {
+            let message = match crate::java_habits::string_static_hint(&method) {
+                Some(help) => format!("no static method `{method}` on `String` -- {help}"),
+                None => format!("no static method `{method}` on `String`"),
+            };
+            self.diagnostics.push(Diagnostic::error(code::Code::E0413_UnresolvedMethod, message).with_span(span));
+            for arg in &c.args {
+                self.check_expr(arg);
+            }
+            return;
+        }
+        if let Some((span, head, method)) = self.unknown_call_head(c) {
+            let message = match crate::java_habits::java_class_hint(&head, &method) {
+                Some(help) => format!("cannot find `{head}` in this scope -- {help}"),
+                None => format!("cannot find `{head}` in this scope"),
+            };
+            self.diagnostics.push(Diagnostic::error(code::Code::E0301_NameNotFound, message).with_span(span));
+            for arg in &c.args {
+                self.check_expr(arg);
+            }
+            return;
+        }
         // Explicit type arguments (`count<Kraken>(a)`) must name real types.
         for ga in &c.explicit_generic_args {
             self.check_generic_arg_known(ga);
@@ -10755,6 +10908,36 @@ impl<'a> Checker<'a> {
                             self.check_expr(arg);
                         }
                         return;
+                    }
+                    // `Color.missing()` / `Pt.nothing()`: a record or enum
+                    // named as the receiver has a closed set of statics (its
+                    // declared static methods, and for an enum its variants
+                    // and helpers such as `fromName` / `cases`). Anything else
+                    // reached rustc as an unresolved associated item.
+                    if let Some((kind, fqn)) = self.value_type_named_by(qn) {
+                        let known = match kind {
+                            "enum" => self.symbols.enums.get(&fqn).is_some_and(|e| {
+                                e.variants.contains_key(method_name) || e.methods.contains_key(method_name)
+                            }),
+                            _ => self
+                                .symbols
+                                .records
+                                .get(&fqn)
+                                .is_some_and(|r| r.methods.contains_key(method_name)),
+                        };
+                        if !known {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    format!("no static method `{method_name}` on {kind} `{fqn}`"),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
+                        }
                     }
                 }
                 // `I.super.m(...)` (§T.8.3): check where it is written and that

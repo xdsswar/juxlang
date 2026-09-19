@@ -1,0 +1,8 @@
+java_habit_utility_classes.jux:9:11: [E0301] error: cannot find `Math` in this scope -- Jux has no `Math` class: numbers carry these as methods, `x.abs()`, `x.sqrt()`, `x.powf(y)`, `a.max(b)` on a double
+java_habit_utility_classes.jux:10:11: [E0301] error: cannot find `Integer` in this scope -- Jux has no boxed number classes: parse text with `s.parse<int>()` (or `<long>`, `<double>`)
+java_habit_utility_classes.jux:11:11: [E0413] error: no static method `valueOf` on `String` -- a value's text is interpolation, `$"${x}"`
+java_habit_utility_classes.jux:12:11: [E0413] error: no static method `join` on `String` -- build the text in a loop, `text += part`, or with interpolation
+java_habit_utility_classes.jux:13:11: [E0301] error: cannot find `Objects` in this scope -- Jux has no `Objects` class: `Objects.equals(a, b)` is `a == b`, and `requireNonNull(x)` is `x!!`
+java_habit_utility_classes.jux:14:11: [E0413] error: no static method `missing` on enum `Color`
+java_habit_utility_classes.jux:15:11: [E0413] error: no static method `nothing` on record `Pt`
+java_habit_utility_classes.jux:16:11: [E0301] error: cannot find `Frobnicator` in this scope

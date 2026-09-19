@@ -203,6 +203,17 @@ Rules:
   - A getter call, `x.name()` or `x.getName()`, on a type whose record
     component, field or property is `name` reads it directly: `x.name`.
   - `System.out.println(x)` and `System.out.print(x)` are `print(x)`.
+  - Java's utility classes do not exist: a call through `Math`, `Integer`,
+    `Long`, `Double`, `Character`, `Boolean`, `Objects`, `Arrays`,
+    `Collections`, `List`, `Map` or `Set` that names nothing visible is
+    `E0301` with the Jux form (the number's own method, `s.parse<int>()`,
+    `a == b`, the Rust std collections).
+  - `String` is Rust's: a static it lacks (`String.valueOf`, `String.format`,
+    `String.join`) is `E0413`, pointing at interpolation.
+  - Any static-looking call whose head names nothing visible (no local,
+    member, type, package, import or built-in) is `E0301`, and a static a
+    record or enum does not declare (a variant, a declared static or an enum
+    helper) is `E0413`; neither reaches the Rust compiler.
   - An array literal is written with braces, `{1, 2, 3}`, as Java writes an
     initializer. `[1, 2, 3]` is one diagnostic naming that form, not a cascade
     of parse errors.
