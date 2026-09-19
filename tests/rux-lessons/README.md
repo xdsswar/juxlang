@@ -124,6 +124,16 @@ languages deliberately differ. The differences met so far:
   sharing, with a `drop` block that runs exactly once.
 - **Names.** Lesson text that names the language itself (Console, Format,
   Thanks) says "Jux".
+- **Foreign libraries answer in their own terms.** serde_json reports a
+  line and column rather than a byte offset (`column 12` where Rux says
+  byte 11), a `Vec` grows by Rust's policy (capacity 0, then 4, then 8),
+  and the Unicode lesson asks `isDigit()` where Rux asks `IsNumeric`.
+  (Json, Vector, Unicode)
+- **Nothing depends on the machine or the clock.** Elapsed time, the path
+  separator and an OS-seeded draw print only what is certain about them
+  (`at least 20 ms: true`); files live under the system temp directory;
+  a directory listing is sorted before it is shown. (Time, Path, Random,
+  File, Directory, Binary)
 
 ## Results
 
@@ -173,20 +183,20 @@ library gap, listed too), **TODO** (a later wave).
 | Console | 1 | PASS | |
 | Thanks | 1 | PASS | |
 | Module | 1 | PASS | three packages; package-private leak found (B9) |
-| Vector | 2 | TODO | |
-| Deque | 2 | TODO | |
-| HashMap | 2 | TODO | |
-| TreeMap | 2 | TODO | |
-| Json | 2 | TODO | |
-| Random | 2 | TODO | |
-| Password | 2 | TODO | |
-| Unicode | 2 | TODO | |
-| Age | 2 | TODO | |
-| Time | 2 | TODO | |
-| File | 2 | TODO | |
-| Directory | 2 | TODO | |
-| Path | 2 | TODO | |
-| Binary | 2 | TODO | |
+| Vector | 2 | PASS | `Vec`; `get` gives `int?`, typed through `var` (B16); capacity follows Rust (0, then 4, then 8) |
+| Deque | 2 | PASS | `VecDeque`; `pop_front`/`pop_back` give `int?` |
+| HashMap | 2 | PASS | `HashMap`/`HashSet`; a set's `insert` returns whether the value was new |
+| TreeMap | 2 | PASS | `BTreeMap` |
+| Json | 2 | FAIL | B17 (the serde_json stub does not parse), B18; `Value` is switched on as an enum |
+| Random | 2 | FAIL | B20, B21, B22; expected output from a Rust oracle on rand 0.9.5 + rand_pcg 0.9.0 |
+| Password | 2 | FAIL | B22; a fixed seed keeps the output checkable, and the lesson says why that is wrong |
+| Unicode | 2 | FAIL | B23 (graphemes unreachable), B24 (`toUppercase` is ASCII-only, a wrong result) |
+| Age | 2 | PASS | chrono `NaiveDate`; the age is a record |
+| Time | 2 | FAIL | B25 (`Duration` unreachable), B26; the chrono half passes on its own |
+| File | 2 | FAIL | B27; temp dir, `File.create`/`open`, `write`/`read` byte counts |
+| Directory | 2 | FAIL | B28, B29; names are sorted, since listing order is the file system's |
+| Path | 2 | FAIL | B21, B30, B31; `is_empty` goes through `as_os_str()` because of B32 |
+| Binary | 2 | PASS | byte order by shifts, `to_le_bytes` is unreachable (B14); `read` typed through `var` (B33) |
 | Circle | 3 | TODO | |
 | Guess | 3 | TODO | |
 | Launch | 3 | TODO | |
@@ -203,6 +213,10 @@ library gap, listed too), **TODO** (a later wave).
 | Allocator | 3 | TODO | |
 
 Wave 1 totals: 32 PASS, 6 FAIL, 1 GAP.
+
+Wave 2 (collections, crates and std I/O, 14 lessons) was run on 2026-09-18:
+6 PASS, 8 FAIL. Every failure is a compiler or binder bug with a repro below;
+none is a gap in the language itself.
 
 ## Bugs found by wave 1
 
@@ -358,3 +372,203 @@ each of these is a discovery gap rather than a list to extend by hand:
   `byteLength()`). The lessons use the spec names.
 - E0931 on a struct says "class `Circle` defines `operator==` but no
   `operator hash`".
+
+## Bugs found by wave 2
+
+Wave 2 is the first wave to lean on the foreign boundary: Rust std types used
+by value, three crates.io crates, and `std::fs`. Most of what it found is in
+that boundary, in the binder (what a stub says) or in the lowering of calls
+into and results out of foreign code. "Leak" means the same as above.
+
+Where a lesson could keep its natural shape with a small change, it does and
+passes, with the change and the bug named in a comment (Vector, Binary).
+Everywhere else the lesson keeps the code a Jux programmer would write and is
+listed in `known-failures.txt`. The Random and Password expected output comes
+from a small Rust program using the same crate versions (rand 0.9.5,
+rand_pcg 0.9.0) and the same `i64` ranges, since those numbers cannot be
+derived by reading.
+
+**B16. `Vec.get` is typed `Output?`.** (Vector) The result of `get` comes
+from `SliceIndex::Output`, which the checker leaves unresolved, so spelling
+the type out is refused. `var first = v.get(0);` works and prints correctly.
+
+```jux
+void main() {
+    var v = new Vec<int>();
+    v.push(4);
+    final int? first = v.get(0);   // E0410: expected int?, found rust.std.Output?
+    print(first ?: -1);
+}
+```
+
+**B17. `Option<()>` is stubbed as `void?`, which does not parse.** (Json)
+serde_json's `Value::as_null` returns `Option<()>`, and the generated stub
+says `public void? as_null();`. The parser stops there (E0200 "expected
+identifier" in `serde_json.jux.d`), so no program can use `rust.serde_json` at
+all. With that one line deleted by hand, the rest of the lesson compiles up to
+B18.
+
+```toml
+[dependencies]
+"rust.serde_json" = "1"      # any program importing rust.serde_json.Value
+```
+
+**B18. A for-each over a map yields references.** (Json) Iterating a
+`HashMap` (or serde_json's `Map`) binds each entry as a tuple of `&K, &V`, and
+passing its fields on leaks E0308. `members.get(name)` inside such a loop
+leaks too (`Borrow<&String>` not implemented).
+
+```jux
+import rust.std.HashMap;
+void show(String name, int value) { print($"${name}=${value}"); }
+void main() {
+    var ages = new HashMap<String, int>();
+    ages.insert("ada", 36);
+    for (var entry : ages) {
+        show(entry.0, entry.1);    // rustc: expected String, found &String
+    }
+}
+```
+
+**B19. A stub is not regenerated when a dependency's version changes.**
+Changing `"rust.rand" = "0.8"` to `"0.9"` in jux.toml kept the 0.8 stub
+(`gen_range`, no `Pcg64Dxsm`) while cargo linked 0.9; changing it back kept
+the 0.9 stub while cargo linked 0.8.8. Deleting `.jux-stubs/` is the only
+way out. BINDGEN §G.11.2 keys staleness on the dependency version.
+
+**B20. A static call through a crate's type alias leaks E0423.** (Random)
+`Pcg64Dxsm` is `public type Pcg64Dxsm = Lcg128CmDxsm64;` in the rand_pcg stub.
+A static call through the alias is accepted, even for a method the aliased
+class does not have (B22), and emitted with a dot.
+
+```jux
+import rust.chrono.Duration;      // chrono: type Duration = TimeDelta
+void main() {
+    var d = Duration.zero();      // emitted `Duration.zero()`: rustc E0423
+    print(d.is_zero());
+}
+```
+
+**B21. Importing a foreign interface, enum or constant emits the wrong
+path.** (Random, Path) A class import uses the stub's `@rust` path; the
+others use the Jux package path instead.
+
+```jux
+import rust.std.Read;             // `use rust::std::Read;`   (E0433)
+import rust.std.Component;        // `use rust::std::Component;`
+import rust.std.MAIN_SEPARATOR;   // `use rust::std::MAIN_SEPARATOR;`
+import rust.rand.SliceRandom;     // `use rand::SliceRandom;`, really rand::seq::SliceRandom
+```
+
+**B22. Trait impls from another crate, and blanket impls, are not
+surfaced.** (Random, Password) rand_pcg implements rand_core's `RngCore` and
+`SeedableRng` for its generators, and its stub even declares both
+interfaces, but `class Lcg128CmDxsm64` has no `implements` clause. So
+`seed_from_u64` is E0413 on the class, and rand's `Rng` (a blanket impl over
+every `RngCore`) never reaches it: `random_range` is E0413 too. The same rule
+hides `SliceRandom::shuffle`, implemented by rand for `[T]`: `v.shuffle(rng)`
+is E0413 on a `Vec`. `rand::rng()` (a rand type) does get `random_range`.
+
+```jux
+import rust.rand_pcg.Lcg128CmDxsm64;
+void main() {
+    var g = Lcg128CmDxsm64.seed_from_u64(1);   // E0413: no static method seed_from_u64
+}
+```
+
+**B23. A crate trait implemented for `str` is not reachable on `String`.**
+(Unicode) unicode-segmentation's `UnicodeSegmentation` is implemented for
+`str`; its stub declares the interface, but `"e\u{301}!".graphemes(true)` is
+E0413 "no method `graphemes` on `String`".
+
+**B24. `char.toUppercase()` and `toLowercase()` are ASCII-only.** (Unicode)
+Silent wrong result. They lower to `to_ascii_uppercase()` /
+`to_ascii_lowercase()` (`juxc-backend-rust/src/exprs/call.rs`), so
+`'é'.toUppercase()` is `é`, not `É`. Core lib §K.11 gives `char` (a Unicode
+scalar) a `toUppercase()` returning one `char`, so the simple Unicode mapping
+is expected; `'ß'` staying `ß` is right. `isDigit` is ASCII-only in the same
+way.
+
+**B25. `std::time::Duration` is unreachable.** (Time) `Duration` is defined
+in `core` and re-exported by std, and the `rust.std` surface leaves `core` out
+(§G.6.2.1), so `import rust.std.Duration;` is E0301 and `sleep` cannot be
+called. `Instant` (defined in std) works, and `elapsed()` returns a value of
+the missing type.
+
+**B26. Crate types are visible without an import.** (Time) With
+`rust.chrono` in jux.toml, a bare `NaiveDate` resolves with no import at all,
+and a bare `Duration` silently becomes chrono's `Duration` alias
+(`TimeDelta`): the program then fails with "no method `as_secs` on
+`rust.chrono.TimeDelta`", naming a type the programmer never wrote.
+
+**B27. A collection handle passed to a foreign static method leaks.** (File)
+`PathBuf` and `Vec` are reference types, held as a shared handle. Passed to a
+free function (`create_dir(path)`, `write(path, bytes)`) the handle is
+unwrapped; passed to a static method it is not.
+
+```jux
+import rust.std.File;
+import rust.std.PathBuf;
+import rust.std.temp_dir;
+void main() {
+    final PathBuf path = temp_dir().join("b27.txt");
+    var file = File.create(path);   // rustc E0277: Rc<JuxCell<PathBuf>>: AsRef<Path>
+}
+```
+
+`String.from_utf8(bytes)` with a `Vec<ubyte>` local, and
+`String.from_utf8_lossy(buffer)` with a `ubyte[]`, fail the same way (E0308).
+
+**B28. Iterating `read_dir` binds the item as `DirEntry` but emits a
+`Result`.** (Directory) Each item of `std::fs::ReadDir` is an
+`io::Result<DirEntry>`. juxc accepts `final DirEntry found = entry;` and
+emits the Result unchanged (rustc E0308). The item should either throw like
+every other `Result` from Rust (§G.5.4) or be refused.
+
+**B29. A nullable borrowed result of an unsized type leaks `.cloned()`.**
+(Directory, Path) `to_str()` on an `OsStr`/`OsString` and `extension()` on a
+path are `@RustRefOut` results of `str`/`OsStr`; `?:` and `!!` on them emit
+`.cloned()` on `Option<&str>` / `Option<&OsStr>` (E0599). In the Path lesson
+the `?:` fallback inside `${...}` is dropped from the emitted
+`__jux_show!(name.to_str())` altogether.
+
+```jux
+import rust.std.PathBuf;
+import rust.std.temp_dir;
+void main() {
+    final PathBuf p = temp_dir().join("abc.txt");
+    final String s = p.extension()!!.to_str() ?: "?";   // rustc E0599 on .cloned()
+    print(s);
+}
+```
+
+**B30. `new Path(...)` makes an unsized local.** (Path) Rust's `Path` is
+unsized and only ever used behind a reference; the local is emitted as
+`let path: std::path::Path = std::path::Path::new(...)` (E0308 and E0277).
+
+```jux
+import rust.std.Path;
+void main() {
+    final Path path = new Path("a/b");
+    print(path.is_absolute());
+}
+```
+
+**B31. A foreign enum variant pattern is emitted unqualified.** (Path)
+`switch (part) { case Normal(var name) -> ... }` over `std::path::Component`
+emits `Normal(name) =>` (E0531, "cannot find tuple struct or tuple variant
+`Normal`"). A user enum's variant is qualified; a foreign one is not.
+
+**B32. The `rust.std` stub offers unstable APIs.** The vendored stub was
+generated from a nightly std and includes `Path.is_empty()`, which stable
+rustc rejects (E0658 `path_is_empty`); `normalize_lexically` and others are
+there too. The Path lesson asks `path.as_os_str().is_empty()` instead.
+
+**B33. A declared `Vec` from a foreign function leaks.** (Binary)
+`final Vec<ubyte> raw = read(path);` emits `let raw: JuxArr<Vec<u8>> =
+read(...)` and rustc rejects it (E0308). `var raw = read(path);` works, and
+indexing and `len()` on it are fine.
+
+**B14 again.** The Rust integer methods are unreachable on primitives in the
+same way as the `f64` ones: `value.to_le_bytes()` on a `u32` is E0413. The
+Binary lesson does the byte order with shifts.
