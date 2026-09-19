@@ -1885,6 +1885,21 @@ impl<'a> Checker<'a> {
     /// protocol (the for-each then types its variable Unknown and
     /// rustc reports the real story).
     fn iterable_element_type(&self, class_name: &str) -> Option<Ty> {
+        // An ITERATOR walks itself: its element is what `next()` answers,
+        // with the `?` peeled (K.5). This is how a Rust iterator
+        // (`path.components()`, `read_dir(dir)`) types its loop variable,
+        // since bindgen surfaces the `next()` of its `Iterator` impl.
+        if self.symbols.lookup_method(class_name, "iterator").is_none() {
+            if let Some((next, _)) = self.symbols.lookup_method(class_name, "next") {
+                if let juxc_ast::ReturnType::Type(t) = &next.return_type {
+                    if t.nullable && next.params.is_empty() {
+                        let mut elem = t.clone();
+                        elem.nullable = false;
+                        return Some(crate::ty::lower_member_type(&elem, class_name, self.symbols));
+                    }
+                }
+            }
+        }
         let (method, declaring) = self.symbols.lookup_method(class_name, "iterator")?;
         let ret = match &method.return_type {
             juxc_ast::ReturnType::Type(t) => t,

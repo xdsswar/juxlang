@@ -454,6 +454,16 @@ Three restrictions, each because the stub could not write the result otherwise:
 
 `Clone`, `Index` and the collection traits stay outside this, read through their own markers (`@RustClone`, `@RustIndexRef`, `@RustCollection`): Jux gives those language meaning rather than a method surface. In std the rule leaves 66 traits over 46 types, `std::io`'s among them.
 
+#### G.6.4.2. Iterators, Views and Projections
+
+Three shapes of a Rust signature need a rule of their own, each discovered from the crate's rustdoc rather than listed:
+
+- **An iterator walks itself.** A type with an `impl Iterator` gets the `next()` of that impl on its stub, typed from the impl's `type Item = X` binding: `X? next()`. That is the K.5 iteration protocol, so a for-each over `path.components()` binds a `Component`. An item that is itself a `Result<Y, E>` (`read_dir` yields `io::Result<DirEntry>`) makes `next()` a `Y? next() throws E`, and a for-each binds the `Y`, throwing each `Err` like any other `Result` from Rust (G.5.4).
+- **A borrowed view is held owned.** `Path`, `OsStr` and `CStr` are unsized and exist only behind a reference, which Jux has no spelling for. A view's own `ToOwned` impl names its owned form (`type Owned = PathBuf`), rendered `@RustOwnedAs("PathBuf")`. A Jux value of the view is stored as the owned form, which derefs back to every method of the view: `new Path("a/b")` is `Path::new(..).to_owned()`. A method returning a borrowed view (`&str`, `&OsStr`, `&Path`, or an `Option` of one) is owned at the call.
+- **A projection is unknown.** An associated-type projection (`<I as SliceIndex<[T]>>::Output`, `Self::Item`) depends on the call's own arguments, so the stub writes it `I.Output`: a name no stub declares, which the checker reads as an unknown type that takes the declared slot's type (`final int? first = v.get(0);`).
+
+A member whose signature has no Jux spelling at all, such as `Option<()>` (`void?`), is left out of the stub, as `W0307` skips any un-mappable item. Constants carry their `@rust("...")` path like types, so an `import` of one, or of a foreign enum or trait, names the place it really lives.
+
 ### G.6.5. First-Class `import rust.X`
 
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**

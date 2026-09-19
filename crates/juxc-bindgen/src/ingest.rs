@@ -563,6 +563,7 @@ fn build_struct(
     // or `reverse`, which is why the backend had grown hardcoded branches for
     // some of them: the scan was not telling it the truth.
     methods.extend(deref_members(krate, &s.impls, pool));
+    methods.extend(iterator_next(krate, &s.impls));
     dedup_methods_by_name(&mut methods);
 
     // §G.6.3 kind selection: an all-public plain-fielded struct with no methods
@@ -1301,6 +1302,58 @@ fn impl_target_is_the_plain_type(own: Id, ty: &Type) -> bool {
     }
 }
 
+/// `next()` for a type that implements Rust's `Iterator`, from the impl's
+/// `type Item = ...` binding (Bindgen G.6.4.2).
+///
+/// `Iterator` is a `core` trait, so its methods are not part of the type's
+/// surface otherwise, and the item type of `path.components()` or
+/// `read_dir(dir)` was unknown: a for-each over one bound an untyped
+/// variable. `next()` is the one method that carries the element type, and
+/// it is what K.5 makes the iteration protocol, so it is the one surfaced.
+///
+/// An item that is itself a `Result` (`read_dir` yields `io::Result<DirEntry>`)
+/// is a `next()` that throws, like every other `Result` from Rust (G.5.4), so
+/// the element a for-each binds is the `DirEntry` (B28).
+fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
+    let item = impls.iter().find_map(|id| {
+        let it = krate.index.get(id)?;
+        let ItemEnum::Impl(im) = &it.inner else { return None };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            return None;
+        }
+        if !im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == "Iterator") {
+            return None;
+        }
+        im.items.iter().find_map(|aid| {
+            let a = krate.index.get(aid)?;
+            if a.name.as_deref() != Some("Item") {
+                return None;
+            }
+            match &a.inner {
+                ItemEnum::AssocType { type_: Some(t), .. } => Some(t.clone()),
+                _ => None,
+            }
+        })
+    })?;
+    let (elem, throws) = map_return(krate, &Some(item));
+    Some(StubFn {
+        visibility: Vis::Public,
+        is_static: false,
+        is_default: false,
+        name: "next".to_string(),
+        generics: Vec::new(),
+        params: Vec::new(),
+        ret: JuxType::nullable(elem),
+        throws,
+        is_unsafe: false,
+        is_mut_self: true,
+        returns_borrow: false,
+        carries_borrow: false,
+        rust_path: None,
+        doc: None,
+    })
+}
+
 /// The `Owned` type of the type's OWN `ToOwned` impl, when it names another
 /// type: `impl ToOwned for Path { type Owned = PathBuf; }` gives `PathBuf`.
 ///
@@ -1447,9 +1500,21 @@ pub fn map_type(t: &Type) -> JuxType {
                 is_async: false,
             }
         }
-        // Pattern types, qualified paths, and inference markers have no Jux
-        // spelling in this slice.
-        Type::QualifiedPath { name, .. } => JuxType::Unknown(name.clone()),
+        // An associated-type projection (`<I as SliceIndex<[T]>>::Output`,
+        // `Self::Item`) names a type the stub cannot know: it depends on the
+        // argument the call is made with. It is written `I.Output`, a
+        // two-segment name no stub declares, so the checker reads it as an
+        // unknown type and leaves the value to the declared slot. Written as
+        // the bare `Output` it resolved to `std::process::Output`, and
+        // `final int? first = v.get(0);` was refused (B16).
+        Type::QualifiedPath { name, self_type, .. } => {
+            let owner = match self_type.as_ref() {
+                Type::Generic(g) => g.clone(),
+                _ => "Self".to_string(),
+            };
+            JuxType::Unknown(format!("{owner}.{name}"))
+        }
+        // Pattern types and inference markers have no Jux spelling.
         Type::Pat { .. } | Type::Infer => JuxType::Unknown("Object".into()),
     }
 }

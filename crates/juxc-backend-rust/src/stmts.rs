@@ -2671,6 +2671,16 @@ impl RustEmitter {
         }
         self.w.push_str(" {\n");
         self.w.indent_inc();
+        // A Rust iterator whose items are `Result`s (`read_dir` yields
+        // `io::Result<DirEntry>`) throws each `Err` like any other `Result`
+        // from Rust (Bindgen G.5.4, G.6.4.2), so the loop variable is the
+        // `Ok` value the program declared (B28).
+        if self.foreign_iterator_next(&f.iter).is_some_and(|m| m.is_foreign_result) {
+            let v = to_rust_ident(&f.var_name.text);
+            self.w.line(&format!(
+                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e));"
+            ));
+        }
         // Register the loop variable's element type in `local_types` for the
         // body, so a wrapper-class element (`for (var t : todos)` over a
         // `Vec<Todo>`) resolves `t.title` to the `t.0.borrow().title` deref
@@ -2756,7 +2766,43 @@ impl RustEmitter {
     /// first generic argument of a `Vec<T>` / `HashSet<T>` / `List<T>` receiver.
     /// `None` when the iterable's type wasn't recorded or carries no element
     /// type. Drives the loop-variable [`Self::local_types`] registration above.
+    /// The `next()` of a FOREIGN iterator a for-each walks: a stub type that
+    /// implements Rust's `Iterator` (bindgen surfaces its `next()`, Bindgen
+    /// G.6.4.2) and is not an iterable of its own.
+    pub(crate) fn foreign_iterator_next(
+        &self,
+        iter: &Expr,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
+        let Some(Ty::User { name, .. }) = self.receiver_ty_of(iter) else {
+            return None;
+        };
+        let fqn = if self.symbols.classes.contains_key(&name) {
+            name.clone()
+        } else {
+            self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))?
+        };
+        if !self.symbols.classes.get(&fqn).is_some_and(|c| c.is_external) {
+            return None;
+        }
+        if self.external_type_method(&fqn, "iterator").is_some() {
+            return None;
+        }
+        self.external_type_method(&fqn, "next")
+            .filter(|m| m.params.is_empty())
+    }
+
     fn for_each_element_ty(&self, iter: &Expr) -> Option<Ty> {
+        // A foreign iterator's element is its `next()` result, `?` peeled.
+        if let Some(m) = self.foreign_iterator_next(iter) {
+            if let juxc_ast::ReturnType::Type(t) = &m.return_type {
+                let mut elem = t.clone();
+                elem.nullable = false;
+                let ty = juxc_tycheck::ty_from_ref_in_env(&elem, &self.symbols);
+                if !matches!(ty, Ty::Unknown) {
+                    return Some(ty);
+                }
+            }
+        }
         // Prefer the iterable's recorded type.
         if let Some(elem) = self
             .expr_types
