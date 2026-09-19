@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports a <code>yield</code> the compiler rejects, and a generator whose signature or returns break the generator rules.
+<!-- tooltip end -->
+<p>A generator is a named function or method whose own body contains <code>yield</code>. It returns
+<code>Iterator&lt;T&gt;</code>, or <code>Stream&lt;T&gt;</code> when it is <code>async</code>.</p>
+<ul>
+  <li><code>yield</code> in a lambda, a constructor, an operator, an initializer or a switch expression's arm (E0990).
+    A switch arm gives its value as an expression: <code>case 1 -&gt; 10;</code>.</li>
+  <li><code>return</code> with a value inside a generator (E0994). Quick-fix: <code>yield</code> the value.</li>
+  <li>An interface's default method that yields (E0995).</li>
+  <li>A generator whose return type is not <code>Iterator&lt;T&gt;</code> / <code>Stream&lt;T&gt;</code> (E0996).
+    Quick-fix: change the return type.</li>
+  <li><code>yield</code> inside an <code>unsafe { }</code> block (E0997).</li>
+</ul>
+</body>
+</html>

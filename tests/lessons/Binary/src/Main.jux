@@ -1,0 +1,128 @@
+// A text file holds characters. A binary file holds the bytes of values
+// directly: smaller, faster to read, and unreadable in an editor.
+//
+// The catch is that a number wider than one byte has to be laid out in some
+// order, and machines do not agree on which. That choice is the whole subject
+// of this lesson: get it wrong and the file reads back as nonsense.
+//
+// Rust's integers have `to_le_bytes` and friends for this, but Jux does not
+// reach them on a primitive yet (README, B14), so the byte order is worked
+// out here with shifts and masks, which is exactly what those methods do
+// inside. The file work is Rust's `std::fs`, reached through `rust.std`.
+
+import rust.std.Error;
+import rust.std.PathBuf;
+import rust.std.metadata;
+import rust.std.read;
+import rust.std.remove_file;
+import rust.std.temp_dir;
+import rust.std.write;
+
+// Pads on the right up to `width` characters, which left-aligns a label.
+String alignLeft(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+// Two hex digits per byte, with the leading zero kept.
+String hexByte(ubyte b) {
+    final String digits = b.toHex();
+    return digits.charLength() < 2 ? "0" + digits : digits;
+}
+
+// The bytes of `value`, smallest first: byte `i` is the value shifted right
+// by `8 * i` bits, keeping only the low eight.
+ubyte[] toLittleEndian(u32 value) {
+    var bytes = new ubyte[4];
+    for (var i : 0..4) {
+        bytes[i] = (ubyte) ((value >> (8 * i)) & 0xFF);
+    }
+    return bytes;
+}
+
+// The same bytes, largest first: the order the number is written in.
+ubyte[] toBigEndian(u32 value) {
+    var bytes = new ubyte[4];
+    for (var i : 0..4) {
+        bytes[3 - i] = (ubyte) ((value >> (8 * i)) & 0xFF);
+    }
+    return bytes;
+}
+
+// Reassembles a value from little-endian bytes: each byte goes back to the
+// position it came from.
+u32 fromLittleEndian(ubyte[] bytes) {
+    u32 value = 0;
+    for (var i : 0..4) {
+        value = value | (((u32) bytes[i]) << (8 * i));
+    }
+    return value;
+}
+
+void showBytes(String label, ubyte[] bytes) {
+    var line = alignLeft(label, 16);
+    for (var b : bytes) {
+        line += $" ${hexByte(b)}";
+    }
+    print(line);
+}
+
+void main() {
+    // A value chosen so every byte is different and recognisable.
+    final u32 value = 305419896;
+    print($"the value       0x${value.toHex()}");
+    // Which order this machine uses is a fact about the build target, so it
+    // is asked with `if cfg(...)`, decided when the program is compiled.
+    var littleEndian = false;
+    if cfg(endian = "little") {
+        littleEndian = true;
+    }
+    print($"this machine is little endian: ${littleEndian}");
+    print("");
+
+    // The same four bytes, laid out both ways. Little endian puts the
+    // smallest byte first; big endian puts the largest first, which is the
+    // order the number is written in.
+    final ubyte[] little = toLittleEndian(value);
+    final ubyte[] big = toBigEndian(value);
+    showBytes("little endian", little);
+    showBytes("big endian", big);
+    print("");
+
+    // Neither is right in general. What matters is that whoever writes and
+    // whoever reads agree, which is why a file format states its byte order
+    // rather than leaving it to whichever machine happens to run the code.
+
+    final PathBuf path = temp_dir().join("jux-binary-lesson.bin");
+    try {
+        // Writing the bytes themselves. Nothing is converted to text, so four
+        // bytes on disk hold a number that would take ten characters written
+        // out. The file's size says how many landed.
+        write(path, little);
+        print($"wrote           ${metadata(path).len()} bytes");
+
+        // Reading them back and reassembling the number, using the same order
+        // it was written in. `read` returns the whole file as a `Vec<ubyte>`;
+        // the type is left to `var` because spelling it out is refused today
+        // (README, B33).
+        var raw = read(path);
+        var bytes = new ubyte[4];
+        for (var i : 0..4) {
+            bytes[i] = raw[i];
+        }
+        final u32 recovered = fromLittleEndian(bytes);
+        print($"read back       ${raw.len()} bytes, value 0x${recovered.toHex()}");
+
+        // Had this read the bytes largest-first instead, the same four bytes
+        // would have produced 0x78563412: a perfectly valid number, and
+        // completely wrong. That is the failure mode worth remembering:
+        // mismatched byte order does not error, it just gives the wrong
+        // answer.
+
+        remove_file(path);
+    } catch (Error failure) {
+        print($"the file work failed: ${failure}");
+    }
+}

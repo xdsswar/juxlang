@@ -1,0 +1,57 @@
+// Some questions have no answer. "Which is the first even number here?" has
+// none when every number is odd, and there is no `int` that means "there
+// wasn't one": every value it can hold is a perfectly good answer.
+//
+// Jux writes the answer `int?`, a nullable int:
+// either an `int`, or `null` for "nothing". The compiler tracks the `?`, so a
+// nullable value cannot be used as a plain one until it has been checked.
+
+// The return type says, in the signature, that this may find nothing. A caller
+// cannot miss it and cannot ignore it.
+int? firstEven(int[] values) {
+    for (var value : values) {
+        if (value % 2 == 0) {
+            return value;
+        }
+    }
+    return null;
+}
+
+// Reports what `firstEven` found for one array. Checking against `null` is
+// the complete way to handle it: one branch has the value, the other does not,
+// and both are written.
+void report(String name, int[] values) {
+    final int? found = firstEven(values);
+    if (found != null) {
+        // After the check the compiler knows `found` holds a value, so it is
+        // used here as a plain `int` (null-test narrowing).
+        print($"${name}first even is ${found}");
+    } else {
+        print($"${name}no even number");
+    }
+}
+
+void main() {
+    final int[] mixed = {3, 7, 8, 9};
+    final int[] odds = {1, 3, 5, 7};
+
+    report("mixed: ", mixed);
+    report("odds:  ", odds);
+
+    // When only the presence matters, comparing with `null` is the question.
+    print($"mixed has one  ${firstEven(mixed) != null}");
+    print($"odds has none  ${firstEven(odds) == null}");
+
+    // And when a sensible stand-in exists, `?:` supplies it, collapsing both
+    // cases into one ordinary value.
+    print($"mixed or -1    ${firstEven(mixed) ?: -1}");
+    print($"odds or -1     ${firstEven(odds) ?: -1}");
+
+    // Which to reach for is a question of what absence means. `?:` is right
+    // when a default is genuinely as good as an answer. When "there was
+    // nothing" needs different handling (a message, a different path), test
+    // for `null`, so the two cases stay visibly different in the code.
+    //
+    // A nullable says only that a value is missing, never why. When the
+    // reason matters, the next lesson's `Result` carries it.
+}

@@ -1,6 +1,0 @@
-[package]
-name = "rux.guess"
-version = "0.1.0"
-
-[dependencies]
-"rust.rand" = "0.9"

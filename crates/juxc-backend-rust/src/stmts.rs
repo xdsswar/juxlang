@@ -64,6 +64,8 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
         Stmt::Return(opt, _) => opt
             .as_ref()
             .is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        // A yielded value leaves for the consumer, as a returned one does.
+        Stmt::Yield(e, _) => is_path_named(e, name) || expr_moves_path_at_top(e, name),
         Stmt::Assign(a) => {
             is_path_named(&a.value, name)
                 || expr_moves_path_at_top(&a.value, name)
@@ -709,7 +711,9 @@ impl RustEmitter {
     /// any block it contains.
     fn stmt_own_exprs(stmt: &Stmt) -> Vec<&Expr> {
         match stmt {
-            Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) => vec![e],
+            Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) | Stmt::Yield(e, _) => {
+                vec![e]
+            }
             Stmt::VarDecl(v) => v.init.iter().collect(),
             Stmt::Assign(a) => vec![&a.target, &a.value],
             Stmt::If(i) => vec![&i.condition],
@@ -749,6 +753,176 @@ impl RustEmitter {
             )),
             _ => None,
         }
+    }
+
+    /// The value half of `return value;`: `value` shaped for the enclosing
+    /// function's return type (`current_return_type`), with the `Some`
+    /// wrap, interface coercion, numeric widening and handle share-clone
+    /// that slot needs. `yield` (§M.2) reuses it with the generator's
+    /// element type standing in as the return type.
+    fn emit_returned_value(&mut self, e: &Expr) {
+        // `return () -> parse(s);` from a `() -> void` function.
+        // Inside a lambda body the return type in hand is the
+        // enclosing function's, not this return's, so leave it.
+        if !self.in_lambda_body {
+            if let Some(juxc_ast::ReturnType::Type(t)) = self.current_return_type.clone() {
+                self.arm_void_lambda_slot(Some(&t), e);
+            }
+        }
+        // Nullable-return coercion: when the enclosing
+        // fn returns `T?` (lowered as `Option<T>`) and
+        // the value being returned isn't already a
+        // `null` literal, wrap it in `Some(...)` so the
+        // type-check passes. A `return null;` already
+        // lowers to `return None;` via `emit_literal`.
+        let wrap_some = self.return_wants_some_wrap(e);
+        // Sealed-upcast coercion: `return new Err(...)`
+        // inside a `Result`-returning function wraps
+        // through `.into()` so the auto-`From<Err> for
+        // Result` impl produces `Result::Err(err)`.
+        let wrap_upcast = self.return_needs_sealed_upcast(e);
+        // Interface return slot: a class value is wrapped in
+        // `Rc<dyn Trait>`, an interface value is `Rc`-cloned — so
+        // a `Shape`-returning factory hands back the same
+        // trait-object representation locals / params use.
+        let ret_iface_ty = match &self.current_return_type {
+            Some(juxc_ast::ReturnType::Type(t))
+            | Some(juxc_ast::ReturnType::AsyncType(t))
+                if !matches!(
+                    self.iface_coercion_to(t, e),
+                    crate::analysis::IfaceCoercion::None,
+                ) =>
+            {
+                Some(t.clone())
+            }
+            _ => None,
+        };
+        // **A multi-armed value carries the wrap into its ARMS.**
+        // `return cond ? value : maybeNull;` has one arm that is
+        // already `Option`-shaped and one that is not, so a single
+        // `Some(...)` around the whole expression is wrong on
+        // whichever side it does not fit. The ternary and switch
+        // emitters already wrap per arm and skip arms that are
+        // already nullable — hand them the target instead.
+        let arm_wrap = self.return_type_is_nullable()
+            && ret_iface_ty.is_none()
+            && matches!(e, Expr::Ternary(_) | Expr::Switch(_));
+        // A nullable dyn return (`Animal? f() { return new Dog(); }`)
+        // is `Some`-wrapped INSIDE the coercion helper — don't add a
+        // second `Some(...)` here.
+        let do_some = wrap_some && ret_iface_ty.is_none() && !arm_wrap;
+        if do_some {
+            self.w.push_str("Some(");
+        }
+        if let Some(ret_ty) = ret_iface_ty {
+            self.emit_expr_coerced_to_iface(&ret_ty, e);
+        } else {
+            // **Numeric widening on return.** `return <int>;` into a
+            // `long`/`double` slot needs an `as <T>` cast: tycheck
+            // accepts the widening but Rust does not implicitly widen,
+            // so the bare value would leak (rustc E0308). Only widens
+            // (never narrows); skipped under nullable/sealed wraps.
+            // Under the `Some(...)` of an `int?` return the value
+            // converts to the inner `int` the same way: a `uint` loop
+            // index returned as an `int?` was `Some(usize)`.
+            let target = if do_some {
+                self.nullable_return_inner_primitive()
+            } else {
+                self.return_type_primitive()
+            };
+            let widen = if !wrap_upcast {
+                target.and_then(|t| self.numeric_widen_or_arm(e, t))
+            } else {
+                None
+            };
+            // `as` binds tighter than every binary operator, so a
+            // widened binary expression needs its own parens or the
+            // cast lands on the right operand alone.
+            let widen_inner =
+                widen.is_some() && crate::exprs::cast_needs_inner_parens(e);
+            if widen.is_some() {
+                self.w.push('(');
+                if widen_inner {
+                    self.w.push('(');
+                }
+            }
+            let prev_nullable_target = self.emitting_nullable_target;
+            if arm_wrap {
+                self.emitting_nullable_target = true;
+            }
+            self.emit_expr(e);
+            self.emitting_nullable_target = prev_nullable_target;
+            // **Wrapper-class share-on-return (§CR.4.1).** A
+            // `return <wrapped place>;` (a `Path`/`this` local or
+            // an `xs[i]` index read of a wrapped class) must hand
+            // the caller a SHARED handle, not move out of the
+            // place — append the cheap `Rc` refcount-bump clone.
+            // Skipped under `Some(...)`/upcast wraps, which only
+            // fire for nullable / sealed shapes (never a bare
+            // wrapped place) — the helper would return false there
+            // anyway, but gating keeps the emit unambiguous.
+            if !wrap_some
+                && !wrap_upcast
+                && (self.wrapper_value_needs_clone(e)
+                    || self.value_place_needs_clone(e))
+            {
+                self.w.push_str(".clone()");
+            }
+            if wrap_upcast {
+                self.w.push_str(".into()");
+            }
+            if let Some(cast) = widen {
+                if widen_inner {
+                    self.w.push(')');
+                }
+                self.w.push_str(" as ");
+                self.w.push_str(cast);
+                self.w.push(')');
+            }
+        }
+        if do_some {
+            self.w.push(')');
+        }
+    }
+
+    /// `yield value;` (§M.2): hand the value to the generator's consumer and
+    /// suspend until it asks for the next one. The value is shaped for the
+    /// element type exactly as `return value;` would shape it for a function
+    /// returning that type.
+    ///
+    /// A value that reads through a borrow (`n * 10` in a method is
+    /// `__jux_this.0.borrow().n * 10`) is computed into a local first, so the
+    /// borrow ends at that `;` instead of being held across the suspension,
+    /// where the consumer may well change the object before asking again.
+    fn emit_yield(&mut self, value: &Expr) {
+        let element = self.generator_element.clone().map(juxc_ast::ReturnType::Type);
+        let saved = std::mem::replace(&mut self.current_return_type, element);
+        // Only a literal or a plain local is borrow-free. A bare name may
+        // also be a field read through `this` (`yield balance;`), or a
+        // shared-cell local read through its cell.
+        let direct = match value {
+            Expr::Literal(_) => true,
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                let class_member = self.enclosing_class.clone().is_some_and(|class| {
+                    self.lookup_class_field_owner_in_chain(&class, name).is_some()
+                        || self.bare_name_is_property_in_chain(&class, name)
+                });
+                !class_member && !self.ref_locals.contains(name)
+            }
+            _ => false,
+        };
+        if direct {
+            self.w.push_str("__jux_co.yield_(");
+            self.emit_returned_value(value);
+            self.w.push_str(").await;\n");
+        } else {
+            self.w.push_str("let __jux_item = ");
+            self.emit_returned_value(value);
+            self.w.push_str(";\n");
+            self.w.line("__jux_co.yield_(__jux_item).await;");
+        }
+        self.current_return_type = saved;
     }
 
     fn emit_stmt_inner(&mut self, stmt: &Stmt) {
@@ -815,121 +989,7 @@ impl RustEmitter {
                     if channel_wrap {
                         self.w.push_str("Some(");
                     }
-                    // `return () -> parse(s);` from a `() -> void` function.
-                    // Inside a lambda body the return type in hand is the
-                    // enclosing function's, not this return's, so leave it.
-                    if !self.in_lambda_body {
-                        if let Some(juxc_ast::ReturnType::Type(t)) = self.current_return_type.clone() {
-                            self.arm_void_lambda_slot(Some(&t), e);
-                        }
-                    }
-                    // Nullable-return coercion: when the enclosing
-                    // fn returns `T?` (lowered as `Option<T>`) and
-                    // the value being returned isn't already a
-                    // `null` literal, wrap it in `Some(...)` so the
-                    // type-check passes. A `return null;` already
-                    // lowers to `return None;` via `emit_literal`.
-                    let wrap_some = self.return_wants_some_wrap(e);
-                    // Sealed-upcast coercion: `return new Err(...)`
-                    // inside a `Result`-returning function wraps
-                    // through `.into()` so the auto-`From<Err> for
-                    // Result` impl produces `Result::Err(err)`.
-                    let wrap_upcast = self.return_needs_sealed_upcast(e);
-                    // Interface return slot: a class value is wrapped in
-                    // `Rc<dyn Trait>`, an interface value is `Rc`-cloned — so
-                    // a `Shape`-returning factory hands back the same
-                    // trait-object representation locals / params use.
-                    let ret_iface_ty = match &self.current_return_type {
-                        Some(juxc_ast::ReturnType::Type(t))
-                        | Some(juxc_ast::ReturnType::AsyncType(t))
-                            if !matches!(
-                                self.iface_coercion_to(t, e),
-                                crate::analysis::IfaceCoercion::None,
-                            ) =>
-                        {
-                            Some(t.clone())
-                        }
-                        _ => None,
-                    };
-                    // **A multi-armed value carries the wrap into its ARMS.**
-                    // `return cond ? value : maybeNull;` has one arm that is
-                    // already `Option`-shaped and one that is not, so a single
-                    // `Some(...)` around the whole expression is wrong on
-                    // whichever side it does not fit. The ternary and switch
-                    // emitters already wrap per arm and skip arms that are
-                    // already nullable — hand them the target instead.
-                    let arm_wrap = self.return_type_is_nullable()
-                        && ret_iface_ty.is_none()
-                        && matches!(e, Expr::Ternary(_) | Expr::Switch(_));
-                    // A nullable dyn return (`Animal? f() { return new Dog(); }`)
-                    // is `Some`-wrapped INSIDE the coercion helper — don't add a
-                    // second `Some(...)` here.
-                    let do_some = wrap_some && ret_iface_ty.is_none() && !arm_wrap;
-                    if do_some {
-                        self.w.push_str("Some(");
-                    }
-                    if let Some(ret_ty) = ret_iface_ty {
-                        self.emit_expr_coerced_to_iface(&ret_ty, e);
-                    } else {
-                        // **Numeric widening on return.** `return <int>;` into a
-                        // `long`/`double` slot needs an `as <T>` cast: tycheck
-                        // accepts the widening but Rust does not implicitly widen,
-                        // so the bare value would leak (rustc E0308). Only widens
-                        // (never narrows); skipped under nullable/sealed wraps.
-                        let widen = if !do_some && !wrap_upcast {
-                            self.return_type_primitive()
-                                .and_then(|t| self.numeric_widen_or_arm(e, t))
-                        } else {
-                            None
-                        };
-                        // `as` binds tighter than every binary operator, so a
-                        // widened binary expression needs its own parens or the
-                        // cast lands on the right operand alone.
-                        let widen_inner =
-                            widen.is_some() && crate::exprs::cast_needs_inner_parens(e);
-                        if widen.is_some() {
-                            self.w.push('(');
-                            if widen_inner {
-                                self.w.push('(');
-                            }
-                        }
-                        let prev_nullable_target = self.emitting_nullable_target;
-                        if arm_wrap {
-                            self.emitting_nullable_target = true;
-                        }
-                        self.emit_expr(e);
-                        self.emitting_nullable_target = prev_nullable_target;
-                        // **Wrapper-class share-on-return (§CR.4.1).** A
-                        // `return <wrapped place>;` (a `Path`/`this` local or
-                        // an `xs[i]` index read of a wrapped class) must hand
-                        // the caller a SHARED handle, not move out of the
-                        // place — append the cheap `Rc` refcount-bump clone.
-                        // Skipped under `Some(...)`/upcast wraps, which only
-                        // fire for nullable / sealed shapes (never a bare
-                        // wrapped place) — the helper would return false there
-                        // anyway, but gating keeps the emit unambiguous.
-                        if !wrap_some
-                            && !wrap_upcast
-                            && (self.wrapper_value_needs_clone(e)
-                                || self.value_place_needs_clone(e))
-                        {
-                            self.w.push_str(".clone()");
-                        }
-                        if wrap_upcast {
-                            self.w.push_str(".into()");
-                        }
-                        if let Some(cast) = widen {
-                            if widen_inner {
-                                self.w.push(')');
-                            }
-                            self.w.push_str(" as ");
-                            self.w.push_str(cast);
-                            self.w.push(')');
-                        }
-                    }
-                    if do_some {
-                        self.w.push(')');
-                    }
+                    self.emit_returned_value(e);
                     if channel_wrap {
                         self.w.push(')');
                     }
@@ -940,6 +1000,7 @@ impl RustEmitter {
                     self.w.push_str(";\n");
                 }
             }
+            Stmt::Yield(value, _) => self.emit_yield(value),
             Stmt::VarDecl(var) => self.emit_var_decl(var),
             Stmt::If(if_stmt) => self.emit_if(if_stmt),
             Stmt::While(w) => self.emit_while(w),
@@ -2138,6 +2199,73 @@ impl RustEmitter {
     ///
     /// **Ranges** (`0..10`) keep their naked form. They're cheap-to-
     /// move self-iterators with `Item = isize`; no borrow needed.
+    /// When a for-each iterates an ITERATOR rather than an iterable (a
+    /// generator's `Iterator<T>` result, §M.2.1, or an object of a class
+    /// implementing `Iterator<T>`), the element type the loop binds:
+    /// `Some(Some(T))` when it is known, `Some(None)` when it is not.
+    fn for_each_iterator_element(&self, iter: &Expr) -> Option<Option<Ty>> {
+        let Some(Ty::User { name, generic_args }) = self.expr_types.get(&expr_span_of(iter)) else {
+            return None;
+        };
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        if bare == "Iterator" && generic_args.len() == 1 && !self.symbols.classes.contains_key(name.as_str()) {
+            return Some(generic_args.first().cloned());
+        }
+        // A class that IS an iterator (and not also an iterable, whose
+        // `iterator()` the loop below prefers).
+        if self.symbols.classes.contains_key(name.as_str())
+            && self.symbols.lookup_method(name, "iterator").is_none()
+            && juxc_tycheck::ty::class_implements_interface(name, "Iterator", &self.symbols)
+        {
+            return Some(None);
+        }
+        None
+    }
+
+    /// `for (var x : it)` over an iterator: drain it, one `next()` per pass.
+    ///
+    ///   { let __jux_it = it; ['label:] while let Some(x) = __jux_it.next() { body } }
+    ///
+    /// A named iterator is share-cloned in (an `Rc` bump): the loop advances
+    /// the same cursor, so after a `break` the variable resumes where the
+    /// loop stopped, as it would in Java.
+    fn emit_for_each_over_iterator(&mut self, f: &ForEachStmt, element: Option<Ty>) {
+        let label = self.pending_loop_label.take();
+        self.w.push_str("{\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let __jux_it = ");
+        self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
+        if matches!(f.iter, Expr::Path(_)) {
+            self.w.push_str(".clone()");
+        }
+        self.w.push_str(";\n");
+        self.w.emit_indent();
+        if let Some(l) = label {
+            self.w.push('\'');
+            self.w.push_str(&escaped_label(&l));
+            self.w.push_str(": ");
+        }
+        self.w.push_str("while let Some(");
+        self.w.push_str(&to_rust_ident(&f.var_name.text));
+        self.w.push_str(") = __jux_it.next() {\n");
+        self.w.indent_inc();
+        self.local_types.push(std::collections::HashMap::new());
+        if let Some(ty @ Ty::User { .. }) = &element {
+            if let Some(scope) = self.local_types.last_mut() {
+                scope.insert(f.var_name.text.clone(), ty.clone());
+            }
+        }
+        self.loop_emit_depth += 1;
+        self.emit_block_contents(&f.body);
+        self.loop_emit_depth -= 1;
+        self.local_types.pop();
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+    }
+
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
         // §18.6.3 `for await (var x : stream)` — one-shot pull loop
         // over a `Stream<T>`:
@@ -2154,7 +2282,14 @@ impl RustEmitter {
         // (no H6-style snapshot needed — and none would make sense
         // for an async sequence). A pending loop label binds the
         // `while`, not the wrapper block, so `break 'label` works.
-        if f.is_await {
+        // `yield* stream;` in an async generator (§M.2.3) pulls the stream
+        // exactly as `for await` does.
+        let delegates_to_stream = f.is_yield_delegation()
+            && matches!(
+                self.expr_types.get(&crate::exprs::expr_span_of(&f.iter)),
+                Some(Ty::User { name, .. }) if name.rsplit('.').next() == Some("Stream")
+            );
+        if f.is_await || delegates_to_stream {
             let label = self.pending_loop_label.take();
             self.w.push_str("{\n");
             self.w.indent_inc();
@@ -2199,6 +2334,39 @@ impl RustEmitter {
             self.w.line("}");
             return;
         }
+        if let Some(element) = self.for_each_iterator_element(&f.iter) {
+            self.emit_for_each_over_iterator(f, element);
+            return;
+        }
+        // **A range whose bounds read a shared container** (`0..v.len()` on
+        // a `Vec`, an array, a class field) borrows its `RefCell` to do so.
+        // Rust keeps the temporaries of a `for` head alive for the WHOLE
+        // loop, so `v[i] = 7` in the body panicked with "already borrowed".
+        // The range is evaluated first, in its own statement, which drops
+        // the guard before the first iteration:
+        //
+        //     let __jux_range = 0..v.borrow().len() as isize;
+        //     for i in __jux_range { .. }
+        //
+        // Only a head that actually takes a guard is hoisted, so an ordinary
+        // `for i in 0..n` keeps its plain form.
+        // The head is written once, here, and reused below either way.
+        let range_head: Option<String> = if matches!(&f.iter, Expr::Range(r) if r.step.is_none()) {
+            let saved = std::mem::replace(&mut self.w, crate::writer::Writer::new());
+            self.emit_expr(&f.iter);
+            let text = std::mem::replace(&mut self.w, saved).into_string();
+            if text.contains(".borrow") || text.contains(".lock()") {
+                self.w.push_str("let __jux_range = ");
+                self.w.push_str(&text);
+                self.w.push_str(";\n");
+                self.w.emit_indent();
+                Some("__jux_range".to_string())
+            } else {
+                Some(text)
+            }
+        } else {
+            None
+        };
         self.emit_pending_loop_label();
         // Stepped range (§M.6): sign-aware while loop — positive
         // steps count up to the bound, negative steps count down,
@@ -2257,7 +2425,10 @@ impl RustEmitter {
             self.w.push_str("for ");
             self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");
-            self.emit_expr(&f.iter);
+            match &range_head {
+                Some(head) => self.w.push_str(head),
+                None => self.emit_expr(&f.iter),
+            }
             self.w.push_str(" {\n");
             self.w.indent_inc();
             self.loop_emit_depth += 1;
@@ -2739,6 +2910,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        self.declared_local_names.insert((self.current_unit_idx, var.name.text.clone()));
         // A `T[N]` local that some later statement hands to a `T[]` slot:
         // store it as that slot's runtime-sized handle (the rest of the
         // declaration is emitted as usual, from the rewritten type).
@@ -5391,6 +5563,7 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => expr_span_of(e),
         Stmt::Return(Some(e), _) => expr_span_of(e),
         Stmt::Return(None, _) => Span::DUMMY,
+        Stmt::Yield(_, span) => *span,
         Stmt::VarDecl(v) => v.span,
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,

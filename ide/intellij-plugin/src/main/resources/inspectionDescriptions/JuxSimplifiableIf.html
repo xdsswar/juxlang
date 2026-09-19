@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports an <b>if</b> statement whose branches only return, or only assign, <code>true</code> and <code>false</code>.
+<!-- tooltip end -->
+<p>The statement is its condition:</p>
+<pre><code>if (n &gt; 0) return true; else return false;   // return n &gt; 0;
+if (done) { return false; } return true;      // return !done;
+if (ok) flag = true; else flag = false;       // flag = ok;</code></pre>
+<p>Quick-fix: replace the statement with the simpler form.</p>
+</body>
+</html>

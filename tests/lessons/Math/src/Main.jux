@@ -1,0 +1,65 @@
+// The arithmetic operators cover the four operations. Everything else (roots,
+// powers, logarithms, angles, rounding) is a method on the number itself.
+//
+// Jux's standard library is Rust's, so the methods on a `double` carry the
+// Rust names: `powf`, `ln`, `log2`, `log10`, `exp`, `sin`, `cos`, `tan`,
+// `hypot`, `trunc`, `min`, `max`. The Java-shaped intrinsics from Core lib
+// §K.11 (`sqrt`, `floor`, `ceil`, `round`, `abs`) sit alongside them.
+
+// The two famous constants, at the precision a double can hold.
+const double Pi = 3.141592653589793;
+const double E = 2.718281828459045;
+
+void main() {
+    print($"Pi            ${Pi}");
+    print($"E             ${E}");
+    print("");
+
+    // Roots and powers. `powf` raises to any power, fractional ones included.
+    print($"Sqrt(2)       ${(2.0).sqrt().toFixed(6)}");
+    print($"Pow(2, 10)    ${(2.0).powf(10.0)}");
+    print($"Pow(2, 0.5)   ${(2.0).powf(0.5).toFixed(6)}");
+    print("");
+
+    // Logarithms. `ln` is the natural one; the others say their base.
+    print($"Log(E)        ${E.ln()}");
+    print($"Log2(1024)    ${(1024.0).log2()}");
+    print($"Log10(1000)   ${(1000.0).log10()}");
+    print($"Exp(1)        ${(1.0).exp().toFixed(6)}");
+    print("");
+
+    // Trigonometry works in radians, not degrees. Pi radians is half a turn,
+    // so a quarter turn, a right angle, is Pi / 2.
+    print($"Sin(Pi / 2)   ${(Pi / 2.0).sin()}");
+    print($"Cos(0)        ${(0.0).cos()}");
+    print($"Tan(Pi / 4)   ${(Pi / 4.0).tan().toFixed(6)}");
+
+    // Converting from degrees is a multiplication, worth writing once.
+    final double degrees = 30.0;
+    final double radians = degrees * Pi / 180.0;
+    print($"Sin(30 deg)   ${radians.sin().toFixed(6)}");
+    print("");
+
+    // The distance from the origin, without writing sqrt(x*x + y*y), which
+    // can overflow on values this form handles.
+    print($"Hypot(3, 4)   ${(3.0).hypot(4.0)}");
+    print("");
+
+    // Rounding, in the several senses of the word. These differ on negatives,
+    // which is where a program usually discovers it chose the wrong one.
+    //
+    // `round()` goes to the nearest whole number and breaks an exact tie
+    // towards the even one (Core lib §K.11), so -2.5 becomes -2.0. Rust's own
+    // `round` sends ties away from zero and gives -3.
+    final double value = -2.5;
+    print($"value         ${value}");
+    print($"Floor         ${value.floor()}   (towards minus infinity)");
+    print($"Ceil          ${value.ceil()}   (towards plus infinity)");
+    print($"Trunc         ${value.trunc()}   (towards zero)");
+    print($"Round         ${value.round()}   (to nearest, ties to even)");
+    print($"Abs           ${value.abs()}");
+    print("");
+
+    print($"Min(3, 7)     ${(3.0).min(7.0)}");
+    print($"Max(3, 7)     ${(3.0).max(7.0)}");
+}

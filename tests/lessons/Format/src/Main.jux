@@ -1,0 +1,111 @@
+// Jux interpolation has no format-spec syntax: `${value}` always writes the value's own
+// text. Formatting is done on the value instead, with methods that return a
+// new `String`:
+//
+// - bases come from the numeric intrinsics `toBinary()`, `toOctal()` and
+//   `toHex()` (Core lib §K.11),
+// - digits after the point come from `toFixed(n)` on a float or double,
+// - width, fill and alignment are a few lines of ordinary code, written once
+//   below and reused.
+//
+// The same value can still render differently in different places, because
+// each place calls what it needs.
+
+// Pads `text` on the left with `fill` up to `width` characters, which
+// right-aligns it. Anything already that wide is left intact, never cut.
+String alignRight(String text, int width, String fill) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return fill.repeat(width - text.charLength()) + text;
+}
+
+// Pads on the right, which left-aligns.
+String alignLeft(String text, int width, String fill) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + fill.repeat(width - text.charLength());
+}
+
+// Centres `text`, putting the odd leftover space on the right.
+String centre(String text, int width, String fill) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    final int spare = width - text.charLength();
+    final int before = spare / 2;
+    return fill.repeat(before) + text + fill.repeat(spare - before);
+}
+
+// Shows a sign even when the number is positive, which keeps a column of
+// mixed signs aligned.
+String signed(int value) {
+    return value >= 0 ? $"+${value}" : $"${value}";
+}
+
+void main() {
+    final int value = 255;
+    final double pi = 3.14159265358979;
+    final String word = "Jux";
+
+    // Base. Each intrinsic returns the digits alone; upper-case hex is the
+    // same text with `toUpperCase()` applied.
+    print($"plain      ${value}");
+    print($"binary     ${value.toBinary()}");
+    print($"octal      ${value.toOctal()}");
+    print($"hex        ${value.toHex()}");
+    print($"HEX        ${value.toHex().toUpperCase()}");
+
+    // The prefix naming the base is written as ordinary text in front.
+    print($"prefixed   0b${value.toBinary()}   0o${value.toOctal()}   0x${value.toHex()}");
+
+    // Width sets a minimum. Anything shorter is padded, and nothing is ever
+    // truncated to fit: a number too wide for its field stays intact.
+    final String text = $"${value}";
+    print($"width 8    [${alignRight(text, 8, " ")}]");
+    print($"too narrow [${alignRight(text, 2, " ")}]");
+
+    // Alignment decides which side the padding goes.
+    print($"left       [${alignLeft(text, 8, " ")}]");
+    print($"centre     [${centre(text, 8, " ")}]");
+    print($"right      [${alignRight(text, 8, " ")}]");
+
+    // The fill need not be a space. Zeros are the common case for numbers.
+    print($"dots       [${alignRight(text, 8, ".")}]");
+    print($"stars      [${centre(text, 8, "*")}]");
+    print($"zeros      [${alignRight(text, 8, "0")}]");
+    print($"zeroed hex [${alignRight(value.toHex(), 8, "0")}]");
+
+    print($"signed     ${signed(42)}  ${signed(-42)}");
+
+    // `toFixed(n)` sets the digits kept after the point, rounding the text
+    // and leaving the stored value alone. Without it, a double prints the
+    // shortest text that reads back as the same value.
+    print($"pi         ${pi}");
+    print($"pi to 2    ${pi.toFixed(2)}");
+    print($"pi to 5    ${pi.toFixed(5)}");
+    print($"pi to 0    ${pi.toFixed(0)}");
+
+    // The pieces combine by calling one inside the other: precision first,
+    // then width, right-aligned in a ten-wide column.
+    print($"combined   [${alignRight(pi.toFixed(4), 10, " ")}]");
+
+    // Text takes the same fill, alignment and width.
+    print($"text       [${alignLeft(word, 8, " ")}][${centre(word, 8, " ")}][${alignRight(word, 8, " ")}]");
+
+    // A small table, which is what all of this is for. Note the last row:
+    // 0.125 sits exactly halfway between 0.12 and 0.13, and `toFixed` breaks
+    // such ties towards the even digit, the same rule as `round()`, so it
+    // prints 0.12.
+    print("");
+    print($"${alignLeft("item", 10, " ")}${alignRight("count", 8, " ")}${alignRight("value", 12, " ")}");
+    row("widgets", 12, 4.5);
+    row("sprockets", 5, 19.75);
+    row("cogs", 1440, 0.125);
+}
+
+// One line of the table: a name on the left, then two right-aligned numbers.
+void row(String item, int count, double value) {
+    print($"${alignLeft(item, 10, " ")}${alignRight($"${count}", 8, " ")}${alignRight(value.toFixed(2), 12, " ")}");
+}

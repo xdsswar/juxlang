@@ -1,0 +1,55 @@
+// A conversion happens on its own only when nothing can be lost: widening
+// inside one family and one signedness, `byte` to `i32` or `float` to
+// `double`. Every other conversion has to be asked for with a cast, written
+// as the target type in parentheses in front of the value, because every
+// other conversion can change the value.
+
+// Pads `text` on the left with zeros up to `width` characters. Jux
+// interpolation has no width syntax, so a small helper built on `repeat` does the job.
+String zeroPad(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return "0".repeat(width - text.charLength()) + text;
+}
+
+void main() {
+    // Widening needs no cast. Every `byte` is also an `i32`, so the compiler
+    // performs the conversion without being told.
+    final byte small = 100;
+    final i32 widened = small;
+    print($"widen       int8 ${small} becomes int32 ${widened}");
+
+    // Narrowing has to be asked for, and keeps only the low bits that fit.
+    // 300 does not fit in a `byte`, and what survives is 300 - 256.
+    final i32 big = 300;
+    final var narrowed = (byte) big;
+    print($"narrow      int32 ${big} becomes int8 ${narrowed}");
+
+    // Changing signedness reinterprets the same bits rather than recomputing
+    // the value: every bit of -1 is set, and eight set bits read as 255.
+    final i32 negative = -1;
+    final var reinterpreted = (ubyte) negative;
+    print($"sign        int32 ${negative} becomes uint8 ${reinterpreted}   ${zeroPad(reinterpreted.toBinary(), 8)}");
+
+    // Integers and floats are different families, so crossing between them
+    // needs a cast in both directions, even widening ones. Converting to an
+    // integer truncates towards zero; it does not round.
+    final double ratio = 3.9;
+    print($"float->int  ${ratio} becomes ${(i32) ratio}");
+
+    // A `double` always prints with a fractional part, so 7 converted to a
+    // `double` shows as `7.0`. That makes the change of family visible.
+    final i32 count = 7;
+    print($"int->float  ${count} becomes ${(double) count}");
+
+    // A character is a number underneath, and the cast shows its code point.
+    final char letter = 'A';
+    print($"char->uint  ${letter} becomes ${(u32) letter}");
+
+    // Notice that none of the narrowing above reported a problem. A cast that
+    // loses information is silent by design: the cast is how you say the loss
+    // is intended. When a lossy conversion should be caught instead, the
+    // numeric intrinsics offer checked forms such as `toInt()`, which hand
+    // back a `Result` rather than a silently shortened value (Core lib §K.11).
+}

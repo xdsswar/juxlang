@@ -1,0 +1,112 @@
+// `malloc` and `free` go straight to the system, one request at a time.
+// That is not the only way to get memory, and often not the best one. An
+// allocator interface names the alternatives: anything wanting memory takes
+// one as a parameter, so the caller decides where the memory comes from.
+//
+// GAP: Jux has no allocator parameter, no `Allocator` interface, no arena and
+// no `Box<T>` that takes one. Its heap model is fixed:
+//
+//   - `new` puts every class object, array and collection on the one global
+//     heap, and reference counting gives it back when the last reference
+//     goes (the Ownership lesson). Nothing is freed by hand, and nothing can
+//     be freed twice.
+//   - The full profile uses Rust's global allocator for all of it, and a
+//     program cannot choose another one per call or per collection.
+//   - The raw C allocator is reachable through FFI (the Memory lesson), for
+//     memory Jux does not manage at all.
+//
+// What does exist is enough to build the arena's STRATEGY by hand: take a
+// block, hand out pieces of it by moving a marker, and give everything back
+// at once. That is what this lesson does, over a Rust `Vec`, with a fixed
+// transcript. What it cannot do is make `new` or a `Vec`
+// use it; only values put there on purpose live in it.
+
+// A piece handed out by the arena: where the value lives. It is only a
+// position, so it stays valid exactly as long as the arena has not been
+// reset, which is the rule an arena's handles always have.
+record Slot(int index) {
+}
+
+// An arena of `long` values. It takes storage in blocks of a fixed number of
+// bytes and hands out one slot at a time. Individual slots are never
+// released; `reset` releases them all.
+class Arena {
+    // The size of one value. `sizeof` answers with a `uint`, cast here to the
+    // `int` the arithmetic below uses.
+    private static const int SLOT_BYTES = sizeof(long) as int;
+
+    private int blockBytes;
+
+    // Every block, end to end. A `Vec` rather than an array, because the
+    // number of blocks grows as they are needed.
+    private Vec<long> storage = new Vec<long>();
+    private int blocks = 0;
+
+    // The marker: how many slots have been handed out since the last reset.
+    private int used = 0;
+
+    public Arena(int blockBytes) {
+        this.blockBytes = blockBytes;
+    }
+
+    public int blockCount() {
+        return blocks;
+    }
+
+    public int bytesUsed() {
+        return used * SLOT_BYTES;
+    }
+
+    // Handing out a piece is little more than moving the marker. Only when the
+    // current blocks are full does the arena ask the heap for another one,
+    // which is one allocation for many values.
+    public Slot create(long value) {
+        final int slotsPerBlock = blockBytes / SLOT_BYTES;
+        if (used == blocks * slotsPerBlock) {
+            for (int i = 0; i < slotsPerBlock; i++) {
+                storage.push(0);
+            }
+            blocks++;
+        }
+        storage[used] = value;
+        used++;
+        return new Slot(used - 1);
+    }
+
+    public long get(Slot slot) {
+        return storage[slot.index];
+    }
+
+    // Everything back at once. Nothing had to be matched up, and no slot
+    // needed releasing individually. The blocks stay, ready to be reused.
+    public void reset() {
+        used = 0;
+    }
+}
+
+void main() {
+    // An arena is often built on a backing allocator. This one takes its
+    // blocks from the one heap every `new` uses, so it needs only the block
+    // size: 256 bytes.
+    var arena = new Arena(256);
+    print($"fresh arena     blocks ${arena.blockCount()}  bytes used ${arena.bytesUsed()}");
+
+    // Two values put in the arena. The arena itself makes each slot.
+    final Slot first = arena.create(10);
+    final Slot second = arena.create(20);
+
+    // One 256-byte block was taken from the heap, and both values came out
+    // of it: one allocation for two values.
+    print($"two boxes made  blocks ${arena.blockCount()}  bytes used ${arena.bytesUsed()}");
+    print($"their values    ${arena.get(first)} and ${arena.get(second)}");
+
+    arena.reset();
+    print($"after reset     blocks ${arena.blockCount()}  bytes used ${arena.bytesUsed()}");
+
+    // The idea worth taking away is not the arena itself. It is that "where
+    // does this memory come from" can be a decision. In Jux it is not yet
+    // a parameter every allocating function takes: the
+    // global heap is the only source for the language's own objects, and a
+    // strategy like this one applies only to the values a program chooses to
+    // put through it.
+}

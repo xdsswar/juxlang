@@ -291,6 +291,7 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
     "byteLength",
     "charLength",
     "repeat",
+    "substringBytes",
 ];
 
 /// Field/property names we allow on **any array receiver** without a
@@ -477,6 +478,16 @@ pub(crate) struct Checker<'a> {
     /// this is set (async addendum §18.1.2). Reset to `false` inside a
     /// constructor body and inside a non-async lambda.
     pub(crate) in_async: bool,
+    /// True while checking the body of a generator (§M.2): a function or
+    /// method whose own body yields. Lambdas reset it, so a `yield` inside
+    /// one is caught (E0990).
+    pub(crate) in_generator: bool,
+    /// The switch expressions of the body being checked (see
+    /// `generators::value_switch_spans`): a `yield` inside one is E0990.
+    pub(crate) value_switch_spans: Vec<Span>,
+    /// Depth of `unsafe { }` blocks around the statement being checked. A
+    /// `yield` may not cross one (§M.2.4, E0997).
+    pub(crate) unsafe_block_depth: usize,
     /// True while checking an expression that legitimately CONSUMES a
     /// future: the operand of `await`, or an argument to the executor
     /// builtins (`spawn`/`block_on`/`parallel`/`withTimeout`/
@@ -577,6 +588,9 @@ impl<'a> Checker<'a> {
             checked_escapes: Vec::new(),
             catch_absorb_stack: Vec::new(),
             lambda_depth: 0,
+            in_generator: false,
+            value_switch_spans: Vec::new(),
+            unsafe_block_depth: 0,
             lambda_slot_params: None,
             in_foreach_iter: false,
             in_static: false,
@@ -1743,6 +1757,128 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// An interface's default method may not be a generator (§M.2.4): the
+    /// iterator would have to keep the implementing object alive, and a
+    /// default body only borrows it (E0995). A `static` one has no object and
+    /// is fine.
+    fn check_interface_generator(&mut self, method: &juxc_ast::FnDecl) {
+        let is_static = method.modifiers.iter().any(|m| matches!(m, juxc_ast::FnModifier::Static));
+        if is_static || !method.body.as_ref().is_some_and(crate::generators::body_yields) {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0995_InterfaceDefaultGenerator,
+                format!(
+                    "default method `{}` yields, but an interface's default method cannot be a generator: the iterator would outlive the object it only borrows (§M.2.4)",
+                    method.name.text
+                ),
+            )
+            .with_span(method.name.span)
+            .with_help("declare the method abstract here and write the generator in each implementing class, or make it a `static` generator that takes the object as a parameter"),
+        );
+    }
+
+    /// A generator (§M.2.1) returns `Iterator<T>`, or `Stream<T>` when it is
+    /// `async`; anything else is E0996, reported once at the name.
+    fn check_generator_signature(&mut self, decl: &juxc_ast::FnDecl) {
+        let ret = self.current_return.clone().unwrap_or(Ty::Unknown);
+        if matches!(ret, Ty::Unknown) || crate::generators::element_type(&ret, self.in_async).is_some() {
+            return;
+        }
+        let wanted = if self.in_async { "Stream<T>" } else { "Iterator<T>" };
+        let found = match &decl.return_type {
+            juxc_ast::ReturnType::Void => "void".to_string(),
+            _ => ret.to_string(),
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0996_GeneratorReturnType,
+                format!(
+                    "`{}` yields, so it is a generator and returns `{wanted}`, not `{found}` (§M.2.1)",
+                    decl.name.text
+                ),
+            )
+            .with_span(decl.name.span),
+        );
+    }
+
+    /// `yield value;` (§M.2): only in a generator's own body, never across an
+    /// `unsafe { }` boundary, and the value must fit the element type the
+    /// generator's `Iterator<T>` (or `Stream<T>`) return declares.
+    fn check_yield(&mut self, value: &Expr, span: Span) {
+        self.check_expr(value);
+        if self.value_switch_spans.iter().any(|s| crate::generators::encloses(*s, span)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0990_YieldOutsideGenerator,
+                    "`yield` does not give a switch arm its value: Jux's `yield` belongs to generators (§M.2)",
+                )
+                .with_span(span)
+                .with_help("write the arm's value as an expression body, `case 1 -> 10;`"),
+            );
+            return;
+        }
+        if !self.in_generator {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0990_YieldOutsideGenerator,
+                    "`yield` is only allowed in a generator: a named function or method whose body yields, never a lambda, a constructor or an initializer (§M.2.1)",
+                )
+                .with_span(span),
+            );
+            return;
+        }
+        if self.unsafe_block_depth > 0 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0997_YieldInUnsafe,
+                    "a `yield` cannot sit inside an `unsafe { }` block: the generator suspends there, and the block's invariants would not hold across the pause (§M.2.4)",
+                )
+                .with_span(span),
+            );
+            return;
+        }
+        let ret = self.current_return.clone().unwrap_or(Ty::Unknown);
+        // A return type that is not `Iterator<T>` / `Stream<T>` was reported
+        // once, at the generator's name (E0996).
+        let Some(element) = crate::generators::element_type(&ret, self.in_async) else {
+            return;
+        };
+        let found = infer_expr(value, &self.env, self.symbols);
+        self.check_literal_fits(&element, value, span);
+        if !compatible(&element, &found, self.symbols) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!("yielded value of type {found}, but this generator yields {element}"),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
+    /// The type a `for` over the range `iter` binds (§M.6.1): the bound type
+    /// `T` of `ExclusiveRange<T>` / `InclusiveRange<T>`, which is where the two
+    /// bounds meet under the arithmetic promotion (§S.2.6). An untyped literal
+    /// bound takes the other bound's type, so `0..v.len()` is a `uint` range,
+    /// and two `char` bounds stay `char`. Bounds with no common numeric type
+    /// (E0410 at the operator level) or of a user type give `Unknown`, as
+    /// before, and rustc sees the real types.
+    fn range_element_type(&self, iter: &Expr) -> Ty {
+        let Expr::Range(r) = iter else {
+            return Ty::Unknown;
+        };
+        let lo = infer_expr(&r.start, &self.env, self.symbols);
+        let hi = infer_expr(&r.end, &self.env, self.symbols);
+        if matches!((&lo, &hi), (Ty::Primitive(Primitive::Char), Ty::Primitive(Primitive::Char))) {
+            return Ty::Primitive(Primitive::Char);
+        }
+        crate::infer::numeric_operands_type(&r.start, &lo, &r.end, &hi)
+            .map(Ty::Primitive)
+            .unwrap_or(Ty::Unknown)
+    }
+
     /// Element type of a user iterable (§K.5): resolve the class's
     /// `iterator()` method, read its declared `Iterator<T>` return,
     /// and yield `T`. `None` when the class doesn't speak the
@@ -2002,6 +2138,84 @@ impl<'a> Checker<'a> {
     /// satisfies both (§T.4.2). Only the certain case is reported: a number
     /// against text, a `bool` against either, or a value type against a class.
     /// Two classes may still share a supertype, which inference resolves.
+    /// A `? super T` slot whose `T` the call fixes from another argument
+    /// (`copyAll(List<? extends T> src, List<? super T> dst)` called with a
+    /// `List<Dog>` and a `List<Animal>`) must, in this phase, be passed a
+    /// container of exactly `T` (ERRATA E50). A container of a strict
+    /// supertype is refused here, as E0410, rather than reaching rustc.
+    fn check_super_wildcard_args(
+        &mut self,
+        generic_params: &[TypeParam],
+        param_tys: &[&TypeRef],
+        arg_tys: &[Ty],
+        c: &CallExpr,
+    ) {
+        // The `? super T` parameter of type parameter `T`, if `param` is one.
+        let super_param = |param: &TypeRef| -> Option<String> {
+            param.generic_args.iter().find_map(|g| match g {
+                juxc_ast::GenericArg::Wildcard(juxc_ast::WildcardArg {
+                    bound: Some(juxc_ast::WildcardBound::Super(b)),
+                    ..
+                }) if b.name.segments.len() == 1
+                    && b.generic_args.is_empty()
+                    && generic_params.iter().any(|g| g.name.text == b.name.segments[0].text) =>
+                {
+                    Some(b.name.segments[0].text.clone())
+                }
+                _ => None,
+            })
+        };
+        if !param_tys.iter().any(|p| super_param(p).is_some()) {
+            return;
+        }
+        // What the OTHER arguments fix each `T` as. Inference over every slot
+        // would let the `? super` argument itself vote.
+        let (fixing_params, fixing_args): (Vec<&TypeRef>, Vec<Ty>) = param_tys
+            .iter()
+            .zip(arg_tys)
+            .filter(|(p, _)| super_param(p).is_none())
+            .map(|(p, a)| (*p, a.clone()))
+            .unzip();
+        let inferred = infer_generic_args(generic_params, &fixing_params, &fixing_args);
+        let same = |a: &Ty, b: &Ty| match (a, b) {
+            (Ty::User { name: x, generic_args: xa }, Ty::User { name: y, generic_args: ya }) => {
+                x.rsplit('.').next() == y.rsplit('.').next() && xa.len() == ya.len()
+            }
+            _ => a == b,
+        };
+        for (i, (param, arg_ty)) in param_tys.iter().zip(arg_tys).enumerate() {
+            let Ty::User { generic_args: arg_elems, .. } = arg_ty else { continue };
+            for (slot, garg) in param.generic_args.iter().enumerate() {
+                let juxc_ast::GenericArg::Wildcard(w) = garg else { continue };
+                let Some(juxc_ast::WildcardBound::Super(bound)) = &w.bound else { continue };
+                if bound.name.segments.len() != 1 || !bound.generic_args.is_empty() {
+                    continue;
+                }
+                let t = &bound.name.segments[0].text;
+                if !generic_params.iter().any(|g| &g.name.text == t) {
+                    continue;
+                }
+                let (Some(fixed), Some(elem)) = (inferred.get(t), arg_elems.get(slot)) else { continue };
+                if matches!(fixed, Ty::Unknown) || matches!(elem, Ty::Unknown) || same(fixed, elem) {
+                    continue;
+                }
+                let span = c.args.get(i).map(expr_span).unwrap_or(c.span);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!(
+                            "this `? super {t}` argument holds {elem}, but the call fixes `{t}` as {fixed}: in this phase a `? super` parameter whose type parameter comes from another argument takes a container of exactly {fixed} (ERRATA E50)"
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help(format!(
+                        "pass a container of {fixed}, or declare this parameter with a concrete bound (`? super {fixed}`), which takes a container of any supertype"
+                    )),
+                );
+            }
+        }
+    }
+
     fn report_generic_conflict(
         &mut self,
         name: &str,
@@ -2150,6 +2364,13 @@ impl<'a> Checker<'a> {
         ));
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(fn_decl);
+        // A body that yields is a generator (§M.2).
+        let saved_generator = std::mem::replace(&mut self.in_generator, crate::generators::body_yields(body));
+        let saved_switches =
+            std::mem::replace(&mut self.value_switch_spans, crate::generators::value_switch_spans(body));
+        if self.in_generator {
+            self.check_generator_signature(fn_decl);
+        }
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
@@ -2167,6 +2388,8 @@ impl<'a> Checker<'a> {
         self.enforce_declared_throws(&fn_decl.throws, &fn_decl.name.text);
         self.flush_uninferable_news();
         self.in_unsafe = saved_unsafe;
+        self.in_generator = saved_generator;
+        self.value_switch_spans = saved_switches;
         self.in_async = saved_async;
         self.current_return = saved;
         self.env.generic_params = saved_generics;
@@ -2388,6 +2611,11 @@ impl<'a> Checker<'a> {
         fn_name: &str,
         name_span: Span,
     ) {
+        // A generator ends by falling off its body (§M.2.4): no return
+        // obligation.
+        if crate::generators::body_yields(body) {
+            return;
+        }
         // Only value-returning functions have a return obligation. `void` and
         // `async void` are exempt — the latter parses as `AsyncType` over a
         // synthesized `void` sentinel TypeRef (see juxc-parse `parse_return_type`).
@@ -3004,6 +3232,13 @@ impl<'a> Checker<'a> {
         ));
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(method);
+        // A body that yields is a generator (§M.2).
+        let saved_generator = std::mem::replace(&mut self.in_generator, crate::generators::body_yields(body));
+        let saved_switches =
+            std::mem::replace(&mut self.value_switch_spans, crate::generators::value_switch_spans(body));
+        if self.in_generator {
+            self.check_generator_signature(method);
+        }
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
@@ -3021,6 +3256,8 @@ impl<'a> Checker<'a> {
         self.enforce_declared_throws(&method.throws, &method.name.text);
         self.flush_uninferable_news();
         self.in_unsafe = saved_unsafe;
+        self.in_generator = saved_generator;
+        self.value_switch_spans = saved_switches;
         self.in_async = saved_async;
         self.current_return = saved;
         self.in_static = saved_static;
@@ -3980,6 +4217,7 @@ impl<'a> Checker<'a> {
             if method.body.is_some() {
                 self.check_method(method, &this_ty);
             }
+            self.check_interface_generator(method);
         }
         self.env.clear_generic_params();
         self.env.clear_class();
@@ -5192,6 +5430,23 @@ impl<'a> Checker<'a> {
                 }
             }
 
+            // A generator ends with a bare `return;`; its values come from
+            // `yield`, so `return value` is E0994 (§M.2.4).
+            Stmt::Return(opt, ret_span) if self.in_generator => {
+                if let Some(value) = opt {
+                    self.check_expr(value);
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0994_GeneratorReturnsValue,
+                            "a generator produces its values with `yield` and ends with a bare `return;`, so it cannot `return` a value (§M.2.4)",
+                        )
+                        .with_span(*ret_span),
+                    );
+                }
+            }
+
+            Stmt::Yield(value, span) => self.check_yield(value, *span),
+
             Stmt::Return(opt, ret_span) => {
                 // Clone the expected return type up front so we can
                 // mutably borrow `self` to walk the expression below
@@ -5387,7 +5642,10 @@ impl<'a> Checker<'a> {
                         if name.rsplit('.').next() == Some("Stream")
                             && !self.symbols.classes.contains_key("Stream")
                 );
-                if f.is_await {
+                // `yield* stream;` in an async generator (§M.2.3) awaits
+                // each element: it is a `for await` in all but spelling.
+                let awaits = f.is_await || (f.is_yield_delegation() && iter_is_stream && self.in_async);
+                if awaits {
                     if !self.in_async {
                         self.diagnostics.push(
                             Diagnostic::error(
@@ -5408,6 +5666,14 @@ impl<'a> Checker<'a> {
                             .with_span(expr_span(&f.iter)),
                         );
                     }
+                } else if iter_is_stream && f.is_yield_delegation() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0704_ForAwaitRequiresStream,
+                            "`yield*` of a `Stream<T>` awaits each element, so it needs an async generator (`async Stream<T> f()`); a synchronous generator can delegate only to an `Iterator<T>` or an iterable (§M.2.3)",
+                        )
+                        .with_span(expr_span(&f.iter)),
+                    );
                 } else if iter_is_stream {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -5424,6 +5690,14 @@ impl<'a> Checker<'a> {
                     ty_from_ref(declared, &self.env, self.symbols)
                 } else {
                     match &iter_ty {
+                        // A range (§M.6.1) iterates its bound type `T`, the
+                        // type its two bounds meet in under the arithmetic
+                        // promotion (§S.2.6): `0..10` is `int`, `0..v.len()`
+                        // is `uint` (the literal takes the other bound's
+                        // type), `'a'..='z'` is `char`.
+                        _ if matches!(&f.iter, Expr::Range(_)) => {
+                            self.range_element_type(&f.iter)
+                        }
                         Ty::Array { element, .. } => (**element).clone(),
                         // Stream<T> (§18.6): the element type is the
                         // single generic arg.
@@ -5443,6 +5717,14 @@ impl<'a> Checker<'a> {
                                 ) =>
                         {
                             generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                        }
+                        // An `Iterator<T>` value itself (a generator's result,
+                        // §M.2.1): the loop drains it, one `next()` per pass.
+                        Ty::User { name, generic_args }
+                            if name.rsplit('.').next() == Some("Iterator")
+                                && generic_args.len() == 1 =>
+                        {
+                            generic_args[0].clone()
                         }
                         // User iterable (§O.6/§K.5): the protocol's
                         // element type — `iterator()`'s Iterator<T>
@@ -5724,7 +6006,9 @@ impl<'a> Checker<'a> {
                 // for the duration of the block, then restore.
                 let saved_unsafe = self.in_unsafe;
                 self.in_unsafe = true;
+                self.unsafe_block_depth += 1;
                 self.check_block(b);
+                self.unsafe_block_depth -= 1;
                 self.in_unsafe = saved_unsafe;
             }
             Stmt::Break(label, span) | Stmt::Continue(label, span) => {
@@ -6156,6 +6440,29 @@ impl<'a> Checker<'a> {
                 self.check_expr(&r.start);
                 self.check_expr(&r.end);
                 self.check_user_range_operator(r);
+                // The bounds meet in one type `T` (§M.6.1), the way the
+                // operands of `+` do. An `int` and a `uint` never do, and
+                // the range reached rustc with two integer types.
+                let lo = infer_expr(&r.start, &self.env, self.symbols);
+                let hi = infer_expr(&r.end, &self.env, self.symbols);
+                if let (Ty::Primitive(lp), Ty::Primitive(hp)) = (&lo, &hi) {
+                    let typed = !crate::infer::untyped_int_literal(&r.start)
+                        && !crate::infer::untyped_int_literal(&r.end);
+                    if typed
+                        && crate::ty::integer_bits(*lp).is_some()
+                        && crate::ty::integer_bits(*hp).is_some()
+                        && crate::ty::promote_numeric(*lp, *hp) == crate::ty::NumericPromotion::NoCommonType
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("the bounds of a range need one type, and {lo} and {hi} have none (§M.6.1)"),
+                            )
+                            .with_span(r.span)
+                            .with_help("convert one bound with `as`, e.g. `(a as int)..b`"),
+                        );
+                    }
+                }
                 // `step` (§M.6.3): integer-typed; Phase 1 supports it
                 // only as a for-each iterable (`for (i : a..b step s)`)
                 // — the ForEach arm clears this flag around its head.
@@ -6515,6 +6822,7 @@ impl<'a> Checker<'a> {
                 // bodies — their raises belong to the lambda, not the
                 // declaring function (Phase 1).
                 self.lambda_depth += 1;
+                let saved_generator = std::mem::replace(&mut self.in_generator, false);
                 self.env.push_scope();
                 let slot_params = self.lambda_slot_params.take();
                 for (i, p) in l.params.iter().enumerate() {
@@ -6550,6 +6858,7 @@ impl<'a> Checker<'a> {
                 self.in_async = saved_async;
                 self.current_return = saved_return;
                 self.lambda_depth -= 1;
+                self.in_generator = saved_generator;
                 self.env.pop_scope();
             }
             Expr::Elvis(e) => {
@@ -9953,8 +10262,11 @@ impl<'a> Checker<'a> {
                     // A C-variadic foreign fn (`printf(String, ...)`) accepts
                     // any number of trailing args beyond its fixed params.
                     let callee_c_variadic = fn_sig.is_c_variadic;
+                    // An async GENERATOR hands back its `Stream<T>` without
+                    // being awaited (§M.2.2), so it is not an async call here.
                     let callee_async =
-                        matches!(fn_sig.return_type, juxc_ast::ReturnType::AsyncType(_),);
+                        matches!(fn_sig.return_type, juxc_ast::ReturnType::AsyncType(_),)
+                            && !fn_sig.body.as_ref().is_some_and(crate::generators::body_yields);
                     // §X.1.3 propagation: the callee's declared
                     // checked throws raise here.
                     let callee_throws = fn_sig.throws.clone();
@@ -9994,6 +10306,7 @@ impl<'a> Checker<'a> {
                             .collect();
                         let inferred = infer_generic_args(&generic_params, &param_tys, &arg_tys);
                         self.report_generic_conflict(name, &generic_params, &param_tys, &arg_tys, c);
+                        self.check_super_wildcard_args(&generic_params, &param_tys, &arg_tys, c);
                         let args: Vec<Ty> = generic_params
                             .iter()
                             .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
@@ -10245,7 +10558,7 @@ impl<'a> Checker<'a> {
                                 let static_is_async = matches!(
                                     method.return_type,
                                     juxc_ast::ReturnType::AsyncType(_),
-                                );
+                                ) && !method.is_generator;
                                 self.flag_unawaited_async_call(
                                     method_name,
                                     static_is_async,
@@ -10586,7 +10899,8 @@ impl<'a> Checker<'a> {
                     let method_is_static = method.is_static;
                     let method_is_unsafe = method.is_unsafe;
                     let method_is_async =
-                        matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_),);
+                        matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_),)
+                            && !method.is_generator;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.

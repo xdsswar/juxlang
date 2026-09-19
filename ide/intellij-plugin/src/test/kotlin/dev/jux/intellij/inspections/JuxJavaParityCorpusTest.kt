@@ -31,6 +31,10 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         JuxSelfAssignmentInspection(),
         JuxEmptyStatementBodyInspection(),
         JuxMissingReturnInspection(),
+        JuxGeneratorInspection(),
+        JuxInterfaceOperatorInspection(),
+        JuxSimplifiableIfInspection(),
+        JuxIndexedLoopInspection(),
         JuxAbstractMethodInClassInspection(),
         JuxUnhandledExceptionInspection(),
     )
@@ -58,6 +62,13 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         // `while (Tape.advance());`: the empty statement as a loop body is
         // what the example demonstrates (Grammar §A.2.8).
         "labeled_blocks.jux:JuxEmptyStatementBody:48",
+        // `for (var i : 0..values.length) { if (test(values[i])) ... }`: the
+        // lesson keeps its indexed loop on purpose, which is exactly what
+        // the check reports (a for-each would do).
+        "../tests/lessons/Callback/src/Main.jux:JuxIndexedLoop:37",
+        // `items[i]` on a record's bare array component is the thing this
+        // example exists to compile (Jux lesson bug B5), so it stays indexed.
+        "record_members.jux:JuxIndexedLoop:24",
     )
 
     fun testCorpusHasNoFindings() {

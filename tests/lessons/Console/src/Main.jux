@@ -1,0 +1,65 @@
+// Everything printed so far has gone through `print`. It writes its argument
+// and then finishes the line, every time.
+//
+// Jux has one print function, and it always ends the line, so a line built from several pieces is assembled as
+// a `String` first and printed whole. That turns out to be the clearer habit
+// anyway: the line exists as a value before it is shown.
+
+void main() {
+    // Three pieces, one line, because only one `print` ends it.
+    var pieces = "one ";
+    pieces += "two ";
+    pieces += "three";
+    print(pieces);
+
+    // An empty string prints just the line ending, which is how a blank line
+    // is produced.
+    print("");
+
+    // A value can be handed over on its own, with no surrounding text. Any
+    // value will do: `print` writes the value's own text.
+    final var answer = 42;
+    print(answer);
+
+    // More often the value goes inside a message. `$"..."` is an interpolated
+    // string: each `${...}` is replaced by the text of the expression inside.
+    final var name = "Jux";
+    final var version = 4;
+    print($"${name} 0.${version}.0");
+
+    // A bare name can drop the braces: `$name` is the same as `${name}`.
+    print($"hello from $name");
+
+    // A row assembled a piece at a time in a loop, and only then printed.
+    var row = "";
+    for (var i : 1..=5) {
+        row += $"${i} ";
+    }
+    print(row);
+
+    // There is no format spec inside the braces; width and alignment are
+    // done on the text, as the Format lesson shows in full. A short helper
+    // covers these three.
+    print($"|${alignRight("right", 8)}|");
+    print($"|${alignLeft("left", 8)}|");
+    print($"|${centre("center", 8)}|");
+
+    // Reading input is the other half of console work. It comes from Rust's
+    // standard library, `rust.std.io`, and waits for a later lesson.
+}
+
+// Pads on the left, right-aligning `text` in `width` characters.
+String alignRight(String text, int width) {
+    return " ".repeat(width - text.charLength()) + text;
+}
+
+// Pads on the right, left-aligning `text` in `width` characters.
+String alignLeft(String text, int width) {
+    return text + " ".repeat(width - text.charLength());
+}
+
+// Centres `text`, putting the odd leftover space on the right.
+String centre(String text, int width) {
+    final int spare = width - text.charLength();
+    return " ".repeat(spare / 2) + text + " ".repeat(spare - spare / 2);
+}

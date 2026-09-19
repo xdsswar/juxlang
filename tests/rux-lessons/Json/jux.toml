@@ -1,8 +1,0 @@
-[package]
-name = "rux.json"
-version = "0.1.0"
-
-# serde_json, from crates.io. `preserve_order` keeps an object's members in
-# document order; without it they come back sorted by key.
-[dependencies]
-"rust.serde_json" = { version = "1", features = ["preserve_order"] }

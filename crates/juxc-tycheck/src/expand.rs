@@ -174,7 +174,7 @@ fn expand_block(block: &mut Block, plans: &Rewrites<'_>) {
 
 fn expand_stmt(stmt: &mut Stmt, plans: &Rewrites<'_>) {
     match stmt {
-        Stmt::Expr(e) => expand_expr(e, plans),
+        Stmt::Expr(e) | Stmt::Yield(e, _) => expand_expr(e, plans),
         Stmt::Return(e, _) => {
             if let Some(e) = e {
                 expand_expr(e, plans);

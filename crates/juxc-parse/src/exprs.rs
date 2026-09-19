@@ -871,6 +871,18 @@ impl<'a> Parser<'a> {
     ///
     /// Future: `.name`, `?.name`, `?`, `!!`, `::name`, …
     pub(crate) fn parse_postfix(&mut self) -> Option<Expr> {
+        // Where the operand starts. A literal carries no span of its own, so
+        // `(2.0).nosuch()` built its call span from `Span::DUMMY` and the
+        // error was reported at 1:1; the operand's first token stands in.
+        let first = self.peek_span();
+        let anchor = move |e: &Expr| {
+            let s = expr_span(e);
+            if s == Span::DUMMY {
+                first
+            } else {
+                s
+            }
+        };
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek() {
@@ -880,7 +892,7 @@ impl<'a> Parser<'a> {
                     let (args, arg_names) = self.parse_arg_list();
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close argument list");
-                    let span = expr_span(&expr).join(end);
+                    let span = anchor(&expr).join(end);
                     expr = Expr::Call(CallExpr {
                         callee: Box::new(expr),
                         explicit_generic_args: Vec::new(),
@@ -900,7 +912,7 @@ impl<'a> Parser<'a> {
                     let (args, arg_names) = self.parse_arg_list();
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close argument list");
-                    let span = expr_span(&expr).join(end);
+                    let span = anchor(&expr).join(end);
                     expr = Expr::Call(CallExpr {
                         callee: Box::new(expr),
                         explicit_generic_args,
@@ -935,7 +947,7 @@ impl<'a> Parser<'a> {
                     }
                     let qspan = self.peek_span();
                     self.advance(); // '?'
-                    let span = expr_span(&expr).join(qspan);
+                    let span = anchor(&expr).join(qspan);
                     expr = Expr::ErrorProp(Box::new(expr), span);
                 }
                 TokenKind::LBracket => {
@@ -944,7 +956,7 @@ impl<'a> Parser<'a> {
                     let index = self.parse_expr()?;
                     let end = self.peek_span();
                     self.expect(&TokenKind::RBracket, "']' to close index expression");
-                    let span = expr_span(&expr).join(end);
+                    let span = anchor(&expr).join(end);
                     expr = Expr::Index(IndexExpr {
                         array: Box::new(expr),
                         index: Box::new(index),
@@ -998,7 +1010,7 @@ impl<'a> Parser<'a> {
                         // unambiguous, so we accept the keyword spelling here.
                         self.parse_member_name()?
                     };
-                    let span = expr_span(&expr).join(field.span);
+                    let span = anchor(&expr).join(field.span);
                     expr = Expr::Field(FieldExpr {
                         object: Box::new(expr),
                         field,
@@ -1012,7 +1024,7 @@ impl<'a> Parser<'a> {
                     // `peer` then reads `.id` off the unwrapped value.
                     let end = self.peek_span();
                     self.advance(); // '!!'
-                    let span = expr_span(&expr).join(end);
+                    let span = anchor(&expr).join(end);
                     expr = Expr::NotNullAssert(Box::new(expr), span);
                 }
                 TokenKind::QuestionDot => {
@@ -1025,7 +1037,7 @@ impl<'a> Parser<'a> {
                     // picking up the `(` and wrapping in `CallExpr`.
                     self.advance(); // '?.'
                     let field = self.parse_member_name()?;
-                    let span = expr_span(&expr).join(field.span);
+                    let span = anchor(&expr).join(field.span);
                     expr = Expr::Field(FieldExpr {
                         object: Box::new(expr),
                         field,
@@ -1099,7 +1111,7 @@ impl<'a> Parser<'a> {
                     let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
                     let end = self.peek_span();
                     self.advance(); // '++' / '--'
-                    let span = expr_span(&expr).join(end);
+                    let span = anchor(&expr).join(end);
                     expr = self.make_incdec_expr(expr, is_inc, /*is_prefix=*/ false, span)?;
                     break;
                 }

@@ -1,0 +1,7 @@
+[package]
+name = "lessons.time"
+version = "0.1.0"
+
+# chrono, for calendar dates. Instants and durations are Rust's std.
+[dependencies]
+"rust.chrono" = "0.4"

@@ -1,0 +1,51 @@
+// A named free function is a value of its function type (§M.8), just like a
+// lambda: it can be passed to a parameter, held in a local or a field, and
+// returned.
+
+class Counter {
+    int hits = 0;
+}
+
+int twice(int v) { return v * 2; }
+
+String shout(String s) { return s + "!"; }
+
+// A class parameter: the function shares the caller's object.
+void bump(Counter c) { c.hits += 1; }
+
+int apply((int) -> int f, int x) { return f(x); }
+
+void each(Counter c, int times, (Counter) -> void step) {
+    for (var i : 0..times) {
+        step(c);
+    }
+}
+
+(int) -> int pick(bool doubling) {
+    if (doubling) {
+        return twice;
+    }
+    return (v) -> v;
+}
+
+class Pipeline {
+    (String) -> String stage = shout;
+
+    String run(String s) { return stage(s); }
+}
+
+void main() {
+    print(apply(twice, 3));
+
+    final (int) -> int held = twice;
+    print(held(21));
+
+    print(pick(true)(5));
+    print(pick(false)(5));
+
+    final Counter c = new Counter();
+    each(c, 3, bump);
+    print(c.hits);
+
+    print(new Pipeline().run("hello"));
+}

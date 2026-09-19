@@ -1,0 +1,41 @@
+// Every project so far has been a single `Main.jux`. A project may hold as
+// many source files as it likes, grouped into packages.
+//
+// This one has three files: this entry point, plus
+// `lessons/module/geometry/Geometry.jux` and
+// `lessons/module/temperature/Temperature.jux`. Each of the other two starts with
+// a `package` line naming where its functions live, and the directories
+// mirror those names. `jux.toml` is the only manifest: it names the project,
+// and the compiler finds every source file under `src/` by itself.
+
+// Imports use `.` between the parts of a name, the same shape as a package.
+// Grouped braces pull in several names from one package at once.
+import lessons.module.geometry.{rectangleArea, squareArea, perimeter, twiceTheArea};
+import lessons.module.temperature.toFahrenheit;
+
+// Both packages have a `describe`. Importing both under one name would be a
+// conflict, so `as` gives each a name of its own here.
+import lessons.module.geometry.describe as describeGeometry;
+import lessons.module.temperature.describe as describeTemperature;
+
+void main() {
+    // Once imported, these are called like any other function. Nothing marks
+    // them as coming from elsewhere in the project.
+    print($"rectangle 3x4 area      ${rectangleArea(3, 4)}");
+    print($"square 5 area           ${squareArea(5)}");
+    print($"rectangle 3x4 perimeter ${perimeter(3, 4)}");
+    print($"20C in Fahrenheit       ${toFahrenheit(20.0)}");
+    print($"twice the 3x4 area      ${twiceTheArea(3, 4)}");
+
+    // The package is also a namespace. Two packages may each declare a
+    // function called `describe` without clashing, because the package a
+    // name comes from is part of reaching it.
+    print($"geometry covers         ${describeGeometry()}");
+    print($"temperature covers      ${describeTemperature()}");
+
+    // `public` controls what leaves a package. `doubled` in the geometry
+    // package has no modifier, so it is package-private: `twiceTheArea` may
+    // call it, and this file may not import it at all. A package keeps its
+    // details private by saying nothing, and marks its intended surface
+    // `public`.
+}

@@ -1,0 +1,45 @@
+// A `switch` over Jux's own `Result` (§K.4). The labels `Ok` and `Err` are
+// the variants of `jux.std.result.Result`, not Rust's prelude type of the
+// same name, and a binder takes the scrutinee's type argument: `e` below is a
+// `MathError`, so it can be switched on in turn.
+
+enum MathError { NotExact(int), Negative }
+
+Result<int, String> half(int n) {
+    if (n % 2 != 0) {
+        return Result.Err("odd");
+    }
+    return Result.Ok(n / 2);
+}
+
+Result<int, MathError> third(int n) {
+    if (n < 0) {
+        return Result.Err(MathError.Negative);
+    }
+    if (n % 3 != 0) {
+        return Result.Err(MathError.NotExact(n % 3));
+    }
+    return Result.Ok(n / 3);
+}
+
+void main() {
+    switch (half(4)) {
+        case Ok(var v) -> print($"half ${v}");
+        case Err(var e) -> print($"error ${e}");
+    }
+    switch (half(3)) {
+        case Result.Ok(var v) -> print($"half ${v}");
+        case Result.Err(var e) -> print($"error ${e}");
+    }
+    for (var n : new int[] {9, 10, -3}) {
+        switch (third(n)) {
+            case Ok(var v) -> print($"third ${v}");
+            case Err(var e) -> {
+                switch (e) {
+                    case NotExact(var r) -> print($"remainder ${r}");
+                    case Negative -> print("negative");
+                }
+            }
+        }
+    }
+}

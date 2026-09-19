@@ -2044,11 +2044,37 @@ impl RustEmitter {
                             self.w.push('(');
                             let prev = self.emitting_format_arg;
                             self.emitting_format_arg = false;
+                            let param_tys: Vec<juxc_ast::TypeRef> = iface
+                                .methods
+                                .get(f.field.text.as_str())
+                                .map(|m| m.params.iter().map(|p| p.ty.clone()).collect())
+                                .unwrap_or_default();
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
                                     self.w.push_str(", ");
                                 }
-                                self.emit_expr(arg);
+                                // Each argument takes its parameter's shape, as
+                                // on a class's static call: a class value
+                                // passed for an interface parameter becomes an
+                                // `Rc<dyn Trait>`, a shared handle is
+                                // share-cloned rather than moved.
+                                if let Some(pty) = param_tys.get(i) {
+                                    if !matches!(
+                                        self.iface_coercion_to(pty, arg),
+                                        crate::analysis::IfaceCoercion::None,
+                                    ) {
+                                        self.emit_expr_coerced_to_iface(pty, arg);
+                                        continue;
+                                    }
+                                }
+                                let nullable = param_tys.get(i).is_some_and(|t| t.nullable);
+                                self.emit_arg_with_nullable_wrap(arg, nullable);
+                                if !nullable
+                                    && (self.wrapper_value_needs_clone(arg)
+                                        || self.value_place_needs_clone(arg))
+                                {
+                                    self.w.push_str(".clone()");
+                                }
                             }
                             self.emitting_format_arg = prev;
                             self.w.push(')');
@@ -2063,12 +2089,33 @@ impl RustEmitter {
         // the receiver as a class name and switch the dot to `::`.
         if let Expr::Field(f) = &*call.callee {
             if let Expr::Path(qn) = &*f.object {
-                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                // A RECORD's static method (`P.zero()`) is an associated
+                // function of the record's struct just the same. Records live
+                // in their own table, so the class lookup alone missed them
+                // and the call was emitted as a field access, `P.zero()`
+                // (rustc E0423).
+                let static_owner = self.path_resolves_to_class_in_emit(qn).or_else(|| {
+                    let name = qn
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    self.resolve_bare_type_fqn(&name)
+                        .filter(|fqn| self.symbols.records.contains_key(fqn))
+                });
+                if let Some(class_fqn) = static_owner {
                     let is_static_method = self
                         .symbols
                         .classes
                         .get(&class_fqn)
                         .and_then(|c| c.methods.get(f.field.text.as_str()))
+                        .or_else(|| {
+                            self.symbols
+                                .records
+                                .get(&class_fqn)
+                                .and_then(|r| r.methods.get(f.field.text.as_str()))
+                        })
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {
@@ -5814,6 +5861,21 @@ impl RustEmitter {
                     None => self.w.push_str(", None)"),
                 }
                 self.emitting_format_arg = prev;
+                true
+            }
+            "substringBytes" => {
+                // `s.substringBytes(start, end)`: byte offsets, through the
+                // prelude's `jux_substring_bytes` (§K.7).
+                self.w.push_str("crate::jux_substring_bytes(&");
+                self.emit_stdlib_receiver(receiver);
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                for arg in call.args.iter().take(2) {
+                    self.w.push_str(", ");
+                    self.emit_index_as_isize(arg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
                 true
             }
             "charAt" => {

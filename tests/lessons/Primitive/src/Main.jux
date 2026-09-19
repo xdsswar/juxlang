@@ -1,0 +1,77 @@
+// The primitive types every other type is built from. Each integer family has
+// fixed-width members (`i8` to `i64`, `u8` to `u64`, with the Java-style names
+// `byte`, `short`, `long` for the signed ones), plus the native-width `int`
+// and `uint` whose size matches the target machine.
+
+void main() {
+    // Signed integers, each fixed width shown at the largest value it holds.
+    final i8 int8Max = 127;
+    final i16 int16Max = 32767;
+    final i32 int32Max = 2147483647;
+    final i64 int64Max = 9223372036854775807;
+    final int nativeInt = -1000;
+    print($"int8    ${int8Max}");
+    print($"int16   ${int16Max}");
+    print($"int32   ${int32Max}");
+    print($"int64   ${int64Max}");
+    print($"int     ${nativeInt}");
+
+    // Unsigned integers hold no negatives, so the same width reaches twice as
+    // far in the positive direction. A bare integer literal is read as a
+    // signed 64-bit number, so one past `long.MAX_VALUE` needs the `uL`
+    // suffix to say it is unsigned from the start.
+    final u8 uint8Max = 255;
+    final u16 uint16Max = 65535;
+    final u32 uint32Max = 4294967295;
+    final u64 uint64Max = 18446744073709551615uL;
+    final uint nativeUint = 1000;
+    print($"uint8   ${uint8Max}");
+    print($"uint16  ${uint16Max}");
+    print($"uint32  ${uint32Max}");
+    print($"uint64  ${uint64Max}");
+    print($"uint    ${nativeUint}");
+
+    // A value and how it is rendered are separate things. These three lines
+    // print the same `u8`, changing only the base: `toBinary`, `toOctal` and
+    // `toHex` (Core lib §K.11). Written out in binary, the eight bits of a
+    // `u8` are visible.
+    print($"binary  0b${uint8Max.toBinary()}");
+    print($"octal   0o${uint8Max.toOctal()}");
+    print($"hex     0x${uint8Max.toHex()}");
+
+    // Floating point trades exactness for range. Both of these are written
+    // from the same digits of pi, but the narrower type keeps fewer of them:
+    // the `f` suffix is what makes a literal a `float`.
+    final float single = 3.141592653589793f;
+    final double wide = 3.141592653589793;
+    final double nativeFloat = 2.718281828459045;
+    print($"float32 ${single}");
+    print($"float64 ${wide}");
+    print($"float   ${nativeFloat}");
+
+    // A rendering can also ask for fewer digits. `toFixed(3)` rounds the
+    // text to three decimal places and leaves the stored value untouched.
+    print($"rounded ${nativeFloat.toFixed(3)}");
+
+    // Jux has one boolean type, `bool`. A C boolean of another width is
+    // spelled at the FFI boundary instead (Layout-ABI §8.1.1).
+    final bool flag8 = true;
+    final bool flag16 = false;
+    final bool flag32 = true;
+    final bool nativeBool = false;
+    print($"bool8   ${flag8}");
+    print($"bool16  ${flag16}");
+    print($"bool32  ${flag32}");
+    print($"bool    ${nativeBool}");
+
+    // A `char` is a whole Unicode scalar value, wide enough for any code
+    // point, so there is one character type rather than three.
+    final char latin = 'W';
+    final char cyrillic = 'Я';
+    final char greek = 'π';
+    final char nativeChar = 'Ψ';
+    print($"char8   ${latin}");
+    print($"char16  ${cyrillic}");
+    print($"char32  ${greek}");
+    print($"char    ${nativeChar}");
+}

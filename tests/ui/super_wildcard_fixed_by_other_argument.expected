@@ -1,0 +1,1 @@
+super_wildcard_fixed_by_other_argument.jux:23:19: [E0410] error: this `? super T` argument holds Animal, but the call fixes `T` as Dog: in this phase a `? super` parameter whose type parameter comes from another argument takes a container of exactly Dog (ERRATA E50)

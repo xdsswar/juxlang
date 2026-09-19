@@ -1,0 +1,59 @@
+// Async generators (JUX-MISSING-DEFS §M.2.2): an `async` function that
+// yields returns a `Stream<T>`. Its body may `await` between values, and the
+// consumer pulls them with `for await`.
+
+async int fetchScore(int id) {
+    return id * 7 % 10;
+}
+
+// Awaits a lookup per value, yields the answer.
+async Stream<int> scores(int count) {
+    for (var id = 1; id <= count; id++) {
+        var score = await fetchScore(id);
+        yield score;
+    }
+}
+
+// `yield*` over a stream awaits each of its values in turn.
+async Stream<int> withBonus(int count) {
+    yield* scores(count);
+    yield 100;
+}
+
+class Ticker {
+    private String label;
+    private int ticks = 0;
+
+    public Ticker(String label) {
+        this.label = label;
+    }
+
+    public async Stream<String> run(int n) {
+        while (ticks < n) {
+            ticks = ticks + 1;
+            yield label + " " + ticks;
+        }
+    }
+}
+
+public async void main() {
+    for await (var s : scores(4)) {
+        print("score " + s);
+    }
+
+    var total = 0;
+    for await (var s : withBonus(3)) {
+        total = total + s;
+    }
+    print("total " + total);
+
+    var t = new Ticker("tick");
+    for await (var line : t.run(3)) {
+        print(line);
+    }
+
+    // A stream is one-shot: combinators take over its values (§18.6.5).
+    for await (var s : scores(6).filterAsync((x) -> x > 3)) {
+        print("high " + s);
+    }
+}

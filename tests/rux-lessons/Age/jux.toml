@@ -1,7 +1,0 @@
-[package]
-name = "rux.age"
-version = "0.1.0"
-
-# chrono, for calendar dates.
-[dependencies]
-"rust.chrono" = "0.4"

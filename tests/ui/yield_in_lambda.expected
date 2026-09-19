@@ -1,0 +1,1 @@
+yield_in_lambda.jux:6:9: [E0990] error: `yield` is only allowed in a generator: a named function or method whose body yields, never a lambda, a constructor or an initializer (§M.2.1)

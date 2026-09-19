@@ -72,20 +72,20 @@ object JuxCorpus {
     fun files(root: File): List<File> = entries(root).map { it.file }
 
     /**
-     * What the corpus tests sweep: everything under [examples], then the Rux
-     * lesson programs (every `.jux` under `tests/rux-lessons/<Lesson>/src`), 39 small
+     * What the corpus tests sweep: everything under [examples], then the Jux
+     * lesson programs (every `.jux` under `tests/lessons/<Lesson>/src`), 39 small
      * projects written the way a newcomer writes Jux, and so a different
      * test of the editor than the examples are.
      *
      * The lessons all have a `src/Main.jux`, so each lesson file is named
-     * `rux_<Lesson>_src_...jux`, clear of every example's name.
+     * `lesson_<Lesson>_src_...jux`, clear of every example's name.
      */
     fun sweep(examples: File): List<Entry> {
-        val lessons = File(examples.absoluteFile.parentFile, "tests/rux-lessons")
-        val ruxEntries = entries(lessons)
+        val lessons = File(examples.absoluteFile.parentFile, "tests/lessons")
+        val lessonEntries = entries(lessons)
             .filter { it.file.relativeTo(lessons).invariantSeparatorsPath.split('/').getOrNull(1) == "src" }
-            .map { Entry("rux_" + it.name, it.file) }
-        return entries(examples) + ruxEntries
+            .map { Entry("lesson_" + it.name, it.file) }
+        return entries(examples) + lessonEntries
     }
 
     /** Just the files of [sweep]. */

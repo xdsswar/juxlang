@@ -11,7 +11,7 @@ Jux is **ahead** on language intelligence and **behind** on reach.
 diagnostics, and the IntelliJ plugin has ~400 tests over a real PSI parser.
 There is no VSCode extension, no Zed extension, and no website.
 
-Three Rux repositories were cloned to `reference/` (gitignored) as a model —
+Three reference editor repositories were cloned to `reference/` (gitignored) as a model —
 `Zed`, `VSCode`, `Web`. What they show, beyond packaging shape: every one of
 them **hand-maintains its keyword list**, in three separate copies that drift
 the moment the language gains a keyword.

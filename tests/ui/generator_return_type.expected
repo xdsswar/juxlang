@@ -1,0 +1,1 @@
+generator_return_type.jux:4:12: [E0996] error: `count` yields, so it is a generator and returns `Iterator<T>`, not `int` (§M.2.1)

@@ -1,0 +1,14 @@
+// A generator suspends at every `yield`, and an `unsafe { }` block's
+// invariants do not survive the pause (§M.2.4).
+
+public Iterator<int> raw() {
+    unsafe {
+        yield 1;
+    }
+}
+
+public void main() {
+    for (var x : raw()) {
+        print(x);
+    }
+}

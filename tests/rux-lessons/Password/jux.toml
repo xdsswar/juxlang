@@ -1,8 +1,0 @@
-[package]
-name = "rux.password"
-version = "0.1.0"
-
-# `rand` has the drawing methods, `rand_pcg` the seeded PCG generator.
-[dependencies]
-"rust.rand" = "0.9"
-"rust.rand_pcg" = "0.9"

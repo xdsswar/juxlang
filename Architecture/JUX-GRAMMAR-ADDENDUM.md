@@ -230,7 +230,7 @@ annotation-arg    = expression                            -- positional
                   | identifier '=' expression              -- named
 ```
 
-Block-form annotations (`@export { ... }` per §3.6) apply the annotation to every declaration inside the braces. They do not introduce a new scope.
+Block-form annotations (`@export { ... }` per §3.6) apply the annotation to every declaration inside the braces. They do not introduce a new scope. The block form takes no arguments (`@export(name = "f")` names one symbol, so it belongs on one function), blocks may nest, and a declaration inside may carry annotations of its own, which follow the block's. Only declarations may appear in the braces.
 
 **Case-insensitive resolution.** The annotation's `qualified-name` is matched against declared annotations by lower-casing both sides before comparison. Same rule for annotation-arg parameter names. Per JUX-LANG-V1 §3.6: `@Override` ≡ `@override` ≡ `@OVERRIDE`. The lexer accepts the user's case verbatim; resolution (phase 4 per `JUX-COMPILER-PIPELINE-ADDENDUM.md`) normalizes for lookup. The compiler echoes the user-written spelling back in diagnostics and `juxc fmt` does not normalize casing.
 

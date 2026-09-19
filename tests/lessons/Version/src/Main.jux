@@ -1,0 +1,72 @@
+// Selecting code by the version of the compiler building it.
+//
+// Ideally the version is read while compiling: only the taken branch reaches
+// the binary, and the others are never type-checked, so they may use features
+// the running compiler does not have. Jux has no such query yet (a GAP).
+//
+// GAP: Jux has no compiler-version query. `@cfg` knows the target, the build
+// mode, the profile and the package's features (JUX-LANG-V1 §11.2), but not
+// which `juxc` is running, and there is no constant carrying its version. The
+// compile-time half of this lesson therefore has no Jux spelling today.
+//
+// What follows is the part that does exist: the version as a value, compared
+// with an ordering operator, and a branch on the result. The value is a
+// stand-in written by hand, and the branch runs at run time rather than while
+// compiling. Where `#compiler.version` would appear, the comments say so.
+
+// A version, compared field by field. A record gives equality and hashing for
+// free; ordering is the one operator it needs to be told about, and `<=>`
+// alone brings `<`, `<=`, `>` and `>=` with it (§7.14.4).
+record SemanticVersion(int major, int minor, int patch) {
+    public int operator<=>(SemanticVersion other) {
+        if (major != other.major) {
+            return major <=> other.major;
+        }
+        if (minor != other.minor) {
+            return minor <=> other.minor;
+        }
+        return patch <=> other.patch;
+    }
+}
+
+// Stand-in for `#compiler.version`. Jux is at 0.1, and this is the number a
+// compiler query would report; it has to be kept up to date by hand, which is
+// the whole problem a real query solves.
+SemanticVersion compilerVersion() {
+    return new SemanticVersion(0, 1, 0);
+}
+
+// The two milestones the branches are about.
+SemanticVersion firstPreview() {
+    return new SemanticVersion(0, 1, 0);
+}
+
+SemanticVersion firstStable() {
+    return new SemanticVersion(1, 0, 0);
+}
+
+// Here the chain is an ordinary `if`, decided at run time, and the
+// last branch can only report the problem after the program has been built.
+void describe() {
+    final SemanticVersion version = compilerVersion();
+    if (version >= firstStable()) {
+        print("Stable release: the 1.x language is frozen");
+    } else if (version >= firstPreview()) {
+        print("Preview release: conditional compilation is available");
+    } else {
+        print("Version requires Jux 0.1.0 or newer");
+    }
+}
+
+void main() {
+    final SemanticVersion version = compilerVersion();
+    print($"Compiled with Jux ${version.major}.${version.minor}.${version.patch}");
+
+    describe();
+
+    // The nearest Jux has to "compile this only on a new enough compiler" is
+    // `if cfg(...)` on something the build does know, such as a feature.
+    if (version.minor >= 1) {
+        print("The `if cfg` statement is supported");
+    }
+}

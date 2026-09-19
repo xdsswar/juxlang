@@ -1,9 +1,0 @@
-[package]
-name = "rux.melody"
-version = "0.1.0"
-
-# Off by default, so a build prints the tune without sounding it.
-# `jux run --features sound` turns the Windows beeps on.
-[features]
-default = []
-sound = []

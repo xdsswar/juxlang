@@ -1194,6 +1194,10 @@ pub struct MethodSig {
     pub params: Vec<ParamSig>,
     /// Declared return type (or `void`).
     pub return_type: ReturnType,
+    /// True when the body yields (JUX-MISSING-DEFS §M.2): the method is a
+    /// generator. An `async` one returns its `Stream<T>` straight away, so a
+    /// call to it is not an unawaited future (E0705 does not apply).
+    pub is_generator: bool,
     /// Span of the method declaration.
     pub span: Span,
 }
@@ -1343,6 +1347,10 @@ pub struct RecordComponentSig {
 pub struct EnumSig {
     /// Enum visibility.
     pub visibility: Visibility,
+    /// Generic parameters in declaration order (`T`, `E` of
+    /// `Result<T, E>`), so a variant's payload types can be substituted
+    /// with the scrutinee's type arguments.
+    pub generic_params: Vec<TypeParam>,
     /// Interfaces this enum implements (§A.2.5). An enum has no `extends`, so
     /// this is its whole supertype list — the same role
     /// [`RecordSig::implements`] plays for records.
@@ -1842,6 +1850,10 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
                 }
             }
         }
+        // `sig.fields` is a `HashMap`, so walk the edges in declaration
+        // order: the warning names the FIRST field that closes a cycle, and
+        // which field that is must not change between two runs.
+        outs.sort_by_key(|(_, span, name)| (span.file, span.start, name.clone()));
         edges.insert(fqn.clone(), outs);
     }
 
@@ -2084,6 +2096,37 @@ fn check_imports_resolve(
                         }
                     }
                     report(fqn.clone(), import.span, diagnostics);
+                    // §4.4: a free function declared with no modifier is
+                    // visible inside its own package only, the rule types
+                    // already follow. Importing one from another package
+                    // compiled and ran. Only a Jux declaration (one with a
+                    // body) is checked; a `.jux.d` stub mirrors a foreign
+                    // API whose visibility is the crate's business.
+                    if let Some(f) = table.functions.get(&fqn) {
+                        let fn_pkg = fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                        if matches!(f.visibility, Visibility::Package)
+                            && f.body.is_some()
+                            && fn_pkg != unit_pkg
+                        {
+                            let declaring = if fn_pkg.is_empty() {
+                                "the root package".to_string()
+                            } else {
+                                format!("`{fn_pkg}`")
+                            };
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0416_PackagePrivateAccess,
+                                    format!(
+                                        "cannot import package-private function `{fqn}` -- it is \
+                                         declared in {declaring} without `public`, so it is \
+                                         visible only inside that package (§4.4). Mark the \
+                                         declaration `public` to export it",
+                                    ),
+                                )
+                                .with_span(import.span),
+                            );
+                        }
+                    }
                     // Binding name = alias, else the imported leaf segment.
                     let bind = alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| {
                         name.segments
@@ -4410,7 +4453,8 @@ fn insert_class(
         collect_operator_sigs(table, &class_decl.operators, "class", &class_decl.name.text, is_external, diagnostics);
     // §O.2.7 pairing: `operator==` requires `operator hash`.
     let class_ops: Vec<&juxc_ast::OperatorDecl> = class_decl.operators.iter().collect();
-    check_eq_hash_pairing(&class_ops, "class", &class_decl.name.text, diagnostics);
+    let kind_label = if class_decl.is_struct { "struct" } else { "class" };
+    check_eq_hash_pairing(&class_ops, kind_label, &class_decl.name.text, diagnostics);
     // §O.2.1: `<=>` conflicts with individual `<`/`<=`/`>`/`>=`.
     check_cmp_individual_conflict(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1/§O.2.2: fixed return types for ==, <=>, hash, string, etc.
@@ -4647,6 +4691,7 @@ fn insert_enum(
         fqn,
         EnumSig {
             visibility: enum_decl.visibility,
+            generic_params: enum_decl.generic_params.clone(),
             implements: enum_decl.implements.clone(),
             variants,
             operators,
@@ -4947,6 +4992,7 @@ fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &E
         generic_params: Vec::new(),
         params: Vec::new(),
         return_type: ret,
+        is_generator: false,
         span,
     };
     methods
@@ -5052,6 +5098,7 @@ fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),
+        is_generator: method.body.as_ref().is_some_and(crate::generators::body_yields),
         span: method.span,
     }
 }
@@ -5648,6 +5695,23 @@ mod tests {
             msg.contains("import a.b.*;"),
             "should suggest the wildcard: {msg}"
         );
+    }
+
+    /// §4.4: a free function with no modifier is package-private, so another
+    /// package importing it is E0416, while a `public` one and a same-package
+    /// use stay legal. (The Module lesson imported one and it ran.)
+    #[test]
+    fn importing_a_package_private_function_is_e0416() {
+        let lib = parse_unit(
+            "package geo; int doubled(int v) { return v * 2; } public int tripled(int v) { return v * 3; }",
+        );
+        let user = parse_unit("package app; import geo.doubled; import geo.tripled; void main() { }");
+        let mut diags = Vec::new();
+        let _ = build_workspace(&[lib, user], &mut diags);
+        let hits: Vec<&Diagnostic> =
+            diags.iter().filter(|d| d.code == code::Code::E0416_PackagePrivateAccess).collect();
+        assert_eq!(hits.len(), 1, "{diags:?}");
+        assert!(hits[0].message.contains("`geo.doubled`"), "{}", hits[0].message);
     }
 
     /// Two classes with the same bare name in DIFFERENT packages are distinct,

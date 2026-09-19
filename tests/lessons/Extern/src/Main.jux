@@ -1,0 +1,111 @@
+// Calling an operating-system API directly, through a foreign declaration.
+//
+// The file is written with Win32's own three calls, `CreateFileA`,
+// `WriteFile` and `CloseHandle`, declared by hand and linked from kernel32,
+// with no library in between (Layout-ABI §L.7). Then it is read back through
+// Rust's std to check that the bytes arrived.
+
+import rust.std.temp_dir;
+import rust.std.read_to_string;
+import rust.std.remove_file;
+
+// An `unsafe native` block declares functions that live in another library;
+// `@extern(lib = ...)` names the library to link. Every call into it is an
+// unsafe operation, because the compiler cannot check what the other side
+// does with what it is given.
+//
+// The types are C's, spelled at their exact widths: a `DWORD` is `u32`, a
+// `BOOL` is a C `int` (`i32`), a `HANDLE` is `void*`. A `String` parameter is
+// passed as a NUL-terminated `const char*` built for the call, so no
+// manual `\0` terminator is needed. An `out u32` is a `DWORD*` the
+// callee fills in.
+@cfg(os = "windows")
+@extern(lib = "kernel32")
+unsafe native {
+    void* CreateFileA(
+        String fileName,
+        u32 desiredAccess,
+        u32 shareMode,
+        void* securityAttributes,
+        u32 creationDisposition,
+        u32 flagsAndAttributes,
+        void* templateFile
+    );
+
+    i32 WriteFile(
+        void* file,
+        String buffer,
+        u32 numberOfBytesToWrite,
+        out u32 numberOfBytesWritten,
+        void* overlapped
+    );
+
+    i32 CloseHandle(void* handle);
+}
+
+// The flag values come from the Windows headers.
+const u32 GENERIC_WRITE = 0x40000000;
+const u32 CREATE_ALWAYS = 2;
+
+// Writes `text` to the file at `path` and says how many bytes went out.
+@cfg(os = "windows")
+long writeFile(String path, String text) {
+    unsafe {
+        void* file = CreateFileA(path, GENERIC_WRITE, 0, null, CREATE_ALWAYS, 0, null);
+
+        // A failed CreateFileA returns INVALID_HANDLE_VALUE, which is -1 as a
+        // pointer, NOT null. A null check misses the failure;
+        // comparing the address with -1 is the check Win32 documents.
+        if ((file as long) == -1) {
+            return -1;
+        }
+        u32 written = 0;
+        WriteFile(file, text, text.byteLength() as u32, out written, null);
+        CloseHandle(file);
+        return written as long;
+    }
+}
+
+// The same job on any other system goes through the C library's stdio. Only
+// one of the two `writeFile`s is compiled into a given build.
+@cfg(not(os = "windows"))
+@extern(lib = "c")
+unsafe native {
+    void* fopen(String path, String mode);
+    i32 fputs(String text, void* stream);
+    i32 fclose(void* stream);
+}
+
+@cfg(not(os = "windows"))
+long writeFile(String path, String text) {
+    unsafe {
+        void* file = fopen(path, "wb");
+        if (file == null) {
+            return -1;
+        }
+        fputs(text, file);
+        fclose(file);
+        return text.byteLength() as long;
+    }
+}
+
+void main() {
+    // A test should not leave files behind, so this writes into the system's temporary directory and
+    // removes the file afterwards. `temp_dir()` returns a Rust `PathBuf`;
+    // interpolating its `display()` gives the path as text.
+    final var location = temp_dir().join("jux-extern-Info.txt");
+    final String path = $"${location.display()}";
+
+    final String text = "Hello, Jux!";
+    final long written = writeFile(path, text);
+    if (written < 0) {
+        print("could not create the file");
+        return;
+    }
+    print($"wrote ${written} bytes");
+
+    // Reading it back through Rust's std: the bytes Win32 wrote are the
+    // bytes Rust reads.
+    print($"the file holds: ${read_to_string(path)}");
+    remove_file(path);
+}

@@ -1,0 +1,99 @@
+// Handling a `Result` with `switch` is right when this function is the one
+// that should decide what a failure means. Often it is not: the function is a
+// step in the middle, and a failure should simply become the caller's problem.
+//
+// Written by hand that is the same few lines every time: switch, take the
+// success, return the error unchanged. The `?` operator is that written once.
+
+enum DigitError {
+    Empty,
+    BadDigit(int position)
+}
+
+// A small step that can fail, carrying which position was wrong.
+Result<int, DigitError> digitAt(String text, int index) {
+    if (text.isEmpty()) {
+        return Result.Err(DigitError.Empty);
+    }
+    final char c = text.charAt(index);
+    if (c < '0' || c > '9') {
+        return Result.Err(DigitError.BadDigit(index));
+    }
+    // A character is a number underneath (the Convert lesson), and the digits
+    // '0' to '9' sit next to each other, so subtracting '0' gives the value.
+    return Result.Ok((int) c - (int) '0');
+}
+
+// The long way. Every failure is switched on, and each one is handed straight
+// back to the caller: near-identical blocks that say nothing new.
+Result<int, DigitError> firstTwoByHand(String text) {
+    int tens = 0;
+    switch (digitAt(text, 0)) {
+        case Ok(var value) -> tens = value;
+        case Err(var reason) -> {
+            return Result.Err(reason);
+        }
+    }
+    int units = 0;
+    switch (digitAt(text, 1)) {
+        case Ok(var value) -> units = value;
+        case Err(var reason) -> {
+            return Result.Err(reason);
+        }
+    }
+    return Result.Ok(tens * 10 + units);
+}
+
+// The same function with `?`. On success the expression is the value, so it
+// can be used straight away. On failure the enclosing function returns that
+// error immediately, and nothing after the `?` runs.
+Result<int, DigitError> firstTwo(String text) {
+    final var tens = digitAt(text, 0)?;
+    final var units = digitAt(text, 1)?;
+    return Result.Ok(tens * 10 + units);
+}
+
+// Pads `text` with spaces on the right to `width` characters.
+String padRight(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+void show(String label, Result<int, DigitError> outcome) {
+    final var name = padRight(label, 10);
+    switch (outcome) {
+        case Ok(var value) -> print($"${name} ${value}");
+        case Err(var reason) -> {
+            switch (reason) {
+                case Empty -> print($"${name} nothing to read");
+                case BadDigit(var at) -> print($"${name} not a digit at position ${at}");
+            }
+        }
+    }
+}
+
+void main() {
+    show("42", firstTwo("42"));
+    show("4x", firstTwo("4x"));
+    show("x4", firstTwo("x4"));
+    show("empty", firstTwo(""));
+
+    // Both versions behave identically: `?` is shorthand, not a shortcut.
+    show("by hand", firstTwoByHand("4x"));
+
+    // The error travels intact. `x4` fails at position 0 and `4x` at position
+    // 1, and each `BadDigit` still carries the position it was given, even
+    // though neither error was looked at on the way out.
+
+    // Two things `?` requires. The function using it must itself return a
+    // `Result`, since that is where the early return goes. And its error type
+    // must be compatible with the one being propagated; a step failing with a
+    // different error type has to be switched on and translated by hand.
+    //
+    // Jux also has exceptions, where propagation needs no operator at all: a
+    // call to a method that `throws` passes the exception up by itself unless
+    // a `try` catches it. Reach for a `Result` when failure is an ordinary
+    // answer the caller must look at, and an exception when it is not.
+}

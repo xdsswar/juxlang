@@ -259,6 +259,7 @@
     "ClassCastException",
     "Clock",
     "Console",
+    "EncodingException",
     "EnumCase",
     "Error",
     "Exception",

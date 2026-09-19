@@ -395,6 +395,12 @@ public final class String {                                  // operators only â
 }
 ```
 
+**The two failures are unchecked.** `IndexOutOfBoundsException` (a range
+outside the string) and `EncodingException` (a byte range that would split a
+multi-byte character, or bytes that are not UTF-8) both extend
+`RuntimeException` in `jux.std.exceptions`, so a caller catches them where it
+can act and need not declare them.
+
 **Equality and ordering are operators, not methods.** `a == b` is byte
 equality and `a <=> b` is byte lexicographic order, so `<`, `<=`, `>`, `>=`
 work on strings directly. There is no `equals` or `compareTo`: they would be

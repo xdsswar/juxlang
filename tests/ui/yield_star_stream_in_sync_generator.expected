@@ -1,0 +1,1 @@
+yield_star_stream_in_sync_generator.jux:10:12: [E0704] error: `yield*` of a `Stream<T>` awaits each element, so it needs an async generator (`async Stream<T> f()`); a synchronous generator can delegate only to an `Iterator<T>` or an iterable (§M.2.3)

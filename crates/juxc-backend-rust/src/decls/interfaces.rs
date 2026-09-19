@@ -17,6 +17,7 @@
 
 use juxc_ast::ReturnType;
 
+use crate::analysis::collect_mutated_names;
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
@@ -430,6 +431,7 @@ impl RustEmitter {
                 self.enclosing_interface = Some(interface.name.text.clone());
                 let saved_return = self.current_return_type.take();
                 self.current_return_type = Some(method.return_type.clone());
+                self.seed_mutated_locals(body);
                 self.emit_fn_body_at(body, &method.return_type);
                 self.current_return_type = saved_return;
                 self.enclosing_interface = prev_iface;
@@ -533,6 +535,7 @@ impl RustEmitter {
                 self.w.indent_inc();
                 let saved_return = self.current_return_type.take();
                 self.current_return_type = Some(method.return_type.clone());
+                self.seed_mutated_locals(body);
                 self.emit_fn_body_at(body, &method.return_type);
                 self.current_return_type = saved_return;
                 self.w.indent_dec();
@@ -606,5 +609,17 @@ impl RustEmitter {
         self.ord_key_params.clear();
         self.eq_bound_params.clear();
         self.hashed_params.clear();
+    }
+}
+
+impl RustEmitter {
+    /// Record which locals `body` reassigns, so each is declared `let mut`.
+    /// Every function and method body runs this before emitting; interface
+    /// bodies are emitted from here, so they run it too.
+    fn seed_mutated_locals(&mut self, body: &juxc_ast::Block) {
+        let mut muts = std::collections::HashSet::new();
+        collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+        self.collect_mut_slot_locals(body, &mut muts);
+        self.mutated_in_fn = muts;
     }
 }

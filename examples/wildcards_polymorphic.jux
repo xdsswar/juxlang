@@ -1,0 +1,55 @@
+// Use-site wildcards over a polymorphic base (Type-system T.2.2): `? extends`
+// reads a container of any subtype and dispatches to the overrides; `? super`
+// with a concrete bound writes into a container of any supertype. A generic
+// `? super T` whose `T` another argument fixes takes a container of exactly
+// `T` in this phase (ERRATA E50).
+
+class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+    public String speak() { return name + " ..."; }
+}
+
+class Dog extends Animal {
+    public Dog(String name) { super(name); }
+
+    @Override
+    public String speak() { return name + " woof"; }
+}
+
+void readAll(Vec<? extends Animal> animals) {
+    for (var a : animals) {
+        print(a.speak());
+    }
+}
+
+void adopt(Vec<? super Dog> home) {
+    home.push(new Dog("rex"));
+}
+
+<T> void copyAll(Vec<? extends T> source, Vec<? super T> dest) {
+    for (var item : source) {
+        dest.push(item);
+    }
+}
+
+public void main() {
+    Vec<Dog> dogs = new Vec<Dog>();
+    dogs.push(new Dog("fido"));
+    Vec<Animal> animals = new Vec<Animal>();
+    animals.push(new Animal("cat"));
+
+    readAll(dogs);
+    readAll(animals);
+
+    adopt(animals);
+    adopt(dogs);
+
+    Vec<Dog> kennel = new Vec<Dog>();
+    copyAll(dogs, kennel);
+
+    print("-- animals");
+    readAll(animals);
+    print("-- kennel");
+    readAll(kennel);
+}

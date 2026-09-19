@@ -55,8 +55,9 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
 
     /** Newer-surface keywords land in the right contexts (language-sync wave). */
     fun testRecentKeywordsOfferedInTheirContexts() {
-        // `yield` / `case` / `default` are statement-position words (switch
-        // bodies); `sizeof` starts an expression.
+        // `case` / `default` are statement-position words (switch bodies);
+        // `sizeof` starts an expression. `yield` is a generator's word only
+        // (§M.2): not in a `void` method, where it would be E0990.
         val stmt = completionsAt(
             """
             public class A {
@@ -66,7 +67,39 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        assertContainsElements(stmt, "yield", "case", "default", "sizeof")
+        assertContainsElements(stmt, "case", "default", "sizeof")
+        assertDoesntContain(stmt, "yield")
+
+        val generator = completionsAt(
+            """
+            public class A {
+                public Iterator<int> count() {
+                    <caret>
+                }
+                public async Stream<int> ticks() {
+                    return;
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(generator, "yield")
+        val asyncGenerator = completionsAt(
+            """
+            public async Stream<int> ticks() {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(asyncGenerator, "yield")
+        // A lambda inside a generator is not the generator.
+        val lambda = completionsAt(
+            """
+            public Iterator<int> count() {
+                var f = () -> { <caret> };
+            }
+            """.trimIndent(),
+        )
+        assertDoesntContain(lambda, "yield")
 
         // `permits` belongs to type headers — member context (nested types)
         // and top level both offer it; statements must not.

@@ -1,0 +1,97 @@
+// Every value so far has been sized when the program was compiled: a `long`
+// is eight bytes, an array of twelve greetings is twelve. When the size is not
+// known until the program runs, the memory has to be asked for.
+//
+// Most Jux code never does this by hand: `new` puts an object on the heap and
+// reference counting gives it back. This is the raw form underneath, where you
+// ask, use, and give back yourself. It is C's allocator, reached through C FFI
+// (Layout-ABI §L.7), and every step that touches the memory sits inside
+// `unsafe { }`, which is where Jux stops checking and trusts you.
+
+// Jux has no `delete` or `free` keyword (writing `delete p;` is error E0507).
+// Memory that came from C goes back to C, through C's own `free`. The block
+// is declared for whichever C runtime this build links.
+@cfg(os = "windows")
+@extern(lib = "msvcrt")
+unsafe native {
+    void* malloc(ulong size);
+    void free(void* block);
+    void* memset(void* block, int value, ulong size);
+}
+
+@cfg(not(os = "windows"))
+@extern(lib = "c")
+unsafe native {
+    void* malloc(ulong size);
+    void free(void* block);
+    void* memset(void* block, int value, ulong size);
+}
+
+void main() {
+    // A count decided while running. `sizeof` gives the size of one element,
+    // so the total is the count times that. `sizeof` answers with a `uint`
+    // (§5.9.1), which a `ulong` product should widen by itself; the cast is
+    // written out because the compiler types `sizeof` as `int` today (B47).
+    final ulong count = 8;
+    final ulong size = count * (sizeof(ulong) as ulong);
+    print($"asking for ${count} elements, ${size} bytes");
+
+    unsafe {
+        // `malloc` hands back an address with no type attached, a `void*`:
+        // "somewhere writable, contents unknown". The cast says what will
+        // live there.
+        ulong* values = malloc(size) as ulong*;
+
+        // It can fail. There is no exception to catch: the answer is `null`,
+        // and a program that does not check it will fault on first use.
+        if (values == null) {
+            print("out of memory");
+            return;
+        }
+
+        // The address itself changes from run to run, so a
+        // lesson with a fixed transcript shows what is always true of it
+        // instead: `malloc` returns memory aligned for any C type, so an
+        // eight-byte value always starts on a multiple of eight.
+        print($"got a block, 8-byte aligned: ${(values as ulong) % 8 == 0}");
+
+        // Fresh memory holds whatever was there before. `memset` to zero makes
+        // it definite; reading it first would be reading someone else's
+        // leftovers.
+        memset(values as void*, 0, size);
+        var line = "after zeroing: ";
+        for (ulong i = 0; i < count; i++) {
+            line += $"${values[i]} ";
+        }
+        print(line);
+
+        // With a type on the pointer, it indexes like an array: the same `[i]`,
+        // and the same counting from zero.
+        for (ulong i = 0; i < count; i++) {
+            values[i] = i * i;
+        }
+        line = "squares:       ";
+        for (ulong i = 0; i < count; i++) {
+            line += $"${values[i]} ";
+        }
+        print(line);
+
+        ulong total = 0;
+        for (ulong i = 0; i < count; i++) {
+            total += values[i];
+        }
+        print($"their total:   ${total}");
+
+        // Nothing reclaims this on its own. `free` gives it back, and every
+        // path out of the function needs one, including the failure above,
+        // which returned before allocating and so had nothing to release.
+        free(values as void*);
+        print("freed");
+    }
+
+    // Two rules the compiler cannot enforce inside `unsafe`, and the reason
+    // the later lessons exist. Using `values` after this point reads memory
+    // that is no longer yours, and calling `free` on it twice corrupts the
+    // allocator. Neither is reported; both are why Defer shows the `drop`
+    // block, which puts the one `free` where it cannot be forgotten.
+}

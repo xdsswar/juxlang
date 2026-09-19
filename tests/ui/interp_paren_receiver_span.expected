@@ -1,0 +1,1 @@
+interp_paren_receiver_span.jux:2:19: [E0413] error: no method `nosuch` on `double`

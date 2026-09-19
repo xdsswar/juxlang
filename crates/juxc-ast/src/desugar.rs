@@ -579,7 +579,7 @@ fn rewrite_block_implicit_this(
                 rewrite_implicit_this(&mut a.target, members, locals);
                 rewrite_implicit_this(&mut a.value, members, locals);
             }
-            Stmt::Expr(e) | Stmt::Throw(e, _) => {
+            Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Yield(e, _) => {
                 rewrite_implicit_this(e, members, locals);
             }
             Stmt::Return(opt, _) => {
@@ -810,7 +810,7 @@ fn rewrite_stmt_property_writes(
             rewrite_expr_property_access(&mut a.target, auto_props);
             rewrite_expr_property_access(&mut a.value, auto_props);
         }
-        Stmt::Expr(e) | Stmt::Throw(e, _) => {
+        Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Yield(e, _) => {
             rewrite_expr_property_access(e, auto_props);
         }
         Stmt::Return(opt, _) => {

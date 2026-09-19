@@ -1,0 +1,22 @@
+// A bare `{...}` initializer works under an alias of an array type: the
+// alias carries the array shape, so it reads as it would under `ubyte[]`.
+
+type Bytes = ubyte[];
+type Grid = int[][];
+
+uint sum(Bytes values) {
+    uint total = 0;
+    for (var v : values) {
+        total += v;
+    }
+    return total;
+}
+
+void main() {
+    final Bytes data = {1, 2, 3, 4};
+    print(data.length);
+    print(sum(data));
+
+    final Grid grid = {{1, 2}, {3, 4}};
+    print(grid[1][0]);
+}

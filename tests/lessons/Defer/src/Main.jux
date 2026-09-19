@@ -1,0 +1,121 @@
+// The Memory lesson had a problem it did not dwell on: every way out of the
+// function needs its own `free`. Add an early return and it is easy to leave
+// one behind, and the leak is invisible.
+//
+// Jux answers with the two tools Java and C++ programmers already know,
+// both of which run when the scope ends, however it ends:
+//
+//   - `try { } finally { }` for a statement that must run on the way out;
+//   - a class with a `drop { }` block when the job is giving back a resource,
+//     so the release is written once, in the type, and happens by itself.
+
+// The C allocator, declared for whichever C runtime this build links: the
+// Microsoft one on Windows, libc elsewhere. The Memory lesson walks through
+// these three functions.
+@cfg(os = "windows")
+@extern(lib = "msvcrt")
+unsafe native {
+    void* malloc(ulong size);
+    void free(void* block);
+    void* memset(void* block, int value, ulong size);
+}
+
+@cfg(not(os = "windows"))
+@extern(lib = "c")
+unsafe native {
+    void* malloc(ulong size);
+    void free(void* block);
+    void* memset(void* block, int value, ulong size);
+}
+
+// Two cleanup statements, in the order they were "scheduled". A `finally`
+// runs when its `try` is left, and the inner one is left first, so B runs
+// before A: last scheduled, first run, the same order `defer` gives.
+void ordering() {
+    print("    body starts");
+    try {
+        try {
+            print("    body ends");
+        } finally {
+            print("    deferred B");
+        }
+    } finally {
+        print("    deferred A");
+    }
+}
+
+// A block of memory that knows how to give itself back. Owning the pointer is
+// the whole class: the destructor is where the release lives, next to the
+// thing it releases, and it runs when the last reference to the object goes
+// away, which for a local is the end of the function it was made in.
+class Block {
+    public ulong* values;
+
+    public Block(ulong* values) {
+        this.values = values;
+    }
+
+    // Runs once, whichever way the owning scope ends. It prints before it
+    // frees.
+    drop {
+        print("    releasing the block");
+        unsafe {
+            free(values as void*);
+        }
+    }
+}
+
+// Two exits, one release. The `Block` is made right after the allocation, and
+// from then on the memory goes back no matter how this function ends.
+ulong sumTo(ulong count, bool failEarly) {
+    // The cast works around B47, as in the Memory lesson.
+    final ulong size = count * (sizeof(ulong) as ulong);
+    // `unsafe { }` is a statement (Layout-ABI §L.5), not an expression, so
+    // the pointer is declared first and filled inside the block.
+    ulong* values = null;
+    unsafe {
+        values = malloc(size) as ulong*;
+    }
+    if (values == null) {
+        return 0;
+    }
+    final var block = new Block(values);
+
+    unsafe {
+        memset(values as void*, 0, size);
+        for (ulong i = 0; i < count; i++) {
+            values[i] = i + 1;
+        }
+    }
+
+    // An early exit. Without the `Block` above, this line would leak, and
+    // nothing would say so.
+    if (failEarly) {
+        print("    leaving early");
+        return 0;
+    }
+
+    ulong total = 0;
+    unsafe {
+        for (ulong i = 0; i < count; i++) {
+            total += block.values[i];
+        }
+    }
+    return total;
+}
+
+void main() {
+    print("ordering:");
+    ordering();
+
+    print("normal path:");
+    print($"    sum of 1..5 is ${sumTo(5, false)}");
+
+    print("early exit:");
+    print($"    result ${sumTo(5, true)}");
+
+    // The value a function returns is worked out before its cleanup runs, so
+    // cleanup cannot change the answer on its way out. That holds for
+    // `finally` and for `drop` alike.
+    print("done");
+}

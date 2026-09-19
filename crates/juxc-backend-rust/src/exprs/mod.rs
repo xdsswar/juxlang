@@ -30,6 +30,7 @@ pub(crate) mod call;
 pub(crate) mod field;
 pub(crate) mod fn_pointer;
 pub(crate) use fn_pointer::{fn_pointer_sig_type_ref, type_ref_is_void_name};
+pub(crate) mod fn_value;
 pub(crate) mod simple;
 
 /// Discriminator for `emit_interp_string`'s deferred-arg emission —
@@ -1302,6 +1303,13 @@ impl RustEmitter {
                             }
                         }
                     }
+                }
+                // **A free function used as a VALUE** (`apply(twice, 3)`,
+                // `(int) -> int g = twice;`). A Jux function type lowers to
+                // `Rc<dyn Fn(..)>`, and a bare Rust fn item is not one, so the
+                // name is boxed the way a lambda is.
+                if qn.segments.len() == 1 && self.emit_free_fn_value(&qn.segments[0].text) {
+                    return;
                 }
                 // **A `String` CONSTANT is a `&'static str`.** A Rust `const`
                 // cannot hold a `String` (allocation is not const), so the
@@ -3400,7 +3408,7 @@ pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut
         match s {
             // `if cfg` never reaches the backend: the driver's cfg pass replaced it.
             Stmt::IfCfg(_) => {}
-            Stmt::Expr(e) => collect_bare_names_expr(e, sink),
+            Stmt::Expr(e) | Stmt::Yield(e, _) => collect_bare_names_expr(e, sink),
             Stmt::Return(Some(e), _) => collect_bare_names_expr(e, sink),
             Stmt::Return(None, _) => {}
             Stmt::VarDecl(v) => {

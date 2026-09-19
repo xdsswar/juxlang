@@ -1,0 +1,1 @@
+range_bounds_no_common_type.jux:4:18: [E0410] error: the bounds of a range need one type, and int and uint have none (§M.6.1)

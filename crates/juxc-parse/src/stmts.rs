@@ -122,21 +122,10 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }
-        // `yield expr;` -- reserved for generator semantics (JUX-LANG-V1 lists
-        // it beside `await` and `move` as language-defined), with no generator
-        // form in Phase 1. Parse it in the `return` shape so the block still
-        // has statements and any errors after it are the program's own.
+        // `yield expr;` and `yield* iter;` (JUX-MISSING-DEFS-ADDENDUM §M.2.3):
+        // the statements that make a function a generator.
         if self.at_kw(Keyword::Yield) {
-            let span = self.peek_span();
-            self.reserved_not_implemented(
-                span,
-                "`yield`",
-                "reserved in JUX-LANG-V1 for generator semantics",
-            );
-            self.advance(); // `yield`
-            let value = self.parse_expr();
-            self.expect(&TokenKind::Semicolon, "';' after `yield`");
-            return Some(Stmt::Return(value, span.join(self.last_consumed_span())));
+            return self.parse_yield_stmt();
         }
         // Leading `final` or `const` modifier on a local declaration
         // (per `JUX-LANG-V1.md` §549–565). Both forms are accepted in
@@ -1506,6 +1495,8 @@ impl<'a> Parser<'a> {
             // start with `{`.
             if self.at(&TokenKind::LBrace) && ty.array_shape.is_some() {
                 Some(self.parse_bare_array_initializer(&ty)?)
+            } else if self.at(&TokenKind::LBrace) {
+                self.parse_brace_initializer_for_named_type(&ty)
             } else if self.at(&TokenKind::LBracket) && ty.array_shape.is_some() {
                 // `["a", "b"]` out of habit from other languages: say once
                 // that Jux writes an array literal with braces, then read it
@@ -1528,6 +1519,53 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
         Some(VarDecl { name, ty: Some(ty), init, is_final, is_ref: false, span: ty_start.join(end) })
+    }
+
+    /// A `{a, b, c}` initializer under a type written with no array shape.
+    ///
+    /// Under an alias of an array type (`type Bytes = ubyte[];` then
+    /// `final Bytes data = {1, 2, 3};`) the alias supplies the shape and the
+    /// initializer reads as it would under `ubyte[]`. Any other type cannot
+    /// take one: that is reported once, the braces are skipped, and the local
+    /// is left uninitialized, where the expression parser used to report each
+    /// element as "expected expression".
+    pub(crate) fn parse_brace_initializer_for_named_type(&mut self, ty: &TypeRef) -> Option<Expr> {
+        let aliased = (ty.name.segments.len() == 1
+            && ty.generic_args.is_empty()
+            && ty.fn_shape.is_none()
+            && ty.ptr_depth == 0)
+            .then(|| self.array_alias(&ty.name.segments[0].text))
+            .flatten();
+        if let Some(target) = aliased {
+            return self.parse_bare_array_initializer(&target);
+        }
+        let name = ty.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0200_UnexpectedToken,
+                format!("a `{{...}}` initializer needs an array type, and `{name}` is not one"),
+            )
+            .with_span(self.peek_span())
+            .with_help("write the array type out, `new T[] {a, b}`, or declare the local with an array type"),
+        );
+        // Skip the balanced braces so nothing inside cascades.
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.advance();
+                        break;
+                    }
+                }
+                TokenKind::Eof => break,
+                _ => {}
+            }
+            self.advance();
+        }
+        None
     }
 
     /// Parse a bare `{a, b, c}` array initializer in typed-local RHS
@@ -1602,6 +1640,38 @@ impl<'a> Parser<'a> {
             elements,
             fixed,
             span: start.join(end),
+        }))
+    }
+
+    /// `yield expr ;` or `yield * expr ;` (§M.2.3).
+    ///
+    /// `yield* iter;` means "yield every value of `iter`", so it is parsed
+    /// straight into that loop: `for (var __jux_yielded : iter) { yield
+    /// __jux_yielded; }`. Everything downstream (the element type, the
+    /// iteration protocol, the check that each value fits the generator's
+    /// element type) is then the ordinary `for` and `yield` path.
+    fn parse_yield_stmt(&mut self) -> Option<Stmt> {
+        let start = self.peek_span();
+        self.advance(); // `yield`
+        let delegate = self.eat(&TokenKind::Star);
+        let value = self.parse_expr()?;
+        self.expect(&TokenKind::Semicolon, "';' after `yield`");
+        let span = start.join(self.last_consumed_span());
+        if !delegate {
+            return Some(Stmt::Yield(value, span));
+        }
+        let binder = juxc_ast::Ident {
+            text: juxc_ast::ForEachStmt::YIELD_DELEGATE_BINDER.to_string(),
+            span,
+        };
+        let element = Expr::Path(juxc_ast::QualifiedName { segments: vec![binder.clone()], span });
+        Some(Stmt::ForEach(juxc_ast::ForEachStmt {
+            is_await: false,
+            var_type: None,
+            var_name: binder,
+            iter: value,
+            body: juxc_ast::Block { statements: vec![Stmt::Yield(element, span)], span },
+            span,
         }))
     }
 

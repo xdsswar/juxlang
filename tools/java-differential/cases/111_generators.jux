@@ -1,0 +1,125 @@
+// Generators (Missing-defs §M.2): a body that yields returns an Iterator<T>
+// and runs only as far as the consumer asks. The Java twin writes each one
+// as the hand-rolled Iterator class a generator saves you from writing.
+
+Iterator<int> squares(int n) {
+    for (var i = 1; i <= n; i++) {
+        yield i * i;
+    }
+}
+
+// `return;` ends the sequence early.
+Iterator<int> countdown(int from) {
+    var n = from;
+    while (true) {
+        if (n < 0) {
+            return;
+        }
+        yield n;
+        n--;
+    }
+}
+
+// `yield*` delegates until the inner iterator runs out.
+Iterator<int> concat(Iterator<int> a, Iterator<int> b) {
+    yield* a;
+    yield* b;
+}
+
+// Endless; the consumer decides where it stops.
+Iterator<long> fibonacci() {
+    long a = 0;
+    long b = 1;
+    while (true) {
+        yield a;
+        var next = a + b;
+        a = b;
+        b = next;
+    }
+}
+
+class Node {
+    public int value;
+    public Node? left;
+    public Node? right;
+
+    public Node(int value, Node? left, Node? right) {
+        this.value = value;
+        this.left = left;
+        this.right = right;
+    }
+}
+
+Iterator<int> inOrder(Node? node) {
+    if (node == null) {
+        return;
+    }
+    yield* inOrder(node.left);
+    yield node.value;
+    yield* inOrder(node.right);
+}
+
+class Account {
+    private int balance;
+
+    public Account(int balance) {
+        this.balance = balance;
+    }
+
+    // Reads the live balance at every step, so a withdrawal the consumer
+    // makes between steps shows up in the next value.
+    public Iterator<int> statements(int months) {
+        for (var m = 0; m < months; m++) {
+            balance = balance + 10;
+            yield balance;
+        }
+    }
+
+    public void withdraw(int amount) {
+        balance = balance - amount;
+    }
+}
+
+public void main() {
+    for (var s : squares(5)) {
+        print("square " + s);
+    }
+
+    for (var n : concat(countdown(2), squares(2))) {
+        print("concat " + n);
+    }
+
+    var fib = fibonacci();
+    for (var i = 0; i < 8; i++) {
+        print("fib " + fib.next());
+    }
+
+    var root = new Node(5,
+        new Node(3, new Node(1, null, null), new Node(4, null, null)),
+        new Node(8, null, new Node(9, null, null)));
+    for (var v : inOrder(root)) {
+        print("tree " + v);
+    }
+
+    var acct = new Account(100);
+    for (var b : acct.statements(3)) {
+        print("balance " + b);
+        acct.withdraw(25);
+    }
+
+    // A `break` leaves the iterator where it stopped.
+    var it = countdown(6);
+    for (var n : it) {
+        if (n == 4) {
+            break;
+        }
+    }
+    print("next " + it.next());
+    print("next " + it.next());
+
+    // An exhausted iterator keeps answering null.
+    var done = countdown(0);
+    print("first " + done.next());
+    print("after " + done.next());
+    print("again " + done.next());
+}

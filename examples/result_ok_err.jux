@@ -1,0 +1,18 @@
+// `ok()` and `err()` (§K.4) turn a `Result` into an `Option` of either side.
+
+Result<int, String> parse(String s) {
+    if (s == "seven") {
+        return Result.Ok(7);
+    }
+    return Result.Err($"not a number: ${s}");
+}
+
+void main() {
+    final Result<int, String> good = parse("seven");
+    final Result<int, String> bad = parse("eight");
+
+    print(good.ok().unwrap());
+    print(good.err().isNone());
+    print(bad.ok().isSome());
+    print(bad.err().unwrap());
+}
