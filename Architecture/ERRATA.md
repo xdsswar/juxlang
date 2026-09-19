@@ -1234,6 +1234,27 @@ stand; the Phase-1 reading above is noted there.
 
 ---
 
+## E71. The `jux new` template's `[module]` table
+
+**Conflict.** Build-system §B.15.1 prints the manifest `jux new` writes with a
+`[module]` table (`name`, `version`, `authors`, `license`) and puts `edition`
+under `[build]`. Everywhere else the manifest's package table is `[package]`
+(§B.2.1, §B.2.2), `edition` belongs to it (§B.2.4), and §B.3 (ERRATA E38) makes
+`jux.toml` the only manifest with no separate module declaration. A project
+created from the template as printed would load with no package name at all.
+
+**Resolution.** `jux new` writes `[package]` with the template's keys plus
+`edition = "2026"`, and keeps the template's `[build]` keys (`profile`,
+`target`, `optimization`) and the empty `[dependencies]`. The other three
+files (`src/main.jux`, `README.md`, `.gitignore`) are written as printed.
+`jux new --lib` adds `[lib]` and puts the library's code in its package
+directory (§B.1.1) under a package-less `src/lib.jux`; `jux new --workspace`
+writes a `[workspace]` root with an empty `members` list.
+
+**Spec status:** §B.15.1 is updated to match.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

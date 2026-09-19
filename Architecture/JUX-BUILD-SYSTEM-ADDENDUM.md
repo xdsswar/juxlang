@@ -1253,9 +1253,10 @@ These dispatch to `juxc` for actual compilation; see §B.11.
 **`jux.toml`:**
 
 ```toml
-[module]
+[package]
 name = "myapp"
 version = "0.1.0"
+edition = "2026"
 authors = ["Your Name <you@example.com>"]
 license = "Apache-2.0"
 
@@ -1263,10 +1264,11 @@ license = "Apache-2.0"
 profile = "full"
 target = "native"
 optimization = "release"
-edition = "2026"
 
 [dependencies]
 ```
+
+(ERRATA E71: the package table is `[package]`, and `edition` belongs to it.)
 
 **`src/main.jux`:**
 
@@ -1357,6 +1359,20 @@ target/
     ├── src/                    # generated .rs files
     └── target/                 # Cargo's nested target dir
 ```
+
+### B.15.5. Phase-1 Status
+
+Implemented as described above:
+
+- `jux new <name>`, `jux new --lib <name>`, `jux new --workspace <name>`, and `jux init`. A new library keeps its code in its package directory (`src/<name>/`) under a package-less `src/lib.jux`, and ships one passing `@Test`. `jux init` never replaces a manifest, and when the directory already holds `.jux` files it says to move them under `src/` instead of adding a second entry point.
+- `jux build`, `jux run`, `jux check`, `jux test` with `--release`, `--profile <name>` (§B.9.2), `--target`, `-p`, `--bin`, `--lib`, `--features`.
+- `jux run --example <name>` and `jux build --examples` (§B.1.3, §B.15.3). An example is `examples/<name>.jux` or a directory `examples/<name>/` of files; it is compiled with the package's library code (every `src/` source except the `[[bin]]` entry files) and its dependencies, and emitted under `target/.rust-build/example-<name>/`.
+- `jux clean` removes `target/`, and in a workspace every member's `target/` as well.
+- `jux add <name>[@<version>]` with `--version`, `--path`, `--git` plus one of `--branch`/`--tag`/`--rev`, and `--features`; `jux remove <name>`. Both edit `[dependencies]` in place and leave the rest of the file, comments included, as written. A version-only dependency is written as a bare string; with no source at all the requirement is `"*"`.
+- `jux tree` prints each package's dependencies, following `path` dependencies into their own manifests and marking a repeated package on one branch `(cycle)`.
+- `jux update` (git dependencies), `jux metadata`, `jux target list`.
+
+Not yet implemented: `publish`, `search`, `yank`, `audit`, `bench`, `bindgen`, `rustgen`, and the lockfile (§B.6).
 
 ---
 

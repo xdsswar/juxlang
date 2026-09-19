@@ -24,8 +24,11 @@
 //! - `jux build [file]` — compile + cargo build, don't execute.
 //! - `jux check [file]` — lex/parse/resolve/typecheck only, no codegen.
 //! - `jux update` — re-fetch the project's git dependencies (§B.2.2).
-//! - `jux new <name>` — scaffold a project (§B.15.1).
-//! - `jux test` — stubbed.
+//! - `jux new [--lib|--workspace] <name>`, `jux init` — scaffold a project (§B.15.1).
+//! - `jux test` — run `@Test` functions.
+//! - `jux clean`, `jux add`, `jux remove`, `jux tree` — see `project_cmds`.
+
+mod project_cmds;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -49,11 +52,57 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CliCommand {
-    /// Create a new Jux project. (§B.15.1 — `jux new <name>`.)
+    /// Create a new Jux project (§B.15.1): a binary by default, a library
+    /// with `--lib`, an empty workspace with `--workspace`.
     New {
-        /// Name of the project to scaffold.
+        /// Name of the project directory to create.
+        name: String,
+        /// Scaffold a library (`[lib]`, code under `src/<name>/`, a test).
+        #[arg(long, conflicts_with = "workspace")]
+        lib: bool,
+        /// Scaffold a workspace root with an empty member list.
+        #[arg(long)]
+        workspace: bool,
+    },
+    /// Add a `jux.toml` to the current directory (§B.15).
+    Init,
+    /// Delete the build output: `target/`, and each workspace member's
+    /// `target/` (§B.15).
+    Clean,
+    /// Add or replace a dependency in `jux.toml` (§B.10.5). The name may carry
+    /// a version: `jux add com.x.json@1.0`, `jux add rust.rand@0.9`.
+    Add {
+        /// `<name>` or `<name>@<version>`.
+        spec: String,
+        /// A SemVer requirement (same as `@<version>`).
+        #[arg(long)]
+        version: Option<String>,
+        /// Depend on a local directory.
+        #[arg(long, conflicts_with = "git")]
+        path: Option<String>,
+        /// Depend on a remote repository.
+        #[arg(long)]
+        git: Option<String>,
+        /// Branch to track.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Tag to pin.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Revision to pin.
+        #[arg(long)]
+        rev: Option<String>,
+        /// Features to enable on the dependency, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+    },
+    /// Remove a dependency from `jux.toml` (§B.10.5).
+    Remove {
+        /// The dependency's name.
         name: String,
     },
+    /// Print the dependency tree (§B.10.5).
+    Tree,
     /// Type-check the project (or a single file) without producing a binary.
     /// (§B.15 — `jux check`.)
     Check {
@@ -276,6 +325,11 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
         | CliCommand::Run { file, .. } => file.clone(),
         // The rest are project-wide or take no path at all.
         CliCommand::New { .. }
+        | CliCommand::Init
+        | CliCommand::Clean
+        | CliCommand::Add { .. }
+        | CliCommand::Remove { .. }
+        | CliCommand::Tree
         | CliCommand::Test { .. }
         | CliCommand::Update
         | CliCommand::Metadata { .. }
@@ -294,7 +348,24 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
     // found (project-mode commands report their own "no jux.toml" error).
     let root = resolve_project_root(cli.manifest_path.as_deref());
     match cli.command {
-        CliCommand::New { name } => cmd_new(&name),
+        CliCommand::New { name, lib, workspace } => {
+            let kind = if workspace {
+                project_cmds::NewKind::Workspace
+            } else if lib {
+                project_cmds::NewKind::Lib
+            } else {
+                project_cmds::NewKind::Bin
+            };
+            project_cmds::cmd_new(&name, kind)
+        }
+        CliCommand::Init => project_cmds::cmd_init(Path::new(".")),
+        CliCommand::Clean => with_root(root, "clean", project_cmds::cmd_clean),
+        CliCommand::Add { spec, version, path, git, branch, tag, rev, features } => {
+            let source = project_cmds::DepSource { version, path, git, branch, tag, rev, features };
+            with_root(root, "add", |r| project_cmds::cmd_add(r, &spec, source))
+        }
+        CliCommand::Remove { name } => with_root(root, "remove", |r| project_cmds::cmd_remove(r, &name)),
+        CliCommand::Tree => with_root(root, "tree", project_cmds::cmd_tree),
         CliCommand::Test { pattern, package, release, features, no_default_features, profile } => {
             set_features(features, no_default_features);
             set_profile(profile);
@@ -475,38 +546,21 @@ fn resolve_project_root(manifest_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// `jux new <name>` — scaffold a fresh Jux project per §B.2.1.
-/// Creates:
-///   - `<name>/jux.toml`  with a minimum-viable `[package]` block.
-///   - `<name>/src/main.jux` with a "hello world" stub.
-///   - `<name>/.gitignore` with the standard ignore list.
-///
-/// `<name>` is the directory name (and the package name's last
-/// segment). Refuses to overwrite an existing directory.
-fn cmd_new(name: &str) -> Result<ExitCode> {
-    let target = PathBuf::from(name);
-    if target.exists() {
-        eprintln!("jux: target directory '{}' already exists", target.display());
-        return Ok(ExitCode::from(1));
+/// Run a project command that needs a `jux.toml`, or say how to get one.
+fn with_root(
+    root: Option<PathBuf>,
+    command: &str,
+    f: impl FnOnce(&Path) -> Result<ExitCode>,
+) -> Result<ExitCode> {
+    match root {
+        Some(r) => f(&r),
+        None => {
+            eprintln!(
+                "jux: no jux.toml found -- run `jux {command}` from a project root (or pass --manifest-path)",
+            );
+            Ok(ExitCode::from(1))
+        }
     }
-    let src_dir = target.join("src");
-    std::fs::create_dir_all(&src_dir).with_context(|| {
-        format!("creating project directory {}", src_dir.display())
-    })?;
-    let manifest = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
-    );
-    std::fs::write(target.join("jux.toml"), manifest)
-        .context("writing jux.toml")?;
-    let main_jux = "public void main() {\n    print(\"Hello from Jux!\");\n}\n";
-    std::fs::write(src_dir.join("main.jux"), main_jux)
-        .context("writing src/main.jux")?;
-    let gitignore = "/target/\n";
-    std::fs::write(target.join(".gitignore"), gitignore)
-        .context("writing .gitignore")?;
-    eprintln!("jux: created project at {}", target.display());
-    eprintln!("     next: `cd {name} && jux run`");
-    Ok(ExitCode::SUCCESS)
 }
 
 /// `jux update` — re-fetch every git dependency of the current project
