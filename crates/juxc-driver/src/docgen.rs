@@ -680,7 +680,7 @@ pub fn markdown_to_html(md: &str, links: &BTreeMap<String, String>) -> String {
 
     fn flush_para(para: &mut Vec<String>, out: &mut String, links: &BTreeMap<String, String>) {
         if !para.is_empty() {
-            let _ = write!(out, "<p>{}</p>\n", inline(&para.join(" "), links));
+            let _ = writeln!(out, "<p>{}</p>", inline(&para.join(" "), links));
             para.clear();
         }
     }
@@ -690,7 +690,7 @@ pub fn markdown_to_html(md: &str, links: &BTreeMap<String, String>) -> String {
             for i in items {
                 let _ = write!(out, "<li>{}</li>", inline(&i, links));
             }
-            let _ = write!(out, "</{tag}>\n");
+            let _ = writeln!(out, "</{tag}>");
         }
     }
 
@@ -699,9 +699,9 @@ pub fn markdown_to_html(md: &str, links: &BTreeMap<String, String>) -> String {
         if let Some((info, lines)) = fence.as_mut() {
             if trimmed.starts_with("```") {
                 let lang = info.split_whitespace().next().unwrap_or("");
-                let _ = write!(
+                let _ = writeln!(
                     out,
-                    "<pre class=\"code\" data-lang=\"{}\"><code>{}</code></pre>\n",
+                    "<pre class=\"code\" data-lang=\"{}\"><code>{}</code></pre>",
                     esc(lang),
                     esc(&lines.join("\n")),
                 );
@@ -728,7 +728,7 @@ pub fn markdown_to_html(md: &str, links: &BTreeMap<String, String>) -> String {
             flush_list(&mut list, &mut out, links);
             // Headings inside an item's docs sit below the item's own heading.
             let level = (hashes + 3).min(6);
-            let _ = write!(out, "<h{level}>{}</h{level}>\n", inline(trimmed[hashes..].trim(), links));
+            let _ = writeln!(out, "<h{level}>{}</h{level}>", inline(trimmed[hashes..].trim(), links));
             continue;
         }
         let bullet = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* "));
@@ -763,7 +763,7 @@ pub fn markdown_to_html(md: &str, links: &BTreeMap<String, String>) -> String {
     }
     if let Some((info, lines)) = fence {
         let lang = info.split_whitespace().next().unwrap_or("");
-        let _ = write!(out, "<pre class=\"code\" data-lang=\"{}\"><code>{}</code></pre>\n", esc(lang), esc(&lines.join("\n")));
+        let _ = writeln!(out, "<pre class=\"code\" data-lang=\"{}\"><code>{}</code></pre>", esc(lang), esc(&lines.join("\n")));
     }
     flush_para(&mut para, &mut out, links);
     flush_list(&mut list, &mut out, links);
@@ -882,7 +882,7 @@ pub fn write_site(manifest: &Manifest, packages: &[DocPackage], out_dir: &Path) 
         let page = page_file(&p.name);
         let display = if p.name.is_empty() { "(root package)".to_string() } else { p.name.clone() };
         let mut body = String::new();
-        let _ = write!(body, "<h1><span class=\"kind\">package</span> {}</h1>\n", esc(&display));
+        let _ = writeln!(body, "<h1><span class=\"kind\">package</span> {}</h1>", esc(&display));
         for item in &p.items {
             count += 1 + item.members.len();
             render_item(&mut body, item, &links, &item.name, 2);
@@ -902,16 +902,16 @@ pub fn write_site(manifest: &Manifest, packages: &[DocPackage], out_dir: &Path) 
 
     // ---- index: overview, package list, dependencies (§B.14.8), search ----
     let mut body = String::new();
-    let _ = write!(body, "<h1>{} <span class=\"muted\">{}</span></h1>\n", esc(title), esc(version));
+    let _ = writeln!(body, "<h1>{} <span class=\"muted\">{}</span></h1>", esc(title), esc(version));
     if let Some(desc) = manifest.package.description.as_deref() {
-        let _ = write!(body, "<p>{}</p>\n", esc(desc));
+        let _ = writeln!(body, "<p>{}</p>", esc(desc));
     }
     body.push_str("<h2>Packages</h2>\n<ul>\n");
     for p in packages {
         let display = if p.name.is_empty() { "(root package)" } else { p.name.as_str() };
-        let _ = write!(
+        let _ = writeln!(
             body,
-            "<li><a href=\"{}\">{}</a> <span class=\"muted\">{} items</span></li>\n",
+            "<li><a href=\"{}\">{}</a> <span class=\"muted\">{} items</span></li>",
             esc(&page_file(&p.name)),
             esc(display),
             p.items.len(),
@@ -961,16 +961,16 @@ fn write_page(out_dir: &Path, file: &str, page_title: &str, site: &str, body: &s
 /// One item (and, for a type, its members) as HTML.
 fn render_item(out: &mut String, item: &DocItem, links: &BTreeMap<String, String>, anchor: &str, level: u8) {
     let class = if level == 2 { "item" } else { "member" };
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "<section class=\"{class}\" id=\"{}\">\n<h{level}><span class=\"kind\">{}</span> {}</h{level}>\n",
+        "<section class=\"{class}\" id=\"{}\">\n<h{level}><span class=\"kind\">{}</span> {}</h{level}>",
         esc(anchor),
         esc(item.kind.label()),
         esc(&item.name),
     );
-    let _ = write!(out, "<pre class=\"sig\"><code>{}</code></pre>\n", linkify(&item.signature, links, &item.name));
+    let _ = writeln!(out, "<pre class=\"sig\"><code>{}</code></pre>", linkify(&item.signature, links, &item.name));
     if let Some(reason) = &item.doc.deprecated {
-        let _ = write!(out, "<p class=\"deprecated\">Deprecated{}</p>\n", if reason.is_empty() { String::new() } else { format!(": {}", inline(reason, links)) });
+        let _ = writeln!(out, "<p class=\"deprecated\">Deprecated{}</p>", if reason.is_empty() { String::new() } else { format!(": {}", inline(reason, links)) });
     }
     out.push_str(&markdown_to_html(&item.doc.body, links));
     let d = &item.doc;
@@ -979,33 +979,33 @@ fn render_item(out: &mut String, item: &DocItem, links: &BTreeMap<String, String
         if !d.params.is_empty() {
             out.push_str("<dt>Parameters</dt>\n");
             for (name, text) in &d.params {
-                let _ = write!(out, "<dd><code>{}</code> {}</dd>\n", esc(name), inline(text, links));
+                let _ = writeln!(out, "<dd><code>{}</code> {}</dd>", esc(name), inline(text, links));
             }
         }
         if let Some(r) = &d.returns {
-            let _ = write!(out, "<dt>Returns</dt>\n<dd>{}</dd>\n", inline(r, links));
+            let _ = writeln!(out, "<dt>Returns</dt>\n<dd>{}</dd>", inline(r, links));
         }
         if !d.throws.is_empty() {
             out.push_str("<dt>Throws</dt>\n");
             for (ty, text) in &d.throws {
-                let _ = write!(out, "<dd><code>{}</code> {}</dd>\n", linkify(ty, links, ""), inline(text, links));
+                let _ = writeln!(out, "<dd><code>{}</code> {}</dd>", linkify(ty, links, ""), inline(text, links));
             }
         }
         if let Some(s) = &d.since {
-            let _ = write!(out, "<dt>Since</dt>\n<dd>{}</dd>\n", esc(s));
+            let _ = writeln!(out, "<dt>Since</dt>\n<dd>{}</dd>", esc(s));
         }
         if !d.see.is_empty() {
             out.push_str("<dt>See also</dt>\n");
             for s in &d.see {
-                let _ = write!(out, "<dd>{}</dd>\n", linkify(s, links, ""));
+                let _ = writeln!(out, "<dd>{}</dd>", linkify(s, links, ""));
             }
         }
         out.push_str("</dl>\n");
     }
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "<p class=\"muted\">{}:{}</p>\n",
-        esc(&item.file.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()),
+        "<p class=\"muted\">{}:{}</p>",
+        esc(item.file.file_name().and_then(|n| n.to_str()).unwrap_or("")),
         item.line,
     );
     for m in &item.members {
@@ -1051,7 +1051,7 @@ fn dependencies_section(manifest: &Manifest) -> String {
     let mut out = String::from("<h2>Dependencies</h2>\n");
     for (title, list) in [("Native Libraries", native), ("Jux Packages", jux), ("Rust Crates", rust)] {
         if !list.is_empty() {
-            let _ = write!(out, "<h3>{title}</h3>\n<ul>\n{}\n</ul>\n", list.join("\n"));
+            let _ = writeln!(out, "<h3>{title}</h3>\n<ul>\n{}\n</ul>", list.join("\n"));
         }
     }
     out
