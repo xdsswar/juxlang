@@ -1,0 +1,137 @@
+// A tiny text adventure: rooms in a map, an enum of directions, an inventory,
+// a scripted list of commands parsed from text, and a state machine that ends
+// when the player escapes or runs out of moves.
+
+enum Dir {
+    North, South, East, West;
+
+    public static Dir? parse(String word) {
+        switch (word) {
+            case "n" -> { return Dir.North; }
+            case "s" -> { return Dir.South; }
+            case "e" -> { return Dir.East; }
+            case "w" -> { return Dir.West; }
+            default -> { return null; }
+        }
+    }
+}
+
+class Room {
+    public String name;
+    public String item;
+    public HashMap<String, String> exits = new HashMap<String, String>();
+    public bool locked = false;
+
+    public Room(String name, String item) {
+        this.name = name;
+        this.item = item;
+    }
+
+    public void link(Dir d, String to) {
+        exits.insert(d.name(), to);
+    }
+}
+
+class Game {
+    private HashMap<String, Room> rooms = new HashMap<String, Room>();
+    private String here = "hall";
+    private Vec<String> bag = new Vec<String>();
+    private int moves = 0;
+    public bool won = false;
+
+    public Game() {
+        var hall = new Room("hall", "");
+        var library = new Room("library", "key");
+        var vault = new Room("vault", "gold");
+        var garden = new Room("garden", "rope");
+        vault.locked = true;
+        hall.link(Dir.North, "library");
+        hall.link(Dir.East, "vault");
+        library.link(Dir.South, "hall");
+        library.link(Dir.West, "garden");
+        garden.link(Dir.East, "library");
+        vault.link(Dir.West, "hall");
+        rooms.insert("hall", hall);
+        rooms.insert("library", library);
+        rooms.insert("vault", vault);
+        rooms.insert("garden", garden);
+    }
+
+    private Room room() {
+        return rooms.get(here)!!;
+    }
+
+    public String run(String command) {
+        moves++;
+        var parts = command.split(" ");
+        var verb = parts[0];
+        if (verb == "go") {
+            var d = Dir.parse(parts[1]);
+            if (d == null) {
+                return "which way?";
+            }
+            var target = room().exits.get(d!!.name());
+            if (target == null) {
+                return "no exit " + d!!.name();
+            }
+            var next = rooms.get(target!!)!!;
+            if (next.locked) {
+                if (bag.contains("key")) {
+                    next.locked = false;
+                    here = next.name;
+                    return "unlocked " + next.name;
+                }
+                return next.name + " is locked";
+            }
+            here = next.name;
+            return "you are in the " + here;
+        }
+        if (verb == "take") {
+            var r = room();
+            if (r.item == "") {
+                return "nothing here";
+            }
+            bag.push(r.item);
+            var got = r.item;
+            r.item = "";
+            if (got == "gold") {
+                won = true;
+            }
+            return "took " + got;
+        }
+        if (verb == "look") {
+            var r = room();
+            var item = r.item == "" ? "nothing" : r.item;
+            return r.name + " holds " + item;
+        }
+        return "unknown command " + verb;
+    }
+
+    public String summary() {
+        var items = "";
+        for (var i = 0; i < bag.len(); i++) {
+            if (i > 0) {
+                items += ",";
+            }
+            items += bag[i];
+        }
+        return $"moves=${moves} bag=[${items}] won=${won}";
+    }
+}
+
+public void main() {
+    var game = new Game();
+    String[] script = {
+        "look", "go e", "go n", "take", "go x", "go w", "take",
+        "look", "go e", "go s", "go e", "take", "dance"
+    };
+    for (var line : script) {
+        print("> " + line);
+        print(game.run(line));
+        if (game.won) {
+            print("escaped with the gold");
+            break;
+        }
+    }
+    print(game.summary());
+}

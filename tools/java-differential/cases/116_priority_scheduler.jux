@@ -1,0 +1,107 @@
+// A priority scheduler: a hand-written binary min-heap of jobs ordered by
+// priority then arrival, a simulated clock, jobs that spawn follow-up jobs,
+// and a round-robin time slice for long jobs.
+
+class Job {
+    public String name;
+    public int priority;
+    public int arrival;
+    public int remaining;
+
+    public Job(String name, int priority, int arrival, int work) {
+        this.name = name;
+        this.priority = priority;
+        this.arrival = arrival;
+        this.remaining = work;
+    }
+
+    // Lower priority number first; the earlier arrival breaks a tie.
+    public int operator<=>(Job other) {
+        if (priority != other.priority) {
+            return priority <=> other.priority;
+        }
+        return arrival <=> other.arrival;
+    }
+}
+
+class Heap {
+    private Vec<Job> items = new Vec<Job>();
+
+    public int size() { return items.len(); }
+
+    public void push(Job j) {
+        items.push(j);
+        var i = items.len() - 1;
+        while (i > 0) {
+            var parent = (i - 1) / 2;
+            if (items[i] < items[parent]) {
+                swap(i, parent);
+                i = parent;
+            } else {
+                break;
+            }
+        }
+    }
+
+    public Job pop() {
+        var top = items[0];
+        var last = items.len() - 1;
+        items[0] = items[last];
+        items.pop();
+        var i = 0;
+        while (true) {
+            var l = 2 * i + 1;
+            var r = l + 1;
+            var smallest = i;
+            if (l < items.len() && items[l] < items[smallest]) { smallest = l; }
+            if (r < items.len() && items[r] < items[smallest]) { smallest = r; }
+            if (smallest == i) { break; }
+            swap(i, smallest);
+            i = smallest;
+        }
+        return top;
+    }
+
+    private void swap(uint a, uint b) {
+        var t = items[a];
+        items[a] = items[b];
+        items[b] = t;
+    }
+}
+
+public void main() {
+    var heap = new Heap();
+    var clock = 0;
+    var arrivals = 0;
+    heap.push(new Job("backup", 5, arrivals++, 7));
+    heap.push(new Job("email", 2, arrivals++, 2));
+    heap.push(new Job("render", 3, arrivals++, 5));
+    heap.push(new Job("alert", 1, arrivals++, 1));
+    heap.push(new Job("index", 3, arrivals++, 3));
+    final int slice = 3;
+    var finished = new Vec<String>();
+    while (heap.size() > 0) {
+        var job = heap.pop();
+        var run = job.remaining < slice ? job.remaining : slice;
+        clock += run;
+        job.remaining -= run;
+        if (job.remaining > 0) {
+            print($"t=${clock} ${job.name} ran ${run}, ${job.remaining} left");
+            job.priority++;
+            job.arrival = arrivals++;
+            heap.push(job);
+        } else {
+            print($"t=${clock} ${job.name} done");
+            finished.push(job.name);
+            if (job.name == "alert") {
+                heap.push(new Job("page-oncall", 1, arrivals++, 2));
+            }
+        }
+    }
+    var order = "";
+    for (var n : finished) {
+        order += n + " ";
+    }
+    print("order: " + order.trim());
+    print("clock: " + clock);
+}
