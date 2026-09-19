@@ -1,0 +1,26 @@
+// Operator coherence (Runtime/ABI §R.3, ERRATA E65): a free-function
+// operator needs an operand, or a record/struct/enum result, that this
+// program declares; and one operator per operand-type pair.
+
+class Vec3 {
+    public double x;
+    public Vec3(double x) { this.x = x; }
+}
+
+record Scaled(double k) {}
+
+record Meters(double v) {}
+
+public Vec3 operator*(double k, Vec3 v) { return new Vec3(v.x * k); }
+public Vec3 operator*(double k, Vec3 v) { return new Vec3(v.x * k * 2.0); }
+
+public int operator+(double a, int b) { return (int) a + b; }
+public String operator+(String a, int b) { return a; }
+
+// Fine: the right operand, the newtype, and the value result are owned.
+public Vec3 operator*(Scaled s, Vec3 v) { return new Vec3(v.x * s.k); }
+public Meters operator+(double a, double b) { return new Meters(a + b); }
+
+public void main() {
+    print((new Scaled(2.0) * new Vec3(3.0)).x);
+}

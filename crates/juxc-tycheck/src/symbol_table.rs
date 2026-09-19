@@ -1464,6 +1464,14 @@ pub struct RecordSig {
     /// additional constructors follow in declaration order. The indexes are
     /// what `ctor_selections` records and the backend names `new` / `new__K`.
     pub constructors: Vec<ConstructorSig>,
+    /// `@layout(c) record` (Layout-ABI §L.1.2): a C-compatible value
+    /// aggregate, fields in declaration order under `#[repr(C)]`, passable at
+    /// the FFI boundary by value or by pointer, exactly like a `@layout(c)
+    /// struct`.
+    pub is_layout_c: bool,
+    /// `@align(N)` on the record, when `N` is an integer literal (Layout-ABI
+    /// §L.1.4). Read by the `transmute` size check, which lays records out.
+    pub align: Option<i64>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -3019,6 +3027,25 @@ pub(crate) fn has_annotation(annotations: &[juxc_ast::Annotation], canonical_low
             .map(|s| s.text.eq_ignore_ascii_case(canonical_lower))
             .unwrap_or(false)
     })
+}
+
+/// The `@align(N)` annotation among `annotations` (Layout-ABI §L.1.4), as its
+/// span and the value of `N` when `N` is a plain integer literal (`None` when
+/// it is anything else, which the checker reports). `None` overall when there
+/// is no `@align`. Case-insensitive, like every built-in annotation lookup.
+pub fn align_annotation(annotations: &[juxc_ast::Annotation]) -> Option<(juxc_source::Span, Option<i64>)> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    let a = annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .is_some_and(|s| s.text.eq_ignore_ascii_case("align"))
+    })?;
+    let value = match a.args.as_slice() {
+        [AnnotationArg::Positional(Expr::Literal(Literal::Int(lit)))] => Some(lit.value),
+        _ => None,
+    };
+    Some((a.span, value))
 }
 
 /// True when `annotations` includes `@layout(c)` — a `layout` annotation with a
@@ -4813,6 +4840,8 @@ fn insert_record(
             operator_overloads,
             methods,
             constructors,
+            is_layout_c: is_layout_c_annotation(&record_decl.annotations),
+            align: align_annotation(&record_decl.annotations).and_then(|(_, n)| n),
             span: record_decl.span,
         },
     );
@@ -5046,6 +5075,26 @@ fn insert_function(
             .or_insert_with(|| vec![first]);
         let want = param_shape_key(&sig.params);
         if group.iter().any(|fs| param_shape_key(&fs.params) == want) {
+            // A free-function operator (§7.14) is stored under its internal
+            // name (`__op_mul`); report it the way it was written (E0951,
+            // Runtime/ABI §R.3.3), never by that name.
+            let bare = fqn.rsplit('.').next().unwrap_or(&fqn);
+            if let Some(kind) = operator_contract_kind(bare) {
+                let operands: Vec<String> = sig.params.iter().map(|p| crate::check::type_ref_display(&p.ty)).collect();
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0951_DuplicateOperator,
+                        format!(
+                            "`operator{}({})` is declared more than once -- a call could not tell which one \
+                             runs; keep one (§R.3.3)",
+                            operator_kind_display(kind),
+                            operands.join(", "),
+                        ),
+                    )
+                    .with_span(fn_decl.span),
+                );
+                return;
+            }
             report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
             return;
         }
@@ -5378,6 +5427,12 @@ fn operator_sig(op: &OperatorDecl) -> OperatorSig {
         is_deleted: op.is_deleted,
         span: op.span,
     }
+}
+
+/// The source spelling of an operator (`*`, `<<`, `hash`), for messages
+/// outside this module.
+pub(crate) fn operator_symbol(kind: OperatorKind) -> &'static str {
+    operator_kind_display(kind)
 }
 
 /// Human-readable spelling of an [`OperatorKind`] suitable for embedding

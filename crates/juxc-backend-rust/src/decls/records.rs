@@ -72,6 +72,13 @@ impl RustEmitter {
         let legacy_eq = components.iter().all(|t| field_supports_eq(t));
         let hash_plan = self.value_hash_plan(&fqn, &components, &record_decl.operators, legacy_eq);
         self.w.line(&record_derive_attribute(record_decl, has_default, hash_plan));
+        // `@layout(c) record` (§L.1.2): fields in declaration order at their C
+        // offsets. The checker has already held every component to a C
+        // `Copy` type, so the derive above includes `Copy`.
+        if crate::has_layout_c(&record_decl.annotations) {
+            self.w.line("#[repr(C)]");
+        }
+        crate::emit_align_attribute(&mut self.w, &record_decl.annotations);
 
         // pub struct Name<T, U> { …components… }
         self.w.emit_indent();
@@ -622,7 +629,11 @@ fn record_derive_attribute(
         .any(|o| o.kind == OperatorKind::Eq);
     let component_tys: Vec<&juxc_ast::TypeRef> =
         record_decl.components.iter().map(|c| &c.ty).collect();
-    let all_copy = component_tys.iter().all(|t| field_supports_copy(t));
+    // A `@layout(c)` record is a C value: every component is a C `Copy` type
+    // (tycheck E0509 otherwise), including raw pointers, which the generic
+    // field test does not count.
+    let all_copy = crate::has_layout_c(&record_decl.annotations)
+        || component_tys.iter().all(|t| field_supports_copy(t));
 
     // PartialEq: derived unless the user wrote operator== (override
     // or delete). The user's override path emits its own `impl

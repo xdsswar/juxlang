@@ -1225,6 +1225,14 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if name == "spawn" || name == "withTimeout" {
                 return Ty::Unknown;
             }
+            // `transmute<A, B>(value)` (Layout-ABI §L.7.4) gives a `B`, unless
+            // the program declares its own `transmute`.
+            if name == "transmute" && symbols.lookup_function(name).is_none() && env.lookup(name).is_none() {
+                return match c.explicit_generic_args.as_slice() {
+                    [_, to] => ty_from_ref(to, env, symbols),
+                    _ => Ty::Unknown,
+                };
+            }
             // `block_on(fut)` resolves to the future's value — for
             // typed runtime calls (m.lock(), ch.receive()) the
             // argument's inferred type IS the value type.

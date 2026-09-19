@@ -1,0 +1,32 @@
+// `@align(N)` rules (Layout-ABI §L.1.4, ERRATA E62) and `alignof` operands.
+
+@align(48)
+struct NotPowerOfTwo {
+    long v;
+}
+
+@align(4)
+struct AlignsDown {
+    long v;
+}
+
+@align(size)
+struct NotALiteral {
+    long v;
+}
+
+struct FieldAligned {
+    @align(64)
+    long v;
+}
+
+@align(8)
+enum Mode {
+    On,
+    Off
+}
+
+public void main() {
+    print(alignof(void));
+    print(alignof(Vec));
+}

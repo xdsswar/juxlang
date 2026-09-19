@@ -111,6 +111,9 @@ pub const BUILTINS: &[&str] = &[
     "assert",
     "spawn",
     "withTimeout",
+    // `transmute<A, B>(value)` (Layout-ABI §L.7.4), checked by
+    // `check_transmute` and lowered to `std::mem::transmute`.
+    "transmute",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
     // Field call on Path("File"). Registering `File` in BUILTINS
@@ -762,7 +765,10 @@ impl<'a> Checker<'a> {
         crate::hash_keys::check_unit(unit, &self.env, self.symbols, self.diagnostics);
         for item in &unit.items {
             match item {
-                TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
+                TopLevelDecl::Function(fn_decl) => {
+                    self.check_operator_coherence(fn_decl);
+                    self.check_function(fn_decl);
+                }
                 TopLevelDecl::Annotation(decl) => self.check_annotation_decl(decl),
                 TopLevelDecl::Class(class) => self.check_class(class),
                 TopLevelDecl::Record(record) => self.check_record(record),
@@ -781,6 +787,9 @@ impl<'a> Checker<'a> {
                 TopLevelDecl::Const(c) => {
                     let found = self.infer_and_record(&c.value);
                     self.check_expr(&c.value);
+                    // `@export const` (§L.3.3): C-visible read-only data.
+                    let const_ty = crate::resolved_const_type(c);
+                    self.check_exported_constant(&c.annotations, Some(&const_ty), true, &c.name.text, c.span);
                     // When the type is written, check the initializer matches.
                     // When it's omitted (inferred), the initializer's type IS
                     // the constant's type — nothing to compare against.
@@ -987,6 +996,7 @@ impl<'a> Checker<'a> {
                     .classes
                     .get(&name)
                     .is_some_and(|c| c.is_layout_c)
+                    || self.symbols.records.get(&name).is_some_and(|r| r.is_layout_c)
                     || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c)
             }
             _ => false,
@@ -1021,6 +1031,7 @@ impl<'a> Checker<'a> {
                     .classes
                     .get(&name)
                     .is_some_and(|c| c.is_layout_c)
+                    || self.symbols.records.get(&name).is_some_and(|r| r.is_layout_c)
                     || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c);
             }
         }
@@ -1118,6 +1129,7 @@ impl<'a> Checker<'a> {
     /// the body's scope. Deleted operators have no body and are
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        self.reject_align_on(&enum_decl.annotations, "an enum", &enum_decl.name.text);
         // `sealed enum X permits A, B` (ERRATA E33): an enum is sealed by
         // default, so the list may only restate its variants, all of them.
         if !enum_decl.permits.is_empty() {
@@ -2663,6 +2675,16 @@ impl<'a> Checker<'a> {
     /// binding), run the body checker, then tear it down. Abstract
     /// methods (body = None) are skipped.
     fn check_class(&mut self, class: &ClassDecl) {
+        // `@align(N)` on the type, and never on one of its fields (§L.1.4).
+        let field_tys: Vec<&juxc_ast::TypeRef> =
+            class.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+        let kind = if class.is_struct { "struct" } else { "class" };
+        self.check_align_annotation(&class.annotations, &field_tys, kind, &class.name.text);
+        for field in &class.fields {
+            self.reject_align_on(&field.annotations, "a field", &field.name.text);
+            let constant = field.is_static && field.is_final;
+            self.check_exported_constant(&field.annotations, field.ty.as_ref(), constant, &field.name.text, field.span);
+        }
         // `@layout(c)` is permitted only on a value aggregate (`struct`), not a
         // `class` (Layout-ABI §L.1.2) — a class has an `Rc`/vtable header with no
         // portable C representation. `@layout(c) struct` field types must also be
@@ -3175,23 +3197,28 @@ impl<'a> Checker<'a> {
     /// plus a `this` binding. Abstract methods (body = None) are
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
-        // `@export` (C linkage) is only honored on FREE functions in Phase 1.
-        // On a method it was silently ignored (no C symbol emitted), so flag it:
-        // an instance method has a receiver C can't express, and static-method
-        // export is a deferred spec item (JUX-LANG-V1 §8.4 / Layout-ABI §L.3.2).
+        // `@export` (C linkage, Layout-ABI §L.3.2): a STATIC method is exported
+        // like a free function, through a C wrapper that calls `Type::method`,
+        // and its signature is held to the same C rules. An instance method
+        // has a receiver C cannot express.
         if crate::symbol_table::has_annotation(&method.annotations, "export") {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0508_FfiTypeNotAllowed,
-                    format!(
-                        "`@export` is not supported on method `{}` in this phase -- `@export` gives \
-                         C linkage to a FREE function; move it out of the class (an instance method \
-                         has a receiver C cannot express, and static-method export is deferred)",
-                        method.name.text,
-                    ),
-                )
-                .with_span(method.span),
-            );
+            let method_is_static = method.modifiers.iter().any(|m| matches!(m, juxc_ast::FnModifier::Static));
+            if method_is_static {
+                self.check_export_signature(method);
+            } else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "`@export` on instance method `{}`: C has no way to pass the object it is \
+                             called on -- make the method `static`, or export a free function that \
+                             takes what it needs as parameters",
+                            method.name.text,
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
         }
         let Some(body) = &method.body else { return };
         self.check_param_defaults(&method.params);
@@ -4210,6 +4237,7 @@ impl<'a> Checker<'a> {
     /// body call the interface's own members and have the results typed --
     /// including the abstract ones it is written against.
     fn check_interface(&mut self, iface: &juxc_ast::InterfaceDecl) {
+        self.reject_align_on(&iface.annotations, "an interface", &iface.name.text);
         let has_bodies = iface.methods.iter().any(|m| m.body.is_some());
         if !has_bodies {
             return;
@@ -4238,6 +4266,406 @@ impl<'a> Checker<'a> {
         self.env.clear_class();
     }
 
+    /// `@align(N)` on a `class`, `struct` or `record` (Layout-ABI §L.1.4,
+    /// ERRATA E62). `N` must be an integer literal and a power of two no
+    /// larger than 2^29 (the largest alignment `#[repr(align)]` takes), and it
+    /// may not align DOWN: when a field of a fixed-width type already needs
+    /// more than `N`, the annotation cannot hold. Platform-sized fields (`int`,
+    /// pointers) and user types are not counted, so only a certain violation
+    /// is reported. All of these are E0519.
+    fn check_align_annotation(
+        &mut self,
+        annotations: &[juxc_ast::Annotation],
+        field_tys: &[&juxc_ast::TypeRef],
+        kind: &str,
+        name: &str,
+    ) {
+        let Some((span, value)) = crate::symbol_table::align_annotation(annotations) else {
+            return;
+        };
+        let problem = match value {
+            None => Some("its argument must be an integer literal, such as `@align(64)`".to_string()),
+            Some(n) if n <= 0 || n & (n - 1) != 0 => Some(format!("{n} is not a power of two")),
+            Some(n) if n > 1 << 29 => Some(format!("{n} is above the largest alignment supported, 536870912 (2^29)")),
+            Some(n) => field_tys
+                .iter()
+                .filter_map(|t| fixed_alignment(t).map(|a| (a, t)))
+                .find(|(a, _)| *a as i64 > n)
+                .map(|(a, t)| {
+                    format!(
+                        "a field of type `{}` already needs {a}-byte alignment, and `@align` can only raise it",
+                        type_ref_display(t),
+                    )
+                }),
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0519_InvalidAlignment,
+                    format!("`@align` on {kind} `{name}` cannot hold: {problem} (§L.1.4)"),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
+    /// Whether `c` calls the built-in `transmute` (Layout-ABI §L.7.4): a bare
+    /// `transmute` that names no declared function, local or parameter.
+    fn is_builtin_transmute(&self, c: &CallExpr) -> bool {
+        matches!(c.callee.as_ref(), Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == "transmute")
+            && self.symbols.lookup_function("transmute").is_none()
+            && self.env.lookup("transmute").is_none()
+    }
+
+    /// `transmute<A, B>(value)` (Layout-ABI §L.7.4, ERRATA E63): reinterpret
+    /// the bits of an `A` as a `B`. It needs `unsafe` (E0506), exactly two
+    /// type arguments and one argument of type `A`, and both types must have
+    /// the same size on EVERY target: a size is a byte count for the
+    /// fixed-width primitives and for `@layout(c)` aggregates built from them,
+    /// and one machine word for `int`, `uint` and pointers. Anything whose
+    /// size is not fixed that way (a class, a `String`, a collection, an
+    /// aggregate holding a pointer) cannot be transmuted. All of these are
+    /// E0522.
+    fn check_transmute(&mut self, c: &CallExpr) {
+        for arg in &c.args {
+            self.check_expr(arg);
+        }
+        if !self.in_unsafe {
+            self.unsafe_pointer_op("`transmute`", c.span);
+        }
+        let [from, to] = c.explicit_generic_args.as_slice() else {
+            self.push_transmute_error(
+                c.span,
+                "it takes exactly two type arguments, the type it reads and the type it gives: `transmute<A, B>(value)`".to_string(),
+            );
+            return;
+        };
+        let [value] = c.args.as_slice() else {
+            self.push_transmute_error(c.span, "it takes exactly one argument, the value to reinterpret".to_string());
+            return;
+        };
+        let expected = ty_from_ref(from, &self.env, self.symbols);
+        let found = infer_expr(value, &self.env, self.symbols);
+        if !matches!(found, Ty::Unknown) && !compatible(&expected, &found, self.symbols) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!("`transmute<{}, ...>` reads a `{expected}`, and this value is `{found}`", type_ref_display(from)),
+                )
+                .with_span(expr_span(value)),
+            );
+        }
+        let sizes = (self.portable_size(from, 0), self.portable_size(to, 0));
+        let problem = match sizes {
+            (None, _) => Some(format!("`{}` has no size fixed on every target", type_ref_display(from))),
+            (_, None) => Some(format!("`{}` has no size fixed on every target", type_ref_display(to))),
+            (Some(a), Some(b)) if a.size_eq(b) => None,
+            (Some(a), Some(b)) => Some(format!(
+                "`{}` is {} and `{}` is {}",
+                type_ref_display(from),
+                a.describe(),
+                type_ref_display(to),
+                b.describe(),
+            )),
+        };
+        if let Some(problem) = problem {
+            self.push_transmute_error(c.span, format!("the two types must be the same size: {problem}"));
+        }
+    }
+
+    fn push_transmute_error(&mut self, span: Span, problem: String) {
+        self.diagnostics.push(
+            Diagnostic::error(code::Code::E0522_InvalidTransmute, format!("invalid `transmute`: {problem} (§L.7.4)"))
+                .with_span(span)
+                .with_help(
+                    "transmute takes primitives, pointers and `@layout(c)` types; `int`, `uint` and pointers \
+                     are one machine word, so pair them with each other, and use `i32`/`long` for fixed widths",
+                ),
+        );
+    }
+
+    /// The size of `t` as a `transmute` must know it (ERRATA E63): a byte
+    /// count and alignment that hold on every target, or one machine word.
+    /// `None` when the size depends on anything else. A `@layout(c)`
+    /// aggregate is laid out by the C rules: each field at the next multiple
+    /// of its alignment, the whole rounded up to the largest alignment (or its
+    /// `@align(N)`); one holding a word-sized field has no fixed byte count,
+    /// since its padding moves with the word size.
+    fn portable_size(&self, t: &juxc_ast::TypeRef, depth: u32) -> Option<PortableSize> {
+        if depth > 16 || t.nullable || t.array_shape.is_some() {
+            return None;
+        }
+        if t.ptr_depth > 0 || t.fn_pointer_shape().is_some() {
+            return Some(PortableSize::Word);
+        }
+        if !t.generic_args.is_empty() || t.fn_shape.is_some() {
+            return None;
+        }
+        let name = t.name.segments.last()?.text.as_str();
+        if let Some(p) = crate::ty::primitive_from_name(name) {
+            if matches!(p, Primitive::Int | Primitive::Uint) {
+                return Some(PortableSize::Word);
+            }
+            let a = fixed_alignment(t)?;
+            return Some(PortableSize::Bytes { size: a, align: a });
+        }
+        let Ty::User { name, .. } = ty_from_ref(t, &self.env, self.symbols) else {
+            return None;
+        };
+        let (mut fields, declared_align): (Vec<juxc_ast::TypeRef>, Option<i64>) =
+            if let Some(class) = self.symbols.classes.get(&name).filter(|c| c.is_layout_c) {
+                let mut sorted: Vec<&crate::symbol_table::FieldSig> =
+                    class.fields.values().filter(|f| !f.is_static).collect();
+                sorted.sort_by_key(|f| (f.span.file, f.span.start));
+                let align = crate::symbol_table::align_annotation(&class.annotations).and_then(|(_, n)| n);
+                (sorted.into_iter().map(|f| f.ty.clone()).collect(), align)
+            } else if let Some(record) = self.symbols.records.get(&name).filter(|r| r.is_layout_c) {
+                (record.components.iter().map(|c| c.ty.clone()).collect(), record.align)
+            } else {
+                return None;
+            };
+        let mut offset: u64 = 0;
+        let mut align: u64 = 1;
+        for field in fields.drain(..) {
+            match self.portable_size(&field, depth + 1)? {
+                PortableSize::Bytes { size, align: a } => {
+                    offset = offset.div_ceil(a) * a + size;
+                    align = align.max(a);
+                }
+                PortableSize::Word => return None,
+            }
+        }
+        if let Some(n) = declared_align.filter(|n| *n > 0) {
+            align = align.max(n as u64);
+        }
+        Some(PortableSize::Bytes { size: offset.div_ceil(align) * align, align })
+    }
+
+    /// `array as T*` (Layout-ABI §L.6.3): the address of the array's first
+    /// element. It is only meaningful while that array is alive, so the operand
+    /// must be a NAMED array (a local, a parameter or a field): a temporary
+    /// `(new byte[4]) as byte*` is freed at the end of the statement and would
+    /// leave the pointer dangling at once. The array must be one-dimensional,
+    /// since the elements of an `int[][]` are handles to other arrays, not
+    /// contiguous ints. Violations are E0521; the `unsafe` requirement is the
+    /// general pointer-cast rule (E0506).
+    fn check_array_to_pointer_cast(&mut self, c: &juxc_ast::CastExpr) {
+        if c.ty.ptr_depth == 0 {
+            return;
+        }
+        let Ty::Array { element, .. } = infer_expr(&c.value, &self.env, self.symbols) else {
+            return;
+        };
+        let problem = if matches!(*element, Ty::Array { .. }) {
+            Some("only a one-dimensional array converts to a pointer: the elements of a nested array are handles to other arrays")
+        } else if !matches!(c.value.as_ref(), Expr::Path(_) | Expr::Field(_)) {
+            Some("the array must be a named one (a local, a parameter or a field): a temporary array is freed at the end of the statement, and the pointer would dangle")
+        } else if c.ty.ptr_depth > 1 {
+            Some("an array converts to a pointer to its elements (`T*`), not to a pointer to a pointer")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0521_ArrayToPointer,
+                    format!("cannot convert this array to a pointer: {problem} (§L.6.3)"),
+                )
+                .with_span(c.span),
+            );
+        }
+    }
+
+    /// Operator coherence for a free-function operator (Runtime/ABI §R.3.1,
+    /// ERRATA E65). `R operator*(A left, B right)` may only be declared where
+    /// `A` or `B`, or a record/struct/enum `R`, is declared too: otherwise it
+    /// would redefine arithmetic on types that belong to someone else, and two
+    /// libraries could each do it differently. A type counts as this
+    /// program's own when the program declares it: a primitive, `String`, a
+    /// standard-library type, a Rust crate's type or a bare type parameter
+    /// never does, while a generic user type (`Wrapper<T>`) does (§R.3.7).
+    /// The newtype escape hatch (§R.3.4) is the fix the message names. E0950.
+    fn check_operator_coherence(&mut self, f: &FnDecl) {
+        let Some(kind) = crate::symbol_table::operator_contract_kind(&f.name.text) else {
+            return;
+        };
+        let [left, right] = f.params.as_slice() else {
+            return;
+        };
+        let owned = |t: &juxc_ast::TypeRef| self.type_is_program_owned(t, false);
+        let returns_owned_value = match &f.return_type {
+            juxc_ast::ReturnType::Type(t) => self.type_is_program_owned(t, true),
+            _ => false,
+        };
+        if owned(&left.ty) || owned(&right.ty) || returns_owned_value {
+            return;
+        }
+        let op = crate::symbol_table::operator_symbol(kind);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0950_OrphanOperator,
+                format!(
+                    "orphan operator: `operator{op}({}, {})` is declared here, but neither `{}` nor `{}` is \
+                     declared by this program, so this would redefine `{op}` on types it does not own (§R.3.1)",
+                    type_ref_display(&left.ty),
+                    type_ref_display(&right.ty),
+                    type_ref_display(&left.ty),
+                    type_ref_display(&right.ty),
+                ),
+            )
+            .with_span(f.span)
+            .with_help(format!(
+                "wrap one operand in a type of your own (a `record Scaled(double k)`), and declare \
+                 `operator{op}` on that type (§R.3.4)"
+            )),
+        );
+    }
+
+    /// Whether `t` names a type this program declares (Runtime/ABI §R.3.1):
+    /// a user class, struct, record, enum or interface, not an external stub
+    /// and not from the standard library. With `value_only`, only a record,
+    /// struct or enum counts (the return-type rule of §R.3.1 item 3).
+    fn type_is_program_owned(&self, t: &juxc_ast::TypeRef, value_only: bool) -> bool {
+        if t.ptr_depth > 0 || t.array_shape.is_some() || t.fn_shape.is_some() {
+            return false;
+        }
+        let Ty::User { name, .. } = ty_from_ref(t, &self.env, self.symbols) else {
+            return false;
+        };
+        let from_std = ["jux.", "core.", "rust."].iter().any(|p| name.starts_with(p));
+        if from_std {
+            return false;
+        }
+        if let Some(c) = self.symbols.classes.get(&name) {
+            return !c.is_external && (!value_only || c.is_struct);
+        }
+        if self.symbols.records.contains_key(&name) {
+            return true;
+        }
+        if let Some(e) = self.symbols.enums.get(&name) {
+            return !e.is_external;
+        }
+        !value_only && self.symbols.interfaces.get(&name).is_some_and(|i| !i.is_external)
+    }
+
+    /// `@export` on data (Layout-ABI §L.3.3, ERRATA E64): only a constant (a
+    /// top-level `const`, or a `static final` field) of a numeric or `bool`
+    /// type can be exported. C links to it as read-only data at its C type. A
+    /// mutable `static` lives behind a lock, since any thread may touch it,
+    /// and C cannot take that lock, so handing C its address would invite a
+    /// data race; an instance field has no single address at all. E0508.
+    fn check_exported_constant(
+        &mut self,
+        annotations: &[juxc_ast::Annotation],
+        ty: Option<&juxc_ast::TypeRef>,
+        is_constant: bool,
+        name: &str,
+        span: Span,
+    ) {
+        if !crate::symbol_table::has_annotation(annotations, "export") {
+            return;
+        }
+        let problem = if !is_constant {
+            Some(
+                "only a constant can be exported: a mutable `static` sits behind a lock C cannot take, \
+                 and an instance field has no single address -- export `static final` data, or \
+                 functions that read and write it"
+                    .to_string(),
+            )
+        } else {
+            match ty {
+                Some(t) if self.exportable_constant_type(t) => None,
+                Some(t) => Some(format!(
+                    "a `{}` constant has no C data representation -- export a number or a `bool`",
+                    type_ref_display(t),
+                )),
+                None => None,
+            }
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0508_FfiTypeNotAllowed, format!("`@export` on `{name}`: {problem} (§L.3.3)"))
+                    .with_span(span),
+            );
+        }
+    }
+
+    /// A type C can see as exported read-only data: a numeric primitive or
+    /// `bool`, not nullable, not a pointer or an array.
+    fn exportable_constant_type(&self, t: &juxc_ast::TypeRef) -> bool {
+        t.ptr_depth == 0
+            && !t.nullable
+            && t.array_shape.is_none()
+            && t.generic_args.is_empty()
+            && t.name.segments.len() == 1
+            && crate::ty::primitive_from_name(&t.name.segments[0].text).is_some_and(|p| p != Primitive::Char)
+    }
+
+    /// `@align(N)` where it cannot apply (Layout-ABI §L.1.4, ERRATA E62): a
+    /// field (Phase 1 aligns whole types; Rust has no per-field alignment, so
+    /// the way to align one field is an `@align` struct holding it), an enum
+    /// or an interface. E0520.
+    fn reject_align_on(&mut self, annotations: &[juxc_ast::Annotation], what: &str, name: &str) {
+        let Some((span, _)) = crate::symbol_table::align_annotation(annotations) else {
+            return;
+        };
+        let help = if what == "a field" {
+            "declare an `@align(N) struct` that holds the value, and make the field that struct"
+        } else {
+            "`@align` applies to a class, struct or record"
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0520_AlignNotApplicable,
+                format!("`@align` cannot be put on {what} (`{name}`) (§L.1.4)"),
+            )
+            .with_span(span)
+            .with_help(help),
+        );
+    }
+
+    /// `@layout(c) record` (Layout-ABI §L.1.2): the same rules as a `@layout(c)
+    /// struct`. It has one concrete C layout, so it may not be generic, and
+    /// every component must be a C-compatible `Copy` field (a primitive, a raw
+    /// pointer, a function pointer, another `@layout(c)` aggregate or a C enum).
+    /// Violations are E0509, worded for a record.
+    fn check_layout_c_record(&mut self, record: &RecordDecl) {
+        if !crate::symbol_table::is_layout_c_annotation(&record.annotations) {
+            return;
+        }
+        if !record.generic_params.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0509_LayoutCOnNonAggregate,
+                    format!(
+                        "`@layout(c) record {}` may not be generic -- a C-compatible type has one \
+                         concrete layout; remove the type parameters",
+                        record.name.text,
+                    ),
+                )
+                .with_span(record.span),
+            );
+        }
+        for comp in &record.components {
+            if !self.ffi_struct_field_ok(&comp.ty) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0509_LayoutCOnNonAggregate,
+                        format!(
+                            "component `{}` of `@layout(c) record {}` has type `{}`, which is not \
+                             C-compatible -- use a primitive, a raw pointer (`T*`), or another \
+                             `@layout(c)` type",
+                            comp.name.text,
+                            record.name.text,
+                            type_ref_display(&comp.ty),
+                        ),
+                    )
+                    .with_span(comp.span),
+                );
+            }
+        }
+    }
+
     /// Walk a record's body — operator overrides plus methods. Same
     /// scope shape as classes: `this` is the record's `Ty::User`,
     /// operator/method params are declared into the body's scope.
@@ -4250,6 +4678,9 @@ impl<'a> Checker<'a> {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         self.declare_const_generic_params(&record.generic_params);
+        self.check_layout_c_record(record);
+        let comp_tys: Vec<&juxc_ast::TypeRef> = record.components.iter().map(|c| &c.ty).collect();
+        self.check_align_annotation(&record.annotations, &comp_tys, "record", &record.name.text);
         let this_ty = Ty::User {
             name: name.clone(),
             generic_args: record
@@ -4722,14 +5153,19 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `sizeof(T)` for a type the operand can only be (§5.9.4): `void` is
-    /// `E0463`, a wildcard argument `E0462`, and a generic type written
-    /// without its arguments (`Vec`, a user `Box`) `E0461`.
-    fn check_sizeof_type(&mut self, t: &juxc_ast::TypeRef, span: Span) {
+    /// `sizeof(T)` / `alignof(T)` for a type the operand can only be
+    /// (§5.9.4, ERRATA E61): `void` is `E0463`, a wildcard argument `E0462`,
+    /// and a generic type written without its arguments (`Vec`, a user `Box`)
+    /// `E0461`. `is_align` only changes the wording.
+    fn check_sizeof_type(&mut self, t: &juxc_ast::TypeRef, span: Span, is_align: bool) {
+        let (kw, what) = if is_align { ("alignof", "alignment") } else { ("sizeof", "size") };
         if t.name.segments.len() == 1 && t.name.segments[0].text == "void" && t.array_shape.is_none() {
             self.diagnostics.push(
-                Diagnostic::error(code::Code::E0463_SizeofVoid, "`sizeof(void)`: `void` has no values, so it has no size (§5.9.4)")
-                    .with_span(span),
+                Diagnostic::error(
+                    code::Code::E0463_SizeofVoid,
+                    format!("`{kw}(void)`: `void` has no values, so it has no {what} (§5.9.4)"),
+                )
+                .with_span(span),
             );
             return;
         }
@@ -4743,7 +5179,7 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0462_SizeofWildcard,
-                    "`sizeof` of a wildcard type: `?` stands for some type, and no size belongs to it (§5.9.4)",
+                    format!("`{kw}` of a wildcard type: `?` stands for some type, and no {what} belongs to it (§5.9.4)"),
                 )
                 .with_span(span)
                 .with_help("name the type argument"),
@@ -4761,10 +5197,10 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0461_SizeofUnboundGeneric,
-                        format!("`sizeof({name})`: `{name}` is generic, and its size depends on its type arguments (§5.9.4)"),
+                        format!("`{kw}({name})`: `{name}` is generic, and its {what} depends on its type arguments (§5.9.4)"),
                     )
                     .with_span(span)
-                    .with_help(format!("write the arguments, `sizeof({name}<...>)`")),
+                    .with_help(format!("write the arguments, `{kw}({name}<...>)`")),
                 );
             }
         }
@@ -6442,6 +6878,7 @@ impl<'a> Checker<'a> {
                     // §L.5.2 items 3-4: reinterpreting an address.
                     self.unsafe_pointer_op("a cast to or from a raw pointer", c.span);
                 }
+                self.check_array_to_pointer_cast(c);
             }
 
             Expr::TypeTest(t) => {
@@ -6655,7 +7092,7 @@ impl<'a> Checker<'a> {
             }
 
             Expr::SizeOf(s) => match &s.type_operand {
-                Some(t) => self.check_sizeof_type(t, s.span),
+                Some(t) => self.check_sizeof_type(t, s.span, s.is_align),
                 None => {
                     self.check_expr(&s.operand);
                     // A bare type name (`sizeof(Box)`, §5.9.3 rule 2) that is
@@ -6671,7 +7108,7 @@ impl<'a> Checker<'a> {
                                 ptr_depth: 0,
                                 span: qn.span,
                             };
-                            self.check_sizeof_type(&t, s.span);
+                            self.check_sizeof_type(&t, s.span, s.is_align);
                         }
                     }
                 }
@@ -9905,6 +10342,12 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // `transmute<A, B>(value)` (Layout-ABI §L.7.4), the built-in, when no
+        // function of that name is declared.
+        if self.is_builtin_transmute(c) {
+            self.check_transmute(c);
+            return;
+        }
         // `System.out.println(x)` out of Java habit: there is no `System`
         // (unless the program declares one), and it used to reach rustc as
         // "cannot find value `System`" (JUX-DIAGNOSTICS-ADDENDUM "Java Habits").
@@ -12495,7 +12938,7 @@ fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
 /// generic instantiations, nullable primitives, and user/class types are not.
 /// Render a `TypeRef` for an FFI diagnostic (`TypeRef` has no `Display`):
 /// dotted name, then `?` for nullable, then one `*` per pointer level.
-fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
+pub(crate) fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
     // A function type has no name; show the signature the user wrote.
     if let Some(shape) = &t.fn_shape {
         let params = shape.params.iter().map(type_ref_display).collect::<Vec<_>>().join(", ");
@@ -12542,6 +12985,52 @@ fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
         }
     }
     s
+}
+
+/// How big a value is on every target, for `transmute` (ERRATA E63): a byte
+/// count with its alignment, or exactly one machine word (`int`, `uint`, a
+/// pointer), whose byte count depends on the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortableSize {
+    Bytes { size: u64, align: u64 },
+    Word,
+}
+
+impl PortableSize {
+    /// Equal on every target: two byte counts that match, or two words.
+    fn size_eq(self, other: PortableSize) -> bool {
+        match (self, other) {
+            (PortableSize::Bytes { size: a, .. }, PortableSize::Bytes { size: b, .. }) => a == b,
+            (PortableSize::Word, PortableSize::Word) => true,
+            _ => false,
+        }
+    }
+
+    fn describe(self) -> String {
+        match self {
+            PortableSize::Bytes { size, .. } => format!("{size} byte{}", if size == 1 { "" } else { "s" }),
+            PortableSize::Word => "one machine word (4 or 8 bytes by target)".to_string(),
+        }
+    }
+}
+
+/// The alignment a field of type `t` needs on every target, in bytes, when
+/// that is fixed by the type alone: the fixed-width primitives. `int`, `uint`,
+/// pointers and user types depend on the target or on their own fields, and
+/// answer `None` (Layout-ABI §L.1.4 only needs a certain lower bound).
+fn fixed_alignment(t: &juxc_ast::TypeRef) -> Option<u64> {
+    if t.ptr_depth > 0 || t.nullable || t.array_shape.is_some() || !t.generic_args.is_empty() {
+        return None;
+    }
+    let name = t.name.segments.last()?.text.as_str();
+    use crate::ty::Primitive as P;
+    Some(match crate::ty::primitive_from_name(name)? {
+        P::Byte | P::Ubyte | P::I8 | P::U8 | P::Bool => 1,
+        P::Short | P::Ushort | P::I16 | P::U16 => 2,
+        P::I32 | P::U32 | P::Float | P::F32 | P::Char => 4,
+        P::Long | P::Ulong | P::I64 | P::U64 | P::Double | P::F64 => 8,
+        P::Int | P::Uint => return None,
+    })
 }
 
 fn ffi_type_ok(t: &juxc_ast::TypeRef) -> bool {
@@ -13922,14 +14411,15 @@ mod tests {
         assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
     }
 
-    /// `@export` on a method (static or instance) is E0508 in Phase 1 — it is
-    /// only honored on free functions.
+    /// `@export` on a static method is exported like a free function
+    /// (§L.3.2); on an instance method it is E0508, since C cannot pass the
+    /// object.
     #[test]
     fn export_on_method_is_e0508() {
         let st = run(
             "class Foo { @export public static int bar(int x) { return x; } } public void main() {}",
         );
-        assert!(has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
+        assert!(!has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
         let inst =
             run("class Foo { @export public int baz(int x) { return x; } } public void main() {}");
         assert!(has(&inst, code::Code::E0508_FfiTypeNotAllowed), "{inst:?}");

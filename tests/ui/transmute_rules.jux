@@ -1,0 +1,19 @@
+// `transmute<A, B>(value)` (Layout-ABI §L.7.4, ERRATA E63): `unsafe` only,
+// two type arguments and one value, and sizes equal on every target.
+
+class Node {
+    public int v = 0;
+}
+
+public void main() {
+    float f = 1.5f;
+    u32 outside = transmute<float, u32>(f);
+    unsafe {
+        long a = transmute<i32, long>(7);
+        long b = transmute<int, long>(7);
+        u32 c = transmute<float>(f);
+        u32 d = transmute<double, u32>(f);
+        long e = transmute<Node, long>(new Node());
+        uint fine = transmute<int, uint>(-1);
+    }
+}

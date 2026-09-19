@@ -1050,6 +1050,129 @@ through a polymorphic base.
 
 ---
 
+## E61. `sizeof` in safe code, and the shape of `alignof`
+
+**Conflict.** JUX-LANG-V1 §5.9 makes `sizeof(T)` / `sizeof(expr)` a keyword
+form that returns a `uint` compile-time constant "usable in any context", and
+the compiler has shipped it that way since v0.1 (examples, lessons, the
+diagnostics E0461-E0463). Layout-ABI §L.1.5 instead writes the query as a
+generic call, `sizeof<T>()`, available only inside `unsafe`, beside an
+`alignof<T>()` of the same shape.
+
+**Resolution.** §5.9 stands: `sizeof(...)` is available in safe code. A size
+query reads nothing and writes nothing, so gating it behind `unsafe` would
+protect nothing while breaking every program that prints a layout. `alignof`
+takes `sizeof`'s shape rather than §L.1.5's: `alignof(T)` / `alignof(expr)`,
+the same syntactic type-or-value rule (§5.9.3), the same errors (E0461-E0463,
+worded for alignment), a `uint` result, lowered to `std::mem::align_of::<T>()`
+or `std::mem::align_of_val(&expr)`. `alignof` is a contextual word: it has
+this meaning only directly before `(`, so it is not a new keyword.
+
+**Spec status:** §L.1.5 is updated to match; its `sizeof<T>()` / `alignof<T>()`
+spelling is withdrawn.
+
+---
+
+## E62. `@align` diagnostics and field alignment
+
+**Conflict.** Layout-ABI §L.1.4 reports aligning down with `E0710`, but
+`E0710` was already published for "`throw` of a non-`Exception` value"
+(Exceptions §X.2.1), and §D.5.1 forbids reusing a number. The band the new
+checks belong in, `E0500`-`E0505`, is permanently reserved for the borrow
+checker Jux does not have. §L.1.4 also permits `@align(N)` on a field, which
+Rust (the Phase-1 backend) cannot express: Rust aligns types, never
+individual fields.
+
+**Resolution.** Two new codes after the band's last published one:
+`E0519` for an `@align(N)` that cannot hold (`N` not an integer literal, not a
+power of two, above 2^29, or below an alignment a fixed-width field already
+needs) and `E0520` for `@align` where it cannot apply (a field, an enum, an
+interface). Field alignment is a Phase-1 restriction with a direct
+workaround the diagnostic names: an `@align(N) struct` holding the value,
+used as the field's type, gives the field that alignment. Type-level
+`@align(N)` on a `class`, `struct` or `record` lowers to `#[repr(align(N))]`
+(on a class, on the object the shared handle points at).
+
+**Spec status:** §L.1.4 is updated with the codes and the restriction.
+
+---
+
+## E63. `transmute`: which size, and which code
+
+**Conflict.** Layout-ABI §L.7.4 permits `transmute<A, B>` "only when
+`sizeof<A>() == sizeof<B>()`" and reports a mismatch with `E0840`. `E0840`
+is already published for "const evaluation exceeded its resource limits"
+(§T.11.4). The size condition is also stated for "the current target", which
+the type checker does not see: a `jux build --target` for a 32-bit machine
+changes the size of `int`, `uint` and every pointer. The section's own
+example, `transmute<float, uint>(f)`, is wrong on a 64-bit target, where a
+`uint` is 8 bytes and a `float` is 4.
+
+**Resolution.** The mismatch is `E0522`, together with a wrong argument count
+and a type that has no size fixed on every target. The size check is
+*portable*: a transmute must be correct for every target the program can be
+built for. The fixed-width primitives and `@layout(c)` aggregates made only of
+them have one byte count everywhere; `int`, `uint`, pointers and function
+pointers are exactly one machine word and match only each other. A class, a
+`String`, a collection or an aggregate holding a pointer has no size fixed
+that way and cannot be transmuted. The example becomes
+`transmute<float, u32>(f)`.
+
+**Spec status:** §L.7.4 is updated to match.
+
+---
+
+## E64. Exporting a mutable `static`
+
+**Conflict.** Layout-ABI §L.3.3 says mutable `static` items "have a single
+global address per process and follow the same rules" as exported constants.
+A Jux mutable static is not bare memory: any thread may read or write it, so
+it lowers behind a lock (a `LazyLock<Mutex<T>>`, or a thread-local where the
+value cannot be shared). C cannot take that lock. Exporting its address would
+let C read and write the value while Jux code holds the lock, a data race the
+language otherwise rules out.
+
+**Resolution.** Only constants are exported as data: a top-level `const`, or
+a `static final` field, of a numeric or `bool` type (C sees it at its C type,
+§8.1.1). `@export` on a mutable `static`, on an instance field, or on a
+constant of another type is `E0508`, and the message names the alternative:
+export functions that read and write the value. This matches how the rest of
+the FFI surface already treats shared state (functions cross, lock-guarded
+data does not).
+
+**Spec status:** §L.3.3 is updated to match.
+
+---
+
+## E65. Operator coherence without module identity
+
+**Conflict.** Runtime/ABI §R.3 states coherence in terms of *modules*: an
+operator may be defined only by the module that owns an operand. Phase 1
+compiles a dependency module by including its sources (Build §B, see
+`crates/juxc-driver/src/project.rs`), so the checker sees one program and
+does not know which module a user type came from. §R.3.3 also detects the
+cross-module duplicate (`E0951`) "at the build's link step", which the
+source-inclusion model never reaches, and §R.3.6's `E0952` covers free-function
+`operator hash` / `operator string`, which the grammar does not accept at all
+(a free operator must be arithmetic or bitwise, §7.14, reported as `E0200`).
+
+**Resolution.** Ownership is by *program*: a type is owned when the program
+being compiled declares it; primitives, `String`, the standard library,
+`rust.<crate>` types and bare type parameters never are. A free operator none
+of whose operands, and not its record/struct/enum result, is owned is
+`E0950`, with the §R.3.4 newtype escape hatch in the help. Two free operators
+with the same operand types are `E0951`, reported where the second is
+declared (it used to print as `E0400` with the internal `__op_*` name).
+`E0952` stays reserved: an orphan free `operator hash`/`string` cannot be
+written. A dependency module's types count as owned by its dependents until
+modules compile as separate crates, so an orphan across that line is missed
+rather than misreported.
+
+**Spec status:** §R.3.3 and §R.3.6 describe the intended multi-module rule and
+stand; the Phase-1 reading above is noted there.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

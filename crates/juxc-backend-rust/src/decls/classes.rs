@@ -244,6 +244,7 @@ impl RustEmitter {
         } else {
             self.w.line("#[derive(Clone, Debug)]");
         }
+        crate::emit_align_attribute(&mut self.w, &class_decl.annotations);
         // pub struct Name<T, U> { …fields… }
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
@@ -974,6 +975,9 @@ impl RustEmitter {
         if !derive.is_empty() {
             self.w.line(derive);
         }
+        // `@align(N)` on a class (§L.1.4) aligns the object itself, which is
+        // the inner struct the shared handle points at.
+        crate::emit_align_attribute(&mut self.w, &class_decl.annotations);
         self.w.emit_indent();
         // The inner struct is `pub` so the wrapper (and any
         // same-crate path) can name it; the user-facing visibility

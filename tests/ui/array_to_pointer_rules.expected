@@ -1,0 +1,5 @@
+array_to_pointer_rules.jux:7:20: [E0506] error: a cast to or from a raw pointer requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+array_to_pointer_rules.jux:8:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
+array_to_pointer_rules.jux:10:27: [E0521] error: cannot convert this array to a pointer: the array must be a named one (a local, a parameter or a field): a temporary array is freed at the end of the statement, and the pointer would dangle (§L.6.3)
+array_to_pointer_rules.jux:11:23: [E0521] error: cannot convert this array to a pointer: only a one-dimensional array converts to a pointer: the elements of a nested array are handles to other arrays (§L.6.3)
+array_to_pointer_rules.jux:12:23: [E0521] error: cannot convert this array to a pointer: an array converts to a pointer to its elements (`T*`), not to a pointer to a pointer (§L.6.3)

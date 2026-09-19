@@ -1,0 +1,48 @@
+// `@align(N)` and `alignof` (Layout-ABI §L.1.4-L.1.5, ERRATA E61, E62).
+//
+// `@align(N)` raises a type's alignment to at least `N` bytes: every value of
+// the type starts at a multiple of `N`, and its size grows to a multiple of
+// `N` too. The classic use is a counter that owns a whole cache line, so two
+// threads bumping two counters never fight over the same line.
+//
+// `alignof(T)` is `sizeof(T)`'s twin: the same operand rules (a type, or an
+// expression whose type is asked about, never evaluated) and a `uint` result.
+
+@align(64)
+struct CacheLine {
+    long counter;
+    long spare;
+}
+
+@align(16)
+record Pair(i32 a, i32 b) {}
+
+/** A class can be aligned too: the object it allocates starts on the boundary. */
+@align(32)
+class Block {
+    public long first = 1;
+}
+
+public void main() {
+    // The primitives' own alignments.
+    print(alignof(byte));
+    print(alignof(short));
+    print(alignof(i32));
+    print(alignof(long));
+    print(alignof(double));
+
+    // Raised by `@align`: the size rounds up to the alignment.
+    print(alignof(CacheLine));
+    print(sizeof(CacheLine));
+    print(alignof(Pair));
+    print(sizeof(Pair));
+
+    // The value form asks about the expression's type.
+    var line = new CacheLine(0, 0);
+    line.counter += 5;
+    print(alignof(line));
+    print(line.counter);
+
+    var block = new Block();
+    print(block.first);
+}

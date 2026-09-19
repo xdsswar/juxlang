@@ -1,0 +1,14 @@
+// `array as T*` (Layout-ABI §L.6.3): only inside `unsafe`, only a named
+// one-dimensional array, and only to a pointer to its elements.
+
+public void main() {
+    int[] nums = {1, 2, 3};
+    int[][] grid = {{1, 2}, {3, 4}};
+    int* outside = nums as int*;
+    unsafe {
+        int* fine = nums as int*;
+        int* temporary = (new int[3]) as int*;
+        int* nested = grid as int*;
+        int** twice = nums as int**;
+    }
+}

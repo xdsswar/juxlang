@@ -551,6 +551,10 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0516`  | `&` of something that is not a place: a literal, a call, an arithmetic result, or a class object's field | Layout-ABI §L.6.1a |
 | `E0517`  | `*` on a value that is not a pointer, or on a `void*` | Layout-ABI §L.6.1a |
 | `E0518`  | An operation pointers do not have: a non-integer step, stepping a `void*`, `p + q`, `p * n`, a bitwise operator | Layout-ABI §L.6.1a |
+| `E0519`  | An `@align(N)` that cannot hold: `N` not an integer literal, not a power of two, above 2^29, or below an alignment a field already needs | Layout-ABI §L.1.4, ERRATA E62 |
+| `E0520`  | `@align` where it cannot apply: a field, an enum or an interface | Layout-ABI §L.1.4, ERRATA E62 |
+| `E0521`  | `array as T*` that cannot give a lasting pointer: a temporary array, a nested array, or a pointer-to-pointer target | Layout-ABI §L.6.3 |
+| `E0522`  | Invalid `transmute<A, B>(value)`: wrong argument count, or sizes not equal on every target | Layout-ABI §L.7.4, ERRATA E63 |
 
 ### Lowering (`E0600–E0699`)
 
@@ -614,9 +618,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |
 | `E0944`  | Misuse of the `out` parameter modifier (`out` + `final`/`ref`/`weak`/varargs/default, or on a constructor param) | Missing-defs §M.4.1 / §M.14.5 |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
-| `E0950`  | Orphan operator overload *(reserved)*                       | Runtime/ABI §R.3.3             |
-| `E0951`  | Duplicate operator overload across modules *(reserved)*     | Runtime/ABI §R.3.3             |
-| `E0952`  | Orphan free-function operator definition *(reserved)*       | Runtime/ABI §R.3.6             |
+| `E0950`  | Orphan free-function operator: no operand (nor a record/struct/enum result) is declared by this program | Runtime/ABI §R.3.1, ERRATA E65 |
+| `E0951`  | The same free-function operator declared twice for the same operand types | Runtime/ABI §R.3.3, ERRATA E65 |
+| `E0952`  | Orphan free-function operator definition *(reserved: a free `operator hash`/`string` cannot be written, ERRATA E65)* | Runtime/ABI §R.3.6 |
 | `E0961`  | Mutable static requires thread-safe wrapper *(reserved)*     | Missing-defs §M.12.3           |
 | `E0970`  | Write to a read-only or computed (get-only) property outside its settable window | Missing-defs §M.7.2 / Properties §P.1.5 |
 | `E0972`  | Property accessor visibility violation (setter more visible than getter; `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 / Properties §P.1.3 / §P.3.5 |
@@ -667,7 +671,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module *(reserved)*    | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
-| `W0820`  | `unsafe` block missing `// SAFETY:` justification *(reserved)*| Layout-ABI §L.5.5              |
+| `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor, not by a build) | Layout-ABI §L.5.5 |
 | `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |
 | `W0970`  | `observer<T>` attached but never detached and target has no `drop` *(reserved)*| Properties §P.6         |
 | `W0971`  | Property declared `{ get; set; }` but never observed or bound *(reserved)*| Properties §P.7.2            |

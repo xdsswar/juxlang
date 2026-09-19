@@ -1,0 +1,43 @@
+// `transmute<A, B>(value)` (Layout-ABI §L.7.4, ERRATA E63): the same bits,
+// read as another type.
+//
+// It needs `unsafe`, and both types must be the same size on every target,
+// which the compiler checks: fixed-width primitives and `@layout(c)` types
+// built from them have one byte count everywhere, while `int`, `uint` and
+// pointers are one machine word and pair only with each other.
+//
+// Most uses of `transmute` are wrong: `as` and the numeric methods cover the
+// ordinary conversions. It is the last resort for looking at a value's bits.
+
+@layout(c)
+record Halves(u32 low, u32 high) {}
+
+public void main() {
+    // SAFETY: every pair of types below has the same size (checked), and each
+    // bit pattern is a valid value of the type it becomes.
+    unsafe {
+        // The IEEE-754 bit pattern of 1.5f: sign 0, exponent 127, mantissa 0.5.
+        float f = 1.5f;
+        u32 bits = transmute<float, u32>(f);
+        print(bits.toHex());
+
+        // And back again.
+        float again = transmute<u32, float>(bits);
+        print(again);
+
+        // A double's 64 bits.
+        long wide = transmute<double, long>(-2.0);
+        print(wide.toHex());
+
+        // Eight bytes as a C-layout pair: the low word comes first on a
+        // little-endian machine, so the test compares rather than prints.
+        Halves h = transmute<ulong, Halves>(0x0000_0002_0000_0001uL);
+        print(h.low + h.high == 3);
+
+        // A pointer and a word-sized integer: the same size on every target.
+        int n = 7;
+        int* p = &n;
+        uint address = transmute<int*, uint>(p);
+        print(address != 0);
+    }
+}

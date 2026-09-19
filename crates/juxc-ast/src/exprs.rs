@@ -525,6 +525,10 @@ pub struct SizeOfExpr {
     /// expressions, so the parser reads them as a type; `operand` then holds
     /// the type's name as a placeholder for passes that only walk values.
     pub type_operand: Option<crate::TypeRef>,
+    /// `alignof(...)` rather than `sizeof(...)` (Layout-ABI §L.1.5, ERRATA
+    /// E61): the same operand rules and the same `uint` result, asking for
+    /// the type's alignment instead of its size.
+    pub is_align: bool,
     /// Span covering `sizeof(...)` whole.
     pub span: Span,
 }
