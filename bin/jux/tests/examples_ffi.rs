@@ -16,6 +16,24 @@ fn ffi_enum() {
     );
 }
 
+/// An exception reaching a C entry point (Exceptions §X.6.5) is reported with
+/// its type and message and ends the process: it never unwinds into C. The
+/// abort's exit status is platform specific, so only its absence of success,
+/// the output before it, and the report are pinned.
+#[test]
+fn ffi_unwind_barrier() {
+    let (lines, all) = common::run_example_expecting("ffi_unwind_barrier", "ffi-unwind-barrier", false);
+    assert_eq!(lines, ["10", "-1", "42"], "output before the abort:\n{all}");
+    assert!(
+        all.contains(
+            "Exception reached the C boundary in `a function pointer`, aborting: \
+             jux.std.exceptions.IllegalArgumentException: negative: -3"
+        ),
+        "the barrier's report:\n{all}"
+    );
+    assert!(!all.contains("not reached"), "the program stopped at the barrier:\n{all}");
+}
+
 #[test]
 fn ffi_export() {
     common::expect_output(

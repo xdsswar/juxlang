@@ -728,7 +728,20 @@ impl RustEmitter {
                 &mut self.current_fn_params,
                 fn_decl.params.iter().map(|p| p.name.text.clone()).collect(),
             );
+            // **FFI unwind barrier** (Exceptions §X.6.5): an exception must not
+            // unwind out of a function C called. The body runs inside
+            // `__jux_ffi_barrier`, which turns an escaping exception into a
+            // report and a process abort.
+            let barrier = inline_export.then(|| export_name.clone()).flatten();
+            if let Some(sym) = &barrier {
+                self.w.line(&format!("crate::__jux_ffi_barrier(\"{sym}\", || {{"));
+                self.w.indent_inc();
+            }
             self.emit_fn_body(body, &fn_decl.return_type);
+            if barrier.is_some() {
+                self.w.indent_dec();
+                self.w.line("})");
+            }
             self.current_fn_params = prev_params;
             self.local_types.pop();
             self.byref_param_names = prev_byref;
@@ -966,13 +979,13 @@ impl RustEmitter {
                 self.w.push_str(&format!("let {n} = {n} as {jux};\n"));
             }
         }
-        // Call the real Jux fn by name, forwarding every parameter.
+        // Call the real Jux fn by name, forwarding every parameter, behind
+        // the FFI unwind barrier (§X.6.5).
         self.w.emit_indent();
-        if matches!(fn_decl.return_type, ReturnType::Void) {
-            self.w.push_str(callee);
-        } else {
-            self.w.push_str(&format!("let __r = {callee}"));
+        if !matches!(fn_decl.return_type, ReturnType::Void) {
+            self.w.push_str("let __r = ");
         }
+        self.w.push_str(&format!("crate::__jux_ffi_barrier(\"{sym}\", || {callee}"));
         self.w.push('(');
         for (i, p) in fn_decl.params.iter().enumerate() {
             if i > 0 {
@@ -984,7 +997,7 @@ impl RustEmitter {
                 self.w.push_str(&to_rust_ident(&p.name.text));
             }
         }
-        self.w.push_str(");\n");
+        self.w.push_str("));\n");
         // Outbound: each `out` value back through the caller's pointer.
         for p in fn_decl.params.iter().filter(|p| p.is_out) {
             let n = to_rust_ident(&p.name.text);

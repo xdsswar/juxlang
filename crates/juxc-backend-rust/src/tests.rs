@@ -5309,7 +5309,12 @@ fn function_values_get_c_entry_points_and_calls_check_null() {
     );
     assert!(rust.contains("unsafe extern \"C\" fn __jux_fn("), "entry point: {rust}");
     assert!(rust.contains("let a0 = a0 as isize;"), "inbound width: {rust}");
-    assert!(rust.contains("let __r = add(a0, a1);"), "calls the function: {rust}");
+    // Behind the FFI unwind barrier (Exceptions §X.6.5): C calls this entry.
+    assert!(
+        rust.contains("let __r = crate::__jux_ffi_barrier(\"a function pointer\", || add(a0, a1));"),
+        "calls the function behind the barrier: {rust}"
+    );
+    assert!(rust.contains("pub fn __jux_ffi_barrier<R>("), "barrier helper emitted: {rust}");
     assert!(rust.contains("__r as core::ffi::c_int"), "outbound width: {rust}");
     assert!(rust.contains("fn __jux_lambda(x: isize) -> isize"), "lambda body: {rust}");
     assert!(rust.contains("__jux_fn as unsafe extern \"C\" fn("), "item cast to pointer: {rust}");
@@ -5371,7 +5376,10 @@ fn export_wrapper_handles_out_and_char() {
         "@export public void fill(out int r) { r = 7; }          @export public int code(char c) { return c as int; }          public void main() {}",
     );
     assert!(rust.contains("fn __jux_cabi_fill(r: *mut core::ffi::c_int)"), "out as pointer: {rust}");
-    assert!(rust.contains("fill(&mut __jux_r);"), "local passed by &mut: {rust}");
+    assert!(
+        rust.contains("crate::__jux_ffi_barrier(\"fill\", || fill(&mut __jux_r));"),
+        "local passed by &mut, behind the barrier: {rust}"
+    );
     assert!(rust.contains("if !r.is_null() { unsafe { *r = __jux_r as core::ffi::c_int; } }"), "write back: {rust}");
     assert!(rust.contains("let c = (c as u8) as char;"), "char in: {rust}");
 }
@@ -5864,7 +5872,10 @@ fn export_string_emits_marshalling_wrapper() {
         "wrapper C-ABI signature: {rust}"
     );
     assert!(rust.contains("::std::ffi::CStr::from_ptr(name)"), "inbound CStr copy: {rust}");
-    assert!(rust.contains("let __r = greet(name, n);"), "wrapper calls real fn: {rust}");
+    assert!(
+        rust.contains("let __r = crate::__jux_ffi_barrier(\"greet\", || greet(name, n));"),
+        "wrapper calls real fn behind the barrier: {rust}"
+    );
     assert!(rust.contains("static __JUX_RETURNED: std::cell::RefCell<Option<std::ffi::CString>>"), "own slot: {rust}");
     assert!(rust.contains("*held.borrow_mut() = Some(__s);"), "held, not leaked: {rust}");
     assert!(!rust.contains("into_raw"), "no buffer is given away: {rust}");

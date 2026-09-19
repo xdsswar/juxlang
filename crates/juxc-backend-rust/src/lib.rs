@@ -7215,6 +7215,48 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             hook.push_str("    if let Some(s) = p.downcast_ref::<&str>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
             source.push_str(&hook);
         }
+        // **The FFI unwind barrier** (Exceptions §X.6.5). A Jux function C
+        // calls (an `@export`, or a function-pointer entry point) runs its body
+        // through this helper: an exception that reaches the C boundary is
+        // reported with its type and message, and the process aborts rather
+        // than unwinding through a C frame, which is undefined behaviour in C.
+        // Emitted once, when used.
+        if source.contains("__jux_ffi_barrier(") || split_text.contains("__jux_ffi_barrier(") {
+            let mut helper = String::from(concat!(
+                "\n/// Run `f`, a Jux body C called into; an exception that escapes it ends\n",
+                "/// the process instead of unwinding into C (Exceptions §X.6.5).\n",
+                "pub fn __jux_ffi_barrier<R>(symbol: &str, f: impl FnOnce() -> R) -> R {\n",
+                "    match std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f)) {\n",
+                "        Ok(r) => r,\n",
+                "        Err(p) => {\n",
+                "            let what: String = 'what: {\n",
+            ));
+            for fqn in &throwable_fqns {
+                let path = self_path(fqn);
+                helper.push_str(&format!(
+                    "                if let Some(e) = p.downcast_ref::<{path}>() {{\n                    break 'what format!(\"{fqn}: {{}}\", e.getMessage());\n                }}\n"
+                ));
+            }
+            helper.push_str(concat!(
+                "                if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() {\n",
+                "                    break 'what format!(\"{}: {}\", e.type_name, e.text);\n",
+                "                }\n",
+                "                if let Some(s) = p.downcast_ref::<&str>() {\n",
+                "                    break 'what s.to_string();\n",
+                "                }\n",
+                "                if let Some(s) = p.downcast_ref::<String>() {\n",
+                "                    break 'what s.clone();\n",
+                "                }\n",
+                "                String::from(\"an exception\")\n",
+                "            };\n",
+                "            eprintln!(\"Exception reached the C boundary in `{symbol}`, aborting: {what}\");\n",
+                "            std::process::abort()\n",
+                "        }\n",
+                "    }\n",
+                "}\n",
+            ));
+            source.push_str(&helper);
+        }
         // **The `Exception` part of a thrown payload** (§X.3.2). A `finally`
         // that throws while another exception propagates records the new one
         // on the original, and a panic payload is only `dyn Any`: exact-type
