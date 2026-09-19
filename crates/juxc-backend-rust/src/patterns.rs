@@ -104,7 +104,9 @@ impl RustEmitter {
             self.w.push_str("    ");
             let prev_guards = std::mem::take(&mut self.pattern_string_guards);
             // The runtime type test as an `Option`-producing expression on the
-            // matched value, and the name it binds.
+            // matched value, and the pattern its `Some` takes apart: the binder
+            // of `case Circle c`, or the struct pattern of `case Circle(var r)`
+            // over an interface the record implements (LANG-V1 §7.5).
             let runtime_type_test = match (&arm.pattern, &dyn_scrutinee) {
                 (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, _) if any_scrutinee => {
                     let target = crate::analysis::synth_iface_type_ref(&type_name.text, type_name.span);
@@ -115,8 +117,23 @@ impl RustEmitter {
                 {
                     Some((format!("__jux_subject.__jux_as_{}()", type_name.text), to_rust_ident(&binder.text)))
                 }
+                (juxc_ast::Pattern::EnumVariant { span, .. }, Some(_))
+                    if self.symbols.record_patterns.contains_key(span) =>
+                {
+                    let fqn = self.symbols.record_patterns[span].clone();
+                    let bare = fqn.rsplit('.').next().unwrap_or(&fqn).to_string();
+                    let mark = self.w.len();
+                    self.emit_pattern(&arm.pattern);
+                    let destructure = self.w.split_off_from(mark);
+                    Some((format!("__jux_subject.__jux_as_{bare}()"), destructure))
+                }
                 _ => None,
             };
+            // Whether the runtime test's `Some(..)` can fail on its own: a
+            // record pattern with a literal inside (`Circle(0.0)`) can, a bare
+            // binder cannot.
+            let refutable_inner = matches!(&arm.pattern, juxc_ast::Pattern::EnumVariant { .. })
+                && runtime_type_test.is_some();
             if runtime_type_test.is_some() {
                 self.w.push_str("ref __jux_subject");
             } else if scrut_nullable.is_some() {
@@ -159,17 +176,37 @@ impl RustEmitter {
             if let Some((getter, binder)) = &runtime_type_test {
                 // `case Ins i when i.ok() ->` needs `i` inside the guard, and
                 // edition 2021 has no `if let` guards, so the test binds it
-                // in a `match` of its own.
+                // in a `match` of its own. A string nested in a record pattern
+                // compares inside that `match`, where its binder exists.
                 self.w.push_str(" if ");
-                match &arm.guard {
-                    Some(guard) => {
-                        self.w.push_str(&format!("match {getter} {{ Some({binder}) => "));
-                        self.emit_expr(guard);
-                        self.w.push_str(", None => false }");
+                let mut inner_guards = String::new();
+                for (b, lit) in &string_guards {
+                    if !inner_guards.is_empty() {
+                        inner_guards.push_str(" && ");
                     }
-                    None => self.w.push_str(&format!("{getter}.is_some()")),
+                    let mark = self.w.len();
+                    self.emit_rust_string_literal(lit);
+                    let text = self.w.split_off_from(mark);
+                    inner_guards.push_str(&format!("{b} == {text}"));
+                }
+                match (&arm.guard, inner_guards.is_empty(), refutable_inner) {
+                    (Some(guard), _, _) => {
+                        self.w.push_str(&format!("match {getter} {{ Some({binder})"));
+                        if !inner_guards.is_empty() {
+                            self.w.push_str(&format!(" if {inner_guards}"));
+                        }
+                        self.w.push_str(" => ");
+                        self.emit_expr(guard);
+                        self.w.push_str(", _ => false }");
+                    }
+                    (None, true, false) => self.w.push_str(&format!("{getter}.is_some()")),
+                    (None, true, true) => self.w.push_str(&format!("matches!({getter}, Some({binder}))")),
+                    (None, false, _) => {
+                        self.w.push_str(&format!("matches!({getter}, Some({binder}) if {inner_guards})"));
+                    }
                 }
             }
+            let string_guards = if runtime_type_test.is_some() { Vec::new() } else { string_guards };
             for (i, (binder, literal)) in string_guards.iter().enumerate() {
                 self.w.push_str(if i == 0 { " if " } else { " && " });
                 self.w.push_str(binder);
@@ -273,8 +310,10 @@ impl RustEmitter {
         // cover every permitted type of a sealed interface (E0440 otherwise),
         // so the arm Rust asks for can never run.
         let tests_runtime_type = dyn_scrutinee.as_ref().is_some_and(|source| {
-            s.arms.iter().any(|arm| {
-                matches!(&arm.pattern, juxc_ast::Pattern::TypeBind { type_name, .. } if &type_name.text != source)
+            s.arms.iter().any(|arm| match &arm.pattern {
+                juxc_ast::Pattern::TypeBind { type_name, .. } => &type_name.text != source,
+                juxc_ast::Pattern::EnumVariant { span, .. } => self.symbols.record_patterns.contains_key(span),
+                _ => false,
             })
         });
         let has_catch_all = s.arms.iter().any(|arm| {

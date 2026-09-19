@@ -3585,6 +3585,23 @@ fn cast_targets_pattern(p: &juxc_ast::Pattern, out: &mut HashSet<String>) {
         juxc_ast::Pattern::TypeBind { type_name, .. } => {
             out.insert(type_name.text.clone());
         }
+        // `case Circle(var r)` over a `Shape` tests the runtime type the way
+        // `case Circle c` does (LANG-V1 §7.5), through the same hook. A name
+        // that is no subtype of any interface or open base is filtered out
+        // where the hooks are emitted, so an enum variant here costs nothing.
+        juxc_ast::Pattern::EnumVariant { path, args, .. } => {
+            if let [only] = path.segments.as_slice() {
+                out.insert(only.text.clone());
+            }
+            for arg in args {
+                cast_targets_pattern(arg, out);
+            }
+        }
+        juxc_ast::Pattern::Tuple(elements, _) => {
+            for e in elements {
+                cast_targets_pattern(e, out);
+            }
+        }
         juxc_ast::Pattern::Or(alts, _) => {
             for alt in alts {
                 cast_targets_pattern(alt, out);

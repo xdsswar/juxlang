@@ -375,8 +375,18 @@ impl Checker<'_> {
                     self.record_patterns.insert(*span, record.clone());
                     let bare = record.rsplit('.').next().unwrap_or(&record).to_string();
                     let value_record = self.record_fqn_of_ty(ty);
+                    // A record pattern over an interface the record implements
+                    // (`case Circle(var r)` on a `Shape`, LANG-V1 §7.5) tests
+                    // the value's runtime type and then takes it apart, the way
+                    // `case Circle c` does. The components are then the
+                    // record's own, not generic in the interface's parameters.
+                    let record_ty = Ty::User { name: record.clone(), generic_args: Vec::new() };
+                    let is_supertype = value_record.is_none()
+                        && matches!(ty, Ty::User { name, .. } if self.symbols.interfaces.contains_key(name))
+                        && crate::check::compatible(ty, &record_ty, self.symbols);
                     let through = match (&value_record, ty) {
                         (Some(v), _) if *v == record => ty.clone(),
+                        _ if is_supertype => record_ty,
                         (_, Ty::Unknown) => Ty::Unknown,
                         _ => {
                             self.shape_mismatch(
@@ -560,6 +570,42 @@ impl Checker<'_> {
                 .collect();
         }
         combos.into_iter().map(|args| Cov::Ctor(ctor.clone(), args)).collect()
+    }
+
+    /// Whether the unguarded `arms` cover every value of the record `record`
+    /// (by FQN) when it is one of a sealed interface's permitted types: a type
+    /// pattern `case Circle c` covers all of it, and record patterns
+    /// (`case Circle(var r)`, `case Circle(0.0)`) cover what the product rule
+    /// of §T.5.7 says they do.
+    pub(crate) fn permitted_record_covered(&self, arms: &[&Pattern], record: &str) -> bool {
+        let record_ty = Ty::User { name: record.to_string(), generic_args: Vec::new() };
+        let dom = self.domain_of(&record_ty, 0);
+        let bare = record.rsplit('.').next().unwrap_or(record);
+        let mut rows: Vec<Vec<Cov>> = Vec::new();
+        for pattern in arms {
+            self.rows_for_member(pattern, record, bare, &dom, &mut rows);
+        }
+        missing(&rows, std::slice::from_ref(&dom)).is_none()
+    }
+
+    /// The coverage rows `pattern` contributes to the permitted record
+    /// `record` (FQN, `bare` its simple name): all of it for a type pattern,
+    /// the product coverage for a record pattern naming it, nothing otherwise.
+    fn rows_for_member(&self, pattern: &Pattern, record: &str, bare: &str, dom: &Domain, rows: &mut Vec<Vec<Cov>>) {
+        match pattern {
+            Pattern::TypeBind { type_name, .. } if type_name.text == bare => rows.push(vec![Cov::Any]),
+            Pattern::EnumVariant { path, .. } if self.pattern_record_fqn(path).as_deref() == Some(record) => {
+                for c in self.coverage(pattern, dom) {
+                    rows.push(vec![c]);
+                }
+            }
+            Pattern::Or(alts, _) => {
+                for alt in alts {
+                    self.rows_for_member(alt, record, bare, dom, rows);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Exhaustiveness for a `switch` whose value is a tuple or record

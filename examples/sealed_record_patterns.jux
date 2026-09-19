@@ -1,0 +1,65 @@
+// Record patterns over a sealed interface (JUX-LANG-V1 §7.5), and a sealed
+// hierarchy that needs no `permits` clause because it lives in one file
+// (JUX-GRAMMAR-ADDENDUM §A.2.5).
+//
+// `case Circle(var r)` tests that the `Shape` is a `Circle` and takes its
+// component apart in one step. The switch covers every permitted record, so it
+// needs no `default`; a record pattern with a literal inside (`Circle(0.0)`)
+// covers only that value, and the arm after it picks up the rest.
+
+sealed interface Shape permits Circle, Square, Triangle {}
+
+record Circle(double radius) implements Shape {}
+record Square(double side) implements Shape {}
+record Triangle(double base, double height) implements Shape {}
+
+double area(Shape s) {
+    return switch (s) {
+        case Circle(var r) -> 3.0 * r * r;
+        case Square(var side) -> side * side;
+        case Triangle(var b, var h) -> 0.5 * b * h;
+    };
+}
+
+String describe(Shape s) {
+    return switch (s) {
+        case Circle(0.0) -> "a point";
+        case Circle(var r) when r > 100.0 -> "a huge circle";
+        case Circle(var r) -> $"a circle of radius ${r}";
+        case Square sq -> $"a square of side ${sq.side}";
+        case Triangle t -> "a triangle";
+    };
+}
+
+// No `permits` here: the two records below are the whole hierarchy, because
+// they are declared in this file.
+sealed interface Event {}
+
+record Click(int x, int y) implements Event {}
+record Key(String name, bool shift) implements Event {}
+
+String handle(Event e) {
+    return switch (e) {
+        case Click(0, 0) -> "click at the origin";
+        case Click(var x, var y) -> $"click at ${x}, ${y}";
+        case Key("enter", _) -> "enter";
+        case Key(var name, true) -> $"shift+${name}";
+        case Key(var name, false) -> name;
+    };
+}
+
+public void main() {
+    print(area(new Circle(1.0)));
+    print(area(new Square(2.0)));
+    print(area(new Triangle(2.0, 3.0)));
+    print(describe(new Circle(0.0)));
+    print(describe(new Circle(500.0)));
+    print(describe(new Circle(2.5)));
+    print(describe(new Square(4.0)));
+    print(describe(new Triangle(1.0, 1.0)));
+    print(handle(new Click(0, 0)));
+    print(handle(new Click(3, 4)));
+    print(handle(new Key("enter", false)));
+    print(handle(new Key("a", true)));
+    print(handle(new Key("b", false)));
+}
