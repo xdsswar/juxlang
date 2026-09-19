@@ -986,6 +986,15 @@ pub enum Code {
     /// `string`, indexing...). Also an operator with no body declared outside
     /// an interface, which only an interface may leave abstract.
     E0936_InterfaceOperatorShape,
+    /// E0950 -- An orphan free-function operator (Runtime/ABI §R.3.1-R.3.3):
+    /// neither operand type, nor a record/struct/enum return type, is
+    /// declared by this program. `double * int` or `String + int` would
+    /// redefine arithmetic on types someone else owns.
+    E0950_OrphanOperator,
+    /// E0951 -- The same free-function operator declared twice for the same
+    /// operand types (Runtime/ABI §R.3.3): a call could not tell which one
+    /// runs.
+    E0951_DuplicateOperator,
 
     // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
     /// E0970 — Write to a read-only property outside the place where
@@ -1193,6 +1202,8 @@ impl Code {
             Code::E0933_KeyHasNoHash             => "E0933",
             Code::E0935_DeletedOperator          => "E0935",
             Code::E0936_InterfaceOperatorShape   => "E0936",
+            Code::E0950_OrphanOperator           => "E0950",
+            Code::E0951_DuplicateOperator        => "E0951",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
             Code::E0975_ObserverShapeMismatch    => "E0975",

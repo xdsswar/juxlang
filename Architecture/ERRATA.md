@@ -1144,6 +1144,35 @@ data does not).
 
 ---
 
+## E65. Operator coherence without module identity
+
+**Conflict.** Runtime/ABI §R.3 states coherence in terms of *modules*: an
+operator may be defined only by the module that owns an operand. Phase 1
+compiles a dependency module by including its sources (Build §B, see
+`crates/juxc-driver/src/project.rs`), so the checker sees one program and
+does not know which module a user type came from. §R.3.3 also detects the
+cross-module duplicate (`E0951`) "at the build's link step", which the
+source-inclusion model never reaches, and §R.3.6's `E0952` covers free-function
+`operator hash` / `operator string`, which the grammar does not accept at all
+(a free operator must be arithmetic or bitwise, §7.14, reported as `E0200`).
+
+**Resolution.** Ownership is by *program*: a type is owned when the program
+being compiled declares it; primitives, `String`, the standard library,
+`rust.<crate>` types and bare type parameters never are. A free operator none
+of whose operands, and not its record/struct/enum result, is owned is
+`E0950`, with the §R.3.4 newtype escape hatch in the help. Two free operators
+with the same operand types are `E0951`, reported where the second is
+declared (it used to print as `E0400` with the internal `__op_*` name).
+`E0952` stays reserved: an orphan free `operator hash`/`string` cannot be
+written. A dependency module's types count as owned by its dependents until
+modules compile as separate crates, so an orphan across that line is missed
+rather than misreported.
+
+**Spec status:** §R.3.3 and §R.3.6 describe the intended multi-module rule and
+stand; the Phase-1 reading above is noted there.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

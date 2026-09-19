@@ -364,6 +364,14 @@ Error E0950: orphan operator overload
 Hint: define this operator in `external.math`, or use a wrapper struct.
 ```
 
+**Phase 1 (implemented, ERRATA E65).** Ownership is checked per program: a
+type is owned when the program being compiled declares it (not a primitive,
+`String`, a standard-library or `rust.<crate>` type, or a bare type
+parameter). An orphan free operator is `E0950`; a second free operator with
+the same operand types is `E0951`, reported at its declaration. Dependency
+modules are compiled by including their sources, so their types count as
+owned by their dependents until modules become separate crates.
+
 ### R.3.4. Newtype Escape Hatch
 
 When the orphan rule prevents a desired operator, wrap one of the operands in a **newtype** struct in your own module:

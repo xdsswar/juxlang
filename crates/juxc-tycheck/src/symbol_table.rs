@@ -5075,6 +5075,26 @@ fn insert_function(
             .or_insert_with(|| vec![first]);
         let want = param_shape_key(&sig.params);
         if group.iter().any(|fs| param_shape_key(&fs.params) == want) {
+            // A free-function operator (§7.14) is stored under its internal
+            // name (`__op_mul`); report it the way it was written (E0951,
+            // Runtime/ABI §R.3.3), never by that name.
+            let bare = fqn.rsplit('.').next().unwrap_or(&fqn);
+            if let Some(kind) = operator_contract_kind(bare) {
+                let operands: Vec<String> = sig.params.iter().map(|p| crate::check::type_ref_display(&p.ty)).collect();
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0951_DuplicateOperator,
+                        format!(
+                            "`operator{}({})` is declared more than once -- a call could not tell which one \
+                             runs; keep one (§R.3.3)",
+                            operator_kind_display(kind),
+                            operands.join(", "),
+                        ),
+                    )
+                    .with_span(fn_decl.span),
+                );
+                return;
+            }
             report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
             return;
         }
@@ -5407,6 +5427,12 @@ fn operator_sig(op: &OperatorDecl) -> OperatorSig {
         is_deleted: op.is_deleted,
         span: op.span,
     }
+}
+
+/// The source spelling of an operator (`*`, `<<`, `hash`), for messages
+/// outside this module.
+pub(crate) fn operator_symbol(kind: OperatorKind) -> &'static str {
+    operator_kind_display(kind)
 }
 
 /// Human-readable spelling of an [`OperatorKind`] suitable for embedding

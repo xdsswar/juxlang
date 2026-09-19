@@ -765,7 +765,10 @@ impl<'a> Checker<'a> {
         crate::hash_keys::check_unit(unit, &self.env, self.symbols, self.diagnostics);
         for item in &unit.items {
             match item {
-                TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
+                TopLevelDecl::Function(fn_decl) => {
+                    self.check_operator_coherence(fn_decl);
+                    self.check_function(fn_decl);
+                }
                 TopLevelDecl::Annotation(decl) => self.check_annotation_decl(decl),
                 TopLevelDecl::Class(class) => self.check_class(class),
                 TopLevelDecl::Record(record) => self.check_record(record),
@@ -4471,6 +4474,78 @@ impl<'a> Checker<'a> {
                 .with_span(c.span),
             );
         }
+    }
+
+    /// Operator coherence for a free-function operator (Runtime/ABI §R.3.1,
+    /// ERRATA E65). `R operator*(A left, B right)` may only be declared where
+    /// `A` or `B`, or a record/struct/enum `R`, is declared too: otherwise it
+    /// would redefine arithmetic on types that belong to someone else, and two
+    /// libraries could each do it differently. A type counts as this
+    /// program's own when the program declares it: a primitive, `String`, a
+    /// standard-library type, a Rust crate's type or a bare type parameter
+    /// never does, while a generic user type (`Wrapper<T>`) does (§R.3.7).
+    /// The newtype escape hatch (§R.3.4) is the fix the message names. E0950.
+    fn check_operator_coherence(&mut self, f: &FnDecl) {
+        let Some(kind) = crate::symbol_table::operator_contract_kind(&f.name.text) else {
+            return;
+        };
+        let [left, right] = f.params.as_slice() else {
+            return;
+        };
+        let owned = |t: &juxc_ast::TypeRef| self.type_is_program_owned(t, false);
+        let returns_owned_value = match &f.return_type {
+            juxc_ast::ReturnType::Type(t) => self.type_is_program_owned(t, true),
+            _ => false,
+        };
+        if owned(&left.ty) || owned(&right.ty) || returns_owned_value {
+            return;
+        }
+        let op = crate::symbol_table::operator_symbol(kind);
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0950_OrphanOperator,
+                format!(
+                    "orphan operator: `operator{op}({}, {})` is declared here, but neither `{}` nor `{}` is \
+                     declared by this program, so this would redefine `{op}` on types it does not own (§R.3.1)",
+                    type_ref_display(&left.ty),
+                    type_ref_display(&right.ty),
+                    type_ref_display(&left.ty),
+                    type_ref_display(&right.ty),
+                ),
+            )
+            .with_span(f.span)
+            .with_help(format!(
+                "wrap one operand in a type of your own (a `record Scaled(double k)`), and declare \
+                 `operator{op}` on that type (§R.3.4)"
+            )),
+        );
+    }
+
+    /// Whether `t` names a type this program declares (Runtime/ABI §R.3.1):
+    /// a user class, struct, record, enum or interface, not an external stub
+    /// and not from the standard library. With `value_only`, only a record,
+    /// struct or enum counts (the return-type rule of §R.3.1 item 3).
+    fn type_is_program_owned(&self, t: &juxc_ast::TypeRef, value_only: bool) -> bool {
+        if t.ptr_depth > 0 || t.array_shape.is_some() || t.fn_shape.is_some() {
+            return false;
+        }
+        let Ty::User { name, .. } = ty_from_ref(t, &self.env, self.symbols) else {
+            return false;
+        };
+        let from_std = ["jux.", "core.", "rust."].iter().any(|p| name.starts_with(p));
+        if from_std {
+            return false;
+        }
+        if let Some(c) = self.symbols.classes.get(&name) {
+            return !c.is_external && (!value_only || c.is_struct);
+        }
+        if self.symbols.records.contains_key(&name) {
+            return true;
+        }
+        if let Some(e) = self.symbols.enums.get(&name) {
+            return !e.is_external;
+        }
+        !value_only && self.symbols.interfaces.get(&name).is_some_and(|i| !i.is_external)
     }
 
     /// `@export` on data (Layout-ABI §L.3.3, ERRATA E64): only a constant (a
@@ -12863,7 +12938,7 @@ fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
 /// generic instantiations, nullable primitives, and user/class types are not.
 /// Render a `TypeRef` for an FFI diagnostic (`TypeRef` has no `Display`):
 /// dotted name, then `?` for nullable, then one `*` per pointer level.
-fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
+pub(crate) fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
     // A function type has no name; show the signature the user wrote.
     if let Some(shape) = &t.fn_shape {
         let params = shape.params.iter().map(type_ref_display).collect::<Vec<_>>().join(", ");
