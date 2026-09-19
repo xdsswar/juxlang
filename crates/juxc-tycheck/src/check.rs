@@ -5156,6 +5156,8 @@ impl<'a> Checker<'a> {
                         .map(|t| ty_from_ref(t, &self.env, self.symbols));
                 if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&declared, &v.init) {
                     self.lambda_slot_params = Some(params.clone());
+                } else if let (Some(slot), Some(Expr::Lambda(_))) = (&declared, &v.init) {
+                    self.lambda_slot_params = self.single_method_interface_params(slot);
                 }
                 let inferred = v.init.as_ref().map(|e| {
                     // Walk the initializer for nested checks (e.g. a
@@ -5478,6 +5480,10 @@ impl<'a> Checker<'a> {
                 // does (`return this::greet;` picks the overload, §M.8.3).
                 if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&expected, opt) {
                     self.lambda_slot_params = Some(params.clone());
+                } else if let (Some(slot), Some(Expr::Lambda(_))) = (&expected, opt) {
+                    // A returned lambda filling a single-method interface
+                    // (§7.9.1) takes that method's parameter types.
+                    self.lambda_slot_params = self.single_method_interface_params(slot);
                 }
                 match (&expected, opt) {
                     // Bare `return;` inside a void function — fine.
@@ -5724,8 +5730,7 @@ impl<'a> Checker<'a> {
                         // A `rust.std` sequence collection iterates over its
                         // element type (the first generic arg) — the stub
                         // exposes `iter()`, not the Jux `iterator()` protocol,
-                        // so recognize these directly. (`HashMap`/`BTreeMap`
-                        // iterate as key/value pairs and aren't covered here.)
+                        // so recognize these directly.
                         Ty::User { name, generic_args }
                             if name.starts_with("rust.std")
                                 && matches!(
@@ -5734,6 +5739,17 @@ impl<'a> Checker<'a> {
                                 ) =>
                         {
                             generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                        }
+                        // A map iterates as `(K, V)` entries, owned (the
+                        // backend copies each entry out). Untyped, `e.1 / n`
+                        // on a `long` value and an `int` skipped the numeric
+                        // promotion and reached rustc.
+                        Ty::User { name, generic_args }
+                            if name.starts_with("rust.std")
+                                && matches!(name.rsplit('.').next().unwrap_or(name), "HashMap" | "BTreeMap")
+                                && generic_args.len() == 2 =>
+                        {
+                            Ty::User { name: juxc_ast::TUPLE_SENTINEL.to_string(), generic_args: generic_args.clone() }
                         }
                         // An `Iterator<T>` value itself (a generator's result,
                         // §M.2.1): the loop drains it, one `next()` per pass.
@@ -7741,6 +7757,65 @@ impl<'a> Checker<'a> {
             return None;
         }
         Some((c.span, method))
+    }
+
+    /// The parameter types a lambda takes when it fills a slot of type `slot`
+    /// that is a Jux interface with exactly one abstract method (JUX-LANG-V1
+    /// §7.9.1): that method's parameter types, with the interface's type
+    /// parameters replaced by the slot's arguments. `None` for any other slot,
+    /// and when a parameter type is not concrete yet.
+    /// A callee parameter type `Iface<A, B>` lowered with the callee's own
+    /// type parameters (`params`) bound to the call's inferred `args`, where a
+    /// generic argument is one of those parameters by name. Used for the
+    /// single-method-interface slot of a generic callee, whose `T` the
+    /// caller's scope cannot resolve. `Unknown` when the head is not a type.
+    fn slot_with_callee_params(&self, tref: &TypeRef, params: &[TypeParam], args: &[Ty]) -> Ty {
+        let head = TypeRef { generic_args: Vec::new(), ..tref.clone() };
+        let Ty::User { name, .. } = ty_from_ref(&head, &self.env, self.symbols) else {
+            return Ty::Unknown;
+        };
+        let generic_args = tref
+            .generic_args
+            .iter()
+            .map(|ga| match ga {
+                juxc_ast::GenericArg::Type(t) if t.name.segments.len() == 1 && t.generic_args.is_empty() => {
+                    match params.iter().position(|p| p.name.text == t.name.segments[0].text) {
+                        Some(i) => args.get(i).cloned().unwrap_or(Ty::Unknown),
+                        None => ty_from_ref(t, &self.env, self.symbols),
+                    }
+                }
+                juxc_ast::GenericArg::Type(t) => ty_from_ref(t, &self.env, self.symbols),
+                juxc_ast::GenericArg::Wildcard(_) => Ty::Unknown,
+            })
+            .collect();
+        Ty::User { name, generic_args }
+    }
+
+    fn single_method_interface_params(&self, slot: &Ty) -> Option<Vec<Ty>> {
+        let Ty::User { name, generic_args } = slot else {
+            return None;
+        };
+        let iface = self.symbols.interfaces.get(name)?;
+        if iface.is_external || !iface.extends.is_empty() || iface.generic_params.len() != generic_args.len() {
+            return None;
+        }
+        let mut abstract_methods = iface
+            .methods
+            .values()
+            .filter(|m| m.is_abstract && !m.is_static && !m.is_property);
+        let method = abstract_methods.next()?;
+        if abstract_methods.next().is_some() {
+            return None;
+        }
+        let params: Vec<Ty> = method
+            .params
+            .iter()
+            .map(|p| {
+                let raw = lower_member_type(&p.ty, name, self.symbols);
+                substitute(&raw, &iface.generic_params, generic_args)
+            })
+            .collect();
+        params.iter().all(ty_is_concrete).then_some(params)
     }
 
     /// Whether the bare `name` can start an expression here (see
@@ -12375,10 +12450,19 @@ impl<'a> Checker<'a> {
                     Some(class) => lower_member_type(&param.ty, class, self.symbols),
                     None => ty_from_ref(&param.ty, &self.env, self.symbols),
                 };
-                if let Ty::Fn { params: slot_params, .. } = substitute(&slot_raw, subst_params, subst_args) {
+                let slot = substitute(&slot_raw, subst_params, subst_args);
+                if let Ty::Fn { params: slot_params, .. } = &slot {
                     if slot_params.iter().all(ty_is_concrete) {
-                        self.lambda_slot_params = Some(slot_params);
+                        self.lambda_slot_params = Some(slot_params.clone());
                     }
+                } else if let Some(slot_params) = self.single_method_interface_params(&slot).or_else(|| {
+                    // The caller's scope does not know the callee's own type
+                    // parameters, so `Combine<T>` lowered to `Combine<?>`;
+                    // bind them by name from the inferred arguments.
+                    let bound = self.slot_with_callee_params(&param.ty, subst_params, subst_args);
+                    self.single_method_interface_params(&bound)
+                }) {
+                    self.lambda_slot_params = Some(slot_params);
                 }
             }
             self.check_expr(arg);

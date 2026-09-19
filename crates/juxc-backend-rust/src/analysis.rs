@@ -138,6 +138,10 @@ pub(crate) enum IfaceCoercion {
     /// No interface coercion — the target isn't an interface slot, or the
     /// source needs no adaptation.
     None,
+    /// Source is a lambda and the target an interface with one abstract
+    /// method (JUX-LANG-V1 §7.9.1): the lambda is that method, emitted as the
+    /// interface's anonymous implementation (captures included).
+    FromLambda,
     /// Source is a concrete class implementing the target interface — wrap it
     /// in `Rc<dyn Trait>`. `clone_first` clones a reused wrapper place (cheap
     /// `Rc` bump, preserves shared identity) before wrapping.
@@ -4154,6 +4158,9 @@ impl crate::RustEmitter {
         if self.type_ref_is_any(target_ty) {
             return IfaceCoercion::IntoAny;
         }
+        if self.lambda_as_anonymous_class(target_ty, expr).is_some() {
+            return IfaceCoercion::FromLambda;
+        }
         // Concrete subclass → its direct base class under the non-sealed,
         // non-polymorphic open hierarchy (the `From<Sub> for Parent` slicing
         // model, e.g. exception causes). Detected here so every coercion call
@@ -4356,6 +4363,11 @@ impl crate::RustEmitter {
         }
         match coercion {
             IfaceCoercion::None | IfaceCoercion::IntoAny => unreachable!("handled above"),
+            IfaceCoercion::FromLambda => {
+                if let Some(anon) = self.lambda_as_anonymous_class(target_ty, expr) {
+                    self.emit_anonymous_class(&anon);
+                }
+            }
             IfaceCoercion::UpcastDyn { clone_first } => {
                 self.w.push('(');
                 self.emit_expr(expr);

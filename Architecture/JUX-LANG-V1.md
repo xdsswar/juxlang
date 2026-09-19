@@ -1184,9 +1184,9 @@ arrays silently are not would make ordinary lines of code do nothing at all,
 with no diagnostic. An array is the most primitive aggregate the language has,
 and it should not be the one that behaves differently.
 
-**`clone()` copies**, shallowly, as it does for a collection: a new array of
-the same length holding the same elements.
-
+**`clone()` copies**, shallowly, as it does for a collection: a new array of
+the same length holding the same elements.
+
 **A nullable array is not an array of nullables.** The `?` binds where it is
 written: before the brackets it is the ELEMENT's, after them it is the ARRAY's.
 
@@ -2646,6 +2646,23 @@ Closures infer their capture mode (shared borrow, exclusive borrow, or move) fro
 A captured variable stays usable after the lambda that captures it, as in Java. A closure may outlive the scope that built it, so it holds its own copy of what it reads: a value (`String`, a record) is copied, and a reference (an object, an array, a collection) is shared, so both sides see the same object. The copy is made only when the enclosing code reads the variable again, or when the lambda is built repeatedly (inside a loop around the variable's declaration, or inside another lambda). A capture that is the variable's last use takes the value as it is. A lambda that reads a field without writing `this` captures the object, the same as `this.field`.
 
 A lambda whose body is a single expression may fill a function type returning `void` (`() -> void`, `(T) -> void`) whatever the expression's type: the value is computed and discarded. This holds wherever the slot appears: an argument, a local declaration, an assignment, or a `return`.
+
+#### 7.9.1. Lambdas as Single-Method Interfaces
+
+A lambda may also fill a slot whose type is a Jux interface with exactly one abstract method (its other methods, if any, have default bodies or are static), as in Java:
+
+```java
+interface Listener<E> { void on(E event); }
+
+var seen = new Vec<String>();
+bus.subscribe((o) -> seen.push(o.id));      // a Listener<Order>
+Pricer p = (item, qty) -> item.charLength() * qty;
+```
+
+- The lambda is that method. Its parameters, in order, are the method's parameters; an untyped lambda parameter takes the method's parameter type, with the interface's type parameters replaced by the slot's type arguments (`Listener<Order>` gives `o` the type `Order`). The parameter counts must match.
+- An expression body is the method's `return` value; for a `void` method it is a statement whose value is discarded.
+- The result is an ordinary value of the interface type: it dispatches, compares by identity, and captures exactly as the lambda would (§7.9), and it is the same as writing the anonymous class `new Listener<Order>() { public void on(Order o) { … } }`.
+- The conversion applies to Jux interfaces that do not extend another interface. A foreign (`@rust`) trait, an interface with no or several abstract methods, and an `async` lambda keep their existing rules; a lambda there is a type error.
 
 ### 7.10. Nullable Types
 

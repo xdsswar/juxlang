@@ -2892,6 +2892,10 @@ impl RustEmitter {
         self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } impl ");
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
+        // A generic interface is implemented at the arguments written
+        // (`new Listener<Order>() { … }` implements `Listener<Order>`); the
+        // bare trait name does not compile (rustc E0107).
+        self.emit_anon_generic_args(&n.generic_args);
         self.w.push_str(" for ");
         self.w.push_str(&struct_name);
         self.w.push_str(" {");
@@ -2961,7 +2965,170 @@ impl RustEmitter {
         });
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
+        self.emit_anon_generic_args(&n.generic_args);
         self.w.push_str("> }");
+    }
+
+    /// Functional-interface conversion (JUX-LANG-V1 §7.9.1): the anonymous
+    /// implementation a lambda stands for when it fills a slot typed as a Jux
+    /// interface with exactly one abstract method. The lambda's parameters
+    /// name that method's parameters (their types come from the method, with
+    /// the interface's type parameters replaced by the slot's arguments), and
+    /// its body is the method's body; an expression body returns its value,
+    /// or is a statement when the method is `void`.
+    ///
+    /// `None` for anything else: not a lambda, an `async` lambda, a nullable,
+    /// foreign or extending interface, a count of abstract methods other than
+    /// one, or a parameter count that does not match. Those keep their
+    /// existing lowering.
+    pub(crate) fn lambda_as_anonymous_class(
+        &self,
+        target: &juxc_ast::TypeRef,
+        expr: &Expr,
+    ) -> Option<juxc_ast::NewObjectExpr> {
+        let Expr::Lambda(l) = expr else {
+            return None;
+        };
+        if l.is_async
+            || target.nullable
+            || target.array_shape.is_some()
+            || target.fn_shape.is_some()
+            || target.ptr_depth > 0
+        {
+            return None;
+        }
+        let bare = target.name.segments.last()?.text.as_str();
+        let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
+        if iface.is_external || !iface.extends.is_empty() {
+            return None;
+        }
+        let mut abstract_methods = iface
+            .methods
+            .iter()
+            .filter(|(_, m)| m.is_abstract && !m.is_static && !m.is_property);
+        let (method_name, method) = abstract_methods.next()?;
+        if abstract_methods.next().is_some() || method.params.len() != l.params.len() {
+            return None;
+        }
+        // The interface's parameters, bound to the slot's arguments.
+        let target_args: Vec<juxc_ast::TypeRef> = target
+            .generic_args
+            .iter()
+            .filter_map(|a| match a {
+                juxc_ast::GenericArg::Type(t) => Some(t.clone()),
+                juxc_ast::GenericArg::Wildcard(_) => None,
+            })
+            .collect();
+        if target_args.len() != iface.generic_params.len() {
+            return None;
+        }
+        let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> = iface
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.clone())
+            .zip(target_args.iter().cloned())
+            .collect();
+        // At a generic call (`fold(nums, 0, (a, b) -> a + b)` against
+        // `Combine<T> f`) the slot still names the callee's own `T`. The
+        // checker gave each untyped lambda parameter its concrete type, so a
+        // method parameter written as a bare interface parameter binds it:
+        // `T apply(T a, T b)` with `a: int` makes `T` `int`.
+        for (ps, lp) in method.params.iter().zip(&l.params) {
+            if lp.ty.is_some() || ps.ty.name.segments.len() != 1 || !ps.ty.generic_args.is_empty() {
+                continue;
+            }
+            let pname = &ps.ty.name.segments[0].text;
+            if !subst.contains_key(pname) {
+                continue;
+            }
+            let recorded = self
+                .expr_types
+                .get(&lp.name.span)
+                .filter(|t| !matches!(t, juxc_tycheck::Ty::Unknown | juxc_tycheck::Ty::Param(_)));
+            if let Some(tref) = recorded.and_then(crate::analysis::ty_to_type_ref) {
+                subst.insert(pname.clone(), tref);
+            }
+        }
+        let target_args: Vec<juxc_ast::TypeRef> =
+            iface.generic_params.iter().filter_map(|p| subst.get(&p.name.text).cloned()).collect();
+        let span = l.span;
+        let params: Vec<juxc_ast::Param> = method
+            .params
+            .iter()
+            .zip(&l.params)
+            .map(|(ps, lp)| juxc_ast::Param {
+                name: lp.name.clone(),
+                ty: crate::decls::classes::substitute_type_ref(&ps.ty, &subst),
+                is_final: false,
+                is_ref: ps.is_ref,
+                is_mut_ref: ps.is_mut_ref,
+                default: None,
+                is_varargs: false,
+                is_out: false,
+                is_shared_ref: false,
+                is_weak: false,
+                span: lp.span,
+            })
+            .collect();
+        let return_type = match &method.return_type {
+            juxc_ast::ReturnType::Void => juxc_ast::ReturnType::Void,
+            juxc_ast::ReturnType::Type(t) => {
+                juxc_ast::ReturnType::Type(crate::decls::classes::substitute_type_ref(t, &subst))
+            }
+            juxc_ast::ReturnType::AsyncType(_) => return None,
+        };
+        let body = match &l.body {
+            juxc_ast::LambdaBody::Block(b) => (**b).clone(),
+            juxc_ast::LambdaBody::Expr(e) => {
+                let stmt = if matches!(return_type, juxc_ast::ReturnType::Void) {
+                    juxc_ast::Stmt::Expr((**e).clone())
+                } else {
+                    juxc_ast::Stmt::Return(Some((**e).clone()), span)
+                };
+                juxc_ast::Block { statements: vec![stmt], span }
+            }
+        };
+        let method_decl = juxc_ast::FnDecl {
+            annotations: Vec::new(),
+            visibility: juxc_ast::Visibility::Public,
+            modifiers: Vec::new(),
+            return_type,
+            name: juxc_ast::Ident { text: method_name.clone(), span },
+            generic_params: Vec::new(),
+            params,
+            throws: Vec::new(),
+            wheres: Vec::new(),
+            body: Some(body),
+            is_property: false,
+            is_c_variadic: false,
+            span,
+        };
+        Some(juxc_ast::NewObjectExpr {
+            class_name: target.name.clone(),
+            generic_args: target_args,
+            args: Vec::new(),
+            arg_names: Vec::new(),
+            anonymous_body: Some(juxc_ast::AnonymousBody { init_blocks: Vec::new(), methods: vec![method_decl] }),
+            eval_order: Vec::new(),
+            span,
+        })
+    }
+
+    /// `<A, B>` for the type arguments an anonymous class names on its
+    /// interface, each in generic-argument position; nothing when there are
+    /// none.
+    fn emit_anon_generic_args(&mut self, args: &[juxc_ast::TypeRef]) {
+        if args.is_empty() {
+            return;
+        }
+        self.w.push('<');
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_element_type_as_rust(a);
+        }
+        self.w.push('>');
     }
 
     /// The enclosing locals an anonymous-class body CAPTURES — every bare name
@@ -2998,9 +3165,43 @@ impl RustEmitter {
                 if let Some(tref) = crate::analysis::ty_to_type_ref(ty) {
                     out.push((n, tref));
                 }
+                continue;
+            }
+            // A PARAMETER of the enclosing function is captured the same way
+            // (`(item, qty) -> ... - discount` inside `bulk(long discount)`),
+            // but parameters are not in `local_types`. The checker typed each
+            // read of the name, so the type comes from the first read's span.
+            if self.current_fn_params.contains(&n) {
+                if let Some(tref) = self.first_read_type_of(body, &n).and_then(|ty| crate::analysis::ty_to_type_ref(&ty)) {
+                    out.push((n, tref));
+                }
             }
         }
         out
+    }
+
+    /// The checker's type for the first bare read of `name` in `body`'s
+    /// methods and init blocks, if any.
+    fn first_read_type_of(&self, body: &juxc_ast::AnonymousBody, name: &str) -> Option<juxc_tycheck::Ty> {
+        let mut found: Option<juxc_tycheck::Ty> = None;
+        let blocks = body.methods.iter().filter_map(|m| m.body.as_ref()).chain(body.init_blocks.iter());
+        for b in blocks {
+            juxc_ast::visit::for_each_node(b, &mut |node| {
+                if found.is_some() {
+                    return;
+                }
+                if let juxc_ast::visit::Node::Expr(Expr::Path(qn)) = node {
+                    if qn.segments.len() == 1 && qn.segments[0].text == name {
+                        found = self
+                            .expr_types
+                            .get(&qn.span)
+                            .filter(|t| !matches!(t, juxc_tycheck::Ty::Unknown))
+                            .cloned();
+                    }
+                }
+            });
+        }
+        found
     }
 
     /// Emit captured-local struct-field declarations (`name: <Type>`). With
@@ -3113,7 +3314,19 @@ impl RustEmitter {
                     undo_nullable.push(p.name.text.clone());
                 }
             }
+            // The params' declared types, by name, for every name-keyed type
+            // question in the body (intrinsic receivers such as
+            // `item.charLength()`, whether a field read must be cloned). A
+            // lambda converted to this method (§7.9.1) has untyped params, so
+            // its body's span-keyed types cannot answer those questions.
+            let scope: std::collections::HashMap<String, juxc_tycheck::Ty> = method
+                .params
+                .iter()
+                .map(|p| (p.name.text.clone(), juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols)))
+                .collect();
+            self.local_types.push(scope);
             self.emit_fn_body_at(body, &method.return_type);
+            self.local_types.pop();
             for n in undo_nullable {
                 self.nullable_locals.remove(&n);
             }
