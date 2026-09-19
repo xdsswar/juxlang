@@ -4506,14 +4506,61 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // Simple Unicode case mapping for `char.toUppercase()` /
         // `toLowercase()` (K.11): the one-char result of Rust's full mapping,
         // or the char itself when the full mapping has several (`'ß'`).
-        w.push_str("pub fn __jux_char_upper(c: char) -> char {\n");
+        w.push_str("pub fn __jux_upper(c: char) -> char {\n");
         w.push_str("    let mut up = c.to_uppercase();\n");
         w.push_str("    match (up.next(), up.next()) { (Some(u), None) => u, _ => c }\n");
         w.push_str("}\n");
-        w.push_str("pub fn __jux_char_lower(c: char) -> char {\n");
+        w.push_str("pub fn __jux_lower(c: char) -> char {\n");
         w.push_str("    let mut low = c.to_lowercase();\n");
         w.push_str("    match (low.next(), low.next()) { (Some(l), None) => l, _ => c }\n");
         w.push_str("}\n\n");
+        // A Rust `Err` crossing into Jux (Bindgen G.5.4): thrown wrapped, so
+        // `catch (Exception e)` can recognise it and a clause naming the Rust
+        // type still gets the value itself.
+        w.push_str(r#"/// A Rust `Err` thrown into Jux (Bindgen G.5.4). The error value rides
+/// along untouched for a `catch` that names its type; the text and type name
+/// serve `catch (Exception e)` and the uncaught-exception report.
+pub struct JuxForeignError {
+    pub type_name: &'static str,
+    pub text: String,
+    pub error: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+}
+/// Throw the `Err` of a foreign call; `text` is its Display (or Debug) form.
+pub fn __jux_raise_foreign<E: ::std::any::Any + ::std::marker::Send>(text: String, error: E) -> ! {
+    let type_name = ::std::any::type_name::<E>();
+    let type_name = type_name.rsplit("::").next().unwrap_or(type_name);
+    ::std::panic::panic_any(JuxForeignError { type_name, text, error: ::std::boxed::Box::new(error) })
+}
+/// For `catch (T e)` with `T` a foreign type: the Rust error itself, when it is a `T`.
+pub fn __jux_foreign_error_of<T: ::std::any::Any>(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) if f.error.is::<T>() => f.error,
+        Ok(f) => f,
+        Err(p) => p,
+    }
+}
+/// For `catch (Exception e)`: a foreign error is an `Exception` carrying its text.
+pub fn __jux_foreign_as_exception(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Exception::new(f.text)),
+        Err(p) => p,
+    }
+}
+/// For `catch (Throwable e)`: the same, as a `Throwable`.
+pub fn __jux_foreign_as_throwable(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Throwable::new(f.text)),
+        Err(p) => p,
+    }
+}
+
+"#);
         // Object identity (§T.1.4, §O.4.1). A class value can sit behind two
         // handle shapes: its own `C(Rc<RefCell<C_Inner>>)` newtype, or a
         // `Rc<dyn BaseKind>` / `Rc<dyn Iface>` that boxes a clone of that
@@ -5985,6 +6032,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                 "if let Some(e) = p.downcast_ref::<{path}>() {{ return format!(\"{fqn}: {{}}\", e.getMessage()); }}",
             ));
         }
+        self.w.line(
+            "if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() { return format!(\"{}: {}\", e.type_name, e.text); }",
+        );
         self.w.line("String::from(\"<panic>\")");
         self.w.indent_dec();
         self.w.line("}");
@@ -6933,6 +6983,13 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                         fqn = fqn,
                     ));
                 }
+                // A Rust `Err` nothing caught (Bindgen G.5.4) is reported like
+                // an uncaught exception, under the Rust error type's name.
+                wrapper.push_str(concat!(
+                    "        if let Some(__jux_e) = __jux_p.downcast_ref::<crate::JuxForeignError>() {\n",
+                    "            eprintln!(\"Exception in thread \\\"main\\\" {}: {}\", __jux_e.type_name, __jux_e.text);\n",
+                    "        }\n",
+                ));
                 wrapper.push_str(concat!(
                     "        std::process::exit(101);\n",
                     "    }\n",

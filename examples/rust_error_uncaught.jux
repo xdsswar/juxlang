@@ -1,0 +1,8 @@
+// A Rust error nothing catches ends the program like an uncaught Jux
+// exception (Bindgen G.5.4): the report names the Rust error type.
+void main() {
+    print("before");
+    double d = "x1".parse<double>();
+    print("after");
+    print(d);
+}

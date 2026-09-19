@@ -273,6 +273,22 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
+**Catching a Rust error.** The `Err` value is thrown as itself, so a clause naming the foreign error type
+(`catch (ParseFloatError e)`, `catch (Error e)` for `std::io::Error`) receives the Rust value with its own
+methods. It is also an exception in the Jux sense: `catch (Exception e)` and `catch (Throwable e)` catch it too,
+and bind an `Exception` (or `Throwable`) whose message is the error's text, its `Display` form, or its `Debug`
+form when it has no `Display`. Clauses are still tried in source order, so a foreign-typed clause placed after
+`catch (Exception e)` never runs. A Rust error that nothing catches ends the program the way an uncaught Jux
+exception does, with `Exception in thread "main" <ErrorType>: <text>` on stderr and exit status 101.
+
+```jux
+try {
+    double d = text.parse<double>();      // Rust: Result<f64, ParseFloatError>
+} catch (Exception e) {
+    print(e.getMessage());                // invalid float literal
+}
+```
+
 ### G.5.4b. A `new` That Can Return Nothing
 
 A Rust `new` returning `Option<Self>` is **not** a constructor. A Jux constructor always produces the object (§7.3.1), and unlike the `Result` case (§G.5.4) there is no error value to throw, so the only faithful surface is a static method that returns `Self?`, carrying the Rust name verbatim:

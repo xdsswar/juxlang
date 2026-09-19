@@ -1123,7 +1123,7 @@ impl RustEmitter {
                     .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                 self.w.indent_inc();
                 self.w.emit_indent();
-                self.w.push_str("match __jux_p.downcast::<");
+                self.emit_catch_downcast_head(ty);
                 self.emit_type_as_rust(ty);
                 self.w.push_str(">() {\n");
                 self.emit_try_expr_arm(clause, depth, binder_mut);
@@ -1364,6 +1364,39 @@ impl RustEmitter {
             return Some(bare);
         }
         self.resolve_bare_type_fqn(&bare)
+    }
+
+    /// Open a catch clause's own-type arm: `match <payload>.downcast::<`,
+    /// the caller writes the type and the rest.
+    ///
+    /// A Rust `Err` thrown by a foreign call travels as a `JuxForeignError`
+    /// (Bindgen G.5.4), so the payload goes through an adapter first:
+    /// `catch (Exception e)` / `catch (Throwable e)` turn it into that class
+    /// with the error's text, and a clause naming the foreign type itself
+    /// unwraps the Rust value when it is one. Every other clause type, the
+    /// Jux exception classes, sees the payload as it is.
+    fn emit_catch_downcast_head(&mut self, ty: &juxc_ast::TypeRef) {
+        let fqn = self.resolve_catch_ty_fqn(ty);
+        let foreign = fqn
+            .as_deref()
+            .and_then(|f| self.symbols.classes.get(f))
+            .is_some_and(|c| c.is_external);
+        self.w.push_str("match ");
+        match fqn.as_deref() {
+            Some("jux.std.exceptions.Exception") => {
+                self.w.push_str("crate::__jux_foreign_as_exception(__jux_p)");
+            }
+            Some("jux.std.exceptions.Throwable") => {
+                self.w.push_str("crate::__jux_foreign_as_throwable(__jux_p)");
+            }
+            _ if foreign => {
+                self.w.push_str("crate::__jux_foreign_error_of::<");
+                self.emit_type_as_rust(ty);
+                self.w.push_str(">(__jux_p)");
+            }
+            _ => self.w.push_str("__jux_p"),
+        }
+        self.w.push_str(".downcast::<");
     }
 
     /// Number of `extends` steps from `from` up to `to` (0 when they
@@ -1932,7 +1965,7 @@ impl RustEmitter {
                         .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                     self.w.indent_inc();
                     self.w.emit_indent();
-                    self.w.push_str("match __jux_p.downcast::<");
+                    self.emit_catch_downcast_head(ty);
                     self.emit_type_as_rust(ty);
                     self.w.push_str(">() {\n");
                     self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut, protect);

@@ -1,0 +1,45 @@
+// A Rust `Err` crossing into Jux is an exception (Bindgen G.5.4).
+// `catch (Exception e)` catches it with the error's text as the message,
+// and a clause naming the Rust error type gets the Rust value itself.
+import rust.std.Error;
+import rust.std.read_to_string;
+
+double parseOr(String text, double fallback) {
+    try {
+        return text.parse<double>();
+    } catch (Exception e) {
+        print($"not a number: ${text} (${e.getMessage()})");
+        return fallback;
+    }
+}
+
+void main() {
+    print(parseOr("2.5", 0.0));
+    print(parseOr("abc", -1.0));
+
+    // A clause for the Rust type sees the Rust value and its methods.
+    try {
+        String text = read_to_string("no/such/file.txt");
+        print(text);
+    } catch (Error e) {
+        print($"io error, kind ${e.kind()}");
+    }
+
+    // Throwable catches it too.
+    try {
+        int k = "".parse<int>();
+        print(k);
+    } catch (Throwable t) {
+        print($"caught: ${t.getMessage()}");
+    }
+
+    // A Jux exception still reaches its own clause first.
+    try {
+        throw new IllegalStateException("jux side");
+    } catch (IllegalStateException e) {
+        print($"jux: ${e.getMessage()}");
+    } catch (Exception e) {
+        print("never");
+    }
+    print("done");
+}

@@ -967,7 +967,7 @@ impl RustEmitter {
         }
         if ctor_is_foreign_result {
             self.w
-                .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e))");
         }
         self.emitting_format_arg = prev;
     }
@@ -1354,7 +1354,7 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_call(c);
                     self.w
-                        .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(__jux_show!(__e), __e))");
                 } else {
                     self.emit_call(c);
                 }

@@ -582,7 +582,7 @@ impl RustEmitter {
             "let __jux_exception_of = |__jux_p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>| -> crate::jux::std::exceptions::Exception { ",
         );
         self.w.push_str(
-            "let __jux_p = match __jux_p.downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
+            "let __jux_p = match crate::__jux_foreign_as_exception(__jux_p).downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
         );
         for sub in self.subclass_fqns_of(BASE) {
             let depth = self.extends_chain_distance(&sub, BASE).unwrap_or(0);
@@ -5481,13 +5481,13 @@ impl RustEmitter {
         // mapping, one char in and one char out: `'é'` becomes `'É'`, and a
         // letter whose full mapping is several chars (`'ß'`) stays as it is.
         // Rust's own `to_uppercase()` yields an iterator, so the runtime
-        // prelude's `__jux_char_upper` / `__jux_char_lower` pick the single
+        // prelude's `__jux_upper` / `__jux_lower` pick the single
         // char out of it.
         if is_char && matches!(method, "toUppercase" | "toLowercase") {
             self.w.push_str(if method == "toUppercase" {
-                "crate::__jux_char_upper("
+                "crate::__jux_upper("
             } else {
-                "crate::__jux_char_lower("
+                "crate::__jux_lower("
             });
             self.emit_expr(receiver);
             self.w.push(')');
@@ -5899,6 +5899,10 @@ impl RustEmitter {
                 .iter()
                 .rev()
                 .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned()),
+            // A string literal carries a dummy span, so it has no
+            // `expr_types` entry; without this `"abc".parse<double>()` was
+            // not seen as a String receiver and its `Result` stayed unopened.
+            Expr::Literal(juxc_ast::Literal::String(_)) => Some(juxc_tycheck::Ty::String),
             _ => None,
         }
         .or_else(|| {
