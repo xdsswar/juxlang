@@ -1,1 +1,2 @@
+pointer_difference_is_long.jux:6:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 pointer_difference_is_long.jux:11:9: [E0410] error: type mismatch in declaration of `n`: expected int, found long

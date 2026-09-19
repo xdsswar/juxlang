@@ -1,5 +1,6 @@
 pointer_type_checks.jux:17:12: [E0410] error: mismatched pointer types: expected `long*`, found `int*`
 pointer_type_checks.jux:36:18: [E0506] error: a cast to or from a raw pointer requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+pointer_type_checks.jux:37:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 pointer_type_checks.jux:39:22: [E0410] error: mismatched pointer types: expected `i32*`, found `int*`
 pointer_type_checks.jux:40:25: [E0410] error: mismatched pointer types: expected `double*`, found `int*`
 pointer_type_checks.jux:41:22: [E0410] error: mismatched pointer types: expected `int**`, found `int*`

@@ -1,4 +1,5 @@
 transmute_rules.jux:10:19: [E0506] error: `transmute` requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+transmute_rules.jux:11:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 transmute_rules.jux:12:18: [E0522] error: invalid `transmute`: the two types must be the same size: `i32` is 4 bytes and `long` is 8 bytes (§L.7.4)
 transmute_rules.jux:13:18: [E0522] error: invalid `transmute`: the two types must be the same size: `int` is one machine word (4 or 8 bytes by target) and `long` is 8 bytes (§L.7.4)
 transmute_rules.jux:14:17: [E0522] error: invalid `transmute`: it takes exactly two type arguments, the type it reads and the type it gives: `transmute<A, B>(value)` (§L.7.4)
