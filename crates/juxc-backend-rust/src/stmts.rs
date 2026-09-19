@@ -1307,10 +1307,18 @@ impl RustEmitter {
             }
             _ => None,
         };
+        // A body that `await`s runs as an `async` block awaited in place
+        // (its own `catch_unwind` from `futures::FutureExt`): `return`
+        // leaves it the same way it leaves a closure, so the return and
+        // loop-control channels work unchanged.
+        let awaits = crate::analysis::block_contains_await(body);
         self.w.emit_indent();
         self.w.push_str(if returns { "match " } else { "if let Err(__jux_q) = " });
-        self.w
-            .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+        self.w.push_str(if awaits {
+            "futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {\n"
+        } else {
+            "std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n"
+        });
         self.w.indent_inc();
         self.emit_block_contents(body);
         // The closure's value when the body falls off its end: no return.
@@ -1325,15 +1333,16 @@ impl RustEmitter {
             ch.closure_has_ret = has_ret;
         }
         self.w.emit_indent();
+        let close = if awaits { "})).await {\n" } else { "})) {\n" };
         if returns {
-            self.w.push_str("})) {\n");
+            self.w.push_str(close);
             self.w.indent_inc();
             self.w.line("Ok(__jux_catch_ret) => { __jux_ret = __jux_catch_ret; }");
             self.w.line("Err(__jux_q) => { __jux_unhandled = Some(__jux_q); }");
             self.w.indent_dec();
             self.w.line("}");
         } else {
-            self.w.push_str("})) {\n");
+            self.w.push_str(close);
             self.w.indent_inc();
             self.w.line("__jux_unhandled = Some(__jux_q);");
             self.w.indent_dec();
@@ -2037,11 +2046,10 @@ impl RustEmitter {
                 // `throw`, a `?: throw`, or a call that throws) parks in
                 // `__jux_unhandled` like an unmatched payload does. A
                 // `break`/`continue` out of the body leaves the closure
-                // through the try's loop-control channel; an `await` keeps
-                // the inline form, since a sync closure cannot carry one.
+                // through the try's loop-control channel, and a body that
+                // `await`s is protected as an awaited `async` block.
                 let protect = t.finally.is_some()
-                    && (wants_loopctl || !block_contains_jump(&clause.body))
-                    && !crate::analysis::block_contains_await(&clause.body);
+                    && (wants_loopctl || !block_contains_jump(&clause.body));
                 for ty in clause_tys {
                     let arm_fqn = self.resolve_catch_ty_fqn(ty);
                     let depth = match (&arm_fqn, &binder_fqn) {

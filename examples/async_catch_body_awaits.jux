@@ -1,0 +1,49 @@
+// A catch body that `await`s and then throws, with a `finally`
+// (JUX-EXCEPTIONS-ADDENDUM §X.3.2, JUX-ASYNC-ADDENDUM §18).
+//
+// `finally` runs before the exception leaves the try, whether the catch body
+// awaited first or not. The awaiting body used to be left unprotected, so its
+// throw skipped `finally`.
+
+async int fetch(int i) {
+    if (i % 2 == 1) {
+        throw new IllegalStateException("odd " + i);
+    }
+    return i * 10;
+}
+
+async int retry(int i) {
+    return i + 100;
+}
+
+void boom(String why) {
+    throw new IllegalArgumentException(why);
+}
+
+async int work(int i) {
+    try {
+        return await fetch(i);
+    } catch (IllegalStateException e) {
+        var again = await retry(i);
+        if (again > 102) {
+            boom("too big " + again);
+        }
+        return again;
+    } finally {
+        print("finally " + i);
+    }
+}
+
+async void run() {
+    for (var i : 0..4) {
+        try {
+            print(await work(i));
+        } catch (IllegalArgumentException e) {
+            print("caught " + e.getMessage());
+        }
+    }
+}
+
+public void main() {
+    block_on(run());
+}
