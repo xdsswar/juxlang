@@ -43,7 +43,9 @@ class JuxMissingReturnInspection : LocalInspectionTool() {
             override fun visitElement(element: PsiElement) {
                 if (element.elementType !== E.METHOD_DECLARATION && element.elementType !== E.OPERATOR_DECLARATION) return
                 val returnType = JuxHierarchy.returnTypeText(element) ?: return
-                if (returnType == "void" || returnType.isEmpty()) return
+                // A `never` function returns nothing at all; its own rules
+                // (E0485/E0486) are JuxNeverFunctionInspection's.
+                if (returnType == "void" || returnType == "never" || returnType.isEmpty()) return
                 val body = element.node.findChildByType(E.CODE_BLOCK)?.psi ?: return
                 if (PsiTreeUtil.findChildOfType(body, PsiErrorElement::class.java) != null) return
                 if (containsYield(body)) return

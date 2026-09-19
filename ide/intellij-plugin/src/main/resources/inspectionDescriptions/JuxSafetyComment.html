@@ -1,0 +1,8 @@
+<html>
+<body>
+Reports an <code>unsafe { }</code> block with no <code>// SAFETY:</code> comment saying why its obligations hold (W0820).
+<!-- tooltip end -->
+<p>The comment may sit on the lines directly above <code>unsafe</code> (no blank line in between) or at the very top of the block. <code>unsafe native</code> blocks and <code>unsafe</code> functions are declarations and are not reported.</p>
+<p>Quick-fix: insert <code>// SAFETY: </code> above the block.</p>
+</body>
+</html>
