@@ -671,7 +671,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module *(reserved)*    | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
-| `W0820`  | `unsafe` block missing `// SAFETY:` justification *(reserved)*| Layout-ABI §L.5.5              |
+| `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor, not by a build) | Layout-ABI §L.5.5 |
 | `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |
 | `W0970`  | `observer<T>` attached but never detached and target has no `drop` *(reserved)*| Properties §P.6         |
 | `W0971`  | Property declared `{ get; set; }` but never observed or bound *(reserved)*| Properties §P.7.2            |

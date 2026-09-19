@@ -514,6 +514,13 @@ These are exactly the obligations Rust's `unsafe` carries. The list is short and
   ```
 - **Lint rule:** `juxc check` warns on any `unsafe` block lacking a `// SAFETY:` comment (`W0820`).
 
+**Implemented.** `juxc --check`, `jux check` and the editor report `W0820` for
+an `unsafe { }` block with no comment containing `SAFETY:` either directly above
+it (a run of comment lines touching the `unsafe` line) or at the top of its
+body (right after `{`). A build does not report it: it is a review lint, not a
+correctness check. `unsafe native` blocks and `unsafe` functions are not
+blocks and are not linted.
+
 ---
 
 ## §L.6 — Raw Pointers

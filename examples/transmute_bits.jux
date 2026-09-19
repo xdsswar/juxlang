@@ -13,6 +13,8 @@
 record Halves(u32 low, u32 high) {}
 
 public void main() {
+    // SAFETY: every pair of types below has the same size (checked), and each
+    // bit pattern is a valid value of the type it becomes.
     unsafe {
         // The IEEE-754 bit pattern of 1.5f: sign 0, exponent 127, mantissa 0.5.
         float f = 1.5f;

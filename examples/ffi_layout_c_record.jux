@@ -29,6 +29,8 @@ unsafe native {
 }
 
 public void main() {
+    // SAFETY: `div` only reads its two integers, and `p` points at `r`, which
+    // lives to the end of the block.
     unsafe {
         // Returned by value from C.
         DivT r = div(17, 5);

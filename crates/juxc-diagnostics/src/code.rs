@@ -776,6 +776,11 @@ pub enum Code {
     /// whole cycle alive forever. Annotating one back-edge field `weak` breaks
     /// it. A **warning**, not an error — the program still compiles and runs.
     W0457_UnannotatedRefCycle,
+    /// W0820 -- An `unsafe { }` block with no `// SAFETY:` comment saying why
+    /// its obligations hold (Layout-ABI §L.5.5). Raised by the checking entry
+    /// points (`juxc --check`, `jux check`, the editor), not by a build: a
+    /// style lint for review, never an error.
+    W0820_UnsafeWithoutSafetyComment,
     /// W0240 -- `@Derive(...)` does nothing: records, structs and enums derive
     /// their operators without it (MISSING-DEFS §M.3, OPERATORS §O.9).
     W0240_DeriveNoOp,
@@ -1159,6 +1164,7 @@ impl Code {
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
             Code::W0457_UnannotatedRefCycle      => "W0457",
+            Code::W0820_UnsafeWithoutSafetyComment => "W0820",
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
             Code::W0470_MissingOverrideAnnotation => "W0470",
