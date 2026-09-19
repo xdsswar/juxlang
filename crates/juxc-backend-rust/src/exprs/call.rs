@@ -297,7 +297,14 @@ impl RustEmitter {
         };
         let (Some(juxc_ast::ReturnType::Type(t)) | Some(juxc_ast::ReturnType::AsyncType(t))) = ret
         else {
-            return false;
+            // No stub type to read: the receiver's type was never discovered.
+            // Such a call is foreign all the same, and an explicit collection
+            // type argument is what it builds (`collect<Vec<int>>()`).
+            return self.call_on_untyped_foreign_receiver(call)
+                && call
+                    .explicit_generic_args
+                    .first()
+                    .is_some_and(|a| self.collection_is_handle(&a.name));
         };
         // A result typed by the method's own type parameter, bound by an
         // explicit collection type argument: `iter.collect<Vec<int>>()` builds a
@@ -395,6 +402,124 @@ impl RustEmitter {
             _ => false,
         };
         !declared_in_jux
+    }
+
+    /// True for a method call whose receiver has no type the program knows:
+    /// a value produced by a foreign method whose return type the stub names
+    /// but never defines (core's `str` iterators, `SplitN<P>` from
+    /// `s.splitn(3, '|')`, are the common case).
+    ///
+    /// Every Jux value is typed by the checker, so an untyped receiver can
+    /// only be foreign, and the call is lowered as a foreign one: a collection
+    /// type argument is the plain Rust collection, and the result goes behind
+    /// a handle. Before this the turbofish named the handle type,
+    /// `collect::<Rc<JuxCell<Vec<String>>>>()`, which rustc rejected.
+    pub(crate) fn call_on_untyped_foreign_receiver(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        // A type name (`Vec.new()`) is not a value, and `this` is always typed.
+        match &*f.object {
+            Expr::This(_) => return false,
+            Expr::Path(qn) => {
+                let named_type = qn
+                    .segments
+                    .last()
+                    .is_some_and(|l| self.resolve_bare_type_fqn(&l.text).is_some())
+                    || self.path_resolves_to_class_in_emit(qn).is_some();
+                if named_type {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        match self.receiver_ty_of(&f.object) {
+            None | Some(juxc_tycheck::Ty::Unknown) => {}
+            // A stub type the checker named but the stub does not define is
+            // as unknown as no type at all.
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                let bare = name.rsplit('.').next().unwrap_or(&name);
+                if self.resolve_bare_class_fqn(bare).is_some() || self.resolve_bare_type_fqn(bare).is_some() {
+                    return false;
+                }
+            }
+            Some(_) => return false,
+        }
+        true
+    }
+
+    /// `iter.collect<Vec<String>>()` on an untyped foreign iterator: the items
+    /// are most often borrowed `&str` views (every `str` splitter yields them),
+    /// which cannot be collected into `Vec<String>` as they are. `String::from`
+    /// owns each one, and is the identity on an item that is already a
+    /// `String`, so the call is emitted as
+    /// `crate::jux_arr(it.map(String::from).collect::<Vec<String>>())`.
+    ///
+    /// Returns false, writing nothing, for any other call.
+    pub(crate) fn emit_untyped_collect_of_strings(&mut self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        if f.field.text != "collect" || !call.args.is_empty() || !self.call_on_untyped_foreign_receiver(call) {
+            return false;
+        }
+        let Some(target) = call.explicit_generic_args.first() else {
+            return false;
+        };
+        let element_is_string = self.collection_is_handle(&target.name)
+            && target.generic_args.len() == 1
+            && matches!(&target.generic_args[0],
+                juxc_ast::GenericArg::Type(t) if crate::analysis::is_jux_string_type(t));
+        if !element_is_string {
+            return false;
+        }
+        self.w.push_str("crate::jux_arr(");
+        self.emit_expr(&f.object);
+        self.w.push_str(".map(String::from).collect::<");
+        self.plain_collection_once = true;
+        self.emit_value_type_as_rust(target);
+        self.plain_collection_once = false;
+        self.w.push_str(">())");
+        true
+    }
+
+    /// A string method's needle argument: `s.split('|')` passes the `char`
+    /// itself (a Rust `Pattern` in its own right), `s.split(", ")` borrows the
+    /// `String` as a `&str`. Before this every needle was borrowed, so a
+    /// `char` needle reached rustc as `'|'.as_str()`, which does not exist.
+    fn emit_string_needle_arg(&mut self, call: &CallExpr, at: usize) {
+        let Some(arg) = call.args.get(at) else { return };
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        self.emit_expr(arg);
+        self.emitting_format_arg = prev;
+        if self.operand_primitive(arg) != Some(juxc_tycheck::Primitive::Char) {
+            self.w.push_str(".as_str()");
+        }
+    }
+
+    /// True when a `String` slot is filled by a call on a receiver whose type
+    /// was never discovered ([`Self::call_on_untyped_foreign_receiver`]).
+    ///
+    /// Such a call's Rust result is unknown: `raw.trim()` on an item of an
+    /// undiscovered iterator is a `&str`, while `raw.to_uppercase()` is a
+    /// `String`. `to_string()` is right for both (it is the identity on an
+    /// owned `String`), and the slot's type is the only thing that says which
+    /// one was meant.
+    pub(crate) fn string_slot_owns_foreign_value(
+        &self,
+        declared: Option<&juxc_ast::TypeRef>,
+        value: &Expr,
+    ) -> bool {
+        let Some(ty) = declared else { return false };
+        if ty.nullable || ty.array_shape.is_some() || !crate::analysis::is_jux_string_type(ty) {
+            return false;
+        }
+        let Expr::Call(call) = value else { return false };
+        self.call_on_untyped_foreign_receiver(call)
+            && !matches!(
+                self.expr_types.get(&call.span),
+                Some(juxc_tycheck::Ty::String)
+            )
     }
 
     /// Whether a foreign call hands back an array that BORROWS its receiver.
@@ -5948,37 +6073,45 @@ impl RustEmitter {
             "startsWith" | "starts_with" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".starts_with(");
-                self.emit_call_args(call);
-                self.w.push_str(".as_str())");
+                self.emit_string_needle_arg(call, 0);
+                self.w.push(')');
                 true
             }
             "endsWith" | "ends_with" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".ends_with(");
-                self.emit_call_args(call);
-                self.w.push_str(".as_str())");
+                self.emit_string_needle_arg(call, 0);
+                self.w.push(')');
                 true
             }
             "contains" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains(");
-                self.emit_call_args(call);
-                self.w.push_str(".as_str())");
+                self.emit_string_needle_arg(call, 0);
+                self.w.push(')');
                 true
             }
             "replace" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".replace(");
+                self.emit_string_needle_arg(call, 0);
+                self.w.push_str(", ");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
-                if let Some(needle) = call.args.first() {
-                    self.emit_expr(needle);
-                }
-                self.w.push_str(".as_str(), ");
                 if let Some(rep) = call.args.get(1) {
                     self.emit_expr(rep);
                 }
-                self.w.push_str(".as_str())");
+                // The replacement is always text, whatever the needle was.
+                if call
+                    .args
+                    .get(1)
+                    .is_some_and(|a| self.operand_primitive(a) == Some(juxc_tycheck::Primitive::Char))
+                {
+                    self.w.push_str(".to_string().as_str()");
+                } else {
+                    self.w.push_str(".as_str()");
+                }
+                self.w.push(')');
                 self.emitting_format_arg = prev;
                 true
             }
@@ -6002,9 +6135,9 @@ impl RustEmitter {
             "split" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".split(");
-                self.emit_call_args(call);
+                self.emit_string_needle_arg(call, 0);
                 self.w
-                    .push_str(".as_str()).map(::std::string::String::from).collect::<Vec<_>>()");
+                    .push_str(").map(::std::string::String::from).collect::<Vec<_>>()");
                 true
             }
             "substring" => {
@@ -6216,7 +6349,8 @@ impl RustEmitter {
     /// (`collect::<Vec<isize>>()`); the call's result is put behind a handle
     /// where it lands (see `call_returns_foreign_collection`).
     fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
-        let foreign = self.foreign_callee_return_type(&call.callee).is_some();
+        let foreign = self.foreign_callee_return_type(&call.callee).is_some()
+            || self.call_on_untyped_foreign_receiver(call);
         if foreign && self.collection_is_handle(&ty.name) {
             self.plain_collection_once = true;
         }

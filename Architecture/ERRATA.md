@@ -1331,6 +1331,38 @@ the loop above.
 
 ---
 
+## E80. A call on a foreign value whose type the stub never defined
+
+**Conflict.** Bindgen §G.6 has the generated stub describe every foreign
+type a program can reach. It does not always: two types from different Rust
+modules with the same short name (`str`'s `Split` and `io`'s, `str`'s
+`SplitN` and a slice's) collapse into one entry, and the loser is named by
+the methods that return it but never defined. `s.splitn(3, '|')` therefore
+has a type nothing is known about, and the spec says nothing about what may
+be called on such a value.
+
+**Resolution.** The value is still foreign, and is lowered as foreign code:
+
+- A collection type argument is the plain Rust collection, and the result
+  arrives behind a Jux handle, so `collect<Vec<String>>()` works.
+- A zero-argument call with an explicit type argument is typed as that
+  argument. Nothing else could fix the type parameter, and it lets a `var`
+  holding the result read as the collection it is.
+- Items collected into a `Vec<String>` are owned (`String::from`), because
+  every `str` splitter yields borrowed `&str`.
+- A `String` slot owns what such a call hands it: `raw.trim()` is a `&str`
+  in Rust and the slot is an owned `String`.
+
+The real repair is discovery: the stub should carry both types under
+distinct names. Until it does, the rules above keep ordinary text
+processing compiling rather than leaking a rustc error about a type the
+program never wrote.
+
+**Spec status:** §G.6 stands; this records what the compiler does for a
+type it was never given.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

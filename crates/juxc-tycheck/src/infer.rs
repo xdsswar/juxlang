@@ -918,6 +918,20 @@ fn weak_field_target_ty(inner: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable)
 /// §M.15.2 -- but that rule is about type arguments, not `?.` chains.)
 /// The type member resolution should use for a `?.` receiver: the inner type,
 /// since the operator reaches through the null.
+/// True for a receiver the program knows nothing about: no type at all, or a
+/// user type name that no declaration or stub defines (a foreign type a stub
+/// refers to but never emitted). See the E80 rule in the method-call arm.
+fn is_undiscovered(ty: &Ty, symbols: &SymbolTable) -> bool {
+    match ty {
+        Ty::Unknown => true,
+        Ty::User { name, .. } => {
+            !symbols.is_type_name_or_stdlib(name)
+                && !symbols.is_type_name_or_stdlib(name.rsplit('.').next().unwrap_or(name))
+        }
+        _ => false,
+    }
+}
+
 fn peel_safe_receiver(safe: bool, ty: Ty) -> Ty {
     match ty {
         Ty::Nullable(inner) if safe => *inner,
@@ -1509,6 +1523,17 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
             let receiver_ty =
                 peel_safe_receiver(field.safe, infer_expr(&field.object, env, symbols));
+            // **A generic method on an undiscovered foreign value** (ERRATA
+            // E80). A stub may name a type it never defines (core's `str`
+            // iterators, `SplitN<P>` behind `s.splitn(3, '|')`), so nothing is
+            // known about its methods. A zero-argument call with an explicit
+            // type argument can only be building that type (`collect<Vec<T>>()`,
+            // `into<PathBuf>()`, `sum<long>()`): nothing else could fix the
+            // type parameter. Typing the result from it lets a `var` holding
+            // it read as the collection it is.
+            if c.args.is_empty() && !c.explicit_generic_args.is_empty() && is_undiscovered(&receiver_ty, symbols) {
+                return ty_from_ref(&c.explicit_generic_args[0], env, symbols);
+            }
             // Channel<T> (§18.3) — async-runtime builtin: `receive()`
             // yields `T?` (null when closed+drained); send/close are
             // void. Typed here so nullable machinery (Some-lifting,
