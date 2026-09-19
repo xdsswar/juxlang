@@ -103,6 +103,20 @@ enum CliCommand {
     },
     /// Print the dependency tree (§B.10.5).
     Tree,
+    /// Generate HTML documentation from doc comments into `target/doc/`
+    /// (JUX-LANG-V1 §3.5, §12.5), and run the ```` ```jux ```` examples in
+    /// them as tests.
+    Doc {
+        /// Open the generated index in the browser afterwards.
+        #[arg(long)]
+        open: bool,
+        /// In a workspace, document only this member.
+        #[arg(short = 'p', long)]
+        package: Option<String>,
+        /// Write the pages without compiling and running the examples.
+        #[arg(long)]
+        no_doctests: bool,
+    },
     /// Type-check the project (or a single file) without producing a binary.
     /// (§B.15 — `jux check`.)
     Check {
@@ -241,6 +255,9 @@ enum CliCommand {
         /// builtin stays checked under `jux test` either way.
         #[arg(long)]
         release: bool,
+        /// Run only the ```` ```jux ```` examples in doc comments.
+        #[arg(long)]
+        doc: bool,
         /// Enable these features of the package, comma-separated, on top of
         /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
         #[arg(long, value_delimiter = ',')]
@@ -330,6 +347,7 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
         | CliCommand::Add { .. }
         | CliCommand::Remove { .. }
         | CliCommand::Tree
+        | CliCommand::Doc { .. }
         | CliCommand::Test { .. }
         | CliCommand::Update
         | CliCommand::Metadata { .. }
@@ -366,9 +384,15 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         }
         CliCommand::Remove { name } => with_root(root, "remove", |r| project_cmds::cmd_remove(r, &name)),
         CliCommand::Tree => with_root(root, "tree", project_cmds::cmd_tree),
-        CliCommand::Test { pattern, package, release, features, no_default_features, profile } => {
+        CliCommand::Doc { open, package, no_doctests } => {
+            with_root(root, "doc", |r| cmd_doc(r, package.as_deref(), open, !no_doctests))
+        }
+        CliCommand::Test { pattern, package, release, doc, features, no_default_features, profile } => {
             set_features(features, no_default_features);
             set_profile(profile);
+            if doc {
+                return with_root(root, "test --doc", |r| cmd_doctest(r, package.as_deref(), release));
+            }
             cmd_test(root, package.as_deref(), pattern, release)
         }
         CliCommand::Update       => cmd_update(root),
@@ -560,6 +584,166 @@ fn with_root(
             );
             Ok(ExitCode::from(1))
         }
+    }
+}
+
+/// The packages a project-level command acts on: the one named by `-p`, else
+/// every workspace member (default members first), else the package itself.
+fn packages_for(root: &Path, package: Option<&str>) -> std::result::Result<Vec<juxc_driver::Manifest>, String> {
+    let Some(root_manifest) = juxc_driver::Manifest::load(root) else {
+        return Err(format!("failed to load {}", root.join("jux.toml").display()));
+    };
+    if root_manifest.workspace_members.is_empty() {
+        if let Some(pkg) = package {
+            if !package_name_matches(&root_manifest, pkg) {
+                return Err(format!("package `{pkg}` not found (this project is `{}`)", root_manifest.package.name));
+            }
+        }
+        return Ok(vec![root_manifest]);
+    }
+    if let Some(pkg) = package {
+        let (_dir, m) = select_member(&root_manifest, root, pkg)?;
+        return Ok(vec![juxc_driver::project::with_root_profiles(&m, &root_manifest)]);
+    }
+    let mut out = Vec::new();
+    for member in &root_manifest.workspace_default_members {
+        if let Some(m) = juxc_driver::Manifest::load(&root.join(member)) {
+            out.push(juxc_driver::project::with_root_profiles(&m, &root_manifest));
+        }
+    }
+    Ok(out)
+}
+
+/// `jux doc`: write `target/doc/` from the package's doc comments, then run
+/// the examples in them unless `--no-doctests`. A workspace gets one site per
+/// member under `target/doc/<member>/` and an index linking them.
+fn cmd_doc(root: &Path, package: Option<&str>, open: bool, run_examples: bool) -> Result<ExitCode> {
+    let manifests = match packages_for(root, package) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
+    let doc_root = root.join("target").join("doc");
+    let nested = manifests.len() > 1;
+    let mut index_links: Vec<(String, String)> = Vec::new();
+    let mut failed = 0usize;
+    for manifest in &manifests {
+        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        let packages = juxc_driver::docgen::collect(&sources);
+        let out_dir = if nested {
+            doc_root.join(juxc_driver::manifest::default_target_name(&manifest.package.name))
+        } else {
+            doc_root.clone()
+        };
+        let written = juxc_driver::docgen::write_site(manifest, &packages, &out_dir)?;
+        eprintln!(
+            "jux: documented {} item(s) of `{}` at {}",
+            written.items,
+            manifest.package.name,
+            written.index.display(),
+        );
+        index_links.push((
+            manifest.package.name.clone(),
+            format!("{}/index.html", juxc_driver::manifest::default_target_name(&manifest.package.name)),
+        ));
+        if run_examples {
+            failed += run_doctests_for(manifest, &packages, root, false)?;
+        }
+    }
+    if nested {
+        write_workspace_doc_index(&doc_root, &index_links)?;
+    }
+    if open {
+        open_in_browser(&doc_root.join("index.html"));
+    }
+    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// `jux test --doc`: only the doc examples.
+fn cmd_doctest(root: &Path, package: Option<&str>, release: bool) -> Result<ExitCode> {
+    let manifests = match packages_for(root, package) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
+    let mut failed = 0usize;
+    for manifest in &manifests {
+        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        let packages = juxc_driver::docgen::collect(&sources);
+        failed += run_doctests_for(manifest, &packages, root, release)?;
+    }
+    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// Run one package's doc examples and print a report in the style of the
+/// `@Test` runner. Returns how many failed.
+fn run_doctests_for(
+    manifest: &juxc_driver::Manifest,
+    packages: &[juxc_driver::docgen::DocPackage],
+    root: &Path,
+    release: bool,
+) -> Result<usize> {
+    let tests = juxc_driver::docgen::doctests(packages);
+    if tests.is_empty() {
+        return Ok(0);
+    }
+    let emit_root = root.join("target").join(".rust-build-doctest");
+    let (dep_sources, _path_deps) = juxc_driver::project::resolve_package_deps(manifest, &emit_root)?;
+    let facts = juxc_driver::project::cfg_facts_for(manifest, release);
+    println!("running {} doc example(s) of `{}`", tests.len(), manifest.package.name);
+    let results = juxc_driver::docgen::run_doctests(manifest, &dep_sources, &tests, &emit_root, release, &facts)?;
+    let mut failed = 0usize;
+    for r in &results {
+        match &r.failure {
+            None => println!("  PASS {} ({})", r.owner, r.location),
+            Some(why) => {
+                failed += 1;
+                println!("  FAIL {} ({})", r.owner, r.location);
+                for line in why.lines() {
+                    println!("       {line}");
+                }
+            }
+        }
+    }
+    println!(
+        "\ndoc examples: {}. {} passed; {} failed",
+        if failed == 0 { "ok" } else { "FAILED" },
+        results.len() - failed,
+        failed,
+    );
+    Ok(failed)
+}
+
+/// The top-level `target/doc/index.html` of a workspace: a link per member.
+fn write_workspace_doc_index(doc_root: &Path, members: &[(String, String)]) -> Result<()> {
+    let mut items = String::new();
+    for (name, href) in members {
+        items.push_str(&format!("<li><a href=\"{href}\">{name}</a></li>\n"));
+    }
+    let html = format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Workspace documentation</title>\n\
+         <style>body{{font:15px/1.55 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}}</style>\n\
+         </head>\n<body>\n<h1>Workspace documentation</h1>\n<ul>\n{items}</ul>\n</body>\n</html>\n",
+    );
+    std::fs::create_dir_all(doc_root)?;
+    std::fs::write(doc_root.join("index.html"), html).context("writing the workspace doc index")
+}
+
+/// Best effort: hand `page` to the platform's opener. A failure only prints.
+fn open_in_browser(page: &Path) {
+    let result = if cfg!(windows) {
+        Command::new("cmd").args(["/C", "start", ""]).arg(page).status()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(page).status()
+    } else {
+        Command::new("xdg-open").arg(page).status()
+    };
+    if result.is_err() {
+        eprintln!("jux: could not open a browser; the docs are at {}", page.display());
     }
 }
 

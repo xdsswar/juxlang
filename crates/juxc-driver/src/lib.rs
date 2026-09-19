@@ -238,6 +238,7 @@ pub mod annotations;
 pub mod big_stack;
 pub mod cfg;
 pub mod diagnostic_order;
+pub mod docgen;
 pub mod git_deps;
 pub mod grammar_export;
 pub mod ice;

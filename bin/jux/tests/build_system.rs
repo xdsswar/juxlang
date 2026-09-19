@@ -314,3 +314,60 @@ fn clean_and_init() {
     assert!(!root.join("target").exists(), "target/ is still there");
     assert!(root.join("src/main.jux").is_file(), "clean touched the sources");
 }
+
+/// `jux doc` writes a searchable site from doc comments: every public item,
+/// its tags, cross-links, and the package's dependencies (§B.14.8); private
+/// members stay out. Its ```` ```jux ```` examples run as tests: a wrong one
+/// fails `jux doc` and `jux test --doc`, and `--no-doctests` skips them.
+#[test]
+fn doc_writes_the_site_and_runs_its_examples() {
+    let root = scratch("doc");
+    write(&root, "util/jux.toml", "[package]\nname = \"geo.util\"\nversion = \"0.3.0\"\n\n[lib]\n");
+    write(&root, "util/src/lib.jux", "// crate root\n");
+    write(
+        &root,
+        "geo/jux.toml",
+        "[package]\nname = \"geo\"\nversion = \"1.2.0\"\ndescription = \"Points.\"\n\n[lib]\n\n[dependencies]\n\"geo.util\" = { path = \"../util\" }\n",
+    );
+    write(&root, "geo/src/lib.jux", "// crate root\n");
+    let point = "package geo;\n\n\
+        /**\n * A point on the plane. See `distance`.\n *\n * ```jux\n * var p = new Point(3.0, 4.0);\n * assert(p.length() == 5.0);\n * ```\n */\n\
+        public class Point {\n    /** Horizontal. */\n    public double x;\n    /** Vertical. */\n    public double y;\n\n\
+        /** Makes one. */\n    public Point(double x, double y) { this.x = x; this.y = y; }\n\n\
+        /**\n     * From the origin.\n     * @return the length\n     */\n    public double length() { return (x * x + y * y).sqrt(); }\n\n\
+        private int secret() { return 1; }\n}\n\n\
+        /**\n * Distance between two points.\n *\n * @param a the first\n * @param b the second\n * @see Point\n *\n * ```jux\n * assert(distance(new Point(0.0, 0.0), new Point(0.0, 2.0)) == EXPECTED);\n * ```\n */\n\
+        public double distance(Point a, Point b) {\n    var dx = a.x - b.x;\n    var dy = a.y - b.y;\n    return (dx * dx + dy * dy).sqrt();\n}\n";
+    write(&root, "geo/src/geo/Point.jux", &point.replace("EXPECTED", "3.0"));
+    let geo = root.join("geo");
+
+    // A wrong example fails both commands.
+    let (ok, out, _err) = jux(&geo, &["doc"]);
+    assert!(!ok, "a wrong doc example must fail jux doc");
+    assert!(out.contains("PASS geo.Point") && out.contains("FAIL geo.distance"), "got:\n{out}");
+    let (ok, out, _err) = jux(&geo, &["test", "--doc"]);
+    assert!(!ok && out.contains("1 failed"), "got:\n{out}");
+
+    // Fixed, everything passes; the pages are there either way.
+    write(&root, "geo/src/geo/Point.jux", &point.replace("EXPECTED", "2.0"));
+    let (ok, out, err) = jux(&geo, &["doc"]);
+    assert!(ok, "jux doc failed:\n{out}\n{err}");
+    assert!(out.contains("2 passed; 0 failed"), "got:\n{out}");
+
+    let site = geo.join("target").join("doc");
+    let index = std::fs::read_to_string(site.join("index.html")).expect("index.html");
+    assert!(index.contains("<h2>Dependencies</h2>") && index.contains("geo.util"), "{index}");
+    let page = std::fs::read_to_string(site.join("geo.html")).expect("package page");
+    assert!(page.contains("public class Point"), "signature missing");
+    assert!(page.contains("id=\"Point.length\""), "member anchor missing");
+    assert!(page.contains("<dt>Returns</dt>") && page.contains("<dt>See also</dt>"), "tags missing");
+    assert!(page.contains("<a href=\"geo.html#distance\"><code>distance</code></a>"), "cross-link missing");
+    assert!(!page.contains("secret"), "a private member was documented");
+    let search = std::fs::read_to_string(site.join("search.js")).expect("search index");
+    assert!(search.contains("\"n\":\"Point.length\""), "{search}");
+
+    // `--no-doctests` writes the pages without building the examples.
+    let (ok, out, err) = jux(&geo, &["doc", "--no-doctests"]);
+    assert!(ok, "{err}");
+    assert!(!out.contains("doc example"), "examples ran:\n{out}");
+}
