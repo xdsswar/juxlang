@@ -47,6 +47,11 @@ sealed class JuxType {
         override fun presentable(): String = element.presentable() + "[]"
     }
 
+    /** A tuple `(A, B)`: what a for-each over a map binds, read as `.0`, `.1`. */
+    data class TupleType(val elements: List<JuxType>) : JuxType() {
+        override fun presentable(): String = elements.joinToString(", ", "(", ")") { it.presentable() }
+    }
+
     data class Nullable(val inner: JuxType) : JuxType() {
         override fun presentable(): String = inner.presentable() + "?"
     }
@@ -128,6 +133,11 @@ object JuxTypeEngine {
                 if (expr.node.findChildByType(T.SUPER_KW) != null || expr.node.findChildByType(T.THIS_KW) != null) {
                     return classOf(typeOf(firstExpressionChild(expr))) ?: JuxType.Unknown
                 }
+                // `pair.0`: a tuple element.
+                expr.node.findChildByType(T.INT_LITERAL)?.let { index ->
+                    val tuple = stripNullable(typeOf(firstExpressionChild(expr))) as? JuxType.TupleType
+                    return index.text.toIntOrNull()?.let { tuple?.elements?.getOrNull(it) } ?: JuxType.Unknown
+                }
                 val member = resolveMemberAccess(expr) ?: return JuxType.Unknown
                 if (member.element.elementType === E.METHOD_DECLARATION) JuxType.Unknown
                 else memberType(member)
@@ -152,7 +162,7 @@ object JuxTypeEngine {
             E.BINARY_EXPRESSION -> binaryType(expr)
             // `start..end` on a user type calls its `operator..` (§O.2.4) and
             // has that operator's return type; a primitive range stays unknown.
-            E.RANGE_EXPRESSION -> JuxOperators.resolve(expr)?.let { returnType(it) } ?: JuxType.Unknown
+            E.RANGE_EXPRESSION -> JuxOperators.resolve(expr)?.let { returnType(it) } ?: primitiveRangeType(expr)
             else -> JuxType.Unknown
         }
     }
@@ -222,6 +232,43 @@ object JuxTypeEngine {
         while (after is com.intellij.psi.PsiWhiteSpace) after = after.nextSibling
         if (after != null && (after.elementType === T.IDENTIFIER || after.elementType === E.LOCAL_VARIABLE)) return null
         return typeOfTypeReference(typeRef)
+    }
+
+    /**
+     * A range of built-in values (MISSING-DEFS M.6.1): `a..b` is an
+     * `ExclusiveRange<T>`, `a..=b` an `InclusiveRange<T>`, either with `step`
+     * a `SteppedRange<T>`. `T` is the bounds' type; an untyped integer literal
+     * takes the other bound's, so `0..v.len()` is a `uint` range.
+     */
+    private fun primitiveRangeType(range: PsiElement): JuxType {
+        val bounds = expressionChildren(range)
+        val left = bounds.getOrNull(0)
+        val right = bounds.getOrNull(1)
+        var bound = typeOf(left)
+        if (left?.elementType === E.LITERAL_EXPRESSION && right != null) {
+            val r = typeOf(right)
+            if (r is JuxType.Primitive) bound = r
+        }
+        val stepped = range.node.getChildren(null).any { it.elementType === T.IDENTIFIER && it.text == "step" }
+        val name = when {
+            stepped -> "SteppedRange"
+            range.node.findChildByType(T.DOT_DOT_EQ) != null -> "InclusiveRange"
+            else -> "ExclusiveRange"
+        }
+        val decl = resolveTypeName(range, name) as? JuxTypeDeclaration ?: return JuxType.Unknown
+        return JuxType.ClassType(decl, listOf(bound))
+    }
+
+    /**
+     * What a for-each over a value of type [t] binds: a map's `(K, V)` entry,
+     * otherwise the element type.
+     */
+    fun forEachElementType(t: JuxType): JuxType {
+        val s = stripNullable(t)
+        if (s is JuxType.ClassType && s.decl.name in MAP_TYPES && s.args.size >= 2) {
+            return JuxType.TupleType(listOf(s.args[0], s.args[1]))
+        }
+        return elementTypeOf(s)
     }
 
     private fun typeOfCall(call: PsiElement): JuxType {
@@ -342,9 +389,177 @@ object JuxTypeEngine {
             val iterable = parent.node.getChildren(null)
                 .dropWhile { it.elementType !== T.COLON }
                 .firstOrNull { it.psi != null && isExpression(it.psi) }?.psi
-            return elementTypeOf(typeOf(iterable))
+            return forEachElementType(typeOf(iterable))
         }
+        if (decl.elementType === E.PARAMETER) lambdaParameterType(decl)?.let { return it }
         return JuxType.Unknown
+    }
+
+    // ------------------------------------------------------------ lambdas
+
+    /**
+     * The type of an untyped lambda parameter, from what the lambda is given to
+     * (LANG-V1 §7.9.1): the parameter's place in the function type or the one
+     * abstract method of the interface the lambda stands for, with the
+     * receiver's type arguments carried in. `opt.map((p) -> p.` knows `p` is
+     * the `T` of that `Option<T>`; `bus.subscribe((o) -> ...)` with
+     * `subscribe(Listener<Order>)` knows `o` is an `Order`.
+     */
+    private fun lambdaParameterType(param: PsiElement): JuxType? {
+        val holder = param.parent ?: return null
+        val lambda = if (holder.elementType === E.PARAMETER_LIST) holder.parent else holder
+        if (lambda?.elementType !== E.LAMBDA_EXPRESSION) return null
+        val params = (lambda.children.firstOrNull { it.elementType === E.PARAMETER_LIST }?.children?.toList()
+            ?: emptyList()) + lambda.children
+        val index = params.filter { it.elementType === E.PARAMETER }.distinct().indexOf(param)
+        if (index < 0) return null
+        val (slot, subst) = expectedLambdaSlot(lambda) ?: return null
+        return lambdaParamFromSlot(slot, subst, index)
+    }
+
+    /**
+     * The written type the lambda must fit, with the substitution its type
+     * variables take: a call argument's parameter type, a declared variable or
+     * field type, or the enclosing method's return type.
+     */
+    private fun expectedLambdaSlot(lambda: PsiElement): Pair<PsiElement, Map<String, JuxType>>? {
+        var node = lambda
+        var parent = node.parent ?: return null
+        while (parent.elementType === E.PARENTHESIZED_EXPRESSION) { node = parent; parent = parent.parent ?: return null }
+        when (parent.elementType) {
+            E.ARGUMENT_LIST -> {
+                val call = parent.parent?.takeIf { it.elementType === E.CALL_EXPRESSION || it.elementType === E.NEW_EXPRESSION }
+                    ?: return null
+                val argIndex = expressionChildren(parent).indexOf(node)
+                if (argIndex < 0) return null
+                val (target, subst) = calleeWithSubstitution(call) ?: return null
+                val slot = JuxHierarchy.parameters(target).getOrNull(argIndex)
+                    ?.node?.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+                return slot to subst
+            }
+            E.LOCAL_VARIABLE, E.FIELD_DECLARATION, E.PROPERTY_DECLARATION ->
+                return parent.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { it to emptyMap() }
+            E.RETURN_STATEMENT -> {
+                // The nearest function the `return` belongs to; a lambda's own
+                // return type is not written, so nothing is known there.
+                var method: PsiElement? = parent.parent
+                while (method != null && method.elementType !== E.METHOD_DECLARATION &&
+                    method.elementType !== E.LAMBDA_EXPRESSION && method !is JuxFile
+                ) method = method.parent
+                if (method?.elementType !== E.METHOD_DECLARATION) return null
+                return method.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { it to emptyMap() }
+            }
+        }
+        return null
+    }
+
+    /** The method a call or `new` invokes, with the receiver's type arguments as a substitution. */
+    private fun calleeWithSubstitution(call: PsiElement): Pair<PsiElement, Map<String, JuxType>>? {
+        if (call.elementType === E.NEW_EXPRESSION) {
+            val ref = call.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+            val ct = classOf(typeOfTypeReference(ref)) ?: return null
+            val argCount = argumentCount(call)
+            val ctor = ct.decl.node.findChildByType(E.CLASS_BODY)?.psi?.children?.firstOrNull {
+                it.elementType === E.CONSTRUCTOR_DECLARATION && JuxHierarchy.arity(it) == argCount
+            } ?: return null
+            return ctor to substitution(ct)
+        }
+        val callee = call.firstChild ?: return null
+        val argCount = argumentCount(call)
+        return when (callee.elementType) {
+            E.FIELD_ACCESS_EXPRESSION -> {
+                val member = resolveMemberAccess(callee, argCount) ?: return null
+                member.element.takeIf { it.elementType === E.METHOD_DECLARATION }?.let { it to substitution(member.owner) }
+            }
+            E.REFERENCE_EXPRESSION -> {
+                val target = resolveReferenceExpression(callee, argCount) ?: return null
+                if (target.elementType !== E.METHOD_DECLARATION) return null
+                val owner = PsiTreeUtil.getParentOfType(target, JuxTypeDeclaration::class.java)
+                target to (owner?.let { substitution(selfType(it)) } ?: emptyMap())
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Parameter [index] of the function a [slot] type describes: a function
+     * type `(A, B) -> R`, or an interface with exactly one abstract method.
+     */
+    private fun lambdaParamFromSlot(slot: PsiElement, subst: Map<String, JuxType>, index: Int): JuxType? {
+        val text = slot.text.trim().removePrefix("async").trim()
+        if (text.startsWith("(")) {
+            val close = matchingParen(text) ?: return null
+            val pieces = splitTopLevel(text.substring(1, close))
+            val piece = pieces.getOrNull(index) ?: return null
+            return substitute(typeFromText(slot, piece), subst)
+        }
+        val ct = classOf(substitute(typeOfTypeReference(slot), subst)) ?: return null
+        val abstract = membersOf(ct).filter {
+            it.element.elementType === E.METHOD_DECLARATION &&
+                it.element.node.findChildByType(E.CODE_BLOCK) == null &&
+                !JuxHierarchy.hasModifier(it.element, "static")
+        }
+        val sam = abstract.singleOrNull() ?: return null
+        val p = JuxHierarchy.parameters(sam.element).getOrNull(index) ?: return null
+        return substitute(declaredType(p), substitution(sam.owner))
+    }
+
+    /** The index of the `)` closing the `(` at [text]'s start, or null. */
+    private fun matchingParen(text: String): Int? {
+        var depth = 0
+        for ((i, c) in text.withIndex()) {
+            when (c) {
+                '(' -> depth++
+                ')' -> { depth--; if (depth == 0) return i }
+            }
+        }
+        return null
+    }
+
+    /** [text] split at depth-0 commas, trimmed, empty pieces dropped. */
+    private fun splitTopLevel(text: String): List<String> {
+        val out = ArrayList<String>()
+        var depth = 0
+        val cur = StringBuilder()
+        for (c in text) {
+            when (c) {
+                '<', '(', '[' -> depth++
+                '>', ')', ']' -> depth--
+            }
+            if (c == ',' && depth == 0) { out.add(cur.toString().trim()); cur.clear() } else cur.append(c)
+        }
+        out.add(cur.toString().trim())
+        return out.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * The type a type written as TEXT denotes, resolved from [context]: the
+     * pieces of a function type are not PSI of their own, so they are read
+     * back from their text (`T`, `Vec<String>`, `int[]`, `Order?`).
+     */
+    fun typeFromText(context: PsiElement, text: String): JuxType {
+        val t = text.trim()
+        if (t.isEmpty()) return JuxType.Unknown
+        if (t.endsWith("?")) return JuxType.Nullable(typeFromText(context, t.dropLast(1)))
+        if (t.endsWith("[]")) return JuxType.ArrayType(typeFromText(context, t.dropLast(2)))
+        if (t.startsWith("(")) return JuxType.Unknown // a function or tuple type
+        val lt = t.indexOf('<')
+        val base = if (lt >= 0) t.substring(0, lt).trim() else t
+        val args = if (lt >= 0 && t.endsWith(">")) splitTopLevel(t.substring(lt + 1, t.length - 1)).map { typeFromText(context, it) }
+        else emptyList()
+        val simple = base.substringAfterLast('.')
+        val qualifier = base.substringBeforeLast('.', "").ifEmpty { null }
+        return when {
+            simple == "void" -> JuxType.Primitive("void")
+            simple == "String" || simple == "string" ->
+                JuxTypeIndex.findType(context, "String")?.let { JuxType.ClassType(it, emptyList()) } ?: JuxType.Primitive("String")
+            simple in JuxKeywords.PRIMITIVES -> JuxType.Primitive(simple)
+            else -> when (val target = resolveTypeName(context, simple, qualifier)) {
+                is JuxTypeParameter -> JuxType.TypeVar(target, boundOf(target))
+                is JuxTypeDeclaration -> JuxType.ClassType(target, args)
+                else -> JuxType.Unknown
+            }
+        }
     }
 
     private fun typeOfDeclarationTypeRef(decl: PsiElement): JuxType =

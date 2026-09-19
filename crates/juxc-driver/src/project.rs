@@ -240,6 +240,97 @@ pub fn build_package_selected(
     })
 }
 
+/// One runnable program under a package's `examples/` directory (§B.1.3,
+/// §B.15.3): either a single file `examples/<name>.jux` or a directory
+/// `examples/<name>/` whose `.jux` files make one program.
+#[derive(Debug, Clone)]
+pub struct Example {
+    /// The name `--example` takes: the file stem or the directory name.
+    pub name: String,
+    /// The example's own sources.
+    pub files: Vec<PathBuf>,
+}
+
+/// Every example in `manifest`'s `examples/` directory, sorted by name.
+/// Hidden entries and a `README.md` are not examples; a directory with no
+/// `.jux` file in it is skipped.
+pub fn discover_examples(manifest: &Manifest) -> Result<Vec<Example>> {
+    let dir = manifest.project_root.join("examples");
+    let mut out: Vec<Example> = Vec::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('.') || file_name == "target" {
+            continue;
+        }
+        if path.is_dir() {
+            let mut files = Vec::new();
+            walk_jux(&path, &mut files)?;
+            files.sort();
+            if !files.is_empty() {
+                out.push(Example { name: file_name.to_string(), files });
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jux") {
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+            out.push(Example { name: name.to_string(), files: vec![path.clone()] });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Build one example as its own program (§B.1.3): the package's library code
+/// (every `src/` source except the `[[bin]]` entry files, which each declare
+/// their own `main`), the package's dependencies, and the example's sources.
+/// The binary is named after the example and emitted under
+/// `<emit_root>/example-<name>/`.
+pub fn build_example(
+    manifest: &Manifest,
+    dep_sources: &[SourceFile],
+    emit_root: &Path,
+    release: bool,
+    example: &Example,
+    cfg: &crate::cfg::CfgFacts,
+) -> Result<PackageBuild> {
+    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut all_sources: Vec<SourceFile> = Vec::new();
+    let mut binaries = Vec::new();
+
+    let mut sources = dep_sources.to_vec();
+    sources.extend(resolve_and_load_stub_sources(manifest));
+    let entries: Vec<&Path> = manifest.bins.iter().map(|b| b.path.as_path()).collect();
+    sources.extend(
+        load_src_tree(&manifest.project_root.join("src"))?
+            .into_iter()
+            .filter(|s| !entries.iter().any(|e| same_path(s.path(), e))),
+    );
+    for file in &example.files {
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("reading {}", file.display()))?;
+        sources.push(SourceFile::new(file.clone(), text));
+    }
+
+    let result = crate::compile_workspace_as_cfg(
+        sources,
+        |u, s, e, src| juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, None),
+        cfg,
+    )?;
+    record(&result, &mut all_diagnostics, &mut all_sources);
+    if let Some(crate_) = result.crate_ {
+        let target = CrateTarget::Bin { name: example.name.clone() };
+        let dir = emit_root.join(format!("example-{}", sanitize(&example.name)));
+        let artifact =
+            build_emitted_crate(&crate_, &dir, &target, release, Some(manifest), &[], false)?;
+        binaries.push(artifact);
+    }
+    Ok(PackageBuild { binaries, library: None, diagnostics: all_diagnostics, sources: all_sources })
+}
+
 /// Outcome of a workspace build: each member's build keyed by package name,
 /// in topological (dependency-first) order.
 pub struct WorkspaceBuild {
@@ -262,18 +353,29 @@ impl WorkspaceBuild {
 /// path-dependency wired to the sibling's emitted library crate (linking
 /// seam). See the module docs for the first-cut limitation.
 pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild> {
-    // Load every member manifest, keyed by package name.
+    // Load every member manifest, keyed by package name. The member directory
+    // each name came from is kept so `default-members` (written as
+    // directories) can be mapped onto package names.
     let mut members: BTreeMap<String, Manifest> = BTreeMap::new();
+    let mut dir_to_name: HashMap<String, String> = HashMap::new();
     for rel in &root.workspace_members {
         let dir = root.project_root.join(rel);
         let m = Manifest::load(&dir).with_context(|| {
             format!("workspace member `{rel}` has no readable jux.toml at {}", dir.display())
         })?;
+        dir_to_name.insert(rel.clone(), m.package.name.clone());
         members.insert(m.package.name.clone(), m);
     }
 
     // Topologically sort members by intra-workspace path dependencies.
-    let order = topo_order(&members)?;
+    let mut order = topo_order(&members)?;
+
+    // A bare build builds the default members (§B.7.2) and whatever members
+    // they depend on, since a dependent cannot be compiled without its
+    // dependency's sources. With no `default-members` every member is a
+    // default one, so nothing is dropped.
+    let wanted = default_member_closure(root, &members, &dir_to_name);
+    order.retain(|name| wanted.contains(name));
 
     // Emitted crates live under <workspace-root>/target/.rust-build/.
     let emit_root = root.project_root.join("target").join(".rust-build");
@@ -286,7 +388,7 @@ pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild>
 
     let mut built: Vec<(String, PackageBuild)> = Vec::new();
     for name in &order {
-        let m = &members[name];
+        let m = &with_root_profiles(&members[name], root);
         // Gather dependency sources + path-dep links for intra-workspace
         // path deps that are themselves workspace members.
         let (dep_sources, path_deps) = resolve_member_deps(m, &members, &emit_root)?;
@@ -512,6 +614,47 @@ fn add_dep(
 
 /// Topologically order workspace members so a member is built after the
 /// members it path-depends on. Detects cycles (rejected per §B.4.6).
+/// `member` as it builds inside `root`'s workspace: the root owns the build
+/// profiles (§B.9.2), so a member that declares none takes the root's
+/// `[profile.*]` tables. Without them a member's emitted crate had no custom
+/// profile, and `jux build --profile <name>` at the root failed in cargo.
+pub fn with_root_profiles(member: &Manifest, root: &Manifest) -> Manifest {
+    let mut m = member.clone();
+    if m.profiles.is_empty() {
+        m.profiles = root.profiles.clone();
+    }
+    m
+}
+
+/// The package names a bare workspace build must compile: every
+/// `default-members` package plus, transitively, the members it depends on
+/// through `path` dependencies.
+fn default_member_closure(
+    root: &Manifest,
+    members: &BTreeMap<String, Manifest>,
+    dir_to_name: &HashMap<String, String>,
+) -> BTreeSet<String> {
+    let mut pending: Vec<String> = root
+        .workspace_default_members
+        .iter()
+        .filter_map(|dir| dir_to_name.get(dir).cloned())
+        .collect();
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !wanted.insert(name.clone()) {
+            continue;
+        }
+        if let Some(m) = members.get(&name) {
+            for dep in m.dependencies.iter().filter(|d| d.path.is_some()) {
+                if members.contains_key(&dep.name) {
+                    pending.push(dep.name.clone());
+                }
+            }
+        }
+    }
+    wanted
+}
+
 fn topo_order(members: &BTreeMap<String, Manifest>) -> Result<Vec<String>> {
     // Build adjacency: name → its in-workspace path-dependency names.
     let mut deps: HashMap<String, Vec<String>> = HashMap::new();

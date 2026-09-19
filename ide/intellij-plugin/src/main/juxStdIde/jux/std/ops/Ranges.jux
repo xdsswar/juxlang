@@ -1,0 +1,39 @@
+/**
+ * jux.std.ops: the range types (MISSING-DEFS M.6.1).
+ *
+ * The compiler binds these structurally and never writes them as source;
+ * this file describes them for the editor only, as the spec declares them,
+ * with the components the compiler exposes today. `a..b` is an
+ * `ExclusiveRange<T>`, `a..=b` an `InclusiveRange<T>`, and either with a
+ * `step` a `SteppedRange<T>`, where `T` is the type the two bounds meet in.
+ */
+package jux.std.ops;
+
+/** `start..end`: from `start`, up to but not including `end`. */
+public struct ExclusiveRange<T> {
+    /** The first value. */
+    public T start;
+    /** The bound the range stops before. */
+    public T end;
+}
+
+/** `start..=endInclusive`: from `start` up to and including `endInclusive`. */
+public struct InclusiveRange<T> {
+    /** The first value. */
+    public T start;
+    /** The last value. */
+    public T endInclusive;
+}
+
+/**
+ * A range walked `step` at a time. A negative step walks down; a zero step
+ * throws `ArithmeticException` when the range is walked.
+ */
+public struct SteppedRange<T> {
+    /** The first value. */
+    public T start;
+    /** The bound the walk stops at. */
+    public T end;
+    /** How far each step moves. */
+    public int step;
+}

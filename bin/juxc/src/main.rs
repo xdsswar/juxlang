@@ -24,13 +24,45 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 
-/// How diagnostics are rendered. `human` is the default terminal format;
-/// `json` emits NDJSON per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.2 (one object per
-/// line + a trailing summary), for editor plugins / CI.
+/// How diagnostics are rendered (JUX-DIAGNOSTICS-ADDENDUM §D.1, §D.2). See
+/// `juxc_driver::render` for each format; without the flag, a terminal gets
+/// `human` and anything else gets `line` (ERRATA E72).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum DiagnosticFormat {
+    /// The multi-line block with source frames (§D.1.3).
     Human,
+    /// One line per diagnostic and per label (§D.1.4).
+    Compact,
+    /// One line per diagnostic (§D.1.5).
+    Short,
+    /// `file:line:col: [E0xxx] severity: message`, the historical form.
+    Line,
+    /// NDJSON on stdout (§D.2).
     Json,
+}
+
+impl DiagnosticFormat {
+    fn to_render(self) -> juxc_driver::render::DiagnosticFormat {
+        use juxc_driver::render::DiagnosticFormat as R;
+        match self {
+            DiagnosticFormat::Human => R::Human,
+            DiagnosticFormat::Compact => R::Compact,
+            DiagnosticFormat::Short => R::Short,
+            DiagnosticFormat::Line => R::Line,
+            DiagnosticFormat::Json => R::Json,
+        }
+    }
+}
+
+/// `--color`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ColorArg {
+    /// Color on a terminal, unless `NO_COLOR` is set.
+    Auto,
+    /// Always color.
+    Always,
+    /// Never color.
+    Never,
 }
 
 #[derive(Parser, Debug)]
@@ -80,14 +112,25 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
-    /// Diagnostic output format. `human` (default) is the terminal form;
-    /// `json` is NDJSON per JUX-DIAGNOSTICS-ADDENDUM §D.2 (one diagnostic
-    /// object per line on stdout, then a `{"summary":…}` line).
-    #[arg(long, value_enum, default_value_t = DiagnosticFormat::Human)]
-    diagnostic_format: DiagnosticFormat,
+    /// Diagnostic output format (§D.1, §D.2): `human` (source frames),
+    /// `compact`, `short`, `line`, or `json` (NDJSON on stdout, then a
+    /// `{"summary":…}` line). Default: `human` on a terminal, else `line`.
+    #[arg(long, value_enum)]
+    diagnostic_format: Option<DiagnosticFormat>,
+
+    /// Color the `human` format: `auto` (a terminal without `NO_COLOR`),
+    /// `always`, or `never`.
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
+    color: ColorArg,
 }
 
 fn main() -> Result<ExitCode> {
+    // `juxc explain <CODE>` (§D.5.3) takes no inputs, so it is answered
+    // before the compile arguments are parsed.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("explain") {
+        return Ok(explain(args.get(2).map(String::as_str)));
+    }
     let cli = Cli::parse();
     // Kept for the report: `cli` is moved onto the compilation thread below,
     // and an ICE needs to name the files that were being compiled.
@@ -152,10 +195,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     // stdout in JSON mode (the consumer reads stdout) and stderr otherwise.
     if cli.check {
         let result = juxc_driver::check_workspace_cfg(sources, &facts);
-        match cli.diagnostic_format {
-            DiagnosticFormat::Human => print_diagnostics(&result.diagnostics, &result.sources),
-            DiagnosticFormat::Json => print_diagnostics_json(&result.diagnostics, &result.sources),
-        }
+        report(&cli, &result.diagnostics, &result.sources);
         let any_error = result
             .diagnostics
             .iter()
@@ -168,10 +208,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     // Surface diagnostics. Human form goes to stderr so stdout stays clean
     // (important when --run forwards the user program's output); JSON goes to
     // stdout as the canonical machine-readable stream.
-    match cli.diagnostic_format {
-        DiagnosticFormat::Human => print_diagnostics(&result.diagnostics, &result.sources),
-        DiagnosticFormat::Json => print_diagnostics_json(&result.diagnostics, &result.sources),
-    }
+    report(&cli, &result.diagnostics, &result.sources);
 
     // If any error fired, bail out with a non-success exit code. The
     // emitted crate (if any) is not produced when errors are present.
@@ -407,190 +444,50 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Pretty-print one diagnostic per line in a stable, line-oriented format.
-///
-/// When a diagnostic carries a `file` index (into `sources`) and a primary
-/// span, we render `path:line:col: [Code] severity: message` so the user can
-/// jump straight to the offending file — important in multi-file workspaces
-/// where the same message could come from any unit. Diagnostics without file
-/// identity or a span fall back to the bare `[Code] severity: message` form.
-fn print_diagnostics(
+/// Print `diagnostics` in the format the command line asked for. Text formats
+/// go to stderr so stdout stays the program's own when `--run` forwards it;
+/// JSON goes to stdout, the stream a tool reads (§D.2).
+fn report(
+    cli: &Cli,
     diagnostics: &[juxc_diagnostics::Diagnostic],
     sources: &[juxc_source::SourceFile],
 ) {
-    for d in juxc_driver::diagnostic_order::in_source_order(diagnostics) {
-        match (d.file, d.primary_span) {
-            (Some(i), Some(span)) if i < sources.len() => {
-                let src = &sources[i];
-                let (line, col) = src.line_col(span.start as usize);
-                eprintln!(
-                    "{}:{}:{}: [{}] {}: {}",
-                    src.path().display(),
-                    line,
-                    col,
-                    d.code,
-                    severity_label(d.severity),
-                    d.message,
-                );
-            }
-            _ => {
-                eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
-            }
+    use std::io::IsTerminal;
+    let terminal = std::io::stderr().is_terminal();
+    let format = cli
+        .diagnostic_format
+        .map(DiagnosticFormat::to_render)
+        .unwrap_or_else(|| juxc_driver::render::DiagnosticFormat::default_for(terminal));
+    if format == juxc_driver::render::DiagnosticFormat::Json {
+        print!("{}", juxc_driver::render::render_json(diagnostics, sources, 0));
+        return;
+    }
+    let color = match cli.color {
+        ColorArg::Auto => juxc_driver::render::ColorChoice::Auto,
+        ColorArg::Always => juxc_driver::render::ColorChoice::Always,
+        ColorArg::Never => juxc_driver::render::ColorChoice::Never,
+    }
+    .enabled(terminal);
+    eprint!("{}", juxc_driver::render::render_text(diagnostics, sources, format, color));
+}
+
+/// `juxc explain <CODE>`: print the bundled documentation of one code.
+fn explain(code: Option<&str>) -> ExitCode {
+    let Some(code) = code else {
+        eprintln!("usage: juxc explain <CODE>   (for example `juxc explain E0413`)");
+        return ExitCode::from(2);
+    };
+    match juxc_driver::explain::explain(code) {
+        Some(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!(
+                "juxc: `{}` is not a diagnostic code this compiler knows",
+                juxc_driver::explain::normalize(code),
+            );
+            ExitCode::from(1)
         }
     }
-}
-
-/// Human label for a [`juxc_diagnostics::Severity`] level.
-fn severity_label(s: juxc_diagnostics::Severity) -> &'static str {
-    match s {
-        juxc_diagnostics::Severity::Error => "error",
-        juxc_diagnostics::Severity::Warning => "warning",
-        juxc_diagnostics::Severity::Note => "note",
-        juxc_diagnostics::Severity::Help => "help",
-    }
-}
-
-// ============================================================================
-// JSON diagnostics (JUX-DIAGNOSTICS-ADDENDUM.md §D.2)
-// ============================================================================
-
-/// Emit diagnostics as NDJSON on **stdout** — one object per line, then a
-/// trailing `{"summary":…}` line — following the §D.2 schema. Hand-rolled
-/// (no serde dependency): every value is either an integer or a string run
-/// through [`json_escape`], so the output is always well-formed.
-fn print_diagnostics_json(
-    diagnostics: &[juxc_diagnostics::Diagnostic],
-    sources: &[juxc_source::SourceFile],
-) {
-    let mut errors = 0u32;
-    let mut warnings = 0u32;
-    for d in juxc_driver::diagnostic_order::in_source_order(diagnostics) {
-        match d.severity {
-            juxc_diagnostics::Severity::Error => errors += 1,
-            juxc_diagnostics::Severity::Warning => warnings += 1,
-            _ => {}
-        }
-
-        let mut fields: Vec<String> = Vec::new();
-        fields.push(format!("\"code\":{}", json_str(&d.code.to_string())));
-        fields.push(format!("\"severity\":{}", json_str(severity_label(d.severity))));
-        fields.push(format!("\"message\":{}", json_str(&d.message)));
-
-        let src = d.file.and_then(|i| sources.get(i));
-        if let (Some(src), Some(span)) = (src, d.primary_span) {
-            fields.push(format!("\"primary_span\":{}", span_json(src, span, None, None)));
-            // Secondary spans come from the diagnostic's labels. A Label
-            // carries no file id of its own, so it shares the primary file.
-            if !d.labels.is_empty() {
-                let arr: Vec<String> = d
-                    .labels
-                    .iter()
-                    .map(|l| span_json(src, l.span, Some(&l.message), Some("note")))
-                    .collect();
-                fields.push(format!("\"secondary_spans\":[{}]", arr.join(",")));
-            }
-        }
-        if let Some(hint) = d.help.first() {
-            fields.push(format!("\"hint\":{}", json_str(hint)));
-        }
-        fields.push(format!(
-            "\"docs_url\":{}",
-            json_str(&format!("https://docs.jux-lang.org/diag/{}", d.code)),
-        ));
-        println!("{{{}}}", fields.join(","));
-    }
-
-    // Trailing summary line (§D.2.4). `duration_ms` is reported as 0 here —
-    // the check path doesn't time itself; tooling that cares can measure
-    // wall-clock around the process.
-    println!(
-        "{{\"summary\":{{\"errors\":{},\"warnings\":{},\"files_compiled\":{},\"duration_ms\":0}}}}",
-        errors,
-        warnings,
-        sources.len(),
-    );
-}
-
-/// Render one [`Span`](juxc_source::Span) as a §D.2.2 span object. [`label`]
-/// and [`severity`] are populated for secondary spans (primary spans pass
-/// `None`). Columns are 1-indexed Unicode-character columns; `highlight_*`
-/// are 0-indexed byte offsets into the snippet line.
-fn span_json(
-    src: &juxc_source::SourceFile,
-    span: juxc_source::Span,
-    label: Option<&str>,
-    severity: Option<&str>,
-) -> String {
-    let text = src.contents();
-    let start = (span.start as usize).min(text.len());
-    let end = (span.end as usize).min(text.len());
-
-    let (line_start, start_line_byte) = line_and_start(src, start);
-    let (line_end, end_line_byte) = line_and_start(src, end);
-
-    // The snippet is the line containing the span's start.
-    let snippet_end = text[start_line_byte..]
-        .find('\n')
-        .map(|n| start_line_byte + n)
-        .unwrap_or(text.len());
-    let snippet = &text[start_line_byte..snippet_end];
-
-    // 1-indexed character columns (count chars from each line start).
-    let column_start = text[start_line_byte..start].chars().count() + 1;
-    let column_end = text[end_line_byte..end].chars().count() + 1;
-
-    // 0-indexed byte offsets into the snippet for the highlighted region.
-    let highlight_start = start - start_line_byte;
-    let highlight_end = (end - start_line_byte).min(snippet.len());
-
-    let mut f: Vec<String> = Vec::new();
-    f.push(format!("\"file\":{}", json_str(&fwd_slash(src.path()))));
-    f.push(format!("\"byte_start\":{}", start));
-    f.push(format!("\"byte_end\":{}", end));
-    f.push(format!("\"line_start\":{}", line_start));
-    f.push(format!("\"line_end\":{}", line_end));
-    f.push(format!("\"column_start\":{}", column_start));
-    f.push(format!("\"column_end\":{}", column_end));
-    f.push(format!("\"snippet\":{}", json_str(snippet)));
-    f.push(format!("\"highlight_start\":{}", highlight_start));
-    f.push(format!("\"highlight_end\":{}", highlight_end));
-    if let Some(l) = label {
-        f.push(format!("\"label\":{}", json_str(l)));
-    }
-    if let Some(s) = severity {
-        f.push(format!("\"severity\":{}", json_str(s)));
-    }
-    format!("{{{}}}", f.join(","))
-}
-
-/// `(1-based line, byte offset of that line's start)` for [`offset`]. Derived
-/// from [`SourceFile::line_col`], whose column is the 1-based BYTE column, so
-/// `line_start = offset − (col − 1)`.
-fn line_and_start(src: &juxc_source::SourceFile, offset: usize) -> (u32, usize) {
-    let (line, byte_col) = src.line_col(offset);
-    (line, offset + 1 - byte_col as usize)
-}
-
-/// A path as a forward-slash JSON-friendly string (per §D.2.2 `file`).
-fn fwd_slash(path: &Path) -> String {
-    path.display().to_string().replace('\\', "/")
-}
-
-/// A JSON string literal: quoted, with the mandatory escapes applied.
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }

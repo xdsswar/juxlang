@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports layout and ABI mistakes the compiler rejects.
+<!-- tooltip end -->
+<ul>
+  <li><code>@align(N)</code> whose argument is not an integer literal or not a power of two (E0519), or that sits on a field, an enum or an interface (E0520).</li>
+  <li><code>array as T*</code> from a temporary or nested array, or to a pointer to a pointer (E0521).</li>
+  <li><code>transmute&lt;A, B&gt;</code> without two type arguments, or between primitive types of different sizes (E0522).</li>
+  <li>A free operator declared twice (E0951), or declared only on types no program declares (E0950).</li>
+</ul>
+</body>
+</html>

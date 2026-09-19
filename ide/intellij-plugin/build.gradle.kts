@@ -85,6 +85,17 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.1</h3>
+            <p>The editor catches up with the newest Jux: the standard library, <b>never</b>, ranges as values, and the layout and ABI features.</p>
+            <ul>
+              <li><b>The standard library ships with the plugin</b>: <b>Option</b>, <b>Result</b>, the iterator combinators, <b>Mutex</b> and the exceptions complete, navigate (Ctrl+B) and show Quick Documentation with their real signatures.</li>
+              <li><b>Lambda parameters know their type</b>: <b>opt.map((p) -&gt; p.</b> completes the element's members, and a lambda passed for a single-method interface gets that method's parameter types.</li>
+              <li><b>Ranges</b> type as values (<b>start</b>, <b>end</b>, <b>endInclusive</b>, <b>step</b>), and a for-each over a map binds a <b>(K, V)</b> entry read as <b>e.0</b> / <b>e.1</b>.</li>
+              <li><b>never</b>: a call to a never function ends its path, so no false "Missing return"; the never rules themselves are checked as you type.</li>
+              <li><b>Layout and ABI</b> checks for <b>@align</b>, <b>array as T*</b>, <b>transmute</b> and free operators; a <b>// SAFETY:</b> comment check on unsafe blocks, with a fix.</li>
+              <li><b>Java library calls</b> (<b>Math.abs</b>, <b>Integer.parseInt</b>, <b>Objects.equals</b>, <b>String.valueOf</b>) are reported with a one-click Jux rewrite.</li>
+            </ul>
+
             <h3>0.1.0</h3>
             <p>More of IntelliJ's Java intelligence, in Jux's own terms.</p>
             <ul>
@@ -375,4 +386,58 @@ val generateJuxTokens by tasks.registering {
 
 kotlin.sourceSets.named("main") {
     kotlin.srcDir(generateJuxTokens)
+}
+
+// ---------------------------------------------------------------------------
+// The `jux.std` sources, bundled.
+//
+// The compiler embeds its standard library (`Option`, `Result`, the iterator
+// combinators, `Mutex`, the exceptions, ...) as Jux source inside
+// `crates/juxc-driver/src/stdlib_embedded.rs` and prepends it to every unit.
+// This task writes those same sources out as `jux-std/jux/std/<path>.jux`
+// resources, so the plugin indexes the exact library the compiler checks
+// against: completion, navigation and Quick Documentation for every std
+// member, with no second copy to keep in step by hand.
+//
+// `src/main/juxStdIde/` adds the few types the compiler binds structurally
+// and so never writes as source (the range types of MISSING-DEFS M.6.1),
+// declared exactly as that clause declares them.
+// ---------------------------------------------------------------------------
+val stdlibEmbedded = layout.projectDirectory.file("../../crates/juxc-driver/src/stdlib_embedded.rs")
+val juxStdIdeDir = layout.projectDirectory.dir("src/main/juxStdIde")
+val generatedJuxStdDir = layout.buildDirectory.dir("generated/resources/juxStd")
+
+val generateJuxStd by tasks.registering {
+    description = "Writes the compiler's embedded jux.std sources out as plugin resources."
+    val input = stdlibEmbedded
+    val ide = juxStdIdeDir
+    val outDir = generatedJuxStdDir
+    inputs.file(input)
+    inputs.dir(ide)
+    outputs.dir(outDir)
+
+    doLast {
+        val root = outDir.get().asFile.resolve("jux-std")
+        root.deleteRecursively()
+        val text = input.asFile.readText()
+        // Each entry is `("dir/File.jux", r###"<source>"###)`.
+        val entry = Regex("""\("([A-Za-z0-9_/]+\.jux)",\s*r###"(.*?)"###\)""", RegexOption.DOT_MATCHES_ALL)
+        var count = 0
+        for (m in entry.findAll(text)) {
+            val file = root.resolve("jux/std/" + m.groupValues[1])
+            file.parentFile.mkdirs()
+            file.writeText(m.groupValues[2])
+            count++
+        }
+        check(count > 0) { "no jux.std sources found in ${input.asFile}" }
+        ide.asFile.walkTopDown().filter { it.isFile }.forEach { src ->
+            val dest = root.resolve(src.relativeTo(ide.asFile).path)
+            dest.parentFile.mkdirs()
+            src.copyTo(dest, overwrite = true)
+        }
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(generateJuxStd)
 }

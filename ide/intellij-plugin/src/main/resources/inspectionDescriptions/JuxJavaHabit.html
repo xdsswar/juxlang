@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports a call to a Java utility class Jux does not have, with the Jux way to write it.
+<!-- tooltip end -->
+<ul>
+  <li><code>Math.abs(x)</code>: numbers carry these as methods. Quick-fix: <code>x.abs()</code> (<code>pow</code> becomes <code>powf</code>, <code>log</code> becomes <code>ln</code>).</li>
+  <li><code>Integer.parseInt(s)</code>: Quick-fix: <code>s.parse&lt;int&gt;()</code>.</li>
+  <li><code>Objects.equals(a, b)</code> / <code>Objects.requireNonNull(x)</code>: Quick-fix: <code>a == b</code> / <code>x!!</code>.</li>
+  <li><code>String.valueOf(x)</code>: Quick-fix: <code>$"${x}"</code>.</li>
+</ul>
+<p>A type your program declares under one of these names is not reported.</p>
+</body>
+</html>

@@ -24,8 +24,11 @@
 //! - `jux build [file]` — compile + cargo build, don't execute.
 //! - `jux check [file]` — lex/parse/resolve/typecheck only, no codegen.
 //! - `jux update` — re-fetch the project's git dependencies (§B.2.2).
-//! - `jux new <name>` — scaffold a project (§B.15.1).
-//! - `jux test` — stubbed.
+//! - `jux new [--lib|--workspace] <name>`, `jux init` — scaffold a project (§B.15.1).
+//! - `jux test` — run `@Test` functions.
+//! - `jux clean`, `jux add`, `jux remove`, `jux tree` — see `project_cmds`.
+
+mod project_cmds;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -45,14 +48,87 @@ struct Cli {
     /// working directory. Ignored in single-file mode (the file is explicit).
     #[arg(long, global = true, value_name = "PATH")]
     manifest_path: Option<PathBuf>,
+    /// Diagnostic format (JUX-DIAGNOSTICS-ADDENDUM §D.1, §D.2): `human`,
+    /// `compact`, `short`, `line` or `json`. Default: `human` on a terminal,
+    /// else `line`.
+    #[arg(long, global = true, value_name = "FORMAT")]
+    diagnostic_format: Option<String>,
+    /// Color the `human` format: `auto`, `always` or `never`.
+    #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
+    color: String,
 }
 
 #[derive(Subcommand, Debug)]
 enum CliCommand {
-    /// Create a new Jux project. (§B.15.1 — `jux new <name>`.)
+    /// Create a new Jux project (§B.15.1): a binary by default, a library
+    /// with `--lib`, an empty workspace with `--workspace`.
     New {
-        /// Name of the project to scaffold.
+        /// Name of the project directory to create.
         name: String,
+        /// Scaffold a library (`[lib]`, code under `src/<name>/`, a test).
+        #[arg(long, conflicts_with = "workspace")]
+        lib: bool,
+        /// Scaffold a workspace root with an empty member list.
+        #[arg(long)]
+        workspace: bool,
+    },
+    /// Add a `jux.toml` to the current directory (§B.15).
+    Init,
+    /// Delete the build output: `target/`, and each workspace member's
+    /// `target/` (§B.15).
+    Clean,
+    /// Add or replace a dependency in `jux.toml` (§B.10.5). The name may carry
+    /// a version: `jux add com.x.json@1.0`, `jux add rust.rand@0.9`.
+    Add {
+        /// `<name>` or `<name>@<version>`.
+        spec: String,
+        /// A SemVer requirement (same as `@<version>`).
+        #[arg(long)]
+        version: Option<String>,
+        /// Depend on a local directory.
+        #[arg(long, conflicts_with = "git")]
+        path: Option<String>,
+        /// Depend on a remote repository.
+        #[arg(long)]
+        git: Option<String>,
+        /// Branch to track.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Tag to pin.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Revision to pin.
+        #[arg(long)]
+        rev: Option<String>,
+        /// Features to enable on the dependency, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+    },
+    /// Remove a dependency from `jux.toml` (§B.10.5).
+    Remove {
+        /// The dependency's name.
+        name: String,
+    },
+    /// Print the dependency tree (§B.10.5).
+    Tree,
+    /// Explain a diagnostic code, offline (JUX-DIAGNOSTICS-ADDENDUM §D.5.3).
+    Explain {
+        /// The code, e.g. `E0413`.
+        code: String,
+    },
+    /// Generate HTML documentation from doc comments into `target/doc/`
+    /// (JUX-LANG-V1 §3.5, §12.5), and run the ```` ```jux ```` examples in
+    /// them as tests.
+    Doc {
+        /// Open the generated index in the browser afterwards.
+        #[arg(long)]
+        open: bool,
+        /// In a workspace, document only this member.
+        #[arg(short = 'p', long)]
+        package: Option<String>,
+        /// Write the pages without compiling and running the examples.
+        #[arg(long)]
+        no_doctests: bool,
     },
     /// Type-check the project (or a single file) without producing a binary.
     /// (§B.15 — `jux check`.)
@@ -76,6 +152,10 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Type-check under this `[profile.<name>]` (§B.9); it decides
+        /// `cfg(debug)` / `cfg(release)`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Build the project (or a single file). (§B.15 — `jux build`.)
     Build {
@@ -101,6 +181,13 @@ enum CliCommand {
         /// Build only the `[lib]` target. Mutually exclusive with `--bin`.
         #[arg(long)]
         lib: bool,
+        /// Build the program `examples/<NAME>.jux` (or `examples/<NAME>/`)
+        /// against this package's library code (§B.1.3).
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["bin", "lib", "examples"])]
+        example: Option<String>,
+        /// Build every program under `examples/` (§B.1.3).
+        #[arg(long, conflicts_with_all = ["bin", "lib"])]
+        examples: bool,
         /// Cross-compile for the given Rust target triple (forwards
         /// `--target` to the inner `cargo build`). The toolchain must
         /// be installed: `rustup target add <triple>`.
@@ -113,6 +200,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
@@ -136,6 +228,10 @@ enum CliCommand {
         /// package's first binary.
         #[arg(long)]
         bin: Option<String>,
+        /// Run the program `examples/<NAME>.jux` (or `examples/<NAME>/`)
+        /// instead of a `[[bin]]` (§B.15.3).
+        #[arg(long, value_name = "NAME", conflicts_with = "bin")]
+        example: Option<String>,
         /// Arguments for the program itself, after a `--` separator.
         ///
         /// `main(String[] args)` has always been a legal entry point; until
@@ -153,6 +249,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Run tests (JUX-TESTING-ADDENDUM §TS.2/§TS.8).
     Test {
@@ -167,6 +268,9 @@ enum CliCommand {
         /// builtin stays checked under `jux test` either way.
         #[arg(long)]
         release: bool,
+        /// Run only the ```` ```jux ```` examples in doc comments.
+        #[arg(long)]
+        doc: bool,
         /// Enable these features of the package, comma-separated, on top of
         /// its `default` set (§B.8; read by `@cfg(feature = "...")`).
         #[arg(long, value_delimiter = ',')]
@@ -174,6 +278,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Re-fetch the project's git dependencies (§B.2.2). Branch-pinned
     /// deps pick up new commits; tag/rev pins re-validate. Without
@@ -246,6 +355,13 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
         | CliCommand::Run { file, .. } => file.clone(),
         // The rest are project-wide or take no path at all.
         CliCommand::New { .. }
+        | CliCommand::Init
+        | CliCommand::Clean
+        | CliCommand::Add { .. }
+        | CliCommand::Remove { .. }
+        | CliCommand::Tree
+        | CliCommand::Explain { .. }
+        | CliCommand::Doc { .. }
         | CliCommand::Test { .. }
         | CliCommand::Update
         | CliCommand::Metadata { .. }
@@ -259,14 +375,55 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
 /// Dispatch one parsed command line. Split out of `main` so the whole of it
 /// runs on the large-stack thread.
 fn run_cli(cli: Cli) -> Result<ExitCode> {
+    if let Err(msg) = set_diagnostic_style(cli.diagnostic_format.as_deref(), &cli.color) {
+        eprintln!("jux: {msg}");
+        return Ok(ExitCode::from(2));
+    }
     // Resolve the project root once: an explicit `--manifest-path`, else the
     // nearest `jux.toml` walking up from the cwd. `None` when no manifest is
     // found (project-mode commands report their own "no jux.toml" error).
     let root = resolve_project_root(cli.manifest_path.as_deref());
     match cli.command {
-        CliCommand::New { name } => cmd_new(&name),
-        CliCommand::Test { pattern, package, release, features, no_default_features } => {
+        CliCommand::New { name, lib, workspace } => {
+            let kind = if workspace {
+                project_cmds::NewKind::Workspace
+            } else if lib {
+                project_cmds::NewKind::Lib
+            } else {
+                project_cmds::NewKind::Bin
+            };
+            project_cmds::cmd_new(&name, kind)
+        }
+        CliCommand::Init => project_cmds::cmd_init(Path::new(".")),
+        CliCommand::Clean => with_root(root, "clean", project_cmds::cmd_clean),
+        CliCommand::Add { spec, version, path, git, branch, tag, rev, features } => {
+            let source = project_cmds::DepSource { version, path, git, branch, tag, rev, features };
+            with_root(root, "add", |r| project_cmds::cmd_add(r, &spec, source))
+        }
+        CliCommand::Remove { name } => with_root(root, "remove", |r| project_cmds::cmd_remove(r, &name)),
+        CliCommand::Tree => with_root(root, "tree", project_cmds::cmd_tree),
+        CliCommand::Explain { code } => Ok(match juxc_driver::explain::explain(&code) {
+            Some(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!(
+                    "jux: `{}` is not a diagnostic code this compiler knows",
+                    juxc_driver::explain::normalize(&code),
+                );
+                ExitCode::from(1)
+            }
+        }),
+        CliCommand::Doc { open, package, no_doctests } => {
+            with_root(root, "doc", |r| cmd_doc(r, package.as_deref(), open, !no_doctests))
+        }
+        CliCommand::Test { pattern, package, release, doc, features, no_default_features, profile } => {
             set_features(features, no_default_features);
+            set_profile(profile);
+            if doc {
+                return with_root(root, "test --doc", |r| cmd_doctest(r, package.as_deref(), release));
+            }
             cmd_test(root, package.as_deref(), pattern, release)
         }
         CliCommand::Update       => cmd_update(root),
@@ -277,23 +434,26 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         CliCommand::Target { cmd } => match cmd {
             TargetCmd::List { installed } => cmd_target_list(installed),
         },
-        CliCommand::Check { file, package, target, features, no_default_features } => {
+        CliCommand::Check { file, package, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
+            set_profile(profile);
             let sel = Selection { package, ..Selection::default() };
             run_single_or_project(root, file, Action::Check, None, false, sel)
         }
-        CliCommand::Build { file, emit_dir, release, package, bin, lib, target, features, no_default_features } => {
+        CliCommand::Build { file, emit_dir, release, package, bin, lib, example, examples, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
-            let sel = Selection { package, bin, lib };
+            set_profile(profile);
+            let sel = Selection { package, bin, lib, example, examples };
             run_single_or_project(root, file, Action::Build, emit_dir, release, sel)
         }
-        CliCommand::Run { file, emit_dir, release, package, bin, args, target, features, no_default_features } => {
+        CliCommand::Run { file, emit_dir, release, package, bin, example, args, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
+            set_profile(profile);
             set_program_args(args);
-            let sel = Selection { package, bin, lib: false };
+            let sel = Selection { package, bin, lib: false, example, examples: false };
             run_single_or_project(root, file, Action::Run, emit_dir, release, sel)
         }
     }
@@ -310,12 +470,20 @@ struct Selection {
     bin: Option<String>,
     /// `--lib` — restrict to the `[lib]` target.
     lib: bool,
+    /// `--example <name>` — build (or run) one program from `examples/`.
+    example: Option<String>,
+    /// `--examples` — build every program under `examples/`.
+    examples: bool,
 }
 
 impl Selection {
     /// True when no package/target restriction was requested.
     fn is_empty(&self) -> bool {
-        self.package.is_none() && self.bin.is_none() && !self.lib
+        self.package.is_none()
+            && self.bin.is_none()
+            && !self.lib
+            && self.example.is_none()
+            && !self.examples
     }
 }
 
@@ -355,6 +523,50 @@ fn set_cross_target(triple: Option<String>) {
     }
 }
 
+/// Record `--profile <name>` in `JUX_PROFILE`, which the driver's cargo
+/// invocations read (`juxc_driver::cargo_profile_args`), the same way
+/// `--target` travels through `JUX_TARGET`.
+fn set_profile(profile: Option<String>) {
+    if let Some(p) = profile {
+        std::env::set_var("JUX_PROFILE", p);
+    }
+}
+
+/// The `--profile` the user asked for, if any.
+fn selected_profile() -> Option<String> {
+    std::env::var("JUX_PROFILE").ok().filter(|p| !p.trim().is_empty())
+}
+
+/// Decide the build type for a project build: the named `--profile` when one
+/// was given (validated against the manifest, which owns custom profiles),
+/// else the manifest's default (`[build] optimization`) overridden by
+/// `--release`. `Err` carries the message for an unknown profile.
+fn resolve_release(manifest: &juxc_driver::Manifest, cli_release: bool) -> std::result::Result<bool, String> {
+    let Some(name) = selected_profile() else {
+        return Ok(manifest.effective_release(cli_release));
+    };
+    manifest.profile_is_optimized(&name).ok_or_else(|| {
+        format!(
+            "no profile `{name}` in {}; available: {}",
+            manifest.project_root.join("jux.toml").display(),
+            manifest.selectable_profiles().join(", "),
+        )
+    })
+}
+
+/// The same for a file with no manifest: only the four built-in profiles
+/// exist there.
+fn resolve_release_without_manifest(cli_release: bool) -> std::result::Result<bool, String> {
+    match selected_profile().as_deref() {
+        None => Ok(cli_release),
+        Some("release") | Some("bench") => Ok(true),
+        Some("dev") | Some("test") => Ok(false),
+        Some(other) => Err(format!(
+            "profile `{other}` needs a project: custom profiles are declared as `[profile.{other}]` in jux.toml"
+        )),
+    }
+}
+
 /// Resolve the project root to act on. With an explicit `--manifest-path`,
 /// accept either the `jux.toml` file (use its parent) or a directory (use it
 /// directly). Otherwise walk up from the current directory and return the first
@@ -389,38 +601,181 @@ fn resolve_project_root(manifest_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// `jux new <name>` — scaffold a fresh Jux project per §B.2.1.
-/// Creates:
-///   - `<name>/jux.toml`  with a minimum-viable `[package]` block.
-///   - `<name>/src/main.jux` with a "hello world" stub.
-///   - `<name>/.gitignore` with the standard ignore list.
-///
-/// `<name>` is the directory name (and the package name's last
-/// segment). Refuses to overwrite an existing directory.
-fn cmd_new(name: &str) -> Result<ExitCode> {
-    let target = PathBuf::from(name);
-    if target.exists() {
-        eprintln!("jux: target directory '{}' already exists", target.display());
-        return Ok(ExitCode::from(1));
+/// Run a project command that needs a `jux.toml`, or say how to get one.
+fn with_root(
+    root: Option<PathBuf>,
+    command: &str,
+    f: impl FnOnce(&Path) -> Result<ExitCode>,
+) -> Result<ExitCode> {
+    match root {
+        Some(r) => f(&r),
+        None => {
+            eprintln!(
+                "jux: no jux.toml found -- run `jux {command}` from a project root (or pass --manifest-path)",
+            );
+            Ok(ExitCode::from(1))
+        }
     }
-    let src_dir = target.join("src");
-    std::fs::create_dir_all(&src_dir).with_context(|| {
-        format!("creating project directory {}", src_dir.display())
-    })?;
-    let manifest = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+}
+
+/// The packages a project-level command acts on: the one named by `-p`, else
+/// every workspace member (default members first), else the package itself.
+fn packages_for(root: &Path, package: Option<&str>) -> std::result::Result<Vec<juxc_driver::Manifest>, String> {
+    let Some(root_manifest) = juxc_driver::Manifest::load(root) else {
+        return Err(format!("failed to load {}", root.join("jux.toml").display()));
+    };
+    if root_manifest.workspace_members.is_empty() {
+        if let Some(pkg) = package {
+            if !package_name_matches(&root_manifest, pkg) {
+                return Err(format!("package `{pkg}` not found (this project is `{}`)", root_manifest.package.name));
+            }
+        }
+        return Ok(vec![root_manifest]);
+    }
+    if let Some(pkg) = package {
+        let (_dir, m) = select_member(&root_manifest, root, pkg)?;
+        return Ok(vec![juxc_driver::project::with_root_profiles(&m, &root_manifest)]);
+    }
+    let mut out = Vec::new();
+    for member in &root_manifest.workspace_default_members {
+        if let Some(m) = juxc_driver::Manifest::load(&root.join(member)) {
+            out.push(juxc_driver::project::with_root_profiles(&m, &root_manifest));
+        }
+    }
+    Ok(out)
+}
+
+/// `jux doc`: write `target/doc/` from the package's doc comments, then run
+/// the examples in them unless `--no-doctests`. A workspace gets one site per
+/// member under `target/doc/<member>/` and an index linking them.
+fn cmd_doc(root: &Path, package: Option<&str>, open: bool, run_examples: bool) -> Result<ExitCode> {
+    let manifests = match packages_for(root, package) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
+    let doc_root = root.join("target").join("doc");
+    let nested = manifests.len() > 1;
+    let mut index_links: Vec<(String, String)> = Vec::new();
+    let mut failed = 0usize;
+    for manifest in &manifests {
+        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        let packages = juxc_driver::docgen::collect(&sources);
+        let out_dir = if nested {
+            doc_root.join(juxc_driver::manifest::default_target_name(&manifest.package.name))
+        } else {
+            doc_root.clone()
+        };
+        let written = juxc_driver::docgen::write_site(manifest, &packages, &out_dir)?;
+        eprintln!(
+            "jux: documented {} item(s) of `{}` at {}",
+            written.items,
+            manifest.package.name,
+            written.index.display(),
+        );
+        index_links.push((
+            manifest.package.name.clone(),
+            format!("{}/index.html", juxc_driver::manifest::default_target_name(&manifest.package.name)),
+        ));
+        if run_examples {
+            failed += run_doctests_for(manifest, &packages, root, false)?;
+        }
+    }
+    if nested {
+        write_workspace_doc_index(&doc_root, &index_links)?;
+    }
+    if open {
+        open_in_browser(&doc_root.join("index.html"));
+    }
+    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// `jux test --doc`: only the doc examples.
+fn cmd_doctest(root: &Path, package: Option<&str>, release: bool) -> Result<ExitCode> {
+    let manifests = match packages_for(root, package) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
+    let mut failed = 0usize;
+    for manifest in &manifests {
+        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        let packages = juxc_driver::docgen::collect(&sources);
+        failed += run_doctests_for(manifest, &packages, root, release)?;
+    }
+    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// Run one package's doc examples and print a report in the style of the
+/// `@Test` runner. Returns how many failed.
+fn run_doctests_for(
+    manifest: &juxc_driver::Manifest,
+    packages: &[juxc_driver::docgen::DocPackage],
+    root: &Path,
+    release: bool,
+) -> Result<usize> {
+    let tests = juxc_driver::docgen::doctests(packages);
+    if tests.is_empty() {
+        return Ok(0);
+    }
+    let emit_root = root.join("target").join(".rust-build-doctest");
+    let (dep_sources, _path_deps) = juxc_driver::project::resolve_package_deps(manifest, &emit_root)?;
+    let facts = juxc_driver::project::cfg_facts_for(manifest, release);
+    println!("running {} doc example(s) of `{}`", tests.len(), manifest.package.name);
+    let results = juxc_driver::docgen::run_doctests(manifest, &dep_sources, &tests, &emit_root, release, &facts)?;
+    let mut failed = 0usize;
+    for r in &results {
+        match &r.failure {
+            None => println!("  PASS {} ({})", r.owner, r.location),
+            Some(why) => {
+                failed += 1;
+                println!("  FAIL {} ({})", r.owner, r.location);
+                for line in why.lines() {
+                    println!("       {line}");
+                }
+            }
+        }
+    }
+    println!(
+        "\ndoc examples: {}. {} passed; {} failed",
+        if failed == 0 { "ok" } else { "FAILED" },
+        results.len() - failed,
+        failed,
     );
-    std::fs::write(target.join("jux.toml"), manifest)
-        .context("writing jux.toml")?;
-    let main_jux = "public void main() {\n    print(\"Hello from Jux!\");\n}\n";
-    std::fs::write(src_dir.join("main.jux"), main_jux)
-        .context("writing src/main.jux")?;
-    let gitignore = "/target/\n";
-    std::fs::write(target.join(".gitignore"), gitignore)
-        .context("writing .gitignore")?;
-    eprintln!("jux: created project at {}", target.display());
-    eprintln!("     next: `cd {name} && jux run`");
-    Ok(ExitCode::SUCCESS)
+    Ok(failed)
+}
+
+/// The top-level `target/doc/index.html` of a workspace: a link per member.
+fn write_workspace_doc_index(doc_root: &Path, members: &[(String, String)]) -> Result<()> {
+    let mut items = String::new();
+    for (name, href) in members {
+        items.push_str(&format!("<li><a href=\"{href}\">{name}</a></li>\n"));
+    }
+    let html = format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Workspace documentation</title>\n\
+         <style>body{{font:15px/1.55 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}}</style>\n\
+         </head>\n<body>\n<h1>Workspace documentation</h1>\n<ul>\n{items}</ul>\n</body>\n</html>\n",
+    );
+    std::fs::create_dir_all(doc_root)?;
+    std::fs::write(doc_root.join("index.html"), html).context("writing the workspace doc index")
+}
+
+/// Best effort: hand `page` to the platform's opener. A failure only prints.
+fn open_in_browser(page: &Path) {
+    let result = if cfg!(windows) {
+        Command::new("cmd").args(["/C", "start", ""]).arg(page).status()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(page).status()
+    } else {
+        Command::new("xdg-open").arg(page).status()
+    };
+    if result.is_err() {
+        eprintln!("jux: could not open a browser; the docs are at {}", page.display());
+    }
 }
 
 /// `jux update` — re-fetch every git dependency of the current project
@@ -714,6 +1069,18 @@ fn run_single_or_project(
     release: bool,
     selection: Selection,
 ) -> Result<ExitCode> {
+    // A file or loose directory has no manifest, so only the built-in
+    // profiles are selectable there. A project directory is resolved below.
+    let release = match &file {
+        Some(path) if !path.join("jux.toml").exists() => match resolve_release_without_manifest(release) {
+            Ok(r) => r,
+            Err(msg) => {
+                eprintln!("jux: {msg}");
+                return Ok(ExitCode::from(1));
+            }
+        },
+        _ => release,
+    };
     match file {
         // Single-file mode ignores package/target selection (the file is the
         // unit). Warn rather than silently dropping a `-p`/`--bin` the user
@@ -768,7 +1135,13 @@ fn run_project(
     // `[build] optimization` sets the default debug/release build type; an
     // explicit CLI `--release` still wins (§B.9). `[build] target` supplies a
     // default cross-compile triple unless `--target` already set JUX_TARGET.
-    let release = root_manifest.effective_release(release);
+    let release = match resolve_release(&root_manifest, release) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
     apply_default_target(&root_manifest);
 
     // Every package (standalone or workspace member) emits under the resolved
@@ -782,17 +1155,22 @@ fn run_project(
     let selected: juxc_driver::Manifest = if is_workspace {
         if let Some(pkg) = &selection.package {
             match select_member(&root_manifest, &root_dir, pkg) {
-                Ok((_dir, m)) => m,
+                // The member builds with the root's profiles (§B.9.2).
+                Ok((_dir, m)) => juxc_driver::project::with_root_profiles(&m, &root_manifest),
                 Err(msg) => {
                     eprintln!("jux: {msg}");
                     return Ok(ExitCode::from(1));
                 }
             }
-        } else if selection.bin.is_some() || selection.lib {
+        } else if selection.bin.is_some()
+            || selection.lib
+            || selection.example.is_some()
+            || selection.examples
+        {
             // `--bin`/`--lib` need a single package to act on; in a workspace
             // that's ambiguous without `-p`.
             eprintln!(
-                "jux: --bin/--lib require selecting a member with --package in a workspace",
+                "jux: --bin/--lib/--example require selecting a member with --package in a workspace",
             );
             return Ok(ExitCode::from(1));
         } else {
@@ -812,6 +1190,12 @@ fn run_project(
         }
         root_manifest.clone()
     };
+
+    // `--example` / `--examples` build programs from `examples/` instead of
+    // the package's own targets (§B.1.3, §B.15.3).
+    if selection.example.is_some() || selection.examples {
+        return build_examples(&selected, &emit_root, action, release, &selection);
+    }
 
     if selected.lib.is_none() && selected.bins.is_empty() {
         eprintln!(
@@ -833,6 +1217,69 @@ fn run_project(
     };
 
     build_and_act(&selected, &emit_root, action, release, &target_sel)
+}
+
+/// `--example <name>` / `--examples`: build (and for `run`, execute) programs
+/// from the package's `examples/` directory. Each one compiles against the
+/// package's library code and dependencies as its own binary (§B.1.3).
+fn build_examples(
+    manifest: &juxc_driver::Manifest,
+    emit_root: &Path,
+    action: Action,
+    release: bool,
+    selection: &Selection,
+) -> Result<ExitCode> {
+    let all = juxc_driver::project::discover_examples(manifest)?;
+    let chosen: Vec<&juxc_driver::project::Example> = match &selection.example {
+        Some(name) => match all.iter().find(|e| &e.name == name) {
+            Some(e) => vec![e],
+            None => {
+                let names: Vec<&str> = all.iter().map(|e| e.name.as_str()).collect();
+                eprintln!(
+                    "jux: package `{}` has no example `{name}`; available: {}",
+                    manifest.package.name,
+                    if names.is_empty() { "(none: examples/ is empty or missing)".to_string() } else { names.join(", ") },
+                );
+                return Ok(ExitCode::from(1));
+            }
+        },
+        None => all.iter().collect(),
+    };
+    if chosen.is_empty() {
+        eprintln!("jux: package `{}` has no examples", manifest.package.name);
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (dep_sources, _path_deps) = juxc_driver::project::resolve_package_deps(manifest, emit_root)?;
+    let facts = juxc_driver::project::cfg_facts_for(manifest, release);
+    for example in chosen {
+        let build = juxc_driver::project::build_example(
+            manifest, &dep_sources, emit_root, release, example, &facts,
+        )?;
+        print_diagnostics(&build.diagnostics, &build.sources);
+        if build.has_errors() {
+            eprintln!("jux: example `{}` failed to build", example.name);
+            return Ok(ExitCode::from(1));
+        }
+        let Some(bin) = build.binaries.first() else {
+            continue;
+        };
+        match action {
+            Action::Check => {}
+            Action::Build => eprintln!("jux: built example `{}` at {}", example.name, bin.binary_path.display()),
+            Action::Run => {
+                eprintln!("jux: built {}", bin.binary_path.display());
+                let status = Command::new(&bin.binary_path)
+                    .args(program_args())
+                    .status()
+                    .with_context(|| format!("running {}", bin.binary_path.display()))?;
+                return Ok(ExitCode::from(status.code().unwrap_or(1) as u8));
+            }
+        }
+    }
+    if matches!(action, Action::Check) {
+        eprintln!("jux: check ok");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Build one package's (filtered) targets and act on the result: report for
@@ -1050,7 +1497,7 @@ fn cmd_test(
             (root_dir.clone(), root_manifest)
         } else {
             match select_member(&root_manifest, &root_dir, pkg) {
-                Ok((dir, m)) => (dir, m),
+                Ok((dir, m)) => (dir, juxc_driver::project::with_root_profiles(&m, &root_manifest)),
                 Err(msg) => {
                     eprintln!("jux: {msg}");
                     return Ok(ExitCode::from(1));
@@ -1062,7 +1509,13 @@ fn cmd_test(
     };
     // `jux test` honors the manifest's default build type too (§B.9); the
     // `assert` builtin stays checked regardless (§TS.2).
-    let release = manifest.effective_release(release);
+    let release = match resolve_release(&manifest, release) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
     apply_default_target(&manifest);
     let binary_name = format!(
         "{}_test",
@@ -1108,7 +1561,12 @@ fn cmd_test(
         eprintln!("jux: nothing to test");
         return Ok(ExitCode::SUCCESS);
     };
-    let artifact = juxc_driver::build(&crate_, &emit_dir, &binary_name, release)?;
+    // A named `--profile` must be defined in the runner's emitted Cargo.toml,
+    // so the manifest (which carries the `[profile.*]` tables) is woven in
+    // then. Without one the runner keeps its plain manifest as before.
+    let with_profiles = selected_profile().is_some().then_some(&manifest);
+    let artifact =
+        juxc_driver::build_with_manifest(&crate_, &emit_dir, &binary_name, release, with_profiles)?;
     // Run the test binary, inherit stdio so the user sees PASS/FAIL
     // output in real time. Forward the filter pattern as argv and
     // the exit code so CI gates work.
@@ -1296,43 +1754,38 @@ fn default_emit_dir(input: &Path) -> PathBuf {
     parent.join("target").join(".rust-build")
 }
 
-/// Pretty-print one diagnostic per line. When the diagnostic carries a `file`
-/// index (into `sources`) and a primary span, render
-/// `path:line:col: [E0xxx] level: message` so the user can jump straight to
-/// the offending file in a multi-file workspace. Otherwise fall back to the
-/// bare `[E0xxx] level: message` form.
-fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
-    // Source order, and de-duplicated, exactly as `juxc` shows them. This
-    // used to print in whatever order the phases produced, so the two tools
-    // disagreed about the same file and `jux` is the one people type.
-    for d in juxc_driver::diagnostic_order::in_source_order(diagnostics) {
-        match (d.file, d.primary_span) {
-            (Some(i), Some(span)) if i < sources.len() => {
-                let src = &sources[i];
-                let (line, col) = src.line_col(span.start as usize);
-                eprintln!(
-                    "{}:{}:{}: [{}] {}: {}",
-                    src.path().display(),
-                    line,
-                    col,
-                    d.code,
-                    severity_label(d.severity),
-                    d.message,
-                );
-            }
-            _ => {
-                eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
-            }
-        }
-    }
+/// The diagnostic format and color chosen on the command line.
+static DIAGNOSTIC_STYLE: std::sync::OnceLock<(juxc_driver::render::DiagnosticFormat, bool)> =
+    std::sync::OnceLock::new();
+
+/// Decide the diagnostic format and color once, from `--diagnostic-format`
+/// and `--color` (and whether stderr is a terminal).
+fn set_diagnostic_style(format: Option<&str>, color: &str) -> std::result::Result<(), String> {
+    use std::io::IsTerminal;
+    let terminal = std::io::stderr().is_terminal();
+    let format = match format {
+        Some(f) => juxc_driver::render::DiagnosticFormat::parse(f)
+            .ok_or_else(|| format!("unknown --diagnostic-format `{f}` (human, compact, short, line, json)"))?,
+        None => juxc_driver::render::DiagnosticFormat::default_for(terminal),
+    };
+    let color = juxc_driver::render::ColorChoice::parse(color)
+        .ok_or_else(|| format!("unknown --color `{color}` (auto, always, never)"))?
+        .enabled(terminal);
+    let _ = DIAGNOSTIC_STYLE.set((format, color));
+    Ok(())
 }
 
-fn severity_label(s: Severity) -> &'static str {
-    match s {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-        Severity::Note => "note",
-        Severity::Help => "help",
+/// Print diagnostics in the chosen format, in source order and de-duplicated
+/// exactly as `juxc` shows them: text on stderr, JSON on stdout (§D.2).
+fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
+    let (format, color) = DIAGNOSTIC_STYLE
+        .get()
+        .copied()
+        .unwrap_or((juxc_driver::render::DiagnosticFormat::Line, false));
+    if format == juxc_driver::render::DiagnosticFormat::Json {
+        print!("{}", juxc_driver::render::render_json(diagnostics, sources, 0));
+    } else {
+        eprint!("{}", juxc_driver::render::render_text(diagnostics, sources, format, color));
     }
 }
 

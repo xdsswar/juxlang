@@ -27,6 +27,9 @@ clap             = { workspace = true }
 # small. Project mode (`jux build`/`run`/`check` without a file)
 # uses this to discover the package layout.
 toml             = { version = "0.8", default-features = false, features = ["parse"] }
+# `jux add` / `jux remove` edit jux.toml in place, keeping the user's comments
+# and layout. Already in the lockfile (pulled in by `toml`).
+toml_edit        = "0.22"
 # `serde_json` renders the machine-readable `jux metadata --format json`
 # output the IntelliJ "Jux Project" tool window consumes (workspace
 # members, targets, dependencies, resolved artifact paths).
