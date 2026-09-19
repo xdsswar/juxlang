@@ -2742,11 +2742,16 @@ impl RustEmitter {
             let is_str = matches!(args.get(i), Some(FfiArg::Str))
                 || (i >= args.len() && expr_is_string_literal(arg));
             if is_str {
+                // The C string is built from the text's BYTES, a borrow: handing
+                // `CString::new` the `String` itself moved it, so any later use
+                // of the same variable, in this call or after it, was rustc
+                // E0382 (B46). A Jux String passed to C is still the caller's.
                 self.w
-                    .push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
+                    .push_str(&format!("let __c{i} = ::std::ffi::CString::new(("));
                 self.emit_expr(arg);
-                self.w
-                    .push_str(").expect(\"string passed to C contains an interior NUL byte\"); ");
+                self.w.push_str(
+                    ").as_bytes()).expect(\"string passed to C contains an interior NUL byte\"); ",
+                );
             }
             // An `out` integer: the place's current value, at the C width.
             if let Some(FfiArg::OutInt(c_ty, _)) = args.get(i) {
