@@ -2562,28 +2562,38 @@ impl RustEmitter {
         //
         // So: ask the scan first, and bridge only the intrinsic it says
         // nothing about.
-        if let Expr::Field(f) = &*call.callee {
-            if f.field.text == "pop" && call.args.is_empty() {
-                let scanned = match self.receiver_ty_of(&f.object) {
-                    Some(juxc_tycheck::Ty::User { name, .. }) => {
-                        self.external_method_sig(&name, "pop").is_some()
-                    }
-                    _ => false,
-                };
-                // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
-                // name matches a user class when it equals some key's last
-                // segment.
-                let receiver_is_user_class =
-                    self.receiver_class_bare(&f.object).is_some_and(|bare| {
-                        self.class_asts
-                            .keys()
-                            .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
-                    });
-                if !receiver_is_user_class && !scanned {
-                    self.w.push_str(".unwrap()");
-                }
-            }
+        if self.pop_needs_intrinsic_unwrap(call) {
+            self.w.push_str(".unwrap()");
         }
+    }
+
+    /// Whether `call` is the array/`Vec` INTRINSIC `pop()`, whose Rust
+    /// `Option<T>` is bridged to the element with `.unwrap()`. A `pop()` the
+    /// scanned stub declares (`rust.std.Vec`'s `T? pop()`) carries its own
+    /// return type, and a user class's own `pop()` (a receiver that is a Jux
+    /// class, `this` included) returns what the user wrote; neither is
+    /// unwrapped, or the `.unwrap()` lands on a value that is not an `Option`.
+    pub(crate) fn pop_needs_intrinsic_unwrap(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else { return false };
+        if f.field.text != "pop" || !call.args.is_empty() {
+            return false;
+        }
+        if matches!(&*f.object, Expr::This(_)) {
+            return false;
+        }
+        let scanned = match self.receiver_ty_of(&f.object) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => self.external_method_sig(&name, "pop").is_some(),
+            _ => false,
+        };
+        // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
+        // name matches a user class when it equals some key's last
+        // segment.
+        let receiver_is_user_class = self.receiver_class_bare(&f.object).is_some_and(|bare| {
+            self.class_asts
+                .keys()
+                .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+        });
+        !receiver_is_user_class && !scanned
     }
 
     /// C6: emit a COMPLETE foreign-collection argument whose matching
@@ -4119,18 +4129,8 @@ impl RustEmitter {
         // The array `pop()` bridge, under the same rule as `emit_call`: a
         // method the scan declares carries its own return type (`T?`), so only
         // the intrinsic the scan says nothing about is unwrapped here.
-        if let Expr::Field(f) = &*call.callee {
-            if f.field.text == "pop" && call.args.is_empty() {
-                let scanned = match self.receiver_ty_of(&f.object) {
-                    Some(juxc_tycheck::Ty::User { name, .. }) => {
-                        self.external_method_sig(&name, "pop").is_some()
-                    }
-                    _ => false,
-                };
-                if !scanned {
-                    self.w.push_str(".unwrap()");
-                }
-            }
+        if self.pop_needs_intrinsic_unwrap(call) {
+            self.w.push_str(".unwrap()");
         }
         self.w.push_str(" }");
     }
@@ -4303,7 +4303,7 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
-        if callee.field.text == "pop" && call.args.is_empty() {
+        if self.pop_needs_intrinsic_unwrap(call) {
             self.w.push_str(".unwrap()");
         }
         self.w.push_str(" })");
