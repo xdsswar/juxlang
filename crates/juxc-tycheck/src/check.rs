@@ -2644,13 +2644,64 @@ impl<'a> Checker<'a> {
         if is_void {
             return;
         }
-        if crate::return_check::body_can_fall_through(body) {
+        // A call to a `never` function (K.4.1) ends its path, as a `throw`
+        // does.
+        let can_complete = crate::return_check::body_can_fall_through_with(body, &|e| {
+            matches!(e, Expr::Call(_)) && infer_expr(e, &self.env, self.symbols) == Ty::Never
+        });
+        // A `never` function has no value to return and may not finish.
+        if let juxc_ast::ReturnType::Type(t) = return_type {
+            if ty_from_ref(t, &self.env, self.symbols) == Ty::Never {
+                self.check_never_function(body, fn_name, name_span, can_complete);
+                return;
+            }
+        }
+        if can_complete {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0460_MissingReturn,
                     format!(
                         "`{fn_name}` can finish without returning a value -- every path must \
                          `return` (or `throw`); add a return for the missing path",
+                    ),
+                )
+                .with_span(name_span),
+            );
+        }
+    }
+
+    /// The rules a function whose return type is `never` obeys
+    /// (JUX-CORE-LIB-ADDENDUM K.4.1): no path may reach the end of its body
+    /// (E0485), and no `return` may appear in it (E0486). A `return` inside a
+    /// lambda written in the body belongs to the lambda and is left alone.
+    fn check_never_function(&mut self, body: &juxc_ast::Block, fn_name: &str, name_span: Span, can_complete: bool) {
+        let mut lambdas: Vec<Span> = Vec::new();
+        let mut returns: Vec<Span> = Vec::new();
+        juxc_ast::visit::for_each_node(body, &mut |n| match n {
+            juxc_ast::visit::Node::Expr(Expr::Lambda(l)) => lambdas.push(l.span),
+            juxc_ast::visit::Node::Stmt(juxc_ast::Stmt::Return(_, span)) => returns.push(*span),
+            _ => {}
+        });
+        for span in returns {
+            if lambdas.iter().any(|l| l.start <= span.start && span.end <= l.end) {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0486_ReturnInNeverFunction,
+                    format!("`{fn_name}` returns `never`, so it cannot `return`"),
+                )
+                .with_span(span)
+                .with_help("throw an exception instead, or change the return type"),
+            );
+        }
+        if can_complete {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0485_NeverFunctionCompletes,
+                    format!(
+                        "`{fn_name}` returns `never` but can reach the end of its body -- every \
+                         path must throw, loop forever, or call another `never` function",
                     ),
                 )
                 .with_span(name_span),
@@ -5482,6 +5533,10 @@ impl<'a> Checker<'a> {
                     (Some(t), None) if t.is_void() => {}
                     // Bare `return;` outside any function — fine.
                     (None, None) => {}
+                    // Any `return` in a `never` function is E0486, reported by
+                    // `check_never_function` with the reason; a type mismatch on
+                    // top of it would say the same thing twice.
+                    (Some(Ty::Never), _) => {}
                     // Bare `return;` in a value-returning function. Carry the
                     // statement span so the diagnostic reaches the IDE (a
                     // file-less diagnostic is dropped by the LSP).
@@ -13218,6 +13273,11 @@ fn fn_shapes_agree(expected: &Ty, found: &Ty) -> bool {
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
+        return true;
+    }
+    // `never` has no values, so a `never` expression (a call to a function
+    // that does not return, K.4.1) fits any slot: the slot is never filled.
+    if matches!(found, Ty::Never) {
         return true;
     }
     if matches!(expected, Ty::Param(_)) || matches!(found, Ty::Param(_)) {

@@ -90,7 +90,8 @@ fn ty_has_default_in(ty: &Ty, symbols: &SymbolTable, visiting: &mut Vec<String>)
         },
         // `any` has no value of its own to start from: it holds whatever the
         // program puts in it (§T.1.2).
-        Ty::Fn { .. } | Ty::Void | Ty::Wildcard(_) | Ty::Any => false,
+        // `never` has no values at all (K.4.1), so no default either.
+        Ty::Fn { .. } | Ty::Void | Ty::Wildcard(_) | Ty::Any | Ty::Never => false,
         Ty::User { name, .. } => {
             // A type that reaches itself without a nullable in between has no
             // finite value to start from, default or otherwise.

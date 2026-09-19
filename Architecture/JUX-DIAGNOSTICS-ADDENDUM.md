@@ -481,6 +481,8 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0482`  | `I.super.m()` outside an instance member of a class that directly implements `I`, or `I.super` used as a value | Type system §T.8.3 |
 | `E0483`  | `I.super.m()` names a method `I` declares without a default body | Type system §T.8.3 |
 | `E0484`  | An arithmetic or bitwise operator (or its compound assignment), or a `..` / `..=` range, on a user type that declares no such operator, with no free-function operator for the operands | Operators §O.2.3, §O.2.4, §O.2.6 |
+| `E0485`  | A function whose return type is `never` can reach the end of its body; every path must throw, loop forever, or call another `never` function | Core lib §K.4.1 |
+| `E0486`  | A `return` inside a function whose return type is `never` | Core lib §K.4.1 |
 | `E0489`  | An `any` used for something other than `===`, `=>` or its text: a member, an operator, indexing, `==` | Type system §T.1.2 |
 | `E0490`  | A `sealed enum`'s `permits` list does not name exactly its variants | LANG-V1 §7.7.6 / `ERRATA.md` E33 |
 | `E0491`  | A record's compact constructor reads `this`, `return`s, or is declared twice | LANG-V1 §7.6.1 |

@@ -560,6 +560,13 @@ impl RustEmitter {
                     self.w.push_str("crate::JuxAny");
                     return;
                 }
+                // `never` (K.4.1) as a value type (`Result<int, never>`):
+                // Rust's uninhabited `Infallible`. A function's `never`
+                // return is `!`, see `emit_return_type_as_rust`.
+                "never" if ty.generic_args.is_empty() && !self.never_is_user_type() => {
+                    self.w.push_str("std::convert::Infallible");
+                    return;
+                }
                 _ => {}
             }
         }
@@ -1361,6 +1368,16 @@ impl RustEmitter {
     /// `String`, so this is a plain forward. Kept named for call-site
     /// readability and to leave room for a future divergence (e.g.
     /// borrow-thread `&'a str` returns when borrow inference lands).
+    /// Whether the program declares a type of its own named `never`, which
+    /// then takes the name over from the built-in bottom type (as `any` can).
+    pub(crate) fn never_is_user_type(&self) -> bool {
+        self.symbols
+            .classes
+            .keys()
+            .chain(self.symbols.records.keys())
+            .any(|k| k.rsplit('.').next() == Some("never"))
+    }
+
     pub(crate) fn emit_return_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // `async void` synthesizes a sentinel `void`-named TypeRef in
         // `parse_return_type` — emit Rust's unit `()` so the produced
@@ -1377,6 +1394,12 @@ impl RustEmitter {
             if let Some(seg) = ty.name.segments.last() {
                 if seg.text == "void" {
                     self.w.push_str("()");
+                    return;
+                }
+                // A `never` function (K.4.1) does not return: Rust's `!`,
+                // which rustc checks the same way.
+                if seg.text == "never" && !self.never_is_user_type() {
+                    self.w.push('!');
                     return;
                 }
             }
@@ -1652,6 +1675,7 @@ pub(crate) fn ty_to_type_ref(
         }
         juxc_tycheck::Ty::String => named("String", Vec::new(), false),
         juxc_tycheck::Ty::Any => named("any", Vec::new(), false),
+        juxc_tycheck::Ty::Never => named("never", Vec::new(), false),
         juxc_tycheck::Ty::Primitive(p) => {
             named(juxc_tycheck::ty::primitive_name(*p), Vec::new(), false)
         }

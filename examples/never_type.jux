@@ -1,0 +1,74 @@
+// The `never` type (JUX-CORE-LIB-ADDENDUM K.4.1): the bottom type, with no
+// values at all.
+//
+// A function that returns `never` does not return: every path throws, loops
+// forever, or calls another `never` function, and the compiler checks that
+// (E0485, E0486). In return, a call to one ends its path the way a `throw`
+// does, so the code around it needs no dummy `return` after it, and its
+// result fits any slot, since that slot is never filled.
+
+class ConfigError extends RuntimeException {
+    public ConfigError(String message) {
+        super(message);
+    }
+}
+
+// The one place that knows how a configuration failure is reported.
+never fail(String what) {
+    throw new ConfigError("config: " + what);
+}
+
+// A `never` function may also hand the job on to another one.
+never failMissing(String key) {
+    fail($"missing key '${key}'");
+}
+
+// No `return` after the call: `fail` ends that path.
+int port(String value) {
+    if (value == "80") {
+        return 80;
+    }
+    if (value == "443") {
+        return 443;
+    }
+    fail($"bad port '${value}'");
+}
+
+String host(String? value) {
+    if (value == null) {
+        failMissing("host");
+    }
+    return value!!;
+}
+
+// In a switch, an arm that fails needs no value of the arm's type.
+String level(int n) {
+    return switch (n) {
+        case 0 -> "quiet";
+        case 1 -> "normal";
+        case 2 -> "loud";
+        default -> fail($"no level ${n}");
+    };
+}
+
+public void main() {
+    print(port("443"));
+    print(host("example.com"));
+    print(level(2));
+
+    try {
+        port("x");
+    } catch (ConfigError e) {
+        print(e.getMessage());
+    }
+    try {
+        host(null);
+    } catch (ConfigError e) {
+        print(e.getMessage());
+    }
+    try {
+        level(7);
+    } catch (ConfigError e) {
+        print(e.getMessage());
+    }
+}
