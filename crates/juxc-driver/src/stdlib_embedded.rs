@@ -195,12 +195,16 @@ public class Iterators {
 
     /** Pairs of elements from `first` and `second`, until either runs out. */
     public static <T, U> Iterator<(T, U)> zip(Iterator<T> first, Iterator<U> second) {
+        // Local handles: a crate whose own `next` takes `&mut self` would
+        // otherwise make the parameters `&mut`, which a generator cannot keep.
+        var left = first;
+        var right = second;
         while (true) {
-            var a = first.next();
+            var a = left.next();
             if (a == null) {
                 return;
             }
-            var b = second.next();
+            var b = right.next();
             if (b == null) {
                 return;
             }

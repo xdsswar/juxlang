@@ -4862,7 +4862,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    }\n");
         w.push_str("    /// What awaiting a cancelled task gives: its CancellationException.\n");
         w.push_str("    fn cancelled() -> ! {\n");
-        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(\"task was cancelled\".to_string()))\n");
+        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(String::from(\"task was cancelled\")))\n");
         w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
         w.push_str("    pub fn blockingGet(self) -> T {\n");
@@ -5196,7 +5196,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // allows (`cur < end`, or `<=` for `..=`; the reverse for a negative
         // step). A zero step throws ArithmeticException when the walk starts.
         w.push_str(concat!(
-            "#[derive(Debug, Clone, Copy)]\n",
+            "#[derive(Debug, Clone)]\n",
             "pub struct JuxStepped<T> {\n",
             "    pub start: T,\n",
             "    pub end: T,\n",
@@ -5204,18 +5204,18 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "    inclusive: bool,\n",
             "    next: Option<T>,\n",
             "}\n",
-            "impl<T: Copy> JuxStepped<T> {\n",
+            "impl<T: Clone> JuxStepped<T> {\n",
             "    pub fn new(start: T, end: T, step: i64, inclusive: bool) -> Self {\n",
-            "        JuxStepped { start, end, step, inclusive, next: Some(start) }\n",
+            "        JuxStepped { next: Some(start.clone()), start, end, step, inclusive }\n",
             "    }\n",
             "}\n",
-            "impl<T: Copy + PartialOrd + TryFrom<i128> + TryInto<i128>> Iterator for JuxStepped<T> {\n",
+            "impl<T: Clone + PartialOrd + TryFrom<i128> + TryInto<i128>> Iterator for JuxStepped<T> {\n",
             "    type Item = T;\n",
             "    fn next(&mut self) -> Option<T> {\n",
             "        if self.step == 0 {\n",
-            "            std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(\"range step is zero\".to_string()));\n",
+            "            std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"range step is zero\")));\n",
             "        }\n",
-            "        let cur = self.next?;\n",
+            "        let cur = self.next.take()?;\n",
             "        let more = if self.step > 0 {\n",
             "            if self.inclusive { cur <= self.end } else { cur < self.end }\n",
             "        } else if self.inclusive {\n",
@@ -5223,13 +5223,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "        } else {\n",
             "            cur > self.end\n",
             "        };\n",
-            "        if !more {\n",
-            "            self.next = None;\n",
-            "            return None;\n",
-            "        }\n",
-            "        // Past the type's range the walk simply ends.\n",
-            "        self.next = cur.try_into().ok().and_then(|c: i128| T::try_from(c + self.step as i128).ok());\n",
-            "        Some(cur)\n",
+            "        // Past the end, or past the type's own range, the walk is over.\n",
+            "        more.then(|| {\n",
+            "            self.next = cur.clone().try_into().ok().and_then(|c: i128| T::try_from(c + self.step as i128).ok());\n",
+            "            cur\n",
+            "        })\n",
             "    }\n",
             "}\n\n",
         ));
