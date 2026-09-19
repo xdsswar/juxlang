@@ -23,8 +23,12 @@ class JuxProjectOptionsStep(private val builder: JuxModuleBuilder) : ModuleWizar
         builder.projectKind == JuxProjectKind.EXECUTABLE,
     )
     private val library = JBRadioButton(
-        "Library — a reusable module other Jux code depends on",
+        "Library: a reusable package other Jux code depends on (jux new --lib)",
         builder.projectKind == JuxProjectKind.LIBRARY,
+    )
+    private val workspace = JBRadioButton(
+        "Workspace: a root for several packages built together (jux new --workspace)",
+        builder.projectKind == JuxProjectKind.WORKSPACE,
     )
 
     /** crate-type for a library (§B.2.3): Jux/Rust lib, or C-ABI shared/static. */
@@ -36,11 +40,16 @@ class JuxProjectOptionsStep(private val builder: JuxModuleBuilder) : ModuleWizar
     private val sample = JBCheckBox("Generate sample code", builder.generateSample)
 
     init {
-        ButtonGroup().apply { add(executable); add(library) }
-        // The crate-type choice only applies to a library.
-        val sync = { setLibraryControlsEnabled(library.isSelected) }
+        ButtonGroup().apply { add(executable); add(library); add(workspace) }
+        // The crate-type choice only applies to a library, starter code not to
+        // a workspace (it has no sources of its own).
+        val sync = {
+            setLibraryControlsEnabled(library.isSelected)
+            sample.isEnabled = !workspace.isSelected
+        }
         executable.addActionListener { sync() }
         library.addActionListener { sync() }
+        workspace.addActionListener { sync() }
     }
 
     override fun getComponent(): JComponent {
@@ -52,6 +61,7 @@ class JuxProjectOptionsStep(private val builder: JuxModuleBuilder) : ModuleWizar
             .addComponent(JBLabel("What would you like to build?"))
             .addComponent(executable)
             .addComponent(library)
+            .addComponent(workspace)
             .addLabeledComponent(crateTypeLabel, crateRow)
             .addComponent(sample)
             .addComponentFillVertically(JPanel(), 0)
@@ -65,7 +75,11 @@ class JuxProjectOptionsStep(private val builder: JuxModuleBuilder) : ModuleWizar
     }
 
     override fun updateDataModel() {
-        builder.projectKind = if (library.isSelected) JuxProjectKind.LIBRARY else JuxProjectKind.EXECUTABLE
+        builder.projectKind = when {
+            library.isSelected -> JuxProjectKind.LIBRARY
+            workspace.isSelected -> JuxProjectKind.WORKSPACE
+            else -> JuxProjectKind.EXECUTABLE
+        }
         builder.crateType = (crateType.selectedItem as? String) ?: "lib"
         builder.generateSample = sample.isSelected
     }

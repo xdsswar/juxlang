@@ -108,18 +108,44 @@ class JuxDocumentationProvider : AbstractDocumentationProvider(), com.intellij.l
         }
         var copiedFrom: String? = null
         val doc = docComment(decl) ?: inheritedDoc(decl)?.let { (from, text) -> copiedFrom = from; text }
-        if (doc != null) renderDoc(JuxDocComment.parse(doc), copiedFrom, sb)
+        if (doc != null) renderDoc(JuxDocComment.parse(doc), copiedFrom, sb, highlighter(decl))
         return sb.toString()
     }
 
-    /** The description, then one section per tag kind, as Java's popup shows them. */
-    private fun renderDoc(doc: JuxDocComment, copiedFrom: String?, sb: StringBuilder) {
+    /**
+     * ```` ```jux ```` examples in the popup get the editor's own colors, the
+     * way the code they document looks in the editor.
+     */
+    private fun highlighter(decl: PsiElement): JuxDocMarkdown.Highlighter = JuxDocMarkdown.Highlighter { code ->
+        try {
+            val sb = StringBuilder()
+            com.intellij.openapi.editor.richcopy.HtmlSyntaxInfoUtil.appendHighlightedByLexerAndEncodedAsHtmlCodeSnippet(
+                sb, decl.project, dev.jux.intellij.JuxLanguage, code, 1.0f,
+            )
+            sb.toString()
+        } catch (_: Exception) {
+            StringUtil.escapeXmlEntities(code)
+        }
+    }
+
+    /**
+     * A deprecation line, the description (Markdown, as `jux doc` renders it),
+     * then one section per tag kind, as Java's popup shows them.
+     */
+    private fun renderDoc(doc: JuxDocComment, copiedFrom: String?, sb: StringBuilder, highlight: JuxDocMarkdown.Highlighter) {
+        doc.deprecated?.let { reason ->
+            sb.append(DocumentationMarkup.CONTENT_START)
+            sb.append("<p><b>Deprecated</b>")
+            if (reason.isNotEmpty()) sb.append(": ").append(JuxDocMarkdown.inline(reason))
+            sb.append("</p>")
+            sb.append(DocumentationMarkup.CONTENT_END)
+        }
         if (doc.description.isNotEmpty()) {
             sb.append(DocumentationMarkup.CONTENT_START)
             if (copiedFrom != null) {
                 sb.append("<p><i>Description copied from: ").append(StringUtil.escapeXmlEntities(copiedFrom)).append("</i></p>")
             }
-            sb.append(JuxDocComment.toHtml(doc.description))
+            sb.append(JuxDocComment.toHtml(doc.description, highlight))
             sb.append(DocumentationMarkup.CONTENT_END)
         }
         val sections = listOf(
@@ -239,12 +265,21 @@ class JuxDocumentationProvider : AbstractDocumentationProvider(), com.intellij.l
         }
     }
 
-    /** Strip `/** … */` (or `/* … */`) markers and leading `*` from each line. */
+    /**
+     * Strip `/** … */` (or `/* … */`) markers, each line's leading `*` and the
+     * one space after it (the comment's margin, as `jux doc` reads it), so
+     * the indentation inside a fenced example survives.
+     */
     private fun cleanBlock(text: String): String =
         text.removePrefix("/**").removePrefix("/*").removeSuffix("*/")
             .lines()
-            .joinToString("\n") { it.trim().removePrefix("*").trim() }
-            .trim()
+            .joinToString("\n") { line ->
+                val t = line.trimStart()
+                val body = if (t.startsWith("*")) t.substring(1) else t
+                body.removePrefix(" ").trimEnd()
+            }
+            .trim('\n')
+            .trimIndent()
 
     /** Strip the leading `///` or `//` from a line comment. */
     private fun cleanLine(text: String): String =

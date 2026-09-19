@@ -332,6 +332,38 @@
     <lang.documentationProvider
         language="Jux"
         implementationClass="dev.jux.intellij.documentation.JuxDocumentationProvider"/>
+    <!-- Inside doc comments: tags and name values colored, ```jux example
+         blocks highlighted as Jux, ignore / no_run flags as metadata. -->
+    <annotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.documentation.JuxDocCommentAnnotator"/>
+    <!-- @tag, @param name and ```jux fence completion in doc comments. -->
+    <completion.contributor
+        language="Jux"
+        order="first"
+        implementationClass="dev.jux.intellij.documentation.JuxDocTagCompletionContributor"/>
+
+    <!-- jux.toml (TOML with the TOML plugin, plain text without it): the
+         [workspace] keys, member paths, key.workspace = true inheritance
+         (completion, checks, and Ctrl+B to the root's declaration). -->
+    <completion.contributor
+        language="any"
+        implementationClass="dev.jux.intellij.toml.JuxManifestCompletionContributor"/>
+    <localInspection
+        shortName="JuxManifest"
+        displayName="jux.toml workspace problems"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.toml.JuxManifestInspection"/>
+    <gotoDeclarationHandler implementation="dev.jux.intellij.toml.JuxManifestGotoHandler"/>
+
+    <!-- Alt+Enter "Explain error EXXXX": juxc explain <code>, offline. -->
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxExplainErrorIntention</className>
+      <category>Jux</category>
+    </intentionAction>
 
     <!-- Java-style inline parameter-name hints inside resolved calls
          (`foo(name: a, …)`). By-name over file-local declarations; ambiguous
@@ -1254,5 +1286,23 @@
             description="Show the Jux plugin license and AS-IS disclaimer">
       <add-to-group group-id="HelpMenu" anchor="last"/>
     </action>
+
+    <!-- Tools | Jux: the jux project commands (JUX-BUILD-SYSTEM-ADDENDUM
+         §B.10.5, §B.14, §B.15), streamed into the Jux Build console. -->
+    <group id="Jux.ToolsGroup" text="Jux" popup="true">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+      <action id="Jux.Cli.New" class="dev.jux.intellij.actions.JuxNewProjectCommandAction"/>
+      <action id="Jux.Cli.Init" class="dev.jux.intellij.actions.JuxInitAction"/>
+      <separator/>
+      <action id="Jux.Cli.Add" class="dev.jux.intellij.actions.JuxAddDependencyAction"/>
+      <action id="Jux.Cli.Remove" class="dev.jux.intellij.actions.JuxRemoveDependencyAction"/>
+      <action id="Jux.Cli.Tree" class="dev.jux.intellij.actions.JuxTreeAction"/>
+      <separator/>
+      <action id="Jux.Cli.Doc" class="dev.jux.intellij.actions.JuxDocAction"/>
+      <action id="Jux.Cli.DocOpen" class="dev.jux.intellij.actions.JuxDocOpenAction"/>
+      <action id="Jux.Cli.DocTests" class="dev.jux.intellij.actions.JuxRunDocExamplesAction"/>
+      <separator/>
+      <action id="Jux.Cli.Clean" class="dev.jux.intellij.actions.JuxCleanAction"/>
+    </group>
   </actions>
 </idea-plugin>

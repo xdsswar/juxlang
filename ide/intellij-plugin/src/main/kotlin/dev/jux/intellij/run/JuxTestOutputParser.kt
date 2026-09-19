@@ -34,8 +34,59 @@ object JuxTestOutputParser {
         /** The `test result: …` summary line. */
         data class Summary(val ok: Boolean, val passed: Int, val failed: Int, val filtered: Int) : Line
 
+        /** `running N doc example(s) of `pkg`` (`jux test --doc`, §12.5). */
+        data class DocRunStart(val count: Int, val pkg: String) : Line
+
+        /** `  PASS Owner (file:line)`: a doc example of [owner] that compiled and ran. */
+        data class DocPass(val owner: String, val location: String) : Line
+
+        /**
+         * `  FAIL Owner (file:line)`: a doc example that failed. The reason
+         * follows on lines indented seven spaces, classified as [Other].
+         */
+        data class DocFail(val owner: String, val location: String) : Line
+
+        /** `doc examples: ok. 3 passed; 0 failed` (or `FAILED.`). */
+        data class DocSummary(val ok: Boolean, val passed: Int, val failed: Int) : Line
+
         /** Anything else (compiler output, program prints, blank lines). */
         data object Other : Line
+    }
+
+    // The doc-example report of `jux test --doc` / `jux doc` (bin/jux,
+    // `run_doctests_for`): the owner is the documented item (`Shape.area`),
+    // the location its declaration (`src/geo/Shape.jux:12`, possibly a
+    // Windows path with a drive colon).
+    private val DOC_RUN_START = Regex("""^running (\d+) doc example\(s\) of `([^`]*)`$""")
+    private val DOC_PASS = Regex("""^\s+PASS (\S+) \((.+:\d+)\)$""")
+    private val DOC_FAIL = Regex("""^\s+FAIL (\S+) \((.+:\d+)\)$""")
+    private val DOC_SUMMARY = Regex("""^doc examples: (ok|FAILED)\. (\d+) passed; (\d+) failed$""")
+
+    /**
+     * Classify one `jux test --doc` line: the doc forms first (their PASS/FAIL
+     * lines end in a `(file:line)` location the unit-test forms never carry),
+     * then the ordinary test forms, so one console can read both reports.
+     */
+    fun classifyDoc(line: String): Line {
+        val t = line.trimEnd('\r', '\n')
+        DOC_RUN_START.matchEntire(t)?.let { return Line.DocRunStart(it.groupValues[1].toInt(), it.groupValues[2]) }
+        DOC_PASS.matchEntire(t)?.let { return Line.DocPass(it.groupValues[1], it.groupValues[2]) }
+        DOC_FAIL.matchEntire(t)?.let { return Line.DocFail(it.groupValues[1], it.groupValues[2]) }
+        DOC_SUMMARY.matchEntire(t)?.let {
+            return Line.DocSummary(it.groupValues[1] == "ok", it.groupValues[2].toInt(), it.groupValues[3].toInt())
+        }
+        return classify(t)
+    }
+
+    /**
+     * Split a doc example's `file:line` location into its path and 1-based
+     * line. The LAST colon splits, so `C:\proj\src\A.jux:7` keeps its drive.
+     */
+    fun splitLocation(location: String): Pair<String, Int>? {
+        val at = location.lastIndexOf(':')
+        if (at <= 0) return null
+        val line = location.substring(at + 1).toIntOrNull() ?: return null
+        return location.substring(0, at) to line
     }
 
     // `running 12 tests` (also tolerates `running 1 test`).

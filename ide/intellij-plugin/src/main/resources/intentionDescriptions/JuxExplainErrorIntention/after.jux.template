@@ -1,0 +1,6 @@
+// A window shows `juxc explain E0413`: what the error means, why the
+// compiler reports it, and how to fix it. The code is not changed.
+public void main() {
+    var v = new Vec<int>();
+    v.add(1);
+}

@@ -12,7 +12,7 @@ class JuxRunConfigurationOptions : RunConfigurationOptions() {
     private val filePathProp = string("").provideDelegate(this, "juxFilePath")
     private val juxcPathProp = string("juxc").provideDelegate(this, "juxcPath")
 
-    /** `"run"` (juxc --run, the default) or `"test"` (`jux test`, §TS.2). */
+    /** `"run"` (the default), `"test"` (`jux test`, §TS.2) or `"doctest"` (`jux test --doc`). */
     private val modeProp = string("run").provideDelegate(this, "juxMode")
 
     /** Substring filter for `jux test <pattern>` (§TS.8); blank = all tests. */
@@ -20,6 +20,15 @@ class JuxRunConfigurationOptions : RunConfigurationOptions() {
 
     /** `jux test --release` — build the test runner with optimizations. */
     private val releaseProp = property(false).provideDelegate(this, "juxTestRelease")
+
+    /** `--profile <name>` (§B.9); blank means the default profile. */
+    private val profileProp = string("").provideDelegate(this, "juxProfile")
+
+    /**
+     * `--example <name>` for a project run (§B.1.3); blank runs the main
+     * program, [JuxRunCommands.ALL_EXAMPLES] builds every example.
+     */
+    private val exampleProp = string("").provideDelegate(this, "juxExample")
 
     var filePath: String
         get() = filePathProp.getValue(this) ?: ""
@@ -40,4 +49,12 @@ class JuxRunConfigurationOptions : RunConfigurationOptions() {
     var release: Boolean
         get() = releaseProp.getValue(this)
         set(value) = releaseProp.setValue(this, value)
+
+    var profile: String
+        get() = profileProp.getValue(this) ?: ""
+        set(value) = profileProp.setValue(this, value)
+
+    var example: String
+        get() = exampleProp.getValue(this) ?: ""
+        set(value) = exampleProp.setValue(this, value)
 }

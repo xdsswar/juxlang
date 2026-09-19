@@ -8,7 +8,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.configurations.RunConfiguration
 import com.intellij.execution.configurations.RunConfigurationBase
 import com.intellij.execution.configurations.RuntimeConfigurationError
-import com.intellij.execution.process.OSProcessHandler
+import com.intellij.execution.process.ColoredProcessHandler
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.process.ProcessTerminatedListener
 import com.intellij.execution.runners.ExecutionEnvironment
@@ -28,6 +28,11 @@ import java.nio.charset.StandardCharsets
  *    dependencies, so a project must go through `jux`.)
  *  - **test** (§TS.2): `jux test [pattern] [--release]` from the project's
  *    manifest root, with the SM test-tree console ([JuxTestCommandLineState]).
+ *  - **doctest** (§12.5): `jux test --doc`, the ```` ```jux ```` examples in
+ *    doc comments, in the same test-tree console.
+ *
+ * A project run can pick a `--profile` (§B.9) and an `--example` (§B.1.3);
+ * every console asks for the framed, colored diagnostics ([JuxRunCommands]).
  *
  * The executables resolve through [JuxToolchain] (explicit override →
  * `$JUX_HOME` → `PATH`), so the common setup needs no per-config tweaking.
@@ -73,8 +78,31 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
             options.release = value
         }
 
-    /** True when this configuration runs `jux test` rather than `juxc --run`. */
-    fun isTestMode(): Boolean = mode == MODE_TEST
+    /** `--profile <name>` (§B.9) for project runs and tests; blank = the default. */
+    var profile: String
+        get() = options.profile
+        set(value) {
+            options.profile = value
+        }
+
+    /**
+     * `--example <name>` (§B.1.3) for a project run; blank runs the main
+     * program and [JuxRunCommands.ALL_EXAMPLES] builds every example.
+     */
+    var example: String
+        get() = options.example
+        set(value) {
+            options.example = value
+        }
+
+    /**
+     * True when this configuration runs a test console: `jux test`, or
+     * `jux test --doc` for the doc-comment examples ([isDocTestMode]).
+     */
+    fun isTestMode(): Boolean = mode == MODE_TEST || mode == MODE_DOCTEST
+
+    /** True for `jux test --doc`: the ```` ```jux ```` examples in doc comments (§12.5). */
+    fun isDocTestMode(): Boolean = mode == MODE_DOCTEST
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = JuxSettingsEditor()
 
@@ -85,12 +113,12 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
      */
     @Throws(RuntimeConfigurationError::class)
     override fun checkConfiguration() {
-        if (isTestMode()) {
-            // Test mode points at any file/dir used only to locate the
-            // manifest; what must exist is the jux.toml `jux test` requires.
+        // Test mode, an example run and a profile all go through `jux`, which
+        // needs a project: the file only locates the jux.toml.
+        if (isTestMode() || example.isNotBlank() || profile.isNotBlank()) {
             if (manifestRoot() == null) {
                 throw RuntimeConfigurationError(
-                    "No jux.toml found above '${filePath.ifBlank { "<project>" }}' — `jux test` needs a Jux project",
+                    "No jux.toml found above '${filePath.ifBlank { "<project>" }}': this configuration needs a Jux project",
                 )
             }
             return
@@ -125,7 +153,7 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
                 val cmd = if (manifest != null) {
                     GeneralCommandLine()
                         .withExePath(JuxToolchain.resolveJux())
-                        .withParameters("run")
+                        .withParameters(JuxRunCommands.projectRun(example, profile))
                         .withWorkDirectory(manifest)
                         .withCharset(StandardCharsets.UTF_8)
                 } else {
@@ -136,13 +164,15 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
                     val target = compileTarget(File(filePath))
                     val c = GeneralCommandLine()
                         .withExePath(JuxToolchain.resolveJuxc(juxcPath))
-                        .withParameters(target.absolutePath, "--run")
+                        .withParameters(JuxRunCommands.standalone(target.absolutePath))
                         .withCharset(StandardCharsets.UTF_8)
                     val workDir = if (target.isDirectory) target else target.parentFile
                     workDir?.let { if (it.isDirectory) c.withWorkDirectory(it) }
                     c
                 }
-                val handler = OSProcessHandler(cmd)
+                // Colored: the tools print the framed `human` diagnostics
+                // with ANSI colors (JuxRunCommands.CONSOLE_DIAGNOSTICS).
+                val handler = ColoredProcessHandler(cmd)
                 ProcessTerminatedListener.attach(handler)
                 return handler
             }
@@ -180,5 +210,6 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
         /** [mode] values. */
         const val MODE_RUN = "run"
         const val MODE_TEST = "test"
+        const val MODE_DOCTEST = "doctest"
     }
 }

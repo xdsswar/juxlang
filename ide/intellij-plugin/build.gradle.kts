@@ -85,6 +85,18 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.2</h3>
+            <p>The build system comes to the IDE: profiles, examples, workspaces, doc examples and framed errors.</p>
+            <ul>
+              <li><b>Run configurations</b> pick a <b>--profile</b> (built-ins plus your <b>[profile.*]</b>) and an <b>--example</b> from <b>examples/</b>, or build all examples; a new <b>Doc examples</b> mode runs <b>jux test --doc</b>.</li>
+              <li><b>Doc examples in the test tree</b>: each <b>```jux</b> example is a green or red node that opens the item it documents; a failure shows its reason.</li>
+              <li><b>jux.toml</b>: completion and checks for <b>[workspace]</b> (<b>members</b> patterns, <b>exclude</b>, <b>default-members</b>) and <b>key.workspace = true</b>, with Ctrl+B to the root's declaration.</li>
+              <li><b>Tools | Jux</b>: <b>new</b> (binary, library, workspace), <b>init</b>, <b>add</b> (path, git, tag, features), <b>remove</b>, <b>tree</b>, <b>doc</b>, <b>doc --open</b>, <b>clean</b>.</li>
+              <li><b>Doc comments</b>: tags colored and completed, <b>```jux</b> examples highlighted as Jux with their <b>ignore</b> / <b>no_run</b> flags, and Quick Documentation rendered like <b>jux doc</b> (Markdown, highlighted examples, <b>@deprecated</b>).</li>
+              <li><b>Framed, colored compile errors</b> in run and test consoles, and Alt+Enter <b>Explain error EXXXX</b> for any Jux diagnostic.</li>
+              <li><b>New Project</b>: binary, library or workspace, made by <b>jux new</b> when the toolchain is installed.</li>
+            </ul>
+
             <h3>0.1.1</h3>
             <p>The editor catches up with the newest Jux: the standard library, <b>never</b>, ranges as values, and the layout and ABI features.</p>
             <ul>
