@@ -181,6 +181,13 @@ impl RustEmitter {
                             // A record is a value that derives `Clone`, and
                             // `var l = loans[0];` moved it out of the Vec.
                             || self.type_name_is_value_type(name)
+                            // A Jux interface element is an `Rc<dyn …>`
+                            // handle: reading it shares the object (a refcount
+                            // bump). `var op = ops[i];` over a `Vec<Op>`
+                            // moved it out of the vector instead (E0507).
+                            || self
+                                .lookup_interface_by_bare_or_fqn(bare)
+                                .is_some_and(|(_, iface)| !iface.is_external)
                     }
                     _ => false,
                 };
