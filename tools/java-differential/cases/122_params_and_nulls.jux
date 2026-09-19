@@ -1,0 +1,105 @@
+// Parameters and nulls: default parameters and named arguments (the Java twin
+// writes the overloads by hand), varargs, and a user directory full of
+// optional data read with ?., ??, ?: and !!.
+
+String greet(String name, String greeting = "Hello", int times = 1, bool shout = false) {
+    var line = "";
+    for (var i = 0; i < times; i++) {
+        if (i > 0) { line += " "; }
+        line += greeting + ", " + name;
+    }
+    return shout ? line.to_uppercase() + "!" : line;
+}
+
+int sum(int... values) {
+    var total = 0;
+    for (var v : values) {
+        total += v;
+    }
+    return total;
+}
+
+String joinAll(String sep, String... parts) {
+    var out = "";
+    for (var i = 0; i < parts.length; i++) {
+        if (i > 0) { out += sep; }
+        out += parts[i];
+    }
+    return out;
+}
+
+class Address {
+    public String city;
+    public String? zip;
+    public Address(String city, String? zip) { this.city = city; this.zip = zip; }
+}
+
+class User {
+    public String name;
+    public Address? address;
+    public User? manager;
+    public int? age;
+    public User(String name, Address? address, User? manager, int? age) {
+        this.name = name;
+        this.address = address;
+        this.manager = manager;
+        this.age = age;
+    }
+}
+
+String city(User? u) {
+    return u?.address?.city ?? "unknown";
+}
+
+String zip(User u) {
+    var a = u.address;
+    if (a == null) { return "no address"; }
+    return a.zip ?: "no zip";
+}
+
+int managerChainLength(User u) {
+    var n = 0;
+    User? cur = u.manager;
+    while (cur != null) {
+        n++;
+        cur = cur.manager;
+    }
+    return n;
+}
+
+int ageOrThrow(User u) {
+    return u.age ?: throw new IllegalStateException(u.name + " has no age");
+}
+
+public void main() {
+    print(greet("Ada"));
+    print(greet("Ada", "Hi"));
+    print(greet("Ada", times: 2));
+    print(greet("Bob", shout: true, greeting: "Hey"));
+    print(greet(name: "Cy", times: 3, greeting: "Yo"));
+
+    print(sum());
+    print(sum(4));
+    print(sum(1, 2, 3, 4));
+    int[] xs = {10, 20, 30};
+    print(sum(xs));
+    print(joinAll("-", "a", "b", "c"));
+    print(joinAll(", "));
+
+    var ceo = new User("Grace", new Address("Arlington", "22201"), null, 85);
+    var vp = new User("Linus", new Address("Portland", null), ceo, null);
+    var dev = new User("Ada", null, vp, 36);
+    User? nobody = null;
+
+    print(city(dev) + " / " + city(vp) + " / " + city(nobody));
+    print(zip(ceo) + " / " + zip(vp) + " / " + zip(dev));
+    print("chain " + managerChainLength(dev) + " " + managerChainLength(ceo));
+    print(dev.manager!!.manager!!.name);
+    print((dev.age ?? 0) + (vp.age ?? 0));
+    try {
+        print(ageOrThrow(dev));
+        print(ageOrThrow(vp));
+    } catch (IllegalStateException e) {
+        print("error: " + e.getMessage());
+    }
+}

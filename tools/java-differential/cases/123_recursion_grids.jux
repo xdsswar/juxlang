@@ -1,0 +1,126 @@
+// Recursion and grids: N-queens by backtracking, a flood fill over a 2D
+// char grid, memoized recursion for grid paths, the Ackermann function, a
+// permutation generator, and a switch with guards classifying cells.
+
+class Queens {
+    private int n;
+    private int[] cols;
+    public int solutions = 0;
+    public String first = "";
+
+    public Queens(int n) {
+        this.n = n;
+        this.cols = new int[n];
+    }
+
+    private bool safe(int row, int col) {
+        for (var r = 0; r < row; r++) {
+            var c = cols[r];
+            if (c == col || c - col == r - row || c - col == row - r) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public void solve(int row) {
+        if (row == n) {
+            solutions++;
+            if (first == "") {
+                for (var r = 0; r < n; r++) {
+                    first += cols[r];
+                }
+            }
+            return;
+        }
+        for (var col = 0; col < n; col++) {
+            if (safe(row, col)) {
+                cols[row] = col;
+                solve(row + 1);
+            }
+        }
+    }
+}
+
+int fill(char[][] grid, int r, int c, char from, char to) {
+    if (r < 0 || c < 0 || r >= grid.length || c >= grid[0].length) { return 0; }
+    if (grid[r][c] != from) { return 0; }
+    grid[r][c] = to;
+    return 1 + fill(grid, r + 1, c, from, to) + fill(grid, r - 1, c, from, to)
+        + fill(grid, r, c + 1, from, to) + fill(grid, r, c - 1, from, to);
+}
+
+long paths(int r, int c, long[][] memo) {
+    if (r == 0 || c == 0) { return 1; }
+    if (memo[r][c] != 0) { return memo[r][c]; }
+    var v = paths(r - 1, c, memo) + paths(r, c - 1, memo);
+    memo[r][c] = v;
+    return v;
+}
+
+long ackermann(long m, long n) {
+    if (m == 0) { return n + 1; }
+    if (n == 0) { return ackermann(m - 1, 1); }
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+
+void permute(String prefix, String rest, Vec<String> out) {
+    if (rest.charLength() == 0) {
+        out.push(prefix);
+        return;
+    }
+    for (var i = 0; i < rest.charLength(); i++) {
+        var pick = rest.substring(i, i + 1);
+        var remaining = rest.substring(0, i) + rest.substring(i + 1);
+        permute(prefix + pick, remaining, out);
+    }
+}
+
+String classify(char cell, int neighbours) {
+    return switch (neighbours) {
+        case 0 -> cell == '#' ? "lonely wall" : "open field";
+        case 1, 2 when cell == '#' -> "thin wall";
+        case 1, 2 -> "path";
+        default -> cell == '#' ? "fortress" : "courtyard";
+    };
+}
+
+public void main() {
+    for (var n = 4; n <= 8; n++) {
+        var q = new Queens(n);
+        q.solve(0);
+        print($"queens ${n}: ${q.solutions} first ${q.first}");
+    }
+
+    char[][] grid = {
+        {'.', '.', '#', '.', '.'},
+        {'.', '#', '#', '.', '#'},
+        {'.', '.', '.', '#', '.'},
+        {'#', '#', '.', '.', '.'}
+    };
+    print("filled " + fill(grid, 0, 0, '.', 'o'));
+    for (var row : grid) {
+        var line = "";
+        for (var ch : row) {
+            line += ch;
+        }
+        print(line);
+    }
+
+    long[][] memo = new long[17][17];
+    print("paths 16x16 = " + paths(16, 16, memo));
+    print("ackermann(2, 3) = " + ackermann(2, 3));
+    print("ackermann(3, 3) = " + ackermann(3, 3));
+
+    var perms = new Vec<String>();
+    permute("", "abcd", perms);
+    print(perms.len() + " perms, 7th " + perms[6] + ", last " + perms[perms.len() - 1]);
+
+    for (var r = 0; r < grid.length; r++) {
+        var walls = 0;
+        for (var c = 0; c < grid[r].length; c++) {
+            if (grid[r][c] == '#') { walls++; }
+        }
+        print("row " + r + ": " + classify(grid[r][0], walls));
+    }
+}

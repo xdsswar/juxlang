@@ -1,0 +1,70 @@
+// Rust std collections in a log-processing pipeline: a generator parses
+// lines lazily, a VecDeque keeps a sliding window, a HashSet dedupes, a
+// BTreeMap aggregates in key order, and a Vec is sorted and sliced.
+
+record Hit(String path, int status, long ms) {}
+
+Iterator<Hit> parse(String[] lines) {
+    for (var line : lines) {
+        var parts = line.split(" ");
+        if (parts.length != 3) {
+            continue;
+        }
+        yield new Hit(parts[0], parts[1].parse<int>(), parts[2].parse<long>());
+    }
+}
+
+Iterator<Hit> errorsOnly(Iterator<Hit> source) {
+    for (var h : source) {
+        if (h.status >= 500) {
+            yield h;
+        }
+    }
+}
+
+public void main() {
+    String[] log = {
+        "/home 200 12", "/api/users 200 40", "/api/users 500 900", "garbage line",
+        "/home 304 3", "/api/orders 200 55", "/api/orders 503 1200", "/api/users 200 38",
+        "/static/app.js 200 4", "/api/orders 200 61", "/home 200 15", "/api/users 502 700"
+    };
+
+    var byPath = new BTreeMap<String, long>();
+    var counts = new BTreeMap<String, int>();
+    var statuses = new HashSet<int>();
+    var window = new VecDeque<long>();
+    long windowSum = 0;
+    var slowest = new Vec<long>();
+
+    for (var h : parse(log)) {
+        byPath.insert(h.path, (byPath.get(h.path) ?? 0L) + h.ms);
+        counts.insert(h.path, (counts.get(h.path) ?? 0) + 1);
+        statuses.insert(h.status);
+        window.push_back(h.ms);
+        windowSum += h.ms;
+        if (window.len() > 3) {
+            windowSum -= window.pop_front()!!;
+        }
+        slowest.push(h.ms);
+    }
+
+    for (var e : byPath) {
+        var n = counts.get(e.0) ?? 1;
+        print(e.0 + " total " + e.1 + "ms avg " + (e.1 / n) + "ms over " + n);
+    }
+    print("distinct statuses " + statuses.len() + ", has 404 " + statuses.contains(404) + ", has 503 " + statuses.contains(503));
+    print("last 3 window sum " + windowSum);
+
+    slowest.sort_unstable();
+    var top = "";
+    for (var k = slowest.len(); k > slowest.len() - 3; k--) {
+        top += slowest[k - 1] + " ";
+    }
+    print("slowest " + top.trim());
+
+    var errors = "";
+    for (var h : errorsOnly(parse(log))) {
+        errors += h.path + ":" + h.status + " ";
+    }
+    print("errors " + errors.trim());
+}
