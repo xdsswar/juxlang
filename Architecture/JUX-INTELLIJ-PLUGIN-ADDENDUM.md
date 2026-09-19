@@ -249,6 +249,63 @@ well, with the rest of Java's refactoring set (see `plugin.xml` and
 - **Names.** `alignof`, `never` and the three range types resolve; `alignof`
   completes in expressions and `@align` in annotations.
 
+### Added in 0.1.2
+
+The build-system wave of the toolchain (JUX-BUILD-SYSTEM-ADDENDUM §B.7,
+§B.9, §B.1.3, §B.10.5, §B.14, §B.15; JUX-DIAGNOSTICS-ADDENDUM §D.1.6,
+§D.5.3), reachable from the IDE:
+
+- **Run configurations.** A **Profile** picker (`--profile <name>`) offers
+  the four built-in profiles plus every `[profile.<name>]` of the manifest,
+  and stays editable. An **Example** picker offers every program under
+  `examples/` (`--example <name>`), the main program, and "all examples"
+  (`jux build --examples`). A third mode, **Doc examples**, runs
+  `jux test --doc`. A profile or an example makes the configuration require
+  a `jux.toml`, as the CLI does.
+- **Framed diagnostics in consoles.** Every run and test console passes
+  `--diagnostic-format human --color always`, so compile errors arrive as
+  the colored, framed `human` form (the console interprets the colors, and
+  every `path:line:col` stays clickable). The editor's background check keeps
+  `juxc --check --diagnostic-format json`.
+- **Doc examples in the test tree.** The `jux test --doc` report (`running N
+  doc example(s)`, `PASS Owner (file:line)`, `FAIL Owner (file:line)` and
+  its indented reason, `doc examples: ok.`) becomes a green/red tree: a
+  failure's reason is the node's message, and double-click opens the item the
+  example documents.
+- **`jux.toml`.** Completion of the `[workspace]` keys (`members`, `exclude`,
+  `default-members`), of member directories inside those arrays (a wildcard
+  pattern for a directory holding several packages; the real members for
+  `default-members`), of table names on a `[` line, and of
+  `key.workspace = true` for every key the root's `[workspace.package]` /
+  `[workspace.dependencies]` declares. An inspection reports an unknown
+  `[workspace]` key, a member that does not exist or holds no `jux.toml`, a
+  pattern matching no package, a `default-members` entry that is no member,
+  and an inherited key the root does not declare (or with no root at all).
+  Ctrl+B on an inherited entry opens the root's declaration. All of it reads
+  the text, so it works whether `jux.toml` is TOML (with the TOML plugin) or
+  plain text.
+- **Tools | Jux.** `jux new` (binary, `--lib`, `--workspace`), `init`, `add`
+  (a dialog for the version, `--path`, `--git` with a branch / tag / rev, and
+  `--features`), `remove` (picked from the manifest's dependencies), `tree`,
+  `doc`, `doc --open`, "Run Doc Examples" (the test tree above) and `clean`,
+  streamed into the Jux Build console.
+- **Doc comments.** Tags (`@param`, `@return`, `@throws`, `@deprecated`,
+  `@since`, `@see` and the synonyms) and the name after `@param` / `@throws`
+  are colored as Java's are; a ```` ```jux ```` block is highlighted as Jux,
+  line by line after the comment margin, with `ignore` / `no_run` shown as
+  metadata. Completion offers the tags after `@`, the undocumented parameters
+  after `@param`, and `jux`, `jux no_run`, `jux ignore` after a fence.
+  Quick Documentation renders the comment with `jux doc`'s Markdown subset
+  (paragraphs, headings, lists, fenced blocks, inline code, bold, italic,
+  links), highlights example blocks, captions `ignore` / `no_run`, and shows
+  `@deprecated` as its own line. Inside a fenced block nothing is a tag.
+- **Explain error.** Alt+Enter "Explain error EXXXX" on any highlight whose
+  message carries a Jux code opens what `juxc explain <code>` prints.
+- **New Project wizard.** Binary, library and workspace, the three `jux new`
+  templates. With a `jux` toolchain installed the wizard runs `jux new` itself
+  and copies its files; without one it writes the same templates. `src/` and
+  `test/` become Jux source roots.
+
 ### Known gaps against the Java plugin
 
 What the audit lists as not built yet, most valuable first: a real
