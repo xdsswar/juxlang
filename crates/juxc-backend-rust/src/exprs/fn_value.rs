@@ -58,7 +58,7 @@ impl RustEmitter {
             .or_else(|| {
                 self.symbols.lookup_function(name).and_then(|(fqn, f)| {
                     let home = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
-                    package.as_deref().is_none_or(|p| p == home).then_some(f)
+                    package.as_deref().map_or(true, |p| p == home).then_some(f)
                 })
             });
         let Some(sig) = sig else {

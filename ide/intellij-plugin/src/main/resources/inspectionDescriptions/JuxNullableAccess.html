@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports a member of a <code>T?</code> value used with <code>.</code> when nothing in the function checks the value.
+<!-- tooltip end -->
+<p>A nullable value can be used as its type only after a check (Type system §T.6):</p>
+<pre><code>void show(String? label) {
+    print(label.len());        // 'label' may be null: check it first
+}</code></pre>
+<p>Check it (<code>if (label != null)</code>, <code>label ?: "none"</code>, <code>label?.len()</code>), or, when you know better,
+use the quick-fix, which asserts it with <code>!!</code>.</p>
+</body>
+</html>

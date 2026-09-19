@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports a local variable that is given values but never read.
+<!-- tooltip end -->
+<pre><code>var last = 0;
+for (var x : xs) {
+    last = x;          // Variable 'last' is assigned but never read
+}</code></pre>
+<p>Usually a leftover, or a read that was meant to be there. No quick-fix: the values assigned may come from calls
+whose effects matter.</p>
+</body>
+</html>

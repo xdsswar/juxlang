@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports <code>x == null</code> or <code>x != null</code> where <code>x</code> is declared with a type that cannot hold null.
+<!-- tooltip end -->
+<p>A Jux type is non-null unless it says <code>?</code>, so the test always gives the same answer:</p>
+<pre><code>void greet(String name) {
+    if (name != null) { ... }   // always true: 'name' is not nullable
+}</code></pre>
+<p>Quick-fix: replace the test with its answer, then fold the branch with the constant-condition fix.</p>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports a <code>private</code> field that is only set while the object is being built.
+<!-- tooltip end -->
+<p>A field with an initializer that nothing assigns afterwards, or one that each constructor assigns exactly once,
+can be declared <code>final</code>, which says so and lets the compiler hold you to it.</p>
+<pre><code>class Account {
+    private String owner;          // Field 'owner' may be 'final'
+    Account(String owner) { this.owner = owner; }
+}</code></pre>
+<p>Quick-fix: add <code>final</code>.</p>
+</body>
+</html>

@@ -7,8 +7,11 @@ import com.intellij.codeInsight.template.postfix.templates.PostfixTemplateProvid
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import dev.jux.intellij.intentions.JuxSwitchCases
+import dev.jux.intellij.resolve.JuxTypeEngine
 import dev.jux.intellij.resolve.JuxTypeInference
 
 /**
@@ -54,6 +57,23 @@ class JuxPostfixTemplateProvider : PostfixTemplateProvider {
         copyFile
 
     private companion object {
+        /**
+         * `.switch` on an enum or a sealed value writes every arm, the way
+         * Java's `.switch` fills in an enum's constants: one `case` per
+         * constant or subtype, with the caret in the first arm. Anything else
+         * keeps the plain `switch (expr) { }`.
+         */
+        fun switchWithArms(file: PsiFile, start: Int, end: Int): String? {
+            val expr = JuxPostfixTemplate.expressionAt(file, start, end) ?: return null
+            val labels = JuxSwitchCases.labelsFor(JuxTypeEngine.typeOf(expr))
+            if (labels.isEmpty()) return null
+            val arms = labels.mapIndexed { i, label ->
+                val inside = if (i == 0) "        \$END\$\n" else ""
+                "    case ${label.text} -> {\n$inside    }\n"
+            }.joinToString("")
+            return "switch (\$EXPR\$) {\n$arms}"
+        }
+
         val STMT = JuxPostfixTemplate.Position.STATEMENT
         val EXPR = JuxPostfixTemplate.Position.EXPRESSION
 
@@ -106,9 +126,12 @@ class JuxPostfixTemplateProvider : PostfixTemplateProvider {
             JuxPostfixTemplate("jux.print", "print", "print(expr);", "print(\$EXPR\$);\$END\$", STMT) { true },
             JuxPostfixTemplate("jux.sout", "sout", "print(expr);", "print(\$EXPR\$);\$END\$", STMT) { true },
             JuxPostfixTemplate(
-                "jux.switch", "switch", "switch (expr) { }",
+                "jux.switch", "switch", "switch (expr) { case ... }",
                 "switch (\$EXPR\$) {\n    \$END\$\n}", STMT,
+                dynamicBody = ::switchWithArms,
             ) { true },
+            // Inside a generator: hand the value out (§M.2).
+            JuxPostfixTemplate("jux.yield", "yield", "yield expr;", "yield \$EXPR\$;\$END\$", STMT) { true },
             JuxPostfixTemplate(
                 "jux.try", "try", "try { expr; } catch (Exception e) { }",
                 "try {\n    \$EXPR\$;\n} catch (Exception \$E\$) {\n    \$END\$\n}", STMT,
@@ -149,6 +172,11 @@ class JuxPostfixTemplate(
     private val body: String,
     private val position: Position,
     private val variables: List<Variable> = emptyList(),
+    /**
+     * A body worked out from the expression's PSI at expansion time (the
+     * document is committed first), or null to fall back to [body].
+     */
+    private val dynamicBody: ((PsiFile, Int, Int) -> String?)? = null,
     private val applies: (Shape) -> Boolean,
 ) : PostfixTemplate(id, name, example, null) {
 
@@ -176,11 +204,16 @@ class JuxPostfixTemplate(
         val expr = chars.subSequence(start, dot).toString()
         val shape = Shape.of(expr, context)
 
+        val chosen = dynamicBody?.let { compute ->
+            PsiDocumentManager.getInstance(context.project).commitDocument(document)
+            runCatching { compute(context.containingFile, start, caret) }.getOrNull()
+        } ?: body
+
         val indent = lineIndentAt(chars, start)
         // A `$` in the expression (an interpolated string) must not read as a
         // template variable marker.
         val literal = expr.replace("$", "$$")
-        val text = body
+        val text = chosen
             .replace("\$EXPR_NOT\$", if (shape.isSimple) literal else "($literal)")
             .replace("\$BOUND\$", shape.bound.replace("$", "$$"))
             .replace("\$EXPR\$", literal)
@@ -312,6 +345,22 @@ class JuxPostfixTemplate(
     }
 
     companion object {
+        /**
+         * The largest expression covering exactly `[start, end)` in [file],
+         * or null when that range is not one expression.
+         */
+        fun expressionAt(file: PsiFile, start: Int, end: Int): PsiElement? {
+            var e: PsiElement? = file.findElementAt(end - 1) ?: return null
+            var best: PsiElement? = null
+            while (e != null && e !is PsiFile) {
+                val r = e.textRange
+                if (r.startOffset < start || r.endOffset > end) break
+                if (r.startOffset == start && r.endOffset == end && JuxTypeEngine.isExpression(e)) best = e
+                e = e.parent
+            }
+            return best
+        }
+
         /**
          * The expression scan, exposed for tests.
          *

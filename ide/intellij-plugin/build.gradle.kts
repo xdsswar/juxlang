@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.0</h3>
+            <p>More of IntelliJ's Java intelligence, in Jux's own terms.</p>
+            <ul>
+              <li><b>New inspections</b>: <b>Field may be 'final'</b>, <b>Variable is assigned but never read</b>, a <b>null check on a non-nullable value</b> (always true or false), and a <b>nullable value used without a check</b>, each with a fix. Off by default, as in Java: <b>Local variable may be 'final'</b> and <b>Explicit type can be replaced with 'var'</b>.</li>
+              <li><b>Extract Interface</b> and <b>Extract Superclass</b> join Pull Up, Push Down and Change Signature in the Refactor menu.</li>
+              <li><b>Completion</b>: right after <b>case</b>, only the enum constants or sealed subtypes no arm names yet; <b>chain completion</b> in smart completion (<b>order.customer.home</b> for an <b>Address</b> slot); <b>.switch</b> writes every arm for an enum or sealed value; <b>.yield</b>.</li>
+              <li><b>Generate</b> (Alt+Insert): <b>operator&lt;=&gt;</b>, and <b>Properties</b> with get/set accessors over fields.</li>
+              <li><b>Method-chain type hints</b>: in a chain written one call per line, the type each line produces.</li>
+            </ul>
+
             <h3>0.0.9</h3>
             <p>Java's navigation and inspections, and the newest Jux syntax understood, not just parsed.</p>
             <ul>

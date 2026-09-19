@@ -104,4 +104,40 @@ class JuxHintsTest : BasePlatformTestCase() {
     fun testWrittenTypeGetsNoHint() {
         assertNull(varHint("public class Shape { }\nvoid main() { Shape s = new Shape(); }", "s"))
     }
+
+    // ---- method chains ----
+
+    private fun chainHints(code: String): List<String> {
+        myFixture.configureByText("c.jux", code)
+        return PsiTreeUtil.collectElements(myFixture.file) { it.elementType === E.CALL_EXPRESSION }
+            .flatMap { JuxChainTypeHintsProvider.hintsFor(it) }
+            .map { it.second }
+    }
+
+    private val chainTypes = """
+        public class Person { public String name() { return "p"; } }
+        public class Group { public Person leader() { return new Person(); } }
+        public class Org {
+            public Group team() { return new Group(); }
+            public Org self() { return this; }
+        }
+    """.trimIndent()
+
+    fun testChainOnePerLineShowsEachLinesType() {
+        val hints = chainHints(
+            chainTypes + "\nvoid main() {\n    Org o = new Org();\n    var n = o\n        .team()\n        .leader()\n        .name();\n}\n",
+        )
+        assertEquals(listOf("Group", "Person"), hints)
+    }
+
+    fun testChainOnOneLineGetsNoHints() {
+        assertTrue(chainHints(chainTypes + "\nvoid main() { Org o = new Org(); var n = o.team().leader().name(); }\n").isEmpty())
+    }
+
+    fun testChainOfOneTypeGetsNoHints() {
+        val hints = chainHints(
+            chainTypes + "\nvoid main() {\n    Org o = new Org();\n    var x = o\n        .self()\n        .self()\n        .self();\n}\n",
+        )
+        assertTrue(hints.toString(), hints.isEmpty())
+    }
 }

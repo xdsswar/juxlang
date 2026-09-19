@@ -138,6 +138,47 @@ class JuxGenerateActionsTest : BasePlatformTestCase() {
         assertFalse(presentationVisible(JuxGenerateOperatorStringAction()))
     }
 
+    fun testOperatorCompareComparesFieldsInOrder() {
+        myFixture.configureByText(
+            "Version.jux",
+            """
+            public class Version {
+                private int major;
+                private int minor;
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        myFixture.testAction(JuxGenerateOperatorCompareAction())
+        val text = myFixture.editor.document.text
+        assertTrue(text, text.contains("public int operator<=>(Version other) {"))
+        assertTrue(text, text.contains("int byMajor = major <=> other.major;"))
+        assertTrue(text, text.contains("return byMajor;"))
+        assertTrue(text, text.contains("return minor <=> other.minor;"))
+        // Offered once: now that the type has one, not again.
+        assertFalse(presentationVisible(JuxGenerateOperatorCompareAction()))
+    }
+
+    fun testPropertiesWrapTheFields() {
+        myFixture.configureByText(
+            "Account.jux",
+            """
+            public class Account {
+                private String owner = "";
+                private int Balance = 0;
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        myFixture.testAction(JuxGeneratePropertiesAction())
+        val text = myFixture.editor.document.text
+        assertTrue(text, text.contains("public String Owner {"))
+        assertTrue(text, text.contains("get { return this.owner; }"))
+        assertTrue(text, text.contains("set { this.owner = value; }"))
+        // `Balance` is already PascalCase: a property of that name would collide.
+        assertFalse(text, text.contains("public int Balance {"))
+    }
+
     fun testGeneratedMemberLandsAfterTheMethodHoldingTheCaret() {
         myFixture.configureByText(
             "Walker.jux",

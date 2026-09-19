@@ -235,6 +235,73 @@ class JuxGenerateOperatorStringAction : JuxGenerateAction() {
     }
 }
 
+/**
+ * Generate `operator<=>`, Java's `compareTo` spelled the Jux way (§O.2.1):
+ * the chosen fields compared in order, the first difference deciding. One
+ * three-way comparison gives `<`, `<=`, `>` and `>=` too (§7.14.4), so this
+ * is the only ordering member a type needs.
+ */
+class JuxGenerateOperatorCompareAction : JuxGenerateAction() {
+    override val includeComputed: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields for operator<=>"
+
+    override fun isAvailableFor(type: JuxTypeDeclaration): Boolean =
+        type.node.elementType in ORDERABLE && "<=>" !in declaredOperators(type)
+
+    override fun build(type: JuxTypeDeclaration, className: String, fields: List<JuxField>): String {
+        val self = selfTypeText(type, className)
+        val body = StringBuilder()
+        if (fields.isEmpty()) {
+            body.append("        return 0;\n")
+        } else {
+            for (field in fields.dropLast(1)) {
+                body.append("        int by${capitalize(field.name)} = ${field.name} <=> other.${field.name};\n")
+                body.append("        if (by${capitalize(field.name)} != 0) {\n            return by${capitalize(field.name)};\n        }\n")
+            }
+            val last = fields.last().name
+            body.append("        return $last <=> other.$last;\n")
+        }
+        return "\n    public int operator<=>($self other) {\n$body    }\n"
+    }
+
+    private companion object {
+        val ORDERABLE = setOf(
+            JuxElementTypes.CLASS_DECLARATION,
+            JuxElementTypes.RECORD_DECLARATION,
+            JuxElementTypes.STRUCT_DECLARATION,
+        )
+    }
+}
+
+/**
+ * Generate a property for each chosen field (§P.1 form 4): `Name { get; set; }`
+ * with full accessors over the field, so every read and write goes through
+ * one place a setter can later validate. The property is the field's name in
+ * PascalCase, the preferred spelling (W0974); a field already named that way
+ * is skipped, since the two names would collide.
+ */
+class JuxGeneratePropertiesAction : JuxGenerateAction() {
+    override val includeProperties: Boolean = false
+    override val includeComputed: Boolean = false
+    override val choosesFields: Boolean = true
+    override val chooserTitle: String = "Select Fields to Expose as Properties"
+
+    override fun isAvailableFor(type: JuxTypeDeclaration): Boolean =
+        type.node.elementType === JuxElementTypes.CLASS_DECLARATION
+
+    override fun build(className: String, fields: List<JuxField>): String? {
+        val usable = fields.filter { capitalize(it.name) != it.name }
+        if (usable.isEmpty()) return null
+        return usable.joinToString("") {
+            "\n    public ${it.type} ${capitalize(it.name)} {\n" +
+                "        get { return this.${it.name}; }\n" +
+                "        set { this.${it.name} = value; }\n" +
+                "    }\n"
+        }
+    }
+}
+
 /** Generate `public ClassName(T f, …) { this.f = f; … }` from the fields. */
 class JuxGenerateConstructorAction : JuxGenerateAction() {
     override val includeComputed: Boolean = false

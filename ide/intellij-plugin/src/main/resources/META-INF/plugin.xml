@@ -349,6 +349,16 @@
         bundle="messages.JuxInlayBundle"
         nameKey="jux.var.types.name"
         descriptionKey="jux.var.types.description"/>
+    <!-- The type each line of a one-call-per-line chain produces. -->
+    <codeInsight.declarativeInlayProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.hints.JuxChainTypeHintsProvider"
+        isEnabledByDefault="true"
+        group="METHOD_CHAINS_GROUP"
+        providerId="jux.chain.types"
+        bundle="messages.JuxInlayBundle"
+        nameKey="jux.chain.types.name"
+        descriptionKey="jux.chain.types.description"/>
 
     <!-- Parameter Info (Ctrl+P): the signature of the call the caret is inside,
          active parameter in bold. Jux overloads on parameter TYPES, so every
@@ -909,6 +919,58 @@
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxUnhandledExceptionInspection"/>
 
+    <!-- 0.1.0: Java's final-candidate and data-flow checks that need no flow
+         graph, and the nullability pair mirroring §T.6. The local-variable
+         style checks are off by default, as in Java. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxFieldMayBeFinal"
+        displayName="Field may be 'final'"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxFieldMayBeFinalInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxLocalMayBeFinal"
+        displayName="Local variable may be 'final'"
+        groupName="Jux"
+        enabledByDefault="false"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxLocalMayBeFinalInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxTypeCanBeVar"
+        displayName="Explicit type can be replaced with 'var'"
+        groupName="Jux"
+        enabledByDefault="false"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxTypeCanBeVarInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxAssignedNeverRead"
+        displayName="Variable is assigned but never read"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxAssignedNeverReadInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxRedundantNullCheck"
+        displayName="Null check on a non-nullable value"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxRedundantNullCheckInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxNullableAccess"
+        displayName="Nullable value used without a check"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxNullableAccessInspection"/>
+
     <!-- "Create method from usage" on `receiver.name(...)` when the receiver's
          class has no such method (the language server draws the error). -->
     <intentionAction>
@@ -1076,6 +1138,20 @@
             text="Setters"
             description="Generate a setter for each field">
       <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Getters"/>
+    </action>
+    <!-- Properties over existing fields (§P.1): Jux's answer to getters and setters. -->
+    <action id="Jux.Generate.Properties"
+            class="dev.jux.intellij.actions.JuxGeneratePropertiesAction"
+            text="Properties"
+            description="Generate a property with get/set accessors for each chosen field">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+    </action>
+    <!-- Java's compareTo(), as the one three-way operator that gives < <= > >=. -->
+    <action id="Jux.Generate.OperatorCompare"
+            class="dev.jux.intellij.actions.JuxGenerateOperatorCompareAction"
+            text="operator&lt;=&gt;"
+            description="Generate operator&lt;=&gt; comparing the chosen fields in order">
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Properties"/>
     </action>
     <action id="Jux.Generate.OverrideMethods"
             class="dev.jux.intellij.actions.JuxOverrideMethodsAction"
