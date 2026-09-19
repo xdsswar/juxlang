@@ -1918,6 +1918,13 @@ pub(crate) fn path_resolves_to_class(
             if symbols.classes.contains_key(fqn) {
                 return Some(fqn.clone());
             }
+            // The unit binds the name to a type that is not a class (an
+            // imported enum such as `jux.std.option.Option`): that binding
+            // wins over a same-named class elsewhere, here a user
+            // `class Option` in the root package.
+            if symbols.is_type_name(fqn) {
+                return None;
+            }
         }
         if symbols.classes.contains_key(bare) {
             return Some(bare.clone());
