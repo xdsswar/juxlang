@@ -1,0 +1,23 @@
+// char.toUppercase() / toLowercase() use the simple Unicode case mapping
+// (core lib K.11): one char in, one char out. Accented letters map, and a
+// letter whose full mapping is several chars ('ß' -> "SS") stays as it is.
+
+String upperAll(String word) {
+    String out = "";
+    for (char c : word.chars()) {
+        out = out + c.toUppercase();
+    }
+    return out;
+}
+
+void main() {
+    print('a'.toUppercase());
+    print('é'.toUppercase());
+    print('É'.toLowercase());
+    print('ß'.toUppercase());
+    print('Ω'.toLowercase());
+    print('7'.toUppercase());
+    print(upperAll("déjà vu"));
+    print('é'.isAlphabetic());
+    print('٣'.isDigit());
+}

@@ -4503,6 +4503,17 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         );
         w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
         w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        // Simple Unicode case mapping for `char.toUppercase()` /
+        // `toLowercase()` (K.11): the one-char result of Rust's full mapping,
+        // or the char itself when the full mapping has several (`'ß'`).
+        w.push_str("pub fn __jux_char_upper(c: char) -> char {\n");
+        w.push_str("    let mut up = c.to_uppercase();\n");
+        w.push_str("    match (up.next(), up.next()) { (Some(u), None) => u, _ => c }\n");
+        w.push_str("}\n");
+        w.push_str("pub fn __jux_char_lower(c: char) -> char {\n");
+        w.push_str("    let mut low = c.to_lowercase();\n");
+        w.push_str("    match (low.next(), low.next()) { (Some(l), None) => l, _ => c }\n");
+        w.push_str("}\n\n");
         // Object identity (§T.1.4, §O.4.1). A class value can sit behind two
         // handle shapes: its own `C(Rc<RefCell<C_Inner>>)` newtype, or a
         // `Rc<dyn BaseKind>` / `Rc<dyn Iface>` that boxes a clone of that

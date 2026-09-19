@@ -5442,8 +5442,6 @@ impl RustEmitter {
                 "isWhitespace" => Some(".is_whitespace()"),
                 "isUppercase" => Some(".is_uppercase()"),
                 "isLowercase" => Some(".is_lowercase()"),
-                "toUppercase" => Some(".to_ascii_uppercase()"),
-                "toLowercase" => Some(".to_ascii_lowercase()"),
                 // `codePoint()` — the Unicode scalar value as `uint`.
                 "codePoint" => Some(" as usize"),
                 _ => None,
@@ -5479,6 +5477,23 @@ impl RustEmitter {
                 _ => None,
             }
         };
+        // `char.toUppercase()` / `toLowercase()` (K.11) are the simple Unicode
+        // mapping, one char in and one char out: `'é'` becomes `'É'`, and a
+        // letter whose full mapping is several chars (`'ß'`) stays as it is.
+        // Rust's own `to_uppercase()` yields an iterator, so the runtime
+        // prelude's `__jux_char_upper` / `__jux_char_lower` pick the single
+        // char out of it.
+        if is_char && matches!(method, "toUppercase" | "toLowercase") {
+            self.w.push_str(if method == "toUppercase" {
+                "crate::__jux_char_upper("
+            } else {
+                "crate::__jux_char_lower("
+            });
+            self.emit_expr(receiver);
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return true;
+        }
         if let Some(suffix) = simple {
             emit_recv(self);
             self.w.push_str(suffix);
