@@ -1,0 +1,85 @@
+// Solving ax^2 + bx + c = 0, which is the classic example of a calculation
+// whose *shape* depends on its input: the discriminant decides whether there
+// are two answers, one, or none at all.
+//
+// That makes it a good exercise in reading input, checking it, and branching
+// on the result, rather than in arithmetic.
+
+import rust.std.stdin;
+import rust.std.stdout;
+
+// Leaves the cursor after the question, as the Circle lesson explains.
+void prompt(String text) {
+    var out = stdout();
+    out.write_all(text.as_bytes());
+    out.flush();
+}
+
+// Reading one number, with both failures handled: no input at all, and input
+// that is not a number. Rux carried the value back through an out-parameter
+// and said whether there was one with a `bool`. Jux says both at once with a
+// nullable result: a `double?` is either a number or `null` (the Option
+// lesson), so the caller cannot use the value without checking it first.
+double? readNumber(String question) {
+    prompt(question);
+    var line = "";
+    if (stdin().read_line(line) == 0) {
+        return null;
+    }
+    try {
+        return line.trim().parse<double>();
+    } catch (Exception e) {
+        return null;
+    }
+}
+
+int main() {
+    // Each read either produced a number or ended the program. After the
+    // `null` check, the name is narrowed to a plain `double` (Option lesson),
+    // so the arithmetic below needs no unwrapping.
+    final double? readA = readNumber("a: ");
+    if (readA == null) { print("not a number"); return 1; }
+    final double? readB = readNumber("b: ");
+    if (readB == null) { print("not a number"); return 1; }
+    final double? readC = readNumber("c: ");
+    if (readC == null) { print("not a number"); return 1; }
+    final double a = readA;
+    final double b = readB;
+    final double c = readC;
+
+    // The check that is easy to forget: with a of zero this is not a quadratic
+    // at all, and the formula would divide by zero.
+    if (a == 0.0) {
+        if (b == 0.0) {
+            print("that is not an equation");
+            return 1;
+        }
+        print($"linear, not quadratic: x = ${(-c / b).toFixed(4)}");
+        return 0;
+    }
+
+    // The discriminant, which decides everything that follows.
+    final double discriminant = b * b - 4.0 * a * c;
+    print($"discriminant ${discriminant.toFixed(4)}");
+
+    if (discriminant > 0.0) {
+        final double root = discriminant.sqrt();
+        print("two real roots:");
+        print($"  x1 = ${((-b + root) / (2.0 * a)).toFixed(4)}");
+        print($"  x2 = ${((-b - root) / (2.0 * a)).toFixed(4)}");
+    } else if (discriminant == 0.0) {
+        print("one real root:");
+        print($"  x  = ${(-b / (2.0 * a)).toFixed(4)}");
+    } else {
+        // No real answer, but the complex pair is worth showing rather than
+        // giving up: the real part and the imaginary part come apart cleanly.
+        // Adding zero turns a negative zero into a plain one, which only
+        // matters because "-0.0000" reads as a mistake.
+        final double real = -b / (2.0 * a) + 0.0;
+        final double imaginary = (-discriminant).sqrt() / (2.0 * a);
+        print("no real roots; the complex pair is:");
+        print($"  x1 = ${real.toFixed(4)} + ${imaginary.toFixed(4)}i");
+        print($"  x2 = ${real.toFixed(4)} - ${imaginary.toFixed(4)}i");
+    }
+    return 0;
+}

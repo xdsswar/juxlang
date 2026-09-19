@@ -1,0 +1,61 @@
+// Reading a line the user types, and turning it into a number that can be
+// worked with, including both ways that can fail.
+//
+// Input needs somewhere to put the text before it exists as a value. In Jux
+// that is an ordinary `String`: Rust's `read_line` appends to it, and the heap
+// behind it is the global one, so no allocator has to be passed in.
+
+// The standard library is Rust's. `stdin()` and `stdout()` are the free
+// functions from `std::io`, imported by their Rust names.
+import rust.std.stdin;
+import rust.std.stdout;
+
+// The constant, at the precision a double can hold. The Math lesson explains
+// why it is declared here rather than imported.
+const double Pi = 3.141592653589793;
+
+// `print` always ends the line, and a question should leave the cursor where
+// the answer is typed. Writing the bytes straight to standard output and
+// flushing it does that; without the flush the text could sit in the buffer
+// until after the program had already stopped to read.
+void prompt(String text) {
+    var out = stdout();
+    out.write_all(text.as_bytes());
+    out.flush();
+}
+
+// `int main` rather than `void main`, because the exit status is part of the
+// answer: zero when a circle was measured, one when the input was unusable.
+int main() {
+    prompt("Circle radius: ");
+
+    // The first failure: there was no line to read. `read_line` returns how
+    // many bytes it added, and zero means the input ended with nothing before
+    // it, which is different from an empty line (that still has its "\n").
+    var line = "";
+    if (stdin().read_line(line) == 0) {
+        print("Nothing was entered");
+        return 1;
+    }
+
+    // The second failure: there was a line, but it does not spell a number.
+    // Rust's `parse` returns a `Result`, and a Rust `Result` reaches Jux as a
+    // method that `throws` (Bindgen §G.5.4), so the failure is a `catch`.
+    // `trim()` drops the line break and any stray spaces around the digits.
+    double radius = 0.0;
+    try {
+        radius = line.trim().parse<double>();
+    } catch (Exception e) {
+        print("That is not a number");
+        return 1;
+    }
+
+    // `toFixed(4)` is the Jux spelling of a four-digit precision; there are no
+    // placeholder specs inside an interpolation.
+    print($"Circumference: ${(2.0 * Pi * radius).toFixed(4)}");
+    print($"Area:          ${(Pi * radius * radius).toFixed(4)}");
+
+    // Nothing to release: the String's buffer goes back to the heap when
+    // `line` goes out of scope.
+    return 0;
+}
