@@ -496,7 +496,7 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
 
-One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity.
+One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity. The gap is rustdoc's, not the prebuilt file's: `alloc`'s `impl<T> [T]` is attached to the `slice` primitive, which `core` defines, so a JSON of `alloc` built from source (checked with the toolchain's own `rust-src`) omits it too. Closing it needs a second discovery source for those impls; until then the discoverable `sort_unstable_by` takes a Jux comparator (`(a, b) -> a <=> b`, Operators §O.2.1).
 
 ### G.6.5. First-Class `import rust.X`
 
