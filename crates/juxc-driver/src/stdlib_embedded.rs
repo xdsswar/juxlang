@@ -1062,6 +1062,8 @@ public enum Option<T> {
  */
 package jux.std.result;
 
+import jux.std.option.Option;
+
 public enum Result<T, E> {
     Ok(T),
     Err(E);
@@ -1102,6 +1104,28 @@ public enum Result<T, E> {
         return switch (this) {
             case Result.Ok(var v) -> v;
             case Result.Err(var e) -> fallback;
+        };
+    }
+
+    /**
+     * The success value as an Option (§K.4): `Some(v)` for `Ok(v)`,
+     * `None` for an Err.
+     */
+    public Option<T> ok() {
+        return switch (this) {
+            case Result.Ok(var v) -> Option.Some(v);
+            case Result.Err(var e) -> Option.None;
+        };
+    }
+
+    /**
+     * The error as an Option (§K.4): `Some(e)` for `Err(e)`, `None` for
+     * an Ok.
+     */
+    public Option<E> err() {
+        return switch (this) {
+            case Result.Ok(var v) -> Option.None;
+            case Result.Err(var e) -> Option.Some(e);
         };
     }
 }
