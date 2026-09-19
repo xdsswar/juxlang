@@ -1006,7 +1006,14 @@ impl RustEmitter {
                         }
                         self.w.push_str(" = ");
                         self.w.push_str(&to_rust_ident(&binder));
-                        self.w.push_str("; __jux_unhandled = Some(::std::boxed::Box::new(__jux_full) as ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>); break '__jux_catch; }\n");
+                        if self.in_catch_arm {
+                            self.w.push_str("; __jux_unhandled = Some(::std::boxed::Box::new(__jux_full) as ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>); break '__jux_catch; }\n");
+                        } else {
+                            // Inside a closure (a protected catch body or a
+                            // nested try's body): no dispatch block to break
+                            // out of, so the whole payload unwinds from here.
+                            self.w.push_str("; std::panic::resume_unwind(::std::boxed::Box::new(__jux_full)); }\n");
+                        }
                         return;
                     }
                 }
@@ -1200,16 +1207,70 @@ impl RustEmitter {
         self.w.line("}");
     }
 
+    /// A catch body run under its own `catch_unwind`, for a try that has a
+    /// `finally` (§X.3.2). Inside the closure a `throw` is a plain panic,
+    /// which the closure catches, so every way out of the body by exception
+    /// takes one path: the payload parks in `__jux_unhandled`, `finally`
+    /// runs, and the unwind resumes after it. A `return` threads out of the
+    /// closure as `Some(value)` and parks in `__jux_ret`, as the try body's
+    /// return does.
+    ///
+    /// ```text
+    /// if let Err(__jux_q) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    ///     /* catch body */
+    /// })) {
+    ///     __jux_unhandled = Some(__jux_q);
+    /// }
+    /// ```
+    fn emit_protected_catch_body(&mut self, body: &juxc_ast::Block) {
+        let returns = block_contains_fn_return(body);
+        let prev_arm = std::mem::replace(&mut self.in_catch_arm, false);
+        let prev_try = std::mem::replace(&mut self.in_try_closure, returns);
+        self.w.emit_indent();
+        self.w.push_str(if returns { "match " } else { "if let Err(__jux_q) = " });
+        self.w
+            .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+        self.w.indent_inc();
+        self.emit_block_contents(body);
+        // The closure's value when the body falls off its end: no return.
+        if returns && !ends_in_exit(body) {
+            self.w.line("None");
+        }
+        self.w.indent_dec();
+        self.in_try_closure = prev_try;
+        self.in_catch_arm = prev_arm;
+        self.w.emit_indent();
+        if returns {
+            self.w.push_str("})) {\n");
+            self.w.indent_inc();
+            self.w.line("Ok(__jux_catch_ret) => { __jux_ret = __jux_catch_ret; }");
+            self.w.line("Err(__jux_q) => { __jux_unhandled = Some(__jux_q); }");
+            self.w.indent_dec();
+            self.w.line("}");
+        } else {
+            self.w.push_str("})) {\n");
+            self.w.indent_inc();
+            self.w.line("__jux_unhandled = Some(__jux_q);");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
     /// One `downcast` match's arms for a catch clause: bind the
     /// recovered value, run the body, break out of the dispatch
     /// block; thread the payload onward on miss. Closes the match
     /// AND its enclosing `if let` (the caller opened both).
+    ///
+    /// `protect` runs the body inside its own `catch_unwind` (the try
+    /// has a `finally`): whatever the body throws parks in
+    /// `__jux_unhandled`, so `finally` runs before it propagates.
     fn emit_catch_arm_body(
         &mut self,
         binder: &str,
         body: &juxc_ast::Block,
         slice_depth: usize,
         binder_mut: bool,
+        protect: bool,
     ) {
         self.w.indent_inc();
         self.w.emit_indent();
@@ -1235,13 +1296,32 @@ impl RustEmitter {
         for _ in 0..slice_depth {
             self.w.push_str(".__parent");
         }
+        if rethrows && protect {
+            self.w.push_str(".clone()");
+        }
         self.w.push_str(";\n");
         let prev_arm = self.in_catch_arm;
-        self.in_catch_arm = true;
         let prev_rethrow = std::mem::replace(
             &mut self.catch_rethrow,
             rethrows.then(|| (binder.to_string(), slice_depth)),
         );
+        if protect {
+            self.emit_protected_catch_body(body);
+            self.catch_rethrow = prev_rethrow;
+            // The protected form always completes normally: a throw or a
+            // return inside it came out as a value, parked above.
+            self.w.line("break '__jux_catch;");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w
+                .line("Err(__jux_rest) => { __jux_payload_slot = Some(__jux_rest); }");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            return;
+        }
+        self.in_catch_arm = true;
         self.emit_block_contents(body);
         self.catch_rethrow = prev_rethrow;
         self.in_catch_arm = prev_arm;
@@ -1726,7 +1806,7 @@ impl RustEmitter {
             );
             self.w.indent_inc();
             self.emit_block_contents(&t.body);
-            if has_ret {
+            if has_ret && !ends_in_exit(&t.body) {
                 self.w.line("None");
             }
             self.w.indent_dec();
@@ -1737,7 +1817,7 @@ impl RustEmitter {
                 .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
             self.w.indent_inc();
             self.emit_block_contents(&t.body);
-            if has_ret {
+            if has_ret && !ends_in_exit(&t.body) {
                 self.w.line("None");
             }
             self.w.indent_dec();
@@ -1832,6 +1912,16 @@ impl RustEmitter {
                     &self.user_mut_methods,
                 );
                 let binder_mut = muts.contains(&clause.name.text);
+                // **A catch body that throws still runs `finally` first
+                // (§X.3.2).** With a `finally` present the body runs under
+                // its own `catch_unwind`, so an exception it raises (a
+                // `throw`, a `?: throw`, or a call that throws) parks in
+                // `__jux_unhandled` like an unmatched payload does. A body
+                // with a `break`/`continue` or an `await` keeps the inline
+                // form: a closure can carry neither.
+                let protect = t.finally.is_some()
+                    && !block_contains_jump(&clause.body)
+                    && !crate::analysis::block_contains_await(&clause.body);
                 for ty in clause_tys {
                     let arm_fqn = self.resolve_catch_ty_fqn(ty);
                     let depth = match (&arm_fqn, &binder_fqn) {
@@ -1845,7 +1935,7 @@ impl RustEmitter {
                     self.w.push_str("match __jux_p.downcast::<");
                     self.emit_type_as_rust(ty);
                     self.w.push_str(">() {\n");
-                    self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut);
+                    self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut, protect);
                     for sub_fqn in self.catch_subclass_fqns(ty) {
                         let sub_depth = match &binder_fqn {
                             Some(b) => self.extends_chain_distance(&sub_fqn, b).unwrap_or(0),
@@ -1863,6 +1953,7 @@ impl RustEmitter {
                             &clause.body,
                             sub_depth,
                             binder_mut,
+                            protect,
                         );
                     }
                 }
@@ -5281,6 +5372,16 @@ pub(crate) fn block_contains_jump(block: &juxc_ast::Block) -> bool {
         }
     }
     block.statements.iter().any(stmt_jumps)
+}
+
+/// True when `block`'s last statement is a plain `return` or `throw`, both of
+/// which lower to Rust that never completes. A try lowering uses it to leave
+/// out the closure's trailing `None`, which would be unreachable code there.
+/// Narrower than `body_can_fall_through` on purpose: an `if`/`else` or a
+/// nested `try` that diverges in Jux may still complete in the Rust shape,
+/// and a missing `None` would then be a type error rather than a warning.
+pub(crate) fn ends_in_exit(block: &juxc_ast::Block) -> bool {
+    matches!(block.statements.last(), Some(Stmt::Return(..)) | Some(Stmt::Throw(..)))
 }
 
 pub(crate) fn block_contains_fn_return(block: &juxc_ast::Block) -> bool {

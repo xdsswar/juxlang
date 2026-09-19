@@ -1,0 +1,112 @@
+// An exception raised INSIDE a catch body still runs the try's `finally`
+// before it propagates (§X.3.2), whichever way it is raised: a `throw`
+// statement, a `?: throw` expression, or a call that throws.
+
+class Fault extends RuntimeException {
+    public Fault(String m) { super(m); }
+}
+
+class DeepFault extends Fault {
+    public DeepFault(String m) { super(m); }
+}
+
+void boom(String why) { throw new IllegalArgumentException(why); }
+
+/// A throw expression in the catch arm's return.
+String viaThrowExpr(String? s) {
+    try {
+        throw new IllegalStateException("first");
+    } catch (IllegalStateException e) {
+        print("catch expr");
+        return s ?: throw new IllegalArgumentException("expr");
+    } finally {
+        print("finally expr");
+    }
+}
+
+/// A call that throws, in the middle of the catch body.
+String viaCall() {
+    try {
+        throw new IllegalStateException("first");
+    } catch (IllegalStateException e) {
+        print("catch call");
+        boom("call");
+        return "unreached";
+    } finally {
+        print("finally call");
+    }
+}
+
+/// A throw statement, the form that already parked.
+void viaStatement() {
+    try {
+        throw new IllegalStateException("first");
+    } catch (IllegalStateException e) {
+        print("catch stmt");
+        throw new IllegalArgumentException("stmt");
+    } finally {
+        print("finally stmt");
+    }
+}
+
+/// A subclass caught through its base and rethrown keeps its own type.
+void rethrowSubclass() {
+    try {
+        throw new DeepFault("deep");
+    } catch (Fault f) {
+        print("catch base " + f.getMessage());
+        throw f;
+    } finally {
+        print("finally rethrow");
+    }
+}
+
+/// The catch body's own writes are seen after the exception leaves it.
+int countedThenThrow(int[] log) {
+    int steps = 0;
+    try {
+        try {
+            throw new IllegalStateException("first");
+        } catch (IllegalStateException e) {
+            steps = steps + 1;
+            log[0] = steps;
+            boom("counted");
+            steps = steps + 100;
+        } finally {
+            steps = steps + 10;
+            log[1] = steps;
+        }
+    } catch (IllegalArgumentException e) {
+        print("outer counted " + e.getMessage());
+    }
+    return steps;
+}
+
+/// A catch body that returns on one path and throws on the other.
+int returnOrThrow(bool ok) {
+    try {
+        throw new IllegalStateException("first");
+    } catch (IllegalStateException e) {
+        if (ok) {
+            return 7;
+        }
+        boom("either");
+        return -1;
+    } finally {
+        print("finally either " + ok);
+    }
+}
+
+public void main() {
+    try { print(viaThrowExpr(null)); } catch (IllegalArgumentException e) { print("outer " + e.getMessage()); }
+    print(viaThrowExpr("kept"));
+    try { print(viaCall()); } catch (IllegalArgumentException e) { print("outer " + e.getMessage()); }
+    try { viaStatement(); } catch (IllegalArgumentException e) { print("outer " + e.getMessage()); }
+    try { rethrowSubclass(); } catch (DeepFault d) { print("outer deep " + d.getMessage()); }
+    int[] log = new int[2];
+    print(countedThenThrow(log));
+    print(log[0]);
+    print(log[1]);
+    print(returnOrThrow(true));
+    try { print(returnOrThrow(false)); } catch (IllegalArgumentException e) { print("outer " + e.getMessage()); }
+}

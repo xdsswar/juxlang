@@ -1,0 +1,23 @@
+catch expr
+finally expr
+outer expr
+catch expr
+finally expr
+kept
+catch call
+finally call
+outer call
+catch stmt
+finally stmt
+outer stmt
+catch base deep
+finally rethrow
+outer deep deep
+outer counted counted
+11
+1
+11
+finally either true
+7
+finally either false
+outer either
