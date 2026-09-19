@@ -1,0 +1,18 @@
+// Importing a foreign enum, trait or constant names the place it really
+// lives (Bindgen G.9.2), the way a class import already did.
+import rust.std.Component;
+import rust.std.MAIN_SEPARATOR;
+import rust.std.Read;
+import rust.std.PathBuf;
+
+void main() {
+    final PathBuf p = new PathBuf();
+    p.push("docs");
+    p.push("guide.txt");
+    int count = 0;
+    for (var part : p.components()) {
+        count += 1;
+    }
+    print(count);
+    print(MAIN_SEPARATOR == '/' || MAIN_SEPARATOR == '\\');
+}

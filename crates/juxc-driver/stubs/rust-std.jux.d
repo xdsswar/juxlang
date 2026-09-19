@@ -1,8 +1,9 @@
-// juxc rust.std stub cache-version 24
+// juxc rust.std stub cache-version 25
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
 
+@rust("std::env::consts::ARCH")
 public const String ARCH;
 
 /** An error returned by [`LocalKey::try_with`](struct.LocalKey.html#method.try_with). */
@@ -451,12 +452,15 @@ public class Builder {
 @RustCollection
 public class ByteString implements ToOwned, ToString {
     @RustDefault public ByteString();
-    @MutSelf public void push(T value);
-    @MutSelf @RustRefOut public T push_mut(T value);
-    @MutSelf public void dedup();
     @MutSelf public void resize(uint new_len, T value);
     @MutSelf public void extend_from_slice(T[] other);
     @MutSelf public void extend_from_within<R>(R src);
+    public Vec<T> into_flattened();
+    @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @MutSelf public void push(T value);
+    @MutSelf @RustRefOut public T push_mut(T value);
+    @MutSelf public void dedup();
     public (T*, uint, uint, A) into_raw_parts_with_alloc();
     public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
@@ -503,9 +507,6 @@ public class ByteString implements ToOwned, ToString {
     @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
     public Vec<T[]> into_chunks();
     public Vec<U> recycle<U>();
-    public Vec<T> into_flattened();
-    @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     public (T*, uint, uint) into_raw_parts();
     public (NonNull<T>, uint, uint) into_parts();
     @RustRefOut public T[] const_make_global();
@@ -732,10 +733,13 @@ public class CursorMutKey<K, V, A> {
     @MutSelf public (K, V)? remove_prev();
 }
 
+@rust("std::env::consts::DLL_EXTENSION")
 public const String DLL_EXTENSION;
 
+@rust("std::env::consts::DLL_PREFIX")
 public const String DLL_PREFIX;
 
+@rust("std::env::consts::DLL_SUFFIX")
 public const String DLL_SUFFIX;
 
 /** The default [`Hasher`] used by [`RandomState`]. */
@@ -811,8 +815,10 @@ public class DrainSorted<T, A> {
     @RustRefOut public A allocator();
 }
 
+@rust("std::env::consts::EXE_EXTENSION")
 public const String EXE_EXTENSION;
 
+@rust("std::env::consts::EXE_SUFFIX")
 public const String EXE_SUFFIX;
 
 /** Iterator returned by [`OsStrExt::encode_wide`]. */
@@ -901,6 +907,7 @@ public interface ExitStatusExt {
 public class ExtractIf<T, F, A> {
 }
 
+@rust("std::env::consts::FAMILY")
 public const String FAMILY;
 
 /** An object providing access to an open file on the filesystem. */
@@ -1371,8 +1378,10 @@ public interface LocalWake {
     public void wake_by_ref();
 }
 
+@rust("std::path::MAIN_SEPARATOR")
 public const char MAIN_SEPARATOR;
 
+@rust("std::path::MAIN_SEPARATOR_STR")
 public const String MAIN_SEPARATOR_STR;
 
 /** An RAII mutex guard returned by `MutexGuard::map`, which can point to a */
@@ -1486,8 +1495,10 @@ public class NulError implements ToOwned, ToString {
 public class NullHandleError {
 }
 
+@rust("std::sync::ONCE_INIT")
 public const Once ONCE_INIT;
 
+@rust("std::env::consts::OS")
 public const String OS;
 
 @rust("std::sys::pal::windows::c::windows_sys::OVERLAPPED")
@@ -2110,8 +2121,10 @@ public class RwLockWriteGuard<T> {
     public static MappedRwLockWriteGuard<U> filter_map<U, F>(RwLockWriteGuard orig, (T) -> U? f) throws RwLockWriteGuard;
 }
 
+@rust("std::path::SEPARATORS")
 public const char[] SEPARATORS;
 
+@rust("std::path::SEPARATORS_STR")
 public const String[] SEPARATORS_STR;
 
 @rust("std::sys::pal::windows::c::windows_sys::SOCKADDR")
@@ -2123,10 +2136,13 @@ public struct SOCKADDR {
 public type SOCKET = ulong;
 
 
+@rust("std::os::fd::stdio::STDERR")
 public const BorrowedFd STDERR;
 
+@rust("std::os::fd::stdio::STDIN")
 public const BorrowedFd STDIN;
 
+@rust("std::os::fd::stdio::STDOUT")
 public const BorrowedFd STDOUT;
 
 @rust("std::os::unix::net::ScmCredentials")
@@ -2389,6 +2405,17 @@ public class String implements ToOwned, ToString {
     @MutSelf public void replace_last<P>(P from, &String to);
     public String into_boxed_str();
     @RustRefOut public String leak();
+    public ubyte[] into_boxed_bytes();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String word_to_titlecase();
+    public String to_uppercase();
+    public String to_casefold_unnormalized();
+    public String into_string();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -2461,17 +2488,6 @@ public class String implements ToOwned, ToString {
     @RustBorrowsSelf public EscapeDefault escape_default();
     @RustBorrowsSelf public EscapeUnicode escape_unicode();
     public Range<uint>? substr_range(&String substr);
-    public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
-    public String word_to_titlecase();
-    public String to_uppercase();
-    public String to_casefold_unnormalized();
-    public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -2669,6 +2685,7 @@ public enum TrySendError<T> {
     Full(T), Disconnected(T)
 }
 
+@rust("std::time::UNIX_EPOCH")
 public const SystemTime UNIX_EPOCH;
 
 /** A UDP socket. */
@@ -2929,9 +2946,31 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void dedup();
     @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut public T[] write_filled(T value);
+    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
+    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
+    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    @RustRefOut public unsafe T[] assume_init_ref();
+    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
     @MutSelf public void sort_floats();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -3047,28 +3086,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @RustRefOut public String as_str();
 }
 

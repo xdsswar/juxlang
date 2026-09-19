@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 24;
+const STD_STUB_CACHE_VERSION: u32 = 25;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -99,8 +99,8 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// at 1 alongside the snake_case-verbatim naming switch. 7: re-exported crates
 /// merged in, handle aliases, `Self` substituted, conversion bounds, renames and
 /// plain aliases declared, `@RustDefault`, `@RustBorrowsSelf`. 8: `Vec` keeps
-/// its name (it was `List`).
-const CRATE_STUB_CACHE_VERSION: u32 = 8;
+/// its name (it was `List`). 9: constants carry `@rust`.
+const CRATE_STUB_CACHE_VERSION: u32 = 9;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///

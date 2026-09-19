@@ -6288,6 +6288,33 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             }
         }
 
+        // A foreign ENUM, TRAIT or CONSTANT lowers the same way, through the
+        // real path its `@rust` annotation records. Only a class was looked up
+        // here before, so `import rust.std.Component;` fell through to the
+        // flat stub package and emitted `use rust::std::Component;`, and
+        // `import rust.rand.SliceRandom;` became `use rand::SliceRandom;`
+        // where the trait lives at `rand::seq::SliceRandom` (B21).
+        let other_real = self
+            .symbols
+            .enums
+            .get(&fqn)
+            .filter(|e| e.is_external)
+            .and_then(|e| e.rust_path.clone())
+            .or_else(|| {
+                self.symbols
+                    .interfaces
+                    .get(&fqn)
+                    .filter(|i| i.is_external)
+                    .and_then(|i| i.rust_path.clone())
+            })
+            .or_else(|| self.symbols.consts.get(&fqn).and_then(|c| c.rust_path.clone()));
+        if let Some(real) = other_real {
+            return Some(match alias {
+                Some(a) => format!("use {real} as {};", a.text),
+                None => format!("use {real};"),
+            });
+        }
+
         // A foreign free FUNCTION with an `@rust("real::path")` annotation
         // (`FunctionSig::rust_path`): the Rust name is snake_case
         // (`parse_duration`) but the Jux stub name is camelCase

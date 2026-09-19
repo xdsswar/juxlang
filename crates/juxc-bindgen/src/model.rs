@@ -243,4 +243,9 @@ pub struct StubConst {
     pub ty: JuxType,
     /// Literal value text, when the const is known at generation time.
     pub value: Option<String>,
+    /// The real Rust path (`std::path::MAIN_SEPARATOR`), rendered as
+    /// `@rust("...")` so an `import` of the constant lowers to a `use` of
+    /// the place it really lives. Without it the import fell back to the
+    /// flat stub package and named `rust::std`, a crate that does not exist.
+    pub rust_path: Option<String>,
 }

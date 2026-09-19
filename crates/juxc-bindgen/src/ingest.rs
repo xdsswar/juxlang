@@ -440,6 +440,7 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                         // bodyless `const T NAME;` rather than emit unparseable
                         // text.
                         value: None,
+                        rust_path: real_rust_path(krate, item, &public),
                     }),
                 ));
             }
@@ -453,6 +454,7 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                         // See the `Constant` arm: the Rust initializer has no Jux
                         // spelling and a stub never lowers it.
                         value: None,
+                        rust_path: real_rust_path(krate, item, &public),
                     }),
                 ));
             }

@@ -249,6 +249,9 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
 }
 
 fn render_const(out: &mut String, c: &StubConst) {
+    if let Some(path) = &c.rust_path {
+        let _ = writeln!(out, "@rust(\"{path}\")");
+    }
     match &c.value {
         Some(v) => {
             let _ = writeln!(out, "public const {} {} = {v};", c.ty, c.name);

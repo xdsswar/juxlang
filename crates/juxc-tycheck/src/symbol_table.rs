@@ -1649,6 +1649,10 @@ pub struct ConstSig {
     /// initializer carries a placeholder `int` here, which is not a type a
     /// read of the constant may be given.
     pub ty_known: bool,
+    /// For a foreign stub constant: its real Rust path, from the `@rust("...")`
+    /// annotation bindgen writes (`std::path::MAIN_SEPARATOR`). Mirrors
+    /// [`ClassSig::rust_path`]; `None` for a constant the program declares.
+    pub rust_path: Option<String>,
     /// The initializer expression, cloned so the const-eval pass can resolve a
     /// const NAME → value without re-walking the AST.
     pub init: juxc_ast::Expr,
@@ -2536,6 +2540,7 @@ fn insert_const(
             visibility: decl.visibility,
             ty: resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span),
             ty_known: decl.ty.is_some() || infer_decl_type(Some(&decl.value), decl.span).is_some(),
+            rust_path: rust_path_annotation(&decl.annotations),
             init: decl.value.clone(),
             span: decl.span,
         },
