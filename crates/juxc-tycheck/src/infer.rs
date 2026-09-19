@@ -519,6 +519,22 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         };
                         return infer_field(&this_field, env, symbols);
                     }
+                    // A RECORD's component read by its bare name (§O.8.1) is
+                    // `this.items` too. Left Unknown, the backend could not
+                    // see that `items[0]` indexes an array handle (E0608).
+                    let is_component = symbols
+                        .records
+                        .get(class_fqn)
+                        .is_some_and(|r| r.components.iter().any(|c| c.name == *name));
+                    if is_component {
+                        let this_field = juxc_ast::FieldExpr {
+                            object: Box::new(Expr::This(qn.span)),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        };
+                        return infer_field(&this_field, env, symbols);
+                    }
                 }
             }
             Ty::Unknown
@@ -1267,6 +1283,37 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                                 return return_type_in_method(
                                     &method.return_type,
                                     enum_fqn,
+                                    &method.generic_params,
+                                    symbols,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // `RecordName.staticMethod(args)`: a record's statics live on
+            // `RecordSig`. Untyped, `Span.zero().length()` gave the backend
+            // no receiver class, and the user `length()` lost to the array
+            // built-in.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1 && env.lookup(&qn.segments[0].text).is_none() {
+                    let bare = qn.segments[0].text.as_str();
+                    let record_fqn = env
+                        .unqualified
+                        .get(bare)
+                        .filter(|fqn| symbols.records.contains_key(fqn.as_str()))
+                        .cloned()
+                        .or_else(|| {
+                            symbols
+                                .find_fqn_by_bare_in(bare, &env.current_package.join("."))
+                                .filter(|fqn| symbols.records.contains_key(fqn.as_str()))
+                        });
+                    if let Some(record_fqn) = record_fqn {
+                        if let Some(method) = symbols.records[&record_fqn].methods.get(method_name) {
+                            if method.is_static {
+                                return return_type_in_method(
+                                    &method.return_type,
+                                    &record_fqn,
                                     &method.generic_params,
                                     symbols,
                                 );

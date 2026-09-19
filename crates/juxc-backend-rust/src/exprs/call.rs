@@ -2063,12 +2063,33 @@ impl RustEmitter {
         // the receiver as a class name and switch the dot to `::`.
         if let Expr::Field(f) = &*call.callee {
             if let Expr::Path(qn) = &*f.object {
-                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                // A RECORD's static method (`P.zero()`) is an associated
+                // function of the record's struct just the same. Records live
+                // in their own table, so the class lookup alone missed them
+                // and the call was emitted as a field access, `P.zero()`
+                // (rustc E0423).
+                let static_owner = self.path_resolves_to_class_in_emit(qn).or_else(|| {
+                    let name = qn
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    self.resolve_bare_type_fqn(&name)
+                        .filter(|fqn| self.symbols.records.contains_key(fqn))
+                });
+                if let Some(class_fqn) = static_owner {
                     let is_static_method = self
                         .symbols
                         .classes
                         .get(&class_fqn)
                         .and_then(|c| c.methods.get(f.field.text.as_str()))
+                        .or_else(|| {
+                            self.symbols
+                                .records
+                                .get(&class_fqn)
+                                .and_then(|r| r.methods.get(f.field.text.as_str()))
+                        })
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {

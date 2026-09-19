@@ -5,4 +5,3 @@
 
 Algorithm: a nullable narrowed inside a ternary branch leaks E0308 when interpolated
 Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)
-Slice: record static call `Span.of(...)` leaks E0423; a user method named `length()` is rewritten to the `.len() as isize` intrinsic (E0214); indexing an array component inside a record leaks E0608
