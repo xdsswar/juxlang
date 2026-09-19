@@ -583,6 +583,7 @@ fn build_struct(
     st.rust_path = real_rust_path(krate, item, public);
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
+    st.owned_as = owned_counterpart(krate, &s.impls, name);
     st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
     st.implements = implemented_trait_names(krate, item.id, &s.impls);
     st
@@ -1298,6 +1299,39 @@ fn impl_target_is_the_plain_type(own: Id, ty: &Type) -> bool {
         }),
         Some(_) => false,
     }
+}
+
+/// The `Owned` type of the type's OWN `ToOwned` impl, when it names another
+/// type: `impl ToOwned for Path { type Owned = PathBuf; }` gives `PathBuf`.
+///
+/// Only a type written for itself counts. The blanket
+/// `impl<T: Clone> ToOwned for T` names `T` again and says nothing, and the
+/// types that have their own impl are exactly the unsized views (`Path`,
+/// `OsStr`, `CStr`) whose values need an owned home.
+fn owned_counterpart(krate: &Crate, impls: &[rustdoc_types::Id], name: &str) -> Option<String> {
+    for id in impls {
+        let Some(item) = krate.index.get(id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            continue;
+        }
+        if !im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == "ToOwned") {
+            continue;
+        }
+        for aid in &im.items {
+            let Some(aitem) = krate.index.get(aid) else { continue };
+            if aitem.name.as_deref() != Some("Owned") {
+                continue;
+            }
+            if let ItemEnum::AssocType { type_: Some(Type::ResolvedPath(p)), .. } = &aitem.inner {
+                let owned = last_segment(&p.path).to_string();
+                if owned != name {
+                    return Some(owned);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str) -> bool {

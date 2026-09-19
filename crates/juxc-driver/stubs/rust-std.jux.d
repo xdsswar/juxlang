@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 25
+// juxc rust.std stub cache-version 26
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -452,15 +452,15 @@ public class Builder {
 @RustCollection
 public class ByteString implements ToOwned, ToString {
     @RustDefault public ByteString();
-    @MutSelf public void resize(uint new_len, T value);
-    @MutSelf public void extend_from_slice(T[] other);
-    @MutSelf public void extend_from_within<R>(R src);
-    public Vec<T> into_flattened();
     @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @MutSelf public void dedup();
+    public Vec<T> into_flattened();
+    public (T*, uint, uint) into_raw_parts();
+    public (NonNull<T>, uint, uint) into_parts();
+    @RustRefOut public T[] const_make_global();
     @MutSelf public void push(T value);
     @MutSelf @RustRefOut public T push_mut(T value);
-    @MutSelf public void dedup();
     public (T*, uint, uint, A) into_raw_parts_with_alloc();
     public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
@@ -507,9 +507,9 @@ public class ByteString implements ToOwned, ToString {
     @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
     public Vec<T[]> into_chunks();
     public Vec<U> recycle<U>();
-    public (T*, uint, uint) into_raw_parts();
-    public (NonNull<T>, uint, uint) into_parts();
-    @RustRefOut public T[] const_make_global();
+    @MutSelf public void resize(uint new_len, T value);
+    @MutSelf public void extend_from_slice(T[] other);
+    @MutSelf public void extend_from_within<R>(R src);
 }
 
 /** An iterator over `u8` values of a reader. */
@@ -1600,6 +1600,7 @@ public interface OpenOptionsExt2 {
 /** Borrowed reference to an OS string (see [`OsString`]). */
 @rust("std::ffi::os_str::OsStr")
 @RustClone
+@RustOwnedAs("OsString")
 public class OsStr implements OsStrExt {
     public OsStr(&S s);
     @RustDefault public OsStr();
@@ -1720,6 +1721,7 @@ public class PanicHookInfo {
 /** A slice of a path (akin to [`str`]). */
 @rust("std::path::Path")
 @RustClone
+@RustOwnedAs("PathBuf")
 public class Path {
     public Path(&S s);
     @RustRefOut public OsStr as_os_str();
@@ -2405,17 +2407,6 @@ public class String implements ToOwned, ToString {
     @MutSelf public void replace_last<P>(P from, &String to);
     public String into_boxed_str();
     @RustRefOut public String leak();
-    public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
-    public String word_to_titlecase();
-    public String to_uppercase();
-    public String to_casefold_unnormalized();
-    public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -2488,6 +2479,17 @@ public class String implements ToOwned, ToString {
     @RustBorrowsSelf public EscapeDefault escape_default();
     @RustBorrowsSelf public EscapeUnicode escape_unicode();
     public Range<uint>? substr_range(&String substr);
+    public ubyte[] into_boxed_bytes();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String word_to_titlecase();
+    public String to_uppercase();
+    public String to_casefold_unnormalized();
+    public String into_string();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -2946,21 +2948,6 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void dedup();
     @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @MutSelf public void sort_floats();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public bool is_ascii();
     @RustRefOut public Char[]? as_ascii();
     @RustRefOut public unsafe Char[] as_ascii_unchecked();
@@ -2971,6 +2958,17 @@ public class Vec<T, A> implements ToOwned {
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
+    @MutSelf public void sort_floats();
+    @MutSelf @RustRefOut public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut public T[] write_filled(T value);
+    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
+    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
+    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    @RustRefOut public unsafe T[] assume_init_ref();
+    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -3086,6 +3084,10 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @RustRefOut public String as_str();
 }
 

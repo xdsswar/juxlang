@@ -771,11 +771,20 @@ impl RustEmitter {
         // drops the borrow from the stub's type. Jux has no borrowed string, so
         // the value is owned here. `.clone()` would not do it: cloning a `&str`
         // gives another `&str`.
-        if !self.owning_borrowed_string && self.foreign_call_returns_borrowed_string(&call.callee) {
+        let borrowed_view = if self.owning_borrowed_string {
+            None
+        } else {
+            self.foreign_call_returns_borrowed_view(&call.callee)
+        };
+        if let Some(nullable) = borrowed_view {
             self.owning_borrowed_string = true;
             self.emit_call(call);
             self.owning_borrowed_string = false;
-            self.w.push_str(".to_string()");
+            self.w.push_str(if nullable {
+                ".map(ToOwned::to_owned)"
+            } else {
+                ".to_owned()"
+            });
             return;
         }
         self.owning_borrowed_string = false;
@@ -4788,8 +4797,12 @@ impl RustEmitter {
                     // a map's `get(&Q key)` is the case that needs it.
                     self.emit_foreign_call_args(call, name, method);
                     self.w.push_str("))");
-                    self.w
-                        .push_str(if nullable { ".cloned()" } else { ".clone()" });
+                    // A borrowed VIEW (`&str`, `&OsStr`, `&Path`) has no
+                    // `Clone` to copy it out with; the caller in `emit_expr`
+                    // takes it into its owned form instead (B29).
+                    if !self.external_returns_borrowed_view(name, method) {
+                        self.w.push_str(if nullable { ".cloned()" } else { ".clone()" });
+                    }
                     return true;
                 }
             }
@@ -5983,6 +5996,30 @@ impl RustEmitter {
             _ => false,
         };
         handle.then_some(nullable)
+    }
+
+    /// Whether the foreign method `recv_type.method` returns a borrowed VIEW:
+    /// its declared result (nullable or not) is `String` (a `&str`) or a type
+    /// with a discovered owned form (`OsStr`, `Path`). Only meaningful for a
+    /// `@RustRefOut` method, whose result is a reference.
+    fn external_returns_borrowed_view(&self, recv_type: &str, method: &str) -> bool {
+        let Some(fqn) = self.resolve_bare_class_fqn(recv_type.rsplit('.').next().unwrap_or(recv_type))
+        else {
+            return false;
+        };
+        let Some(m) = self.external_type_method(&fqn, method) else {
+            return false;
+        };
+        let juxc_ast::ReturnType::Type(t) = &m.return_type else {
+            return false;
+        };
+        if t.array_shape.is_some() {
+            return false;
+        }
+        let Some(last) = t.name.segments.last() else {
+            return false;
+        };
+        last.text == "String" || self.external_owned_form(&last.text).is_some()
     }
 
     pub(crate) fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {

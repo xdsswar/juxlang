@@ -419,6 +419,13 @@ impl RustEmitter {
     /// `Result.Ok(..)` already follows, because a bare `Result` or `Option`
     /// is Rust's prelude type in the emitted module.
     fn enum_pattern_path(&self, fqn: &str) -> String {
+        // A FOREIGN enum (`std::path::Component`, serde_json's `Value`) lives at
+        // the real path its stub records, never under `crate::rust::...`. An
+        // unqualified `Normal(name)` arm over a `Component` was rustc E0531
+        // (B31); qualified through the stub package it was E0433.
+        if let Some(real) = self.external_enum_real_path(fqn) {
+            return real;
+        }
         let bare = fqn.rsplit('.').next().unwrap_or(fqn);
         let pkg = fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
         if fqn.contains('.') && pkg != self.current_package_path() {

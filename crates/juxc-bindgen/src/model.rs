@@ -116,6 +116,11 @@ pub struct StubType {
     /// `implemented_trait_names`), since a name the stub never declares would
     /// not resolve.
     pub implements: Vec<String>,
+    /// For a borrowed-view type, the OWNED type its own `ToOwned` impl names
+    /// (`type Owned = PathBuf` on `Path`). Rendered as `@RustOwnedAs("...")`;
+    /// the backend stores a value of the view as the owned form, since the
+    /// view itself is unsized. `None` for every type without such an impl.
+    pub owned_as: Option<String>,
 }
 
 impl StubType {
@@ -135,6 +140,7 @@ impl StubType {
             is_clone: false,
             is_collection: false,
             implements: Vec::new(),
+            owned_as: None,
         }
     }
 }

@@ -3182,30 +3182,33 @@ impl crate::RustEmitter {
         self.external_type_method(&fqn, f.field.text.as_str())
     }
 
-    /// Does this call return a BORROWED string -- a foreign method whose real
-    /// Rust signature is `-> &str` (or `-> &String`)?
+    /// Does this call return a BORROWED VIEW -- a foreign method whose real
+    /// Rust signature is `-> &str`, `-> &OsStr`, `-> &Path`, or an `Option` of
+    /// one? `Some(nullable)` when it does.
     ///
     /// bindgen drops the borrow from the stub's return type (G.3.4) and records
     /// it as `@RustRefOut` instead, so the declared type reads `String` either
-    /// way and only the marker tells them apart. Jux has no borrowed string, so
-    /// the call site owns the value with `to_string`.
-    pub(crate) fn foreign_call_returns_borrowed_string(&self, callee: &juxc_ast::Expr) -> bool {
-        let Some(m) = self.foreign_callee_method(callee) else {
-            return false;
-        };
+    /// way and only the marker tells them apart. Jux has no borrowed view, so
+    /// the call site owns the value: `to_string` for a string, `to_owned` for
+    /// a view with a discovered owned form, mapped over the `Option` when the
+    /// result is nullable (`path.to_str()` is an `Option<&str>`, B29).
+    pub(crate) fn foreign_call_returns_borrowed_view(&self, callee: &juxc_ast::Expr) -> Option<bool> {
+        let m = self.foreign_callee_method(callee)?;
         if !m
             .annotations
             .iter()
             .any(crate::exprs::field::annotation_is_rust_ref_out)
         {
-            return false;
+            return None;
         }
         let juxc_ast::ReturnType::Type(ty) = &m.return_type else {
-            return false;
+            return None;
         };
-        ty.array_shape.is_none()
+        let last = ty.name.segments.last()?;
+        let view = ty.array_shape.is_none()
             && ty.generic_args.is_empty()
-            && ty.name.segments.last().is_some_and(|s| s.text == "String")
+            && (last.text == "String" || self.external_owned_form(&last.text).is_some());
+        view.then_some(ty.nullable)
     }
 
     // ============================================================

@@ -575,6 +575,32 @@ impl RustEmitter {
             && self
                 .enclosing_nested_type(&ty.name.segments[0].text)
                 .is_some();
+        // A foreign borrowed view (`Path`, `OsStr`) is stored as its owned
+        // form (`PathBuf`, `OsString`): the view is unsized and cannot be a
+        // local, a field or a return value on its own (B30).
+        if !shadowed_by_nested_type {
+            if let Some(owned) = ty
+                .name
+                .segments
+                .last()
+                .and_then(|s| self.external_owned_form(&s.text))
+            {
+                // The plain owned value, never the 6.5.1 handle the owned type
+                // takes when it is written in its own right (`PathBuf` is a
+                // collection): a `Path` is a value, and every use of one reads
+                // it as a value.
+                let owned_name = juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident {
+                        text: owned.clone(),
+                        span: ty.name.span,
+                    }],
+                    span: ty.name.span,
+                };
+                let real = self.external_class_real_path(&owned_name).unwrap_or(owned);
+                self.w.push_str(&real);
+                return;
+            }
+        }
         if let Some(real) = self
             .external_class_real_path(&ty.name)
             .filter(|_| !shadowed_by_nested_type)

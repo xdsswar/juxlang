@@ -80,6 +80,11 @@ fn render_type(out: &mut String, t: &StubType) {
         let _ = writeln!(out, "@RustCollection");
     }
 
+    // A borrowed view's owned form (`ToOwned::Owned`), e.g. `PathBuf` for `Path`.
+    if let Some(owned) = &t.owned_as {
+        let _ = writeln!(out, "@RustOwnedAs(\"{owned}\")");
+    }
+
     let keyword = match t.kind {
         TypeKind::Class => "class",
         TypeKind::Interface => "interface",
