@@ -1005,6 +1005,12 @@ struct RustEmitter {
     /// emit the qualified `Enum::Variant` Rust pattern instead of a catch-all
     /// binding (rustc `E0170`). `None` outside an enum switch.
     current_switch_enum: Option<String>,
+    /// How a pattern SPELLS that enum in Rust: the bare name for an enum of
+    /// the current package, the crate-rooted path for any other. A bare
+    /// `Result::Ok(v)` resolved to Rust's prelude `Result`, not Jux's own
+    /// `jux.std.result.Result` the scrutinee has, so a `switch` on a Jux
+    /// `Result` failed to compile.
+    current_switch_enum_path: Option<String>,
     /// When `true`, the emitter is producing a `jux test` binary:
     /// the workspace shim is a test runner that invokes every
     /// `@Test`-annotated function instead of the user's `main()`.
@@ -5114,6 +5120,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             in_enum_method: false,
             enclosing_enum_fields: std::collections::HashMap::new(),
             current_switch_enum: None,
+            current_switch_enum_path: None,
             test_mode: false,
             current_unit_idx: None,
             split_files: None,

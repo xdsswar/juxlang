@@ -308,12 +308,36 @@ impl Checker<'_> {
     /// The payload types of variant `variant` of the enum `ty` is, when `ty`
     /// is an enum and has that variant.
     fn variant_payload_types(&self, ty: &Ty, variant: &str) -> Option<Vec<Ty>> {
-        let Ty::User { name, .. } = ty else { return None };
+        let Ty::User { name, generic_args } = ty else { return None };
         let (fqn, sig) = self
             .symbols
             .lookup_enum_in(name, &self.env.current_package.join("."))?;
         let v = sig.variants.get(variant)?;
-        Some(v.payload.iter().map(|t| lower_member_type(t, fqn, self.symbols)).collect())
+        // A generic enum's payload names its own parameters (`Err(E)`), so
+        // the binder takes the scrutinee's type argument: `case Err(var e)`
+        // on a `Result<int, MathError>` binds a `MathError`. Lowered in the
+        // enum's scope with its parameters declared, then substituted.
+        let mut env = crate::env::TypeEnv::new();
+        env.current_class = Some(fqn.to_string());
+        if let Some(pkg) = fqn.rsplit_once('.').map(|(p, _)| p) {
+            env.current_package = pkg.split('.').map(str::to_string).collect();
+        }
+        for tp in &sig.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+        Some(
+            v.payload
+                .iter()
+                .map(|t| {
+                    if sig.generic_params.is_empty() {
+                        lower_member_type(t, fqn, self.symbols)
+                    } else {
+                        let lowered = crate::ty::ty_from_ref(t, &env, self.symbols);
+                        crate::ty::substitute(&lowered, &sig.generic_params, generic_args)
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Whether `ty` is a value tuple and record patterns take apart: a tuple

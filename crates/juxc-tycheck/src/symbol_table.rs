@@ -1323,6 +1323,10 @@ pub struct RecordComponentSig {
 pub struct EnumSig {
     /// Enum visibility.
     pub visibility: Visibility,
+    /// Generic parameters in declaration order (`T`, `E` of
+    /// `Result<T, E>`), so a variant's payload types can be substituted
+    /// with the scrutinee's type arguments.
+    pub generic_params: Vec<TypeParam>,
     /// Interfaces this enum implements (§A.2.5). An enum has no `extends`, so
     /// this is its whole supertype list — the same role
     /// [`RecordSig::implements`] plays for records.
@@ -4624,6 +4628,7 @@ fn insert_enum(
         fqn,
         EnumSig {
             visibility: enum_decl.visibility,
+            generic_params: enum_decl.generic_params.clone(),
             implements: enum_decl.implements.clone(),
             variants,
             operators,
