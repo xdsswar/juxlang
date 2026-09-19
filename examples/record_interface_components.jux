@@ -1,0 +1,69 @@
+// Records whose components are interfaces or polymorphic base classes
+// (JUX-LANG-V1 §7.6, JUX-OPERATORS-ADDENDUM §O.3.1).
+//
+// A record compares and hashes by its components. An interface-typed or
+// base-class-typed component is a shared object, so that part compares the
+// way `==` on the object does: by identity. These records used to fail inside
+// rustc, first on the constructor's parameter type and then on the derived
+// equality.
+
+interface Expr {
+    int eval();
+}
+
+record Num(int v) implements Expr {
+    public int eval() { return v; }
+}
+
+record Paren(Expr inner) implements Expr {
+    public int eval() { return inner.eval(); }
+}
+
+record Add(Expr left, Expr right) implements Expr {
+    public int eval() { return left.eval() + right.eval(); }
+}
+
+record MaybeNeg(Expr? inner, String label) {}
+
+class Animal {
+    public String sound() { return "..."; }
+}
+
+class Dog extends Animal {
+    @Override
+    public String sound() { return "woof"; }
+}
+
+record Pet(Animal animal, int age) {}
+
+public void main() {
+    Expr e = new Add(new Paren(new Num(2)), new Num(3));
+    print(e.eval());
+    var p = new Paren(new Num(7));
+    print(p.inner.eval());
+
+    // Interface values compare by identity: the same object is equal, a
+    // structurally equal but separate one is not.
+    Expr shared = new Num(7);
+    var a = new Paren(shared);
+    var b = new Paren(shared);
+    var c = new Paren(new Num(7));
+    print(a == b);
+    print(a == c);
+
+    var m = new MaybeNeg(null, "none");
+    var n = new MaybeNeg(null, "none");
+    print(m == n);
+    print(new MaybeNeg(shared, "x") == new MaybeNeg(shared, "x"));
+
+    Animal d = new Dog();
+    var pet = new Pet(d, 3);
+    print(pet.animal.sound());
+    print(pet == new Pet(d, 3));
+
+    var set = new HashSet<Paren>();
+    set.insert(a);
+    set.insert(b);
+    set.insert(c);
+    print(set.len());
+}
