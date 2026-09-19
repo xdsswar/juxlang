@@ -1091,6 +1091,24 @@ lazy steps are generators in `jux.std.collections.Iterators`.
 
 **Spec status:** §K.5 should list the combinators on `Iterator<T>` as well.
 
+## E58. `seconds(n)` and `milliseconds(n)` are not specified
+
+**Conflict.** JUX-ASYNC-ADDENDUM §18.1.9 and JUX-LANG-V1 §10.1.9 write
+`withTimeout(seconds(5), ...)` and `sleep(milliseconds(10))`, and §18.1.4
+gives `Task.delay(Duration d)`. No addendum defines `Duration` or those
+constructor functions; JUX-GAPS-ROADMAP lists them as a future `std.time`
+tier. The standard library is Rust's (Core lib §K.12), which already has a
+`Duration`.
+
+**Resolution.** A time span is Rust's `std::time::Duration`, reached as
+`import rust.std.Duration;` and built with its own constructors
+(`Duration.from_secs(5)`, `Duration.from_millis(10)`). `withTimeout` and
+`Task.delay` take either that `Duration` or an integer count of
+milliseconds (the form Phase 1 always accepted); anything else is `E0487`.
+No free `seconds`/`milliseconds` functions are added.
+
+**Spec status:** §18.1.9 and §10.1.9 should write `Duration.from_secs(5)`.
+
 ---
 
 ## How to use this file

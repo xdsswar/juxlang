@@ -4828,8 +4828,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         //     emission works unchanged.
         //   - `task.blockingGet()` — drive to completion from sync
         //     code (consumes the handle).
-        //   - `task.cancel()`  — drop the handle; RemoteHandle
-        //     cancels the remote computation on drop (consumes).
+        //   - `task.cancel()`  — drop the RemoteHandle, which stops the
+        //     remote computation at its next suspension point (its next
+        //     `await`, LANG-V1 §10.1.9); the handle stays, and awaiting it
+        //     afterwards throws `CancellationException`.
         //
         // Spawned bodies run on pool threads, so captures must be
         // Send — tycheck's E0702 capture scan enforces the Jux-level
@@ -4844,7 +4846,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    // (orphaned, parked failure)\n");
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
         w.push_str("}\n");
-        w.push_str("pub struct JuxTask<T>(Option<futures::future::RemoteHandle<Result<T, ()>>>, std::sync::Arc<JuxTaskShared>);\n");
+        // The handle sits in a `Cell` so `cancel()` works through `&self`: a
+        // cancelled task is still a value the program may `await`.
+        w.push_str("pub struct JuxTask<T>(std::cell::Cell<Option<futures::future::RemoteHandle<Result<T, ()>>>>, std::sync::Arc<JuxTaskShared>);\n");
         w.push_str("impl<T: 'static> JuxTask<T> {\n");
         w.push_str("    /// The awaiter's side of a failed task: rethrow what it threw.\n");
         w.push_str("    fn settle(shared: &JuxTaskShared, result: Result<T, ()>) -> T {\n");
@@ -4856,18 +4860,20 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
+        w.push_str("    /// What awaiting a cancelled task gives: its CancellationException.\n");
+        w.push_str("    fn cancelled() -> ! {\n");
+        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(\"task was cancelled\".to_string()))\n");
+        w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    pub fn blockingGet(mut self) -> T {\n");
-        w.push_str("        let handle = self.0.take().expect(\"task already consumed\");\n");
+        w.push_str("    pub fn blockingGet(self) -> T {\n");
+        w.push_str("        let Some(handle) = self.0.take() else { Self::cancelled() };\n");
         w.push_str("        Self::settle(&self.1, futures::executor::block_on(handle))\n");
         w.push_str("    }\n");
-        w.push_str("    pub fn cancel(mut self) {\n");
-        w.push_str("        // Dropping the RemoteHandle cancels the remote\n");
-        w.push_str("        // computation (the Drop impl would FORGET it). A\n");
-        w.push_str("        // cancelled task has no failure to report.\n");
-        w.push_str("        if let Some(h) = self.0.take() {\n");
-        w.push_str("            std::mem::drop(h);\n");
-        w.push_str("        }\n");
+        w.push_str("    pub fn cancel(&self) {\n");
+        w.push_str("        // Dropping the RemoteHandle stops the remote computation\n");
+        w.push_str("        // at its next suspension point (the Drop impl would FORGET\n");
+        w.push_str("        // it instead). A cancelled task has no failure to report.\n");
+        w.push_str("        std::mem::drop(self.0.take());\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
@@ -4876,7 +4882,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // task); explicit `cancel()` drops the handle for real.
         w.push_str("impl<T> Drop for JuxTask<T> {\n");
         w.push_str("    fn drop(&mut self) {\n");
-        w.push_str("        if let Some(h) = self.0.take() {\n");
+        w.push_str("        if let Some(h) = self.0.get_mut().take() {\n");
         w.push_str("            h.forget();\n");
         w.push_str("            // Nobody will await it now: a failure already parked is\n");
         w.push_str("            // unhandled, and a later one will be reported by the task.\n");
@@ -4894,12 +4900,12 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("impl<T: 'static> std::future::Future for JuxTask<T> {\n");
         w.push_str("    type Output = T;\n");
         w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
-        w.push_str("        let h = self.0.as_mut().expect(\"awaiting a cancelled task\");\n");
+        w.push_str("        let Some(h) = self.0.get_mut().as_mut() else { Self::cancelled() };\n");
         w.push_str("        match std::pin::Pin::new(h).poll(cx) {\n");
         w.push_str("            std::task::Poll::Pending => std::task::Poll::Pending,\n");
         w.push_str("            std::task::Poll::Ready(result) => {\n");
         w.push_str("                // Consumed: the handle's drop must not orphan the task.\n");
-        w.push_str("                self.0 = None;\n");
+        w.push_str("                *self.0.get_mut() = None;\n");
         w.push_str("                std::task::Poll::Ready(Self::settle(&self.1, result))\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
@@ -4935,7 +4941,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        }\n");
         w.push_str("    };\n");
         w.push_str("    JuxTask(\n");
-        w.push_str("        Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\")),\n");
+        w.push_str("        std::cell::Cell::new(Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\"))),\n");
         w.push_str("        shared,\n");
         w.push_str("    )\n");
         w.push_str("}\n\n");

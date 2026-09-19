@@ -1,0 +1,51 @@
+// Cooperative cancellation and timeouts (JUX-LANG-V1 10.1.9,
+// JUX-ASYNC-ADDENDUM 18.1.9).
+//
+// `task.cancel()` asks a task to stop. It stops at its next `await`, never in
+// the middle of other work, and awaiting it afterwards throws
+// `CancellationException`. `withTimeout(d, f)` is built on the same idea: the
+// work that runs out of time is cancelled, and the caller gets a
+// `TimeoutException`. A time span is a `Duration` from Rust's std, or a plain
+// count of milliseconds.
+
+import rust.std.Duration;
+
+async String longOperation() {
+    for (var i = 0; i < 1000; i++) {
+        await Task.delay(Duration.from_millis(10));
+    }
+    return "done";
+}
+
+async int quick() {
+    return 42;
+}
+
+async int slow() {
+    await Task.delay(Duration.from_millis(500));
+    return 99;
+}
+
+async void driver() {
+    var task = spawn(longOperation());
+    await Task.delay(Duration.from_millis(50));
+    task.cancel();
+    try {
+        print(await task);
+    } catch (CancellationException e) {
+        print("cancelled: " + e.getMessage());
+    }
+
+    // A timeout, with a Duration and with milliseconds.
+    print(await withTimeout(Duration.from_secs(2), async () -> await quick()));
+    try {
+        print(await withTimeout(Duration.from_millis(50), async () -> await slow()));
+    } catch (TimeoutException e) {
+        print("timed out: " + e.getMessage());
+    }
+    print(await withTimeout(1000, async () -> await quick()));
+}
+
+public void main() {
+    block_on(driver());
+}

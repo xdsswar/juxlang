@@ -351,14 +351,12 @@ Because direct async calls require `await` (§18.1.2), unhandled rejections can 
 
 #### 18.1.9. Cancellation
 
-> **Phase-1 implementation note.** `withTimeout(ms, f)` and
-> `TimeoutException` are implemented (the timed-out work is dropped).
-> `task.cancel()` cancels by dropping the handle and CONSUMES it —
-> awaiting a cancelled task is a compile-time move error rather than
-> a `CancellationException` (the cooperative checkpoint runtime this
-> section describes lands later; the exception class exists for
-> forward compatibility). `for await` / `Stream<T>` are specified in
-> §18.6 and implemented.
+> **Phase-1 implementation note.** Cancellation is implemented as
+> described: `task.cancel()` stops the task at its next suspension point,
+> and awaiting a cancelled task throws `CancellationException`.
+> `withTimeout(d, f)` and `Task.delay(d)` take a `Duration` (Rust's, per
+> ERRATA E58) or an integer count of milliseconds. `for await` /
+> `Stream<T>` are specified in §18.6 and implemented.
 
 Calling `task.cancel()` requests cancellation. At the next `await` inside the task, a `CancellationException` is thrown:
 

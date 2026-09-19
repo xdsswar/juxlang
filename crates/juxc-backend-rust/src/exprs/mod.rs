@@ -3149,6 +3149,13 @@ impl RustEmitter {
 /// real source span return [`juxc_source::Span::DUMMY`], which is the
 /// same value the recorder sentinels out — so `expr_types.get(...)`
 /// will simply miss and the caller falls back conservatively.
+/// Whether a type is `rust.std`'s `Duration` (`std::time::Duration`), the
+/// time span `withTimeout` and `Task.delay` accept besides milliseconds.
+pub(crate) fn expr_is_duration(ty: Option<&juxc_tycheck::Ty>) -> bool {
+    matches!(ty, Some(juxc_tycheck::Ty::User { name, .. })
+        if name.starts_with("rust.") && name.rsplit('.').next() == Some("Duration"))
+}
+
 pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     match e {
         Expr::Literal(_) => juxc_source::Span::DUMMY,

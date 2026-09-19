@@ -1,0 +1,14 @@
+// A time span is milliseconds (an integer) or a Duration (Async 18.1.9).
+
+async int work() {
+    return 1;
+}
+
+async void run() {
+    await Task.delay("soon");
+    print(await withTimeout(2.5, async () -> await work()));
+}
+
+public void main() {
+    block_on(run());
+}

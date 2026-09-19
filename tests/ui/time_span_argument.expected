@@ -1,0 +1,2 @@
+time_span_argument.jux:8:11: [E0487] error: a time span is milliseconds (an integer) or a `Duration`, found String
+time_span_argument.jux:9:17: [E0487] error: a time span is milliseconds (an integer) or a `Duration`, found double

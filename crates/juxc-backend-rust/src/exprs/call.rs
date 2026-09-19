@@ -1179,15 +1179,9 @@ impl RustEmitter {
                 self.w.push_str("async {\n");
                 self.w.indent_inc();
                 self.w.emit_indent();
-                self.w.push_str(
-                    "let __jux_timer = crate::__jux_spawn(async move { std::thread::sleep(std::time::Duration::from_millis((",
-                );
-                if let Some(ms) = call.args.first() {
-                    self.emit_expr(ms);
-                } else {
-                    self.w.push('0');
-                }
-                self.w.push_str(") as u64)) });\n");
+                self.w.push_str("let __jux_timer = crate::__jux_spawn(async move { std::thread::sleep(");
+                self.emit_time_span(call.args.first());
+                self.w.push_str(") });\n");
                 self.w.emit_indent();
                 self.w
                     .push_str("match futures::future::select(std::pin::pin!(async move { ");
@@ -1319,15 +1313,9 @@ impl RustEmitter {
                             return;
                         }
                         "delay" => {
-                            self.w.push_str(
-                                "crate::__jux_spawn(async move { std::thread::sleep(std::time::Duration::from_millis((",
-                            );
-                            if let Some(ms) = call.args.first() {
-                                self.emit_expr(ms);
-                            } else {
-                                self.w.push('0');
-                            }
-                            self.w.push_str(") as u64)) })");
+                            self.w.push_str("crate::__jux_spawn(async move { std::thread::sleep(");
+                            self.emit_time_span(call.args.first());
+                            self.w.push_str(") })");
                             self.emitting_format_arg = prev;
                             return;
                         }
@@ -3255,6 +3243,24 @@ impl RustEmitter {
         self.w.push_str(") as ");
         self.w.push_str(target_rust);
         true
+    }
+
+    /// A time span argument (`withTimeout`, `Task.delay`) as a Rust
+    /// `std::time::Duration`: a `rust.std` `Duration` passes as it is, and an
+    /// integer is a count of milliseconds (JUX-ASYNC-ADDENDUM 18.1.9, ERRATA
+    /// E58). A missing argument is no wait at all.
+    pub(crate) fn emit_time_span(&mut self, arg: Option<&Expr>) {
+        let Some(arg) = arg else {
+            self.w.push_str("std::time::Duration::ZERO");
+            return;
+        };
+        if crate::exprs::expr_is_duration(self.expr_types.get(&crate::exprs::expr_span_of(arg))) {
+            self.emit_expr(arg);
+            return;
+        }
+        self.w.push_str("std::time::Duration::from_millis((");
+        self.emit_expr(arg);
+        self.w.push_str(") as u64)");
     }
 
     fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {

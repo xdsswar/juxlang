@@ -2670,6 +2670,30 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// A time span handed to `withTimeout` or `Task.delay` (JUX-ASYNC-ADDENDUM
+    /// 18.1.9, ERRATA E58) is a count of milliseconds, any integer type, or a
+    /// `rust.std` `Duration`. Anything else is E0487.
+    fn check_time_span_arg(&mut self, arg: &Expr, call_span: Span) {
+        let ty = infer_expr(arg, &self.env, self.symbols);
+        let ok = match &ty {
+            Ty::Unknown => true,
+            Ty::Primitive(p) => crate::ty::integer_bits(*p).is_some(),
+            Ty::User { name, .. } => name.starts_with("rust.") && name.rsplit('.').next() == Some("Duration"),
+            _ => false,
+        };
+        if !ok {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0487_NotATimeSpan,
+                    format!("a time span is milliseconds (an integer) or a `Duration`, found {ty}"),
+                )
+                // A literal carries no span of its own; the call does.
+                .with_span(if expr_span(arg).end == 0 { call_span } else { expr_span(arg) })
+                .with_help("write `Duration.from_secs(n)` / `Duration.from_millis(n)` (import rust.std.Duration), or a count of milliseconds"),
+            );
+        }
+    }
+
     /// The rules a function whose return type is `never` obeys
     /// (JUX-CORE-LIB-ADDENDUM K.4.1): no path may reach the end of its body
     /// (E0485), and no `return` may appear in it (E0486). A `return` inside a
@@ -10272,6 +10296,11 @@ impl<'a> Checker<'a> {
                 // `withTimeout(ms, f())`), so their args are
                 // future-consuming positions (E0705 exempt).
                 if BUILTINS.contains(&name.as_str()) {
+                    if name == "withTimeout" {
+                        if let Some(span) = c.args.first() {
+                            self.check_time_span_arg(span, c.span);
+                        }
+                    }
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
                     for arg in &c.args {
@@ -10548,6 +10577,11 @@ impl<'a> Checker<'a> {
                         && qn.segments[0].text == "Task"
                         && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay")
                     {
+                        if method_name == "delay" {
+                            if let Some(span) = c.args.first() {
+                                self.check_time_span_arg(span, c.span);
+                            }
+                        }
                         let prev_slot = self.in_future_slot;
                         self.in_future_slot = true;
                         for arg in &c.args {
