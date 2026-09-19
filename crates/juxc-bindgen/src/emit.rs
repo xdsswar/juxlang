@@ -212,7 +212,7 @@ fn render_ctor(out: &mut String, c: &StubCtor) {
 fn fn_is_spellable(f: &StubFn) -> bool {
     f.ret.is_spellable()
         && f.params.iter().all(|p| p.ty.is_spellable())
-        && f.throws.as_ref().is_none_or(JuxType::is_spellable)
+        && f.throws.as_ref().map_or(true, JuxType::is_spellable)
 }
 
 fn render_fn(f: &StubFn, in_interface: bool) -> String {

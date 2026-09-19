@@ -12196,9 +12196,9 @@ impl<'a> Checker<'a> {
                 );
             if !pointer_null
                 && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
-                && !(declaring_class.is_none()
-                    && callee_is_foreign_free_fn(callee_name, self.symbols)
-                    && slice_arg_bridges(&expected, &found, param, self.symbols))
+                && (declaring_class.is_some()
+                    || !callee_is_foreign_free_fn(callee_name, self.symbols)
+                    || !slice_arg_bridges(&expected, &found, param, self.symbols))
                 && !compatible(&expected, &found, self.symbols)
             {
                 let mut diag = Diagnostic::error(
