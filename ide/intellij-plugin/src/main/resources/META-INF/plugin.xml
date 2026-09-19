@@ -349,6 +349,16 @@
         bundle="messages.JuxInlayBundle"
         nameKey="jux.var.types.name"
         descriptionKey="jux.var.types.description"/>
+    <!-- The type each line of a one-call-per-line chain produces. -->
+    <codeInsight.declarativeInlayProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.hints.JuxChainTypeHintsProvider"
+        isEnabledByDefault="true"
+        group="METHOD_CHAINS_GROUP"
+        providerId="jux.chain.types"
+        bundle="messages.JuxInlayBundle"
+        nameKey="jux.chain.types.name"
+        descriptionKey="jux.chain.types.description"/>
 
     <!-- Parameter Info (Ctrl+P): the signature of the call the caret is inside,
          active parameter in bold. Jux overloads on parameter TYPES, so every
