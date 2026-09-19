@@ -1156,6 +1156,7 @@ impl Resolver {
             Stmt::Expr(e) => self.visit_expr(e),
             Stmt::Return(Some(e), _) => self.visit_expr(e),
             Stmt::Return(None, _) => {}
+            Stmt::Yield(e, _) => self.visit_expr(e),
             Stmt::VarDecl(var) => self.visit_var_decl(var),
             Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::While(w) => self.visit_while(w),

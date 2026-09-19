@@ -34,6 +34,12 @@ pub enum Stmt {
     /// value when present) so diagnostics on the statement — notably a bare
     /// `return;` in a non-`void` function — carry a source location for the IDE.
     Return(Option<Expr>, Span),
+    /// `yield expr ;` inside a generator (JUX-MISSING-DEFS-ADDENDUM §M.2):
+    /// produce one value for the caller's `next()` and suspend until it asks
+    /// for the next one. The delegating form `yield* iter;` never reaches the
+    /// AST: the parser rewrites it to a `for` over `iter` that yields each
+    /// element (§M.2.3 defines it as exactly that).
+    Yield(Expr, Span),
     /// `var name = expr ;` — a local variable declaration with type
     /// inference. See [`VarDecl`].
     VarDecl(VarDecl),
@@ -318,6 +324,20 @@ pub struct ForEachStmt {
     pub body: Block,
     /// Span of the entire `for` statement.
     pub span: Span,
+}
+
+impl ForEachStmt {
+    /// The loop variable the parser gives the loop it builds for
+    /// `yield* iter;` (JUX-MISSING-DEFS §M.2.3). The `__jux_` prefix keeps it
+    /// out of every user namespace.
+    pub const YIELD_DELEGATE_BINDER: &'static str = "__jux_yielded";
+
+    /// True for the loop a `yield* iter;` statement became. Inside an async
+    /// generator, delegating to a `Stream<T>` pulls it with `await`, so the
+    /// checker and the backend treat such a loop as `for await`.
+    pub fn is_yield_delegation(&self) -> bool {
+        self.var_name.text == Self::YIELD_DELEGATE_BINDER
+    }
 }
 
 /// `target = expr ;` per §A.2.9.

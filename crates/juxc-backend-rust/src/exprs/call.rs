@@ -2044,11 +2044,37 @@ impl RustEmitter {
                             self.w.push('(');
                             let prev = self.emitting_format_arg;
                             self.emitting_format_arg = false;
+                            let param_tys: Vec<juxc_ast::TypeRef> = iface
+                                .methods
+                                .get(f.field.text.as_str())
+                                .map(|m| m.params.iter().map(|p| p.ty.clone()).collect())
+                                .unwrap_or_default();
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
                                     self.w.push_str(", ");
                                 }
-                                self.emit_expr(arg);
+                                // Each argument takes its parameter's shape, as
+                                // on a class's static call: a class value
+                                // passed for an interface parameter becomes an
+                                // `Rc<dyn Trait>`, a shared handle is
+                                // share-cloned rather than moved.
+                                if let Some(pty) = param_tys.get(i) {
+                                    if !matches!(
+                                        self.iface_coercion_to(pty, arg),
+                                        crate::analysis::IfaceCoercion::None,
+                                    ) {
+                                        self.emit_expr_coerced_to_iface(pty, arg);
+                                        continue;
+                                    }
+                                }
+                                let nullable = param_tys.get(i).is_some_and(|t| t.nullable);
+                                self.emit_arg_with_nullable_wrap(arg, nullable);
+                                if !nullable
+                                    && (self.wrapper_value_needs_clone(arg)
+                                        || self.value_place_needs_clone(arg))
+                                {
+                                    self.w.push_str(".clone()");
+                                }
                             }
                             self.emitting_format_arg = prev;
                             self.w.push(')');

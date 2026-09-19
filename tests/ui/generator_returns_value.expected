@@ -1,0 +1,1 @@
+generator_returns_value.jux:8:5: [E0994] error: a generator produces its values with `yield` and ends with a bare `return;`, so it cannot `return` a value (§M.2.4)

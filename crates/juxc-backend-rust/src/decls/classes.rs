@@ -1879,7 +1879,7 @@ impl RustEmitter {
                 // defaults take a shared receiver; mutation goes through the
                 // wrapper's interior `RefCell`).
                 self.w.push_str("pub ");
-                if matches!(sig.return_type, ReturnType::AsyncType(_)) {
+                if matches!(sig.return_type, ReturnType::AsyncType(_)) && !sig.is_generator {
                     self.w.push_str("async ");
                 }
                 self.w.push_str("fn ");
@@ -3273,6 +3273,7 @@ impl RustEmitter {
             generic_params: Vec::new(),
             params,
             return_type,
+            is_generator: false,
             span,
         }
     }
@@ -5813,7 +5814,10 @@ impl RustEmitter {
         self.enclosing_class = Some(class_decl.name.text.clone());
         self.w.emit_indent();
         self.emit_visibility(method.visibility);
-        if matches!(method.return_type, ReturnType::AsyncType(_)) {
+        // An async generator returns its `Stream<T>` without awaiting (§M.2.2).
+        if matches!(method.return_type, ReturnType::AsyncType(_))
+            && !method.body.as_ref().is_some_and(juxc_tycheck::generators::body_yields)
+        {
             self.w.push_str("async ");
         }
         if method.modifiers.contains(&juxc_ast::FnModifier::Unsafe) {
@@ -6013,7 +6017,10 @@ impl RustEmitter {
         // `async T` method → `async fn`. Same rule as `emit_fn_decl`:
         // Rust's `async` keyword sits before `fn`, so we prepend it
         // when the declared return type is async.
-        if matches!(method.return_type, ReturnType::AsyncType(_)) {
+        // An async generator returns its `Stream<T>` without awaiting (§M.2.2).
+        if matches!(method.return_type, ReturnType::AsyncType(_))
+            && !method.body.as_ref().is_some_and(juxc_tycheck::generators::body_yields)
+        {
             self.w.push_str("async ");
         }
         // `unsafe T m()` → `unsafe fn m()` (§A.2.4 modifier).

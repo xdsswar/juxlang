@@ -719,8 +719,6 @@ is what `Channel<T>` is for.
 
 ### 18.7. What This Addendum Does Not Specify
 
-- **Async generators** (`yield`-based stream bodies). Will build on §18.6's
-  `Stream<T>`; `Stream.generate` is the Phase-1 form.
 - **Async transform lambdas in combinators** (`mapAsync(async x -> …)`).
   Planned widening of §18.6.5 under the same names.
 - **User classes implementing `Stream<T>`.** Lands with async interface

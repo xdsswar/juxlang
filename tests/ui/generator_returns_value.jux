@@ -1,0 +1,15 @@
+// A generator's values come from `yield`; `return;` ends it, and a `return`
+// with a value has nowhere to go (§M.2.4).
+
+public Iterator<int> upTo(int n) {
+    for (var i = 0; i < n; i++) {
+        yield i;
+    }
+    return n;
+}
+
+public void main() {
+    for (var x : upTo(3)) {
+        print(x);
+    }
+}

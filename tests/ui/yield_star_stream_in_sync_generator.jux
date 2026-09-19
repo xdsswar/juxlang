@@ -1,0 +1,17 @@
+// `yield*` over a `Stream<T>` awaits each element, which only an async
+// generator can do (§M.2.3).
+
+public async Stream<int> ticks() {
+    yield 1;
+    yield 2;
+}
+
+public Iterator<int> relay() {
+    yield* ticks();
+}
+
+public void main() {
+    for (var x : relay()) {
+        print(x);
+    }
+}

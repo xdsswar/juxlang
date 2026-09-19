@@ -347,7 +347,8 @@ impl<'a> Walker<'a> {
             | Stmt::Break(..)
             | Stmt::Continue(..)
             | Stmt::SuperCall(..)
-            | Stmt::Throw(..) => {}
+            | Stmt::Throw(..)
+            | Stmt::Yield(..) => {}
         }
     }
 

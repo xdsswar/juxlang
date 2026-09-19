@@ -657,6 +657,21 @@ pub enum Code {
     /// language: a lambda, or a nested type declared on the enclosing class,
     /// covers the same ground.
     E0993_LocalTypeDeclaration,
+    /// E0990 -- `yield` outside a generator's own body (JUX-MISSING-DEFS
+    /// §M.2.1): in a lambda, a constructor, an initializer, or a switch
+    /// expression's arm (Java's arm-value `yield`, which Jux does not have).
+    E0990_YieldOutsideGenerator,
+    /// E0996 -- A generator (a function that yields) whose declared return
+    /// type is not `Iterator<T>`, or `Stream<T>` when async (§M.2.1).
+    E0996_GeneratorReturnType,
+    /// E0997 -- `yield` inside an `unsafe { }` block (§M.2.4).
+    E0997_YieldInUnsafe,
+    /// E0994 -- `return` with a value inside a generator (§M.2.4): values
+    /// come from `yield`, and a bare `return;` ends the sequence.
+    E0994_GeneratorReturnsValue,
+    /// E0995 -- An interface's default (non-static) method that yields
+    /// (§M.2.4): its iterator would outlive the object the body borrows.
+    E0995_InterfaceDefaultGenerator,
     /// E0449 — A **default-value expression references another
     /// parameter** (`int[] buf = new int[n]`). §S.1.3 allows
     /// defaults to read EARLIER parameters, but Phase 1 lowers a
@@ -1099,6 +1114,11 @@ impl Code {
             Code::E0477_TestAnnotationMisplaced  => "E0477",
             Code::E0512_VoidInInterpolation      => "E0512",
             Code::E0993_LocalTypeDeclaration    => "E0993",
+            Code::E0990_YieldOutsideGenerator  => "E0990",
+            Code::E0996_GeneratorReturnType    => "E0996",
+            Code::E0997_YieldInUnsafe          => "E0997",
+            Code::E0994_GeneratorReturnsValue  => "E0994",
+            Code::E0995_InterfaceDefaultGenerator => "E0995",
             Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0446_GenericBoundNotSatisfied => "E0446",

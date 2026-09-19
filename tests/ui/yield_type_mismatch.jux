@@ -1,0 +1,12 @@
+// Every yielded value must fit the element type the generator declares.
+
+public Iterator<int> numbers() {
+    yield 1;
+    yield "two";
+}
+
+public void main() {
+    for (var x : numbers()) {
+        print(x);
+    }
+}

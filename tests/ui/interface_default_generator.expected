@@ -1,0 +1,1 @@
+interface_default_generator.jux:8:27: [E0995] error: default method `count` yields, but an interface's default method cannot be a generator: the iterator would outlive the object it only borrows (§M.2.4)
