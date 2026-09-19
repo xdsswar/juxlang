@@ -79,12 +79,22 @@ class JuxDocumentationProvider : AbstractDocumentationProvider(), com.intellij.l
         return "${kindLabel(decl)} ${signature(decl)}${nullableSuffix(decl)}"
     }
 
-    /** The full Ctrl+Q popup: a definition block plus the doc comment, if any. */
+    /**
+     * The full Ctrl+Q popup, laid out as Java's: where the declaration lives
+     * (its type, or its file for a top-level one), its signature, with the
+     * inferred type of a `var`, then the doc comment's description and its
+     * Params, Returns, Throws, Since and See sections. A method without a doc
+     * comment of its own shows the one of the method it overrides, as Java's
+     * "Description copied from" does. Generated `.jux.d` stubs are Jux files
+     * too, so a library member's doc renders the same way.
+     */
     override fun generateDoc(element: PsiElement?, originalElement: PsiElement?): String? {
         val decl = element as? JuxNamedElement ?: return null
         val sb = StringBuilder()
         sb.append(DocumentationMarkup.DEFINITION_START)
+        location(decl)?.let { sb.append("<small>").append(StringUtil.escapeXmlEntities(it)).append("</small><br/>") }
         sb.append(StringUtil.escapeXmlEntities(signature(decl)))
+        inferredType(decl)?.let { sb.append(": ").append(StringUtil.escapeXmlEntities(it)) }
         sb.append(DocumentationMarkup.DEFINITION_END)
         // An uninitialized auto-property is implicitly nullable (§M.7.3.1): note
         // the effective `T?` type the program actually sees, so offline tooling
@@ -96,12 +106,69 @@ class JuxDocumentationProvider : AbstractDocumentationProvider(), com.intellij.l
             sb.append("</code> (null until set).")
             sb.append(DocumentationMarkup.CONTENT_END)
         }
-        docComment(decl)?.let { doc ->
+        var copiedFrom: String? = null
+        val doc = docComment(decl) ?: inheritedDoc(decl)?.let { (from, text) -> copiedFrom = from; text }
+        if (doc != null) renderDoc(JuxDocComment.parse(doc), copiedFrom, sb)
+        return sb.toString()
+    }
+
+    /** The description, then one section per tag kind, as Java's popup shows them. */
+    private fun renderDoc(doc: JuxDocComment, copiedFrom: String?, sb: StringBuilder) {
+        if (doc.description.isNotEmpty()) {
             sb.append(DocumentationMarkup.CONTENT_START)
-            sb.append(StringUtil.escapeXmlEntities(doc).replace("\n", "<br/>"))
+            if (copiedFrom != null) {
+                sb.append("<p><i>Description copied from: ").append(StringUtil.escapeXmlEntities(copiedFrom)).append("</i></p>")
+            }
+            sb.append(JuxDocComment.toHtml(doc.description))
             sb.append(DocumentationMarkup.CONTENT_END)
         }
-        return sb.toString()
+        val sections = listOf(
+            "Params:" to doc.params.map { (name, text) -> "<code>$name</code> - ${JuxDocComment.toHtml(text)}" },
+            "Returns:" to listOfNotNull(doc.returns?.let { JuxDocComment.toHtml(it) }),
+            "Throws:" to doc.throws.map { (type, text) -> "<code>$type</code> - ${JuxDocComment.toHtml(text)}" },
+            "Since:" to listOfNotNull(doc.since?.let { JuxDocComment.toHtml(it) }),
+            "See Also:" to doc.see.map { "<code>${StringUtil.escapeXmlEntities(it)}</code>" },
+        ).filter { it.second.isNotEmpty() }
+        if (sections.isEmpty()) return
+        sb.append(DocumentationMarkup.SECTIONS_START)
+        for ((title, rows) in sections) {
+            sb.append(DocumentationMarkup.SECTION_HEADER_START).append(title).append(DocumentationMarkup.SECTION_SEPARATOR)
+            sb.append(rows.joinToString("<br/>"))
+            sb.append(DocumentationMarkup.SECTION_END)
+        }
+        sb.append(DocumentationMarkup.SECTIONS_END)
+    }
+
+    /** `Cart`, or `shop.Cart` for a member; the file for a top-level declaration. */
+    private fun location(decl: JuxNamedElement): String? {
+        if (decl.elementType === E.PARAMETER || decl.elementType === E.LOCAL_VARIABLE) return null
+        val owner = com.intellij.psi.util.PsiTreeUtil.getParentOfType(decl, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
+        val pkg = decl.containingFile?.let { dev.jux.intellij.run.JuxTestDetector.packageName(it) }.orEmpty()
+        return when {
+            owner != null -> listOf(pkg, owner.name.orEmpty()).filter { it.isNotEmpty() }.joinToString(".")
+            decl.containingFile != null -> listOf(pkg, decl.containingFile.name).filter { it.isNotEmpty() }.joinToString(" ")
+            else -> null
+        }.takeIf { !it.isNullOrEmpty() }
+    }
+
+    /** The type a `var` declaration infers, which its signature does not show. */
+    private fun inferredType(decl: JuxNamedElement): String? {
+        if (decl.elementType !== E.LOCAL_VARIABLE && decl.elementType !== E.FIELD_DECLARATION) return null
+        if (decl.node.findChildByType(E.TYPE_REFERENCE) != null && decl.node.findChildByType(JuxTokenTypes.VAR_KW) == null) return null
+        val type = dev.jux.intellij.resolve.JuxTypeEngine.declaredType(decl)
+        return type.takeIf { it !is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()
+    }
+
+    /** The doc of the nearest method [decl] overrides that has one, with where it came from. */
+    private fun inheritedDoc(decl: JuxNamedElement): Pair<String, String>? {
+        val method = decl as? dev.jux.intellij.psi.JuxMethodDeclaration ?: return null
+        for (sup in dev.jux.intellij.codeInsight.JuxGotoSuperHandler.superMethods(method)) {
+            val named = sup as? JuxNamedElement ?: continue
+            val text = docComment(named) ?: continue
+            val owner = com.intellij.psi.util.PsiTreeUtil.getParentOfType(sup, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)?.name
+            return "${owner ?: "?"}.${named.name}" to text
+        }
+        return null
     }
 
     /** A short human label for the declaration kind. */
