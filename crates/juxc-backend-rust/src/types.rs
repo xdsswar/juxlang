@@ -348,6 +348,9 @@ impl RustEmitter {
                 "AsyncMutex" if !self.symbols.classes.contains_key("AsyncMutex") => {
                     Some("crate::JuxAsyncMutex")
                 }
+                // The synchronous `Mutex<T>` (JUX-LANG-V1 10.3.3), when the
+                // name means Jux's own and not an imported `rust.std.Mutex`.
+                "Mutex" if self.resolve_bare_class_fqn("Mutex").as_deref() == Some("jux.std.concurrent.Mutex") => Some("crate::JuxMutex"),
                 // Async streams (§18.6) — same builtin-helper mapping.
                 "Stream" if !self.symbols.classes.contains_key("Stream") => {
                     Some("crate::JuxStream")

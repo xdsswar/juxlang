@@ -386,6 +386,30 @@ public enum MemoryOrder {
     SeqCst;
 }
 "###),
+    ("concurrent/Mutex.jux", r###"/**
+ * jux.std.concurrent.Mutex<T>
+ *
+ * Mutual exclusion for synchronous, multithreaded code (JUX-LANG-V1
+ * 10.3.3): worker pools, callbacks from C. The protected value is reachable
+ * only through `lock`, so there is no way to touch it without holding the
+ * lock. Handles SHARE the one mutex: passing a Mutex into `Worker.spawn`
+ * gives every worker the same value. For code that awaits while holding
+ * the lock, use `AsyncMutex` instead.
+ */
+package jux.std.concurrent;
+
+public class Mutex<T> {
+    /** A mutex guarding `initial`. */
+    public Mutex(T initial) {}
+
+    /**
+     * Holding the lock, replaces the value with `update(value)` and returns
+     * the new value. `update` runs while the lock is held, so keep it short,
+     * and do not lock the same mutex again inside it.
+     */
+    public T lock((T) -> T update) { throw new UnsupportedOperationException("intrinsic"); }
+}
+"###),
     ("concurrent/AtomicInt.jux", r###"/**
  * jux.std.concurrent.AtomicInt
  *

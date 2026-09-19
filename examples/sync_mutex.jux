@@ -1,0 +1,56 @@
+// The synchronous Mutex (JUX-LANG-V1 10.3.3).
+//
+// The protected value has no getter and no setter: `lock(update)` is the only
+// way in, and it holds the lock while `update` turns the old value into the
+// new one. So there is no "forgot to lock" to make. Handles share one mutex,
+// so every worker below adds to the same counter.
+
+import jux.std.concurrent.Mutex;
+
+class SafeCounter {
+    private Mutex<int> count;
+
+    public SafeCounter() {
+        this.count = new Mutex<int>(0);
+    }
+
+    public int increment() {
+        return count.lock((c) -> c + 1);
+    }
+
+    public int current() {
+        return count.lock((c) -> c);
+    }
+}
+
+// One worker's share: a thousand increments, each under the lock.
+int addMany(Mutex<long> total) {
+    for (var i = 0; i < 1000; i++) {
+        total.lock((t) -> t + 1L);
+    }
+    return 0;
+}
+
+public async void main() {
+    var counter = new SafeCounter();
+    counter.increment();
+    print(counter.increment());
+    print(counter.current());
+
+    // Four real threads, one shared total.
+    var total = new Mutex<long>(0L);
+    final var a = Worker.spawn(() -> addMany(total));
+    final var b = Worker.spawn(() -> addMany(total));
+    final var c = Worker.spawn(() -> addMany(total));
+    final var d = Worker.spawn(() -> addMany(total));
+    await a;
+    await b;
+    await c;
+    await d;
+    print(total.lock((t) -> t));
+
+    // Any value type works, a String included.
+    var log = new Mutex<String>("start");
+    log.lock((s) -> s + ",a");
+    print(log.lock((s) -> s + ",b"));
+}

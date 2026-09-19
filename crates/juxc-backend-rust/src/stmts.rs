@@ -1851,6 +1851,7 @@ impl RustEmitter {
                                 c.as_str(),
                                 "Stream" | "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong",
                             )
+                            || c == "jux.std.concurrent.Mutex"
                     })
                     .unwrap_or(false)
             });

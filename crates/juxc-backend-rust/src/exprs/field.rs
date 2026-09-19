@@ -1822,7 +1822,8 @@ impl RustEmitter {
                         if matches!(
                             bare,
                             "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong" | "Stream"
-                        ) {
+                        ) || name == "jux.std.concurrent.Mutex"
+                        {
                             return true;
                         }
                         return self.is_wrapper_class(bare);

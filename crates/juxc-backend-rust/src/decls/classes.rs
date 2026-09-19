@@ -63,6 +63,7 @@ impl RustEmitter {
             || class_decl.name.text == "Task"
             || class_decl.name.text == "AtomicInt"
             || class_decl.name.text == "AtomicLong"
+            || class_decl.name.text == "Mutex"
         {
             let pkg = self.current_package_path();
             if pkg == "jux.std.concurrent" {

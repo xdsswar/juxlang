@@ -499,6 +499,21 @@ impl RustEmitter {
         // type (§18.3); lowers to the emitted JuxChannel
         // helper. Recognized before user-class resolution so
         // no stdlib stub is needed.
+        // `new Mutex<T>(v)` -- the synchronous mutex (JUX-LANG-V1 10.3.3).
+        if n.class_name.segments.len() == 1
+            && n.class_name.segments[0].text == "Mutex"
+            && self.resolve_bare_class_fqn("Mutex").as_deref() == Some("jux.std.concurrent.Mutex")
+        {
+            self.w.push_str("crate::JuxMutex::new(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            if let Some(v) = n.args.first() {
+                self.emit_expr(v);
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
         // `new AsyncMutex<T>(v)` — §18.3 runtime helper.
         if n.class_name.segments.len() == 1
             && n.class_name.segments[0].text == "AsyncMutex"

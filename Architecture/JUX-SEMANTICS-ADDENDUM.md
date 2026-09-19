@@ -509,7 +509,7 @@ The default ordering for the no-argument methods is **SeqCst**. This is the safe
 
 There are no fence intrinsics in v1 (`atomic_thread_fence`-equivalent). If experience shows a need, they can be added in a later edition without changing the rest of the model.
 
-**Phase-1 implementation notes.** `AtomicInt` / `AtomicLong` and `MemoryOrder` are available (`jux.std.concurrent`), lowered onto `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc` — handles share the same cell across `spawn` / `Worker.spawn` boundaries. The `fetch*` family carries both the SeqCst-default and explicit-order overloads. Deferred: `compareAndSwap` (its `CasResult<T>` return type is referenced above but not yet specified — it needs a definition here before implementation) and `AtomicRef<T>`.
+**Phase-1 implementation notes.** `AtomicInt` / `AtomicLong` and `MemoryOrder` are available (`jux.std.concurrent`), lowered onto `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc` — handles share the same cell across `spawn` / `Worker.spawn` boundaries. The `fetch*` family carries both the SeqCst-default and explicit-order overloads. Deferred: `compareAndSwap` (its `CasResult<T>` return type is referenced above but not yet specified — it needs a definition here before implementation) and `AtomicRef<T>`, whose operations are not specified here either; and a lock-free swap of a reference-counted class handle has no safe primitive in Rust's standard library, so it would need a spec'd API and a runtime crate (or a lock, which the name promises not to take). For shared mutable state across threads today, `Mutex<T>` (JUX-LANG-V1 §10.3.3) is available.
 
 ### S.6.3. Volatile Access
 

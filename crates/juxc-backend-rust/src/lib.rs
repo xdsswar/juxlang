@@ -4040,7 +4040,7 @@ pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
         ("jux.std.io", "File" | "Path" | "Console")
             | (
                 "jux.std.concurrent",
-                "Worker" | "Task" | "AtomicInt" | "AtomicLong"
+                "Worker" | "Task" | "AtomicInt" | "AtomicLong" | "Mutex"
             )
             | ("jux.std.time", "Clock" | "Instant")
     )
@@ -5185,6 +5185,37 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        self.inner.lock().await\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Synchronous Mutex runtime -- JUX-LANG-V1 10.3.3. `lock(f)` holds
+        // the std mutex while `f` maps the value to its replacement, so the
+        // value is never reachable outside a held lock. A panic inside `f`
+        // (an uncaught Jux exception) poisons the std mutex; the value it
+        // guards is still whole, so the next `lock` takes it back.
+        w.push_str(concat!(
+            "pub struct JuxMutex<T> {\n",
+            "    inner: std::sync::Arc<std::sync::Mutex<T>>,\n",
+            "}\n",
+            "impl<T> Clone for JuxMutex<T> {\n",
+            "    fn clone(&self) -> Self {\n",
+            "        JuxMutex { inner: self.inner.clone() }\n",
+            "    }\n",
+            "}\n",
+            "impl<T> std::fmt::Debug for JuxMutex<T> {\n",
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n",
+            "        f.write_str(\"Mutex\")\n",
+            "    }\n",
+            "}\n",
+            "impl<T: Clone> JuxMutex<T> {\n",
+            "    pub fn new(v: T) -> Self {\n",
+            "        JuxMutex { inner: std::sync::Arc::new(std::sync::Mutex::new(v)) }\n",
+            "    }\n",
+            "    pub fn lock(&self, update: std::rc::Rc<dyn Fn(T) -> T>) -> T {\n",
+            "        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());\n",
+            "        let next = update((*guard).clone());\n",
+            "        *guard = next.clone();\n",
+            "        next\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
         // runs `f` on a real OS thread from the system's thread
         // pool and returns a `Task<T>` (a Future yielding the
