@@ -1,0 +1,12 @@
+// `int main()` returns the process exit code (Entry Points E.1.2/E.1.3).
+// Output printed before the return is flushed first.
+
+int main() {
+    print("working");
+    int failures = 2;
+    if (failures > 0) {
+        print($"${failures} checks failed");
+        return failures;
+    }
+    return 0;
+}

@@ -3524,6 +3524,25 @@ fn compute_polymorphic_forced_classes(units: &[juxc_ast::CompilationUnit]) -> Ha
     forced
 }
 
+/// The argument an entry shim passes to `main(String[] args)`: the
+/// command line without the program name (§E.1.3).
+pub(crate) const ENTRY_ARGS_EXPR: &str = "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())";
+
+/// Whether an entry point hands back an exit code (§E.1.2): `int main()`, or
+/// `async int main()`, whose inner type is not the `void` sentinel.
+pub(crate) fn entry_returns_code(rt: &juxc_ast::ReturnType) -> bool {
+    match rt {
+        juxc_ast::ReturnType::Type(_) => true,
+        juxc_ast::ReturnType::AsyncType(t) => {
+            !(t.name.segments.len() == 1
+                && t.name.segments[0].text == "void"
+                && t.generic_args.is_empty()
+                && !t.nullable)
+        }
+        juxc_ast::ReturnType::Void => false,
+    }
+}
+
 /// Collect the bare names used as **cast / type-test targets** — the `T` in a
 /// `(T) e` / `e as T` cast or (later) an `e => T` type-test — anywhere in the
 /// program. "Finish polymorphism" emits a runtime-type `__jux_as_<T>` downcast
@@ -5438,31 +5457,22 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // excluded, like Java). A sync param-taking main was
             // renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = main_decl.is_some_and(|f| !f.params.is_empty());
-            let args_expr = if takes_args {
-                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-            } else {
-                ""
-            };
+            // `int main()` hands back an exit code (§E.1.3) and was renamed
+            // like the args form, since Rust's `main` cannot return an integer.
+            let returns_code = main_decl.is_some_and(|f| entry_returns_code(&f.return_type));
+            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
             let path = juxc_lex::join_rust_path(&package);
-            if async_main {
-                self.w.push_str("futures::executor::block_on(");
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str("));\n");
-            } else if takes_args {
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_args_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str(");\n");
+            let call = if async_main {
+                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+            } else if takes_args || returns_code {
+                format!("{path}::__jux_args_main({args_expr})")
             } else {
-                self.w.push_str(&path);
-                self.w.push_str("::main();\n");
-            }
+                format!("{path}::main()")
+            };
+            self.emit_entry_call(&call, returns_code);
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -5734,11 +5744,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // the shim feeds `std::env::args().skip(1)`. Sync forms
             // were renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = !main_fn.params.is_empty();
-            let args_expr = if takes_args {
-                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-            } else {
-                ""
-            };
+            // `int main()`: the exit code goes to `std::process::exit`, and a
+            // sync one was renamed to `__jux_args_main` like the args form.
+            let returns_code = entry_returns_code(&main_fn.return_type);
+            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
@@ -5754,23 +5763,19 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     self.w.newline();
                     self.w.line("fn main() {");
                     self.w.indent_inc();
-                    self.w.emit_indent();
-                    self.w
-                        .push_str("futures::executor::block_on(__jux_async_main(");
-                    self.w.push_str(args_expr);
-                    self.w.push_str("));\n");
+                    self.emit_entry_call(
+                        &format!("futures::executor::block_on(__jux_async_main({args_expr}))"),
+                        returns_code,
+                    );
                     self.w.indent_dec();
                     self.w.line("}");
-                } else if takes_args {
-                    // Crate-root sync `main(args)` was renamed to
-                    // `__jux_args_main`; this shim is the real entry.
+                } else if takes_args || returns_code {
+                    // Crate-root sync `main(args)` / `int main()` was renamed
+                    // to `__jux_args_main`; this shim is the real entry.
                     self.w.newline();
                     self.w.line("fn main() {");
                     self.w.indent_inc();
-                    self.w.emit_indent();
-                    self.w.push_str("__jux_args_main(");
-                    self.w.push_str(args_expr);
-                    self.w.push_str(");\n");
+                    self.emit_entry_call(&format!("__jux_args_main({args_expr})"), returns_code);
                     self.w.indent_dec();
                     self.w.line("}");
                 }
@@ -5779,26 +5784,19 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
             let path = juxc_lex::join_rust_path(&pkg);
-            if is_async_main {
-                // Reach into the user's package and drive their async
-                // main via the futures executor. The user's main was
-                // renamed to `__jux_async_main` by `emit_fn_decl`.
-                self.w.push_str("futures::executor::block_on(");
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str("));\n");
-            } else if takes_args {
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_args_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str(");\n");
+            // Reach into the user's package. An async main was renamed to
+            // `__jux_async_main` and runs under the futures executor; a sync
+            // one taking args or returning a code was renamed to
+            // `__jux_args_main` by `emit_fn_decl`.
+            let call = if is_async_main {
+                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+            } else if takes_args || returns_code {
+                format!("{path}::__jux_args_main({args_expr})")
             } else {
-                self.w.push_str(&path);
-                self.w.push_str("::main();\n");
-            }
+                format!("{path}::main()")
+            };
+            self.emit_entry_call(&call, returns_code);
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -5834,22 +5832,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // exit code. This covers BOTH `int main()` (ReturnType::Type) and
         // `async int main()` (ReturnType::AsyncType whose inner isn't the `void`
         // sentinel); the latter would otherwise drop its exit code.
-        let returns_int = match &method.return_type {
-            juxc_ast::ReturnType::Type(_) => true,
-            juxc_ast::ReturnType::AsyncType(t) => {
-                !(t.name.segments.len() == 1
-                    && t.name.segments[0].text == "void"
-                    && t.generic_args.is_empty()
-                    && !t.nullable)
-            }
-            juxc_ast::ReturnType::Void => false,
-        };
+        let returns_int = entry_returns_code(&method.return_type);
         let takes_args = !method.params.is_empty();
-        let args_expr = if takes_args {
-            "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-        } else {
-            ""
-        };
+        let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
 
         // `ClassName::main` at the crate root, else `pkg::path::ClassName::main`.
         let pkg: Vec<&str> = unit
@@ -5875,17 +5860,25 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         self.w.newline();
         self.w.line("fn main() {");
         self.w.indent_inc();
-        self.w.emit_indent();
-        if returns_int {
-            self.w.push_str("std::process::exit(");
-            self.w.push_str(&inner);
-            self.w.push_str(" as i32);\n");
-        } else {
-            self.w.push_str(&inner);
-            self.w.push_str(";\n");
-        }
+        self.emit_entry_call(&inner, returns_int);
         self.w.indent_dec();
         self.w.line("}");
+    }
+
+    /// One statement of an entry shim: the call to the user's `main`, and for
+    /// an `int main` (§E.1.3) the exit with its result. `std::process::exit`
+    /// flushes stdout before the process ends, and the user's locals are gone
+    /// by then because their function has returned.
+    pub(crate) fn emit_entry_call(&mut self, call: &str, returns_code: bool) {
+        self.w.emit_indent();
+        if returns_code {
+            self.w.push_str("std::process::exit(");
+            self.w.push_str(call);
+            self.w.push_str(" as i32);\n");
+        } else {
+            self.w.push_str(call);
+            self.w.push_str(";\n");
+        }
     }
 
     /// Emit the test-runner `fn main()` for `jux test`
