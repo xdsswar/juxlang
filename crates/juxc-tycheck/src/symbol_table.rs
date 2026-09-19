@@ -1837,6 +1837,10 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
                 }
             }
         }
+        // `sig.fields` is a `HashMap`, so walk the edges in declaration
+        // order: the warning names the FIRST field that closes a cycle, and
+        // which field that is must not change between two runs.
+        outs.sort_by_key(|(_, span, name)| (span.file, span.start, name.clone()));
         edges.insert(fqn.clone(), outs);
     }
 
