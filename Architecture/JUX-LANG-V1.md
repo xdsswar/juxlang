@@ -508,7 +508,7 @@ switch (shape) {
 }
 ```
 
-A destructuring declaration binds one local per binder, in component order. A binder is a name, `var name` (the same spelling a `case` pattern uses), or `_` to skip a component; `final var Point(x, y) = p;` makes every binder final. A record pattern names the record and gives exactly one binder per component (`E0439` otherwise). A declaration has no other branch to take if its pattern fails, so the value must always be that record: a value typed as a supertype, a sealed interface, or `Point?` is `E0271`, and the program tests it first with `switch` or `=>`. Nested patterns in a declaration (`var Line(Point(a, b), q) = l;`) are not supported yet; destructure the outer record, then the component.
+A destructuring declaration binds one local per binder, in component order. A binder is a name, `var name` (the same spelling a `case` pattern uses), or `_` to skip a component; `final var Point(x, y) = p;` makes every binder final. A record pattern names the record and gives exactly one binder per component (`E0439` otherwise). A declaration has no other branch to take if its pattern fails, so the value must always be that record: a value typed as a supertype, a sealed interface, or `Point?` is `E0271`, and the program tests it first with `switch` or `=>`. A binder may itself be a record pattern, `var Line(Point(a, b), var q) = l;`, which takes that component apart the same way and under the same rules: its record, its binder count, and a component that is always that record (`E0271` when the component is typed as a supertype or nullable).
 
 ### 5.5. Special Types
 

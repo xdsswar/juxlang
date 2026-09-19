@@ -1,0 +1,22 @@
+// Nested record patterns in a destructuring declaration (JUX-LANG-V1 §5.4):
+// a binder can itself be a record pattern, taken apart the same way.
+
+record Pt(int x, int y) {}
+record Line(Pt start, Pt end) {}
+record Named(String label, Line line) {}
+
+public void main() {
+    var l = new Line(new Pt(1, 2), new Pt(3, 4));
+
+    var Line(Pt(x1, y1), var end) = l;
+    print(x1 + y1 + end.x);
+
+    // Two levels, `var` binders, and `_` to skip parts at any depth.
+    var n = new Named("diag", new Line(new Pt(0, 0), new Pt(5, 5)));
+    final var Named(label, Line(Pt(_, var sy), var Pt(ex, _))) = n;
+    print(label + " " + sy + " " + ex);
+
+    // Both ends at once.
+    var Line(Pt(ax, ay), Pt(bx, by)) = l;
+    print((bx - ax) * (by - ay));
+}
