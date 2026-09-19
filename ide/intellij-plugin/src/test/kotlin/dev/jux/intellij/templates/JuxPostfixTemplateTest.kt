@@ -137,6 +137,39 @@ class JuxPostfixTemplateTest : BasePlatformTestCase() {
         assertTrue(out, out.contains("var x = ((Type) value);"))
     }
 
+    fun testSwitchOnAnEnumWritesEveryArm() {
+        val out = tab(
+            "enum Color { Red, Green, Blue }\n" +
+                inMain("    Color c = Color.Red;\n    c.switch<caret>"),
+        )
+        assertTrue(out, out.contains("switch (c) {"))
+        assertTrue(out, out.contains("case Red -> {"))
+        assertTrue(out, out.contains("case Green -> {"))
+        assertTrue(out, out.contains("case Blue -> {"))
+    }
+
+    fun testSwitchOnASealedValueWritesTypePatterns() {
+        val out = tab(
+            "sealed interface Shape permits Circle, Square {}\n" +
+                "record Circle(double r) implements Shape {}\n" +
+                "record Square(double side) implements Shape {}\n" +
+                inMain("    Shape s = new Circle(1.0);\n    s.switch<caret>"),
+        )
+        assertTrue(out, out.contains("case Circle circle -> {"))
+        assertTrue(out, out.contains("case Square square -> {"))
+    }
+
+    fun testSwitchOnAnythingElseStaysEmpty() {
+        val out = tab(inMain("    int n = 3;\n    n.switch<caret>"))
+        assertTrue(out, out.contains("switch (n) {"))
+        assertFalse(out, out.contains("case"))
+    }
+
+    fun testYieldHandsTheValueOut() {
+        val out = tab("Iterator<int> nums() {\n    int n = 1;\n    n.yield<caret>\n}\n")
+        assertTrue(out, out.contains("yield n;"))
+    }
+
     fun testJavaTemplateSetIsRegistered() {
         val names = JuxPostfixTemplateProvider().templates.map { it.key }
         assertContainsElements(

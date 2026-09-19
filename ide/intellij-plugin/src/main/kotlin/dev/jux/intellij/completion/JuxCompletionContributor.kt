@@ -164,6 +164,10 @@ class JuxCompletionContributor : CompletionContributor() {
                         return
                     }
 
+                    // Right after `case` in a switch over an enum or a sealed
+                    // type: the constants and subtypes no arm names yet.
+                    if (JuxCaseCompletion.addTo(parameters, result::addElement)) return
+
                     // After `@` — only the builtin annotations exist in Phase 1
                     // (`@override` + the §TS.1 test/hook five), so nothing else
                     // belongs in the list.
