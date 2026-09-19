@@ -1,0 +1,21 @@
+import rust.std.HashMap;
+import rust.std.BTreeMap;
+
+void show(String name, int value) {
+    print($"${name}=${value}");
+}
+
+void main() {
+    var ages = new BTreeMap<String, int>();
+    ages.insert("ada", 36);
+    ages.insert("alan", 41);
+    for (var entry : ages) {
+        show(entry.0, entry.1);
+    }
+    var one = new HashMap<String, int>();
+    one.insert("grace", 85);
+    for (var entry : one) {
+        show(entry.0, entry.1 + 1);
+    }
+    print(ages.len());
+}

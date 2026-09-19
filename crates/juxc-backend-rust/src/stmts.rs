@@ -2443,6 +2443,38 @@ impl RustEmitter {
         // by-value also works for a function that returns a collection.
         let iter_is_place =
             snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
+        // **A map walks OWNED entries.** A foreign map (`HashMap`, `BTreeMap`,
+        // a crate's `Map<K, V>`) iterated by reference yields `(&K, &V)`, and
+        // Jux has no reference types to hold them: `show(entry.0, entry.1)`
+        // handed a `&String` to a `String` parameter (B18). Each entry is
+        // copied out as the `(K, V)` pair the Jux program sees; a class value
+        // inside is a handle, so its copy is a refcount bump.
+        if iter_is_place && self.for_each_iterates_map_entries(&f.iter) {
+            self.w.push_str("for ");
+            self.w.push_str(&to_rust_ident(&f.var_name.text));
+            self.w.push_str(" in ");
+            if snapshot {
+                self.w.push_str("__jux_fe_iter");
+            } else {
+                self.emit_expr(&f.iter);
+            }
+            self.w.push_str(".iter().map(|(k, v)| (k.clone(), v.clone())) {\n");
+            self.w.indent_inc();
+            self.local_types.push(std::collections::HashMap::new());
+            self.loop_emit_depth += 1;
+            self.emit_block_contents(&f.body);
+            self.loop_emit_depth -= 1;
+            self.local_types.pop();
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+            if snapshot {
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+            }
+            return;
+        }
         self.w.push_str("for ");
         if element_is_copy && iter_is_place {
             self.w.push('&');
@@ -2513,6 +2545,25 @@ impl RustEmitter {
             self.w.emit_indent();
             self.w.push_str("}\n");
         }
+    }
+
+    /// Whether a for-each iterable is a FOREIGN map, whose by-reference
+    /// iteration yields `(&K, &V)`: `HashMap<K, V, S>`, `BTreeMap<K, V, A>`,
+    /// serde_json's `Map<K, V>`.
+    ///
+    /// Read off the crate's own declaration rather than a list of names: a
+    /// Rust map declares its key and value parameters first, as `K` and `V`,
+    /// and bindgen keeps the Rust parameter names. The parameter COUNT cannot
+    /// tell, since `Vec<T, A>` has two as well.
+    fn for_each_iterates_map_entries(&self, iter: &Expr) -> bool {
+        let Some(Ty::User { name, .. }) = self.receiver_ty_of(iter) else {
+            return false;
+        };
+        self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name))
+            .is_some_and(|c| {
+                let params: Vec<&str> = c.generic_params.iter().map(|g| g.name.text.as_str()).collect();
+                c.is_external && params.starts_with(&["K", "V"])
+            })
     }
 
     /// True iff a for-each iterable is a collection field read through a wrapper
