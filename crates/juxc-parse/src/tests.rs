@@ -2449,6 +2449,28 @@ fn switch_arm_or_pattern_parses() {
     assert!(alts.iter().all(|p| matches!(p, Pattern::Literal(_, _))));
 }
 
+/// A sealed type with no `permits` clause permits the types in its own file
+/// that extend or implement it (§A.2.5); a written clause is left alone.
+#[test]
+fn sealed_type_without_permits_permits_its_files_subtypes() {
+    let ast = parse_clean(
+        r#"sealed interface Animal {}
+           record Dog(String name) implements Animal {}
+           record Cat(int lives) implements Animal {}
+           class Robot {}
+           sealed class Vehicle {}
+           class Car extends Vehicle {}
+           sealed interface Listed permits Dog {}"#,
+    );
+    let names = |ids: &Vec<juxc_ast::Ident>| ids.iter().map(|i| i.text.clone()).collect::<Vec<_>>();
+    let TopLevelDecl::Interface(animal) = &ast.items[0] else { panic!() };
+    assert_eq!(names(&animal.permits), ["Dog", "Cat"]);
+    let TopLevelDecl::Class(vehicle) = &ast.items[4] else { panic!() };
+    assert_eq!(names(&vehicle.permits), ["Car"]);
+    let TopLevelDecl::Interface(listed) = &ast.items[6] else { panic!() };
+    assert_eq!(names(&listed.permits), ["Dog"]);
+}
+
 /// The comma list `case A, B ->` (JUX-LANG-V1 §7.5) is the same or-pattern,
 /// and mixing it with `|` gives one flat list. A record pattern's own commas
 /// stay inside it.

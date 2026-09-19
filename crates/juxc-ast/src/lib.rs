@@ -53,7 +53,7 @@ pub use decls::{
     RecordDecl, ReturnType, TopLevelDecl, TypeAliasDecl, TypeParam, WhereConstraint,
 };
 pub use desugar::{
-    backing_field_name as desugar_backing_field_name, desugar_properties,
+    backing_field_name as desugar_backing_field_name, desugar_properties, infer_sealed_permits,
     setter_method_name as desugar_static_setter_name,
 };
 pub use exprs::{
