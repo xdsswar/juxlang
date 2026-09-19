@@ -384,7 +384,7 @@ Status: FIXED in 8acb573. Every integer, float, `char` and `bool` has Rust's met
 - E0931 on a struct says "class `Circle` defines `operator==` but no
   `operator hash`".
 
-Status: `--emit-dir` in project mode and the help text FIXED in 177cdcc; E0931 wording FIXED in 2966922. `String.length()` is DEFERRED: ERRATA E13 records that the String surface is unresolved and E5 makes `?.length()` normative, so removing it needs an owner ruling.
+Status: `--emit-dir` in project mode and the help text FIXED in 177cdcc; E0931 wording FIXED in 2966922. `String.length()` is KEPT by owner ruling (2026-09-19): it counts characters like `charLength()`, and ERRATA E13 records it.
 
 ## Bugs found by wave 2
 

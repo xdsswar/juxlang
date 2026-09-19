@@ -377,6 +377,7 @@ public final class String {                                  // operators only â
 
     public int byteLength();
     public int charLength();                                     -- O(N) by default
+    public int length();                                         -- same as charLength() (owner ruling, ERRATA E13)
 
     public Iterable<byte> bytes();
     public Iterable<char> chars();
