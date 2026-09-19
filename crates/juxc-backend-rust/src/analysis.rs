@@ -4493,7 +4493,7 @@ impl crate::RustEmitter {
             }
             let arg = local(&format!("__jux_a{i}"));
             let differs = slot_params.get(i) != value_params.get(i);
-            match value_params.get(i).and_then(|t| crate::analysis::ty_to_type_ref(t)) {
+            match value_params.get(i).and_then(crate::analysis::ty_to_type_ref) {
                 Some(value_param) if differs => self.emit_expr_coerced_to_iface(&value_param, &arg),
                 _ => self.emit_expr(&arg),
             }

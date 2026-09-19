@@ -222,9 +222,9 @@ impl TypeEnv {
     /// narrows a name by declaring it again with the narrower type). `None`
     /// when the name is bound once, or not at all: nothing is refined.
     pub fn declared_type_under_refinement(&self, name: &str) -> Option<&Ty> {
-        let mut bindings = self.scopes.iter().rev().filter_map(|scope| scope.get(name));
-        let innermost = bindings.next()?;
-        let outermost = bindings.last()?;
+        let mut bindings = self.scopes.iter().filter_map(|scope| scope.get(name));
+        let outermost = bindings.next()?;
+        let innermost = bindings.next_back()?;
         (outermost != innermost).then_some(outermost)
     }
 
