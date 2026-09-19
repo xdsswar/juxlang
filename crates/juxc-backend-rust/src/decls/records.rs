@@ -78,6 +78,7 @@ impl RustEmitter {
         if crate::has_layout_c(&record_decl.annotations) {
             self.w.line("#[repr(C)]");
         }
+        crate::emit_align_attribute(&mut self.w, &record_decl.annotations);
 
         // pub struct Name<T, U> { …components… }
         self.w.emit_indent();

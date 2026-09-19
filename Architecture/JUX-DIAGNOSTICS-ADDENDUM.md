@@ -551,6 +551,8 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0516`  | `&` of something that is not a place: a literal, a call, an arithmetic result, or a class object's field | Layout-ABI §L.6.1a |
 | `E0517`  | `*` on a value that is not a pointer, or on a `void*` | Layout-ABI §L.6.1a |
 | `E0518`  | An operation pointers do not have: a non-integer step, stepping a `void*`, `p + q`, `p * n`, a bitwise operator | Layout-ABI §L.6.1a |
+| `E0519`  | An `@align(N)` that cannot hold: `N` not an integer literal, not a power of two, above 2^29, or below an alignment a field already needs | Layout-ABI §L.1.4, ERRATA E62 |
+| `E0520`  | `@align` where it cannot apply: a field, an enum or an interface | Layout-ABI §L.1.4, ERRATA E62 |
 
 ### Lowering (`E0600–E0699`)
 

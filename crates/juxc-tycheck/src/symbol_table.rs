@@ -3026,6 +3026,25 @@ pub(crate) fn has_annotation(annotations: &[juxc_ast::Annotation], canonical_low
     })
 }
 
+/// The `@align(N)` annotation among `annotations` (Layout-ABI §L.1.4), as its
+/// span and the value of `N` when `N` is a plain integer literal (`None` when
+/// it is anything else, which the checker reports). `None` overall when there
+/// is no `@align`. Case-insensitive, like every built-in annotation lookup.
+pub fn align_annotation(annotations: &[juxc_ast::Annotation]) -> Option<(juxc_source::Span, Option<i64>)> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    let a = annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .is_some_and(|s| s.text.eq_ignore_ascii_case("align"))
+    })?;
+    let value = match a.args.as_slice() {
+        [AnnotationArg::Positional(Expr::Literal(Literal::Int(lit)))] => Some(lit.value),
+        _ => None,
+    };
+    Some((a.span, value))
+}
+
 /// True when `annotations` includes `@layout(c)` — a `layout` annotation with a
 /// positional `c` argument, marking a C-compatible memory layout (Layout-ABI
 /// §L.1.2). Case-insensitive, like every built-in annotation lookup.

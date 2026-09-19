@@ -1,0 +1,7 @@
+align_rules.jux:3:1: [E0519] error: `@align` on struct `NotPowerOfTwo` cannot hold: 48 is not a power of two (§L.1.4)
+align_rules.jux:8:1: [E0519] error: `@align` on struct `AlignsDown` cannot hold: a field of type `long` already needs 8-byte alignment, and `@align` can only raise it (§L.1.4)
+align_rules.jux:13:1: [E0519] error: `@align` on struct `NotALiteral` cannot hold: its argument must be an integer literal, such as `@align(64)` (§L.1.4)
+align_rules.jux:19:5: [E0520] error: `@align` cannot be put on a field (`v`) (§L.1.4)
+align_rules.jux:23:1: [E0520] error: `@align` cannot be put on an enum (`Mode`) (§L.1.4)
+align_rules.jux:30:11: [E0463] error: `alignof(void)`: `void` has no values, so it has no alignment (§5.9.4)
+align_rules.jux:31:11: [E0461] error: `alignof(rust.std.Vec)`: `rust.std.Vec` is generic, and its alignment depends on its type arguments (§5.9.4)

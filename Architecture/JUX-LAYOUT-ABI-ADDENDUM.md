@@ -173,22 +173,30 @@ public struct CacheLine {
 }
 ```
 
-`@align(N)` is permitted on a type declaration (forces every instance to that alignment) or on a field (forces that field's offset within its enclosing aggregate to that alignment). Aligning *up* — `@align(N)` where `N` exceeds the natural alignment — is permitted; aligning down is rejected (`E0710`).
+`@align(N)` is permitted on a type declaration (forces every instance to that alignment) or on a field (forces that field's offset within its enclosing aggregate to that alignment). Aligning *up* — `@align(N)` where `N` exceeds the natural alignment — is permitted; aligning down is rejected.
+
+**Implemented (ERRATA E62).** On a `class`, `struct` or `record`, `@align(N)`
+lowers to `#[repr(align(N))]` (on a class, on the object its shared handle
+points at), and the type's size rounds up to a multiple of `N`. `N` must be an
+integer literal, a power of two, and at most 2^29; aligning below what a
+fixed-width field already needs is caught too. All of these are **E0519**.
+`@align` on a field, an enum or an interface is **E0520**: Phase 1 aligns whole
+types only, and a field gets an alignment by having an `@align(N) struct` as
+its type. See `examples/align_and_alignof.jux`.
 
 ### L.1.5. Size and Alignment Introspection
 
-Inside `unsafe { }`, the compiler-built-in functions `sizeof<T>()` and `alignof<T>()` return the size and alignment of `T` for the current target, in bytes:
+`sizeof(T)` (JUX-LANG-V1 §5.9) and its twin `alignof(T)` return the size and alignment of `T` for the current target, in bytes, as a `uint` compile-time constant. Both take a type or an expression (whose type is asked about; the expression is never evaluated), and both are available in safe code (ERRATA E61):
 
 ```jux
-unsafe {
-    var n = sizeof<Point>();        // 16 on a typical 64-bit target
-    var a = alignof<long>();        // 8
-}
+var n = sizeof(Point);        // 16 on a typical 64-bit target
+var a = alignof(long);        // 8
+var b = alignof(p);           // the alignment of p's type
 ```
 
-Outside `unsafe`, these are not available. The reasoning: a program that wants `sizeof` is almost certainly doing pointer arithmetic and should be in `unsafe` anyway.
+`alignof` follows `sizeof`'s rules exactly: the §5.9.3 type-or-value rule, the E0461-E0463 errors, and the lowering (`std::mem::align_of::<T>()`, `std::mem::align_of_val(&expr)`). It is a contextual word, meaningful only directly before `(`.
 
-Generic instantiations have stable sizes — `sizeof<List<int>>()` produces a value, not an error. The borrow checker and type system do not depend on size queries.
+Generic instantiations have stable sizes — `sizeof(List<int>)` produces a value, not an error. The type system does not depend on size queries.
 
 ### L.1.6. Niche Optimization
 

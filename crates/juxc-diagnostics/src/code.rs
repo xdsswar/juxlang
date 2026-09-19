@@ -547,6 +547,15 @@ pub enum Code {
     /// stepping a `void*`, adding two pointers, multiplying or dividing one,
     /// or a bitwise operator on one (Layout-ABI §L.6.1a).
     E0518_InvalidPointerOperation,
+    /// E0519 -- An `@align(N)` that cannot hold (Layout-ABI §L.1.4, ERRATA
+    /// E62): `N` is not an integer literal, not a power of two, above the
+    /// largest alignment the target supports (2^29), or lower than an
+    /// alignment the type's own fields already need (aligning down).
+    E0519_InvalidAlignment,
+    /// E0520 -- `@align(N)` somewhere it cannot apply (Layout-ABI §L.1.4,
+    /// ERRATA E62): on a field (Phase 1 aligns whole types only; wrap the
+    /// field in an `@align` struct), or on an interface, enum or function.
+    E0520_AlignNotApplicable,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -1093,6 +1102,8 @@ impl Code {
             Code::E0516_AddressOfNonPlace        => "E0516",
             Code::E0517_DerefOfNonPointer        => "E0517",
             Code::E0518_InvalidPointerOperation  => "E0518",
+            Code::E0519_InvalidAlignment         => "E0519",
+            Code::E0520_AlignNotApplicable       => "E0520",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

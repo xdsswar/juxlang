@@ -1120,6 +1120,7 @@ impl<'a> Checker<'a> {
     /// the body's scope. Deleted operators have no body and are
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        self.reject_align_on(&enum_decl.annotations, "an enum", &enum_decl.name.text);
         // `sealed enum X permits A, B` (ERRATA E33): an enum is sealed by
         // default, so the list may only restate its variants, all of them.
         if !enum_decl.permits.is_empty() {
@@ -2665,6 +2666,14 @@ impl<'a> Checker<'a> {
     /// binding), run the body checker, then tear it down. Abstract
     /// methods (body = None) are skipped.
     fn check_class(&mut self, class: &ClassDecl) {
+        // `@align(N)` on the type, and never on one of its fields (§L.1.4).
+        let field_tys: Vec<&juxc_ast::TypeRef> =
+            class.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+        let kind = if class.is_struct { "struct" } else { "class" };
+        self.check_align_annotation(&class.annotations, &field_tys, kind, &class.name.text);
+        for field in &class.fields {
+            self.reject_align_on(&field.annotations, "a field", &field.name.text);
+        }
         // `@layout(c)` is permitted only on a value aggregate (`struct`), not a
         // `class` (Layout-ABI §L.1.2) — a class has an `Rc`/vtable header with no
         // portable C representation. `@layout(c) struct` field types must also be
@@ -4212,6 +4221,7 @@ impl<'a> Checker<'a> {
     /// body call the interface's own members and have the results typed --
     /// including the abstract ones it is written against.
     fn check_interface(&mut self, iface: &juxc_ast::InterfaceDecl) {
+        self.reject_align_on(&iface.annotations, "an interface", &iface.name.text);
         let has_bodies = iface.methods.iter().any(|m| m.body.is_some());
         if !has_bodies {
             return;
@@ -4238,6 +4248,72 @@ impl<'a> Checker<'a> {
         }
         self.env.clear_generic_params();
         self.env.clear_class();
+    }
+
+    /// `@align(N)` on a `class`, `struct` or `record` (Layout-ABI §L.1.4,
+    /// ERRATA E62). `N` must be an integer literal and a power of two no
+    /// larger than 2^29 (the largest alignment `#[repr(align)]` takes), and it
+    /// may not align DOWN: when a field of a fixed-width type already needs
+    /// more than `N`, the annotation cannot hold. Platform-sized fields (`int`,
+    /// pointers) and user types are not counted, so only a certain violation
+    /// is reported. All of these are E0519.
+    fn check_align_annotation(
+        &mut self,
+        annotations: &[juxc_ast::Annotation],
+        field_tys: &[&juxc_ast::TypeRef],
+        kind: &str,
+        name: &str,
+    ) {
+        let Some((span, value)) = crate::symbol_table::align_annotation(annotations) else {
+            return;
+        };
+        let problem = match value {
+            None => Some("its argument must be an integer literal, such as `@align(64)`".to_string()),
+            Some(n) if n <= 0 || n & (n - 1) != 0 => Some(format!("{n} is not a power of two")),
+            Some(n) if n > 1 << 29 => Some(format!("{n} is above the largest alignment supported, 536870912 (2^29)")),
+            Some(n) => field_tys
+                .iter()
+                .filter_map(|t| fixed_alignment(t).map(|a| (a, t)))
+                .find(|(a, _)| *a as i64 > n)
+                .map(|(a, t)| {
+                    format!(
+                        "a field of type `{}` already needs {a}-byte alignment, and `@align` can only raise it",
+                        type_ref_display(t),
+                    )
+                }),
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0519_InvalidAlignment,
+                    format!("`@align` on {kind} `{name}` cannot hold: {problem} (§L.1.4)"),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
+    /// `@align(N)` where it cannot apply (Layout-ABI §L.1.4, ERRATA E62): a
+    /// field (Phase 1 aligns whole types; Rust has no per-field alignment, so
+    /// the way to align one field is an `@align` struct holding it), an enum
+    /// or an interface. E0520.
+    fn reject_align_on(&mut self, annotations: &[juxc_ast::Annotation], what: &str, name: &str) {
+        let Some((span, _)) = crate::symbol_table::align_annotation(annotations) else {
+            return;
+        };
+        let help = if what == "a field" {
+            "declare an `@align(N) struct` that holds the value, and make the field that struct"
+        } else {
+            "`@align` applies to a class, struct or record"
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0520_AlignNotApplicable,
+                format!("`@align` cannot be put on {what} (`{name}`) (§L.1.4)"),
+            )
+            .with_span(span)
+            .with_help(help),
+        );
     }
 
     /// `@layout(c) record` (Layout-ABI §L.1.2): the same rules as a `@layout(c)
@@ -4295,6 +4371,8 @@ impl<'a> Checker<'a> {
         }
         self.declare_const_generic_params(&record.generic_params);
         self.check_layout_c_record(record);
+        let comp_tys: Vec<&juxc_ast::TypeRef> = record.components.iter().map(|c| &c.ty).collect();
+        self.check_align_annotation(&record.annotations, &comp_tys, "record", &record.name.text);
         let this_ty = Ty::User {
             name: name.clone(),
             generic_args: record
@@ -4767,14 +4845,19 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `sizeof(T)` for a type the operand can only be (§5.9.4): `void` is
-    /// `E0463`, a wildcard argument `E0462`, and a generic type written
-    /// without its arguments (`Vec`, a user `Box`) `E0461`.
-    fn check_sizeof_type(&mut self, t: &juxc_ast::TypeRef, span: Span) {
+    /// `sizeof(T)` / `alignof(T)` for a type the operand can only be
+    /// (§5.9.4, ERRATA E61): `void` is `E0463`, a wildcard argument `E0462`,
+    /// and a generic type written without its arguments (`Vec`, a user `Box`)
+    /// `E0461`. `is_align` only changes the wording.
+    fn check_sizeof_type(&mut self, t: &juxc_ast::TypeRef, span: Span, is_align: bool) {
+        let (kw, what) = if is_align { ("alignof", "alignment") } else { ("sizeof", "size") };
         if t.name.segments.len() == 1 && t.name.segments[0].text == "void" && t.array_shape.is_none() {
             self.diagnostics.push(
-                Diagnostic::error(code::Code::E0463_SizeofVoid, "`sizeof(void)`: `void` has no values, so it has no size (§5.9.4)")
-                    .with_span(span),
+                Diagnostic::error(
+                    code::Code::E0463_SizeofVoid,
+                    format!("`{kw}(void)`: `void` has no values, so it has no {what} (§5.9.4)"),
+                )
+                .with_span(span),
             );
             return;
         }
@@ -4788,7 +4871,7 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0462_SizeofWildcard,
-                    "`sizeof` of a wildcard type: `?` stands for some type, and no size belongs to it (§5.9.4)",
+                    format!("`{kw}` of a wildcard type: `?` stands for some type, and no {what} belongs to it (§5.9.4)"),
                 )
                 .with_span(span)
                 .with_help("name the type argument"),
@@ -4806,10 +4889,10 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0461_SizeofUnboundGeneric,
-                        format!("`sizeof({name})`: `{name}` is generic, and its size depends on its type arguments (§5.9.4)"),
+                        format!("`{kw}({name})`: `{name}` is generic, and its {what} depends on its type arguments (§5.9.4)"),
                     )
                     .with_span(span)
-                    .with_help(format!("write the arguments, `sizeof({name}<...>)`")),
+                    .with_help(format!("write the arguments, `{kw}({name}<...>)`")),
                 );
             }
         }
@@ -6700,7 +6783,7 @@ impl<'a> Checker<'a> {
             }
 
             Expr::SizeOf(s) => match &s.type_operand {
-                Some(t) => self.check_sizeof_type(t, s.span),
+                Some(t) => self.check_sizeof_type(t, s.span, s.is_align),
                 None => {
                     self.check_expr(&s.operand);
                     // A bare type name (`sizeof(Box)`, §5.9.3 rule 2) that is
@@ -6716,7 +6799,7 @@ impl<'a> Checker<'a> {
                                 ptr_depth: 0,
                                 span: qn.span,
                             };
-                            self.check_sizeof_type(&t, s.span);
+                            self.check_sizeof_type(&t, s.span, s.is_align);
                         }
                     }
                 }
@@ -12587,6 +12670,25 @@ fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
         }
     }
     s
+}
+
+/// The alignment a field of type `t` needs on every target, in bytes, when
+/// that is fixed by the type alone: the fixed-width primitives. `int`, `uint`,
+/// pointers and user types depend on the target or on their own fields, and
+/// answer `None` (Layout-ABI §L.1.4 only needs a certain lower bound).
+fn fixed_alignment(t: &juxc_ast::TypeRef) -> Option<u64> {
+    if t.ptr_depth > 0 || t.nullable || t.array_shape.is_some() || !t.generic_args.is_empty() {
+        return None;
+    }
+    let name = t.name.segments.last()?.text.as_str();
+    use crate::ty::Primitive as P;
+    Some(match crate::ty::primitive_from_name(name)? {
+        P::Byte | P::Ubyte | P::I8 | P::U8 | P::Bool => 1,
+        P::Short | P::Ushort | P::I16 | P::U16 => 2,
+        P::I32 | P::U32 | P::Float | P::F32 | P::Char => 4,
+        P::Long | P::Ulong | P::I64 | P::U64 | P::Double | P::F64 => 8,
+        P::Int | P::Uint => return None,
+    })
 }
 
 fn ffi_type_ok(t: &juxc_ast::TypeRef) -> bool {

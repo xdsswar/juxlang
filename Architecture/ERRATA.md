@@ -1050,6 +1050,53 @@ through a polymorphic base.
 
 ---
 
+## E61. `sizeof` in safe code, and the shape of `alignof`
+
+**Conflict.** JUX-LANG-V1 §5.9 makes `sizeof(T)` / `sizeof(expr)` a keyword
+form that returns a `uint` compile-time constant "usable in any context", and
+the compiler has shipped it that way since v0.1 (examples, lessons, the
+diagnostics E0461-E0463). Layout-ABI §L.1.5 instead writes the query as a
+generic call, `sizeof<T>()`, available only inside `unsafe`, beside an
+`alignof<T>()` of the same shape.
+
+**Resolution.** §5.9 stands: `sizeof(...)` is available in safe code. A size
+query reads nothing and writes nothing, so gating it behind `unsafe` would
+protect nothing while breaking every program that prints a layout. `alignof`
+takes `sizeof`'s shape rather than §L.1.5's: `alignof(T)` / `alignof(expr)`,
+the same syntactic type-or-value rule (§5.9.3), the same errors (E0461-E0463,
+worded for alignment), a `uint` result, lowered to `std::mem::align_of::<T>()`
+or `std::mem::align_of_val(&expr)`. `alignof` is a contextual word: it has
+this meaning only directly before `(`, so it is not a new keyword.
+
+**Spec status:** §L.1.5 is updated to match; its `sizeof<T>()` / `alignof<T>()`
+spelling is withdrawn.
+
+---
+
+## E62. `@align` diagnostics and field alignment
+
+**Conflict.** Layout-ABI §L.1.4 reports aligning down with `E0710`, but
+`E0710` was already published for "`throw` of a non-`Exception` value"
+(Exceptions §X.2.1), and §D.5.1 forbids reusing a number. The band the new
+checks belong in, `E0500`-`E0505`, is permanently reserved for the borrow
+checker Jux does not have. §L.1.4 also permits `@align(N)` on a field, which
+Rust (the Phase-1 backend) cannot express: Rust aligns types, never
+individual fields.
+
+**Resolution.** Two new codes after the band's last published one:
+`E0519` for an `@align(N)` that cannot hold (`N` not an integer literal, not a
+power of two, above 2^29, or below an alignment a fixed-width field already
+needs) and `E0520` for `@align` where it cannot apply (a field, an enum, an
+interface). Field alignment is a Phase-1 restriction with a direct
+workaround the diagnostic names: an `@align(N) struct` holding the value,
+used as the field's type, gives the field that alignment. Type-level
+`@align(N)` on a `class`, `struct` or `record` lowers to `#[repr(align(N))]`
+(on a class, on the object the shared handle points at).
+
+**Spec status:** §L.1.4 is updated with the codes and the restriction.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

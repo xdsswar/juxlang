@@ -1490,6 +1490,17 @@ pub(crate) fn is_layout_c_struct(cd: &juxc_ast::ClassDecl) -> bool {
     cd.is_struct && has_layout_c(&cd.annotations)
 }
 
+/// Write `#[repr(align(N))]` for an `@align(N)` on a type (Layout-ABI §L.1.4).
+/// The checker has already held `N` to a power of two that does not align
+/// down (E0519), so anything else here is simply not written.
+pub(crate) fn emit_align_attribute(w: &mut crate::writer::Writer, annotations: &[juxc_ast::Annotation]) {
+    if let Some((_, Some(n))) = juxc_tycheck::symbol_table::align_annotation(annotations) {
+        if n > 0 && n & (n - 1) == 0 {
+            w.line(&format!("#[repr(align({n}))]"));
+        }
+    }
+}
+
 /// True when `annotations` carry `@layout(c, ...)`: a `@layout` annotation
 /// with a positional `c`. Shared by `@layout(c) struct` and `@layout(c)
 /// record` (§L.1.2), which lower the same way: `#[repr(C)]`, `Copy`.
