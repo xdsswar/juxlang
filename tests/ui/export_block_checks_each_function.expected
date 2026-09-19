@@ -1,0 +1,1 @@
+export_block_checks_each_function.jux:13:27: [E0508] error: parameter `s` of `@export` function `session_id` has type `Session`, which is not C-compatible -- use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, or `String`
