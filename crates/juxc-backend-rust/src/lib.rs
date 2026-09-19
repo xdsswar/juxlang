@@ -4674,7 +4674,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "        ));\n",
             "    }\n",
             "    match s.get(begin as usize..end as usize) {\n",
-            "        Some(part) => part.to_string(),\n",
+            "        Some(part) => part.to_owned(),\n",
             "        None => std::panic::panic_any(crate::jux::std::exceptions::EncodingException::new(\n",
             "            format!(\"Range [{begin}, {end}) splits a multi-byte character\"),\n",
             "        )),\n",
