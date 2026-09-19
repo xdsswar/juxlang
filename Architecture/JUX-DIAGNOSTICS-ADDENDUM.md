@@ -96,6 +96,12 @@ src/util.jux:12:5: note: candidate `log(String)` defined here
 src/foo.jux:14:5: error[E0450]: ambiguous overload of `log`
 ```
 
+### D.1.6. Phase-1 Status
+
+All five formats are implemented in `juxc` and `jux` through `--diagnostic-format human|compact|short|line|json`, with `--color auto|always|never` for `human` (`auto` colors a terminal unless `NO_COLOR` is set or `TERM=dumb`). Without the flag a terminal gets `human` and anything else gets `line`, `file:line:col: [E0410] error: message`, the form tools already parse (ERRATA E72). The `human` block draws each span's source lines with a gutter, `^` under the primary span and `-` under each label (a label in another file gets its own `note:` and `-->`), then the diagnostic's `note:` and `help:` lines, and closes with a pointer to `juxc explain <code>` and an `aborting due to N errors` count. JSON (§D.2) goes to stdout, every text format to stderr.
+
+`juxc explain <code>` and `jux explain <code>` (§D.5.3) print, offline, the code's catalog row from §D.4, the description the compiler's code table gives it, and any section of this addendum whose heading names the code. `e414`, `0414` and `E414` all mean `E0414`.
+
 ---
 
 ### Reserved But Not Implemented (`E0203`)

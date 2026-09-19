@@ -48,6 +48,14 @@ struct Cli {
     /// working directory. Ignored in single-file mode (the file is explicit).
     #[arg(long, global = true, value_name = "PATH")]
     manifest_path: Option<PathBuf>,
+    /// Diagnostic format (JUX-DIAGNOSTICS-ADDENDUM §D.1, §D.2): `human`,
+    /// `compact`, `short`, `line` or `json`. Default: `human` on a terminal,
+    /// else `line`.
+    #[arg(long, global = true, value_name = "FORMAT")]
+    diagnostic_format: Option<String>,
+    /// Color the `human` format: `auto`, `always` or `never`.
+    #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
+    color: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -103,6 +111,11 @@ enum CliCommand {
     },
     /// Print the dependency tree (§B.10.5).
     Tree,
+    /// Explain a diagnostic code, offline (JUX-DIAGNOSTICS-ADDENDUM §D.5.3).
+    Explain {
+        /// The code, e.g. `E0413`.
+        code: String,
+    },
     /// Generate HTML documentation from doc comments into `target/doc/`
     /// (JUX-LANG-V1 §3.5, §12.5), and run the ```` ```jux ```` examples in
     /// them as tests.
@@ -347,6 +360,7 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
         | CliCommand::Add { .. }
         | CliCommand::Remove { .. }
         | CliCommand::Tree
+        | CliCommand::Explain { .. }
         | CliCommand::Doc { .. }
         | CliCommand::Test { .. }
         | CliCommand::Update
@@ -361,6 +375,10 @@ fn ice_inputs(cli: &Cli) -> Vec<PathBuf> {
 /// Dispatch one parsed command line. Split out of `main` so the whole of it
 /// runs on the large-stack thread.
 fn run_cli(cli: Cli) -> Result<ExitCode> {
+    if let Err(msg) = set_diagnostic_style(cli.diagnostic_format.as_deref(), &cli.color) {
+        eprintln!("jux: {msg}");
+        return Ok(ExitCode::from(2));
+    }
     // Resolve the project root once: an explicit `--manifest-path`, else the
     // nearest `jux.toml` walking up from the cwd. `None` when no manifest is
     // found (project-mode commands report their own "no jux.toml" error).
@@ -384,6 +402,19 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         }
         CliCommand::Remove { name } => with_root(root, "remove", |r| project_cmds::cmd_remove(r, &name)),
         CliCommand::Tree => with_root(root, "tree", project_cmds::cmd_tree),
+        CliCommand::Explain { code } => Ok(match juxc_driver::explain::explain(&code) {
+            Some(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!(
+                    "jux: `{}` is not a diagnostic code this compiler knows",
+                    juxc_driver::explain::normalize(&code),
+                );
+                ExitCode::from(1)
+            }
+        }),
         CliCommand::Doc { open, package, no_doctests } => {
             with_root(root, "doc", |r| cmd_doc(r, package.as_deref(), open, !no_doctests))
         }
@@ -1723,43 +1754,38 @@ fn default_emit_dir(input: &Path) -> PathBuf {
     parent.join("target").join(".rust-build")
 }
 
-/// Pretty-print one diagnostic per line. When the diagnostic carries a `file`
-/// index (into `sources`) and a primary span, render
-/// `path:line:col: [E0xxx] level: message` so the user can jump straight to
-/// the offending file in a multi-file workspace. Otherwise fall back to the
-/// bare `[E0xxx] level: message` form.
-fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
-    // Source order, and de-duplicated, exactly as `juxc` shows them. This
-    // used to print in whatever order the phases produced, so the two tools
-    // disagreed about the same file and `jux` is the one people type.
-    for d in juxc_driver::diagnostic_order::in_source_order(diagnostics) {
-        match (d.file, d.primary_span) {
-            (Some(i), Some(span)) if i < sources.len() => {
-                let src = &sources[i];
-                let (line, col) = src.line_col(span.start as usize);
-                eprintln!(
-                    "{}:{}:{}: [{}] {}: {}",
-                    src.path().display(),
-                    line,
-                    col,
-                    d.code,
-                    severity_label(d.severity),
-                    d.message,
-                );
-            }
-            _ => {
-                eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
-            }
-        }
-    }
+/// The diagnostic format and color chosen on the command line.
+static DIAGNOSTIC_STYLE: std::sync::OnceLock<(juxc_driver::render::DiagnosticFormat, bool)> =
+    std::sync::OnceLock::new();
+
+/// Decide the diagnostic format and color once, from `--diagnostic-format`
+/// and `--color` (and whether stderr is a terminal).
+fn set_diagnostic_style(format: Option<&str>, color: &str) -> std::result::Result<(), String> {
+    use std::io::IsTerminal;
+    let terminal = std::io::stderr().is_terminal();
+    let format = match format {
+        Some(f) => juxc_driver::render::DiagnosticFormat::parse(f)
+            .ok_or_else(|| format!("unknown --diagnostic-format `{f}` (human, compact, short, line, json)"))?,
+        None => juxc_driver::render::DiagnosticFormat::default_for(terminal),
+    };
+    let color = juxc_driver::render::ColorChoice::parse(color)
+        .ok_or_else(|| format!("unknown --color `{color}` (auto, always, never)"))?
+        .enabled(terminal);
+    let _ = DIAGNOSTIC_STYLE.set((format, color));
+    Ok(())
 }
 
-fn severity_label(s: Severity) -> &'static str {
-    match s {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-        Severity::Note => "note",
-        Severity::Help => "help",
+/// Print diagnostics in the chosen format, in source order and de-duplicated
+/// exactly as `juxc` shows them: text on stderr, JSON on stdout (§D.2).
+fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
+    let (format, color) = DIAGNOSTIC_STYLE
+        .get()
+        .copied()
+        .unwrap_or((juxc_driver::render::DiagnosticFormat::Line, false));
+    if format == juxc_driver::render::DiagnosticFormat::Json {
+        print!("{}", juxc_driver::render::render_json(diagnostics, sources, 0));
+    } else {
+        eprint!("{}", juxc_driver::render::render_text(diagnostics, sources, format, color));
     }
 }
 

@@ -458,6 +458,7 @@ dependencies = [
  "juxc-diagnostics",
  "juxc-driver",
  "juxc-source",
+ "serde_json",
  "winres",
 ]
 
