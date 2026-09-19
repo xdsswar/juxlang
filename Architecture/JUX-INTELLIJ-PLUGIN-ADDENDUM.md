@@ -84,17 +84,83 @@
   Flatten Packages in the Project view for a Jux root.
 - **Build.** IntelliJ Platform Gradle Plugin 2.x against
   `intellijIdea("2026.1.3")`, JDK 21 toolchain, `sinceBuild` 242, no
-  `untilBuild` cap. Plugin id `dev.jux.lang`, version 0.0.8 at the time of
+  `untilBuild` cap. Plugin id `dev.jux.lang`, version 0.0.9 at the time of
   writing.
 
 Refactor | Move Class, Change Signature and Extract Method are built as
 well, with the rest of Java's refactoring set (see `plugin.xml` and
 `refactoring/`).
 
+### Added in 0.0.8
+
+- **Navigation.** Go-to, Find Usages and rename work for labels in
+  `break`/`continue`, the subject of a smart cast (`x => Dog`), method and
+  constructor references (`obj::m`, `Type::new`), names inside `int[N]`, and
+  a sealed type's `permits` list. Pattern binders (`case C(var r)`,
+  `case Dog d`, `x => Dog d`, `var Pt(x, _) = p`) are real locals: they
+  resolve, rename, complete and have types.
+- **Java's navigation actions.** Type Info (Ctrl+Shift+P), Go to Type
+  Declaration (Ctrl+Shift+B), Go to Implementation and Quick Definition,
+  File Structure with the Fields, Properties, Non-Public and Inherited
+  toggles, and Go to Test / Create Test over the `src/` and `test/` layout.
+- **Completion** after `A.super.`, `obj::` and `Type::`, and an enum's
+  built-in helpers (`name`, `ordinal`, `fromName`, `cases`).
+- **Folding** with Java's regions and defaults (imports and the file header
+  folded, a doc comment shows its first sentence), with a Jux group under
+  Settings | Editor | General | Code Folding.
+- **Code style.** Wrapping and Braces and Blank Lines tabs, with Java's
+  option names; the formatter honors every option shown, Force braces
+  included. The defaults keep code as written.
+- **Quick Documentation** in Java's layout: owner and signature, the
+  inferred type of a `var`, `@param` / `@return` / `@throws` sections, and an
+  override without a doc comment shows the one it overrides. It works for
+  `.jux.d` stub members too.
+- **New syntax parsed:** `@export { ... }` blocks, generators, `operator..`
+  and `operator..=`, bodiless interface operators, or-patterns and nested
+  destructuring. The corpus sweeps (parse, highlighting, completion,
+  inspections) run over `examples/` and every `tests/rux-lessons` program.
+
+### Added in 0.0.9
+
+- **Operators as symbols.** A use such as `a * 2.0`, `start..end` or
+  `price += 1L` resolves to the operator the compiler calls: the left
+  operand's type and its supertypes supply the candidates, and the right
+  operand's type picks among operators with the same symbol, the way a call
+  picks a method overload (Operators addendum §O.2.3). Ctrl+B on the operator
+  token navigates there, the expression's type is that operator's return
+  type, and Find Usages on an operator declaration lists its uses (an
+  operator has no name to index, so a dedicated references search walks the
+  Jux files that contain the symbol).
+- **Interface operators.** Gutter markers link an interface's
+  `T operator+(T other);` and the class operators that fill it, both ways.
+  An inspection mirrors E0936 (a body, more than one operand, or an operator
+  other than `+ - * / % & | ^ << >>` in an interface; a bodiless operator
+  elsewhere), with a fix that removes the body.
+- **Generators.** `yield` completes only inside a named function that
+  returns `Iterator<T>` (`Stream<T>` when `async`). An inspection mirrors
+  E0990, E0994, E0995, E0996 and E0997, with fixes that change the return
+  type and turn `return value;` into `yield value;`.
+- **Java parity, from an audit of IntelliJ's Java support.**
+  - Completion in a class body offers the inherited methods to implement or
+    override; accepting one writes `@override` and the whole member.
+  - Intention "Create missing 'case' branches" for a `switch` over an enum
+    or a sealed type.
+  - Inspection "'if' statement can be simplified" (a branch that only
+    returns or assigns `true`/`false`).
+  - Inspection "Indexed loop can be a for-each" (`for (int i = 0; i <
+    xs.len(); i++)` or `for (var i : 0..xs.len())` that only reads `xs[i]`).
+
+### Known gaps against the Java plugin
+
+The audit also listed what is not built yet, most valuable first: dataflow
+checks (a value assigned and never read, a condition always true on one
+path), "Field may be final", Pull Members Up / Push Members Down and
+Extract Interface / Superclass, chain completion (`.` after a call offering
+what the chain can reach), and postfix templates for the newer syntax
+(`.yield`, `.switch` with generated arms).
+
 ### Still open
 
-- **`juxc-lsp` does not read `jux.sourceRoots` yet.** The plugin sends the
-  roots (§I.4, "Coordination with `juxc-lsp`"); the server side is pending.
 - **Per-platform distributions with a bundled `juxc-lsp`.** The build can
   bundle one binary (§I.9); publishing one plugin build per platform is not
   set up.
