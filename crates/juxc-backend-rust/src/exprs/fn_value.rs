@@ -38,18 +38,29 @@ impl RustEmitter {
         }
         let shadowed = self.current_fn_params.contains(name)
             || self.pointer_locals.contains_key(name)
-            || self.local_types.iter().any(|s| s.contains_key(name));
+            || self.local_types.iter().any(|s| s.contains_key(name))
+            || self.declared_local_names.contains(&(self.current_unit_idx, name.to_string()));
         if shadowed {
             return false;
         }
         // The same resolution a call makes: an import or same-package name
-        // through the unit's table first, then a unique bare name.
-        let sig = self
-            .current_unit_idx
-            .and_then(|i| self.symbols.units.get(i))
+        // through the unit's table first, then a unique bare name, but only
+        // one declared in THIS unit's package. A free function in another
+        // package is not in scope without an import, so a user's `text()` must
+        // not capture the name `text` inside `jux.std.meta`.
+        let unit = self.current_unit_idx.and_then(|i| self.symbols.units.get(i));
+        // Without a unit table (legacy single-file emission) there is only one
+        // package in play, so the bare-name lookup stands as it is.
+        let package = unit.map(|ctx| ctx.package.join("."));
+        let sig = unit
             .and_then(|ctx| ctx.unqualified.get(name))
             .and_then(|fqn| self.symbols.functions.get(fqn))
-            .or_else(|| self.symbols.lookup_function(name).map(|(_, f)| f));
+            .or_else(|| {
+                self.symbols.lookup_function(name).and_then(|(fqn, f)| {
+                    let home = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
+                    package.as_deref().is_none_or(|p| p == home).then_some(f)
+                })
+            });
         let Some(sig) = sig else {
             return false;
         };

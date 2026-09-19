@@ -2826,6 +2826,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        self.declared_local_names.insert((self.current_unit_idx, var.name.text.clone()));
         // A `T[N]` local that some later statement hands to a `T[]` slot:
         // store it as that slot's runtime-sized handle (the rest of the
         // declaration is emitted as usual, from the rewritten type).

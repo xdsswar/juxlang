@@ -1029,6 +1029,13 @@ struct RustEmitter {
     /// emission (legacy single-file paths don't have an `units`
     /// table to consult).
     pub(crate) current_unit_idx: Option<usize>,
+    /// Every local name declared so far, keyed by compilation unit. Used only
+    /// to keep a local from being read as a free function VALUE of the same
+    /// name ([`Self::emit_free_fn_value`]): `local_types` misses some binding
+    /// shapes (an inferred `var x = y!!;`), and a missed local there was
+    /// wrapped as `Rc::new(x)`, moving it. Per unit rather than per function,
+    /// so it can only err on the side of leaving a name alone.
+    pub(crate) declared_local_names: std::collections::HashSet<(Option<usize>, String)>,
     /// When `Some`, the crate is being emitted as **one file per Jux
     /// compilation unit** (the multi-file output). Each packaged unit's body
     /// and each package's `mod.rs` are captured here as `(rel-path, content)`
@@ -5242,6 +5249,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             current_switch_enum_path: None,
             test_mode: false,
             current_unit_idx: None,
+            declared_local_names: std::collections::HashSet::new(),
             split_files: None,
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
