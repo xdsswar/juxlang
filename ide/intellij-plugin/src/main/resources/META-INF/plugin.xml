@@ -929,6 +929,15 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxTimeSpanInspection"/>
+    <!-- Java utility classes Jux does not have (Math, Integer, Objects, String.valueOf): E0301, E0413. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxJavaHabit"
+        displayName="Java library call"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxJavaHabitInspection"/>
     <!-- Operators an interface requires (LANG-V1 sec. 7.14.6): E0936. -->
     <localInspection
         language="Jux"
