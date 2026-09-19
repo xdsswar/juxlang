@@ -405,6 +405,14 @@ The Rust standard library is auto-loaded into every compile and editor analysis 
 - **Cache.** The generated stub is written once to the OS user-cache dir (`<cache>/juxc/stubs/rust-std.jux.d`) and loaded directly thereafter — no subprocess on the hot path, so the LSP's per-keystroke `check_workspace` stays cheap. A version marker in the cache header invalidates it when the bindgen surface changes; deleting the cache forces regeneration after a toolchain update.
 - **Override.** `$JUX_STUBS_DIR` points the loader at a directory of `.jux.d` files loaded verbatim (no generation) — the hook for tests and for vendoring a frozen std surface.
 
+**What `std` re-exports from `core` is part of `rust.std`.** `core` stays out of the merge set, but `std` publishes a number of its types as its own: `pub use core::time::Duration;` in `std::time`, and whole modules such as `pub use core::cmp;`. A program reaches these as `std` types, so the generated surface includes them under the `std` path (`@rust("std::time::Duration")`):
+
+- every type, constant and free function `std` re-exports item by item;
+- through a re-exported module, only the types the `alloc`/`std` surface itself mentions (`Ordering`, named by `sort_unstable_by`; `Chars`, returned by `chars()`), so a module re-export does not pull its whole module in;
+- traits are not taken this way: a `core` trait on every type's `implements` clause (`Debug`, `Clone`) is language meaning in Jux, not an interface to inherit;
+- `Option` and `Result` never are: the type map folds them (§G.3.1);
+- a name two such items share is decided by the shorter path (`std::cmp::Ordering` over `std::sync::atomic::Ordering`), and a true tie (`INFINITY` for `f32` and `f64`) is left out.
+
 ### G.6.2.2. Merging Layered Crates
 
 A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) items; items it merely re-exports from a lower layer appear as external references and are skipped. Rust's std is layered `core` ⊂ `alloc` ⊂ `std` — `Vec`, `String`, `Box`, `Rc`/`Arc`, `BTreeMap` are *defined* in `alloc` and only re-exported by `std` — so ingesting `std` alone misses them. `bindgen` therefore ingests each crate's JSON in turn (each as the local crate) and merges the results into one package, keyed by item name with **first-definition-wins** (crates supplied most-fundamental-first). Deduplication also collapses the platform-duplicated names std ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that would otherwise collide as duplicate Jux declarations (`E0400`).
@@ -469,6 +477,8 @@ A member whose signature has no Jux spelling at all, such as `Option<()>` (`void
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**
 
 ---
+
+**A bound crate's types need their `import`.** The implicit auto-import that makes a bare `Vec` or `HashMap` resolve covers `rust.std` only. A type of another bound crate is reached through an `import` (or its full name): with `rust.chrono` in `jux.toml`, a bare `Duration` does not quietly become chrono's `TimeDelta` alias, and a bare `NaiveDate` without `import rust.chrono.NaiveDate;` is an unknown type (`E0417`). The crate's own stub still sees its types.
 
 ### G.6.6. Which Foreign Types Are Collections
 

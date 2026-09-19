@@ -99,6 +99,27 @@ impl JuxType {
         }
     }
 
+    /// Add every named type this type mentions (`Vec<Duration>` gives `Vec`
+    /// and `Duration`) to `out`.
+    pub fn collect_names(&self, out: &mut std::collections::HashSet<String>) {
+        match self {
+            JuxType::User { name, args } => {
+                out.insert(name.clone());
+                for a in args {
+                    a.collect_names(out);
+                }
+            }
+            JuxType::Nullable(t) | JuxType::RawPtr(t) => t.collect_names(out),
+            JuxType::Array { elem, .. } => elem.collect_names(out),
+            JuxType::Tuple(ts) => ts.iter().for_each(|t| t.collect_names(out)),
+            JuxType::Fn { params, ret, .. } => {
+                params.iter().for_each(|t| t.collect_names(out));
+                ret.collect_names(out);
+            }
+            _ => {}
+        }
+    }
+
     /// Wrap in a nullable marker, collapsing `T??` to `T?` (idempotent).
     pub fn nullable(inner: JuxType) -> JuxType {
         match inner {

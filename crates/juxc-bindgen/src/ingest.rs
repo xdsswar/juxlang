@@ -81,12 +81,35 @@ pub fn generate_merged_with_pool(
     }
 
     // Pass 2: ingest, now able to resolve a deref target across crates.
-    for (_crate_name, json) in jsons {
+    let pool_names: HashSet<&str> = pool_only.iter().map(|(n, _)| *n).collect();
+    let mut reexports = PoolReexports::default();
+    // The facade is the crate a program names (`std`): the last one given.
+    // `alloc` re-exports `core` too, but `alloc::slice::...` is not a path a
+    // program's crate can write.
+    let facade = jsons.last().map(|(n, _)| *n);
+    for (crate_name, json) in jsons {
         let krate: Crate = serde_json::from_str(json)?;
         format_version = krate.format_version;
+        if Some(*crate_name) == facade {
+            reexports.record(&krate, &pool_names);
+        }
         for (name, item) in collect_items_with(&krate, &pool) {
             // First definition wins (crates passed core→alloc→std), and
             // platform-duplicated names are collapsed.
+            if seen.insert(name.clone()) {
+                collected.push((name, item));
+            }
+        }
+    }
+
+    // Pass 3: what the ingested crates RE-EXPORT from a pool crate. `std`
+    // publishes `core::time::Duration` as `std::time::Duration` and
+    // `core::cmp::Ordering` through `pub use core::cmp`, and a program reaches
+    // them as std's own; skipping every `core` definition left `sleep`
+    // taking a `Duration` nobody could name (B25, B44).
+    for (_crate_name, json) in pool_only {
+        let krate: Crate = serde_json::from_str(json)?;
+        for (name, item) in reexports.surface(&krate, &pool, &collected) {
             if seen.insert(name.clone()) {
                 collected.push((name, item));
             }
@@ -112,6 +135,176 @@ pub fn generate_merged_with_pool(
         )],
         items: collected.into_iter().map(|(_, it)| it).collect(),
     })
+}
+
+/// The items the ingested crates re-export from a POOL crate (`core`), by the
+/// definition path the pool crate records for them.
+#[derive(Default)]
+struct PoolReexports {
+    /// `pub use core::time::Duration;` in `std::time`: definition path to the
+    /// public path (`core::time::Duration` -> `std::time::Duration`).
+    items: HashMap<String, String>,
+    /// `pub use core::cmp;` in `std`: a whole module, by definition prefix
+    /// (`core::cmp` -> `std::cmp`).
+    modules: Vec<(String, String)>,
+}
+
+impl PoolReexports {
+    /// Record every public, non-glob `use` in `krate` whose target lives in
+    /// one of `pool` (by crate name).
+    fn record(&mut self, krate: &Crate, pool: &HashSet<&str>) {
+        for module in krate.index.values() {
+            if module.crate_id != 0 || !is_public(&module.visibility) {
+                continue;
+            }
+            let ItemEnum::Module(m) = &module.inner else { continue };
+            let Some(mpath) = krate.paths.get(&module.id).map(|s| s.path.join("::")) else {
+                continue;
+            };
+            for child in &m.items {
+                let Some(citem) = krate.index.get(child) else { continue };
+                if !is_public(&citem.visibility) {
+                    continue;
+                }
+                let ItemEnum::Use(u) = &citem.inner else { continue };
+                if u.is_glob {
+                    continue;
+                }
+                let Some(target) = u.id.as_ref().and_then(|id| krate.paths.get(id)) else {
+                    continue;
+                };
+                let from_pool = krate
+                    .external_crates
+                    .get(&target.crate_id)
+                    .is_some_and(|c| pool.contains(c.name.as_str()));
+                if !from_pool {
+                    continue;
+                }
+                let def = target.path.join("::");
+                let public = format!("{mpath}::{}", u.name);
+                if matches!(target.kind, rustdoc_types::ItemKind::Module) {
+                    self.modules.push((def, public));
+                } else {
+                    // The shortest public spelling: `std::iter::Iterator`
+                    // over `std::prelude::v1::Iterator`.
+                    let slot = self.items.entry(def).or_insert_with(|| public.clone());
+                    if public.len() < slot.len() {
+                        *slot = public;
+                    }
+                }
+            }
+        }
+        // Longest prefix first, so `core::f64::consts` beats `core::f64`.
+        self.modules.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.cmp(b)));
+    }
+
+    /// The public path a pool item is reached by, and whether that is an
+    /// item-level re-export (`true`) or one through a re-exported module
+    /// (`false`).
+    ///
+    /// `def` is where the item is defined (`core::iter::adapters::map::Map`,
+    /// through private modules), `pool_public` the path the pool crate itself
+    /// publishes it at (`core::iter::Map`). An item re-export is keyed by the
+    /// definition; a module re-export rewrites the published path, since only
+    /// that one threads public modules. The shorter spelling wins when both
+    /// apply (`std::option::Option` over `std::prelude::v1::Option`).
+    fn public_path(&self, def: &str, pool_public: Option<&str>) -> Option<(String, bool)> {
+        let item = self.items.get(def).cloned();
+        let pool_crate = def.split("::").next().unwrap_or_default();
+        let module = pool_public.and_then(|pp| {
+            // Already a facade path: the pool crate's own scan followed the
+            // re-export (`core::cmp::Ordering` comes back `std::cmp::Ordering`).
+            if pp.split("::").next() != Some(pool_crate) {
+                return Some(pp.to_string());
+            }
+            self.modules.iter().find_map(|(prefix, public)| {
+                pp.strip_prefix(prefix.as_str())
+                    .filter(|rest| rest.starts_with("::"))
+                    .map(|rest| format!("{public}{rest}"))
+            })
+        });
+        match (item, module) {
+            (Some(i), Some(m)) if m.len() < i.len() => Some((m, true)),
+            (Some(i), _) => Some((i, true)),
+            (None, Some(m)) => Some((m, false)),
+            (None, None) => None,
+        }
+    }
+
+    /// The pool crate's items to add to the stub, with their `@rust` paths
+    /// rewritten to the public re-export.
+    ///
+    /// Only TYPES (structs, enums), constants and free functions are taken.
+    /// A pool trait would put `implements Debug, Clone, Iterator, ...` on
+    /// every type of the stub, and those are language meaning in Jux
+    /// (operators, `@RustClone`, K.5), not interfaces to inherit.
+    ///
+    /// Everything re-exported ITEM by item is added; that is std choosing to
+    /// publish it. Through a re-exported MODULE only what the ingested crates'
+    /// own items mention is added (`Ordering`, named by `sort_unstable_by`),
+    /// since `pub use core::iter;` alone would otherwise pull all of
+    /// `core::iter` in: the reason the pool exists (G.6.2.1). A name several
+    /// such items share is decided by the shorter public path
+    /// (`std::cmp::Ordering` over `std::sync::atomic::Ordering`); a true tie
+    /// (`INFINITY` for `f32` and `f64`) is left out, since the flat package
+    /// cannot say which one a program means.
+    fn surface(
+        &self,
+        krate: &Crate,
+        pool: &InherentPool,
+        already: &[(String, StubItem)],
+    ) -> Vec<(String, StubItem)> {
+        let mut candidates: Vec<(String, StubItem, bool, String)> = Vec::new();
+        for (id, name, mut item) in collect_items_with_ids(krate, pool) {
+            let Some(def) = krate.paths.get(&Id(id)).map(|s| s.path.join("::")) else {
+                continue;
+            };
+            // The type map folds `Option` and `Result` into `T?` and `throws`
+            // (G.3.1), so they are never types of the stub.
+            if map_path_folds(&name) {
+                continue;
+            }
+            let pool_public = match &item {
+                StubItem::Type(t) => t.rust_path.clone(),
+                StubItem::Function(f) => f.rust_path.clone(),
+                StubItem::Const(c) => c.rust_path.clone(),
+                StubItem::Alias(_) => None,
+            };
+            let Some((public, item_level)) = self.public_path(&def, pool_public.as_deref()) else {
+                continue;
+            };
+            match &mut item {
+                StubItem::Type(t) if t.kind != TypeKind::Interface => t.rust_path = Some(public.clone()),
+                StubItem::Function(f) => f.rust_path = Some(public.clone()),
+                StubItem::Const(c) => c.rust_path = Some(public.clone()),
+                _ => continue,
+            }
+            candidates.push((name, item, item_level, public));
+        }
+        let declared: HashSet<&str> = already.iter().map(|(n, _)| n.as_str()).collect();
+        let mut referenced: HashSet<String> = HashSet::new();
+        for (_, item) in already {
+            item.referenced_type_names(&mut referenced);
+        }
+        // One winner per name: the shorter public path; a tie drops the name.
+        let mut best: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (name, _, item_level, _)) in candidates.iter().enumerate() {
+            let wanted = *item_level || referenced.contains(name);
+            if wanted && !declared.contains(name.as_str()) {
+                best.entry(name.as_str()).or_default().push(i);
+            }
+        }
+        let mut chosen: Vec<(String, StubItem)> = Vec::new();
+        for (name, idxs) in best {
+            let depth = |i: &usize| candidates[*i].3.matches("::").count();
+            let Some(min) = idxs.iter().map(depth).min() else { continue };
+            let winners: Vec<&usize> = idxs.iter().filter(|i| depth(i) == min).collect();
+            if let [only] = winners.as_slice() {
+                chosen.push((name.to_string(), candidates[**only].1.clone()));
+            }
+        }
+        chosen
+    }
 }
 
 /// Build a [`StubFile`] from an already-parsed rustdoc [`Crate`].
@@ -328,6 +521,15 @@ fn build_handle_alias(
 }
 
 fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubItem)> {
+    collect_items_with_ids(krate, pool)
+        .into_iter()
+        .map(|(_, name, item)| (name, item))
+        .collect()
+}
+
+/// [`collect_items_with`], keeping each item's rustdoc id so the caller can
+/// ask the crate where the item is DEFINED (`krate.paths`).
+fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
@@ -477,9 +679,6 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
             .then_with(|| a.0.cmp(&b.0))
     });
     collected
-        .into_iter()
-        .map(|(_, name, item)| (name, item))
-        .collect()
 }
 
 /// A collected item's recorded Rust path, or the empty string when it has none
@@ -1543,6 +1742,13 @@ fn map_primitive(p: &str) -> JuxType {
         "never" | "!" => JuxType::Never,
         other => JuxType::Unknown(other.to_string()),
     }
+}
+
+/// Whether [`map_path`] folds the Rust type of this name into a Jux spelling
+/// of its own (`Option` to `T?`, `Result` to `throws`, the smart pointers to
+/// their pointee), so the type itself is never one the stub declares.
+fn map_path_folds(name: &str) -> bool {
+    matches!(name, "Option" | "Result" | "Box" | "Rc" | "Arc")
 }
 
 /// Map a named path type, applying the §G.3.1 stdlib substitutions

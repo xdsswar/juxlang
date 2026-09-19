@@ -5209,7 +5209,14 @@ impl RustEmitter {
         }
         self.w.push_str("{ ");
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        // A LAMBDA stays in place. Bound to a `let` first, a Rust closure
+        // loses the parameter types the callee's signature would have given
+        // it (`sort_unstable_by((a, b) -> ...)` was E0282), and hoisting buys
+        // nothing: what it captures is taken when it is built either way.
         for (i, arg) in call.args.iter().enumerate() {
+            if matches!(arg, Expr::Lambda(_)) {
+                continue;
+            }
             self.w.push_str("let __jux_carg");
             self.w.push_str(&i.to_string());
             self.w.push_str(" = ");
@@ -5218,8 +5225,14 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev_fmt;
         // Synthetic call: same callee/receiver, args replaced by the temps.
-        let temp_args: Vec<Expr> = (0..call.args.len())
-            .map(|i| {
+        let temp_args: Vec<Expr> = call
+            .args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                if matches!(arg, Expr::Lambda(_)) {
+                    return arg.clone();
+                }
                 Expr::Path(juxc_ast::QualifiedName {
                     segments: vec![juxc_ast::Ident {
                         text: format!("__jux_carg{i}"),
@@ -6151,6 +6164,19 @@ impl RustEmitter {
             return;
         }
         if self.collection_args_prehoisted {
+            // A lambda left in place (see `emit_mut_collection_method`) is
+            // emitted inside the receiver's l-value context; its body is an
+            // ordinary expression context of its own.
+            if matches!(arg, Expr::Lambda(_)) {
+                let prev_lv = std::mem::take(&mut self.emitting_lvalue);
+                let prev_out = std::mem::take(&mut self.emitting_out_place);
+                let prev_hoist = std::mem::take(&mut self.collection_args_prehoisted);
+                self.emit_expr(arg);
+                self.emitting_lvalue = prev_lv;
+                self.emitting_out_place = prev_out;
+                self.collection_args_prehoisted = prev_hoist;
+                return;
+            }
             self.emit_expr(arg);
             return;
         }

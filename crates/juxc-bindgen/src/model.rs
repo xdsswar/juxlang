@@ -62,6 +62,51 @@ pub enum StubItem {
     Alias(StubAlias),
 }
 
+impl StubItem {
+    /// Add every type name this item's declaration mentions to `out`:
+    /// fields, constructor and method signatures, variant payloads.
+    pub fn referenced_type_names(&self, out: &mut std::collections::HashSet<String>) {
+        let mut add = |t: &JuxType| t.collect_names(out);
+        match self {
+            StubItem::Type(t) => {
+                for f in &t.fields {
+                    add(&f.ty);
+                }
+                for c in &t.constructors {
+                    for p in &c.params {
+                        add(&p.ty);
+                    }
+                }
+                for m in &t.methods {
+                    add(&m.ret);
+                    for p in &m.params {
+                        add(&p.ty);
+                    }
+                    if let Some(e) = &m.throws {
+                        add(e);
+                    }
+                }
+                for v in &t.variants {
+                    for p in &v.payload {
+                        add(p);
+                    }
+                }
+            }
+            StubItem::Function(f) => {
+                add(&f.ret);
+                for p in &f.params {
+                    add(&p.ty);
+                }
+                if let Some(e) = &f.throws {
+                    add(e);
+                }
+            }
+            StubItem::Const(c) => add(&c.ty),
+            StubItem::Alias(_) => {}
+        }
+    }
+}
+
 /// A type alias stub: `public type Name = Target;`.
 #[derive(Debug, Clone)]
 pub struct StubAlias {
