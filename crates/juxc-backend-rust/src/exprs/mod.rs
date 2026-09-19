@@ -1578,15 +1578,17 @@ impl RustEmitter {
             .rev()
             .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned())
             .or_else(|| self.expr_types.get(&expr_span_of(inner)).cloned());
+        // The recorded type may already be the NARROWED one (`other` after an
+        // `if (other == null) ... else` is a `Line` to the checker), while the
+        // Rust binding is still the `Option` -- the caller only gets here when
+        // the operand is Option-shaped. Either way the payload decides.
+        let payload = match ty {
+            Some(juxc_tycheck::Ty::Nullable(t)) => Some(*t),
+            other => other,
+        };
         matches!(
-            ty,
-            Some(juxc_tycheck::Ty::Nullable(ref t))
-                if matches!(
-                    **t,
-                    juxc_tycheck::Ty::User { .. }
-                        | juxc_tycheck::Ty::String
-                        | juxc_tycheck::Ty::Array { .. }
-                )
+            payload,
+            Some(juxc_tycheck::Ty::User { .. } | juxc_tycheck::Ty::String | juxc_tycheck::Ty::Array { .. })
         )
     }
 
