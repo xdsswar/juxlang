@@ -1,0 +1,144 @@
+// `ref` bindings, rule by rule (JUX-MISSING-DEFS §M.13.2).
+//
+// A value type -- a primitive, a `String`, a `struct`, a `record` -- copies on
+// assignment and on argument passing. `ref` opts ONE binding into the shared
+// behaviour classes already have: every name initialized from it names the same
+// object, and a write through any of them is seen by all of them.
+//
+// The type of a `ref T` binding is `T` everywhere: it reads as a `T`, calls
+// `T`'s methods, and `typeof` says `T`. Only the sharing changes.
+
+struct Pt {
+    public int x;
+    public int y;
+}
+
+record Money(long cents) {}
+
+class Profile {
+    // A `ref` field: the object is shared, so handing the field to a `ref`
+    // parameter lets the callee write the profile's own value.
+    public ref String displayName = "anon";
+    public ref int counter = 0;
+    public int plain = 0;
+}
+
+class Totals {
+    // A `static ref` field is one cell for the whole program, and it aliases
+    // into `ref` slots like any other `ref` binding.
+    public static ref int hits = 0;
+}
+
+// Writes through the caller's object, because the parameter is `ref` AND the
+// argument passed in is a `ref` binding.
+void rename(ref String name) {
+    name = "renamed";
+}
+
+void bump(ref int n) {
+    n += 1;
+}
+
+// Two levels deep: `outer` passes its own `ref` parameter on, so the write
+// still lands on the caller's object.
+void outer(ref int n) {
+    bump(n);
+}
+
+// A plain parameter takes a COPY, whatever the argument was.
+void bumpCopy(int n) {
+    n += 1000;
+}
+
+// A whole-value write replaces what the shared object holds; aliases see it.
+void raise(ref Money m) {
+    m = new Money(m.cents + 500);
+}
+
+void moveRight(ref Pt p) {
+    p.x = p.x + 1;
+}
+
+public void main() {
+    // Aliasing: `b` names `a`'s object, so one write is seen by both.
+    ref String a = "first";
+    ref String b = a;
+    b = "second";
+    print(a);                          // second
+    rename(a);
+    print(b);                          // renamed
+
+    // A plain value argument is wrapped in a fresh object: the callee's write
+    // stays inside the callee.
+    int plain = 5;
+    bump(plain);
+    print(plain);                      // 5
+
+    ref int shared = 5;
+    bump(shared);
+    outer(shared);
+    bumpCopy(shared);
+    print(shared);                     // 7
+
+    // A `ref` binding reads and behaves as its underlying type.
+    print(typeof(shared));             // int
+    ref int other = 7;
+    print(shared == other);            // true
+    ref String text = "ab";
+    print($"${text}/${text.length()}");  // ab/2
+
+    // Structs: a field write goes into the shared object.
+    ref Pt p = new Pt(0, 0);
+    ref Pt q = p;
+    q.x = 7;
+    moveRight(p);
+    print(q.x);                        // 8
+    Pt copy = p;                       // a plain binding copies
+    copy.x = 100;
+    print(p.x);                        // 8
+
+    // Records: the whole value is replaced through the shared object.
+    ref Money price = new Money(1250);
+    ref Money alias = price;
+    raise(price);
+    print(alias.cents);                // 1750
+
+    // Fields: instance and static.
+    var profile = new Profile();
+    rename(profile.displayName);
+    bump(profile.counter);
+    profile.counter += 10;
+    print(profile.displayName);        // renamed
+    print(profile.counter);            // 11
+    ref int counterAlias = profile.counter;
+    counterAlias = 40;
+    print(profile.counter);            // 40
+
+    bump(Totals.hits);
+    bump(Totals.hits);
+    ref int hitsAlias = Totals.hits;
+    hitsAlias += 8;
+    print(Totals.hits);                // 10
+
+    // A nullable `ref` slot holds "a value or null", and stores lift into it.
+    ref int? maybe = null;
+    ref int? maybeAlias = maybe;
+    print(maybeAlias == null);         // true
+    maybe = 5;
+    print(maybeAlias!!);               // 5
+
+    // Closures capture the cell, not a copy: nested lambdas write the same one.
+    ref int hits = 0;
+    var once = () -> { hits += 1; };
+    var twice = () -> { once(); once(); };
+    twice();
+    print(hits);                       // 2
+
+    // A loop accumulating through a `ref` parameter.
+    ref int total = 0;
+    for (var v : new int[]{1, 2, 3}) {
+        bump(total);
+        total += v;
+    }
+    print(total);                      // 9
+}

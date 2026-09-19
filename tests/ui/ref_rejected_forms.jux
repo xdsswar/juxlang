@@ -1,0 +1,24 @@
+// The `ref` forms Phase 1 rejects (JUX-MISSING-DEFS §M.13.4, ERRATA E84), and
+// the ones it accepts with a warning because the type is already shared.
+ref int badReturn() {
+    return 1;
+}
+
+class Thing {
+    public int v = 0;
+}
+
+class Holder {
+    public ref int memberReturn() {
+        return 1;
+    }
+}
+
+public void main() {
+    ref ref int nested = 1;
+    var wrong = new Vec<ref int>();
+    ref int[] numbers = new int[]{1, 2};
+    ref Thing thing = new Thing();
+    ref String text = "value";
+    print(nested + numbers.length + thing.v + text.length());
+}
