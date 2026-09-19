@@ -1,0 +1,7 @@
+read through long*   41
+after writing        42
+after bump           43
+100 into byte  lost false  value 100
+300 into byte  lost true  value 44
+so the program can react instead of carrying on with 44
+is it null?          true

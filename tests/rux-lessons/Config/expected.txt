@@ -1,0 +1,7 @@
+compiled for a desktop operating system, 64-bit
+debug build: extra checking is worth its cost here
+optimization: none, so the output follows the source closely
+profile: full
+source location:
+  [Main.jux in main] this message knows where it came from
+feature verbose: off (try `jux run --features verbose`)

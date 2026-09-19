@@ -1,0 +1,86 @@
+// The Memory lesson used a pointer without explaining it: `malloc` returned an
+// address, `as ulong*` said what lived there, and `values[i]` reached it.
+// This is that piece on its own.
+//
+// A pointer is an address. `&value` produces the address of something, and
+// indexing a pointer reaches what is at it: `p[0]` is the value itself (the
+// same as `*p`), which is why an allocated block indexes like an array.
+//
+// In Jux all of that is `unsafe`-only (Layout-ABI §L.6). A pointer VALUE may
+// be stored, passed and compared with `null` anywhere; taking an address,
+// reading through one or writing through one needs an `unsafe` context.
+
+// A `long*` may be written through, so this changes the caller's variable
+// rather than a copy of it. Marking the whole function `unsafe` makes its
+// body an unsafe context, and makes calling it an unsafe operation too.
+//
+// The modifier is written after `public`: a declaration that STARTS with
+// `unsafe` is read as an `unsafe { }` statement today (B45).
+public unsafe void bump(long* target) {
+    target[0] += 1;
+}
+
+// The checked narrowing the Convert lesson promised. `as` is silent when a
+// value does not fit; this writes the converted value through a pointer and
+// returns whether anything was lost, which it finds out by widening the
+// result back and comparing. Note carefully which way round the answer reads,
+// as in Rux: the flag is true when the conversion FAILED.
+public unsafe bool convertChecked(long value, byte* target) {
+    *target = value as byte;
+    return (*target as long) != value;
+}
+
+void main() {
+    long value = 41;
+
+    unsafe {
+        // Rux has two pointer types, `*int` (read only) and `*var int` (may
+        // write), split the way `let` and `var` are. Jux has one, `T*`, which
+        // may always write: a pointer is the tool for talking to C, and C's
+        // `const` is a promise the callee makes, not something the pointer
+        // enforces. Reading and writing look the same.
+        long* reader = &value;
+        print($"read through long*   ${reader[0]}");
+
+        long* writer = &value;
+        writer[0] = 42;
+    }
+    print($"after writing        ${value}");
+
+    // Because the address was passed rather than the value, the function
+    // changed `value` itself. Nothing was returned.
+    unsafe {
+        bump(&value);
+    }
+    print($"after bump           ${value}");
+
+    // That is what an out-parameter is. Jux also has a safe spelling for it,
+    // `out byte target` (the `out` keyword, §M.4), which needs no `unsafe`
+    // and is checked to be written on every path; the pointer form is shown
+    // here because it is what the safe one is built on.
+    byte narrowed = 0;
+    bool lost100 = false;
+    bool lost300 = false;
+    unsafe {
+        lost100 = convertChecked(100, &narrowed);
+    }
+    print($"100 into byte  lost ${lost100}  value ${narrowed}");
+
+    unsafe {
+        lost300 = convertChecked(300, &narrowed);
+    }
+    print($"300 into byte  lost ${lost300}  value ${narrowed}");
+
+    // 300 does not fit, so the flag is true and `narrowed` holds the wrapped
+    // 44, the same 44 that `300 as byte` produces silently. The difference is
+    // that this time the program was told.
+    if (lost300) {
+        print("so the program can react instead of carrying on with 44");
+    }
+
+    // A pointer can also point at nothing, which is what `null` means and what
+    // the Memory lesson checked for after `malloc`. Comparing with `null` is
+    // safe; reaching through a null pointer is not caught by the compiler.
+    long* nothing = null;
+    print($"is it null?          ${nothing == null}");
+}

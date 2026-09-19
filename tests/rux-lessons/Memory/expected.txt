@@ -1,0 +1,6 @@
+asking for 8 elements, 64 bytes
+got a block, 8-byte aligned: true
+after zeroing: 0 0 0 0 0 0 0 0
+squares:       0 1 4 9 16 25 36 49
+their total:   140
+freed
