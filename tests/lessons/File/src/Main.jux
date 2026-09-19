@@ -20,7 +20,7 @@ void main() {
     // with `PathBuf` rather than by gluing text together. The Path lesson goes
     // into why this matters. The file goes in the system's temporary
     // directory, so the lesson never writes into the project.
-    final PathBuf path = temp_dir().join("rux-file-lesson.txt");
+    final PathBuf path = temp_dir().join("jux-file-lesson.txt");
 
     try {
         // Opening says what is intended. `File.create` creates the file if it

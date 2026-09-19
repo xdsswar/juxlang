@@ -1,5 +1,5 @@
 [package]
-name = "rux.password"
+name = "lessons.password"
 version = "0.1.0"
 
 # `rand` has the drawing methods, `rand_pcg` the seeded PCG generator.

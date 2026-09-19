@@ -1,8 +1,8 @@
 // Selecting code by the version of the compiler building it.
 //
-// Rux reads `#compiler.version` while compiling and branches on it with
-// `when`: only the taken branch reaches the binary, and the others are never
-// type-checked, so they may use features the running compiler does not have.
+// Ideally the version is read while compiling: only the taken branch reaches
+// the binary, and the others are never type-checked, so they may use features
+// the running compiler does not have. Jux has no such query yet (a GAP).
 //
 // GAP: Jux has no compiler-version query. `@cfg` knows the target, the build
 // mode, the profile and the package's features (JUX-LANG-V1 §11.2), but not
@@ -45,8 +45,7 @@ SemanticVersion firstStable() {
     return new SemanticVersion(1, 0, 0);
 }
 
-// In Rux this chain is decided while compiling, and its last branch is a
-// compile error. Here it is an ordinary `if`, decided at run time, and the
+// Here the chain is an ordinary `if`, decided at run time, and the
 // last branch can only report the problem after the program has been built.
 void describe() {
     final SemanticVersion version = compilerVersion();
@@ -60,7 +59,6 @@ void describe() {
 }
 
 void main() {
-    // Rux folds these numbers into the binary as compile-time constants.
     final SemanticVersion version = compilerVersion();
     print($"Compiled with Jux ${version.major}.${version.minor}.${version.patch}");
 

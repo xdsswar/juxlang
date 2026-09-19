@@ -2,7 +2,7 @@
 // that directly: for an instruction the language has no way to express, for a
 // system call, or to stop the optimizer removing something it thinks is dead.
 //
-// Rux has `asm func`, a function whose body is instructions rather than
+// An assembly function has a body made of instructions rather than
 // statements. The compiler emits it as written and does not look inside,
 // which is the point and also the danger: nothing there is checked for you.
 //
@@ -13,7 +13,7 @@
 // declaration form at all.
 //
 // So the two functions are written here in Jux, one statement per
-// instruction where that is possible, with the assembly Rux used alongside.
+// instruction where that is possible, with the matching assembly alongside.
 // What survives is the lesson's other half: assembly is written for one
 // architecture, and `@cfg(arch = ...)` is how Jux picks a body per
 // architecture while compiling.
@@ -56,11 +56,11 @@ long sumTo(long count) {
     return total;
 }
 
-// The architecture choice Rux made with `when #target.arch`. With assembly,
+// The architecture choice, made while compiling. With assembly,
 // each branch would hold a different body; here the bodies are the same Jux,
 // and only the name differs, so the compile-time selection is still visible.
-// Rux stopped any other build with `#Error`; Jux has no compile-time error
-// statement, so a third declaration covers everything else.
+// Jux has no compile-time error statement, so a third declaration covers
+// every other architecture.
 @cfg(arch = "x86_64")
 String architecture() {
     return "x86-64";
@@ -78,7 +78,7 @@ String architecture() {
 
 void main() {
     // Called exactly like any other function. Nothing at the call site would
-    // say they were unusual, in Rux or in Jux.
+    // say they were unusual.
     print($"Add(20, 22)    ${add(20, 22)}");
     print($"SumTo(10)      ${sumTo(10)}");
     print($"SumTo(100)     ${sumTo(100)}");
@@ -92,7 +92,7 @@ void main() {
     // adapting when the calling convention differs, and a separate body for
     // every architecture you support. That is why such functions are rare.
     //
-    // Rux also shows `intrinsic func`, a function the compiler itself
+    // A related idea is an intrinsic, a function the compiler itself
     // provides with no body. Jux's nearest equivalents are the numeric
     // intrinsics in Core lib §K: `+%` wrapping arithmetic, `checkedAdd` and
     // `saturatingAdd` reach the processor's overflow handling without a body

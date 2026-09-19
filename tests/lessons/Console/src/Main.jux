@@ -1,8 +1,7 @@
 // Everything printed so far has gone through `print`. It writes its argument
 // and then finishes the line, every time.
 //
-// Rux has two functions, `Print` (stay on the line) and `PrintLine` (end it).
-// Jux has only the one, so a line built from several pieces is assembled as
+// Jux has one print function, and it always ends the line, so a line built from several pieces is assembled as
 // a `String` first and printed whole. That turns out to be the clearer habit
 // anyway: the line exists as a value before it is shown.
 

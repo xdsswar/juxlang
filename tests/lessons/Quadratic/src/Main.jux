@@ -16,9 +16,7 @@ void prompt(String text) {
 }
 
 // Reading one number, with both failures handled: no input at all, and input
-// that is not a number. Rux carried the value back through an out-parameter
-// and said whether there was one with a `bool`. Jux says both at once with a
-// nullable result: a `double?` is either a number or `null` (the Option
+// that is not a number. Jux says both at once with a nullable result: a `double?` is either a number or `null` (the Option
 // lesson), so the caller cannot use the value without checking it first.
 double? readNumber(String question) {
     prompt(question);

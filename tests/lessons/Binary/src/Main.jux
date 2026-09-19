@@ -95,7 +95,7 @@ void main() {
     // whoever reads agree, which is why a file format states its byte order
     // rather than leaving it to whichever machine happens to run the code.
 
-    final PathBuf path = temp_dir().join("rux-binary-lesson.bin");
+    final PathBuf path = temp_dir().join("jux-binary-lesson.bin");
     try {
         // Writing the bytes themselves. Nothing is converted to text, so four
         // bytes on disk hold a number that would take ten characters written

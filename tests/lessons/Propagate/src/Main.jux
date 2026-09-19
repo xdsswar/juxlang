@@ -53,8 +53,7 @@ Result<int, DigitError> firstTwo(String text) {
     return Result.Ok(tens * 10 + units);
 }
 
-// Pads `text` with spaces on the right to `width` characters, standing in for
-// the Rux `{:10}` placeholder.
+// Pads `text` with spaces on the right to `width` characters.
 String padRight(String text, int width) {
     if (text.charLength() >= width) {
         return text;

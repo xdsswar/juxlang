@@ -1,5 +1,5 @@
 [package]
-name = "rux.melody"
+name = "lessons.melody"
 version = "0.1.0"
 
 # Off by default, so a build prints the tune without sounding it.

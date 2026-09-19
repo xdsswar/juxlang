@@ -2,7 +2,7 @@
 // arm that fits. It says much the same as a long `if` / `else if` chain, but
 // names the value being tested once instead of repeating it in every branch.
 //
-// Rux calls this `match`; Jux keeps the Java name and the arrow-form cases,
+// Jux keeps the Java name `switch` and the arrow-form cases,
 // which never fall through from one arm into the next.
 
 void main() {
@@ -52,8 +52,7 @@ void main() {
         default -> print("weekday");
     }
 
-    // Here Jux parts company with Rux. In Rux a `match` on a number that fits
-    // no arm simply does nothing. In Jux every `switch` must cover every value
+    // In Jux every `switch` must cover every value
     // it could be given (Type System §T.5.2), so leaving the `default` off is
     // a compile error that names a value no arm handles:
     //

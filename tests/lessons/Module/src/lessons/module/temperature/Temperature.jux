@@ -1,7 +1,7 @@
 // A second package, in its own file. Its `describe` and Geometry's can never
 // be confused, because each is reached through its own package.
 
-package rux.module.temperature;
+package lessons.module.temperature;
 
 public double toFahrenheit(double celsius) {
     return celsius * 9.0 / 5.0 + 32.0;

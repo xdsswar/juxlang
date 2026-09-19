@@ -1,12 +1,12 @@
 // A second source file in the same project. The `package` line says where its
-// contents live, and the directory mirrors it: `rux/module/geometry/` holds
-// `package rux.module.geometry` (Jux §3.1).
+// contents live, and the directory mirrors it: `lessons/module/geometry/` holds
+// `package lessons.module.geometry` (Jux §3.1).
 //
 // A file of functions declares no public type, so it may be named anything.
 // Two files could even contribute to one package; the `package` line, not the
 // file, decides where these functions live.
 
-package rux.module.geometry;
+package lessons.module.geometry;
 
 // `public` is what makes a function reachable from other packages. Main is in
 // a different package, so these three need it.
@@ -29,7 +29,7 @@ public String describe() {
 }
 
 // Without a modifier a function is package-private: any file in
-// `rux.module.geometry` may call it, and nothing outside may. Main could not
+// `lessons.module.geometry` may call it, and nothing outside may. Main could not
 // import this one, which is the point: it is a detail of this package.
 int doubled(int value) {
     return value * 2;

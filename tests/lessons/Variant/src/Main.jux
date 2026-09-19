@@ -1,5 +1,5 @@
 // An enum says a value is one of a fixed list of cases. The same `enum` can
-// also let each case carry data of its own; Rux calls that a `variant`, and in
+// also let each case carry data of its own, and in
 // Jux it is still an enum.
 //
 // That combination is what makes it useful: the data is reachable only after
@@ -34,8 +34,7 @@ String label(Reading reading) {
     };
 }
 
-// Pads `text` with spaces on the right to `width` characters, standing in for
-// the Rux `{:12}` placeholder.
+// Pads `text` with spaces on the right to `width` characters.
 String padRight(String text, int width) {
     if (text.charLength() >= width) {
         return text;

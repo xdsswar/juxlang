@@ -1,5 +1,4 @@
-// Rux formats with placeholder specs such as `{:>8}` and `{:.2}`. Jux
-// interpolation has no spec syntax: `${value}` always writes the value's own
+// Jux interpolation has no format-spec syntax: `${value}` always writes the value's own
 // text. Formatting is done on the value instead, with methods that return a
 // new `String`:
 //

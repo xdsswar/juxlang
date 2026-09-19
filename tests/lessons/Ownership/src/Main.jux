@@ -61,8 +61,8 @@ void main() {
     final var alias = owner;
     print($"    shared, also held as id ${alias.id}");
 
-    // Rux marks a transfer of ownership with `<-`, and forbids using the old
-    // name afterwards. Jux reserves the `move` keyword for the same idea, but
+    // A transfer of ownership forbids using the old name afterwards. Jux
+    // reserves the `move` keyword for that idea, but
     // Phase 1 does not implement it yet: a class is shared by reference
     // counting instead, so there is no old name to invalidate and no chance
     // of closing the handle twice. Watch the output: handle 2 is closed once,

@@ -2,9 +2,8 @@
 // is UTF-8 text, immutable, and a reference type (Core lib §K.7): assigning
 // one shares it, and since it can never change, sharing is always safe.
 //
-// Rux divides the work between three types (a borrowed view, an owned
-// `String`, a builder) and asks for an allocator. Jux has the one `String`,
-// and the allocator is the program's own.
+// Jux has the one `String` type, and its memory comes from the program's
+// own heap.
 
 // Reports whether `byteIndex` falls on the start of a character. UTF-8 marks
 // the bytes that continue a character: their top two bits are `10`. Any other

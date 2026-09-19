@@ -23,8 +23,8 @@ public unsafe void bump(long* target) {
 // The checked narrowing the Convert lesson promised. `as` is silent when a
 // value does not fit; this writes the converted value through a pointer and
 // returns whether anything was lost, which it finds out by widening the
-// result back and comparing. Note carefully which way round the answer reads,
-// as in Rux: the flag is true when the conversion FAILED.
+// result back and comparing. Note carefully which way round the answer reads:
+// the flag is true when the conversion FAILED.
 public unsafe bool convertChecked(long value, byte* target) {
     *target = value as byte;
     return (*target as long) != value;
@@ -34,8 +34,7 @@ void main() {
     long value = 41;
 
     unsafe {
-        // Rux has two pointer types, `*int` (read only) and `*var int` (may
-        // write), split the way `let` and `var` are. Jux has one, `T*`, which
+        // Jux has one pointer type, `T*`, which
         // may always write: a pointer is the tool for talking to C, and C's
         // `const` is a promise the callee makes, not something the pointer
         // enforces. Reading and writing look the same.

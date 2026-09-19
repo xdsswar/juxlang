@@ -1,5 +1,5 @@
 [package]
-name = "rux.random"
+name = "lessons.random"
 version = "0.1.0"
 
 # `rand` has the drawing methods, `rand_pcg` the seeded PCG generator. The

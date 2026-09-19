@@ -1,5 +1,5 @@
 [package]
-name = "rux.age"
+name = "lessons.age"
 version = "0.1.0"
 
 # chrono, for calendar dates.

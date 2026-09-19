@@ -49,8 +49,8 @@ void main() {
     // which is where a program usually discovers it chose the wrong one.
     //
     // `round()` goes to the nearest whole number and breaks an exact tie
-    // towards the even one (Core lib §K.11), so -2.5 becomes -2.0. Rux, like
-    // Rust's own `round`, sends ties away from zero and prints -3.
+    // towards the even one (Core lib §K.11), so -2.5 becomes -2.0. Rust's own
+    // `round` sends ties away from zero and gives -3.
     final double value = -2.5;
     print($"value         ${value}");
     print($"Floor         ${value.floor()}   (towards minus infinity)");

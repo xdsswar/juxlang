@@ -53,9 +53,8 @@ void main() {
     // text to three decimal places and leaves the stored value untouched.
     print($"rounded ${nativeFloat.toFixed(3)}");
 
-    // Jux has one boolean type, `bool`. (Rux also has 8, 16 and 32-bit
-    // booleans for C layouts; in Jux a C boolean is spelled at the FFI
-    // boundary instead, Layout-ABI §8.1.1.)
+    // Jux has one boolean type, `bool`. A C boolean of another width is
+    // spelled at the FFI boundary instead (Layout-ABI §8.1.1).
     final bool flag8 = true;
     final bool flag16 = false;
     final bool flag32 = true;

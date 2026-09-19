@@ -2,7 +2,7 @@
 // none when every number is odd, and there is no `int` that means "there
 // wasn't one": every value it can hold is a perfectly good answer.
 //
-// Rux spells the answer `Option<int>`. Jux writes it `int?`, a nullable int:
+// Jux writes the answer `int?`, a nullable int:
 // either an `int`, or `null` for "nothing". The compiler tracks the `?`, so a
 // nullable value cannot be used as a plain one until it has been checked.
 

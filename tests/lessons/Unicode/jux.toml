@@ -1,5 +1,5 @@
 [package]
-name = "rux.unicode"
+name = "lessons.unicode"
 version = "0.1.0"
 
 # The crate is published as `unicode-segmentation`; a Jux (and Rust) path

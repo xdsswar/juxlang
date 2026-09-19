@@ -6,7 +6,7 @@
 // reading another reinterprets the same bytes rather than converting them,
 // which is how a number's bit pattern is examined directly.
 //
-// GAP: Jux has no `union` declaration. Rux's
+// GAP: Jux has no `union` declaration. A union such as
 //
 //     union Bits { asSigned: int32, asUnsigned: uint32, asBytes: uint8[4] }
 //

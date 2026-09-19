@@ -1,5 +1,5 @@
 [package]
-name = "rux.config"
+name = "lessons.config"
 version = "0.1.0"
 
 # A feature the lesson tests with `if cfg(feature = "verbose")`. Off unless a

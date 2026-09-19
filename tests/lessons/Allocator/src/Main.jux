@@ -1,8 +1,7 @@
-// Rux's `Alloc` and `Free` go straight to the system, one request at a time.
-// That is not the only way to get memory, and often not the best one. Rux
-// names the alternatives through an `Allocator` interface: anything wanting
-// memory takes one as a parameter, so the caller decides where the memory
-// comes from.
+// `malloc` and `free` go straight to the system, one request at a time.
+// That is not the only way to get memory, and often not the best one. An
+// allocator interface names the alternatives: anything wanting memory takes
+// one as a parameter, so the caller decides where the memory comes from.
 //
 // GAP: Jux has no allocator parameter, no `Allocator` interface, no arena and
 // no `Box<T>` that takes one. Its heap model is fixed:
@@ -18,8 +17,8 @@
 //
 // What does exist is enough to build the arena's STRATEGY by hand: take a
 // block, hand out pieces of it by moving a marker, and give everything back
-// at once. That is what this lesson does, over a Rust `Vec`, with the same
-// transcript as the Rux original. What it cannot do is make `new` or a `Vec`
+// at once. That is what this lesson does, over a Rust `Vec`, with a fixed
+// transcript. What it cannot do is make `new` or a `Vec`
 // use it; only values put there on purpose live in it.
 
 // A piece handed out by the arena: where the value lives. It is only a
@@ -86,14 +85,13 @@ class Arena {
 }
 
 void main() {
-    // Rux builds its arena on a backing allocator. Jux's arena takes its
+    // An arena is often built on a backing allocator. This one takes its
     // blocks from the one heap every `new` uses, so it needs only the block
-    // size: 256 bytes, as in Rux.
+    // size: 256 bytes.
     var arena = new Arena(256);
     print($"fresh arena     blocks ${arena.blockCount()}  bytes used ${arena.bytesUsed()}");
 
-    // Two values put in the arena. Rux's `Box::Create<int>` took the
-    // allocator to use; here the arena itself makes the slot.
+    // Two values put in the arena. The arena itself makes each slot.
     final Slot first = arena.create(10);
     final Slot second = arena.create(20);
 
@@ -106,8 +104,8 @@ void main() {
     print($"after reset     blocks ${arena.blockCount()}  bytes used ${arena.bytesUsed()}");
 
     // The idea worth taking away is not the arena itself. It is that "where
-    // does this memory come from" can be a decision. In Rux it is a
-    // parameter every allocating function takes. In Jux it is not yet: the
+    // does this memory come from" can be a decision. In Jux it is not yet
+    // a parameter every allocating function takes: the
     // global heap is the only source for the language's own objects, and a
     // strategy like this one applies only to the values a program chooses to
     // put through it.

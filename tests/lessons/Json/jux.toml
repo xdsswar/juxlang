@@ -1,5 +1,5 @@
 [package]
-name = "rux.json"
+name = "lessons.json"
 version = "0.1.0"
 
 # serde_json, from crates.io. `preserve_order` keeps an object's members in

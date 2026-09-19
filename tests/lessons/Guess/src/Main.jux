@@ -73,8 +73,7 @@ int main() {
         // half of what is left, and seven halvings covers a hundred.
         final String hint = guess < secret ? "higher" : "lower";
 
-        // Jux has no caveat here: a text conditional can go straight into the
-        // interpolation, where Rux had to bind it to a name first.
+        // A text conditional can go straight into the interpolation.
         print($"${hint}  (${remaining} guess${remaining == 1 ? "" : "es"} left)");
     }
 

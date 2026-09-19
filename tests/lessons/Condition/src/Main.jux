@@ -5,8 +5,8 @@
 void main() {
     final i32 temperature = 18;
 
-    // The condition always sits in parentheses, as in Java and C. (Rux lets
-    // you leave them out; Jux does not, so there is only one way to write it.)
+    // The condition always sits in parentheses, as in Java and C, so
+    // there is only one way to write it.
     if (temperature > 15) {
         print("warm enough");
     }

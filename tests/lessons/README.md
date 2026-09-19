@@ -1,21 +1,20 @@
-# Rux lessons, in Jux
+# Jux lessons
 
-Rux ships 67 short teaching programs, one concept each: Hello, Variable,
-Const, and so on up to allocators and inline assembly. This folder rewrites
-them in Jux and runs them. They serve two purposes at once:
+67 short Jux teaching programs, one concept each: Hello, Variable, Const,
+and so on up to allocators and inline assembly. They serve two purposes at
+once:
 
-- **Teaching material.** Each `src/Main.jux` is commented the way the Rux
-  original is, adapted to Jux: what the construct is, why it exists, and the
-  trap worth knowing before relying on it.
+- **Teaching material.** Each `src/Main.jux` is commented as a lesson: what
+  the construct is, why it exists, and the trap worth knowing before relying
+  on it.
 - **A test corpus.** Each lesson has an `expected.txt` with its exact output,
-  derived by reading the Rux program, and `bin/jux/tests/rux_lessons.rs`
-  builds, runs and compares every one of them.
+  and `bin/jux/tests/lessons.rs` builds, runs and compares every one of them.
 
 ## Layout
 
 ```
-tests/rux-lessons/
-  README.md              this file: mapping rules and the results table
+tests/lessons/
+  README.md              this file: conventions and the results table
   known-failures.txt     lessons that fail today, one `Name: reason` per line
   <Name>/jux.toml        the project manifest (the only manifest; no module.jux)
   <Name>/src/Main.jux    the lesson (Module has more files, in packages)
@@ -26,12 +25,12 @@ tests/rux-lessons/
 ## Running
 
 ```
-cargo test -p jux --test rux_lessons                   # every lesson
-RUX_LESSON=Hello,Range cargo test -p jux --test rux_lessons   # just these
+cargo test -p jux --test lessons                   # every lesson
+LESSON=Hello,Range cargo test -p jux --test lessons   # just these
 ```
 
 The test discovers lesson folders from this directory, copies each one to
-`target/rux-lessons/<Name>` so the build never writes into the sources, runs
+`target/lessons/<Name>` so the build never writes into the sources, runs
 `jux run --manifest-path` on the copy, and compares stdout with
 `expected.txt`. Both sides are compared after unifying line endings, dropping
 trailing whitespace on every line, removing `jux:` status lines, and trimming
@@ -42,48 +41,40 @@ All failures are reported together in one message. A lesson listed in
 test with "remove it from known-failures", so a fixed bug cannot hide behind a
 stale entry.
 
-## Mapping rules
+## Conventions
 
-How a Rux construct becomes Jux, applied the same way in every lesson.
+Every lesson is written the same way.
 
-- `func Main() -> int` becomes `void main()` (or `int main()` where the exit
-  code matters); `PrintLine("x {}", v)` becomes `print($"x ${v}")`.
-- `let` / `var` become `final` locals / non-final locals (`var` or a written
-  type); `match` becomes `switch` with `case ... ->` arms; `Option<T>` becomes
-  `T?`; `Result` and `?` use the core `Result<T, E>` (`Result.Ok`,
-  `Result.Err`, `expr?`) per Core lib §K.4, with exceptions mentioned where
-  they are the better Jux answer.
-- Rux collections become the Rust std ones under their Rust names (`Vec`,
-  `VecDeque`, `HashMap`, `HashSet`, `BTreeMap`) and Rust method names (`push`,
-  `len`, `contains`, `sort_unstable`), with no allocator argument: the full
-  profile uses the global heap.
+- The entry point is `void main()` (or `int main()` where the exit code
+  matters); output goes through `print($"x ${v}")`.
+- Locals that never change are `final`; `switch` uses `case ... ->` arms;
+  "maybe a value" is `T?`; `Result<T, E>` and `expr?` follow Core lib §K.4,
+  with exceptions shown where they are the better Jux answer.
+- Collections are the Rust std ones under their Rust names (`Vec`,
+  `VecDeque`, `HashMap`, `HashSet`, `BTreeMap`) with Rust method names (`push`,
+  `len`, `contains`, `sort_unstable`); the full profile uses the global heap.
 - Equality, ordering, hashing and text are operator overrides
   (`operator==`, `operator<=>`, `operator hash`, `operator string`), never
-  methods. `Core::Equatable` maps to `operator==` (plus `operator hash`, which
-  Jux requires alongside it).
-- `variant` becomes an `enum` with payloads; `extend Type` blocks become
-  methods inside the type; `extend Type : Interface` becomes
-  `implements Interface`; `struct` stays `struct` (a value type in both).
-- A Rux function taking `T[..]` takes a Jux array `T[]` (any length) or a
+  methods.
+- Data-carrying cases are an `enum` with payloads; behaviour lives inside the
+  type; `struct` is a value type.
+- A function over a sequence takes a Jux array `T[]` (any length) or a
   `Vec<T>`; Jux arrays and `Vec` are reference types.
-- `Variadic` uses `T... name` (sugar for `T[]`); a Rux `Display...` list of
-  mixed types becomes `any...`.
-- `Module` becomes a multi-package project: one `jux.toml`, the entry point in
-  `src/Main.jux`, and each Rux `module` a Jux `package` in a directory that
-  mirrors its name.
-- Later waves: Json uses `rust.serde_json`; Random and Password use
-  `rust.rand` + `rust.rand_pcg` with a fixed seed; Age and Time use
-  `rust.chrono`; Unicode uses `rust.unicode-segmentation`; File, Directory,
-  Path and Binary use `rust.std`; `defer` becomes `try`/`finally` or a `drop`
-  block; `Alloc`/`Free`/`Memory`/`Pointer` use unsafe pointers with
-  `new`/`delete`; `when`, `#target` and `#build` use `@cfg`. Real gaps
+- `Variadic` uses `T... name` (sugar for `T[]`), and `any...` for mixed types.
+- `Module` is a multi-package project: one `jux.toml`, the entry point in
+  `src/Main.jux`, and each package in a directory that mirrors its name.
+- Libraries Rust's std lacks come from crates: Json uses `rust.serde_json`;
+  Random and Password use `rust.rand` + `rust.rand_pcg` with a fixed seed;
+  Age and Time use `rust.chrono`; Unicode uses `rust.unicode-segmentation`;
+  File, Directory, Path and Binary use `rust.std`.
+- Scope cleanup is `try`/`finally` or a `drop` block; raw memory uses unsafe
+  pointers with C `malloc`/`free`; target selection uses `@cfg`. Real gaps
   (`union`, inline `asm`, arena and custom allocators, compiler-version
   queries) are written as far as Jux allows and marked GAP.
 
-## Where Jux prints differently by design
+## Jux semantics the transcripts show
 
-`expected.txt` follows Jux semantics, not Rux output, wherever the two
-languages deliberately differ. The differences met so far:
+Each `expected.txt` is what Jux prints. Worth knowing when reading them:
 
 - **Floating point text.** A `double` prints like Java's `Double.toString`
   and a `float` like `Float.toString`: `7.0` rather than `7`, `3.0 x 4.0`
@@ -91,23 +82,19 @@ languages deliberately differ. The differences met so far:
   Tuple, Variant, Interface, TypeAlias, Math, Statistics.)
 - **Ties round to even.** `round()` and `toFixed(n)` break an exact tie
   towards the even digit: `(-2.5).round()` is `-2.0` and `0.125.toFixed(2)`
-  is `0.12`. Rux, like Rust's `round`, sends ties away from zero. (Math,
-  Format.)
+  is `0.12`. (Math, Format.)
 - **No placeholder specs.** Jux interpolation has no `{:>8}` or `{:08b}`.
   Bases come from `toBinary()`, `toOctal()`, `toHex()`; precision from
   `toFixed(n)`; width, fill and alignment from a few lines of helper code in
-  the lesson. The rendered text is the same. (Primitive, Operator, Convert,
-  Format, Console, Variant, Propagate, Overloading, Algorithm.)
-- **One `print`.** `print` always ends the line; Rux's `Print` (no newline)
-  pieces are assembled into a `String` and printed whole. The output is the
-  same except that trailing spaces are not significant. (Loop, Range,
-  Console, Thanks, Prime, Statistics, Algorithm.)
-- **One `bool` and one `char`.** Rux has 8/16/32-bit booleans and
-  characters; Jux has one of each, with C widths spelled at the FFI boundary.
-  The Primitive lesson keeps the labels and prints the same values.
-- **Every `switch` is exhaustive.** A Rux `match` on a number that fits no
-  arm does nothing; in Jux that is error E0440, and silence needs an explicit
-  empty `default`. (Match.)
+  the lesson. (Primitive, Operator, Convert, Format, Console, Variant,
+  Propagate, Overloading, Algorithm.)
+- **One `print`.** `print` always ends the line; a line built from pieces is
+  assembled into a `String` and printed whole, so trailing spaces are not
+  significant. (Loop, Range, Console, Thanks, Prime, Statistics, Algorithm.)
+- **One `bool` and one `char`.** C widths are spelled at the FFI boundary.
+  (Primitive.)
+- **Every `switch` is exhaustive.** A number that fits no arm is error
+  E0440, and silence needs an explicit empty `default`. (Match.)
 - **Operators come in consistent sets.** `operator==` requires
   `operator hash` (E0931), and ordering is `operator<=>` or all four of
   `<`, `<=`, `>`, `>=` (E0930). (Interface, Overloading.)
@@ -122,13 +109,9 @@ languages deliberately differ. The differences met so far:
 - **No `move` yet.** Jux reserves `move` but Phase 1 does not implement it;
   classes are shared by reference counting, so the Ownership lesson shows
   sharing, with a `drop` block that runs exactly once.
-- **Names.** Lesson text that names the language itself (Console, Format,
-  Thanks) says "Jux".
 - **Foreign libraries answer in their own terms.** serde_json reports a
-  line and column rather than a byte offset (`column 12` where Rux says
-  byte 11), a `Vec` grows by Rust's policy (capacity 0, then 4, then 8),
-  and the Unicode lesson asks `isDigit()` where Rux asks `IsNumeric`.
-  (Json, Vector, Unicode)
+  line and column, a `Vec` grows by Rust's policy (capacity 0, then 4, then
+  8), and the Unicode lesson asks `isDigit()`. (Json, Vector, Unicode)
 - **Nothing depends on the machine or the clock.** Elapsed time, the path
   separator and an OS-seeded draw print only what is certain about them
   (`at least 20 ms: true`); files live under the system temp directory;
@@ -151,7 +134,7 @@ library gap, listed too), **TODO** (a later wave).
 | Convert | 1 | PASS | `int->float` prints `7.0` |
 | Operator | 1 | PASS | binary via `toBinary()` + padding |
 | Condition | 1 | PASS | parentheses are required in Jux |
-| Ternary | 1 | PASS | the Rux "bind text operands first" caveat does not apply |
+| Ternary | 1 | PASS | a text conditional goes straight into interpolation |
 | Loop | 1 | PASS | `loop` becomes `while (true)` |
 | Range | 1 | PASS | overflow panics in debug instead of wrapping |
 | Function | 1 | PASS | |
@@ -326,7 +309,7 @@ void main() {
 **B9. A package-private free function is visible from another package.**
 (Module) Language §4.4 makes a declaration with no modifier visible within its
 package only, and reaching it from elsewhere E0416. In the Module project,
-`src/Main.jux` can `import rux.module.geometry.doubled;` and call
+`src/Main.jux` can `import lessons.module.geometry.doubled;` and call
 `doubled(5)`, though `doubled` has no modifier; it compiles and prints `10`.
 The lesson follows the spec and does not rely on this.
 
@@ -586,11 +569,11 @@ How the lessons map, beyond the rules above:
 - **Input.** `stdin().read_line(line)` from `rust.std` returns the byte
   count, zero at end of input. A prompt is written with
   `stdout().write_all(...)` and `flush()`, so it stays on the line the answer
-  is typed on, as Rux's `Print` does. Piped input is not echoed, so the next
+  is typed on. Piped input is not echoed, so the next
   output lands on the prompt's line: `Circle radius: Circumference: 15.7080`.
 - **Parsing.** `text.parse<double>()` is Rust's `str::parse`. A Rust `Result`
   reaches Jux as `throws`, so a bad number is a `catch`, and a nullable
-  `double?` return replaces Rux's out-parameter plus `bool`. The scripted
+  `double?` return says both "no value" and the value. The scripted
   inputs are all valid, because the `catch` does not work yet (B42).
 - **`defer`** becomes nested `try`/`finally` for statement ordering, and a
   class with a `drop` block for releasing memory (Defer).
@@ -600,26 +583,26 @@ How the lessons map, beyond the rules above:
   E0507 by design); memory from C goes back to C. `new` and reference
   counting are the managed heap, which needs no release at all.
 - **Pointers.** Jux has one pointer type, `T*`, always writable; there is
-  no read-only `*T` beside Rux's `*var T`. `&x`, `*p` and `p[i]` need
+  no read-only pointer type. `&x`, `*p` and `p[i]` need
   `unsafe`; comparing with `null` does not. Addresses change every run, so
   Memory prints the alignment instead.
 - **`when` / `#target` / `#build`** become `@cfg` declarations and
   `if cfg(...)` (Config, Melody, Asm). Jux has predicates, not values, so the
   target is described by declaring one answer per case. `debug` and
-  `release` also stand for Rux's optimization mode.
+  `release` also stand for the optimization mode.
 - **Emoji** are written as `\u{1F680}` escapes (Launch).
 
 ### Gaps
 
 These have no Jux spelling today. Each lesson is written as far as Jux goes,
-with a stand-in for the missing part whose output matches the Rux original.
+with a stand-in for the missing part with a fixed transcript.
 The GAP lessons pass with their stand-ins, so they are not in
 `known-failures.txt`.
 
 - **Compiler-version query** (Version). `@cfg` knows the target, build mode,
   profile and features, but not the version of `juxc`, and no constant
   carries it. The stand-in is a version record ordered with `<=>` and
-  compared at run time, where Rux decides it while compiling.
+  compared at run time, not while compiling.
 - **Source-location query** (Config). Nothing like `#source.fileName`,
   `.line` or `.function`. The lesson's trace helper takes the function name
   by hand. (The Config lesson passes otherwise.)

@@ -20,13 +20,13 @@ import rust.std.write;
 void main() {
     // The lesson works in a directory of its own under the system's temporary
     // directory, so it never touches the project.
-    final PathBuf dir = temp_dir().join("rux-directory-lesson");
+    final PathBuf dir = temp_dir().join("jux-directory-lesson");
 
     try {
         // Making it. If it already exists this throws rather than failing
         // silently, which is why the failure is worth handling in real code.
         create_dir(dir);
-        print("made rux-directory-lesson");
+        print("made jux-directory-lesson");
 
         // `join` builds a path one component at a time, with the platform's
         // own separator. `write` creates (or truncates) a file and writes the

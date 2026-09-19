@@ -1,4 +1,4 @@
-//! `tests/rux-lessons`: the Rux teaching lessons, rewritten in Jux and run.
+//! `tests/lessons`: the Jux teaching lessons, built and run.
 //!
 //! Each lesson is a small `jux.toml` project with an `expected.txt` beside it.
 //! The folders are discovered from the directory, so adding a lesson is adding
@@ -11,12 +11,12 @@
 //! the cost is waiting on them.
 //!
 //! A lesson that fails because of a compiler bug is listed in
-//! `tests/rux-lessons/known-failures.txt` with the reason, which keeps the gate
+//! `tests/lessons/known-failures.txt` with the reason, which keeps the gate
 //! green while the bug is open. The list is checked in both directions: a
 //! listed lesson that starts passing fails the test until its line is removed,
 //! so a fixed bug cannot hide behind a stale entry.
 //!
-//! Set `RUX_LESSON=Name` (or `Name,Other`) to run only those lessons.
+//! Set `LESSON=Name` (or `Name,Other`) to run only those lessons.
 
 mod common;
 
@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 /// Where the lessons live, relative to the repository root.
-const LESSONS: &str = "tests/rux-lessons";
+const LESSONS: &str = "tests/lessons";
 
 /// The file naming lessons that are expected to fail, one per line.
 const KNOWN_FAILURES: &str = "known-failures.txt";
@@ -130,7 +130,7 @@ fn copy_tree(from: &Path, to: &Path) {
 /// and compares its output with `expected.txt`.
 fn run_lesson(workspace: &Path, name: &str) -> Outcome {
     let lesson = workspace.join(LESSONS).join(name);
-    let staged = workspace.join("target").join("rux-lessons").join(name);
+    let staged = workspace.join("target").join("lessons").join(name);
     stage(&lesson, &staged);
 
     let expected = match fs::read_to_string(lesson.join("expected.txt")) {
@@ -180,15 +180,15 @@ fn run_lesson(workspace: &Path, name: &str) -> Outcome {
     }
 }
 
-/// The lessons named in `RUX_LESSON`, or every lesson when it is unset.
+/// The lessons named in `LESSON`, or every lesson when it is unset.
 fn selected(all: Vec<String>) -> Vec<String> {
-    match std::env::var("RUX_LESSON") {
+    match std::env::var("LESSON") {
         Ok(filter) if !filter.trim().is_empty() => {
             let wanted: Vec<&str> = filter.split(',').map(str::trim).collect();
             for name in &wanted {
                 assert!(
                     all.iter().any(|lesson| lesson == name),
-                    "RUX_LESSON names `{name}`, which is not a lesson folder"
+                    "LESSON names `{name}`, which is not a lesson folder"
                 );
             }
             all.into_iter()
@@ -200,7 +200,7 @@ fn selected(all: Vec<String>) -> Vec<String> {
 }
 
 #[test]
-fn rux_lessons() {
+fn lessons() {
     let workspace = common::workspace_root();
     let root = workspace.join(LESSONS);
     let all = discover(&root);
@@ -255,7 +255,7 @@ fn rux_lessons() {
     }
 
     eprintln!(
-        "rux lessons: {passed} passed, {expected_failures} known failures, {} problems, of {}",
+        "jux lessons: {passed} passed, {expected_failures} known failures, {} problems, of {}",
         problems.len(),
         results.len()
     );

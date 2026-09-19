@@ -1,4 +1,4 @@
-made rux-directory-lesson
+made jux-directory-lesson
 made two files
   first.txt
   second.txt

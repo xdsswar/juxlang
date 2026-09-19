@@ -1,6 +1,5 @@
-// In Rux an array's length is part of its type, and a slice `T[..]` is a view
-// of part of one. Jux arrays are simpler on the first point: `int[]` is every
-// int array, whatever its length, so one function already serves arrays of any
+// In some languages an array's length is part of its type. Jux arrays are
+// simpler: `int[]` is every int array, whatever its length, so one function already serves arrays of any
 // size.
 //
 // The second point, a view of *part* of an array without copying it, has no

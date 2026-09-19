@@ -49,7 +49,7 @@ void main() {
             return;
         }
 
-        // Rux printed the address itself. It changes from run to run, so a
+        // The address itself changes from run to run, so a
         // lesson with a fixed transcript shows what is always true of it
         // instead: `malloc` returns memory aligned for any C type, so an
         // eight-byte value always starts on a multiple of eight.

@@ -9,8 +9,8 @@
 
 // Windows provides `Beep(frequency, duration)` in kernel32, which is exactly
 // the shape a note needs. `@cfg` keeps the declaration out of a build for any
-// other system, where the symbol would not exist to link against. Rux stopped
-// such a build with an error; Jux simply leaves the sound out there.
+// other system, where the symbol would not exist to link against. Jux simply
+// leaves the sound out there.
 @cfg(os = "windows")
 @extern(lib = "kernel32")
 unsafe native {

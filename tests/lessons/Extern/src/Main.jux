@@ -16,8 +16,8 @@ import rust.std.remove_file;
 //
 // The types are C's, spelled at their exact widths: a `DWORD` is `u32`, a
 // `BOOL` is a C `int` (`i32`), a `HANDLE` is `void*`. A `String` parameter is
-// passed as a NUL-terminated `const char*` built for the call, so Rux's
-// `"Info.txt\0"` and `.data` are not needed. An `out u32` is a `DWORD*` the
+// passed as a NUL-terminated `const char*` built for the call, so no
+// manual `\0` terminator is needed. An `out u32` is a `DWORD*` the
 // callee fills in.
 @cfg(os = "windows")
 @extern(lib = "kernel32")
@@ -54,7 +54,7 @@ long writeFile(String path, String text) {
         void* file = CreateFileA(path, GENERIC_WRITE, 0, null, CREATE_ALWAYS, 0, null);
 
         // A failed CreateFileA returns INVALID_HANDLE_VALUE, which is -1 as a
-        // pointer, NOT null. Rux checked for null, which misses the failure;
+        // pointer, NOT null. A null check misses the failure;
         // comparing the address with -1 is the check Win32 documents.
         if ((file as long) == -1) {
             return -1;
@@ -90,11 +90,10 @@ long writeFile(String path, String text) {
 }
 
 void main() {
-    // Rux wrote `Info.txt` into the current directory. A test should not leave
-    // files behind, so this writes into the system's temporary directory and
+    // A test should not leave files behind, so this writes into the system's temporary directory and
     // removes the file afterwards. `temp_dir()` returns a Rust `PathBuf`;
     // interpolating its `display()` gives the path as text.
-    final var location = temp_dir().join("rux-extern-Info.txt");
+    final var location = temp_dir().join("jux-extern-Info.txt");
     final String path = $"${location.display()}";
 
     final String text = "Hello, Jux!";

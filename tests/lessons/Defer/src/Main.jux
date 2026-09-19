@@ -2,9 +2,8 @@
 // function needs its own `free`. Add an early return and it is easy to leave
 // one behind, and the leak is invisible.
 //
-// Rux answers with `defer`, a statement that runs when the scope ends,
-// however it ends. Jux has no `defer`; it has the two tools Java and C++
-// programmers already know for the same job:
+// Jux answers with the two tools Java and C++ programmers already know,
+// both of which run when the scope ends, however it ends:
 //
 //   - `try { } finally { }` for a statement that must run on the way out;
 //   - a class with a `drop { }` block when the job is giving back a resource,
@@ -57,7 +56,7 @@ class Block {
     }
 
     // Runs once, whichever way the owning scope ends. It prints before it
-    // frees, the same order as Rux's two `defer` lines.
+    // frees.
     drop {
         print("    releasing the block");
         unsafe {

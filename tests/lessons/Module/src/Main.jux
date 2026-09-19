@@ -2,21 +2,21 @@
 // many source files as it likes, grouped into packages.
 //
 // This one has three files: this entry point, plus
-// `rux/module/geometry/Geometry.jux` and
-// `rux/module/temperature/Temperature.jux`. Each of the other two starts with
+// `lessons/module/geometry/Geometry.jux` and
+// `lessons/module/temperature/Temperature.jux`. Each of the other two starts with
 // a `package` line naming where its functions live, and the directories
 // mirror those names. `jux.toml` is the only manifest: it names the project,
 // and the compiler finds every source file under `src/` by itself.
 
 // Imports use `.` between the parts of a name, the same shape as a package.
 // Grouped braces pull in several names from one package at once.
-import rux.module.geometry.{rectangleArea, squareArea, perimeter, twiceTheArea};
-import rux.module.temperature.toFahrenheit;
+import lessons.module.geometry.{rectangleArea, squareArea, perimeter, twiceTheArea};
+import lessons.module.temperature.toFahrenheit;
 
 // Both packages have a `describe`. Importing both under one name would be a
 // conflict, so `as` gives each a name of its own here.
-import rux.module.geometry.describe as describeGeometry;
-import rux.module.temperature.describe as describeTemperature;
+import lessons.module.geometry.describe as describeGeometry;
+import lessons.module.temperature.describe as describeTemperature;
 
 void main() {
     // Once imported, these are called like any other function. Nothing marks

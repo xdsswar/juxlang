@@ -4,9 +4,8 @@
 // as the target type in parentheses in front of the value, because every
 // other conversion can change the value.
 
-// Pads `text` on the left with zeros up to `width` characters. The Rux
-// original gets this from a `{:08b}` placeholder; Jux interpolation has no
-// width syntax, so a small helper built on `repeat` does the job.
+// Pads `text` on the left with zeros up to `width` characters. Jux
+// interpolation has no width syntax, so a small helper built on `repeat` does the job.
 String zeroPad(String text, int width) {
     if (text.charLength() >= width) {
         return text;

@@ -6,8 +6,7 @@
 // Only the branch that holds reaches the binary. The others are parsed and
 // then gone: not skipped at run time, absent.
 
-// Rux reads the target as values (`#target.os`) that can be printed. Jux has
-// predicates rather than values, so a question about the target is asked by
+// Jux describes the target with predicates rather than values, so a question about the target is asked by
 // declaring the answer once per case. Exactly one of each pair survives.
 @cfg(any(os = "windows", os = "linux", os = "macos", os = "freebsd"))
 String system() {
@@ -29,9 +28,8 @@ String width() {
     return "not 64-bit";
 }
 
-// Rux's `#source` describes where the reading expression is, filled in at the
-// point it appears, so a helper can report its caller's file and function
-// without them being typed by hand. Jux has no such query (a gap listed in
+// A helper that reports its caller's file and function would need a query
+// the compiler fills in where the call appears. Jux has no such query (a gap listed in
 // the README), so here the function name is passed in, which is exactly the
 // hand-typing `#source` exists to avoid.
 void trace(String function, String message) {
@@ -53,8 +51,7 @@ void main() {
         print("release build: the checks above were never compiled in");
     }
 
-    // Rux separates the optimizer's goal (none, size, speed) from the mode.
-    // Jux ties the two together: `debug` means not optimized and `release`
+    // Jux ties the optimizer's goal to the build mode: `debug` means not optimized and `release`
     // means optimized (§11.6.1), so the same predicate answers both.
     if cfg(debug) {
         print("optimization: none, so the output follows the source closely");
@@ -62,7 +59,7 @@ void main() {
         print("optimization: speed");
     }
 
-    // The profile is the part of the build Jux has and Rux does not: how much
+    // The profile says how much
     // of the language and runtime the target can carry (`[build] profile` in
     // jux.toml). An ordinary program is `full`.
     if cfg(profile = "full") {
@@ -76,8 +73,7 @@ void main() {
     print("source location:");
     trace("main", "this message knows where it came from");
 
-    // Rux's `#config.Get("FEATURE")` is meant to carry values a build defines
-    // by name, and is not implemented there yet. Jux's equivalent works:
+    // A build can switch named features on and off:
     // features are declared in jux.toml and tested with `feature = "name"`.
     if cfg(feature = "verbose") {
         print("feature verbose: on");
