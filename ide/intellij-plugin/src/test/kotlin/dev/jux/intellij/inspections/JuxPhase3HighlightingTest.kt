@@ -42,6 +42,8 @@ class JuxPhase3HighlightingTest : BasePlatformTestCase() {
             JuxSelfAssignmentInspection(),
             JuxEmptyStatementBodyInspection(),
             JuxMissingReturnInspection(),
+            JuxGeneratorInspection(),
+            JuxInterfaceOperatorInspection(),
             JuxAbstractMethodInClassInspection(),
             JuxUnhandledExceptionInspection(),
             JuxPackageMismatchInspection(),

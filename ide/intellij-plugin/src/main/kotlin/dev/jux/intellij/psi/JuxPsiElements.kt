@@ -92,8 +92,29 @@ abstract class JuxNamedElementImpl(node: ASTNode) : JuxCompositeElement(node), J
 /** A top-level or nested type: class / interface / enum / record / struct / annotation. */
 class JuxTypeDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
 
-/** A method or free function declaration. */
-class JuxMethodDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
+/** A method or free function declaration, or an `operator` declaration. */
+class JuxMethodDeclaration(node: ASTNode) : JuxNamedElementImpl(node) {
+    /**
+     * An operator such as `Vec2 operator*(double k)` has no name identifier;
+     * its symbol stands in for one. Pointing the offset at the symbol lets the
+     * platform treat the caret on `*` as "this declaration" (Find Usages,
+     * highlight usages) and puts the caret there after navigation.
+     */
+    override fun getTextOffset(): Int {
+        if (nameIdentifier == null && node.elementType === JuxElementTypes.OPERATOR_DECLARATION) {
+            operatorSymbolLeaf()?.let { return it.textRange.startOffset }
+        }
+        return super.getTextOffset()
+    }
+
+    /** The first token after `operator`: the `*` of `operator*`, the `..=` of `operator..=`. */
+    fun operatorSymbolLeaf(): PsiElement? {
+        val kw = node.findChildByType(JuxTokenTypes.OPERATOR_KW)?.psi ?: return null
+        var c = kw.nextSibling
+        while (c is com.intellij.psi.PsiWhiteSpace) c = c.nextSibling
+        return c?.takeIf { it.node.elementType !== JuxElementTypes.PARAMETER_LIST }
+    }
+}
 
 /** A field declaration. Open so [JuxPropertyDeclaration] can specialize it. */
 open class JuxFieldDeclaration(node: ASTNode) : JuxNamedElementImpl(node)

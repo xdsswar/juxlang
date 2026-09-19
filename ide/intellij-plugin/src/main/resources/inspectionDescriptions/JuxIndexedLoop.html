@@ -1,0 +1,10 @@
+<html>
+<body>
+Reports a loop that counts an index over a whole sequence and only reads <code>xs[i]</code> with it.
+<!-- tooltip end -->
+<p>Both counting shapes are recognised, <code>for (int i = 0; i &lt; xs.len(); i++)</code> (or <code>xs.length</code>
+for an array) and <code>for (var i : 0..xs.len())</code>. The loop is reported only when the index is used for
+nothing else and the body never assigns <code>xs</code> itself.</p>
+<p>Quick-fix: rewrite the loop as <code>for (var x : xs)</code> and each <code>xs[i]</code> as <code>x</code>.</p>
+</body>
+</html>

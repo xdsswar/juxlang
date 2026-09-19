@@ -33,6 +33,9 @@ class JuxReferenceContributor : PsiReferenceContributor() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
                     importReferences(element)?.let { return it }
                     labelReference(element)?.let { return arrayOf(it) }
+                    // `a * b` / `a..b` / `v *= k`: the operator token names the
+                    // user `operator` it calls (§O.2.3).
+                    JuxOperatorReference.of(element)?.let { return arrayOf(it) }
                     if (element.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
                     val name = nameLeaf(element) ?: return PsiReference.EMPTY_ARRAY
                     // `x.operator hash()` (§O.2.7) names an operator every value

@@ -200,8 +200,15 @@ class JuxCompletionContributor : CompletionContributor() {
                     // `for await (…)` (§18.6) — a two-word statement opener, so
                     // it can't ride the curated single-word sets (same reason
                     // OBSERVER joins them as a raw extra in JuxKeywordContext).
-                    if (keywords === JuxKeywordContext.STATEMENT) {
+                    // Statement position is recognised by `for` (the set may
+                    // be STATEMENT or STATEMENT without `yield`).
+                    if ("for" in keywords) {
                         result.addElement(keyword("for await"))
+                    }
+                    // Where a member begins: the inherited methods this class
+                    // can implement or override, written out in full on accept.
+                    if (keywords === JuxKeywordContext.MEMBER) {
+                        JuxOverrideCompletion.addTo(parameters, result::addElement)
                     }
 
                     // Tiers 1, 2, 4: declarations visible from the caret only.

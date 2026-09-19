@@ -235,7 +235,7 @@ class JuxLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                     var kind = switch (times) {
                         case 0 -> "zero";
                         case 1 | 2 -> "few";
-                        default -> { yield "many"; }
+                        default -> "many";
                     };
                     for (var i : 0..times) {
                         print(kind);

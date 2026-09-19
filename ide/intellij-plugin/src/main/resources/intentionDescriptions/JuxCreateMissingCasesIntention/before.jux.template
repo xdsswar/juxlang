@@ -1,0 +1,7 @@
+enum Light { Red, Amber, Green }
+
+void show(Light l) {
+    <spot>switch</spot> (l) {
+        case Red -> print("stop");
+    }
+}
