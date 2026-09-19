@@ -6,7 +6,7 @@ import com.intellij.execution.ExecutionResult
 import com.intellij.execution.Executor
 import com.intellij.execution.configurations.CommandLineState
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.process.OSProcessHandler
+import com.intellij.execution.process.ColoredProcessHandler
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.process.ProcessTerminatedListener
 import com.intellij.execution.runners.ExecutionEnvironment
@@ -17,7 +17,8 @@ import java.nio.charset.StandardCharsets
 
 /**
  * Process + console state for a test-mode [JuxRunConfiguration]: runs
- * `jux test [pattern] [--release]` from the project's manifest root (`jux test`
+ * `jux test [pattern] [--release | --profile p]`, or `jux test --doc` for the
+ * doc-comment examples (§12.5), from the project's manifest root (`jux test`
  * requires `jux.toml` in its working directory, §TS.2) and attaches the SM
  * test-tree console ([JuxTestConsoleProperties]) instead of a plain one.
  */
@@ -31,17 +32,19 @@ class JuxTestCommandLineState(
         val workDir = config.manifestRoot()
             ?: throw ExecutionException("No jux.toml found above '${config.filePath}' — `jux test` needs a Jux project")
         val exe = JuxToolchain.resolveJux()
-        val params = buildList {
-            add("test")
-            config.testPattern.takeIf { it.isNotBlank() }?.let { add(it) }
-            if (config.release) add("--release")
-        }
+        val params = JuxRunCommands.test(
+            pattern = config.testPattern,
+            release = config.release,
+            profile = config.profile,
+            doc = config.isDocTestMode(),
+        )
         val cmd = GeneralCommandLine()
             .withExePath(exe)
             .withParameters(params)
             .withWorkDirectory(workDir)
             .withCharset(StandardCharsets.UTF_8)
-        val handler = OSProcessHandler(cmd)
+        // Colored: compile errors arrive as framed `human` diagnostics.
+        val handler = ColoredProcessHandler(cmd)
         ProcessTerminatedListener.attach(handler)
         return handler
     }

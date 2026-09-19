@@ -24,12 +24,19 @@ import dev.jux.intellij.psi.JuxMethodDeclaration
 object JuxTestLocator : SMTestLocator {
     const val PROTOCOL = "jux:test"
 
+    /**
+     * A doc example's node (`jux test --doc`, §12.5): the path is the
+     * documented item's `file:line` as `jux` printed it.
+     */
+    const val DOC_PROTOCOL = "jux:doctest"
+
     override fun getLocation(
         protocol: String,
         path: String,
         project: Project,
         scope: GlobalSearchScope,
     ): List<Location<*>> {
+        if (protocol == DOC_PROTOCOL) return docLocation(path, project)
         if (protocol != PROTOCOL || path.isBlank()) return emptyList()
         // FileTypeIndex.getFiles throws IndexNotReadyException while indexing;
         // navigation re-resolves once smart mode returns.
@@ -49,5 +56,36 @@ object JuxTestLocator : SMTestLocator {
             }
         }
         return emptyList()
+    }
+
+    /**
+     * The `file:line` of a doc example's item as a location on that line.
+     * `jux` prints the path as it found the file (absolute, or relative to
+     * the project it ran in), so a relative one is tried under every content
+     * root and the project base.
+     */
+    private fun docLocation(path: String, project: Project): List<Location<*>> {
+        val (file, line) = JuxTestOutputParser.splitLocation(path) ?: return emptyList()
+        val fs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+        val normalized = file.replace('\\', '/')
+        val candidates = buildList {
+            add(normalized)
+            project.basePath?.let { add("$it/$normalized") }
+            com.intellij.openapi.roots.ProjectRootManager.getInstance(project).contentRoots
+                .forEach { add("${it.path}/$normalized") }
+        }
+        val vf = candidates.firstNotNullOfOrNull { p ->
+            try {
+                fs.findFileByPath(p)?.takeIf { !it.isDirectory }
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return emptyList()
+        val psi = PsiManager.getInstance(project).findFile(vf) ?: return emptyList()
+        val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psi) ?: return emptyList()
+        val lineIndex = (line - 1).coerceIn(0, (document.lineCount - 1).coerceAtLeast(0))
+        val offset = document.getLineStartOffset(lineIndex)
+        val element = psi.findElementAt(offset) ?: psi
+        return listOf(PsiLocation(element))
     }
 }
