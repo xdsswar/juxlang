@@ -57,8 +57,8 @@ enum CliCommand {
     /// Type-check the project (or a single file) without producing a binary.
     /// (§B.15 — `jux check`.)
     Check {
-        /// Optional `.jux` file. When omitted, runs in project mode
-        /// (currently not yet implemented).
+        /// Optional `.jux` file. When omitted, acts on the project whose
+        /// `jux.toml` is found upward from here (or given by --manifest-path).
         file: Option<PathBuf>,
         /// In a workspace, type-check only this member package (by package
         /// name or its last segment). Ignored in single-file mode.
@@ -82,7 +82,8 @@ enum CliCommand {
         /// Optional `.jux` file.
         file: Option<PathBuf>,
         /// Where to emit the generated Rust crate. Defaults to
-        /// `<input-parent>/target/.rust-build/`.
+        /// `<input-parent>/target/.rust-build/`, or `<project>/target/.rust-build/`
+        /// for a project (a whole workspace always uses the latter).
         #[arg(long)]
         emit_dir: Option<PathBuf>,
         /// Build the emitted program with optimizations
@@ -115,11 +116,12 @@ enum CliCommand {
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
-        /// Optional `.jux` file. When omitted, runs in project mode
-        /// (currently not yet implemented).
+        /// Optional `.jux` file. When omitted, acts on the project whose
+        /// `jux.toml` is found upward from here (or given by --manifest-path).
         file: Option<PathBuf>,
         /// Where to emit the generated Rust crate. Defaults to
-        /// `<input-parent>/target/.rust-build/`.
+        /// `<input-parent>/target/.rust-build/`, or `<project>/target/.rust-build/`
+        /// for a project (a whole workspace always uses the latter).
         #[arg(long)]
         emit_dir: Option<PathBuf>,
         /// Build the emitted program with optimizations
@@ -747,7 +749,7 @@ fn run_single_or_project(
 fn run_project(
     root: Option<PathBuf>,
     action: Action,
-    _emit_dir_override: Option<PathBuf>,
+    emit_dir_override: Option<PathBuf>,
     release: bool,
     selection: Selection,
 ) -> Result<ExitCode> {
@@ -771,8 +773,9 @@ fn run_project(
 
     // Every package (standalone or workspace member) emits under the resolved
     // root's `target/.rust-build`, matching `build_workspace` and the paths
-    // `jux metadata` reports.
-    let emit_root = root_dir.join("target").join(".rust-build");
+    // `jux metadata` reports, unless `--emit-dir` names another place (a test
+    // harness staging many projects keeps their builds out of the sources).
+    let emit_root = emit_dir_override.unwrap_or_else(|| root_dir.join("target").join(".rust-build"));
     let is_workspace = !root_manifest.workspace_members.is_empty();
 
     // ---- Resolve the package to act on ----------------------------------
