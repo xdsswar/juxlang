@@ -85,6 +85,18 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.0.9</h3>
+            <p>Java's navigation and inspections, and the newest Jux syntax understood, not just parsed.</p>
+            <ul>
+              <li><b>Operators are symbols</b>: Ctrl+B on the <b>*</b> of <b>v * 2.0</b> goes to the <b>operator*</b> the compiler calls, chosen by operand type; the expression has that operator's type; Find Usages on an operator lists its uses. Interface operators get implement gutters.</li>
+              <li><b>Generators</b>: <b>yield</b> completes only in a function returning <b>Iterator&lt;T&gt;</b> or <b>Stream&lt;T&gt;</b>, and the compiler's generator rules show as you type, with fixes.</li>
+              <li><b>Implement / override completion</b>: in a class body, type the start of an inherited method's name and accept it to write the whole member.</li>
+              <li><b>Create missing 'case' branches</b> for a switch over an enum or a sealed type; <b>'if' can be simplified</b>; <b>indexed loop can be a for-each</b>.</li>
+              <li><b>Type Info</b> (Ctrl+Shift+P), <b>Type Declaration</b> (Ctrl+Shift+B), <b>Go to Test</b> / <b>Create Test</b>, and File Structure toggles for fields, properties, non-public and inherited members.</li>
+              <li><b>Folding</b> with Java's regions, <b>Wrapping and Braces</b> and <b>Blank Lines</b> code-style tabs, and Quick Documentation laid out like Java's.</li>
+              <li>Pattern binders, labels, method references and smart casts navigate and rename.</li>
+            </ul>
+
             <h3>0.0.8</h3>
             <p>Broken code while you type: one clear message at the mistake, and a fix on Alt+Enter.</p>
             <ul>
