@@ -510,6 +510,17 @@ license.workspace = true
 
 `jux build` at the workspace root builds every default member. `jux build -p pkg-a` builds only `pkg-a`. The resolver runs once, producing a single `jux.lock` consumed by all members. This guarantees that every member sees the same version of any shared dependency — no diamond dependency conflicts within a workspace.
 
+### B.7.2a. Phase-1 Status
+
+All of §B.7.1 is implemented:
+
+- **`members` patterns.** An entry may use `*` and `?` inside any path segment (`"tools/*"`, `"pkg-?"`). A pattern expands to the matching directories that contain a `jux.toml`, in alphabetical order; a plain entry is kept as written, so a missing member is reported by name. Hidden directories and `target/` never match.
+- **`exclude`** removes entries (exact paths or patterns) after expansion.
+- **`default-members`** is what a bare `jux build` / `run` / `check` at the root builds. The members those depend on through `path` dependencies are built too, because a dependent cannot compile without its dependency's sources. Absent, every member is a default member. `-p <name>` still selects any member. An entry that names no member is a warning.
+- **`[workspace.package]` / `[workspace.dependencies]`** are inherited through `key.workspace = true` (`edition.workspace = true`, `"com.x.json".workspace = true`). A member's `features` on an inherited dependency are added to the root's. A `path` in `[workspace.dependencies]` is relative to the workspace root. An inherited key the root does not define is a warning and is dropped.
+
+The workspace root is the nearest directory at or above the member whose `jux.toml` has a `[workspace]` table.
+
 ### B.7.3. Why Workspaces Are Standard
 
 A monorepo of related Jux packages — a server + its client + their shared protocol — should live in one workspace. The shared lockfile and unified `jux build` make iteration fast and prevent version skew. This is the design that makes Cargo's monorepo story work; Jux inherits it directly.
@@ -651,7 +662,8 @@ The default profiles are `dev` (used by `jux build` without `--release`) and `re
 - **Default Tier-0 release profile.** Every stand-alone emitted crate gets an optimized `[profile.release]` by default, for each key the user has not pinned: `opt-level = 3`, `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`, `overflow-checks = false`. So `jux build --release` is fully optimized out of the box; debug builds ignore the table. `panic` is deliberately left at Cargo's default (`unwind`) because Jux `try`/`catch` lowers to `panic_any` + `catch_unwind` (a `panic = "abort"` profile would break `catch` recovery; opt in explicitly if your program has no catch-recovery). Any key a user writes in their own `[profile.release]` overrides the Tier-0 default. Workspace **members** carry no profiles (the workspace root manifest owns them).
 - **`[build] target`** supplies a default cross-compile triple (overridden by the CLI `--target`); `"native"` is normalized to "no triple".
 - **`[profile.*]`** keys are translated to their Cargo spellings on emission: `debug = "line-tables"` → Cargo `"line-tables-only"`; `strip = "all"` → Cargo `"symbols"`; spec `extends` → Cargo `inherits` (and Cargo's `inherits` spelling is also accepted). A custom-named profile (anything but `dev`/`release`/`test`/`bench`) always emits an `inherits` (defaulting to `"dev"`), since Cargo requires it.
-- **Divergences:** custom-named profiles are emitted but not yet *selectable* (no `jux build --profile <name>` flag — only `dev`/`release` are reachable, via `--release`). A non-integer `codegen-units` (e.g. the spec's `"max"`) is dropped on emission because Cargo only accepts an integer there.
+- **Selecting a profile.** `jux build|run|check|test --profile <name>` builds with any declared `[profile.<name>]` or one of the four built-ins; `--release` is the same as `--profile release` (the two flags conflict). The build lands in Cargo's directory for that profile: `dev` and `test` in `debug/`, `release` and `bench` in `release/`, a custom profile in `target/<name>/`. Whether `cfg(release)` holds follows the profile's `extends` chain to a built-in (`release`/`bench` optimized, `dev`/`test` not); a custom profile with no `extends` derives from `dev`. An unknown name is an error that lists the selectable profiles. In a workspace the root owns the profiles and every member builds with them. A file with no manifest accepts only the four built-ins.
+- **Divergences:** a non-integer `codegen-units` (e.g. the spec's `"max"`) is dropped on emission because Cargo only accepts an integer there.
 
 ---
 
@@ -1241,9 +1253,10 @@ These dispatch to `juxc` for actual compilation; see §B.11.
 **`jux.toml`:**
 
 ```toml
-[module]
+[package]
 name = "myapp"
 version = "0.1.0"
+edition = "2026"
 authors = ["Your Name <you@example.com>"]
 license = "Apache-2.0"
 
@@ -1251,10 +1264,11 @@ license = "Apache-2.0"
 profile = "full"
 target = "native"
 optimization = "release"
-edition = "2026"
 
 [dependencies]
 ```
+
+(ERRATA E71: the package table is `[package]`, and `edition` belongs to it.)
 
 **`src/main.jux`:**
 
@@ -1345,6 +1359,22 @@ target/
     ├── src/                    # generated .rs files
     └── target/                 # Cargo's nested target dir
 ```
+
+### B.15.5. Phase-1 Status
+
+Implemented as described above:
+
+- `jux new <name>`, `jux new --lib <name>`, `jux new --workspace <name>`, and `jux init`. A new library keeps its code in its package directory (`src/<name>/`) under a package-less `src/lib.jux`, and ships one passing `@Test`. `jux init` never replaces a manifest, and when the directory already holds `.jux` files it says to move them under `src/` instead of adding a second entry point.
+- `jux build`, `jux run`, `jux check`, `jux test` with `--release`, `--profile <name>` (§B.9.2), `--target`, `-p`, `--bin`, `--lib`, `--features`.
+- `jux run --example <name>` and `jux build --examples` (§B.1.3, §B.15.3). An example is `examples/<name>.jux` or a directory `examples/<name>/` of files; it is compiled with the package's library code (every `src/` source except the `[[bin]]` entry files) and its dependencies, and emitted under `target/.rust-build/example-<name>/`.
+- `jux clean` removes `target/`, and in a workspace every member's `target/` as well.
+- `jux add <name>[@<version>]` with `--version`, `--path`, `--git` plus one of `--branch`/`--tag`/`--rev`, and `--features`; `jux remove <name>`. Both edit `[dependencies]` in place and leave the rest of the file, comments included, as written. A version-only dependency is written as a bare string; with no source at all the requirement is `"*"`.
+- `jux tree` prints each package's dependencies, following `path` dependencies into their own manifests and marking a repeated package on one branch `(cycle)`.
+- `jux update` (git dependencies), `jux metadata`, `jux target list`.
+- `jux doc [--open] [-p <member>] [--no-doctests]` (JUX-LANG-V1 §3.5, §12.5, §B.14.8). It writes a static, searchable site to `target/doc/` (one site per member under `target/doc/<member>/` in a workspace, with an index linking them): an index with the package description, its Jux packages, and a `## Dependencies` section (native libraries from `[ffi.*]`, Jux packages, Rust crates), then one page per Jux package listing every `public` or `protected` declaration with its members. Each entry shows the declaration's header as written, its Markdown doc comment, and the `@param` / `@return` / `@throws` / `@deprecated` / `@since` / `@see` tags; names of documented items in signatures, `@see` and code spans become links. The doc comment is the `/** ... */` block right in front of the declaration; annotations may sit between the two. A search box on every page filters an index of all items and members. Nothing loads from the network.
+- Doc examples are tests (§3.5): every fenced block tagged `jux` is compiled against the package and run, as its own program. A block that declares `main` is used as written; otherwise its leading `import` lines stay at the top, the rest becomes the body of `main`, and the documented item's package is imported with `.*`. An example fails when it does not compile or when the program exits non-zero (a failed `assert` included). `jux ignore` shows a block without compiling it; `jux no_run` compiles without running. `jux doc` runs them after writing the pages and exits non-zero when one fails; `jux test --doc` runs only them.
+
+Not yet implemented: `publish`, `search`, `yank`, `audit`, `bench`, `bindgen`, `rustgen`, and the lockfile (§B.6).
 
 ---
 

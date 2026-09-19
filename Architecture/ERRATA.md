@@ -1234,6 +1234,52 @@ stand; the Phase-1 reading above is noted there.
 
 ---
 
+## E71. The `jux new` template's `[module]` table
+
+**Conflict.** Build-system §B.15.1 prints the manifest `jux new` writes with a
+`[module]` table (`name`, `version`, `authors`, `license`) and puts `edition`
+under `[build]`. Everywhere else the manifest's package table is `[package]`
+(§B.2.1, §B.2.2), `edition` belongs to it (§B.2.4), and §B.3 (ERRATA E38) makes
+`jux.toml` the only manifest with no separate module declaration. A project
+created from the template as printed would load with no package name at all.
+
+**Resolution.** `jux new` writes `[package]` with the template's keys plus
+`edition = "2026"`, and keeps the template's `[build]` keys (`profile`,
+`target`, `optimization`) and the empty `[dependencies]`. The other three
+files (`src/main.jux`, `README.md`, `.gitignore`) are written as printed.
+`jux new --lib` adds `[lib]` and puts the library's code in its package
+directory (§B.1.1) under a package-less `src/lib.jux`; `jux new --workspace`
+writes a `[workspace]` root with an empty `members` list.
+
+**Spec status:** §B.15.1 is updated to match.
+
+---
+
+## E72. The default diagnostic format when nobody is watching
+
+**Conflict.** Diagnostics §D.1.3 makes the multi-line, colored block the
+default terminal format and §D.1.4 offers `compact` "for older tooling". Before
+those formats existed `juxc` and `jux` printed one line per diagnostic,
+`file:line:col: [E0410] error: message`, and that line is what the blessed UI
+tests pin, what the IDE's run console turns into links, and what scripts
+around the compiler read. Switching every consumer to the block at once would
+break all of them without the output being any more correct.
+
+**Resolution.** The default depends on who is reading. On a terminal it is the
+§D.1.3 block (`human`), colored unless `NO_COLOR` is set or `--color never` is
+given. When stderr is not a terminal (a pipe, a file, a test, an editor) it is
+the one-line form, now named `line`. Every format can be asked for by name with
+`--diagnostic-format human|compact|short|line|json`, on both `juxc` and `jux`.
+`compact` and `short` are exactly §D.1.4 and §D.1.5 (`error[E0410]:` after the
+location); `line` keeps its bracketed code so nothing that parses it breaks.
+The human block ends with a pointer to `juxc explain <code>` rather than to
+the docs URL, because the explanation ships with the compiler (§D.5.3) and the
+URL is not served yet; the JSON keeps its `docs_url` field.
+
+**Spec status:** §D.1 carries a Phase-1 note to match.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

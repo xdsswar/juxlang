@@ -23,6 +23,10 @@ juxc-diagnostics = { workspace = true }
 anyhow           = { workspace = true }
 clap             = { workspace = true }
 
+[dev-dependencies]
+# The diagnostic-format tests check that `--diagnostic-format json` is JSON.
+serde_json       = { workspace = true }
+
 # Embed Windows resources (icon + VERSIONINFO with product name,
 # company, copyright, file/product version). Only active on the
 # MSVC/mingw toolchain — `build.rs` is a no-op elsewhere.

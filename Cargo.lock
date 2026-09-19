@@ -445,6 +445,7 @@ dependencies = [
  "juxc-source",
  "serde_json",
  "toml 0.8.23",
+ "toml_edit",
  "winres",
 ]
 
@@ -457,6 +458,7 @@ dependencies = [
  "juxc-diagnostics",
  "juxc-driver",
  "juxc-source",
+ "serde_json",
  "winres",
 ]
 

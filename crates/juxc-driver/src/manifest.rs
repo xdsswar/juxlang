@@ -131,6 +131,10 @@ pub struct Manifest {
     /// `[workspace] members` — present only in workspace-root manifests.
     /// Each entry is a member directory relative to the workspace root.
     pub workspace_members: Vec<String>,
+    /// `[workspace] default-members`, expanded against `workspace_members`
+    /// (§B.7.2): what a bare `jux build` at the root builds. Equal to
+    /// `workspace_members` when the manifest does not narrow it.
+    pub workspace_default_members: Vec<String>,
     /// `[build] profile` — the language profile (`full` / `embedded` / `core`,
     /// async addendum §18.1.11). Drives async availability (`core` forbids it,
     /// E0701). Defaults to [`juxc_tycheck::Profile::Full`].
@@ -310,11 +314,21 @@ struct RawBin {
     main: Option<String>,
 }
 
-/// Serde shape for the `[workspace]` table.
+/// Serde shape for the `[workspace]` table (§B.7.1). `[workspace.package]`
+/// and `[workspace.dependencies]` are not read here: they are applied to each
+/// member's raw TOML before that member is deserialized (see
+/// [`crate::workspace::inherit_from_workspace`]).
 #[derive(Debug, Default, Deserialize)]
 struct RawWorkspace {
+    /// Member directories, relative to the root; entries may hold wildcards.
     #[serde(default)]
     members: Vec<String>,
+    /// Directories (or patterns) removed from the expanded member list.
+    #[serde(default)]
+    exclude: Vec<String>,
+    /// What a bare `jux build` at the root builds (§B.7.2).
+    #[serde(default, rename = "default-members")]
+    default_members: Vec<String>,
 }
 
 /// Serde shape for the `[build]` table (§B.9). The language `profile`
@@ -445,7 +459,15 @@ impl Manifest {
             // No manifest at all: the common loose-file case. Silent.
             Err(_) => return None,
         };
-        let raw: RawManifest = match toml::from_str(&text) {
+        // Parse to a plain TOML value first so `key.workspace = true` entries
+        // can be replaced by the workspace root's values (§B.7.1) before the
+        // typed shape sees them; `edition = { workspace = true }` would not
+        // deserialize as a string otherwise.
+        let parsed = toml::from_str::<toml::Value>(&text).and_then(|mut value| {
+            crate::workspace::inherit_from_workspace(&mut value, project_root);
+            value.try_into::<RawManifest>()
+        });
+        let raw: RawManifest = match parsed {
             Ok(r) => r,
             Err(e) => {
                 eprintln!(
@@ -612,7 +634,16 @@ impl Manifest {
             .collect();
 
         // ---- [workspace] --------------------------------------------------
-        let workspace_members = raw.workspace.map(|w| w.members).unwrap_or_default();
+        // Patterns expand against the root and `exclude` is applied here, so
+        // every consumer of `workspace_members` sees concrete directories.
+        let raw_ws = raw.workspace.unwrap_or_default();
+        let workspace_members =
+            crate::workspace::expand_members(project_root, &raw_ws.members, &raw_ws.exclude);
+        let workspace_default_members = crate::workspace::expand_default_members(
+            project_root,
+            &raw_ws.default_members,
+            &workspace_members,
+        );
 
         // ---- [build] table ------------------------------------------------
         let raw_build = raw.build.unwrap_or_default();
@@ -706,6 +737,7 @@ impl Manifest {
             bins,
             dependencies,
             workspace_members,
+            workspace_default_members,
             profile,
             optimization,
             build_target,
@@ -765,6 +797,53 @@ impl Manifest {
             self.optimization.as_deref(),
             Some("release") | Some("size"),
         )
+    }
+
+    /// Whether the build profile `name` is an optimized one, for
+    /// `jux build --profile <name>` (§B.9). `None` when the manifest declares
+    /// no such profile and it is not one of the four built-ins.
+    ///
+    /// The answer follows `extends` up to a built-in: `release` and `bench`
+    /// are optimized, `dev` and `test` are not, and a custom profile with no
+    /// `extends` derives from `dev` (the same default the emitted Cargo
+    /// `inherits` gets). It decides `cfg(debug)` / `cfg(release)` for the
+    /// build. A cycle of `extends` is treated as not optimized; Cargo rejects
+    /// the cycle itself when it reads the emitted manifest.
+    pub fn profile_is_optimized(&self, name: &str) -> Option<bool> {
+        let builtin = |n: &str| match n {
+            "release" | "bench" => Some(true),
+            "dev" | "test" => Some(false),
+            _ => None,
+        };
+        if builtin(name).is_none() && !self.profiles.iter().any(|p| p.name == name) {
+            return None;
+        }
+        let mut current = name.to_string();
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            if !seen.insert(current.clone()) {
+                return Some(false);
+            }
+            let declared = self.profiles.iter().find(|p| p.name == current);
+            match declared.and_then(|p| p.extends.clone()) {
+                // A declared parent wins, even over a built-in's default.
+                Some(parent) => current = parent,
+                None => return Some(builtin(&current).unwrap_or(false)),
+            }
+        }
+    }
+
+    /// The profile names `--profile` accepts for this package: the four
+    /// built-ins plus every declared `[profile.<name>]`.
+    pub fn selectable_profiles(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            ["dev", "release", "test", "bench"].iter().map(|s| s.to_string()).collect();
+        for p in &self.profiles {
+            if !names.contains(&p.name) {
+                names.push(p.name.clone());
+            }
+        }
+        names
     }
 
     /// Lower the parsed `[profile.*]` tables to the backend's
@@ -1259,6 +1338,22 @@ mod tests {
             m.workspace_members,
             vec!["greeter".to_string(), "app".to_string()]
         );
+    }
+
+    /// `--profile` resolution: built-ins answer directly, a custom profile
+    /// follows `extends`, and an unknown name is `None`.
+    #[test]
+    fn profile_optimization_follows_extends() {
+        let (m, _d) = load_toml(
+            "[package]\nname = \"app\"\n\n[profile.embedded]\nextends = \"release\"\nopt-level = \"s\"\n\n[profile.small]\nextends = \"embedded\"\n\n[profile.trace]\ndebug = \"full\"\n",
+        );
+        assert_eq!(m.profile_is_optimized("release"), Some(true));
+        assert_eq!(m.profile_is_optimized("dev"), Some(false));
+        assert_eq!(m.profile_is_optimized("embedded"), Some(true));
+        assert_eq!(m.profile_is_optimized("small"), Some(true));
+        assert_eq!(m.profile_is_optimized("trace"), Some(false));
+        assert_eq!(m.profile_is_optimized("ghost"), None);
+        assert!(m.selectable_profiles().contains(&"small".to_string()));
     }
 
     #[test]
