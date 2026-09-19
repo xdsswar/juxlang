@@ -1,0 +1,50 @@
+// `@layout(c)` on a record (Layout-ABI §L.1.2).
+//
+// A record is already a value: copied on assignment, compared field by field.
+// `@layout(c)` adds the C memory shape: components in declaration order at
+// their C offsets, so the record can cross the FFI boundary by value or by
+// pointer, exactly like a `@layout(c) struct`.
+//
+// C's `div` returns a `div_t { int quot; int rem; }` by value, which is the
+// record below. The components are `i32`, the width of a C `int`.
+//
+// `div` is linked from `msvcrt` on Windows; elsewhere link `c` instead
+// (`@extern(lib = "c")`).
+
+@layout(c)
+record DivT(i32 quot, i32 rem) {
+    public String operator string() {
+        return $"${quot} r ${rem}";
+    }
+}
+
+/** A record can nest another `@layout(c)` record, still one flat C shape. */
+@layout(c)
+record Span(DivT first, DivT second) {}
+
+@extern(lib = "msvcrt")
+unsafe native {
+    // C: div_t div(int numer, int denom);
+    DivT div(i32 numer, i32 denom);
+}
+
+public void main() {
+    unsafe {
+        // Returned by value from C.
+        DivT r = div(17, 5);
+        print(r);
+
+        // Through a pointer: the record's own address, read with `(*p).field`.
+        DivT* p = &r;
+        print((*p).quot + (*p).rem);
+    }
+
+    // Still a record: structural equality and `with`.
+    var a = new DivT(3, 2);
+    var b = a.with(rem: 2);
+    print(a == b);
+
+    // Two `int`s in declaration order: 8 bytes, the size of C's `div_t`.
+    print(sizeof(DivT));
+    print(sizeof(Span));
+}

@@ -1487,23 +1487,29 @@ pub(crate) fn class_decl_uses_wrapper(cd: &juxc_ast::ClassDecl) -> bool {
 /// before the symbol table is built); mirrors
 /// `juxc_tycheck::symbol_table::is_layout_c_annotation`.
 pub(crate) fn is_layout_c_struct(cd: &juxc_ast::ClassDecl) -> bool {
-    cd.is_struct
-        && cd.annotations.iter().any(|a| {
-            let is_layout = a
-                .name
-                .segments
-                .last()
-                .map(|s| s.text.eq_ignore_ascii_case("layout"))
-                .unwrap_or(false);
-            is_layout
-                && a.args.iter().any(|arg| {
-                    matches!(arg,
-                        juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Path(qn))
-                            if qn.segments.last()
-                                .map(|s| s.text.eq_ignore_ascii_case("c"))
-                                .unwrap_or(false))
-                })
-        })
+    cd.is_struct && has_layout_c(&cd.annotations)
+}
+
+/// True when `annotations` carry `@layout(c, ...)`: a `@layout` annotation
+/// with a positional `c`. Shared by `@layout(c) struct` and `@layout(c)
+/// record` (§L.1.2), which lower the same way: `#[repr(C)]`, `Copy`.
+pub(crate) fn has_layout_c(annotations: &[juxc_ast::Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        let is_layout = a
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("layout"))
+            .unwrap_or(false);
+        is_layout
+            && a.args.iter().any(|arg| {
+                matches!(arg,
+                    juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Path(qn))
+                        if qn.segments.last()
+                            .map(|s| s.text.eq_ignore_ascii_case("c"))
+                            .unwrap_or(false))
+            })
+    })
 }
 
 /// Compute the **global wrapper-class set** for a workspace.

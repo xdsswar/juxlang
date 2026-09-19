@@ -1464,6 +1464,11 @@ pub struct RecordSig {
     /// additional constructors follow in declaration order. The indexes are
     /// what `ctor_selections` records and the backend names `new` / `new__K`.
     pub constructors: Vec<ConstructorSig>,
+    /// `@layout(c) record` (Layout-ABI §L.1.2): a C-compatible value
+    /// aggregate, fields in declaration order under `#[repr(C)]`, passable at
+    /// the FFI boundary by value or by pointer, exactly like a `@layout(c)
+    /// struct`.
+    pub is_layout_c: bool,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -4813,6 +4818,7 @@ fn insert_record(
             operator_overloads,
             methods,
             constructors,
+            is_layout_c: is_layout_c_annotation(&record_decl.annotations),
             span: record_decl.span,
         },
     );

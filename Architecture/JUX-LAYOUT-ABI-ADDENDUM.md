@@ -110,7 +110,13 @@ positional constructor** synthesized from its fields (declaration order), like a
 initializers) opts out of the synthesis. Field access through a pointer
 (`(*ptr).field`) and the by-value path are supported.
 
-> Not yet emitted: `@layout(c)` on `record`.
+**`@layout(c)` on a `record` (implemented).** A record is already a value
+(copied on assignment, structural `==`), so `@layout(c) record R(i32 a, i32 b)`
+lowers to the same `#[repr(C)]` `Copy` struct, components in declaration order,
+with the record's own constructor, `with(...)` and derives kept. The component
+rules are the struct's: each must be a C `Copy` type, and the record may not be
+generic (**E0509** otherwise). It crosses the FFI boundary by value or as `R*`.
+See `examples/ffi_layout_c_record.jux`, where C's `div` returns a `div_t`.
 
 ### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
 

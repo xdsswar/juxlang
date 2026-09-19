@@ -987,6 +987,7 @@ impl<'a> Checker<'a> {
                     .classes
                     .get(&name)
                     .is_some_and(|c| c.is_layout_c)
+                    || self.symbols.records.get(&name).is_some_and(|r| r.is_layout_c)
                     || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c)
             }
             _ => false,
@@ -1021,6 +1022,7 @@ impl<'a> Checker<'a> {
                     .classes
                     .get(&name)
                     .is_some_and(|c| c.is_layout_c)
+                    || self.symbols.records.get(&name).is_some_and(|r| r.is_layout_c)
                     || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c);
             }
         }
@@ -4238,6 +4240,48 @@ impl<'a> Checker<'a> {
         self.env.clear_class();
     }
 
+    /// `@layout(c) record` (Layout-ABI §L.1.2): the same rules as a `@layout(c)
+    /// struct`. It has one concrete C layout, so it may not be generic, and
+    /// every component must be a C-compatible `Copy` field (a primitive, a raw
+    /// pointer, a function pointer, another `@layout(c)` aggregate or a C enum).
+    /// Violations are E0509, worded for a record.
+    fn check_layout_c_record(&mut self, record: &RecordDecl) {
+        if !crate::symbol_table::is_layout_c_annotation(&record.annotations) {
+            return;
+        }
+        if !record.generic_params.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0509_LayoutCOnNonAggregate,
+                    format!(
+                        "`@layout(c) record {}` may not be generic -- a C-compatible type has one \
+                         concrete layout; remove the type parameters",
+                        record.name.text,
+                    ),
+                )
+                .with_span(record.span),
+            );
+        }
+        for comp in &record.components {
+            if !self.ffi_struct_field_ok(&comp.ty) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0509_LayoutCOnNonAggregate,
+                        format!(
+                            "component `{}` of `@layout(c) record {}` has type `{}`, which is not \
+                             C-compatible -- use a primitive, a raw pointer (`T*`), or another \
+                             `@layout(c)` type",
+                            comp.name.text,
+                            record.name.text,
+                            type_ref_display(&comp.ty),
+                        ),
+                    )
+                    .with_span(comp.span),
+                );
+            }
+        }
+    }
+
     /// Walk a record's body — operator overrides plus methods. Same
     /// scope shape as classes: `this` is the record's `Ty::User`,
     /// operator/method params are declared into the body's scope.
@@ -4250,6 +4294,7 @@ impl<'a> Checker<'a> {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
         self.declare_const_generic_params(&record.generic_params);
+        self.check_layout_c_record(record);
         let this_ty = Ty::User {
             name: name.clone(),
             generic_args: record
