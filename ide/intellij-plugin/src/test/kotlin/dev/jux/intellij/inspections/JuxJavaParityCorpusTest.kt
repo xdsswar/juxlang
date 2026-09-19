@@ -63,9 +63,9 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         // what the example demonstrates (Grammar §A.2.8).
         "labeled_blocks.jux:JuxEmptyStatementBody:48",
         // `for (var i : 0..values.length) { if (test(values[i])) ... }`: the
-        // lesson keeps the Rux original's indexed loop, which is exactly what
+        // lesson keeps its indexed loop on purpose, which is exactly what
         // the check reports (a for-each would do).
-        "../tests/rux-lessons/Callback/src/Main.jux:JuxIndexedLoop:37",
+        "../tests/lessons/Callback/src/Main.jux:JuxIndexedLoop:37",
     )
 
     fun testCorpusHasNoFindings() {

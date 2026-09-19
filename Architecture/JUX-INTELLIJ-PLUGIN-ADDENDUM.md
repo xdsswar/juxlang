@@ -118,7 +118,7 @@ well, with the rest of Java's refactoring set (see `plugin.xml` and
 - **New syntax parsed:** `@export { ... }` blocks, generators, `operator..`
   and `operator..=`, bodiless interface operators, or-patterns and nested
   destructuring. The corpus sweeps (parse, highlighting, completion,
-  inspections) run over `examples/` and every `tests/rux-lessons` program.
+  inspections) run over `examples/` and every `tests/lessons` program.
 
 ### Added in 0.0.9
 
