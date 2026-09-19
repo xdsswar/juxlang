@@ -384,6 +384,44 @@ impl RustEmitter {
                 // Inherited methods count: `e.getSuppressed()` on an
                 // `IllegalStateException` is declared on `Exception`, and
                 // already hands back an array handle.
+                // A record, enum or interface declares methods as much as a
+                // class does. Asking only the class map made a record's
+                // `char[] letters()` look foreign, so its array result -- a
+                // handle already -- was wrapped in a second one.
+                let receiver_type_fqn = match &*f.object {
+                    Expr::Path(qn) => qn
+                        .segments
+                        .last()
+                        .and_then(|l| self.resolve_bare_type_fqn(&l.text)),
+                    _ => None,
+                }
+                .or_else(|| match self.receiver_ty_of(&f.object) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        self.resolve_bare_type_fqn(name.rsplit('.').next().unwrap_or(&name))
+                    }
+                    _ => None,
+                });
+                if let Some(fqn) = &receiver_type_fqn {
+                    let method = f.field.text.as_str();
+                    let in_record = self
+                        .symbols
+                        .records
+                        .get(fqn)
+                        .is_some_and(|r| r.methods.contains_key(method));
+                    let in_enum = self
+                        .symbols
+                        .enums
+                        .get(fqn)
+                        .is_some_and(|e| e.methods.contains_key(method));
+                    let in_iface = self
+                        .symbols
+                        .interfaces
+                        .get(fqn)
+                        .is_some_and(|i| !i.is_external && i.methods.contains_key(method));
+                    if in_record || in_enum || in_iface {
+                        return false;
+                    }
+                }
                 let mut cursor = owner.and_then(|fqn| self.symbols.classes.get(&fqn));
                 let mut declared = false;
                 for _ in 0..64 {

@@ -874,3 +874,15 @@ fn foreign_split_collect() {
         &["3", "3", "buy milk|and bread", "4", "60", "ALPHA", "BETA"],
     );
 }
+
+/// §7.6: a record member whose type carries a suffix (`String?`, `int[]`,
+/// `Vec<String>`), a static const beside them, and a component read by its
+/// bare name in a value slot.
+#[test]
+fn record_member_types() {
+    common::expect_output(
+        "record_member_types",
+        "record-member-types",
+        &["study", "true", "4", "h", "2", "room"],
+    );
+}

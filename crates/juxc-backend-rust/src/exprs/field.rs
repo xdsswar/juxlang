@@ -609,6 +609,33 @@ impl RustEmitter {
                     }
                 }
             }
+            // **A RECORD's static field**: `Room.KIND`. A record keeps no
+            // field map in the symbol table, so the class branch below never
+            // matched it and the access emitted as `Room.KIND` -- a field of
+            // a type name, which is not a Rust expression. It is an
+            // associated const on the record's own impl, exactly like a
+            // class's `final static`.
+            if !is_call_callee && self.path_resolves_to_class_in_emit(qn).is_none() {
+                let record_fqn = qn
+                    .segments
+                    .last()
+                    .and_then(|l| self.resolve_bare_type_fqn(&l.text))
+                    .filter(|fqn| self.symbols.records.contains_key(fqn));
+                if let Some(record_fqn) = record_fqn {
+                    self.emit_fqn_path_in_rust(&record_fqn, qn.segments.len() > 1);
+                    self.w.push_str("::");
+                    self.w.push_str(&to_rust_ident(&f.field.text));
+                    // A `const String` is stored as `&'static str`; a read of
+                    // one is an owned Jux `String` (as for a class).
+                    let owns = !self.emitting_const_context
+                        && !self.emitting_format_arg
+                        && matches!(self.expr_types.get(&f.span), Some(juxc_tycheck::Ty::String));
+                    if owns {
+                        self.w.push_str(".to_string()");
+                    }
+                    return;
+                }
+            }
             if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                 let cls = self.symbols.classes.get(&class_fqn);
                 if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
@@ -2251,6 +2278,18 @@ impl RustEmitter {
         // resolve through the enclosing class's field table instead
         // (the same extends-chain walk the wrapper path uses).
         if matches!(&*f.object, Expr::This(_)) {
+            // A RECORD's own component, read by its bare name inside one of
+            // its methods. `this` carries no `expr_types` entry and a record
+            // has no class field table, so both lookups above missed it and
+            // `return a;` moved the `String` out of `&self` (rustc E0507).
+            if let Some(record) = self.enclosing_record.as_ref() {
+                if let Some(comp) =
+                    record.components.iter().find(|c| c.name.text == f.field.text)
+                {
+                    let ty = juxc_tycheck::ty::ty_from_ref_in_env(&comp.ty, &self.symbols);
+                    return self.ty_needs_clone_on_field_read(&ty);
+                }
+            }
             return self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
         }
         false
