@@ -1,0 +1,90 @@
+// `for` has walked ranges and arrays since the Range lesson. It is not built
+// only for those: any type can be walked by `for` once it says how.
+//
+// Two interfaces do it (Core lib §K.5). `Iterator<T>` is the cursor: something
+// that produces the next item each time it is asked. `Iterable<T>` is a thing
+// that can hand out such a cursor. `for` asks the second for the first, then
+// calls `next()` until it reports there is nothing left.
+
+import jux.std.collections.Iterator;
+import jux.std.collections.Iterable;
+
+// The cursor. It holds enough state to know where it is: the next two numbers
+// of the sequence, and how many remain.
+class Fibonacci implements Iterator<long> {
+    private long current;
+    private long following;
+    private int remaining;
+
+    Fibonacci(int count) {
+        this.current = 0;
+        this.following = 1;
+        this.remaining = count;
+    }
+
+    // The one requirement. `long?` is how "another item" and "the end" are
+    // told apart: a value is the item, `null` stops the loop.
+    //
+    // Producing an item moves the cursor forward, which is a change to the
+    // iterator itself.
+    public long? next() {
+        if (remaining <= 0) {
+            return null;
+        }
+        final var value = current;
+        final var sum = current + following;
+        current = following;
+        following = sum;
+        remaining -= 1;
+        return value;
+    }
+}
+
+// The thing being walked. It holds no position; it only knows how to start.
+class FirstFibonacci implements Iterable<long> {
+    private int count;
+
+    FirstFibonacci(int count) {
+        this.count = count;
+    }
+
+    // The other requirement: hand back a fresh cursor. Because a new one is
+    // made each time, the same value can be walked more than once.
+    public Iterator<long> iterator() {
+        return new Fibonacci(count);
+    }
+}
+
+void main() {
+    final var sequence = new FirstFibonacci(12);
+
+    // Nothing here mentions `next` or `null`. `for` does that, exactly as it
+    // does for a range or an array.
+    var line = "first twelve:";
+    for (var value : sequence) {
+        line += $" ${value}";
+    }
+    print(line);
+
+    // Walking it again starts from the beginning, because `iterator()` built
+    // a new cursor rather than handing back the one already used.
+    long total = 0;
+    for (var value : sequence) {
+        total += value;
+    }
+    print($"their sum:    ${total}");
+
+    // The cursor can also be driven by hand, which is all `for` is doing.
+    final var cursor = new Fibonacci(5);
+    var byHand = "by hand:     ";
+    var going = true;
+    while (going) {
+        final long? value = cursor.next();
+        if (value != null) {
+            byHand += $" ${value}";
+        } else {
+            going = false;
+        }
+    }
+    print(byHand);
+}

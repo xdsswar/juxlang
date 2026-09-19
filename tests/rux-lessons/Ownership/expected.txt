@@ -1,0 +1,10 @@
+copying a Point:
+    first.x 1   second.x 99
+calling scoped:
+    made handle 1 inside scoped
+    closing handle 1
+    back in main
+sharing a Handle:
+    shared, also held as id 2
+end of main:
+    closing handle 2
