@@ -1628,6 +1628,27 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The type a `for` over the range `iter` binds (§M.6.1): the bound type
+    /// `T` of `ExclusiveRange<T>` / `InclusiveRange<T>`, which is where the two
+    /// bounds meet under the arithmetic promotion (§S.2.6). An untyped literal
+    /// bound takes the other bound's type, so `0..v.len()` is a `uint` range,
+    /// and two `char` bounds stay `char`. Bounds with no common numeric type
+    /// (E0410 at the operator level) or of a user type give `Unknown`, as
+    /// before, and rustc sees the real types.
+    fn range_element_type(&self, iter: &Expr) -> Ty {
+        let Expr::Range(r) = iter else {
+            return Ty::Unknown;
+        };
+        let lo = infer_expr(&r.start, &self.env, self.symbols);
+        let hi = infer_expr(&r.end, &self.env, self.symbols);
+        if matches!((&lo, &hi), (Ty::Primitive(Primitive::Char), Ty::Primitive(Primitive::Char))) {
+            return Ty::Primitive(Primitive::Char);
+        }
+        crate::infer::numeric_operands_type(&r.start, &lo, &r.end, &hi)
+            .map(Ty::Primitive)
+            .unwrap_or(Ty::Unknown)
+    }
+
     /// Element type of a user iterable (§K.5): resolve the class's
     /// `iterator()` method, read its declared `Iterator<T>` return,
     /// and yield `T`. `None` when the class doesn't speak the
@@ -5309,6 +5330,14 @@ impl<'a> Checker<'a> {
                     ty_from_ref(declared, &self.env, self.symbols)
                 } else {
                     match &iter_ty {
+                        // A range (§M.6.1) iterates its bound type `T`, the
+                        // type its two bounds meet in under the arithmetic
+                        // promotion (§S.2.6): `0..10` is `int`, `0..v.len()`
+                        // is `uint` (the literal takes the other bound's
+                        // type), `'a'..='z'` is `char`.
+                        _ if matches!(&f.iter, Expr::Range(_)) => {
+                            self.range_element_type(&f.iter)
+                        }
                         Ty::Array { element, .. } => (**element).clone(),
                         // Stream<T> (§18.6): the element type is the
                         // single generic arg.
@@ -6038,6 +6067,29 @@ impl<'a> Checker<'a> {
             Expr::Range(r) => {
                 self.check_expr(&r.start);
                 self.check_expr(&r.end);
+                // The bounds meet in one type `T` (§M.6.1), the way the
+                // operands of `+` do. An `int` and a `uint` never do, and
+                // the range reached rustc with two integer types.
+                let lo = infer_expr(&r.start, &self.env, self.symbols);
+                let hi = infer_expr(&r.end, &self.env, self.symbols);
+                if let (Ty::Primitive(lp), Ty::Primitive(hp)) = (&lo, &hi) {
+                    let typed = !crate::infer::untyped_int_literal(&r.start)
+                        && !crate::infer::untyped_int_literal(&r.end);
+                    if typed
+                        && crate::ty::integer_bits(*lp).is_some()
+                        && crate::ty::integer_bits(*hp).is_some()
+                        && crate::ty::promote_numeric(*lp, *hp) == crate::ty::NumericPromotion::NoCommonType
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("the bounds of a range need one type, and {lo} and {hi} have none (§M.6.1)"),
+                            )
+                            .with_span(r.span)
+                            .with_help("convert one bound with `as`, e.g. `(a as int)..b`"),
+                        );
+                    }
+                }
                 // `step` (§M.6.3): integer-typed; Phase 1 supports it
                 // only as a for-each iterable (`for (i : a..b step s)`)
                 // — the ForEach arm clears this flag around its head.

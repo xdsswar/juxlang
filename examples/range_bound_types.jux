@@ -1,0 +1,45 @@
+// A range's element type is where its two bounds meet (§M.6.1). A literal
+// bound takes the other bound's type, so `0..v.len()` counts in `uint`, the
+// type `Vec.len()` returns, and the loop variable is a `uint` too.
+
+int lastIndex(Vec<int> items) {
+    var best = 0;
+    for (var i : 0..items.len()) {
+        best = i;
+    }
+    return best;
+}
+
+void main() {
+    var v = new Vec<int>();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+
+    // The bound reads the Vec, and the body writes it: the read is over
+    // before the first iteration starts.
+    for (var i : 0..v.len()) {
+        v[i] = v[i] * 10;
+    }
+    print($"${v[0]} ${v[1]} ${v[2]}");
+    print(lastIndex(v));
+
+    // An array bound works the same way.
+    final int[] xs = {1, 2, 3, 4};
+    for (var i : 0..xs.length) {
+        xs[i] = xs[i] + 1;
+    }
+    print($"${xs[0]} ${xs[3]}");
+
+    for (var i : 0..3) {
+        print(typeof(i));
+        break;
+    }
+    for (var i : 0..v.len()) {
+        print(typeof(i));
+        break;
+    }
+    for (var ch : 'a'..='c') {
+        print(ch);
+    }
+}

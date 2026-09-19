@@ -1,0 +1,7 @@
+void main() {
+    int lo = 0;
+    uint hi = 3;
+    for (var i : lo..hi) {
+        print(i);
+    }
+}
