@@ -2,7 +2,7 @@
 // total, sort.
 //
 // `Vec` is Rust's, so it brings Rust's own methods along: `contains`,
-// `sort_unstable` and `reverse` are used below exactly as Rust names them.
+// `sort` and `reverse` are used below exactly as Rust names them.
 // The questions a `Vec` does not answer by itself are a few lines each, and
 // writing them once, taking the varying part as a function value, is the same
 // idea the Callback lesson introduced.
@@ -119,9 +119,9 @@ void main() {
     print($"sum squares  ${fold(numbers, 0, (total, n) -> total + n * n)}");
 
     // Sorting rearranges in place. A `Vec` is a reference, so `numbers` is
-    // itself rearranged, not a copy. `sort_unstable` may reorder equal
-    // elements, which for plain numbers makes no visible difference.
-    numbers.sort_unstable();
+    // itself rearranged, not a copy. `sort` keeps equal elements in the order
+    // they were in, which for plain numbers makes no visible difference.
+    numbers.sort();
     show("sorted", numbers);
 
     // Descending is ascending, reversed.

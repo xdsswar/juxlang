@@ -52,7 +52,7 @@ Every lesson is written the same way.
   with exceptions shown where they are the better Jux answer.
 - Collections are the Rust std ones under their Rust names (`Vec`,
   `VecDeque`, `HashMap`, `HashSet`, `BTreeMap`) with Rust method names (`push`,
-  `len`, `contains`, `sort_unstable`); the full profile uses the global heap.
+  `len`, `contains`, `sort`); the full profile uses the global heap.
 - Equality, ordering, hashing and text are operator overrides
   (`operator==`, `operator<=>`, `operator hash`, `operator string`), never
   methods.
@@ -162,7 +162,7 @@ library gap, listed too), **TODO** (a later wave).
 | Math | 1 | FIXED | B14: Rust `f64` methods reach `double` (8acb573) |
 | Prime | 1 | PASS | `Vec<bool>` |
 | Statistics | 1 | FIXED | B8: runtime panic, `for (i : 1..v.len())` held the Vec borrowed (d6b2b91) |
-| Algorithm | 1 | FIXED | B6, B7 (d6b2b91, fc4b7c8); iterator adaptors reachable since 8acb573 (B14); `sort` is not discoverable, `sort_unstable` is |
+| Algorithm | 1 | FIXED | B6, B7 (d6b2b91, fc4b7c8); iterator adaptors reachable since 8acb573, `sort` since the source reader (B14) |
 | Console | 1 | PASS | |
 | Thanks | 1 | PASS | |
 | Module | 1 | PASS | three packages; package-private leak found (B9, now E0416 since 9065573) |
@@ -371,7 +371,7 @@ each of these is a discovery gap rather than a list to extend by hand:
 - There is no way to sort a `Vec<double>`: `total_cmp` is missing and an
   ordering closure cannot produce a Rust `Ordering`.
 
-Status: FIXED in 8acb573. Every integer, float, `char` and `bool` has Rust's methods (discovered per primitive from rustdoc), Rust's `Iterator` trait is surfaced as `RustIterator` with its adaptors, and `total_cmp` plus `sort_unstable_by` sort a `Vec<double>`. One part is the toolchain's: the prebuilt `alloc` rustdoc JSON omits `impl<T> [T]`, so `sort`/`sort_by` are not discoverable (Bindgen G.6.4.4). `import rust.std.f64.consts.PI` stays E0301: `rust.std` is one flat package and has no module path to import through.
+Status: FIXED in 8acb573. Every integer, float, `char` and `bool` has Rust's methods (discovered per primitive from rustdoc), Rust's `Iterator` trait is surfaced as `RustIterator` with its adaptors, and `total_cmp` plus `sort_unstable_by` sort a `Vec<double>`. `sort`, `sort_by`, `sort_by_key`, `to_vec`, `concat` and `join` are reachable too: no rustdoc JSON carries `alloc`'s `impl<T> [T]`, so they are read from the toolchain's library source instead (Bindgen G.6.4.4). `import rust.std.f64.consts.PI` stays E0301: `rust.std` is one flat package and has no module path to import through.
 
 **B15. Smaller tooling and wording issues.**
 - `jux run` in project mode (`--manifest-path`) ignores `--emit-dir` and

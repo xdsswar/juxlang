@@ -49,7 +49,7 @@ void main() {
             // not text.
             names.push(found.file_name().to_str() ?: "(a name that is not text)");
         }
-        names.sort_unstable();
+        names.sort();
         for (var name : names) {
             print($"  ${name}");
         }
