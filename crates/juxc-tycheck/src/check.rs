@@ -196,7 +196,7 @@ pub const BUILTIN_INT_METHODS: &[&str] = &[
     "checkedSub",
     "countOnes",
     "leadingZeros",
-    "rotateLeft",
+    "rotateLeft",
     "rotateRight",
     "saturatingToInt",
     "saturatingAdd",
@@ -6136,7 +6136,7 @@ impl<'a> Checker<'a> {
                 // for the rest of the enclosing block, which is the scope
                 // this `declare` lands in.
                 if if_stmt.else_branch.is_none()
-                    && !crate::return_check::body_can_fall_through(&if_stmt.then_block)
+                    && crate::return_check::guard_leaves(&if_stmt.then_block)
                 {
                     for (name, ty) in narrow_after {
                         self.env.declare(&name, ty);

@@ -1,0 +1,65 @@
+// A guard clause that leaves with `break` or `continue` narrows the rest of
+// the block, exactly as one ending in `return` or `throw` does
+// (JUX-LANG-V1 §7.10, ERRATA E79).
+//
+// This is the shape of every loop that reads until there is nothing left.
+
+class Reader {
+    private Vec<String> lines;
+    private int at = 0;
+
+    public Reader(Vec<String> lines) {
+        this.lines = lines;
+    }
+
+    /** The next line, or null when they run out. */
+    public String? next() {
+        if (at >= lines.len()) {
+            return null;
+        }
+        final String line = lines[at];
+        at++;
+        return line;
+    }
+}
+
+void main() {
+    var input = new Vec<String>();
+    input.push("first");
+    input.push("");
+    input.push("third");
+
+    // `break` narrows: `line` is a String below the guard.
+    var reader = new Reader(input);
+    var seen = 0;
+    while (true) {
+        final String? line = reader.next();
+        if (line == null) {
+            break;
+        }
+        seen += line.charLength();
+    }
+    print(seen);
+
+    // `continue` narrows the rest of the body the same way.
+    var joined = "";
+    for (var raw : input) {
+        String? value = raw.is_empty() ? null : raw;
+        if (value == null) {
+            continue;
+        }
+        joined = joined.is_empty() ? value : joined + "," + value;
+    }
+    print(joined);
+
+    // A guard whose branch ends in `return` still narrows (the old rule).
+    print(shout("hello"));
+    print(shout(null));
+}
+
+String shout(String? text) {
+    if (text == null) {
+        return "(nothing)";
+    }
+    return text.to_uppercase();
+}

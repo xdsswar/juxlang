@@ -2768,9 +2768,20 @@ public String pick(String? s) {
 ```
 
 The third form is the second one written out. A guard clause narrows only
-when its branch cannot fall through -- it ends in `return` or `throw` on
-every path -- because that is exactly the condition under which the code
-after it is unreachable from the null case.
+when its branch cannot fall through -- it ends in `return`, `throw`,
+`break` or `continue` on every path -- because that is exactly the
+condition under which the code after it is unreachable from the null case
+(ERRATA E79). A loop that reads until `null` narrows the rest of its body:
+
+```java
+while (true) {
+    var line = reader.next();
+    if (line == null) {
+        break;
+    }
+    handle(line);                 // `line` is non-null here
+}
+```
 
 **A test narrows wherever its outcome is already known, inside an expression
 as well as across statements.** `&&` evaluates its right side only when the

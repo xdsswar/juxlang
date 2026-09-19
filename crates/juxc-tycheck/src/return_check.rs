@@ -28,6 +28,55 @@ pub fn body_can_fall_through_with(body: &Block, diverging_call: &dyn Fn(&Expr) -
     !block_diverges(body, diverging_call)
 }
 
+/// True when a guard clause's then-branch `block` never lets control reach the
+/// statement after its `if`: every path returns, throws, loops forever, or
+/// jumps away with `break` / `continue` (LANG-V1 §7.10, ERRATA E79).
+///
+/// The narrowing rule's own reason is "the code after it is unreachable from
+/// the null case", and a jump out of the enclosing loop satisfies that as much
+/// as a `return` does, so `while (true) { var x = next(); if (x == null)
+/// break; use(x); }` narrows `x`. This is deliberately separate from
+/// [`body_can_fall_through`], which answers the missing-return question: for a
+/// function body a `break` does not leave the function.
+pub fn guard_leaves(block: &Block) -> bool {
+    block.statements.iter().any(stmt_leaves)
+}
+
+/// [`guard_leaves`] for one statement: a jump, or a compound statement every
+/// branch of which leaves, or anything [`stmt_diverges`] already proves.
+fn stmt_leaves(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Break(..) | Stmt::Continue(..) => true,
+        Stmt::If(i) => if_leaves(i),
+        Stmt::Unsafe(b) => guard_leaves(b),
+        Stmt::Try(t) => {
+            t.finally.as_ref().is_some_and(guard_leaves)
+                || (guard_leaves(&t.body) && t.catches.iter().all(|c| guard_leaves(&c.body)))
+        }
+        // `break name;` to a labeled block inside the branch finishes that
+        // block normally, so such a block leaves only when nothing targets it.
+        Stmt::Labeled { label, stmt } => match stmt.as_ref() {
+            Stmt::Block(b) => guard_leaves(b) && !block_breaks_to(b, &label.text),
+            other => stmt_leaves(other),
+        },
+        other => stmt_diverges(other, &|_| false),
+    }
+}
+
+/// An `if` leaves when it has an `else` and both arms leave.
+fn if_leaves(i: &IfStmt) -> bool {
+    match &i.else_branch {
+        None => false,
+        Some(eb) => {
+            guard_leaves(&i.then_block)
+                && match eb.as_ref() {
+                    ElseBranch::Block(b) => guard_leaves(b),
+                    ElseBranch::If(inner) => if_leaves(inner),
+                }
+        }
+    }
+}
+
 /// True when executing `block` never falls through to the statement after it —
 /// every path `return`s, `throw`s, or loops forever. A block diverges as soon
 /// as one of its (reachable) statements diverges, since everything after an

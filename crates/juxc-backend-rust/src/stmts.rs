@@ -3299,7 +3299,13 @@ impl RustEmitter {
             if wrap_some {
                 self.w.push_str("Some(");
             }
-            if let Some(decl_ty) = iface_target {
+            if self.string_slot_owns_foreign_value(var.ty.as_ref(), init) {
+                // `final String line = raw.trim();` where `raw` came out of an
+                // iterator whose type was never discovered: the Rust value is
+                // a borrowed `&str`, and the slot is an owned `String`.
+                self.emit_expr(init);
+                self.w.push_str(".to_string()");
+            } else if let Some(decl_ty) = iface_target {
                 self.emit_expr_coerced_to_iface(&decl_ty.clone(), init);
             } else {
                 // §5.6: a `new T[N]` flowing into a DYNAMIC array slot
@@ -5548,7 +5554,7 @@ impl RustEmitter {
             .filter(|n| self.nullable_locals.contains(n));
         let guard_narrows = null_name.is_some()
             && if_stmt.else_branch.is_none()
-            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block);
+            && juxc_tycheck::return_check::guard_leaves(&if_stmt.then_block);
         // A condition that is a chain rather than one test
         // (`it != null && it.qty() < 5`, `a == null || b == null`) narrows
         // the same way (§7.10), but cannot be an `if let`: the names it
@@ -5701,7 +5707,7 @@ impl RustEmitter {
         }
         if compound
             && if_stmt.else_branch.is_none()
-            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block)
+            && juxc_tycheck::return_check::guard_leaves(&if_stmt.then_block)
         {
             self.shadow_narrowed(&else_narrowed);
         }

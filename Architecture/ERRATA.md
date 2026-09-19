@@ -1300,6 +1300,37 @@ URL is not served yet; the JSON keeps its `docs_url` field.
 
 ---
 
+## E79. A guard clause that leaves with `break` or `continue`
+
+**Conflict.** LANG-V1 §7.10 narrows a null-tested name past a guard clause
+"only when its branch cannot fall through -- it ends in `return` or
+`throw`", and gives the reason: that is exactly when the code after the `if`
+is unreachable from the null case. A `break` or `continue` meets the same
+reason, but the wording left it out, so the commonest reading loop in the
+language was rejected:
+
+```java
+while (true) {
+    final Command? next = reader.next();
+    if (next == null) {
+        break;
+    }
+    run(next);        // E0410: expected Command, found Command?
+}
+```
+
+**Resolution.** The guard clause counts `break` and `continue` as leaving,
+alongside `return`, `throw` and loops that never end. The narrowing still
+covers only the rest of the enclosing block, which a jump leaves along with
+everything after it. This is separate from missing-return analysis (E0451):
+a `break` does not leave the function, so a body ending in one still needs
+its `return`.
+
+**Spec status:** §7.10 is amended to name `break` and `continue` and shows
+the loop above.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,
