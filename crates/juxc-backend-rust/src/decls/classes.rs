@@ -5739,11 +5739,35 @@ impl RustEmitter {
         }
         if let Some(seg) = ty.name.segments.last() {
             let bare = seg.text.as_str();
-            if self.is_wrapper_class(bare)
-                || self.is_poly_base_class(bare)
-                || self.lookup_interface_by_bare_or_fqn(bare).is_some()
-            {
+            let not_send = |name: &str| {
+                self.is_wrapper_class(name)
+                    || self.is_poly_base_class(name)
+                    || self.lookup_interface_by_bare_or_fqn(name).is_some()
+            };
+            if not_send(bare) {
                 return true;
+            }
+            // A nested type named bare from inside its owner
+            // (`public static Counter counter;` in `Stats`) is lifted to
+            // `Stats__Counter`, which the bare name does not find. Every read,
+            // write and initializer of the static asks this same question, so
+            // one answer has to hold wherever it is asked: when the bare name
+            // names nothing, any lifted nested type of that name that is
+            // `!Send` sends the slot to `thread_local!`, which is correct for a
+            // `Send` payload too.
+            if self.resolve_bare_class_fqn(bare).is_none() {
+                let suffix = format!("__{bare}");
+                let lifted: Vec<String> = self
+                    .symbols
+                    .classes
+                    .keys()
+                    .chain(self.symbols.interfaces.keys())
+                    .filter(|k| crate::backend_fqn::fqn_bare(k).ends_with(&suffix))
+                    .cloned()
+                    .collect();
+                if lifted.iter().any(|k| not_send(k)) {
+                    return true;
+                }
             }
         }
         ty.generic_args.iter().any(|a| match a {

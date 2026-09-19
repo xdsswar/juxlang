@@ -1,0 +1,83 @@
+// Operator-heavy vector math: a 3D vector record with +, -, scalar and dot
+// products, a cross product method, a matrix class with * over matrices and
+// vectors, <=> ordering to sort by length, and == with hash as map keys.
+
+record V3(long x, long y, long z) {
+    public V3 operator+(V3 o) { return new V3(x + o.x, y + o.y, z + o.z); }
+    public V3 operator-(V3 o) { return new V3(x - o.x, y - o.y, z - o.z); }
+    public V3 operator*(long k) { return new V3(x * k, y * k, z * k); }
+    public long operator*(V3 o) { return x * o.x + y * o.y + z * o.z; }
+    public int operator<=>(V3 o) { return (this * this) <=> (o * o); }
+    public V3 cross(V3 o) {
+        return new V3(y * o.z - z * o.y, z * o.x - x * o.z, x * o.y - y * o.x);
+    }
+    public String operator string() { return $"(${x}, ${y}, ${z})"; }
+}
+
+class M3 {
+    public long[][] m;
+
+    public M3(long[][] m) { this.m = m; }
+
+    public static M3 rotZ() {
+        long[][] r = {{0, -1, 0}, {1, 0, 0}, {0, 0, 1}};
+        return new M3(r);
+    }
+
+    public V3 operator*(V3 v) {
+        return new V3(
+            m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+            m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+            m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z);
+    }
+
+    public M3 operator*(M3 o) {
+        long[][] out = new long[3][3];
+        for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++) {
+                long s = 0;
+                for (var k = 0; k < 3; k++) {
+                    s += m[i][k] * o.m[k][j];
+                }
+                out[i][j] = s;
+            }
+        }
+        return new M3(out);
+    }
+}
+
+public void main() {
+    var a = new V3(1, 2, 3);
+    var b = new V3(4, -5, 6);
+    print(a + b);
+    print(b - a);
+    print(a * 3);
+    print(a * b);
+    print(a.cross(b));
+    print((a + b) * 2 - a);
+
+    var rot = M3.rotZ();
+    var p = new V3(1, 0, 0);
+    print(rot * p);
+    print((rot * rot) * p);
+    print((rot * rot * rot * rot) * p);
+
+    var vs = new Vec<V3>();
+    vs.push(new V3(3, 0, 0));
+    vs.push(new V3(1, 1, 1));
+    vs.push(new V3(0, 0, 5));
+    vs.push(new V3(2, 2, 0));
+    // `sort_unstable`: the lengths are all different, so it is the same order
+    // Java's stable sort gives.
+    vs.sort_unstable();
+    var line = "";
+    for (var v : vs) {
+        line += v + " ";
+    }
+    print(line.trim());
+    print(new V3(1, 1, 1) < new V3(2, 0, 0));
+
+    var seen = new HashMap<V3, String>();
+    seen.insert(new V3(1, 2, 3), "a");
+    print(seen.contains_key(a) + " " + (a == new V3(1, 2, 3)));
+}

@@ -857,6 +857,19 @@ impl RustEmitter {
     /// argument that names a type parameter belonging to the callee.
     pub(crate) const INFER_PLACEHOLDER: &'static str = "_";
 
+    /// Whether a value slot of type `ty` holds a trait-object handle: the head
+    /// names an interface (`Rc<dyn Iface>`) or a polymorphic base class
+    /// (`Rc<dyn <Name>Kind>`), possibly nullable. Arrays, generic and function
+    /// shapes are containers or closures, not a handle of their own.
+    pub(crate) fn is_dyn_handle_type(&self, ty: &juxc_ast::TypeRef) -> bool {
+        if ty.array_shape.is_some() || ty.fn_shape.is_some() || ty.ptr_depth > 0 || !ty.generic_args.is_empty() {
+            return false;
+        }
+        ty.name.segments.last().is_some_and(|s| {
+            self.lookup_interface_by_bare_or_fqn(&s.text).is_some() || self.is_poly_base_class(&s.text)
+        })
+    }
+
     pub(crate) fn emit_value_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         let prev = self.in_value_type_position;
         self.in_value_type_position = true;

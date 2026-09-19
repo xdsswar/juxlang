@@ -29,6 +29,14 @@ impl RustEmitter {
     /// natively, written by hand when a component is a float (hashed by its
     /// bits, §O.3.1), and absent when a component has no hash at all.
     pub(crate) fn emit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
+        // Inside a record's methods and operators `this` is `&Self`; see
+        // `in_record_body`.
+        let prev = std::mem::replace(&mut self.in_record_body, true);
+        self.emit_record_decl_inner(record_decl);
+        self.in_record_body = prev;
+    }
+
+    fn emit_record_decl_inner(&mut self, record_decl: &juxc_ast::RecordDecl) {
         // (Migrated to Writer indent-aware API)
         // Per `JUX-OPERATORS-ADDENDUM.md` §O.3.1 records auto-provide
         // `operator==`, `operator hash`, and copy-on-assignment when
@@ -70,8 +78,29 @@ impl RustEmitter {
         };
         let components: Vec<&juxc_ast::TypeRef> = record_decl.components.iter().map(|c| &c.ty).collect();
         let legacy_eq = components.iter().all(|t| field_supports_eq(t));
-        let hash_plan = self.value_hash_plan(&fqn, &components, &record_decl.operators, legacy_eq);
-        self.w.line(&record_derive_attribute(record_decl, has_default, hash_plan));
+        let mut hash_plan = self.value_hash_plan(&fqn, &components, &record_decl.operators, legacy_eq);
+        // A component held as a trait-object handle (an interface, or a
+        // polymorphic base class: `record Paren(Expr inner)` stores
+        // `Rc<dyn Expr>`) cannot go through `#[derive(PartialEq)]`: the derive
+        // writes `self.inner == other.inner`, and because the handle itself
+        // implements the trait, rustc coerces the right side to `dyn Expr` and
+        // reports E0507. Such a record gets `PartialEq` written by hand, which
+        // compares the objects themselves (identity, as `==` on interface
+        // values is), and its `Eq` / `Hash` move off the derive with it.
+        let dyn_components: Vec<bool> = components.iter().map(|t| self.is_dyn_handle_type(t)).collect();
+        let manual_eq = dyn_components.iter().any(|d| *d)
+            && !record_decl.operators.iter().any(|o| o.kind == OperatorKind::Eq);
+        if manual_eq {
+            if hash_plan.derive_eq {
+                hash_plan.derive_eq = false;
+                hash_plan.eq_marker = true;
+            }
+            if hash_plan.derive_hash {
+                hash_plan.derive_hash = false;
+                hash_plan.manual_hash = true;
+            }
+        }
+        self.w.line(&record_derive_attribute(record_decl, has_default, hash_plan, manual_eq));
         // `@layout(c) record` (§L.1.2): fields in declaration order at their C
         // offsets. The checker has already held every component to a C
         // `Copy` type, so the derive above includes `Copy`.
@@ -147,8 +176,11 @@ impl RustEmitter {
             self.w.push_str(": ");
             // Post Fix 1 Jux `String` lowers to owned Rust `String`
             // in every position — params included. Field init below
-            // is therefore a plain move (`name: name`).
-            self.emit_type_as_rust(&comp.ty);
+            // is therefore a plain move (`name: name`), so the parameter
+            // has exactly the field's type: an interface-typed component
+            // (`record Paren(Expr inner)`) is `Rc<dyn Expr>` on both, where
+            // the bare trait name did not compile (rustc E0782).
+            self.emit_value_type_as_rust(&comp.ty);
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
@@ -358,6 +390,11 @@ impl RustEmitter {
                 self.emit_operator_trait_impl(&record_decl.name.text, op);
             }
         }
+        // `PartialEq` by hand for a record holding a trait-object handle (see
+        // `manual_eq` above).
+        if manual_eq {
+            self.emit_record_manual_partial_eq(record_decl, &dyn_components);
+        }
         // `Hash` by hand when a float component rules out the derive, and the
         // `Eq` promise a hash key needs when it was not derived.
         if hash_plan.manual_hash {
@@ -380,6 +417,37 @@ impl RustEmitter {
                 self.emit_ord_from_cmp(&record_decl.name.text, arg);
             }
         }
+    }
+
+    /// `impl PartialEq for R`, component by component. A trait-object handle
+    /// is compared through the object (`*a == *b`, or `as_deref()` for a
+    /// nullable one), which is what the derive could not spell; every other
+    /// component compares the way the derive would have.
+    fn emit_record_manual_partial_eq(&mut self, record_decl: &juxc_ast::RecordDecl, dyn_components: &[bool]) {
+        let name = record_decl.name.text.clone();
+        self.emit_value_impl_head("PartialEq", &name, &record_decl.generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.line("fn eq(&self, other: &Self) -> bool {");
+        self.w.indent_inc();
+        if record_decl.components.is_empty() {
+            self.w.line("true");
+        }
+        for (i, (comp, is_dyn)) in record_decl.components.iter().zip(dyn_components).enumerate() {
+            let field = to_rust_ident(&comp.name.text);
+            let test = match (*is_dyn, comp.ty.nullable) {
+                (true, false) => format!("*self.{field} == *other.{field}"),
+                (true, true) => format!("self.{field}.as_deref() == other.{field}.as_deref()"),
+                (false, _) => format!("self.{field} == other.{field}"),
+            };
+            let line = if i + 1 < record_decl.components.len() { format!("{test} &&") } else { test };
+            self.w.line(&line);
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
     }
 
     /// Emit the statements of a record constructor body: the compact
@@ -620,6 +688,7 @@ fn record_derive_attribute(
     record_decl: &juxc_ast::RecordDecl,
     all_default: bool,
     hash_plan: crate::decls::hashing::HashPlan,
+    manual_eq: bool,
 ) -> String {
     let mut derives: Vec<&str> = vec!["Debug", "Clone"];
 
@@ -637,8 +706,9 @@ fn record_derive_attribute(
 
     // PartialEq: derived unless the user wrote operator== (override
     // or delete). The user's override path emits its own `impl
-    // PartialEq`; `= delete;` opts out entirely.
-    if !has_eq_op {
+    // PartialEq`; `= delete;` opts out entirely. A record holding a
+    // trait-object handle has it written by hand instead (`manual_eq`).
+    if !has_eq_op && !manual_eq {
         derives.push("PartialEq");
     }
     // Eq and Hash follow the shared hash plan (§O.3.1): derived when every

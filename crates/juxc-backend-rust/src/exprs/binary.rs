@@ -375,6 +375,31 @@ impl RustEmitter {
         if let Some(Ty::Primitive(p)) = self.expr_types.get(&expr_span_of(e)) {
             return Some(*p);
         }
+        // A tuple element (`t.0`, and a map entry's `e.1`, which iterates as a
+        // `(K, V)` tuple) has the element type at that position. Without this
+        // `e.1 / n` on a `long` value and an `int` skipped the promotion and
+        // reached rustc as `i64 / isize`.
+        if let Expr::Field(f) = e {
+            if let Ok(index) = f.field.text.parse::<usize>() {
+                let tuple = match f.object.as_ref() {
+                    Expr::Path(qn) if qn.segments.len() == 1 => self
+                        .local_types
+                        .iter()
+                        .rev()
+                        .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
+                        .cloned()
+                        .or_else(|| self.expr_types.get(&expr_span_of(&f.object)).cloned()),
+                    other => self.expr_types.get(&expr_span_of(other)).cloned(),
+                };
+                if let Some(Ty::User { name, generic_args }) = tuple {
+                    if name == juxc_ast::TUPLE_SENTINEL {
+                        if let Some(Ty::Primitive(p)) = generic_args.get(index) {
+                            return Some(*p);
+                        }
+                    }
+                }
+            }
+        }
         // An arithmetic node with no recorded type of its own has the type its
         // operands promote to, which is how the checker computed it. Without
         // this `'a' + (c - 'a' + shift) % 26` saw a typed `char` on the left
@@ -910,6 +935,22 @@ impl RustEmitter {
             && self.operand_is_float(&b.left) == Some(false)
             && self.operand_is_float(&b.right) == Some(false)
         {
+            // The helper takes both operands at ONE type, so a mixed pair
+            // (`long / int`, `short % int`) promotes first, as Java does
+            // (§S.2.6): the narrower side is cast to the common type. Without
+            // this every mixed-width integer division failed in rustc.
+            let as_arith = |p: juxc_tycheck::Primitive| {
+                if p == juxc_tycheck::Primitive::Char { juxc_tycheck::Primitive::Int } else { p }
+            };
+            let target = match (self.operand_primitive(&b.left), self.operand_primitive(&b.right)) {
+                (Some(l), Some(r)) if as_arith(l) != as_arith(r) || l != r => {
+                    match juxc_tycheck::ty::promote_numeric(as_arith(l), as_arith(r)) {
+                        juxc_tycheck::ty::NumericPromotion::To(p) => Some((l, r, p)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             self.w.push_str(if matches!(b.op, BinaryOp::Div) {
                 "crate::__jux_idiv("
             } else {
@@ -917,9 +958,26 @@ impl RustEmitter {
             });
             let prev = self.emitting_format_arg;
             self.emitting_format_arg = false;
-            self.emit_expr(&b.left);
-            self.w.push_str(", ");
-            self.emit_expr(&b.right);
+            let cast_to = |side: juxc_tycheck::Primitive| match target {
+                Some((_, _, p)) if side != p => Some(crate::exprs::rust_primitive_name(p)),
+                _ => None,
+            };
+            let left_cast = target.and_then(|(l, _, _)| cast_to(l));
+            let right_cast = target.and_then(|(_, r, _)| cast_to(r));
+            for (operand, cast, first) in [(&b.left, left_cast, true), (&b.right, right_cast, false)] {
+                if !first {
+                    self.w.push_str(", ");
+                }
+                match cast {
+                    Some(rust) => {
+                        self.w.push('(');
+                        self.emit_expr(operand);
+                        self.w.push_str(") as ");
+                        self.w.push_str(rust);
+                    }
+                    None => self.emit_expr(operand),
+                }
+            }
             self.emitting_format_arg = prev;
             self.w.push(')');
             return;
@@ -1047,6 +1105,16 @@ impl RustEmitter {
             self.in_enum_method && matches!(b.left.as_ref(), Expr::This(_) | Expr::Super(_));
         let deref_right =
             self.in_enum_method && matches!(b.right.as_ref(), Expr::This(_) | Expr::Super(_));
+        // Inside a record `this` is `&Self` too, and the record's operators are
+        // implemented on the value, so `this * this` takes a copy of the
+        // record on each side (`self.clone()`; a record is a value). `==`
+        // compares through `PartialEq`, which references cover, so it keeps
+        // the plain form.
+        let record_this = |e: &Expr| {
+            self.in_record_body && matches!(e, Expr::This(_)) && !matches!(b.op, BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::RefEq | BinaryOp::RefNeq)
+        };
+        let clone_left = record_this(&b.left);
+        let clone_right = record_this(&b.right);
 
         // **A cast on the left of a shift needs parentheses.** Rust reads
         // `r as u32 << 16` as the start of generic arguments for `u32`, not as
@@ -1076,6 +1144,9 @@ impl RustEmitter {
         self.signed_slot_target = None;
         if deref_left {
             self.w.push(')');
+        }
+        if clone_left {
+            self.w.push_str(".clone()");
         }
         // **Any left operand that ENDS in a cast needs parentheses before `<`
         // or `<<`**, not only a written one: `xs.length` emits
@@ -1116,6 +1187,9 @@ impl RustEmitter {
         self.signed_slot_target = None;
         if deref_right {
             self.w.push(')');
+        }
+        if clone_right {
+            self.w.push_str(".clone()");
         }
         if cast_right {
             self.w.push_str(" as ");

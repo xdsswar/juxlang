@@ -138,6 +138,10 @@ pub(crate) enum IfaceCoercion {
     /// No interface coercion — the target isn't an interface slot, or the
     /// source needs no adaptation.
     None,
+    /// Source is a lambda and the target an interface with one abstract
+    /// method (JUX-LANG-V1 §7.9.1): the lambda is that method, emitted as the
+    /// interface's anonymous implementation (captures included).
+    FromLambda,
     /// Source is a concrete class implementing the target interface — wrap it
     /// in `Rc<dyn Trait>`. `clone_first` clones a reused wrapper place (cheap
     /// `Rc` bump, preserves shared identity) before wrapping.
@@ -620,7 +624,7 @@ fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
 /// Names that are the target of a WHOLE-NAME reassignment (`name = …`, a
 /// single-segment `Expr::Path`) anywhere in `block`, INCLUDING inside lambda
 /// bodies. Used by [`collect_captured_mutated_locals`].
-fn collect_whole_name_reassigned(block: &Block, out: &mut HashSet<String>) {
+pub(crate) fn collect_whole_name_reassigned(block: &Block, out: &mut HashSet<String>) {
     fn ex(e: &Expr, out: &mut HashSet<String>) {
         // Only need to descend into lambda bodies (where a captured local is
         // mutated) and through expr children that can hold a lambda.
@@ -3803,6 +3807,41 @@ impl crate::RustEmitter {
     /// actual type for upcast detection. `None` when the callee
     /// can't be resolved or doesn't have a parameter at that
     /// position.
+    /// The declared type of parameter `arg_idx` when the bare callee `qn` is
+    /// a method of the class being emitted (or one it inherits), picking the
+    /// overload tycheck selected for this call when there are several.
+    fn enclosing_method_param_type(
+        &self,
+        qn: &juxc_ast::QualifiedName,
+        arg_idx: usize,
+    ) -> Option<juxc_ast::TypeRef> {
+        self.enclosing_method_param_type_named(&qn.segments[0].text, qn.span, arg_idx)
+    }
+
+    /// [`Self::enclosing_method_param_type`] by method name and the span
+    /// tycheck keyed its overload selection by.
+    fn enclosing_method_param_type_named(
+        &self,
+        name: &str,
+        selection_span: juxc_source::Span,
+        arg_idx: usize,
+    ) -> Option<juxc_ast::TypeRef> {
+        let class = self.enclosing_class.as_deref()?;
+        let class_fqn = if self.symbols.classes.contains_key(class) {
+            class.to_string()
+        } else {
+            self.resolve_bare_type_fqn(class)?
+        };
+        if let Some(k) = self.symbols.method_selections.get(&selection_span) {
+            let group = self.symbols.merged_method_overloads(&class_fqn, name);
+            if let Some(member) = group.get(*k) {
+                return member.params.get(arg_idx).map(|p| p.ty.clone());
+            }
+        }
+        let (method, _) = self.symbols.lookup_method(&class_fqn, name)?;
+        method.params.get(arg_idx).map(|p| p.ty.clone())
+    }
+
     pub(crate) fn callee_param_type(
         &self,
         callee: &juxc_ast::Expr,
@@ -3810,6 +3849,14 @@ impl crate::RustEmitter {
     ) -> Option<juxc_ast::TypeRef> {
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
+                // An implicit-`this` call (`swap(i, j)` inside a method): the
+                // enclosing class's method (inherited ones included) is the
+                // callee, as for `this.swap(i, j)`. Without this the argument
+                // conversions (`int` into a `uint` slot, an upcast) were
+                // skipped for the bare form and rustc rejected the call.
+                if let Some(param) = self.enclosing_method_param_type(qn, arg_idx) {
+                    return Some(param);
+                }
                 // An overloaded function converts its arguments to the member
                 // tycheck picked (keyed by the callee's span), not to member 0:
                 // `f(new Dog())` against `f(Animal)` / `f(Dog)` passes a `Dog`.
@@ -3828,6 +3875,15 @@ impl crate::RustEmitter {
             }
         }
         if let juxc_ast::Expr::Field(f) = callee {
+            // `this.m(..)`, written out or rewritten from a bare `m(..)`: the
+            // enclosing class's method. The rewritten form's `this` carries
+            // the bare name's span, which tycheck typed as the method, so the
+            // receiver-type lookup below cannot be used for it.
+            if matches!(&*f.object, juxc_ast::Expr::This(_)) {
+                if let Some(param) = self.enclosing_method_param_type_named(&f.field.text, f.span, arg_idx) {
+                    return Some(param);
+                }
+            }
             // Static method call: `ClassName.method(args)` — the
             // receiver path resolves to a class.
             if let juxc_ast::Expr::Path(qn) = &*f.object {
@@ -4102,6 +4158,9 @@ impl crate::RustEmitter {
         if self.type_ref_is_any(target_ty) {
             return IfaceCoercion::IntoAny;
         }
+        if self.lambda_as_anonymous_class(target_ty, expr).is_some() {
+            return IfaceCoercion::FromLambda;
+        }
         // Concrete subclass → its direct base class under the non-sealed,
         // non-polymorphic open hierarchy (the `From<Sub> for Parent` slicing
         // model, e.g. exception causes). Detected here so every coercion call
@@ -4304,6 +4363,11 @@ impl crate::RustEmitter {
         }
         match coercion {
             IfaceCoercion::None | IfaceCoercion::IntoAny => unreachable!("handled above"),
+            IfaceCoercion::FromLambda => {
+                if let Some(anon) = self.lambda_as_anonymous_class(target_ty, expr) {
+                    self.emit_anonymous_class(&anon);
+                }
+            }
             IfaceCoercion::UpcastDyn { clone_first } => {
                 self.w.push('(');
                 self.emit_expr(expr);

@@ -3752,6 +3752,8 @@ impl<'a> Checker<'a> {
     /// and rejects an impossible test (E0442 — `x` could never be a `T`).
     fn check_typetest(&mut self, t: &juxc_ast::TypeTestExpr, allow_binder: bool) {
         self.check_expr(&t.value);
+        // `a => Dolphin` must name a real type (E0417); it reached rustc.
+        self.check_local_type_known(&t.ty);
         if let Some(binder) = &t.binder {
             if !allow_binder {
                 self.diagnostics.push(
@@ -5669,6 +5671,8 @@ impl<'a> Checker<'a> {
                         .map(|t| ty_from_ref(t, &self.env, self.symbols));
                 if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&declared, &v.init) {
                     self.lambda_slot_params = Some(params.clone());
+                } else if let (Some(slot), Some(Expr::Lambda(_))) = (&declared, &v.init) {
+                    self.lambda_slot_params = self.single_method_interface_params(slot);
                 }
                 let inferred = v.init.as_ref().map(|e| {
                     // Walk the initializer for nested checks (e.g. a
@@ -5991,6 +5995,10 @@ impl<'a> Checker<'a> {
                 // does (`return this::greet;` picks the overload, §M.8.3).
                 if let (Some(Ty::Fn { params, .. }), Some(Expr::Lambda(_) | Expr::MethodRef(_))) = (&expected, opt) {
                     self.lambda_slot_params = Some(params.clone());
+                } else if let (Some(slot), Some(Expr::Lambda(_))) = (&expected, opt) {
+                    // A returned lambda filling a single-method interface
+                    // (§7.9.1) takes that method's parameter types.
+                    self.lambda_slot_params = self.single_method_interface_params(slot);
                 }
                 match (&expected, opt) {
                     // Bare `return;` inside a void function — fine.
@@ -6241,8 +6249,7 @@ impl<'a> Checker<'a> {
                         // A `rust.std` sequence collection iterates over its
                         // element type (the first generic arg) — the stub
                         // exposes `iter()`, not the Jux `iterator()` protocol,
-                        // so recognize these directly. (`HashMap`/`BTreeMap`
-                        // iterate as key/value pairs and aren't covered here.)
+                        // so recognize these directly.
                         Ty::User { name, generic_args }
                             if name.starts_with("rust.std")
                                 && matches!(
@@ -6251,6 +6258,17 @@ impl<'a> Checker<'a> {
                                 ) =>
                         {
                             generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                        }
+                        // A map iterates as `(K, V)` entries, owned (the
+                        // backend copies each entry out). Untyped, `e.1 / n`
+                        // on a `long` value and an `int` skipped the numeric
+                        // promotion and reached rustc.
+                        Ty::User { name, generic_args }
+                            if name.starts_with("rust.std")
+                                && matches!(name.rsplit('.').next().unwrap_or(name), "HashMap" | "BTreeMap")
+                                && generic_args.len() == 2 =>
+                        {
+                            Ty::User { name: juxc_ast::TUPLE_SENTINEL.to_string(), generic_args: generic_args.clone() }
                         }
                         // An `Iterator<T>` value itself (a generator's result,
                         // §M.2.1): the loop drains it, one `next()` per pass.
@@ -6425,6 +6443,11 @@ impl<'a> Checker<'a> {
                 // the BODY (not the catch/finally blocks).
                 let mut absorb_frame: Vec<Ty> = Vec::new();
                 for c in &t.catches {
+                    // `catch (Oyster e)` must name a real type (E0417).
+                    self.check_local_type_known(&c.ty);
+                    for alt in &c.alt_tys {
+                        self.check_local_type_known(alt);
+                    }
                     absorb_frame.push(ty_from_ref(&c.ty, &self.env, self.symbols));
                     for alt in &c.alt_tys {
                         absorb_frame.push(ty_from_ref(alt, &self.env, self.symbols));
@@ -6925,7 +6948,11 @@ impl<'a> Checker<'a> {
                 // Rust compiler reported a missing `Default` on a type the
                 // program never mentioned by that name.
                 let element = ty_from_ref(&n.element_type, &self.env, self.symbols);
-                if !crate::defaults::ty_has_default(&element, self.symbols) {
+                // An element type that names nothing is E0417 on its own; the
+                // "no default value" follow-up would only repeat it.
+                if self.check_local_type_known(&n.element_type)
+                    && !crate::defaults::ty_has_default(&element, self.symbols)
+                {
                     let written = type_ref_display(&n.element_type);
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -6942,6 +6969,7 @@ impl<'a> Checker<'a> {
             }
 
             Expr::NewArrayLit(n) => {
+                self.check_local_type_known(&n.element_type);
                 for el in &n.elements {
                     self.check_expr(el);
                 }
@@ -6949,8 +6977,12 @@ impl<'a> Checker<'a> {
 
             Expr::Cast(c) => {
                 self.check_expr(&c.value);
-                self.check_reference_cast(c);
-                self.check_string_cast(c);
+                // `a as Crab` with no `Crab` anywhere is E0417, and the cast
+                // rules below have nothing real to compare against.
+                if self.check_local_type_known(&c.ty) {
+                    self.check_reference_cast(c);
+                    self.check_string_cast(c);
+                }
                 // `p as fn(A) -> R` and `f as void*` reinterpret a code address
                 // (§L.6.4), which nothing can check.
                 let from_fn_pointer =
@@ -8146,6 +8178,189 @@ impl<'a> Checker<'a> {
     /// A `System.out.println(...)`-shaped call on an undeclared `System`:
     /// the span of `System` and the help to give. The parser reads the callee
     /// as the dotted path `System.out.println`, or as field accesses on it.
+    /// The head of a static-looking call (`Head.m(..)`, `Head.a.m(..)`) when
+    /// that head names nothing visible here: no local, parameter or member of
+    /// the enclosing type, no type, function, constant or package (any
+    /// declared or scanned FQN, which covers `rust.*` and `jux.*` paths), no
+    /// import and no built-in. Returns the head's span and text and the
+    /// method name. `System` is left to [`Self::java_system_out_call`].
+    fn unknown_call_head(&self, c: &CallExpr) -> Option<(juxc_source::Span, String, String)> {
+        let (head, method) = match c.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() >= 2 => (&qn.segments[0], qn.segments.last()?.text.clone()),
+            Expr::Field(f) => {
+                let mut root = f.object.as_ref();
+                while let Expr::Field(inner) = root {
+                    root = inner.object.as_ref();
+                }
+                match root {
+                    Expr::Path(p) if !p.segments.is_empty() => (&p.segments[0], f.field.text.clone()),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let name = head.text.as_str();
+        if name == "System" || self.name_is_visible(name) {
+            return None;
+        }
+        Some((head.span, name.to_string(), method))
+    }
+
+    /// The record or enum a receiver path names, as `("record" | "enum",
+    /// fqn)`: a dotted FQN as written, else the unit's import / package map,
+    /// else a unique bare-name match. A local or parameter of the same name
+    /// wins, so `pt.x()` on a variable is never read as a type.
+    fn value_type_named_by(&self, qn: &juxc_ast::QualifiedName) -> Option<(&'static str, String)> {
+        let written = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        if qn.segments.len() == 1 && self.env.lookup(&written).is_some() {
+            return None;
+        }
+        let candidates: Vec<String> = match self.env.unqualified.get(&written) {
+            Some(fqn) => vec![fqn.clone(), written.clone()],
+            None => vec![written.clone()],
+        };
+        for fqn in &candidates {
+            if self.symbols.records.contains_key(fqn) {
+                return Some(("record", fqn.clone()));
+            }
+            if self.symbols.enums.contains_key(fqn) {
+                return Some(("enum", fqn.clone()));
+            }
+        }
+        let suffix = format!(".{written}");
+        let mut hits = self
+            .symbols
+            .records
+            .keys()
+            .filter(|k| k.ends_with(&suffix))
+            .map(|k| ("record", k.clone()))
+            .chain(self.symbols.enums.keys().filter(|k| k.ends_with(&suffix)).map(|k| ("enum", k.clone())));
+        match (hits.next(), hits.next()) {
+            (Some(one), None) => Some(one),
+            _ => None,
+        }
+    }
+
+    /// `String.m(..)` where `String` is the built-in type (no local, no user
+    /// class of that name) and the scanned `rust.std.String` has no static
+    /// `m`. Returns the call's span and the method name. Without a scanned
+    /// `String` (no `rust.std` surface) nothing is claimed.
+    fn unknown_string_static(&self, c: &CallExpr) -> Option<(juxc_source::Span, String)> {
+        let Expr::Field(f) = c.callee.as_ref() else {
+            return None;
+        };
+        let Expr::Path(qn) = f.object.as_ref() else {
+            return None;
+        };
+        if qn.segments.len() != 1 || qn.segments[0].text != "String" || self.env.lookup("String").is_some() {
+            return None;
+        }
+        if self.symbols.classes.iter().any(|(k, cls)| k.rsplit('.').next() == Some("String") && !cls.is_external) {
+            return None;
+        }
+        let scanned = self.symbols.classes.keys().find(|k| k.as_str() == "rust.std.String")?.clone();
+        let method = f.field.text.clone();
+        let is_static = self
+            .symbols
+            .lookup_method(&scanned, &method)
+            .is_some_and(|(m, _)| m.is_static);
+        if is_static {
+            return None;
+        }
+        Some((c.span, method))
+    }
+
+    /// The parameter types a lambda takes when it fills a slot of type `slot`
+    /// that is a Jux interface with exactly one abstract method (JUX-LANG-V1
+    /// §7.9.1): that method's parameter types, with the interface's type
+    /// parameters replaced by the slot's arguments. `None` for any other slot,
+    /// and when a parameter type is not concrete yet.
+    /// A callee parameter type `Iface<A, B>` lowered with the callee's own
+    /// type parameters (`params`) bound to the call's inferred `args`, where a
+    /// generic argument is one of those parameters by name. Used for the
+    /// single-method-interface slot of a generic callee, whose `T` the
+    /// caller's scope cannot resolve. `Unknown` when the head is not a type.
+    fn slot_with_callee_params(&self, tref: &TypeRef, params: &[TypeParam], args: &[Ty]) -> Ty {
+        let head = TypeRef { generic_args: Vec::new(), ..tref.clone() };
+        let Ty::User { name, .. } = ty_from_ref(&head, &self.env, self.symbols) else {
+            return Ty::Unknown;
+        };
+        let generic_args = tref
+            .generic_args
+            .iter()
+            .map(|ga| match ga {
+                juxc_ast::GenericArg::Type(t) if t.name.segments.len() == 1 && t.generic_args.is_empty() => {
+                    match params.iter().position(|p| p.name.text == t.name.segments[0].text) {
+                        Some(i) => args.get(i).cloned().unwrap_or(Ty::Unknown),
+                        None => ty_from_ref(t, &self.env, self.symbols),
+                    }
+                }
+                juxc_ast::GenericArg::Type(t) => ty_from_ref(t, &self.env, self.symbols),
+                juxc_ast::GenericArg::Wildcard(_) => Ty::Unknown,
+            })
+            .collect();
+        Ty::User { name, generic_args }
+    }
+
+    fn single_method_interface_params(&self, slot: &Ty) -> Option<Vec<Ty>> {
+        let Ty::User { name, generic_args } = slot else {
+            return None;
+        };
+        let iface = self.symbols.interfaces.get(name)?;
+        if iface.is_external || !iface.extends.is_empty() || iface.generic_params.len() != generic_args.len() {
+            return None;
+        }
+        let mut abstract_methods = iface
+            .methods
+            .values()
+            .filter(|m| m.is_abstract && !m.is_static && !m.is_property);
+        let method = abstract_methods.next()?;
+        if abstract_methods.next().is_some() {
+            return None;
+        }
+        let params: Vec<Ty> = method
+            .params
+            .iter()
+            .map(|p| {
+                let raw = lower_member_type(&p.ty, name, self.symbols);
+                substitute(&raw, &iface.generic_params, generic_args)
+            })
+            .collect();
+        params.iter().all(ty_is_concrete).then_some(params)
+    }
+
+    /// Whether the bare `name` can start an expression here (see
+    /// [`Self::unknown_call_head`] for the list of what counts).
+    fn name_is_visible(&self, name: &str) -> bool {
+        if self.env.lookup(name).is_some() || self.env.generic_params.contains(name) {
+            return true;
+        }
+        if juxc_lex::grammar_spec::BUILTIN_NAMES.contains(&name) || juxc_lex::PRIMITIVE_TYPE_NAMES.contains(&name) {
+            return true;
+        }
+        if let Some(cls) = self.env.current_class.as_deref() {
+            if self.symbols.lookup_field(cls, name).is_some()
+                || self.symbols.classes.get(cls).is_some_and(|c| c.properties.contains_key(name))
+                || self.symbols.records.get(cls).is_some_and(|r| r.components.iter().any(|comp| comp.name == name))
+            {
+                return true;
+            }
+        }
+        if self.env.unqualified.contains_key(name) {
+            return true;
+        }
+        let dotted = format!("{name}.");
+        let suffix = format!(".{name}");
+        let names_it = |k: &String| k == name || k.starts_with(&dotted) || k.ends_with(&suffix);
+        self.symbols.classes.keys().any(names_it)
+            || self.symbols.records.keys().any(names_it)
+            || self.symbols.enums.keys().any(names_it)
+            || self.symbols.interfaces.keys().any(names_it)
+            || self.symbols.aliases.keys().any(names_it)
+            || self.symbols.functions.keys().any(names_it)
+            || self.symbols.consts.keys().any(names_it)
+    }
+
     fn java_system_out_call(&self, c: &CallExpr) -> Option<(juxc_source::Span, &'static str)> {
         let (head, stream, method) = match c.callee.as_ref() {
             Expr::Path(qn) if qn.segments.len() == 3 => {
@@ -8223,28 +8438,27 @@ impl<'a> Checker<'a> {
                 .is_some_and(|r| r.components.iter().any(|comp| comp.name == name))
     }
 
-    /// `" -- did you mean `x`?"` when the type has a method whose name is
-    /// close to the one written, else an empty string.
-    ///
-    /// Candidates come from the type's own recorded surface, so a foreign
-    /// type suggests what the rustdoc scan actually found. The threshold is
-    /// deliberately generous on a shared PREFIX, because the misses that
-    /// matter are a Rust name the user shortened (`sort` for
-    /// `sort_unstable`) or a Java name that has a differently-spelled twin.
     /// A local's declared type must name something (E0417): `Zork z = 5;`
     /// used to pass the checker and fail in rustc. Checks the head and every
     /// generic argument and function-type slot, with the same resolver the
     /// signature check uses, and suggests the nearest visible type name.
-    fn check_local_type_known(&mut self, tref: &TypeRef) {
+    ///
+    /// Also used for every other place a type is written inside a body: the
+    /// type of `new T(..)` / `new T[n]`, its generic arguments, a cast
+    /// target, a `=>` type test, explicit call type arguments and a `catch`
+    /// type. Returns `false` when it reported, so a caller can skip a
+    /// follow-on diagnostic about a type that does not exist.
+    fn check_local_type_known(&mut self, tref: &TypeRef) -> bool {
         if let Some(fs) = &tref.fn_shape {
+            let mut known = true;
             for p in &fs.params {
-                self.check_local_type_known(p);
+                known &= self.check_local_type_known(p);
             }
-            self.check_local_type_known(&fs.return_type);
-            return;
+            known &= self.check_local_type_known(&fs.return_type);
+            return known;
         }
         if tref.const_literal_text().is_some() {
-            return;
+            return true;
         }
         if self.sig_head_unresolved(tref, &[]) {
             let bare = tref.name.segments[0].text.clone();
@@ -8258,13 +8472,50 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(tref.span),
             );
-            return;
+            return false;
         }
+        let mut known = true;
         for ga in &tref.generic_args {
             if let juxc_ast::GenericArg::Type(inner) = ga {
-                self.check_local_type_known(inner);
+                known &= self.check_generic_arg_known(inner);
             }
         }
+        known
+    }
+
+    /// [`Self::check_local_type_known`] for one generic ARGUMENT. A const
+    /// generic parameter (`class Ring<T, int N>`, Type system T.11.3) takes a
+    /// compile-time value, and the parser hands that over as a type-shaped
+    /// name: `new Ring<float, SIZE>` names the constant `SIZE`, not a type.
+    /// A bare name that resolves to a constant is therefore left alone here;
+    /// the const-generic checks own it.
+    pub(crate) fn check_generic_arg_known(&mut self, tref: &TypeRef) -> bool {
+        if tref.name.segments.len() == 1
+            && tref.generic_args.is_empty()
+            && tref.array_shape.is_none()
+            && self.names_a_constant(&tref.name.segments[0].text)
+        {
+            return true;
+        }
+        self.check_local_type_known(tref)
+    }
+
+    /// Whether the bare `name` is a value a const generic argument can be: a
+    /// top-level `const`, a static field of the enclosing class, or a local
+    /// in scope.
+    fn names_a_constant(&self, name: &str) -> bool {
+        if self.env.lookup(name).is_some() {
+            return true;
+        }
+        let suffix = format!(".{name}");
+        if self.symbols.consts.keys().any(|k| k == name || k.ends_with(&suffix)) {
+            return true;
+        }
+        self.env
+            .current_class
+            .as_deref()
+            .and_then(|cls| self.symbols.lookup_field(cls, name))
+            .is_some()
     }
 
     /// `" -- did you mean `String`?"` when a visible type name, a primitive,
@@ -8295,6 +8546,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `" -- did you mean `x`?"` when the type has a method whose name is
+    /// close to the one written, else an empty string.
+    ///
+    /// Candidates come from the type's own recorded surface, so a foreign
+    /// type suggests what the rustdoc scan actually found. The threshold is
+    /// deliberately generous on a shared PREFIX, because the misses that
+    /// matter are a Rust name the user shortened (`sort` for
+    /// `sort_unstable`) or a Java name that has a differently-spelled twin.
     fn nearest_method_hint(&self, type_name: &str, wanted: &str) -> String {
         let mut names: Vec<&str> = Vec::new();
         if let Some(cls) = self.symbols.classes.get(type_name) {
@@ -10426,6 +10685,39 @@ impl<'a> Checker<'a> {
             self.check_transmute(c);
             return;
         }
+        // `Math.abs(x)` / `Integer.parseInt(s)`: a static-looking call whose
+        // head names nothing visible used to pass the checker and fail in
+        // rustc as "cannot find value `Math`" (E0301 here, with the Jux way
+        // for the common Java utility classes).
+        // `String.valueOf(5)`: `String` is Rust's, and its statics are the
+        // ones the scanned `rust.std.String` has (`from_utf8`, `new`, ...).
+        // Anything else reached rustc as "expected value, found struct".
+        if let Some((span, method)) = self.unknown_string_static(c) {
+            let message = match crate::java_habits::string_static_hint(&method) {
+                Some(help) => format!("no static method `{method}` on `String` -- {help}"),
+                None => format!("no static method `{method}` on `String`"),
+            };
+            self.diagnostics.push(Diagnostic::error(code::Code::E0413_UnresolvedMethod, message).with_span(span));
+            for arg in &c.args {
+                self.check_expr(arg);
+            }
+            return;
+        }
+        if let Some((span, head, method)) = self.unknown_call_head(c) {
+            let message = match crate::java_habits::java_class_hint(&head, &method) {
+                Some(help) => format!("cannot find `{head}` in this scope -- {help}"),
+                None => format!("cannot find `{head}` in this scope"),
+            };
+            self.diagnostics.push(Diagnostic::error(code::Code::E0301_NameNotFound, message).with_span(span));
+            for arg in &c.args {
+                self.check_expr(arg);
+            }
+            return;
+        }
+        // Explicit type arguments (`count<Kraken>(a)`) must name real types.
+        for ga in &c.explicit_generic_args {
+            self.check_generic_arg_known(ga);
+        }
         // `System.out.println(x)` out of Java habit: there is no `System`
         // (unless the program declares one), and it used to reach rustc as
         // "cannot find value `System`" (JUX-DIAGNOSTICS-ADDENDUM "Java Habits").
@@ -11223,6 +11515,36 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
+                    // `Color.missing()` / `Pt.nothing()`: a record or enum
+                    // named as the receiver has a closed set of statics (its
+                    // declared static methods, and for an enum its variants
+                    // and helpers such as `fromName` / `cases`). Anything else
+                    // reached rustc as an unresolved associated item.
+                    if let Some((kind, fqn)) = self.value_type_named_by(qn) {
+                        let known = match kind {
+                            "enum" => self.symbols.enums.get(&fqn).is_some_and(|e| {
+                                e.variants.contains_key(method_name) || e.methods.contains_key(method_name)
+                            }),
+                            _ => self
+                                .symbols
+                                .records
+                                .get(&fqn)
+                                .is_some_and(|r| r.methods.contains_key(method_name)),
+                        };
+                        if !known {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    format!("no static method `{method_name}` on {kind} `{fqn}`"),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
+                        }
+                    }
                 }
                 // `I.super.m(...)` (§T.8.3): check where it is written and that
                 // `m` has a default to run, then let the ordinary interface-method
@@ -11785,6 +12107,11 @@ impl<'a> Checker<'a> {
     /// turbofish) leaves substitution off — the wildcard rule in
     /// [`compatible`] then accepts whatever argument the user passed.
     fn check_new_object(&mut self, n: &NewObjectExpr) {
+        // `new Vec<Snark>()`: the class name itself is resolved below, but a
+        // generic argument that names nothing reached rustc (E0417).
+        for ga in &n.generic_args {
+            self.check_generic_arg_known(ga);
+        }
         // Walk arg expressions for nested checks regardless of resolution.
         for arg in &n.args {
             self.check_expr(arg);
@@ -12668,10 +12995,19 @@ impl<'a> Checker<'a> {
                     Some(class) => lower_member_type(&param.ty, class, self.symbols),
                     None => ty_from_ref(&param.ty, &self.env, self.symbols),
                 };
-                if let Ty::Fn { params: slot_params, .. } = substitute(&slot_raw, subst_params, subst_args) {
+                let slot = substitute(&slot_raw, subst_params, subst_args);
+                if let Ty::Fn { params: slot_params, .. } = &slot {
                     if slot_params.iter().all(ty_is_concrete) {
-                        self.lambda_slot_params = Some(slot_params);
+                        self.lambda_slot_params = Some(slot_params.clone());
                     }
+                } else if let Some(slot_params) = self.single_method_interface_params(&slot).or_else(|| {
+                    // The caller's scope does not know the callee's own type
+                    // parameters, so `Combine<T>` lowered to `Combine<?>`;
+                    // bind them by name from the inferred arguments.
+                    let bound = self.slot_with_callee_params(&param.ty, subst_params, subst_args);
+                    self.single_method_interface_params(&bound)
+                }) {
+                    self.lambda_slot_params = Some(slot_params);
                 }
             }
             self.check_expr(arg);

@@ -1,0 +1,84 @@
+// Lambdas where a single-method interface is expected (JUX-LANG-V1 §7.9.1),
+// and anonymous classes over generic interfaces.
+//
+// A lambda in a slot typed as a Jux interface with one abstract method IS
+// that method: its parameters take the method's types, captures work as they
+// do for any lambda, and the value dispatches like any implementation. Both
+// used to fail inside rustc.
+
+interface Listener<E> {
+    void on(E event);
+}
+
+interface Pricer {
+    long price(String item, int qty);
+
+    // A default method does not count: Pricer still has one abstract method.
+    default long doubled(String item, int qty) {
+        return 2 * price(item, qty);
+    }
+}
+
+interface Combine<T> {
+    T apply(T a, T b);
+}
+
+record Order(String id, long cents) {}
+
+class Bus<E> {
+    private Vec<Listener<E>> listeners = new Vec<Listener<E>>();
+
+    public void subscribe(Listener<E> l) { listeners.push(l); }
+
+    public void publish(E event) {
+        for (var l : listeners) {
+            l.on(event);
+        }
+    }
+}
+
+<T> T fold(Vec<T> items, T start, Combine<T> f) {
+    var acc = start;
+    for (var x : items) {
+        acc = f.apply(acc, x);
+    }
+    return acc;
+}
+
+Pricer bulk(long discount) {
+    return (item, qty) -> item.charLength() * qty - discount;
+}
+
+public void main() {
+    var bus = new Bus<Order>();
+    var ids = new Vec<String>();
+    long total = 0;
+    bus.subscribe((o) -> ids.push(o.id));
+    bus.subscribe((o) -> {
+        if (o.cents > 1000) {
+            print("large order " + o.id);
+        }
+    });
+    bus.subscribe(new Listener<Order>() {
+        public void on(Order o) { print("anonymous saw " + o.id); }
+    });
+    bus.publish(new Order("A1", 500));
+    bus.publish(new Order("A2", 2500));
+    print(ids.len());
+
+    Pricer p = (item, qty) -> item.charLength() * qty;
+    print(p.price("abc", 4));
+    print(p.doubled("abc", 4));
+    print(bulk(2).price("pen", 3));
+
+    var nums = new Vec<int>();
+    nums.push(3);
+    nums.push(4);
+    nums.push(5);
+    print(fold(nums, 0, (a, b) -> a + b));
+    print(fold(nums, 1, (a, b) -> a * b));
+    var words = new Vec<String>();
+    words.push("jux");
+    words.push("lang");
+    print(fold(words, "", (a, b) -> a + b));
+}

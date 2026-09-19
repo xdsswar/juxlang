@@ -1,0 +1,113 @@
+// A bank ledger driven by checked exceptions: a small exception hierarchy,
+// multi-catch, rethrow with a cause, finally blocks that audit every
+// operation, and a transfer that rolls back when its second half fails.
+
+class BankException extends Exception {
+    BankException(String m) { super(m); }
+}
+
+class InsufficientFunds extends BankException {
+    public long shortBy;
+    InsufficientFunds(String account, long shortBy) {
+        super(account + " is short by " + shortBy);
+        this.shortBy = shortBy;
+    }
+}
+
+class AccountFrozen extends BankException {
+    AccountFrozen(String account) { super(account + " is frozen"); }
+}
+
+class TransferFailed extends Exception {
+    TransferFailed(String m, Exception cause) { super(m, cause); }
+}
+
+class Account {
+    public String id;
+    public long balance;
+    public bool frozen = false;
+
+    public Account(String id, long balance) {
+        this.id = id;
+        this.balance = balance;
+    }
+
+    public void withdraw(long amount) throws BankException {
+        if (frozen) {
+            throw new AccountFrozen(id);
+        }
+        if (amount > balance) {
+            throw new InsufficientFunds(id, amount - balance);
+        }
+        balance -= amount;
+    }
+
+    public void deposit(long amount) throws BankException {
+        if (frozen) {
+            throw new AccountFrozen(id);
+        }
+        if (amount <= 0) {
+            throw new IllegalArgumentException("deposit must be positive: " + amount);
+        }
+        balance += amount;
+    }
+}
+
+class Bank {
+    public Vec<String> audit = new Vec<String>();
+    public int operations = 0;
+
+    public void transfer(Account from, Account to, long amount) throws TransferFailed {
+        operations++;
+        try {
+            from.withdraw(amount);
+            try {
+                to.deposit(amount);
+            } catch (BankException e) {
+                from.balance += amount;
+                audit.push("rolled back " + amount + " to " + from.id);
+                throw e;
+            }
+            audit.push("moved " + amount + " " + from.id + "->" + to.id);
+        } catch (InsufficientFunds | AccountFrozen e) {
+            throw new TransferFailed("transfer of " + amount + " failed", e);
+        } catch (BankException e) {
+            throw new TransferFailed("unexpected bank error", e);
+        } finally {
+            audit.push("op " + operations + " checked");
+        }
+    }
+}
+
+void attempt(Bank bank, Account a, Account b, long amount) {
+    try {
+        bank.transfer(a, b, amount);
+        print("ok: " + a.id + "=" + a.balance + " " + b.id + "=" + b.balance);
+    } catch (TransferFailed e) {
+        print("failed: " + e.getMessage());
+        var cause = e.getCause();
+        if (cause != null) {
+            print("  because: " + cause!!.getMessage());
+        }
+    } catch (IllegalArgumentException e) {
+        print("rejected: " + e.getMessage());
+    }
+}
+
+public void main() {
+    var bank = new Bank();
+    var alice = new Account("alice", 100);
+    var bob = new Account("bob", 20);
+    var carol = new Account("carol", 0);
+    attempt(bank, alice, bob, 30);
+    attempt(bank, bob, carol, 80);
+    carol.frozen = true;
+    attempt(bank, alice, carol, 10);
+    attempt(bank, alice, bob, 0);
+    carol.frozen = false;
+    attempt(bank, carol, alice, 5);
+    print("alice=" + alice.balance + " bob=" + bob.balance + " carol=" + carol.balance);
+    for (var line : bank.audit) {
+        print(line);
+    }
+}

@@ -1,0 +1,109 @@
+// Text and bits: a Caesar cipher, run-length encoding, a palindrome check,
+// word counting, and the classic bit tricks (population count, power of two,
+// reversal, masks and shifts on long).
+
+String caesar(String text, int shift) {
+    var out = "";
+    for (var i = 0; i < text.charLength(); i++) {
+        char c = text.charAt(i);
+        if (c >= 'a' && c <= 'z') {
+            out += (char) ('a' + ((c - 'a' + shift) % 26 + 26) % 26);
+        } else if (c >= 'A' && c <= 'Z') {
+            out += (char) ('A' + ((c - 'A' + shift) % 26 + 26) % 26);
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+String runLength(String text) {
+    if (text.charLength() == 0) { return ""; }
+    var out = "";
+    char prev = text.charAt(0);
+    var count = 1;
+    for (var i = 1; i < text.charLength(); i++) {
+        char c = text.charAt(i);
+        if (c == prev) {
+            count++;
+        } else {
+            out += count + "" + prev;
+            prev = c;
+            count = 1;
+        }
+    }
+    return out + count + prev;
+}
+
+bool palindrome(String text) {
+    var letters = "";
+    for (var i = 0; i < text.charLength(); i++) {
+        char c = text.charAt(i);
+        if (c >= 'A' && c <= 'Z') {
+            letters += (char) (c + 32);
+        } else if (c >= 'a' && c <= 'z') {
+            letters += c;
+        }
+    }
+    var lo = 0;
+    var hi = letters.charLength() - 1;
+    while (lo < hi) {
+        if (letters.charAt(lo) != letters.charAt(hi)) { return false; }
+        lo++;
+        hi--;
+    }
+    return true;
+}
+
+int popcount(long x) {
+    var n = 0;
+    var v = x;
+    while (v != 0) {
+        v = v & (v - 1);
+        n++;
+    }
+    return n;
+}
+
+bool powerOfTwo(long x) {
+    return x > 0 && (x & (x - 1)) == 0;
+}
+
+long reverseLow16(long x) {
+    long out = 0;
+    for (var i = 0; i < 16; i++) {
+        out = (out << 1) | ((x >> i) & 1);
+    }
+    return out;
+}
+
+public void main() {
+    var secret = caesar("Hello, Jux World!", 3);
+    print(secret);
+    print(caesar(secret, -3));
+    print(runLength("aaabccddddde"));
+    print(palindrome("A man, a plan, a canal: Panama"));
+    print(palindrome("Jux lang"));
+
+    var words = "the quick brown fox jumps over the lazy dog the end".split(" ");
+    var counts = new BTreeMap<String, int>();
+    for (var w : words) {
+        counts.insert(w, (counts.get(w) ?? 0) + 1);
+    }
+    for (var e : counts) {
+        if (e.1 > 1) {
+            print(e.0 + " x" + e.1);
+        }
+    }
+
+    long[] values = {0, 1, 6, 255, 1024, 65535, 123456789};
+    for (var v : values) {
+        print(v + ": bits=" + popcount(v) + " pow2=" + powerOfTwo(v) + " rev16=" + reverseLow16(v));
+    }
+    long flags = 0;
+    flags |= 1L << 3;
+    flags |= 1L << 40;
+    flags ^= 1L << 3;
+    print("flags=" + flags + " bit40=" + ((flags >> 40) & 1));
+    print("mask=" + (0xFFL << 8) + " neg shift=" + (-16L >> 2));
+}

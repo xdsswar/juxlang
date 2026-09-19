@@ -112,7 +112,7 @@ impl RustEmitter {
     /// A record or enum declares its parameters bare. A struct declares them
     /// with the class bounds, which every impl must repeat; the struct path
     /// sets [`RustEmitter::op_impl_class`] to say so.
-    fn emit_value_impl_head(&mut self, trait_path: &str, name: &str, params: &[TypeParam]) {
+    pub(crate) fn emit_value_impl_head(&mut self, trait_path: &str, name: &str, params: &[TypeParam]) {
         self.w.emit_indent();
         self.w.push_str("impl");
         match self.op_impl_class.clone() {
