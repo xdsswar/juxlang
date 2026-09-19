@@ -71,8 +71,8 @@ pub const BUILTIN_ANNOTATIONS: &[&str] = &[
     "Override",
     // §TS.1 — the testing framework's case, lifecycle hooks, and skip marker.
     "Test", "BeforeAll", "BeforeEach", "AfterEach", "AfterAll", "Ignore",
-    // FFI and layout (§8.1, §8.4, §L.1.3).
-    "extern", "export", "layout",
+    // FFI and layout (§8.1, §8.4, §L.1.3), and a type's alignment (§L.1.4).
+    "extern", "export", "layout", "align",
 ];
 
 /// Names that are bound without a declaration or an `import`: the prelude
@@ -102,6 +102,12 @@ pub const BUILTIN_NAMES: &[&str] = &[
     // The opaque top type (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). Not lexed as a
     // primitive: `@cfg(any(...))` and `Task.any` keep the plain name.
     "any",
+    // The bottom type (JUX-CORE-LIB-ADDENDUM §K.4.1), compiler-recognized and
+    // usable in any type position without an import.
+    "never",
+    // What `a..b`, `a..=b` and `r step s` produce (JUX-MISSING-DEFS §M.6.1),
+    // written as types by a program that stores or passes a range.
+    "ExclusiveRange", "InclusiveRange", "SteppedRange",
 ];
 
 /// The full token alphabet, ready to serialize to `jux-tokens.json`.
@@ -305,7 +311,7 @@ mod tests {
             sorted,
             [
                 "AfterAll", "AfterEach", "BeforeAll", "BeforeEach", "Ignore",
-                "Override", "Test", "export", "extern", "layout",
+                "Override", "Test", "align", "export", "extern", "layout",
             ],
             "the honored-annotation set changed -- update the editor's list too",
         );
