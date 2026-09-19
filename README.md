@@ -53,6 +53,19 @@ optimize all of it to the metal.
 That's the goal. Some of it works today, some of it is half-built, some of it is
 still on paper. I'll be honest below about which is which.
 
+**On this page:**
+[screenshots](#the-first-window-jux-ever-drew) ·
+[a taste of Jux](#a-taste-of-jux) ·
+[the language tour](#more-of-the-language) ·
+[friendly to Java hands](#friendly-to-java-hands) ·
+[what works today](#what-works-today) ·
+[how Jux uses Rust](#how-jux-uses-rust-the-part-im-proud-of) ·
+[how the lowering works](#how-the-borrow-checker-works-and-how-we-lower-to-rust) ·
+[how Jux is tested](#how-jux-is-tested) ·
+[getting started](#getting-started) ·
+[`jux.toml`](#project-config-juxtoml) ·
+[commands](#jux-command-reference)
+
 ---
 
 ## The first window Jux ever drew
@@ -638,11 +651,394 @@ public void main() {
 }
 ```
 
-> Coming features (specced, not emitted yet): taking the address of an object
-> (`&obj`) and the full C/C++ FFI binding layer they hang off. Freeing memory
-> needs no `delete` keyword by design: you call the foreign deallocator inside
-> `unsafe`, from a `drop { }` destructor (writing `delete p;` is guided there by
-> a diagnostic). Until those land, raw pointers are for value-typed locals.
+Taking the address of an object (`&obj`) works too, and pointers can live in
+fields. Freeing memory needs no `delete` keyword by design: you call the foreign
+deallocator inside `unsafe`, from a `drop { }` destructor (writing `delete p;`
+is guided there by a diagnostic).
+
+### Records: data classes with no boilerplate
+
+A `record` is an immutable data carrier. Equality, hashing and printing come for
+free, a **compact constructor** validates or normalizes the components before they
+are stored, and extra constructors chain to the canonical one with `this(...)`.
+
+```java
+record Range(int lo, int hi) {
+    Range {                                  // compact constructor
+        if (lo > hi) { int t = lo; lo = hi; hi = t; }   // normalize, don't reject
+    }
+    Range(int single) { this(single, single); }
+    public int length() { return hi - lo; }
+}
+
+record Temperature(double celsius) {
+    Temperature {
+        if (celsius < -273.15) {
+            throw new IllegalArgumentException($"below absolute zero: ${celsius}");
+        }
+    }
+}
+
+print(new Range(9, 2));                      // Range(lo: 2, hi: 9)
+print(new Range(3, 8).length());             // 5
+```
+
+Need a changed copy? `with(...)` builds one, naming only the components that
+change, and it nests:
+
+```java
+record Address(String city, String country) {}
+record User(String name, Address addr) {}
+
+var u  = new User("Alice", new Address("Paris", "FR"));
+var u2 = u.with(addr: u.addr.with(city: "Lyon"));   // u is untouched
+```
+
+### Sealed hierarchies and real pattern matching
+
+A `sealed interface` closes its set of implementations, so a `switch` over it is
+checked for exhaustiveness with no `default`. Patterns take records apart in the
+same step that tests their type, can hold literals, and can carry a `when` guard.
+
+```java
+sealed interface Shape permits Circle, Square, Triangle {}
+record Circle(double radius) implements Shape {}
+record Square(double side) implements Shape {}
+record Triangle(double base, double height) implements Shape {}
+
+String describe(Shape s) {
+    return switch (s) {
+        case Circle(0.0) -> "a point";                         // literal inside a pattern
+        case Circle(var r) when r > 100.0 -> "a huge circle";  // guard
+        case Circle(var r) -> $"a circle of radius ${r}";
+        case Square sq -> $"a square of side ${sq.side}";      // type pattern with a binder
+        case Triangle t -> "a triangle";
+    };                                                         // no default: the set is closed
+}
+```
+
+**Or-patterns bind names too.** When every alternative binds the same name with
+the same type, the arm body sees one variable, whichever alternative matched:
+
+```java
+sealed interface Expr permits Num, Neg, Twice {}
+record Num(int v) implements Expr {}
+record Neg(int v) implements Expr {}
+record Twice(int v) implements Expr {}
+
+int magnitude(Expr e) {
+    return switch (e) {
+        case Num(var n) | Neg(var n) -> n;
+        case Twice(var n) -> 2 * n;
+    };
+}
+
+String pair((int, int) p) {                  // tuples match the same way
+    return switch (p) {
+        case (0, var y) | (var y, 0) -> "axis " + y;
+        case (var a, var b) when a == b -> "diag " + a;
+        default -> "other";
+    };
+}
+```
+
+### Tuples and destructuring
+
+Tuples are anonymous, fixed-size value groups: handy for returning two things
+without inventing a class. A declaration can take tuples and records apart, at any
+depth, with `_` to skip a part:
+
+```java
+(int, int) divmod(int a, int b) { return (a / b, a % b); }
+
+record Pt(int x, int y) {}
+record Line(Pt start, Pt end) {}
+
+public void main() {
+    var (q, r) = divmod(17, 5);                    // 3, 2
+    var pair = divmod(22, 7);
+    print(pair.0 + pair.1);
+
+    var l = new Line(new Pt(1, 2), new Pt(3, 4));
+    var Line(Pt(ax, ay), Pt(bx, by)) = l;          // nested, one line
+    var Line(Pt(_, var y1), var end) = l;          // skip parts, keep a whole record
+    print((bx - ax) * (by - ay));
+}
+```
+
+### Null safety that the compiler actually tracks
+
+A type is non-null unless it says otherwise. `T?` may be `null`, and the compiler
+will not let you use it as a `T` until you have checked it. The checks you would
+write anyway are the ones it understands:
+
+```java
+String require(String? s) {
+    return s ?: throw new IllegalArgumentException("missing value");   // s is a String after this
+}
+
+int total(Node? head) {
+    Node? cur = head;
+    int sum = 0;
+    while (cur != null) {        // cur is a Node inside the loop
+        sum += cur.value;
+        cur = cur.next;
+    }
+    return sum;
+}
+
+public void main() {
+    int? present = 5;
+    print(present ?? expensive());   // `??` short-circuits: expensive() never runs here
+    Node? gone = null;
+    var r = gone?.step();            // `?.` skips the whole call on null
+    Animal pet = new Dog();
+    if (pet => Dog) print(pet.bark());   // `=>` type test, then pet IS a Dog in the branch
+    String name = maybeName()!!;     // `!!` asserts non-null (throws if it is null)
+}
+```
+
+### Operators, taken all the way
+
+Arithmetic, comparison, equality, hashing, indexing, ranges and text are all
+**operator overrides**, never magic method names. There is no `equals`,
+`hashCode`, `compareTo` or `toString` to remember: you override `operator==`,
+`operator hash`, `operator<=>` and `operator string`.
+
+**One operator, several operand types.** The right operand picks the overload the
+way a call picks a method, and each overload has its own return type:
+
+```java
+class Vec2 {
+    public double x;
+    public double y;
+    public Vec2(double x, double y) { this.x = x; this.y = y; }
+
+    public Vec2   operator*(double k)   { return new Vec2(x * k, y * k); }      // scale
+    public double operator*(Vec2 other) { return x * other.x + y * other.y; }  // dot product
+    public Vec2   operator+(Vec2 other) { return new Vec2(x + other.x, y + other.y); }
+    public String operator string()     { return $"(${x}, ${y})"; }
+}
+
+var a = new Vec2(1.0, 2.0);
+var b = new Vec2(3.0, 4.0);
+Vec2   doubled = a * 2.0;       // (2.0, 4.0)
+double dot     = a * b;         // 11.0
+a *= 10.0;                      // compound assignment picks the same way
+```
+
+**`<=>` gives you the whole ordering.** Define one three-way comparison and
+`<`, `<=`, `>`, `>=` all follow, for your own types and for sorting:
+
+```java
+class Version {
+    private int major;
+    private int minor;
+    Version(int major, int minor) { this.major = major; this.minor = minor; }
+
+    public int operator <=>(Version other) {
+        if (this.major != other.major) { return this.major <=> other.major; }
+        return this.minor <=> other.minor;
+    }
+}
+
+print(new Version(1, 9) < new Version(2, 0));   // true
+```
+
+**Operators in interfaces, used as generic bounds.** An interface can declare an
+operator as a contract, and generic code bounded by it can simply write `a + b`:
+
+```java
+interface Addable<T>  { T operator+(T other); }
+interface Scalable<T> { T operator*(double k); }
+
+<T extends Addable<T>> T sum(Vec<T> items, T zero) {
+    var total = zero;
+    for (var item : items) { total = total + item; }
+    return total;
+}
+
+<T extends Addable<T> & Scalable<T>> T midpoint(T a, T b) {
+    return (a + b) * 0.5;       // two bounds, two operators, one expression
+}
+```
+
+**Ranges of your own types.** `a..b` and `a..=b` call `operator..` / `operator..=`,
+so a for-each can walk dates, versions or anything else you define:
+
+```java
+record Date(int day) {
+    public Vec<Date> operator..=(Date end) {
+        var out = new Vec<Date>();
+        for (int d = day; d <= end.day; d++) { out.push(new Date(d)); }
+        return out;
+    }
+}
+
+for (var d : new Date(10)..=new Date(12)) { print(d.day); }   // 10, 11, 12
+```
+
+### Generators: `yield`
+
+A function that `yield`s returns an `Iterator<T>` and runs only as far as the
+caller asks, so endless sequences are fine. `yield*` hands over to another
+iterator, which makes a recursive tree walk a few lines long. An `async`
+generator returns a `Stream<T>` you read with `for await`.
+
+```java
+Iterator<long> fibonacci() {
+    long a = 0;
+    long b = 1;
+    while (true) {              // endless, and that's fine
+        yield a;
+        var next = a + b;
+        a = b;
+        b = next;
+    }
+}
+
+Iterator<int> inOrder(Node? node) {
+    if (node == null) { return; }   // `return;` ends the sequence
+    yield* inOrder(node.left);
+    yield node.value;
+    yield* inOrder(node.right);
+}
+
+Iterator<int> evens(Iterator<int> source) {   // a lazy pipeline stage
+    for (var n : source) {
+        if (n % 2 == 0) { yield n; }
+    }
+}
+```
+
+### Default parameters and named arguments
+
+Defaults are evaluated at the call site, fresh on every call (no shared mutable
+default trap), and any argument can be passed by name. It works on functions,
+methods and constructors alike:
+
+```java
+void connect(String host, int port = 80, int timeout = 30) {
+    print($"$host:$port (t=$timeout)");
+}
+
+connect("example.com");                          // example.com:80 (t=30)
+connect("example.com", port: 443);               // example.com:443 (t=30)
+connect("example.com", timeout: 60, port: 443);  // any order once named
+```
+
+Overloading by parameter type works for free functions and methods, and `T...`
+varargs take any number of arguments (or an array).
+
+### Exceptions, the Java way, plus `Result` and `?`
+
+`try` / `catch` / `finally` behave like Java's, including checked exceptions:
+a body that can throw a checked exception must catch it or declare it with
+`throws` (error `E0711` otherwise). Multi-catch handles unrelated types with one
+body, and `finally` always runs first, even when a catch body throws.
+
+```java
+class ConfigError extends Exception { ConfigError(String m) { super(m); } }
+
+void load() throws ConfigError { throw new ConfigError("bad host"); }
+
+void risky(int kind) throws NetError, TimeoutError { ... }
+
+public void main() {
+    try {
+        load();
+    } catch (ConfigError e) {
+        print("recovered: " + e.getMessage());
+    }
+
+    try {
+        risky(0);
+    } catch (NetError | TimeoutError e) {          // multi-catch
+        print("transient: " + e.getMessage());
+    } finally {
+        print("always runs");
+    }
+}
+```
+
+When you'd rather return errors as values, `Result<T, E>` and the `?` operator
+propagate them, and `?` works on nullables too:
+
+```java
+Result<int, String> parsePort(String s) {
+    if (s == "80") { return Result.Ok(80); }
+    return Result.Err("bad port: " + s);
+}
+
+Result<String, String> describe(String s) {
+    var port = parsePort(s)?;             // Ok unwraps, Err returns early
+    return Result.Ok("port is " + port);
+}
+```
+
+### Conditional compilation
+
+`@cfg(...)` keeps a declaration in or out of the build, and `if cfg(...)` does
+the same inside a body. What a build leaves out is gone, so it may even call
+functions that only exist on another target:
+
+```java
+@cfg(os = "windows")
+public String home() { return "C:\\Users"; }
+
+@cfg(not(os = "windows"))
+public String home() { return "/home"; }
+
+public void main() {
+    if cfg(feature = "verbose") {        // features are declared in jux.toml
+        print("verbose build");
+    }
+}
+```
+
+### Testing is built in
+
+`jux test` finds every `@Test` function and runs it, with `@BeforeAll`,
+`@BeforeEach`, `@AfterEach` and `@AfterAll` hooks and the usual assertions,
+including `assertThrows<E>`:
+
+```java
+import jux.std.testing.*;
+
+int divide(int a, int b) { return a / b; }
+
+@Test
+void numbersAddUp() {
+    assertEqual(4, 2 + 2);
+    assertNear(0.3, 0.1 + 0.2, 1e-9);
+}
+
+@Test
+void divisionByZeroThrows() {
+    assertThrows<ArithmeticException>(() -> divide(1, 0));
+}
+```
+
+---
+
+## Friendly to Java hands
+
+Jux looks like Java on purpose, so Java habits are the most common mistakes. The
+compiler recognizes them and tells you the Jux way instead of just saying "no":
+
+```text
+app.jux:3:5: [E0413] error: no method `add` on type `rust.std.Vec` -- Jux collections are the Rust std ones: use `push` or `insert`
+app.jux:9:11: [E0413] error: no method `equals` on type `Point` -- equality is an operator: write `a == b` (override `operator==` to define it)
+app.jux:12:11: [E0413] error: no method `toString` on type `Point` -- a value's text is its `operator string` (override it to define it): interpolate it, `$"${x}"`, or call `x.operator string()`
+app.jux:13:11: [E0413] error: no method `getOwner` on type `Account` -- `Owner` is read directly: `x.Owner`, with no call
+app.jux:2:5: [E0301] error: cannot find `System` in this scope -- Jux prints with `print(...)`; format with interpolation, `print($"${x}")`
+app.jux:4:22: [E0200] error: an array literal is written with braces: `{a, b, c}`, not `[a, b, c]`
+```
+
+Every diagnostic has a code, a precise span and, where there is an obvious fix, a
+hint. Errors are Jux's own: the goal is that a mistake in Jux code is reported by
+`juxc` in Jux terms and never leaks through as a confusing `rustc` error about
+code you did not write.
 
 ---
 
@@ -663,11 +1059,32 @@ runs. That currently includes:
   multi-interface inheritance, like Java.
 - **Generics:** `class A<T>`, bounded type params, wildcards (`? extends`,
   `? super`), const generics (`<int N>`), explicit type arguments.
-- **Enums + `match`** with exhaustiveness checking, payload binding, and
+- **Enums + `switch`** with exhaustiveness checking, payload binding, and
   recursive variants (`Add(Expr, Expr)` self-referential trees, auto-boxed).
-- **Records**, **lambdas & method references**, **operator overloading**.
-- **Annotations** (case-insensitive built-in lookups).
-- **String interpolation:** `$"hello ${name}"`.
+  Enums get `name()`, `ordinal()`, `fromName()`, `fromOrdinal()` and `cases()`.
+- **Pattern matching:** record patterns, type patterns with binders, literal
+  patterns, `when` guards, ranges, or-patterns that bind names, tuple patterns,
+  and nested destructuring declarations. `sealed` interfaces make a `switch`
+  exhaustive with no `default`.
+- **Records** (compact and extra constructors, `with(...)`), **tuples**,
+  **lambdas & method references** (including `async` lambdas), **generators**
+  (`yield` / `yield*` to `Iterator<T>`, async generators to `Stream<T>`).
+- **Operators:** arithmetic, comparison, `<=>` (which derives `<` `<=` `>` `>=`),
+  `==` + `hash`, `string`, indexers `[]` / `[]=`, compound assignment, free
+  operators, overloads by operand type, operators in interfaces and generic
+  bounds, and `..` / `..=` on your own types.
+- **Null safety:** `T?`, `?.`, `??`, `?:` (including `?: throw`), `!!`, and flow
+  narrowing after `!= null`, `=>` type tests, `assert`, and guard clauses.
+- **Parameters:** defaults, named arguments, `T...` varargs, overloading by type
+  (free functions too), `out` parameters, `final` / `weak` / `ref` parameters.
+- **Exceptions:** `try` / `catch` / `finally`, checked exceptions with `throws`,
+  multi-catch, exception causes, plus `Result<T, E>` and the `?` operator.
+- **Annotations** declared in Jux (`public annotation Route { ... }`), checked at
+  compile time, with a generated registry for runtime-retention ones (this is how
+  the HTTP example routes requests with no reflection).
+- **Conditional compilation:** `@cfg(...)` on declarations and `if cfg(...)` in
+  bodies, with features declared in `jux.toml`.
+- **String interpolation:** `$"hello ${name}"`, plus raw strings.
 - **Observable properties:** `observer<T>`, binding, bidirectional binding.
 - **Async/streams, a testing framework, exceptions** (`try`/`catch`/`finally`).
 - **Concurrency:** `async`/`await`, `spawn` tasks, `Channel<T>`, real-thread
@@ -688,8 +1105,9 @@ runs. That currently includes:
 
 - `jux new` scaffolds a project and `jux test` runs `@Test` functions today;
   `jux bench` is not added yet.
-- `rust.std` compile coverage is partial: construction and method calls work;
-  free functions, traits/operators, and the full type mapping are being filled in.
+- `rust.std` and crate coverage is wide but not total: construction, methods,
+  free functions, statics and trait methods work (the HTTP and TCP examples run
+  on `std::io` and `tiny_http`); the gaps are listed just below.
 - **C FFI** works for the common case: declare C functions in an
   `@extern(lib = "…") unsafe native { … }` block and call them inside `unsafe`.
   System libraries link via `#[link]`; custom libraries are configured with an
@@ -713,19 +1131,17 @@ runs. That currently includes:
   [`examples/ffi_variadic.jux`](examples/ffi_variadic.jux), and
   [`examples/ffi_export.jux`](examples/ffi_export.jux). Still to come: header
   `bindgen` and C++.
-- Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
-  There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
-  foreign-`free` model).
-- **Polymorphic values in a generic container** don't compile yet: a
-  `List<Shape>` holding mixed subtypes (`Circle`/`Square`/…) is rejected because
-  the element type doesn't lower to the `dyn` form. Polymorphism through
-  base-typed locals (`Shape s = new Circle(); s.area();`) works fine; only the
-  *generic-collection-of-supertype* case is open.
-- **A nullable class handle (`T?`) moves instead of share-cloning** on
-  assignment, so reusing it in a later loop iteration trips the borrow checker
-  (`use of moved value`). A non-nullable handle shares correctly; the `Option<>`
-  path is the gap.
-- Tuple syntax is still placeholder.
+- Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`,
+  pointer fields, function pointers). There is no `delete` keyword by design
+  (`delete p;` is guided to the `drop { }` + foreign-`free` model).
+- **Rust std discovery has gaps.** Everything is discovered from rustdoc, never
+  hand-listed, and a few corners are not reached yet: the `f64` math methods on
+  `double` (`powf`, `sin`, ...), iterator adaptors, and trait methods that come
+  from blanket or cross-crate impls. The [Jux lessons](tests/lessons/README.md)
+  track each one with a repro.
+- **Real language gaps, logged and not invented yet:** `union`, inline `asm`,
+  custom allocators and arenas, and compile-time version/source-location queries.
+- `move` is reserved but not implemented; classes share by reference counting.
 - Expect bugs. This is experimental, one person is building it, and corners of the
   language will break, change, or get rewritten without warning. File issues.
 
@@ -763,16 +1179,61 @@ because they are Rust's.
 
 ### Dependencies: crates *and* Jux libraries
 
-- **Rust crates** from crates.io, consumed and called with Jux syntax.
+- **Rust crates** from crates.io (or a path, or git), consumed and called with Jux
+  syntax. Add `"rust.tiny_http" = "0.12"` to `jux.toml` and `import
+  rust.tiny_http.Server;` just works: the compiler reads the crate's rustdoc,
+  writes a Jux-syntax stub for type checking, and links the crate into the build.
+  Member names stay exactly as the crate spells them (`is_open`, `recv`), so the
+  crate's own docs apply.
 - **Jux libraries straight from GitHub.** Point at a repo (with branch / tag /
   rev, or a bare-URL shorthand), and `jux` resolves and caches it under `~/.jux`.
   Cross-compilation via `--target <triple>` is supported.
 
 ### Annotations for frameworks
 
-Annotations are first-class and the plan is to lean on them hard, so people can
-build clean, declarative frameworks on top of Jux the way Spring or ASP.NET did
-for their ecosystems.
+Annotations are declared in Jux, checked at compile time, and the compiler writes
+every runtime-retention use into a generated registry. That is the Spring-Boot
+shape without a reflection runtime. Here is the real HTTP server from
+[`examples/http_server`](examples/http_server), a crates.io socket library plus an
+annotation router:
+
+```java
+import rust.tiny_http.Server;
+import rust.tiny_http.Response;
+import jux.meta.Registry;
+import jux.std.meta.AnnotatedItem;
+
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+    String method() default "GET";
+}
+
+public class Api {
+    @Route(path = "/health")
+    public String health() { return "ok\n"; }
+}
+
+/** The handler whose `@Route` path matches `url`, or null. */
+public AnnotatedItem? routeFor(String url) {
+    for (var r : Registry.annotated("Route")) {
+        if (r.getOr("path", "") == url) { return r; }
+    }
+    return null;
+}
+
+public void main() {
+    var server = Server.http("127.0.0.1:9091");
+    while (true) {
+        var request = server.recv();
+        var route = routeFor(request.url());
+        // ... dispatch to the handler, answer with a tiny_http Response
+    }
+}
+```
+
+Nothing in the program keeps a list of routes. Adding an endpoint is one annotated
+method, and the router finds it on the next build.
 
 ### C / C++ FFI
 
@@ -839,6 +1300,39 @@ optimizing backend already out there and gets out of the way.
         (share-clones, RefCell,                  everything
          hoists; no borrow errors)
 ```
+
+---
+
+## How Jux is tested
+
+A young language is only as good as the programs it has survived. Jux is held to
+several independent checks, and all of them run locally with one command
+(`cargo xtask gate`):
+
+- **Every example is a test.** Each of the 360+ programs in
+  [`examples/`](examples/) is compiled, run, and compared byte for byte with its
+  expected output.
+- **Java differential twins.** Around a hundred programs (a bank ledger, an LRU
+  cache, a state machine, a binary search tree, generators, pattern matching...)
+  exist twice, once in Jux and once in Java. Both are run and their output is
+  diffed, so "behaves like Java" is measured, not claimed. The few places where
+  Jux differs on purpose are declared, with the reason.
+- **The Jux lessons.** [`tests/lessons/`](tests/lessons/) holds 67 small teaching
+  programs, one concept each (Hello, Variables, Generics, Ownership, Json,
+  Files, Pointers, FFI...), each with its exact expected transcript. The
+  [results table](tests/lessons/README.md#results) records what passes, what a
+  bug broke and which commit fixed it.
+- **Blessed diagnostics.** UI tests pin the exact text, code and position of
+  every error for hundreds of wrong programs, so a message never degrades
+  silently.
+- **Stability gates.** A no-crash fuzz pass over the parser and checker, and a
+  determinism check that the same program always produces the same diagnostics
+  and the same Rust.
+- **The IDE plugin** has its own suite (close to 900 tests), including sweeps that
+  open every example and every lesson and require zero false errors.
+
+In total that is well over 1,400 compiler tests on every change, and nothing is
+merged unless all of it is green.
 
 ---
 
@@ -930,15 +1424,39 @@ cd ide/intellij-plugin
 ```
 
 The first build downloads the IntelliJ Platform and a JDK 21 toolchain
-automatically. The result is `build/distributions/jux-intellij-0.0.3.zip`. Then in
+automatically. The result is `build/distributions/jux-intellij-0.0.9.zip`. Then in
 your IDE:
 
 **Settings/Preferences > Plugins > gear icon > Install Plugin from Disk...**, pick
 the zip, then **restart**.
 
-You'll get syntax highlighting, **New > Jux File** templates (Class, Interface,
-Enum, Struct, Record, Annotation), diagnostics, hover types, completion, and a Run
-button for any file with a `main`.
+The goal is to feel like IntelliJ's Java support, and it gets closer with every
+release. What you get today:
+
+- **Editing:** a real PSI parser for all of Jux (records, sealed types, patterns,
+  generators, operators, `@export { }` blocks, properties and observers),
+  semantic highlighting, folding with Java's regions and defaults, smart enter,
+  surround-with, move statement, live templates, brace matching, and a formatter
+  that honors the Wrapping and Braces and Blank Lines code-style tabs.
+- **Completion** ranked the way Java's is, most relevant first: locals and
+  members in scope, smart type-aware suggestions, name suggestions, enum helpers,
+  members of every Rust crate and Jux library in the project (re-indexed when a
+  dependency changes), and override completion that writes `@override` and the
+  whole member for you.
+- **Navigation:** go to declaration, implementation and type declaration, Find
+  Usages, Quick Definition, Type Info (Ctrl+Shift+P), type hierarchy, File
+  Structure with filters, breadcrumbs, Go to Test / Create Test, and Ctrl+B on an
+  operator (`a * 2.0`, `a..b`) lands on the exact overload the compiler picks.
+- **Inspections and quick-fixes:** unresolved symbols, unused variables,
+  Java-parity checks ("if can be simplified", "indexed loop can be a for-each"),
+  generator and interface-operator rules, and "Create missing case branches" for a
+  `switch` over an enum or sealed type. Diagnostics from `juxc-lsp` show inline.
+- **Refactoring:** rename (with conflict detection), extract and inline
+  variable/method, safe delete.
+- **Docs and running:** Java-style Quick Documentation (signature, inferred `var`
+  types, `@param` / `@return` / `@throws`, inherited docs), **New > Jux File**
+  templates, a Run button for any `main`, and a test runner with gutter icons for
+  `@Test` functions.
 
 > On **IntelliJ Community**, the native LSP client is inert, so install **LSP4IJ**
 > from the Marketplace and register `juxc-lsp` for the Jux file type. On
@@ -980,6 +1498,12 @@ main = "it.xss.Main"                     # entry file by dotted path: src/it/xss
 "com.acme.json"  = { git = "https://github.com/acme/json", tag = "v1.4.2" }
 # A Rust crate from crates.io, used with Jux syntax:
 "rust.serde_json" = "1.0"
+
+# Features for `@cfg(feature = "...")` / `if cfg(feature = "...")`,
+# switched on with `jux build --features verbose`:
+[features]
+default = []
+verbose = []
 
 # Linking a C library works today via an [ffi.*] table (you declare the
 # functions yourself in an `@extern unsafe native` block):
@@ -1050,7 +1574,12 @@ juxlang/
 ├── Architecture/                # the language specification (the contract)
 │   ├── JUX-LANG-V1.md           # consolidated dossier
 │   └── JUX-*-ADDENDUM.md        # 20+ normative addenda
-├── examples/                    # .jux programs; every one compiles & runs
+├── examples/                    # .jux programs; every one compiles, runs, and is output-checked
+├── tests/
+│   ├── lessons/                 # 67 Jux teaching lessons, each with its exact transcript
+│   ├── ui/                      # wrong programs + their blessed diagnostics
+│   └── expected/                # expected output of every example
+├── tools/java-differential/     # Jux/Java twin programs, run and diffed
 ├── benchmarks/                  # self-timing perf workloads + runner (run.ps1)
 ├── crates/
 │   ├── juxc-source/             # source files, spans, positions
