@@ -1144,9 +1144,11 @@ impl RustEmitter {
     /// an `async` block that the prelude's `JuxGenerator` resumes once per
     /// `next()`, each `yield` handing a value out and suspending there.
     ///
-    ///     std::rc::Rc::new(crate::JuxGenerator::<T>::new(move |__jux_co| async move {
-    ///         ...body, with `yield v;` as `__jux_co.yield_(v).await;`...
-    ///     }))
+    /// ```text
+    /// std::rc::Rc::new(crate::JuxGenerator::<T>::new(move |__jux_co| async move {
+    ///     ...body, with `yield v;` as `__jux_co.yield_(v).await;`...
+    /// }))
+    /// ```
     ///
     /// An async generator (§M.2.2) wraps the same machine as a `Stream<T>`.
     /// The block owns everything it uses (`move`), so the iterator can
