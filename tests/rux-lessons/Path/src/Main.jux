@@ -1,0 +1,51 @@
+// A path looks like a string and is not one.
+//
+// The operating system decides what a filename may contain, and its answer is
+// not "valid text". Windows paths are sequences of 16-bit units that need not
+// form valid UTF-16; Unix paths are bytes that need not form valid UTF-8. A
+// type that insisted on being text could not name every file that exists.
+//
+// So Rust's std has `OsString`, which holds whatever the system holds, and
+// `Path`, which is a view of one with path meaning attached (`PathBuf` is the
+// owned, growable kind). Jux uses them as they are, through `rust.std`.
+
+import rust.std.Component;
+import rust.std.MAIN_SEPARATOR;
+import rust.std.Path;
+
+void main() {
+    // Text goes in through a conversion, because it is a conversion: from
+    // text into whatever this platform's names are made of.
+    final Path path = new Path("Bin/reports/summary.txt");
+    // Length and emptiness are questions about the underlying `OsStr`.
+    print($"length in units  ${path.as_os_str().len()}");
+    print($"is it empty      ${path.as_os_str().is_empty()}");
+
+    // Walking the parts. A path is a sequence of components, and the
+    // separator between them is the platform's business rather than yours,
+    // which is why splitting on a hard-coded slash is a bug waiting for a
+    // different machine. Each component is a `Component`: an ordinary name is
+    // `Normal`, and the others mark a root, a `.` or a `..`.
+    var line = "components      ";
+    for (var part : path.components()) {
+        switch (part) {
+            case Normal(var name) -> line += $" [${name.to_str() ?: "?"}]";
+            case _ -> line += " [?]";
+        }
+    }
+    print(line);
+
+    // Comparison is by path rules rather than by text, so two spellings the
+    // system considers the same compare equal.
+    final Path other = new Path("Bin/reports/summary.txt");
+    print($"equal to itself  ${path == other}");
+
+    // And the separator, if it is ever genuinely needed. It is `\` on Windows
+    // and `/` elsewhere, so the lesson prints only that it is one of the two.
+    print($"separator known  ${MAIN_SEPARATOR == '/' || MAIN_SEPARATOR == '\\'}");
+
+    // The practical upshot: build paths through `Path` and `PathBuf.join`,
+    // not by joining strings with slashes. Text conversion happens at the
+    // edges: once on the way in, and once on the way out when something has
+    // to be shown to a person.
+}

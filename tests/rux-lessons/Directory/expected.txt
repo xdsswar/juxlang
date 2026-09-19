@@ -1,0 +1,6 @@
+made rux-directory-lesson
+made two files
+  first.txt
+  second.txt
+found 2 entries
+cleaned up
