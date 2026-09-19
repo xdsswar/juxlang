@@ -36,7 +36,7 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
 
         val failures = StringBuilder()
         var count = 0
-        JuxCorpus.entries(examples).forEach { (name, file) ->
+        JuxCorpus.sweep(examples).forEach { (name, file) ->
             count++
             val psi = createPsiFile(name, file.readText())
             val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)

@@ -75,7 +75,7 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
 
         val failures = StringBuilder()
         var count = 0
-        val files = JuxCorpus.entries(examples)
+        val files = JuxCorpus.sweep(examples)
 
         // PHASE 1 -- every file into the project first.
         //

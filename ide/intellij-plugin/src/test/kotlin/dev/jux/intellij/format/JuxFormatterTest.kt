@@ -273,7 +273,7 @@ class JuxFormatterTest : BasePlatformTestCase() {
         val examples = File("../../examples").absoluteFile
         assertTrue("examples dir not found at $examples", examples.isDirectory)
         var count = 0
-        for (file in JuxCorpus.files(examples)) {
+        for (file in JuxCorpus.sweepFiles(examples)) {
             count++
             val once = reformat(file.readText())
             val twice = reformat(once)

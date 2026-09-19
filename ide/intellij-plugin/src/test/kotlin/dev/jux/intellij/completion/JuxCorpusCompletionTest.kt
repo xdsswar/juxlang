@@ -30,7 +30,7 @@ class JuxCorpusCompletionTest : BasePlatformTestCase() {
 
         val failures = StringBuilder()
         var positions = 0
-        val files = JuxCorpus.entries(examples)
+        val files = JuxCorpus.sweep(examples)
         for ((name, file) in files) {
             val text = file.readText()
             for (offset in probePositions(text)) {
