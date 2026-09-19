@@ -181,6 +181,10 @@ pub(crate) struct Parser<'a> {
     /// arrow is never a lambda's; a lambda nested inside the guard
     /// (`when xs.any(x -> x > 0)`) has its own arrow and still parses.
     pub(crate) switch_arm_arrow: Option<usize>,
+    /// Set when the declaration being parsed was written `unsafe public ...`
+    /// (Layout-ABI L.5): the visibility parser consumed that `unsafe` and the
+    /// modifier loop records it.
+    pub(crate) leading_unsafe: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -192,6 +196,7 @@ impl<'a> Parser<'a> {
             pending_gt: 0,
             in_as_type: false,
             switch_arm_arrow: None,
+            leading_unsafe: false,
             diagnostics: Vec::new(),
             pending_stmts: Vec::new(),
             tuple_tmp_counter: 0,
