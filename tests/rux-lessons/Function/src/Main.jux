@@ -1,0 +1,72 @@
+// A function names a piece of work so it can be run from more than one place.
+// `main` has been one since the first lesson; these are the rest of the shape.
+//
+// Jux writes the result type first, then the name, then the typed parameters,
+// the same order as Java and C.
+
+// Parameters are typed, and so is the result. This one takes two `int` values
+// and gives one back.
+int add(int left, int right) {
+    return left + right;
+}
+
+// A function that returns nothing is declared `void`. It is called for what
+// it does, not for what it produces.
+void announce(String label) {
+    print($"-- ${label} --");
+}
+
+// A parameter can be marked `final` to promise the body never assigns it,
+// which is how Jux spells an immutable parameter. A local holds the running
+// value instead.
+int triple(final int n) {
+    var result = n;
+    result += n;
+    result += n;
+    return result;
+}
+
+// A function may call itself. Each call gets its own parameters, so `n` here
+// is a different `n` on every level, and the `if` is what stops the descent.
+//
+// This is the factorial from the Range lesson written a second way: that one
+// repeated with a loop, this one repeats by calling inward and multiplying on
+// the way back out.
+int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+// `return` leaves immediately, so a function can answer as soon as it knows
+// and need not carry a result to the bottom.
+String sign(int value) {
+    if (value > 0) {
+        return "positive";
+    }
+    if (value < 0) {
+        return "negative";
+    }
+    return "zero";
+}
+
+void main() {
+    announce("arithmetic");
+    print($"Add(2, 3)     ${add(2, 3)}");
+    print($"Triple(7)     ${triple(7)}");
+
+    // The result of one call is an ordinary value, so it can go straight into
+    // the next call.
+    print($"Add(Add(1,2),4) ${add(add(1, 2), 4)}");
+
+    announce("recursion");
+    for (var i : 1..=6) {
+        print($"Factorial(${i}) ${factorial(i)}");
+    }
+
+    announce("early return");
+    print($"Sign(-4)      ${sign(-4)}");
+    print($"Sign(0)       ${sign(0)}");
+    print($"Sign(9)       ${sign(9)}");
+}

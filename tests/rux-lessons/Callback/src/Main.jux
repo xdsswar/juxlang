@@ -1,0 +1,68 @@
+// Functions have been called by name all along. They can also be handed
+// around as values: stored in a local, passed to another function, and called
+// from there.
+//
+// That is what lets one function be given the *part that varies*. Sorting
+// takes a comparison; searching takes a test. Each is written once and told
+// what to do at the point of use.
+
+int doubled(int value) {
+    return value * 2;
+}
+
+int square(int value) {
+    return value * value;
+}
+
+bool isEven(int value) {
+    return value % 2 == 0;
+}
+
+// The parameter type is the shape of the function: what it takes, what it
+// gives back. `(int) -> int` reads "takes an int, gives an int", and anything
+// matching that shape may be passed.
+//
+// An array is a reference, like a class instance, so the writes below land in
+// the caller's array rather than in a copy.
+void applyAll(int[] values, (int) -> int operation) {
+    for (var i : 0..values.length) {
+        values[i] = operation(values[i]);
+    }
+}
+
+// A function taking a test rather than a value can answer any question that
+// can be written as one.
+uint countWhere(int[] values, (int) -> bool test) {
+    uint found = 0;
+    for (var i : 0..values.length) {
+        if (test(values[i])) {
+            found += 1;
+        }
+    }
+    return found;
+}
+
+void main() {
+    int[] numbers = {1, 2, 3, 4, 5};
+
+    // `doubled` is passed, not called: no parentheses. `applyAll` does the
+    // calling, once per element.
+    applyAll(numbers, doubled);
+    print($"doubled  ${numbers[0]} ${numbers[1]} ${numbers[2]} ${numbers[3]} ${numbers[4]}");
+
+    // The same function, given a different operation. Nothing about
+    // `applyAll` changed.
+    applyAll(numbers, square);
+    print($"squared  ${numbers[0]} ${numbers[1]} ${numbers[2]} ${numbers[3]} ${numbers[4]}");
+
+    print($"even     ${countWhere(numbers, isEven)}");
+
+    // A function value can also be held in a local, and its type written out
+    // in full. The local is called exactly like the function it holds.
+    final (int) -> int chosen = doubled;
+    print($"chosen   ${chosen(21)}");
+
+    // A lambda writes the function in place, where it is used, instead of
+    // naming it at the top of the file. It is the same kind of value.
+    print($"odd      ${countWhere(numbers, (n) -> n % 2 != 0)}");
+}
