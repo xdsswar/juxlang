@@ -565,6 +565,11 @@
       <className>dev.jux.intellij.intentions.JuxMergeElseIfIntention</className>
       <category>Jux</category>
     </intentionAction>
+    <intentionAction>
+      <language>Jux</language>
+      <className>dev.jux.intellij.intentions.JuxCreateMissingCasesIntention</className>
+      <category>Jux</category>
+    </intentionAction>
 
     <!-- Join Lines (Ctrl+Shift+J): declaration + assignment, adjacent string
          literals, nested ifs. -->
@@ -805,6 +810,22 @@
         enabledByDefault="true"
         level="INFORMATION"
         implementationClass="dev.jux.intellij.inspections.JuxRedundantElseInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxSimplifiableIf"
+        displayName="'if' statement can be simplified"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxSimplifiableIfInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxIndexedLoop"
+        displayName="Indexed loop can be a for-each"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxIndexedLoopInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxPointlessBooleanExpression"

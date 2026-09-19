@@ -205,6 +205,11 @@ class JuxCompletionContributor : CompletionContributor() {
                     if ("for" in keywords) {
                         result.addElement(keyword("for await"))
                     }
+                    // Where a member begins: the inherited methods this class
+                    // can implement or override, written out in full on accept.
+                    if (keywords === JuxKeywordContext.MEMBER) {
+                        JuxOverrideCompletion.addTo(parameters, result::addElement)
+                    }
 
                     // Tiers 1, 2, 4: declarations visible from the caret only.
                     addVisibleDeclarations(parameters, result::addElement, typesOnly = false, matcher = result.prefixMatcher)
