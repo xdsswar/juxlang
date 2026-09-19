@@ -56,6 +56,9 @@ impl RustEmitter {
         let wrap_each_arm = self.emitting_nullable_target;
         let prev_nullable_target = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
+        // Headed for an interface slot: each expression arm coerces itself
+        // (see `arm_iface_target`).
+        let arm_iface_target = self.arm_iface_target.take();
         // Resolve the scrutinee's enum (if any) so bare `case Variant ->`
         // labels qualify to `Enum::Variant`. Saved/restored for nested switches.
         let prev_switch_enum = self.current_switch_enum.take();
@@ -293,6 +296,7 @@ impl RustEmitter {
                     // generic-arg helper recognizes paths to
                     // nullable locals and `?.`-chain results).
                     let wrap = wrap_each_arm
+                        && arm_iface_target.is_none()
                         && !matches!(&**e, juxc_ast::Expr::Literal(juxc_ast::Literal::Null))
                         && !self.expression_is_already_nullable(e);
                     // An expression-bodied arm with boxed binders becomes a
@@ -323,7 +327,9 @@ impl RustEmitter {
                         };
                         self.operand_primitive(e) != Some(*p) && !adapts
                     });
-                    if widen.is_some() {
+                    if let Some(target) = &arm_iface_target {
+                        self.emit_expr_coerced_to_iface(target, e);
+                    } else if widen.is_some() {
                         self.w.push('(');
                         // `as` binds tighter than any binary operator:
                         // `(n * 2) as i64`, never `n * 2 as i64`.

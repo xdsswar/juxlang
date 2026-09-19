@@ -1,0 +1,50 @@
+// A `? :` or `switch` whose arms are different types, flowing into a slot
+// typed as the interface they share.
+//
+// Each arm is converted on its own: two records have no common Rust type, so
+// converting the conditional as a whole cannot work.
+
+sealed interface Shape permits Circle, Square {}
+record Circle(double r) implements Shape {}
+record Square(double s) implements Shape {}
+
+class Tall {}
+
+/** A `switch` value into an interface return slot. */
+Shape make(String word) {
+    return switch (word) {
+        case "circle" -> new Circle(1.0);
+        default -> new Square(2.0);
+    };
+}
+
+/** The same, nullable: the `null` arm stays null. */
+Shape? maybe(String word) {
+    return switch (word) {
+        case "circle" -> new Circle(3.0);
+        case "square" -> new Square(4.0);
+        default -> null;
+    };
+}
+
+void main() {
+    print(make("circle"));
+    print(make("other"));
+    print(maybe("square"));
+    print(maybe("nothing") == null);
+
+    // A ternary into an interface-typed local.
+    Shape picked = flip() ? new Circle(5.0) : new Square(6.0);
+    print(picked);
+
+    // And into a nullable one.
+    Shape? optional = flip() ? null : new Square(7.0);
+    print(optional);
+
+    // A collection element slot takes the same conversion.
+    var shapes = new Vec<Shape>();
+    shapes.push(flip() ? new Circle(8.0) : new Square(9.0));
+    print(shapes[0]);
+}
+
+bool flip() { return false; }

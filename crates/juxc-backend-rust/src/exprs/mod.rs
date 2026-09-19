@@ -1417,6 +1417,7 @@ impl RustEmitter {
                     .join("::");
                 self.w.push_str(&path);
             }
+            Expr::Call(c) if self.emit_untyped_collect_of_strings(c) => {}
             Expr::Call(c) => {
                 // A foreign method that hands back a COLLECTION hands back the
                 // bare container; the slot receiving it is a handle (§6.5.1),
@@ -1639,6 +1640,27 @@ impl RustEmitter {
     /// `T` / `null` branches produces `if cond { Some(...) }
     /// else { None }`.
     pub(crate) fn emit_ternary(&mut self, t: &juxc_ast::TernaryExpr) {
+        // Headed for an interface slot: each arm coerces itself (see
+        // `arm_iface_target`), which also covers a nullable slot's `Some`.
+        if let Some(target) = self.arm_iface_target.take() {
+            let prev = std::mem::replace(&mut self.emitting_nullable_target, false);
+            self.w.push_str("if ");
+            self.emit_expr(&t.condition);
+            self.w.push_str(" { ");
+            let depth = self.expr_narrowed.len();
+            let when_true = self.null_narrowed_locals(&t.condition, true);
+            self.expr_narrowed.extend(when_true);
+            self.emit_expr_coerced_to_iface(&target, &t.then_branch);
+            self.expr_narrowed.truncate(depth);
+            self.w.push_str(" } else { ");
+            let when_false = self.null_narrowed_locals(&t.condition, false);
+            self.expr_narrowed.extend(when_false);
+            self.emit_expr_coerced_to_iface(&target, &t.else_branch);
+            self.expr_narrowed.truncate(depth);
+            self.w.push_str(" }");
+            self.emitting_nullable_target = prev;
+            return;
+        }
         let wrap_each_arm = self.emitting_nullable_target;
         let prev = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
@@ -3074,7 +3096,16 @@ impl RustEmitter {
         // implementer answers with its own address.
         self.w.push_str("impl crate::JuxIdentity for ");
         self.w.push_str(&struct_name);
-        self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } impl ");
+        self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } ");
+        // The interface trait has a `Display` supertrait (an interface-typed
+        // value prints as its object). An anonymous class has no name of its
+        // own, so it prints the identity form under the interface it
+        // implements, the way a named class without `operator string` does.
+        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str(&struct_name);
+        self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
+        self.w.push_str(target_bare);
+        self.w.push_str("$anon@{:p}\", self as *const Self) } } impl ");
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         // A generic interface is implemented at the arguments written
