@@ -3646,6 +3646,8 @@ impl<'a> Checker<'a> {
     /// and rejects an impossible test (E0442 — `x` could never be a `T`).
     fn check_typetest(&mut self, t: &juxc_ast::TypeTestExpr, allow_binder: bool) {
         self.check_expr(&t.value);
+        // `a => Dolphin` must name a real type (E0417); it reached rustc.
+        self.check_local_type_known(&t.ty);
         if let Some(binder) = &t.binder {
             if !allow_binder {
                 self.diagnostics.push(
@@ -5906,6 +5908,11 @@ impl<'a> Checker<'a> {
                 // the BODY (not the catch/finally blocks).
                 let mut absorb_frame: Vec<Ty> = Vec::new();
                 for c in &t.catches {
+                    // `catch (Oyster e)` must name a real type (E0417).
+                    self.check_local_type_known(&c.ty);
+                    for alt in &c.alt_tys {
+                        self.check_local_type_known(alt);
+                    }
                     absorb_frame.push(ty_from_ref(&c.ty, &self.env, self.symbols));
                     for alt in &c.alt_tys {
                         absorb_frame.push(ty_from_ref(alt, &self.env, self.symbols));
@@ -6406,7 +6413,11 @@ impl<'a> Checker<'a> {
                 // Rust compiler reported a missing `Default` on a type the
                 // program never mentioned by that name.
                 let element = ty_from_ref(&n.element_type, &self.env, self.symbols);
-                if !crate::defaults::ty_has_default(&element, self.symbols) {
+                // An element type that names nothing is E0417 on its own; the
+                // "no default value" follow-up would only repeat it.
+                if self.check_local_type_known(&n.element_type)
+                    && !crate::defaults::ty_has_default(&element, self.symbols)
+                {
                     let written = type_ref_display(&n.element_type);
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -6423,6 +6434,7 @@ impl<'a> Checker<'a> {
             }
 
             Expr::NewArrayLit(n) => {
+                self.check_local_type_known(&n.element_type);
                 for el in &n.elements {
                     self.check_expr(el);
                 }
@@ -6430,8 +6442,12 @@ impl<'a> Checker<'a> {
 
             Expr::Cast(c) => {
                 self.check_expr(&c.value);
-                self.check_reference_cast(c);
-                self.check_string_cast(c);
+                // `a as Crab` with no `Crab` anywhere is E0417, and the cast
+                // rules below have nothing real to compare against.
+                if self.check_local_type_known(&c.ty) {
+                    self.check_reference_cast(c);
+                    self.check_string_cast(c);
+                }
                 // `p as fn(A) -> R` and `f as void*` reinterpret a code address
                 // (§L.6.4), which nothing can check.
                 let from_fn_pointer =
@@ -7712,28 +7728,27 @@ impl<'a> Checker<'a> {
                 .is_some_and(|r| r.components.iter().any(|comp| comp.name == name))
     }
 
-    /// `" -- did you mean `x`?"` when the type has a method whose name is
-    /// close to the one written, else an empty string.
-    ///
-    /// Candidates come from the type's own recorded surface, so a foreign
-    /// type suggests what the rustdoc scan actually found. The threshold is
-    /// deliberately generous on a shared PREFIX, because the misses that
-    /// matter are a Rust name the user shortened (`sort` for
-    /// `sort_unstable`) or a Java name that has a differently-spelled twin.
     /// A local's declared type must name something (E0417): `Zork z = 5;`
     /// used to pass the checker and fail in rustc. Checks the head and every
     /// generic argument and function-type slot, with the same resolver the
     /// signature check uses, and suggests the nearest visible type name.
-    fn check_local_type_known(&mut self, tref: &TypeRef) {
+    ///
+    /// Also used for every other place a type is written inside a body: the
+    /// type of `new T(..)` / `new T[n]`, its generic arguments, a cast
+    /// target, a `=>` type test, explicit call type arguments and a `catch`
+    /// type. Returns `false` when it reported, so a caller can skip a
+    /// follow-on diagnostic about a type that does not exist.
+    fn check_local_type_known(&mut self, tref: &TypeRef) -> bool {
         if let Some(fs) = &tref.fn_shape {
+            let mut known = true;
             for p in &fs.params {
-                self.check_local_type_known(p);
+                known &= self.check_local_type_known(p);
             }
-            self.check_local_type_known(&fs.return_type);
-            return;
+            known &= self.check_local_type_known(&fs.return_type);
+            return known;
         }
         if tref.const_literal_text().is_some() {
-            return;
+            return true;
         }
         if self.sig_head_unresolved(tref, &[]) {
             let bare = tref.name.segments[0].text.clone();
@@ -7747,13 +7762,50 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(tref.span),
             );
-            return;
+            return false;
         }
+        let mut known = true;
         for ga in &tref.generic_args {
             if let juxc_ast::GenericArg::Type(inner) = ga {
-                self.check_local_type_known(inner);
+                known &= self.check_generic_arg_known(inner);
             }
         }
+        known
+    }
+
+    /// [`Self::check_local_type_known`] for one generic ARGUMENT. A const
+    /// generic parameter (`class Ring<T, int N>`, Type system T.11.3) takes a
+    /// compile-time value, and the parser hands that over as a type-shaped
+    /// name: `new Ring<float, SIZE>` names the constant `SIZE`, not a type.
+    /// A bare name that resolves to a constant is therefore left alone here;
+    /// the const-generic checks own it.
+    pub(crate) fn check_generic_arg_known(&mut self, tref: &TypeRef) -> bool {
+        if tref.name.segments.len() == 1
+            && tref.generic_args.is_empty()
+            && tref.array_shape.is_none()
+            && self.names_a_constant(&tref.name.segments[0].text)
+        {
+            return true;
+        }
+        self.check_local_type_known(tref)
+    }
+
+    /// Whether the bare `name` is a value a const generic argument can be: a
+    /// top-level `const`, a static field of the enclosing class, or a local
+    /// in scope.
+    fn names_a_constant(&self, name: &str) -> bool {
+        if self.env.lookup(name).is_some() {
+            return true;
+        }
+        let suffix = format!(".{name}");
+        if self.symbols.consts.keys().any(|k| k == name || k.ends_with(&suffix)) {
+            return true;
+        }
+        self.env
+            .current_class
+            .as_deref()
+            .and_then(|cls| self.symbols.lookup_field(cls, name))
+            .is_some()
     }
 
     /// `" -- did you mean `String`?"` when a visible type name, a primitive,
@@ -7784,6 +7836,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `" -- did you mean `x`?"` when the type has a method whose name is
+    /// close to the one written, else an empty string.
+    ///
+    /// Candidates come from the type's own recorded surface, so a foreign
+    /// type suggests what the rustdoc scan actually found. The threshold is
+    /// deliberately generous on a shared PREFIX, because the misses that
+    /// matter are a Rust name the user shortened (`sort` for
+    /// `sort_unstable`) or a Java name that has a differently-spelled twin.
     fn nearest_method_hint(&self, type_name: &str, wanted: &str) -> String {
         let mut names: Vec<&str> = Vec::new();
         if let Some(cls) = self.symbols.classes.get(type_name) {
@@ -9905,6 +9965,10 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // Explicit type arguments (`count<Kraken>(a)`) must name real types.
+        for ga in &c.explicit_generic_args {
+            self.check_generic_arg_known(ga);
+        }
         // `System.out.println(x)` out of Java habit: there is no `System`
         // (unless the program declares one), and it used to reach rustc as
         // "cannot find value `System`" (JUX-DIAGNOSTICS-ADDENDUM "Java Habits").
@@ -11240,6 +11304,11 @@ impl<'a> Checker<'a> {
     /// turbofish) leaves substitution off — the wildcard rule in
     /// [`compatible`] then accepts whatever argument the user passed.
     fn check_new_object(&mut self, n: &NewObjectExpr) {
+        // `new Vec<Snark>()`: the class name itself is resolved below, but a
+        // generic argument that names nothing reached rustc (E0417).
+        for ga in &n.generic_args {
+            self.check_generic_arg_known(ga);
+        }
         // Walk arg expressions for nested checks regardless of resolution.
         for arg in &n.args {
             self.check_expr(arg);

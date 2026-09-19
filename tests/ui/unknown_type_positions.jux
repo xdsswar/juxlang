@@ -1,0 +1,20 @@
+// Every place a type is written inside a body must name a real type (E0417).
+// Each of these used to pass the checker and fail in rustc instead.
+class Animal {}
+
+<T> int count(T x) { return 1; }
+
+public void main() {
+    Animal a = new Animal();
+    var v = new Vec<Snark>();
+    var c = a as Crab;
+    if (a => Dolphin) { print("d"); }
+    var k = count<Kraken>(a);
+    var arr = new Gleep[3];
+    try {
+        print(1);
+    } catch (Oyster e) {
+        print(2);
+    }
+    print(v.len());
+}
