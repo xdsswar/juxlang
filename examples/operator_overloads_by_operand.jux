@@ -1,0 +1,80 @@
+// One operator symbol, several operand types (JUX-OPERATORS-ADDENDUM §O.2.3).
+// `a * b` calls the `operator*` whose parameter `b` fits, the way a call picks
+// a method overload, and each one has its own return type: `v * 2.0` is a
+// vector, `v * w` a dot product. Compound assignment picks the same way, and a
+// subclass that declares no `*` of its own inherits the whole set.
+
+class Vec2 {
+    public double x;
+    public double y;
+
+    public Vec2(double x, double y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    // Scale by a number.
+    public Vec2 operator*(double k) {
+        return new Vec2(x * k, y * k);
+    }
+
+    // Dot product with another vector.
+    public double operator*(Vec2 other) {
+        return x * other.x + y * other.y;
+    }
+
+    public Vec2 operator+(Vec2 other) {
+        return new Vec2(x + other.x, y + other.y);
+    }
+
+    public String operator string() {
+        return $"(${x}, ${y})";
+    }
+}
+
+// Inherits all three operators.
+class Point extends Vec2 {
+    public Point(double x, double y) {
+        super(x, y);
+    }
+}
+
+record Money(long cents) {
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    // Add a bare amount of cents.
+    public Money operator+(long more) {
+        return new Money(cents + more);
+    }
+
+    public String operator string() {
+        return $"${cents} cents";
+    }
+}
+
+public void main() {
+    var a = new Vec2(1.0, 2.0);
+    var b = new Vec2(3.0, 4.0);
+    Vec2 doubled = a * 2.0;
+    double dot = a * b;
+    print(doubled);
+    print(dot);
+    print((a + b) * 0.5);
+
+    Vec2 v = a;
+    v *= 10.0;
+    print(v);
+    print(a);
+
+    var p = new Point(1.0, 1.0);
+    print(p * 3.0);
+    print(p * b);
+
+    var price = new Money(1250);
+    price += new Money(199);
+    price += 1L;
+    print(price);
+    print(price + new Money(50) + 100L);
+}

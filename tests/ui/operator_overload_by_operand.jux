@@ -1,0 +1,21 @@
+class Meters {
+    public double v;
+    public Meters(double v) { this.v = v; }
+    public Meters operator+(long more) { return new Meters(v + more); }
+    public Meters operator+(double more) { return new Meters(v + more); }
+    public Meters operator+(Meters other) { return new Meters(v + other.v); }
+    public Meters operator*(double k) { return new Meters(v * k); }
+    public Meters operator*(double factor) { return new Meters(v * factor); }
+    public bool operator==(Meters other) { return v == other.v; }
+    public bool operator==(double other) { return v == other; }
+    public int operator hash() { return 0; }
+}
+
+public void main() {
+    var m = new Meters(1.0);
+    var a = m + 2;
+    var b = m * m;
+    var c = m + 2.5;
+    var d = m + m;
+    var e = m + true;
+}

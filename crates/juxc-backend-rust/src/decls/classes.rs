@@ -3238,9 +3238,16 @@ impl RustEmitter {
             .unwrap_or_default();
         if let Some(decl) = self.class_ast_named(class_bare) {
             for op in decl.operators.iter().filter(|o| !o.is_deleted && !parent_ops.contains_key(&o.kind)) {
-                let Some(op_sig) = sig.operators.get(&op.kind) else { continue };
+                // Each member of an overload group by operand type (§O.2.3)
+                // is its own slot, under the name it emits as.
+                let member = self.symbols.operator_overload_index.get(&op.span).copied().unwrap_or(0);
+                let op_sig = match sig.operator_overloads.get(&op.kind) {
+                    Some(group) => group.get(member),
+                    None => sig.operators.get(&op.kind),
+                };
+                let Some(op_sig) = op_sig else { continue };
                 out.push((
-                    crate::decls::synthetic_op_method_name(op.kind).to_string(),
+                    self.operator_method_name(op),
                     Self::operator_method_sig(op_sig.params.clone(), op_sig.return_type.clone(), op_sig.span),
                 ));
             }
@@ -4809,11 +4816,38 @@ impl RustEmitter {
                 .collect();
             let mut method_targets: std::collections::HashMap<String, Option<String>> =
                 std::collections::HashMap::new();
+            // An operator contract (LANG-V1 §7.14.6) is met by the class's
+            // operator of that symbol, its own or an inherited one (which a
+            // wrapper class carries inline), so the trait method delegates to
+            // that operator's inherent method. With several operators of the
+            // symbol (§O.2.3) it is the one whose operand is the contract's.
+            let class_ops = self.class_effective_operators(class_decl);
+            let mut operator_aliases: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for (name, sig) in &methods {
+                let Some(kind) = juxc_tycheck::symbol_table::operator_contract_kind(name) else { continue };
+                let candidates: Vec<&juxc_ast::OperatorDecl> =
+                    class_ops.iter().filter(|o| o.kind == kind && !o.is_deleted && o.params.len() == 1).collect();
+                let wanted = sig.params.first().map(|p| substitute_type_ref(&p.ty, &type_subst));
+                let same_shape = |a: &juxc_ast::TypeRef, b: &juxc_ast::TypeRef| {
+                    a.name.segments.last().map(|s| &s.text) == b.name.segments.last().map(|s| &s.text)
+                        && a.nullable == b.nullable
+                        && a.array_shape.is_some() == b.array_shape.is_some()
+                        && a.generic_args.len() == b.generic_args.len()
+                };
+                let chosen = wanted
+                    .as_ref()
+                    .and_then(|w| candidates.iter().find(|o| same_shape(&o.params[0].ty, w)))
+                    .or_else(|| candidates.first());
+                if let Some(op) = chosen {
+                    operator_aliases.insert(name.clone(), self.operator_method_name(op));
+                }
+            }
             for (name, sig) in &methods {
                 if sig.is_static {
                     continue;
                 }
-                if class_method_names.contains(name.as_str()) {
+                if class_method_names.contains(name.as_str()) || operator_aliases.contains_key(name) {
                     method_targets.insert(name.clone(), Some(String::new()));
                     continue;
                 }
@@ -5095,7 +5129,10 @@ impl RustEmitter {
                         }
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("::");
-                        self.w.push_str(&to_rust_ident(method_name));
+                        match operator_aliases.get(method_name) {
+                            Some(inherent) => self.w.push_str(inherent),
+                            None => self.w.push_str(&to_rust_ident(method_name)),
+                        }
                         self.w.push_str("(self");
                         for param in &method.params {
                             self.w.push_str(", ");
@@ -6199,6 +6236,10 @@ impl RustEmitter {
             let prev_type_params = self.current_type_params.clone();
             self.current_type_params
                 .extend(crate::collect_type_param_names(&method.generic_params));
+            // Their bounds too (an operator reached through one, §7.14.6).
+            let prev_type_param_bounds = self.type_param_bounds.clone();
+            self.type_param_bounds
+                .extend(crate::collect_type_param_bounds(&method.generic_params));
             // `out` params (§M.4): in scope for the body so reads/writes deref.
             let prev_out = std::mem::replace(
                 &mut self.out_params,
@@ -6231,6 +6272,7 @@ impl RustEmitter {
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
+            self.type_param_bounds = prev_type_param_bounds;
             self.current_return_type = saved;
             self.current_fn_params.clear();
             self.this_alias = None;

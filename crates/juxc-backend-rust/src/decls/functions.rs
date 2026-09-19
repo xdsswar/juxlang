@@ -681,6 +681,11 @@ impl RustEmitter {
             let prev_type_params = self.current_type_params.clone();
             self.current_type_params
                 .extend(crate::collect_type_param_names(&fn_decl.generic_params));
+            // ...and their bounds, which is how `a + b` on a
+            // `T extends Addable<T>` finds the interface's operator (§7.14.6).
+            let prev_type_param_bounds = self.type_param_bounds.clone();
+            self.type_param_bounds
+                .extend(crate::collect_type_param_bounds(&fn_decl.generic_params));
             // `out` params (§M.4): in scope for the body so reads/writes deref.
             let prev_out = std::mem::replace(
                 &mut self.out_params,
@@ -715,6 +720,7 @@ impl RustEmitter {
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
+            self.type_param_bounds = prev_type_param_bounds;
             self.current_return_type = saved;
         }
         self.w.indent_dec();

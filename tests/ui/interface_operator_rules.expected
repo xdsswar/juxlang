@@ -1,0 +1,5 @@
+interface_operator_rules.jux:3:5: [E0936] error: an interface can declare only an abstract binary arithmetic or bitwise operator (`+ - * / % & | ^ << >>`), with one operand and no body: `T operator+(T other);` (§7.14.6)
+interface_operator_rules.jux:4:5: [E0936] error: an interface can declare only an abstract binary arithmetic or bitwise operator (`+ - * / % & | ^ << >>`), with one operand and no body: `T operator+(T other);` (§7.14.6)
+interface_operator_rules.jux:5:5: [E0936] error: an interface can declare only an abstract binary arithmetic or bitwise operator (`+ - * / % & | ^ << >>`), with one operand and no body: `T operator+(T other);` (§7.14.6)
+interface_operator_rules.jux:8:1: [E0429] error: class `Money` doesn't implement abstract method(s): `operator+` of `Addable`
+interface_operator_rules.jux:15:12: [E0936] error: operator `+` in class `Draft` has no body; only an interface declares an operator without one (§7.14.6)

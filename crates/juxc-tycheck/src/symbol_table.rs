@@ -97,6 +97,17 @@ pub struct SymbolTable {
     /// (LANG-V1 §7.14): binary span -> (function name, overload index). The
     /// backend emits each as a call to that function instead of the operator.
     pub free_operator_calls: HashMap<juxc_source::Span, (String, usize)>,
+    /// Member operator overloads (JUX-OPERATORS-ADDENDUM §O.2.3): the span of
+    /// every operator DECLARATION past the first of its symbol on a type ->
+    /// its index in that type's group. Member 0 emits as `__op_mul`, member K
+    /// as `__op_mul__ovK`, the identity scheme methods and free functions use.
+    /// Keyed by span so an inherited copy of the declaration keeps its name.
+    pub operator_overload_index: HashMap<juxc_source::Span, usize>,
+    /// Member operator overload selections recorded by the checker: the span
+    /// of a binary expression (or compound assignment) whose left operand's
+    /// type declares several operators of that symbol -> the index of the one
+    /// its right operand picked. Absent means member 0.
+    pub operator_selections: HashMap<juxc_source::Span, usize>,
     /// Typed `assertThrows<E>(f)` calls (JUX-TESTING-ADDENDUM §TS.3) found by
     /// the checker -- call span -> the FQN of the exception class `E`. The
     /// backend lowers each one at the call site to the type dispatch a
@@ -1064,13 +1075,19 @@ pub struct ClassSig {
     /// duplicate emits `E0402`.
     pub methods: HashMap<String, MethodSig>,
     /// Operator overload declarations per `JUX-OPERATORS-ADDENDUM.md`
-    /// §O.2, indexed by [`OperatorKind`]. Each operator appears at
-    /// most once today — a class with two `operator+` declarations
-    /// emits `E0402`. Arity-based overloading (binary vs unary `+`)
-    /// would need keying by `(kind, arity)`; spec §O.2.3 calls out
-    /// "Binary or unary" but doesn't say a single class can declare
-    /// both at once, so we keep the simpler keying for now.
+    /// §O.2, indexed by [`OperatorKind`]. When a binary arithmetic or
+    /// bitwise operator is overloaded by operand type (§O.2.3) this holds
+    /// the FIRST declaration, so every lookup that only asks "does it
+    /// declare `*`?" stays exact; the whole group is in
+    /// [`Self::operator_overloads`]. Two declarations of any other
+    /// operator, or two with the same operand type, emit `E0402`.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// Operator overload GROUPS (§O.2.3): an operator declared more than
+    /// once, one per operand type -> every declaration in source order,
+    /// member 0 included. Present only for a kind declared 2+ times, the
+    /// way [`Self::method_overloads`] is. Inherited whole when the class
+    /// declares none of that kind itself.
+    pub operator_overloads: HashMap<OperatorKind, Vec<OperatorSig>>,
     /// C#-style property metadata, indexed by property name
     /// (JUX-MISSING-DEFS §M.7). The property's getter / setter are
     /// *also* present in [`Self::methods`] (the parser desugared them),
@@ -1289,6 +1306,9 @@ pub struct RecordSig {
     /// `is_deleted` flag so the backend can distinguish a real
     /// override from a §O.3.4 suppression.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// Operator overload groups by operand type. Mirrors
+    /// [`ClassSig::operator_overloads`].
+    pub operator_overloads: HashMap<OperatorKind, Vec<OperatorSig>>,
     /// Methods declared in the record body, indexed by name. Mirrors
     /// [`ClassSig::methods`]. Records can declare methods (per
     /// grammar §A.2.4) but not additional fields or constructors —
@@ -1334,6 +1354,9 @@ pub struct EnumSig {
     /// [`RecordSig::operators`]. Most enums won't have any — natural
     /// variant-order semantics cover the common cases.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// Operator overload groups by operand type. Mirrors
+    /// [`ClassSig::operator_overloads`].
+    pub operator_overloads: HashMap<OperatorKind, Vec<OperatorSig>>,
     /// Methods declared in the enum body (§A.2.5), keyed by name —
     /// same shape as [`ClassSig::methods`] so call-site inference
     /// reuses the method machinery.
@@ -3120,9 +3143,17 @@ fn inherit_class_operators(table: &mut SymbolTable) {
         .iter()
         .map(|(fqn, class)| (fqn.clone(), class.operators.clone()))
         .collect();
+    // ...and their own overload groups (§O.2.3), which travel whole: a class
+    // that declares no `*` of its own inherits every `*` its parent has.
+    let own_groups: HashMap<String, HashMap<OperatorKind, Vec<OperatorSig>>> = table
+        .classes
+        .iter()
+        .map(|(fqn, class)| (fqn.clone(), class.operator_overloads.clone()))
+        .collect();
     let fqns: Vec<String> = table.classes.keys().cloned().collect();
     for fqn in fqns {
         let mut merged = own.get(&fqn).cloned().unwrap_or_default();
+        let mut merged_groups = own_groups.get(&fqn).cloned().unwrap_or_default();
         // `extends Store<String>` binds the parent's `T`; an operator the
         // parent declares over `T` reads as `String` here. Composed level by
         // level, as inherited methods are.
@@ -3141,10 +3172,7 @@ fn inherit_class_operators(table: &mut SymbolTable) {
                 }
             }
             subst = next;
-            for (kind, op) in own.get(&parent_fqn).into_iter().flatten() {
-                if merged.contains_key(kind) {
-                    continue; // a closer class redeclares it
-                }
+            let read_through = |op: &OperatorSig| -> OperatorSig {
                 let mut inherited = op.clone();
                 for param in &mut inherited.params {
                     param.ty = substitute_type_ref(&param.ty, &subst);
@@ -3154,12 +3182,22 @@ fn inherit_class_operators(table: &mut SymbolTable) {
                     ReturnType::AsyncType(t) => ReturnType::AsyncType(substitute_type_ref(t, &subst)),
                     ReturnType::Void => ReturnType::Void,
                 };
-                merged.insert(*kind, inherited);
+                inherited
+            };
+            for (kind, op) in own.get(&parent_fqn).into_iter().flatten() {
+                if merged.contains_key(kind) {
+                    continue; // a closer class redeclares it
+                }
+                merged.insert(*kind, read_through(op));
+                if let Some(group) = own_groups.get(&parent_fqn).and_then(|g| g.get(kind)) {
+                    merged_groups.insert(*kind, group.iter().map(read_through).collect());
+                }
             }
             child = parent_fqn;
         }
         if let Some(class) = table.classes.get_mut(&fqn) {
             class.operators = merged;
+            class.operator_overloads = merged_groups;
         }
     }
 }
@@ -3285,6 +3323,11 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
                 if field_meets_property_contract(table, class_name, iface, m_name, m_sig) {
                     continue;
                 }
+                // An operator contract (§7.14.6) is met by the class's own or
+                // inherited operator of that symbol, not by a method.
+                if operator_contract_kind(m_name).is_some_and(|kind| class.operators.contains_key(&kind)) {
+                    continue;
+                }
                 // Reachable as a default method on any interface in the
                 // closure -- a default declared on a SUPER-interface satisfies
                 // the requirement exactly as one on a direct interface does.
@@ -3356,6 +3399,11 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
                     })
                 })
                 .map(|(owner, m)| match owner_property(owner, m) {
+                    // An operator contract is named as the operator.
+                    _ if operator_contract_kind(m).is_some() => {
+                        let kind = operator_contract_kind(m).map(operator_kind_display).unwrap_or_default();
+                        format!("`operator{kind}` of `{owner}`")
+                    }
                     Some(prop) if m.starts_with("__set_") => {
                         format!("property `{owner}.{prop}` (its `set`)")
                     }
@@ -3375,6 +3423,16 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
             );
         }
     }
+}
+
+/// The operator an interface method stands for when it is an operator
+/// contract (§7.14.6): the parser adds `T operator+(T other);` to the
+/// interface's methods as `__op_add`, the operator's function name.
+pub fn operator_contract_kind(method: &str) -> Option<OperatorKind> {
+    use OperatorKind as K;
+    [K::Plus, K::Minus, K::Mul, K::Div, K::Rem, K::BitAnd, K::BitOr, K::BitXor, K::Shl, K::Shr]
+        .into_iter()
+        .find(|k| k.free_function_name() == Some(method))
 }
 
 /// True when a public instance field of `class_name` (or an ancestor)
@@ -4336,25 +4394,9 @@ fn insert_class(
         methods.insert(method.name.text.clone(), sig);
     }
 
-    // Operators — same E0402 treatment for duplicates, keyed by kind.
-    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
-    for op in &class_decl.operators {
-        if operators.contains_key(&op.kind) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0402_DuplicateMethod,
-                    format!(
-                        "operator `{}` is declared more than once in class `{}`",
-                        operator_kind_display(op.kind),
-                        class_decl.name.text,
-                    ),
-                )
-                .with_span(op.span),
-            );
-            continue;
-        }
-        operators.insert(op.kind, operator_sig(op));
-    }
+    // Operators — keyed by kind, overloadable by operand type (§O.2.3).
+    let (operators, operator_overloads) =
+        collect_operator_sigs(table, &class_decl.operators, "class", &class_decl.name.text, is_external, diagnostics);
     // §O.2.7 pairing: `operator==` requires `operator hash`.
     let class_ops: Vec<&juxc_ast::OperatorDecl> = class_decl.operators.iter().collect();
     check_eq_hash_pairing(&class_ops, "class", &class_decl.name.text, diagnostics);
@@ -4419,6 +4461,7 @@ fn insert_class(
             method_overloads,
             methods,
             operators,
+            operator_overloads,
             properties,
             span: class_decl.span,
         },
@@ -4439,24 +4482,8 @@ fn insert_record(
     // Operators on records — same E0402-on-duplicate treatment as on
     // classes. `= delete;` declarations land here too; the
     // `is_deleted` flag carries through from the AST.
-    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
-    for op in &record_decl.operators {
-        if operators.contains_key(&op.kind) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0402_DuplicateMethod,
-                    format!(
-                        "operator `{}` is declared more than once in record `{}`",
-                        operator_kind_display(op.kind),
-                        record_decl.name.text,
-                    ),
-                )
-                .with_span(op.span),
-            );
-            continue;
-        }
-        operators.insert(op.kind, operator_sig(op));
-    }
+    let (operators, operator_overloads) =
+        collect_operator_sigs(table, &record_decl.operators, "record", &record_decl.name.text, is_external, diagnostics);
     // §O.2.7 pairing on records too — same rule, same message shape.
     let record_ops: Vec<&juxc_ast::OperatorDecl> = record_decl.operators.iter().collect();
     check_eq_hash_pairing(&record_ops, "record", &record_decl.name.text, diagnostics);
@@ -4554,6 +4581,7 @@ fn insert_record(
                 })
                 .collect(),
             operators,
+            operator_overloads,
             methods,
             constructors,
             span: record_decl.span,
@@ -4595,24 +4623,8 @@ fn insert_enum(
             },
         );
     }
-    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
-    for op in &enum_decl.operators {
-        if operators.contains_key(&op.kind) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0402_DuplicateMethod,
-                    format!(
-                        "operator `{}` is declared more than once in enum `{}`",
-                        operator_kind_display(op.kind),
-                        enum_decl.name.text,
-                    ),
-                )
-                .with_span(op.span),
-            );
-            continue;
-        }
-        operators.insert(op.kind, operator_sig(op));
-    }
+    let (operators, operator_overloads) =
+        collect_operator_sigs(table, &enum_decl.operators, "enum", &enum_decl.name.text, is_external, diagnostics);
     // §O.2.7 pairing on enums too.
     let enum_ops: Vec<&juxc_ast::OperatorDecl> = enum_decl.operators.iter().collect();
     check_eq_hash_pairing(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
@@ -4627,6 +4639,7 @@ fn insert_enum(
             implements: enum_decl.implements.clone(),
             variants,
             operators,
+            operator_overloads,
             methods: {
                 let mut m: HashMap<String, MethodSig> = enum_decl
                     .methods
@@ -5034,6 +5047,90 @@ fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
 
 /// Lower an [`OperatorDecl`] into the symbol-table's [`OperatorSig`]
 /// shape. Mirrors [`method_sig`].
+/// True for the operators a type may declare several times, one per operand
+/// type (JUX-OPERATORS-ADDENDUM §O.2.3): the binary arithmetic and bitwise
+/// family, the same symbols a free-function operator may take. `a * b` picks
+/// among them by `b`, as a call picks among a method's overloads (§T.3).
+/// Every other operator is declared at most once per type.
+pub fn operator_overloads_by_operand(kind: OperatorKind) -> bool {
+    use OperatorKind as K;
+    matches!(
+        kind,
+        K::Plus | K::Minus | K::Mul | K::Div | K::Rem | K::BitAnd | K::BitOr | K::BitXor | K::Shl | K::Shr
+    )
+}
+
+/// Build one type's operator tables from its declarations.
+///
+/// `operators` keeps the FIRST declaration of each kind, so every lookup that
+/// only asks "does this type declare `*`?" reads the same as before operators
+/// could overload. `overloads` holds the whole group of a kind declared more
+/// than once, member 0 included, and each member past the first has its span
+/// recorded in [`SymbolTable::operator_overload_index`] so the backend can
+/// name it `__op_mul__ovK`.
+///
+/// A second declaration is a duplicate (`E0402`) unless its kind overloads by
+/// operand ([`operator_overloads_by_operand`]), every member takes exactly one
+/// operand, none is `= delete`, and no earlier member takes the same operand
+/// type: two of those could never be told apart at a use site.
+///
+/// An operator with neither a body nor `= delete` is abstract, which only an
+/// interface may declare (§7.14.6): `E0936`, and it is left out.
+fn collect_operator_sigs(
+    table: &mut SymbolTable,
+    ops: &[OperatorDecl],
+    host: &str,
+    host_name: &str,
+    is_external: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (HashMap<OperatorKind, OperatorSig>, HashMap<OperatorKind, Vec<OperatorSig>>) {
+    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
+    let mut overloads: HashMap<OperatorKind, Vec<OperatorSig>> = HashMap::new();
+    for op in ops {
+        if op.body.is_none() && !op.is_deleted && !is_external {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0936_InterfaceOperatorShape,
+                    format!(
+                        "operator `{}` in {host} `{host_name}` has no body; only an interface declares an operator without one (§7.14.6)",
+                        operator_kind_display(op.kind),
+                    ),
+                )
+                .with_span(op.span),
+            );
+            continue;
+        }
+        let sig = operator_sig(op);
+        let Some(first) = operators.get(&op.kind) else {
+            operators.insert(op.kind, sig);
+            continue;
+        };
+        let group = overloads.get(&op.kind).cloned().unwrap_or_else(|| vec![first.clone()]);
+        let binary = |s: &OperatorSig| s.params.len() == 1 && !s.is_deleted;
+        let by_operand = operator_overloads_by_operand(op.kind) && binary(&sig) && group.iter().all(binary);
+        let key = param_shape_key(&sig.params);
+        let same_operand = group.iter().any(|g| param_shape_key(&g.params) == key);
+        if !by_operand || same_operand {
+            let message = if by_operand {
+                format!(
+                    "operator `{}` taking `{key}` is declared more than once in {host} `{host_name}`",
+                    operator_kind_display(op.kind),
+                )
+            } else {
+                format!(
+                    "operator `{}` is declared more than once in {host} `{host_name}`",
+                    operator_kind_display(op.kind),
+                )
+            };
+            diagnostics.push(Diagnostic::error(code::Code::E0402_DuplicateMethod, message).with_span(op.span));
+            continue;
+        }
+        table.operator_overload_index.insert(op.span, group.len());
+        overloads.entry(op.kind).or_insert(group).push(sig);
+    }
+    (operators, overloads)
+}
+
 fn operator_sig(op: &OperatorDecl) -> OperatorSig {
     OperatorSig {
         visibility: op.visibility,

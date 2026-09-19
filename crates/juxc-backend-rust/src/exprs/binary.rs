@@ -481,7 +481,7 @@ impl RustEmitter {
                 // would move its right operand, and has no impl at all between
                 // a handle and a concrete class.
                 if l.declares_equality && (l.is_dyn || r.is_dyn) {
-                    if let Some(param) = self.class_operator_param(&l.name, OperatorKind::Eq) {
+                    if let Some(param) = self.class_operator_param(&l.name, OperatorKind::Eq, 0) {
                         if b.op == BinaryOp::NotEq {
                             self.w.push('!');
                         }
@@ -850,7 +850,7 @@ impl RustEmitter {
         // the RHS. The trait impl still exists so call sites that DO
         // want consumption (rare) can be rewritten to use it later.
         if let Some(synth) = self.class_op_method_for_binary(b) {
-            self.emit_class_op_method_call(b, synth);
+            self.emit_class_op_method_call(b, &synth);
             return;
         }
         // `<=>` without a user overload (§A.4 level 11): primitives
@@ -1643,7 +1643,11 @@ impl RustEmitter {
     /// `None` for primitives, unknown types, comparison/logical ops
     /// (which don't consume operands), and class types that don't
     /// declare the relevant operator.
-    fn class_op_method_for_binary(&self, b: &BinaryExpr) -> Option<&'static str> {
+    ///
+    /// When the class declares several operators of the symbol, one per
+    /// operand type (§O.2.3), the one the checker picked for this expression
+    /// is `__op_mul__ovK`; member 0 keeps the plain name.
+    fn class_op_method_for_binary(&self, b: &BinaryExpr) -> Option<String> {
         let kind = match b.op {
             // `<=>` on a class with `operator<=>` → `__op_cmp`.
             BinaryOp::Cmp => OperatorKind::Cmp,
@@ -1663,22 +1667,82 @@ impl RustEmitter {
             _ => return None,
         };
         let left_ty = self.expr_types.get(&expr_span_of(&b.left))?;
+        // A value known only through an interface that declares the operator
+        // (§7.14.6), or a type parameter bounded by one: the operator is the
+        // interface's `__op_*` method, reached through its Rust trait.
+        if self.operator_through_interface(left_ty, kind) {
+            return Some(synthetic_op_method_name(kind).to_string());
+        }
         let Ty::User { name, .. } = left_ty else {
             return None;
         };
         let class = self.symbols.classes.get(name)?;
         if class.operators.contains_key(&kind) {
-            Some(synthetic_op_method_name(kind))
+            Some(self.operator_method_name_at(kind, b.span))
         } else {
             None
         }
     }
 
+    /// True when `a OP b` with `a` typed `ty` calls an interface's operator
+    /// contract (LANG-V1 §7.14.6): `ty` is an interface that declares
+    /// `operator OP` (or extends one that does), or a type parameter bounded
+    /// by such an interface, as `T` is in `<T extends Addable<T>> T sum(...)`.
+    /// The parser gave the contract the operator's function name as an
+    /// abstract method, so it is on the interface's trait under that name.
+    pub(crate) fn operator_through_interface(&self, ty: &Ty, kind: OperatorKind) -> bool {
+        let Some(method) = kind.free_function_name() else { return false };
+        match ty {
+            Ty::User { name, .. } => {
+                !self.symbols.classes.contains_key(name) && self.interface_chain_declares(name, method)
+            }
+            Ty::Param(p) => self.type_param_bounds.get(p).is_some_and(|bounds| {
+                bounds.iter().any(|b| {
+                    b.name.segments.last().is_some_and(|s| self.interface_chain_declares(&s.text, method))
+                })
+            }),
+            _ => false,
+        }
+    }
+
+    /// Whether interface `name`, or one it extends, declares `method`.
+    fn interface_chain_declares(&self, name: &str, method: &str) -> bool {
+        let mut queue = vec![name.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(current) = queue.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&current) else { continue };
+            if iface.methods.contains_key(method) {
+                return true;
+            }
+            queue.extend(iface.extends.iter().filter_map(|p| p.name.segments.last().map(|s| s.text.clone())));
+        }
+        false
+    }
+
+    /// The inherent method a use of operator `kind` at `site` calls: the
+    /// synthetic `__op_*` name, plus `__ovK` when the checker picked member K
+    /// of an overload group (§O.2.3) there.
+    pub(crate) fn operator_method_name_at(&self, kind: OperatorKind, site: juxc_source::Span) -> String {
+        let synth = synthetic_op_method_name(kind);
+        match self.symbols.operator_selections.get(&site) {
+            Some(k) if *k > 0 => format!("{synth}__ov{k}"),
+            _ => synth.to_string(),
+        }
+    }
+
     /// The first parameter type of operator `kind` on class `class`, inherited
-    /// operators included.
-    pub(crate) fn class_operator_param(&self, class: &str, kind: OperatorKind) -> Option<juxc_ast::TypeRef> {
+    /// operators included. `member` is the index in the kind's overload group
+    /// (§O.2.3), 0 when the class declares the operator once.
+    pub(crate) fn class_operator_param(&self, class: &str, kind: OperatorKind, member: usize) -> Option<juxc_ast::TypeRef> {
         let sig = self.lookup_class_by_bare_or_fqn(class)?;
-        sig.operators.get(&kind)?.params.first().map(|p| p.ty.clone())
+        let op = match sig.operator_overloads.get(&kind) {
+            Some(group) => group.get(member)?,
+            None => sig.operators.get(&kind)?,
+        };
+        op.params.first().map(|p| p.ty.clone())
     }
 
     /// Emit `arg` for an operator parameter typed `param`, converting a class
@@ -1697,13 +1761,23 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.clone())
             .filter(|n| !param.nullable && param.array_shape.is_none() && self.is_poly_base_class(n));
+        // A value statically typed as a polymorphic base is normally its
+        // `Rc<dyn …Kind>` handle, but `new Vec2(…)` and a `var` holding one
+        // are the concrete struct (what the argument coercions elsewhere
+        // call a concrete poly-base local), and those convert with `.into()`.
+        let concrete = match arg {
+            Expr::NewObject(_) => true,
+            Expr::Path(qn) => qn.segments.len() == 1 && self.concrete_polybase_locals.contains(&qn.segments[0].text),
+            _ => false,
+        };
+        let arg_is_dyn = arg_side.is_dyn && !concrete;
         self.emit_expr_with_parent_prec(arg, u8::MAX, false);
         match param_class {
-            Some(base) if arg_side.is_dyn && arg_side.name != base => {
+            Some(base) if arg_is_dyn && arg_side.name != base => {
                 let prefix = self.cross_package_prefix(&base);
                 self.w.push_str(&format!(".clone() as std::rc::Rc<dyn {prefix}{base}Kind>"));
             }
-            Some(_) if !arg_side.is_dyn => self.w.push_str(".clone().into()"),
+            Some(_) if !arg_is_dyn => self.w.push_str(".clone().into()"),
             _ => self.w.push_str(".clone()"),
         }
     }
@@ -1715,7 +1789,10 @@ impl RustEmitter {
     /// before being passed by value.
     fn emit_class_op_method_call(&mut self, b: &BinaryExpr, synth: &str) {
         match binary_operator_kind(b.op) {
-            Some(kind) => self.emit_operator_call(&b.left, synth, kind, &b.right),
+            Some(kind) => {
+                let member = self.symbols.operator_selections.get(&b.span).copied().unwrap_or(0);
+                self.emit_operator_call(&b.left, synth, kind, member, &b.right)
+            }
             None => {
                 self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
                 self.w.push('.');
@@ -1732,8 +1809,16 @@ impl RustEmitter {
     ///
     /// The left operand is borrowed by the method call; the right one is
     /// passed by value, so a class or record operand is cloned (an `Rc` bump)
-    /// and a primitive goes in as written.
-    pub(crate) fn emit_operator_call(&mut self, left: &Expr, synth: &str, kind: OperatorKind, right: &Expr) {
+    /// and a primitive goes in as written. `member` is the overload the call
+    /// resolved to (§O.2.3), whose parameter shapes the argument.
+    pub(crate) fn emit_operator_call(
+        &mut self,
+        left: &Expr,
+        synth: &str,
+        kind: OperatorKind,
+        member: usize,
+        right: &Expr,
+    ) {
         // Use the maximum precedence value so any non-atomic LHS
         // (binary, range, etc.) gets wrapped in parens — method-call
         // dot binds tighter than every binary op.
@@ -1743,10 +1828,19 @@ impl RustEmitter {
         self.w.push('(');
         // An operator over a polymorphic base takes the base handle, so a
         // concrete or subclass-typed operand converts on the way in.
-        let param = self.identity_operand(left).and_then(|l| self.class_operator_param(&l.name, kind));
+        let param = self.identity_operand(left).and_then(|l| self.class_operator_param(&l.name, kind, member));
         match (param, self.identity_operand(right)) {
             (Some(param), Some(r)) => self.emit_operator_argument(right, &r, &param),
             (_, Some(_)) => {
+                self.emit_expr(right);
+                self.w.push_str(".clone()");
+            }
+            // A value of a type parameter is passed by value too, and every
+            // `T` is `Clone`; a place is cloned so it stays usable after.
+            (_, None)
+                if crate::analysis::expr_is_place_pub(right)
+                    && matches!(self.expr_types.get(&expr_span_of(right)), Some(Ty::Param(_))) =>
+            {
                 self.emit_expr(right);
                 self.w.push_str(".clone()");
             }

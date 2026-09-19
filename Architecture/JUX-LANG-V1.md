@@ -3045,6 +3045,8 @@ The compiler resolves operator calls by looking first at the left operand's memb
 
 **Symmetry rules.** Overloading `==` automatically defines `!=` as its negation; you cannot overload `!=` separately. Overloading `<=>` (the three-way comparison from C++20) auto-derives `<`, `<=`, `>`, `>=` from its sign. Overloading any individual `<`, `<=`, `>`, `>=` requires defining all four explicitly — the compiler does not derive partial sets.
 
+**Overloading by operand type.** A binary arithmetic or bitwise operator may be declared more than once on a type, once per operand type (`Vec2 operator*(double k)` and `double operator*(Vec2 other)`); the right operand picks the member as a call picks a method overload. See `JUX-OPERATORS-ADDENDUM.md` §O.2.3.
+
 **Compound assignment.** `a += b`, `a -= b`, `a *= b`, etc. desugar automatically to `a = a + b`, `a = a - b`, etc., using the corresponding binary operator. Compound assignment cannot be overloaded separately. This eliminates the C++ trap where `a += b` and `a = a + b` can have observably different behavior.
 
 #### 7.14.2. What Cannot Be Overloaded
@@ -3175,6 +3177,12 @@ public <T extends Addable<T>> T sum(Vec<T> items, T zero) {
 ```
 
 This makes operators usable in generic algorithms without resorting to function arguments, the way `std::accumulate` does in C++ and `Iterator::sum` does in Rust.
+
+The rules for an operator in an interface:
+
+- It is a **contract**, always abstract: `T operator+(T other);`, no body, and one of the binary arithmetic and bitwise operators (`+ - * / % & | ^ << >>`), the ones a value of an unknown type can be asked for. A body, a different operand count, or any other operator (`==`, `<=>`, `string`, `hash`, indexing, calling, ranges, `in`, the unary forms) is `E0936`. An operator with no body outside an interface is `E0936` too.
+- A class that implements the interface meets the contract by declaring that operator itself, or inheriting it (§O.2.9). Without one it is `E0429`, which names the operator. When the class declares several operators of the symbol (`JUX-OPERATORS-ADDENDUM.md` §O.2.3), the one whose operand is the contract's operand, read through the `implements` arguments, is the one the contract calls.
+- `a + b` where `a` is typed by the interface, or by a type parameter bounded by it (`T extends Addable<T>`), calls the contract, and its type is the contract's return type read through the type arguments: `T` in `sum` above. The operand is passed the way any argument is.
 
 #### 7.14.7. Worked Example — A Complex Number Type
 

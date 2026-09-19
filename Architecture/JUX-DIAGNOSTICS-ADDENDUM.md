@@ -413,9 +413,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0400`  | Duplicate top-level declaration (class, record, enum, interface, or function) | Single-namespace rule. Two FUNCTIONS of one name form an overload group (T.3.1), not a duplicate, unless their parameter shapes are identical |
 | `E0401`  | Duplicate field in the same class body              | —                              |
-| `E0402`  | Duplicate method in the same class body (lifted once overload resolution lands) | Type system §T.3 |
+| `E0402`  | Duplicate method in the same class body (lifted once overload resolution lands); a second operator of one symbol, unless both are binary arithmetic or bitwise operators with different operand types | Type system §T.3, Operators §O.2.3 |
 | `E0403`  | Duplicate variant in the same enum body             | —                              |
-| `E0410`  | Type mismatch — assignments, returns, call arguments; also mixed-type arithmetic without explicit `as` and nullable-primitive types | Semantics §S.2.6 / ERRATA E5 |
+| `E0410`  | Type mismatch — assignments, returns, call arguments, a user operator's operand; also mixed-type arithmetic without explicit `as` and nullable-primitive types | Semantics §S.2.6 / ERRATA E5, Operators §O.2.3 |
 | `E0411`  | Wrong number of positional call arguments           | —                              |
 | `E0412`  | `obj.field` doesn't exist on the receiver (inheritance chain walked) | —             |
 | `E0413`  | `obj.method(...)` / `new T(...)` target doesn't resolve — carries near-name suggestions, see below | Core lib §K.7 (String) |
@@ -473,7 +473,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0472`  | Missing required annotation parameter   | Annotations §A.13              |
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter     | Annotations §A.13              |
-| `E0475`  | Ambiguous overloaded call: several members apply and none is more specific | Type system §T.3.3 |
+| `E0475`  | Ambiguous overloaded call: several members apply and none is more specific; likewise an operator overloaded by operand type that two members take equally well | Type system §T.3.3, Operators §O.2.3 |
 | `E0478`  | Write through a `? extends` wildcard (read-only in `T`) | Type system §T.2.2 |
 | `E0479`  | `s.length` on a String: pick `byteLength` or `charLength` | Semantics §S.3.2 |
 | `E0481`  | A file's public type must be the only one and share the file's name | JUX-LANG-V1 §3.1 |
@@ -607,6 +607,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0932`  | An operator must be `public`                                 | Operators §O.2.8               |
 | `E0933`  | A type with no `operator hash` used as a hash key (`HashMap` key, `HashSet` element) or given `.operator hash()`: a function value, an array, a collection, a float by itself, or a type holding one | Operators §O.3.1 / §O.2.7 |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
+| `E0936`  | An interface operator that is not an abstract binary arithmetic or bitwise operator (a body, other than one operand, or `==`, `string`, indexing and the like); or an operator with no body outside an interface | LANG-V1 §7.14.6 |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |
 | `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |

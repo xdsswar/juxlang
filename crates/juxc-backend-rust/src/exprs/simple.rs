@@ -291,7 +291,7 @@ impl RustEmitter {
     pub(crate) fn emit_range(&mut self, r: &RangeExpr) {
         // `a..b` on a user type calls its `operator..` (§O.2.4).
         if let Some(kind) = self.user_range_operator(r) {
-            self.emit_operator_call(&r.start, crate::decls::synthetic_op_method_name(kind), kind, &r.end);
+            self.emit_operator_call(&r.start, crate::decls::synthetic_op_method_name(kind), kind, 0, &r.end);
             return;
         }
         self.emit_expr(&r.start);

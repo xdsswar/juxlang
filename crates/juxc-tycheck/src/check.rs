@@ -395,6 +395,10 @@ pub(crate) struct Checker<'a> {
     /// absorbed into `SymbolTable::function_selections`. The same
     /// mechanism as `method_selections`, for the other kind of callee.
     pub(crate) function_selections: HashMap<Span, usize>,
+    /// Member operator overload picks (§O.2.3): binary or compound-assignment
+    /// span -> index into the left type's operator group, absorbed into
+    /// `SymbolTable::operator_selections`. Only picks past member 0.
+    pub(crate) operator_selections: HashMap<Span, usize>,
     /// Binary expressions resolved to a free-function operator (§7.14):
     /// binary span -> (function key, overload index). Absorbed into
     /// `SymbolTable::free_operator_calls` for the backend.
@@ -535,6 +539,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, String>,
     HashMap<Span, String>,
     HashMap<Span, (String, usize)>,
+    HashMap<Span, usize>,
 );
 
 impl<'a> Checker<'a> {
@@ -555,6 +560,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
+            operator_selections: HashMap::new(),
             free_operator_calls: HashMap::new(),
             typed_assert_throws: HashMap::new(),
             record_patterns: HashMap::new(),
@@ -684,6 +690,7 @@ impl<'a> Checker<'a> {
             self.record_patterns,
             self.component_names,
             self.free_operator_calls,
+            self.operator_selections,
         )
     }
 
@@ -1438,12 +1445,16 @@ impl<'a> Checker<'a> {
             return;
         }
         let symbol = operator_kind_user_spelling(kind);
+        // The expression's own span keys the overload pick; diagnostics point
+        // at the left operand when it has a span of its own.
+        let site = span;
         let span = [expr_span(left), span].into_iter().find(|sp| *sp != Span::DUMMY).unwrap_or(span);
         if crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env).is_some() {
             return;
         }
         if user_declared(self, &left_ty) {
             if self.ty_satisfies_operator(&left_ty, kind) {
+                self.pick_member_operator_overload(kind, &left_ty, &right_ty, site, span);
                 return;
             }
             let Ty::User { name, .. } = &left_ty else { return };
@@ -1467,6 +1478,52 @@ impl<'a> Checker<'a> {
                 .with_span(span)
                 .with_help(format!("declare a free-function operator: `public R operator{symbol}({left_ty} left, {right_ty} right) {{ ... }}`")),
             );
+        }
+    }
+
+    /// `a * b` where `a`'s type declares `operator*`, possibly several, one per
+    /// operand type (§O.2.3): record which one `b` picks, under the
+    /// expression's span `site`, for the backend to call (`__op_mul__ovK`).
+    /// No member taking `b` is `E0410` (a lone operator included, which used
+    /// to leave the mismatch to rustc); two taking it equally well is
+    /// `E0475`, as for a call.
+    fn pick_member_operator_overload(&mut self, kind: OperatorKind, left_ty: &Ty, right_ty: &Ty, site: Span, span: Span) {
+        use crate::infer::OperatorPick;
+        let symbol = operator_kind_user_spelling(kind);
+        let Ty::User { name, .. } = left_ty else { return };
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        match crate::infer::pick_member_operator(left_ty, kind, right_ty, self.symbols) {
+            OperatorPick::Single => {}
+            OperatorPick::Member(k, _) => {
+                if k > 0 {
+                    self.operator_selections.insert(site, k);
+                }
+            }
+            OperatorPick::NoMatch(_) if matches!(right_ty, Ty::Unknown) => {}
+            OperatorPick::NoMatch(takes) => {
+                let takes = match takes.as_slice() {
+                    [one] => format!("it takes `{one}`"),
+                    many => format!("they take {}", many.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")),
+                };
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!("no `operator{symbol}` on `{bare}` takes `{right_ty}` ({takes})"),
+                    )
+                    .with_span(span),
+                );
+            }
+            OperatorPick::Ambiguous(a, b) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0475_AmbiguousOverload,
+                        format!(
+                            "`{symbol}` on `{bare}` is ambiguous: `operator{symbol}({a})` and `operator{symbol}({b})` both take `{right_ty}`, and neither is an exact match (§O.2.3)",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
         }
     }
 
