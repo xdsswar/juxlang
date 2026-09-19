@@ -1,0 +1,43 @@
+// An array holds a fixed number of values of one type, written as a list in
+// braces. `for` walks an array with the same keyword that walked a range in
+// the Range lesson.
+
+void main() {
+    // `String[]` is an array of strings. Its length is set when it is created
+    // and never changes, which is what makes it an array rather than a
+    // growable `Vec`.
+    //
+    // Each string is stored as UTF-8, so a greeting in any script is an
+    // ordinary value needing no special handling to print.
+    final String[] greetings = {
+        "Hello World",
+        "你好，世界",
+        "नमस्ते दुनिया",
+        "Hola Mundo",
+        "Bonjour le monde",
+        "مرحبا يا عالم",
+        "হ্যালো বিশ্ব",
+        "Привет мир",
+        "Olá Mundo",
+        "سلام دنیا",
+        "Привіт світ",
+        "🐯🐶🐱🐭"
+    };
+
+    // Walking the array binds each element in turn. This is the form to reach
+    // for when the body does not care where in the array it is.
+    for (var greeting : greetings) {
+        print(greeting);
+    }
+
+    // An array knows its own length and is indexed from zero, so the last
+    // element sits at `length - 1`.
+    print("");
+    print($"${greetings.length} greetings, from ${greetings[0]} to ${greetings[greetings.length - 1]}");
+
+    // When the position matters, walk a range of indices instead. `..` stops
+    // before its upper bound, which is exactly what indexing from zero wants.
+    for (var i : 0..3) {
+        print($"index ${i} holds ${greetings[i]}");
+    }
+}

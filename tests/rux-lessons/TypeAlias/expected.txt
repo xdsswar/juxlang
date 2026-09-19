@@ -1,0 +1,5 @@
+100.0C is 212.0F
+sum of bytes 10
+row 10 20 30
+converted    98.6F
+this compiles and is wrong: 212.0F treated as Celsius is 413.6F

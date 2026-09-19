@@ -1,0 +1,78 @@
+// An enum is a named set of cases. It says that a value is one of a fixed
+// list, which a bare `int` cannot: nothing stops an `int` holding 47 where a
+// month was meant.
+//
+// The cases here carry no data. A case that needs to carry something is the
+// subject of the next lesson.
+
+// Most enums need no numbers at all. When the cases must line up with integers
+// that mean something outside the program (a file format, a protocol, a C
+// library), `@layout(c, repr = ...)` gives the enum an integer representation
+// and each case its own value (Layout-ABI §L.1.3).
+//
+// Every value is written out. Assigned numbers are part of what the enum
+// promises: if they are written to a file or sent to another program,
+// inserting a case in the middle silently changes what the old numbers mean.
+@layout(c, repr = "u8")
+enum Month {
+    January = 1,
+    February = 2,
+    March = 3,
+    April = 4
+}
+
+// A plain enum, with no representation chosen. Its cases are simply its
+// cases; `ordinal()` gives each one's position, counting from zero.
+enum Level {
+    Low,
+    Medium,
+    High
+}
+
+// `switch` is an expression as well as a statement, so its arms can produce
+// the value that gets returned. Inside a `switch` on a `Month` the type is
+// already known, so the cases are written by their bare names.
+//
+// The compiler checks that every case is covered: add `May` to the enum and
+// this function stops compiling until it says how many days May has.
+int days(Month month) {
+    return switch (month) {
+        case January -> 31;
+        case February -> 28;
+        case March -> 31;
+        case April -> 30;
+    };
+}
+
+String describe(Level level) {
+    return switch (level) {
+        case Low -> "take your time";
+        case Medium -> "keep an eye on it";
+        case High -> "deal with it now";
+    };
+}
+
+void main() {
+    // Outside a context that fixes the type, a case is written with its type.
+    final var month = Month.February;
+    print($"February has ${days(month)} days");
+    print($"March has ${days(Month.March)} days");
+
+    print($"Low    -> ${describe(Level.Low)}");
+    print($"High   -> ${describe(Level.High)}");
+
+    // Cases compare as values.
+    print($"March == March  ${Month.March == Month.March}");
+    print($"March == April  ${Month.March == Month.April}");
+
+    // A C-layout enum's number is reached by casting to its representation,
+    // using the same cast from the Convert lesson.
+    print($"January is ${(u8) Month.January}");
+    print($"April is   ${(u8) Month.April}");
+
+    // A plain enum has no number to cast to, only a position in the list.
+    print($"Level.High is ${Level.High.ordinal()}");
+
+    // Every enum can also name itself, which is handy in messages.
+    print($"level name ${Level.Medium.name()}");
+}

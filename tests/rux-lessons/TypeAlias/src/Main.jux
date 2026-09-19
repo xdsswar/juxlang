@@ -1,0 +1,53 @@
+// `type` gives an existing type a second name. It creates nothing new: a value
+// of the alias and a value of the aliased type are the same type, and can be
+// used in place of each other without a conversion (Jux §5.7).
+
+// The point is a spelling written once. A signature saying `Celsius` explains
+// itself where one saying `double` does not.
+type Celsius = double;
+type Fahrenheit = double;
+
+// It is most useful on compound types, where the full spelling is long and
+// repeated. An array type and a function type are both good candidates.
+type Bytes = ubyte[];
+type Row = i32[];
+type Converter = (Celsius) -> Fahrenheit;
+
+Fahrenheit toFahrenheit(Celsius temperature) {
+    return temperature * 9.0 / 5.0 + 32.0;
+}
+
+uint sum(Bytes values) {
+    uint total = 0;
+    for (var value : values) {
+        total += (uint) value;
+    }
+    return total;
+}
+
+void main() {
+    final Celsius boiling = 100.0;
+    print($"${boiling}C is ${toFahrenheit(boiling)}F");
+
+    // A bare `{...}` initializer needs the array type spelled out where it
+    // is written, so with an alias the array is created with `new`.
+    final Bytes data = new ubyte[] {1, 2, 3, 4};
+    print($"sum of bytes ${sum(data)}");
+
+    final Row row = new i32[] {10, 20, 30};
+    print($"row ${row[0]} ${row[1]} ${row[2]}");
+
+    // An alias of a function type reads as a name for the *kind* of function.
+    final Converter convert = (c) -> c * 9.0 / 5.0 + 32.0;
+    print($"converted    ${convert(37.0)}F");
+
+    // The trap worth knowing before relying on aliases for safety: an alias is
+    // only a spelling, so it gives no protection at all. `Celsius` and
+    // `Fahrenheit` are both `double`, which makes them the same type, and
+    // nothing stops one being passed where the other is meant:
+    final Fahrenheit mistake = 212.0;
+    print($"this compiles and is wrong: ${mistake}F treated as Celsius is ${toFahrenheit(mistake)}F");
+
+    // When two things must not be mixed up, they need to be different types,
+    // and that means a struct or a record wrapping the number.
+}
