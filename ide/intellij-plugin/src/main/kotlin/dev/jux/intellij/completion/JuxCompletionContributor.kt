@@ -986,10 +986,9 @@ class JuxCompletionContributor : CompletionContributor() {
      */
     private fun addBuiltinAnnotations(result: CompletionResultSet) {
         // Generated from the compiler's honored set — the same list juxc-lsp
-        // offers, so `@` means the same thing whether or not a server is up.
-        // `@align(N)` (Layout-ABI §L.1.4) has behaviour but is not yet in the
-        // compiler's generated honored list, so it is added here until it is.
-        for (name in JuxKeywords.ANNOTATIONS + (if ("align" in JuxKeywords.ANNOTATIONS) emptyList() else listOf("align"))) {
+        // offers, so `@` means the same thing whether or not a server is up
+        // (`@align(N)`, Layout-ABI §L.1.4, is in that list now).
+        for (name in JuxKeywords.ANNOTATIONS) {
             result.addElement(
                 ranked(
                     LookupElementBuilder.create(name)
