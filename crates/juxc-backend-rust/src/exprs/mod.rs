@@ -1664,6 +1664,8 @@ impl RustEmitter {
         let wrap_each_arm = self.emitting_nullable_target;
         let prev = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
+        // The slot's own numeric type wins over the meet of the arms.
+        let slot_numeric = self.arm_numeric_target.take();
         // **Binary numeric promotion across the arms (Java JLS 15.25).**
         // `cond ? 1 : 2.0` is a `double` in Java and prints `1.0`. Rust has no
         // implicit numeric coercion and both arms of an `if` expression must
@@ -1675,7 +1677,9 @@ impl RustEmitter {
         let same_primitive = self
             .operand_primitive(&t.then_branch)
             .is_some_and(|p| Some(p) == self.operand_primitive(&t.else_branch));
-        let promote = if same_primitive {
+        let promote = if slot_numeric.is_some() {
+            slot_numeric
+        } else if same_primitive {
             None
         } else {
             self.numeric_promote_target(&t.then_branch, &t.else_branch, true)

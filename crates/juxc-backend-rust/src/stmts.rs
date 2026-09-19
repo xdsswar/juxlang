@@ -858,7 +858,14 @@ impl RustEmitter {
             } else {
                 self.return_type_primitive()
             };
-            let widen = if !wrap_upcast {
+            // A conditional's arms each convert to the slot (see
+            // `arm_numeric_target`); the whole expression has no cast of its
+            // own then.
+            let arms_convert = matches!(e, Expr::Ternary(_) | Expr::Switch(_));
+            if arms_convert {
+                self.arm_numeric_target = target;
+            }
+            let widen = if !wrap_upcast && !arms_convert {
                 target.and_then(|t| self.numeric_widen_or_arm(e, t))
             } else {
                 None

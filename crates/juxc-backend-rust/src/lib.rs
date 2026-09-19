@@ -817,6 +817,12 @@ struct RustEmitter {
     /// Taken (cleared) by the emitter that consumes it, so a nested
     /// conditional inside an arm starts clean.
     pub(crate) arm_iface_target: Option<juxc_ast::TypeRef>,
+    /// The numeric type a `? :` or `switch` value is headed for, handed to
+    /// its ARMS. The arms agree with each other on their own (§S.2.6), but
+    /// that meet is not the slot: `int count()` returning
+    /// `switch (v) { case A(var xs) -> xs.len(); default -> -1; }` met at
+    /// `uint` and reached rustc as a `usize` in an `isize` return.
+    pub(crate) arm_numeric_target: Option<juxc_tycheck::Primitive>,
     /// Names of locals in the current function body whose declared
     /// type is nullable (`T?`). Populated by [`Self::emit_var_decl`]
     /// when it sees a `var_decl.ty` with `nullable = true`, and
@@ -5482,6 +5488,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             emitting_comparison_operand: false,
             emitting_nullable_target: false,
             arm_iface_target: None,
+            arm_numeric_target: None,
             nullable_locals: HashSet::new(),
             expr_narrowed: Vec::new(),
             loop_narrowed: Vec::new(),

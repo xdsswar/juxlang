@@ -45,7 +45,8 @@ impl RustEmitter {
     pub(crate) fn emit_switch(&mut self, s: &juxc_ast::SwitchExpr) {
         // Numeric arms meet in one type (§S.2.6), as a `? :`'s do: a narrower
         // arm is cast up to it, since a Rust `match` needs every arm to agree.
-        let arm_widen = self.switch_arm_widen_target(s);
+        // The slot's own numeric type wins over the meet of the arms.
+        let arm_widen = self.arm_numeric_target.take().or_else(|| self.switch_arm_widen_target(s));
         // When the surrounding context requires `Option<T>` (the
         // `emitting_nullable_target` flag is set, currently fired
         // by `emit_tail_stmt` for a `T?`-returning fn), push the
@@ -301,7 +302,8 @@ impl RustEmitter {
                         && !self.expression_is_already_nullable(e);
                     // An expression-bodied arm with boxed binders becomes a
                     // block so the unbox `let`s can precede the value.
-                    if !arm_lets.is_empty() || downcast_let.is_some() {
+                    let arm_block = !arm_lets.is_empty() || downcast_let.is_some();
+                    if arm_block {
                         self.w.push_str("{ ");
                         for bind in &arm_lets {
                             self.w.push_str(bind);
@@ -311,6 +313,12 @@ impl RustEmitter {
                             self.w.push_str(bind);
                             self.w.push(' ');
                         }
+                        // The value binds to a local before the block ends.
+                        // As the block's tail expression it kept a borrow of
+                        // a binder alive past the binder itself
+                        // (`items.borrow().len()` on a destructured
+                        // collection, rustc E0597).
+                        self.w.push_str("let __jux_arm = ");
                     }
                     if wrap {
                         self.w.push_str("Some(");
@@ -345,8 +353,8 @@ impl RustEmitter {
                     if wrap {
                         self.w.push(')');
                     }
-                    if !arm_lets.is_empty() || downcast_let.is_some() {
-                        self.w.push_str(" }");
+                    if arm_block {
+                        self.w.push_str("; __jux_arm }");
                     }
                 }
                 juxc_ast::SwitchBody::Block(b) => {
