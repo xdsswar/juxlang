@@ -2056,6 +2056,37 @@ fn check_imports_resolve(
                         }
                     }
                     report(fqn.clone(), import.span, diagnostics);
+                    // §4.4: a free function declared with no modifier is
+                    // visible inside its own package only, the rule types
+                    // already follow. Importing one from another package
+                    // compiled and ran. Only a Jux declaration (one with a
+                    // body) is checked; a `.jux.d` stub mirrors a foreign
+                    // API whose visibility is the crate's business.
+                    if let Some(f) = table.functions.get(&fqn) {
+                        let fn_pkg = fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                        if matches!(f.visibility, Visibility::Package)
+                            && f.body.is_some()
+                            && fn_pkg != unit_pkg
+                        {
+                            let declaring = if fn_pkg.is_empty() {
+                                "the root package".to_string()
+                            } else {
+                                format!("`{fn_pkg}`")
+                            };
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0416_PackagePrivateAccess,
+                                    format!(
+                                        "cannot import package-private function `{fqn}` -- it is \
+                                         declared in {declaring} without `public`, so it is \
+                                         visible only inside that package (§4.4). Mark the \
+                                         declaration `public` to export it",
+                                    ),
+                                )
+                                .with_span(import.span),
+                            );
+                        }
+                    }
                     // Binding name = alias, else the imported leaf segment.
                     let bind = alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| {
                         name.segments
@@ -5545,6 +5576,23 @@ mod tests {
             msg.contains("import a.b.*;"),
             "should suggest the wildcard: {msg}"
         );
+    }
+
+    /// §4.4: a free function with no modifier is package-private, so another
+    /// package importing it is E0416, while a `public` one and a same-package
+    /// use stay legal. (The Rux Module lesson imported one and it ran.)
+    #[test]
+    fn importing_a_package_private_function_is_e0416() {
+        let lib = parse_unit(
+            "package geo; int doubled(int v) { return v * 2; } public int tripled(int v) { return v * 3; }",
+        );
+        let user = parse_unit("package app; import geo.doubled; import geo.tripled; void main() { }");
+        let mut diags = Vec::new();
+        let _ = build_workspace(&[lib, user], &mut diags);
+        let hits: Vec<&Diagnostic> =
+            diags.iter().filter(|d| d.code == code::Code::E0416_PackagePrivateAccess).collect();
+        assert_eq!(hits.len(), 1, "{diags:?}");
+        assert!(hits[0].message.contains("`geo.doubled`"), "{}", hits[0].message);
     }
 
     /// Two classes with the same bare name in DIFFERENT packages are distinct,
