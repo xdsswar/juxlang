@@ -1534,7 +1534,27 @@ impl RustEmitter {
                 self.w.push_str("let ");
                 self.w.push_str(&seeded[&seed.field]);
                 self.w.push_str(" = ");
+                let value_mark = self.w.mark();
                 self.emit_ctor_field_init(field_ty.as_ref(), &seed.value);
+                // A parameter stored into its field and read again later in
+                // the body (`this.code = code;` then a loop over `code`)
+                // is shared with the field, not moved into it: the field
+                // keeps a copy of a value and the same handle of an object
+                // or collection.
+                if let juxc_ast::Expr::Path(qn) = &seed.value {
+                    let name = qn.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                    let is_param = qn.segments.len() == 1 && ctor.params.iter().any(|p| p.name.text == name);
+                    let rest = juxc_ast::Block {
+                        statements: ctor.body.statements[seed.stmt_index + 1..].to_vec(),
+                        span: ctor.body.span,
+                    };
+                    let mut read_later = false;
+                    crate::exprs::collect_bare_names_block(&rest, &mut |n| read_later |= n == name);
+                    let already_cloned = self.w.text_from(value_mark).ends_with(".clone()");
+                    if is_param && read_later && !already_cloned {
+                        self.w.push_str(".clone()");
+                    }
+                }
                 self.w.push_str(";\n");
             }
 
