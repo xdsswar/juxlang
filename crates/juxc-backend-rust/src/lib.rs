@@ -5191,6 +5191,48 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        self.inner.lock().await\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Stepped range runtime -- MISSING-DEFS M.6.1. `a..b step s` as a
+        // value: walks `start, start+step, ...` while the step's direction
+        // allows (`cur < end`, or `<=` for `..=`; the reverse for a negative
+        // step). A zero step throws ArithmeticException when the walk starts.
+        w.push_str(concat!(
+            "#[derive(Debug, Clone, Copy)]\n",
+            "pub struct JuxStepped<T> {\n",
+            "    pub start: T,\n",
+            "    pub end: T,\n",
+            "    pub step: i64,\n",
+            "    inclusive: bool,\n",
+            "    next: Option<T>,\n",
+            "}\n",
+            "impl<T: Copy> JuxStepped<T> {\n",
+            "    pub fn new(start: T, end: T, step: i64, inclusive: bool) -> Self {\n",
+            "        JuxStepped { start, end, step, inclusive, next: Some(start) }\n",
+            "    }\n",
+            "}\n",
+            "impl<T: Copy + PartialOrd + TryFrom<i128> + TryInto<i128>> Iterator for JuxStepped<T> {\n",
+            "    type Item = T;\n",
+            "    fn next(&mut self) -> Option<T> {\n",
+            "        if self.step == 0 {\n",
+            "            std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(\"range step is zero\".to_string()));\n",
+            "        }\n",
+            "        let cur = self.next?;\n",
+            "        let more = if self.step > 0 {\n",
+            "            if self.inclusive { cur <= self.end } else { cur < self.end }\n",
+            "        } else if self.inclusive {\n",
+            "            cur >= self.end\n",
+            "        } else {\n",
+            "            cur > self.end\n",
+            "        };\n",
+            "        if !more {\n",
+            "            self.next = None;\n",
+            "            return None;\n",
+            "        }\n",
+            "        // Past the type's range the walk simply ends.\n",
+            "        self.next = cur.try_into().ok().and_then(|c: i128| T::try_from(c + self.step as i128).ok());\n",
+            "        Some(cur)\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // Synchronous Mutex runtime -- JUX-LANG-V1 10.3.3. `lock(f)` holds
         // the std mutex while `f` maps the value to its replacement, so the
         // value is never reachable outside a held lock. A panic inside `f`

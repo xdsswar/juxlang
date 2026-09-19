@@ -734,7 +734,9 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     if t.name.segments.len() == 1
         && matches!(
             t.name.segments[0].text.as_str(),
-            "Channel" | "AsyncMutex" | "Stream",
+            "Channel" | "AsyncMutex" | "Stream"
+                // The range types, MISSING-DEFS M.6.1.
+                | "ExclusiveRange" | "InclusiveRange" | "SteppedRange",
         )
         && !symbols.classes.contains_key(t.name.segments[0].text.as_str())
     {

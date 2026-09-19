@@ -351,6 +351,11 @@ impl RustEmitter {
                 // The synchronous `Mutex<T>` (JUX-LANG-V1 10.3.3), when the
                 // name means Jux's own and not an imported `rust.std.Mutex`.
                 "Mutex" if self.resolve_bare_class_fqn("Mutex").as_deref() == Some("jux.std.concurrent.Mutex") => Some("crate::JuxMutex"),
+                // The range types (MISSING-DEFS §M.6.1): Rust's own ranges,
+                // and the prelude's `JuxStepped` for a range with a `step`.
+                "ExclusiveRange" if !self.symbols.classes.contains_key("ExclusiveRange") => Some("std::ops::Range"),
+                "InclusiveRange" if !self.symbols.classes.contains_key("InclusiveRange") => Some("std::ops::RangeInclusive"),
+                "SteppedRange" if !self.symbols.classes.contains_key("SteppedRange") => Some("crate::JuxStepped"),
                 // Async streams (§18.6) — same builtin-helper mapping.
                 "Stream" if !self.symbols.classes.contains_key("Stream") => {
                     Some("crate::JuxStream")

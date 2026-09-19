@@ -3509,6 +3509,10 @@ impl<'a> Checker<'a> {
             "AsyncMutex",
             "Stream",
             "Task",
+            // The range types of MISSING-DEFS §M.6.1 (`var r = 0..10;`).
+            "ExclusiveRange",
+            "InclusiveRange",
+            "SteppedRange",
         ];
         if INTRINSIC.contains(&bare) || bare == juxc_ast::TUPLE_SENTINEL {
             return false;
@@ -6572,15 +6576,6 @@ impl<'a> Checker<'a> {
                             .with_span(expr_span(s)),
                         );
                     }
-                    if !self.in_foreach_iter {
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0410_TypeMismatch,
-                                "`step` ranges are only supported as for-each iterables in Phase 1 -- `for (var i : a..b step s)`",
-                            )
-                            .with_span(r.span),
-                        );
-                    }
                 }
             }
 
@@ -8530,6 +8525,10 @@ impl<'a> Checker<'a> {
                 // through an interface-typed value, or a default property the
                 // class inherits. Interface members are public.
                 if self.symbols.lookup_interface_property(name, field_name).is_some() {
+                    return;
+                }
+                // A range value's components (MISSING-DEFS §M.6.1).
+                if crate::infer::range_component_type(name, &Ty::Unknown, field_name).is_some() {
                     return;
                 }
                 // Records: check components directly. Record

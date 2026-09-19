@@ -294,6 +294,20 @@ impl RustEmitter {
             self.emit_operator_call(&r.start, crate::decls::synthetic_op_method_name(kind), kind, 0, &r.end);
             return;
         }
+        // `a..b step s` outside a for-each head is a `SteppedRange` value
+        // (M.6.1): the prelude's iterator, which checks the step itself.
+        if let Some(step) = &r.step {
+            self.w.push_str("crate::JuxStepped::new(");
+            self.emit_expr(&r.start);
+            self.w.push_str(", ");
+            self.emit_expr(&r.end);
+            self.w.push_str(", (");
+            self.emit_expr(step);
+            self.w.push_str(") as i64, ");
+            self.w.push_str(if r.inclusive { "true" } else { "false" });
+            self.w.push(')');
+            return;
+        }
         self.emit_expr(&r.start);
         if r.inclusive {
             self.w.push_str("..=");

@@ -1,0 +1,10 @@
+10
+10
+1 to 5, 3 in it: true
+1..=6
+0 2 4 6 8
+step 2 from 0
+10 5 0
+true
+abcde
+zero step: range step is zero

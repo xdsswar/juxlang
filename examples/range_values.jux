@@ -1,0 +1,53 @@
+// Ranges are values (MISSING-DEFS M.6.1). `a..b` is an ExclusiveRange<T>,
+// `a..=b` an InclusiveRange<T>, and either with a `step` a SteppedRange<T>,
+// where T is the type the two bounds meet in. A range can be stored, passed
+// and returned like any other value, walked with a for-each as often as you
+// like, and taken apart: `start` and `end` (or `endInclusive`), and `step`.
+
+int total(ExclusiveRange<int> r) {
+    int sum = 0;
+    for (var i : r) {
+        sum += i;
+    }
+    return sum;
+}
+
+String listed(SteppedRange<int> r) {
+    var out = "";
+    for (var i : r) {
+        out = out == "" ? "" + i : out + " " + i;
+    }
+    return out;
+}
+
+InclusiveRange<char> letters(char from, char to) {
+    return from..=to;
+}
+
+public void main() {
+    var r = 1..5;
+    print(total(r));
+    print(total(r));                 // still the whole range
+    print($"${r.start} to ${r.end}, 3 in it: ${3 in r}");
+
+    InclusiveRange<int> dice = 1..=6;
+    print($"${dice.start}..=${dice.endInclusive}");
+
+    var evens = 0..10 step 2;
+    print(listed(evens));
+    print($"step ${evens.step} from ${evens.start}");
+    print(listed(10..=0 step -5));
+    print(listed(3..3 step 1) == "");
+
+    var word = "";
+    for (var c : letters('a', 'e')) {
+        word = word + c;
+    }
+    print(word);
+
+    try {
+        print(listed(0..4 step 0));
+    } catch (ArithmeticException e) {
+        print("zero step: " + e.getMessage());
+    }
+}
