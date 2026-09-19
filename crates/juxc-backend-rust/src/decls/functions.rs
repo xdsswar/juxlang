@@ -270,9 +270,12 @@ impl RustEmitter {
         // Jux args exclude the program name, like Java). Async mains
         // already rename to `__jux_async_main`; params just change
         // what the shim passes.
+        // An `int main()` (§E.1.2) cannot BE Rust's entry either: Rust's `main`
+        // returns `()` or a `Termination` type, never an integer. It takes the
+        // same rename, and the shim hands its result to `std::process::exit`.
         let is_args_main = fn_decl.name.text == "main"
             && !is_async_main
-            && !fn_decl.params.is_empty();
+            && (!fn_decl.params.is_empty() || crate::entry_returns_code(&fn_decl.return_type));
         // In-scope params for wildcard substitution = this function's own
         // generics plus any enclosing (`current_type_params`).
         let mut in_scope = self.current_type_params.clone();
@@ -757,15 +760,11 @@ impl RustEmitter {
         if is_async_main && self.symbols.package.is_empty() && !self.workspace_mode {
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
-            if fn_decl.params.is_empty() {
-                self.w
-                    .push_str("futures::executor::block_on(__jux_async_main());\n");
-            } else {
-                self.w.push_str(
-                    "futures::executor::block_on(__jux_async_main(crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())));\n",
-                );
-            }
+            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            self.emit_entry_call(
+                &format!("futures::executor::block_on(__jux_async_main({args}))"),
+                crate::entry_returns_code(&fn_decl.return_type),
+            );
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();
@@ -776,8 +775,11 @@ impl RustEmitter {
         if is_args_main && self.symbols.package.is_empty() && !self.workspace_mode {
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
-            self.w.push_str("__jux_args_main(std::rc::Rc::new(std::cell::RefCell::new(crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>()))));\n");
+            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            self.emit_entry_call(
+                &format!("__jux_args_main({args})"),
+                crate::entry_returns_code(&fn_decl.return_type),
+            );
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();

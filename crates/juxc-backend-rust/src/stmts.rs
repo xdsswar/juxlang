@@ -1184,7 +1184,7 @@ impl RustEmitter {
                     .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                 self.w.indent_inc();
                 self.w.emit_indent();
-                self.w.push_str("match __jux_p.downcast::<");
+                self.emit_catch_downcast_head(ty);
                 self.emit_type_as_rust(ty);
                 self.w.push_str(">() {\n");
                 self.emit_try_expr_arm(clause, depth, binder_mut);
@@ -1425,6 +1425,39 @@ impl RustEmitter {
             return Some(bare);
         }
         self.resolve_bare_type_fqn(&bare)
+    }
+
+    /// Open a catch clause's own-type arm: `match <payload>.downcast::<`,
+    /// the caller writes the type and the rest.
+    ///
+    /// A Rust `Err` thrown by a foreign call travels as a `JuxForeignError`
+    /// (Bindgen G.5.4), so the payload goes through an adapter first:
+    /// `catch (Exception e)` / `catch (Throwable e)` turn it into that class
+    /// with the error's text, and a clause naming the foreign type itself
+    /// unwraps the Rust value when it is one. Every other clause type, the
+    /// Jux exception classes, sees the payload as it is.
+    fn emit_catch_downcast_head(&mut self, ty: &juxc_ast::TypeRef) {
+        let fqn = self.resolve_catch_ty_fqn(ty);
+        let foreign = fqn
+            .as_deref()
+            .and_then(|f| self.symbols.classes.get(f))
+            .is_some_and(|c| c.is_external);
+        self.w.push_str("match ");
+        match fqn.as_deref() {
+            Some("jux.std.exceptions.Exception") => {
+                self.w.push_str("crate::__jux_foreign_as_exception(__jux_p)");
+            }
+            Some("jux.std.exceptions.Throwable") => {
+                self.w.push_str("crate::__jux_foreign_as_throwable(__jux_p)");
+            }
+            _ if foreign => {
+                self.w.push_str("crate::__jux_foreign_error_of::<");
+                self.emit_type_as_rust(ty);
+                self.w.push_str(">(__jux_p)");
+            }
+            _ => self.w.push_str("__jux_p"),
+        }
+        self.w.push_str(".downcast::<");
     }
 
     /// Number of `extends` steps from `from` up to `to` (0 when they
@@ -1993,7 +2026,7 @@ impl RustEmitter {
                         .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                     self.w.indent_inc();
                     self.w.emit_indent();
-                    self.w.push_str("match __jux_p.downcast::<");
+                    self.emit_catch_downcast_head(ty);
                     self.emit_type_as_rust(ty);
                     self.w.push_str(">() {\n");
                     self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut, protect);
@@ -2180,7 +2213,9 @@ impl RustEmitter {
         }
         // A class that IS an iterator (and not also an iterable, whose
         // `iterator()` the loop below prefers).
-        if self.symbols.classes.contains_key(name.as_str())
+        // A FOREIGN iterator (one that implements Rust's `Iterator`) is walked
+        // by Rust's own `for`, see `foreign_iterator_next`.
+        if self.symbols.classes.get(name.as_str()).is_some_and(|c| !c.is_external)
             && self.symbols.lookup_method(name, "iterator").is_none()
             && juxc_tycheck::ty::class_implements_interface(name, "Iterator", &self.symbols)
         {
@@ -2581,6 +2616,38 @@ impl RustEmitter {
         // by-value also works for a function that returns a collection.
         let iter_is_place =
             snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
+        // **A map walks OWNED entries.** A foreign map (`HashMap`, `BTreeMap`,
+        // a crate's `Map<K, V>`) iterated by reference yields `(&K, &V)`, and
+        // Jux has no reference types to hold them: `show(entry.0, entry.1)`
+        // handed a `&String` to a `String` parameter (B18). Each entry is
+        // copied out as the `(K, V)` pair the Jux program sees; a class value
+        // inside is a handle, so its copy is a refcount bump.
+        if iter_is_place && self.for_each_iterates_map_entries(&f.iter) {
+            self.w.push_str("for ");
+            self.w.push_str(&to_rust_ident(&f.var_name.text));
+            self.w.push_str(" in ");
+            if snapshot {
+                self.w.push_str("__jux_fe_iter");
+            } else {
+                self.emit_expr(&f.iter);
+            }
+            self.w.push_str(".iter().map(|(k, v)| (k.clone(), v.clone())) {\n");
+            self.w.indent_inc();
+            self.local_types.push(std::collections::HashMap::new());
+            self.loop_emit_depth += 1;
+            self.emit_block_contents(&f.body);
+            self.loop_emit_depth -= 1;
+            self.local_types.pop();
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+            if snapshot {
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+            }
+            return;
+        }
         self.w.push_str("for ");
         if element_is_copy && iter_is_place {
             self.w.push('&');
@@ -2606,6 +2673,16 @@ impl RustEmitter {
         }
         self.w.push_str(" {\n");
         self.w.indent_inc();
+        // A Rust iterator whose items are `Result`s (`read_dir` yields
+        // `io::Result<DirEntry>`) throws each `Err` like any other `Result`
+        // from Rust (Bindgen G.5.4, G.6.4.2), so the loop variable is the
+        // `Ok` value the program declared (B28).
+        if self.foreign_iterator_next(&f.iter).is_some_and(|m| m.is_foreign_result) {
+            let v = to_rust_ident(&f.var_name.text);
+            self.w.line(&format!(
+                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e));"
+            ));
+        }
         // Register the loop variable's element type in `local_types` for the
         // body, so a wrapper-class element (`for (var t : todos)` over a
         // `Vec<Todo>`) resolves `t.title` to the `t.0.borrow().title` deref
@@ -2653,6 +2730,25 @@ impl RustEmitter {
         }
     }
 
+    /// Whether a for-each iterable is a FOREIGN map, whose by-reference
+    /// iteration yields `(&K, &V)`: `HashMap<K, V, S>`, `BTreeMap<K, V, A>`,
+    /// serde_json's `Map<K, V>`.
+    ///
+    /// Read off the crate's own declaration rather than a list of names: a
+    /// Rust map declares its key and value parameters first, as `K` and `V`,
+    /// and bindgen keeps the Rust parameter names. The parameter COUNT cannot
+    /// tell, since `Vec<T, A>` has two as well.
+    fn for_each_iterates_map_entries(&self, iter: &Expr) -> bool {
+        let Some(Ty::User { name, .. }) = self.receiver_ty_of(iter) else {
+            return false;
+        };
+        self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name))
+            .is_some_and(|c| {
+                let params: Vec<&str> = c.generic_params.iter().map(|g| g.name.text.as_str()).collect();
+                c.is_external && params.starts_with(&["K", "V"])
+            })
+    }
+
     /// True iff a for-each iterable is a collection field read through a wrapper
     /// class's `.0.borrow()` guard — `this.items` / `obj.items` where the owner
     /// uses the `Rc<RefCell>` representation. Such an iterable must be snapshotted
@@ -2672,7 +2768,43 @@ impl RustEmitter {
     /// first generic argument of a `Vec<T>` / `HashSet<T>` / `List<T>` receiver.
     /// `None` when the iterable's type wasn't recorded or carries no element
     /// type. Drives the loop-variable [`Self::local_types`] registration above.
+    /// The `next()` of a FOREIGN iterator a for-each walks: a stub type that
+    /// implements Rust's `Iterator` (bindgen surfaces its `next()`, Bindgen
+    /// G.6.4.2) and is not an iterable of its own.
+    pub(crate) fn foreign_iterator_next(
+        &self,
+        iter: &Expr,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
+        let Some(Ty::User { name, .. }) = self.receiver_ty_of(iter) else {
+            return None;
+        };
+        let fqn = if self.symbols.classes.contains_key(&name) {
+            name.clone()
+        } else {
+            self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))?
+        };
+        if !self.symbols.classes.get(&fqn).is_some_and(|c| c.is_external) {
+            return None;
+        }
+        if self.external_type_method(&fqn, "iterator").is_some() {
+            return None;
+        }
+        self.external_type_method(&fqn, "next")
+            .filter(|m| m.params.is_empty())
+    }
+
     fn for_each_element_ty(&self, iter: &Expr) -> Option<Ty> {
+        // A foreign iterator's element is its `next()` result, `?` peeled.
+        if let Some(m) = self.foreign_iterator_next(iter) {
+            if let juxc_ast::ReturnType::Type(t) = &m.return_type {
+                let mut elem = t.clone();
+                elem.nullable = false;
+                let ty = juxc_tycheck::ty_from_ref_in_env(&elem, &self.symbols);
+                if !matches!(ty, Ty::Unknown) {
+                    return Some(ty);
+                }
+            }
+        }
         // Prefer the iterable's recorded type.
         if let Some(elem) = self
             .expr_types
@@ -3078,16 +3210,19 @@ impl RustEmitter {
                 // Numeric coercion into a typed local: `int n = v.len();`
                 // (uint -> int) or `long x = intExpr;` (int -> long widening).
                 // Cast the init to the declared numeric type when it differs
-                // (widen or same-width signedness); never narrows. Skipped under
-                // the nullable `Some(...)` wrap.
-                let num_widen = if wrap_some {
-                    None
-                } else {
-                    var.ty
-                        .as_ref()
-                        .and_then(|t| self.type_ref_primitive(t))
-                        .and_then(|target| self.numeric_widen_or_arm(init, target))
-                };
+                // (widen or same-width signedness); never narrows. Under the
+                // nullable `Some(...)` wrap the cast goes inside it:
+                // `int? n = w;` with a `uint w` is `Some((w) as isize)`.
+                let num_widen = var
+                    .ty
+                    .as_ref()
+                    .filter(|_| wrap_some || !declared_nullable)
+                    .and_then(|t| {
+                        let mut inner = t.clone();
+                        inner.nullable = false;
+                        self.type_ref_primitive(&inner)
+                    })
+                    .and_then(|target| self.numeric_widen_or_arm(init, target));
                 let widen_inner =
                     num_widen.is_some() && crate::exprs::cast_needs_inner_parens(init);
                 if num_widen.is_some() {
@@ -4688,12 +4823,30 @@ impl RustEmitter {
             // target's numeric type when it differs; never narrows. A compound
             // assignment widens its operand the same way (`d += anInt`, `d++`),
             // since Rust has no `f64 += isize`. Skipped for nullable assigns.
+            // Into a nullable numeric slot the cast goes inside the `Some(...)`:
+            // `slot = w;` with `int? slot` and `uint w` is `Some((w) as isize)`.
             let num_widen = if assign_nullable {
-                None
+                match self.receiver_ty_of(a_target) {
+                    Some(Ty::Nullable(inner)) => match *inner {
+                        Ty::Primitive(p) if !self.expression_is_already_nullable(a_value) => {
+                            self.numeric_widen_or_arm(a_value, p)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
             } else {
                 self.operand_primitive(a_target)
                     .and_then(|t| self.numeric_widen_or_arm(a_value, t))
             };
+            if let (true, Some(cast)) = (assign_nullable, num_widen) {
+                self.w.push_str("Some((");
+                self.emit_expr(a_value);
+                self.w.push_str(") as ");
+                self.w.push_str(cast);
+                self.w.push(')');
+                return;
+            }
             let widen_inner =
                 num_widen.is_some() && crate::exprs::cast_needs_inner_parens(a_value);
             if num_widen.is_some() {

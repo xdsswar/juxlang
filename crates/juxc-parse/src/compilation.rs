@@ -734,7 +734,11 @@ impl<'a> Parser<'a> {
             || self.at_kw(Keyword::Return)
             || self.at_kw(Keyword::Break)
             || self.at_kw(Keyword::Continue)
-            || self.at_kw(Keyword::Unsafe)
+            // `unsafe { ... }` is a statement, but `unsafe void f()` and
+            // `unsafe public void f()` declare an unsafe function
+            // (Layout-ABI L.5, `unsafe-fn = 'unsafe' function-decl`).
+            || (self.at_kw(Keyword::Unsafe)
+                && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LBrace)))
     }
 
     /// After both the declaration AND statement parses failed at the
@@ -747,6 +751,24 @@ impl<'a> Parser<'a> {
     /// Per §A.2.2 `visibility = 'public' | 'internal' | 'protected' | 'private'`.
     /// Absence means package-private.
     pub(crate) fn parse_visibility(&mut self) -> Visibility {
+        // `unsafe public void f()`: Layout-ABI L.5 writes `unsafe` in front of
+        // the whole function declaration, visibility included, while every
+        // other modifier follows the visibility. The `unsafe` is taken here and
+        // handed to the modifier loop that comes next
+        // ([`Self::parse_fn_modifiers`]), which reads the rest in the usual
+        // order.
+        self.leading_unsafe = false;
+        let visibility_follows_unsafe = self.at_kw(Keyword::Unsafe)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Kw(
+                    Keyword::Public | Keyword::Internal | Keyword::Protected | Keyword::Private
+                ))
+            );
+        if visibility_follows_unsafe {
+            self.advance();
+            self.leading_unsafe = true;
+        }
         if self.eat_kw(Keyword::Public) {
             Visibility::Public
         } else if self.eat_kw(Keyword::Internal) {

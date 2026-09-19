@@ -62,6 +62,51 @@ pub enum StubItem {
     Alias(StubAlias),
 }
 
+impl StubItem {
+    /// Add every type name this item's declaration mentions to `out`:
+    /// fields, constructor and method signatures, variant payloads.
+    pub fn referenced_type_names(&self, out: &mut std::collections::HashSet<String>) {
+        let mut add = |t: &JuxType| t.collect_names(out);
+        match self {
+            StubItem::Type(t) => {
+                for f in &t.fields {
+                    add(&f.ty);
+                }
+                for c in &t.constructors {
+                    for p in &c.params {
+                        add(&p.ty);
+                    }
+                }
+                for m in &t.methods {
+                    add(&m.ret);
+                    for p in &m.params {
+                        add(&p.ty);
+                    }
+                    if let Some(e) = &m.throws {
+                        add(e);
+                    }
+                }
+                for v in &t.variants {
+                    for p in &v.payload {
+                        add(p);
+                    }
+                }
+            }
+            StubItem::Function(f) => {
+                add(&f.ret);
+                for p in &f.params {
+                    add(&p.ty);
+                }
+                if let Some(e) = &f.throws {
+                    add(e);
+                }
+            }
+            StubItem::Const(c) => add(&c.ty),
+            StubItem::Alias(_) => {}
+        }
+    }
+}
+
 /// A type alias stub: `public type Name = Target;`.
 #[derive(Debug, Clone)]
 pub struct StubAlias {
@@ -116,6 +161,31 @@ pub struct StubType {
     /// `implemented_trait_names`), since a name the stub never declares would
     /// not resolve.
     pub implements: Vec<String>,
+    /// For a borrowed-view type, the OWNED type its own `ToOwned` impl names
+    /// (`type Owned = PathBuf` on `Path`). Rendered as `@RustOwnedAs("...")`;
+    /// the backend stores a value of the view as the owned form, since the
+    /// view itself is unsized. `None` for every type without such an impl.
+    pub owned_as: Option<String>,
+    /// What the type derefs to, by shape: `[]` for `Vec<T>` (`Deref<Target =
+    /// [T]>`), `str` for `String`, a type name otherwise. Rendered as
+    /// `@RustDerefs("[]")`; a trait implemented for that target (`SliceRandom`
+    /// for `[T]`) is then callable on this type, as Rust's method lookup
+    /// allows.
+    pub derefs_to: Option<String>,
+    /// For a trait: the traits its BLANKET impls cover
+    /// (`impl<R: RngCore + ?Sized> Rng for R` gives `RngCore`). Rendered as
+    /// `@RustBlanket("RngCore")`: every type implementing the bound gets this
+    /// trait's methods.
+    pub blanket_over: Vec<String>,
+    /// For a trait: the primitive or slice shapes it is implemented for
+    /// (`impl<T> SliceRandom for [T]` gives `[]`, `impl UnicodeSegmentation for
+    /// str` gives `str`). Rendered as `@RustImplementedBy("[]")`.
+    pub implemented_by: Vec<String>,
+    /// For the method surface of a Rust PRIMITIVE (`f64`, `u32`, `char`,
+    /// `bool`): its Rust name. Rendered as `@RustPrimitive("f64")`; the checker
+    /// reaches this class's methods from a Jux value of that primitive
+    /// (`x.powf(2.0)` on a `double`).
+    pub primitive: Option<String>,
 }
 
 impl StubType {
@@ -135,6 +205,11 @@ impl StubType {
             is_clone: false,
             is_collection: false,
             implements: Vec::new(),
+            owned_as: None,
+            derefs_to: None,
+            blanket_over: Vec::new(),
+            implemented_by: Vec::new(),
+            primitive: None,
         }
     }
 }
@@ -207,6 +282,12 @@ pub struct StubFn {
     /// (dispatched on the type) and when unavailable.
     pub rust_path: Option<String>,
     pub doc: Option<String>,
+    /// Indices of the closure parameters whose Rust closure takes its
+    /// arguments BY REFERENCE (`filter(P) where P: FnMut(&Self::Item) -> bool`,
+    /// `sort_unstable_by(F) where F: FnMut(&T, &T) -> Ordering`). Rendered as
+    /// `@RustClosureRefs("0")`; a Jux lambda in that slot takes owned values,
+    /// so the backend clones each argument out of its reference.
+    pub closure_ref_params: Vec<usize>,
 }
 
 /// A single parameter (`ty name`).
@@ -243,4 +324,9 @@ pub struct StubConst {
     pub ty: JuxType,
     /// Literal value text, when the const is known at generation time.
     pub value: Option<String>,
+    /// The real Rust path (`std::path::MAIN_SEPARATOR`), rendered as
+    /// `@rust("...")` so an `import` of the constant lowers to a `use` of
+    /// the place it really lives. Without it the import fell back to the
+    /// flat stub package and named `rust::std`, a crate that does not exist.
+    pub rust_path: Option<String>,
 }

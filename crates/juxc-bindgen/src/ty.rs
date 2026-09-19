@@ -1,7 +1,7 @@
 //! Jux type representation and rendering — JUX-BINDGEN-ADDENDUM.md §G.3.
 //!
 //! [`JuxType`] is the language-agnostic result of mapping a foreign type. Its
-//! [`Display`](std::fmt::Display) renders Jux source syntax (`List<T>`, `T?`,
+//! [`Display`](std::fmt::Display) renders Jux source syntax (`Vec<T>`, `T?`,
 //! `(A) -> B`, …) — that's what lands in a `.jux.d` stub.
 
 use std::fmt;
@@ -13,7 +13,7 @@ pub enum JuxType {
     Prim(&'static str),
     /// The Jux `String` type.
     String,
-    /// A user or library type with optional generic args: `List<T>`,
+    /// A user or library type with optional generic args: `Vec<T>`,
     /// `Map<K, V>`, `HashMap`→`Map`, or a named class/interface.
     User { name: String, args: Vec<JuxType> },
     /// A generic parameter in scope — the `T` of `class Box<T>`.
@@ -61,9 +61,13 @@ impl JuxType {
         JuxType::User { name: name.into(), args: Vec::new() }
     }
 
-    /// The Jux stdlib `List<elem>`.
-    pub fn list(elem: JuxType) -> JuxType {
-        JuxType::User { name: "List".into(), args: vec![elem] }
+    /// Rust's `Vec<elem>`, under its own name (Bindgen G.3.1: "`Vec<T>`, the
+    /// same name, kept"). It used to be spelled `List`, a type no stub
+    /// declares, so a foreign `Vec` result was never recognised as one: a
+    /// `final Vec<ubyte> raw = read(path);` slot and the value it received
+    /// disagreed in rustc.
+    pub fn vec(elem: JuxType) -> JuxType {
+        JuxType::User { name: "Vec".into(), args: vec![elem] }
     }
 
     /// The Jux stdlib `Map<k, v>`.
@@ -74,6 +78,46 @@ impl JuxType {
     /// The Jux stdlib `Set<elem>`.
     pub fn set(elem: JuxType) -> JuxType {
         JuxType::User { name: "Set".into(), args: vec![elem] }
+    }
+
+    /// Whether this type has a Jux spelling at all. `Option<()>` maps to a
+    /// nullable `void`, which the grammar has no form for: serde_json's
+    /// `Value::as_null` came out as `public void? as_null();`, the stub did
+    /// not parse, and no program could use the crate (B17). A member whose
+    /// signature contains such a type is left out of the stub, the way
+    /// Bindgen G.12 `W0307` skips any un-mappable item.
+    pub fn is_spellable(&self) -> bool {
+        match self {
+            JuxType::Nullable(inner) if matches!(**inner, JuxType::Void) => false,
+            JuxType::Nullable(inner) => inner.is_spellable(),
+            JuxType::User { args, .. } | JuxType::Tuple(args) => args.iter().all(JuxType::is_spellable),
+            JuxType::Array { elem, .. } | JuxType::RawPtr(elem) => elem.is_spellable(),
+            JuxType::Fn { params, ret, .. } => {
+                params.iter().all(JuxType::is_spellable) && ret.is_spellable()
+            }
+            _ => true,
+        }
+    }
+
+    /// Add every named type this type mentions (`Vec<Duration>` gives `Vec`
+    /// and `Duration`) to `out`.
+    pub fn collect_names(&self, out: &mut std::collections::HashSet<String>) {
+        match self {
+            JuxType::User { name, args } => {
+                out.insert(name.clone());
+                for a in args {
+                    a.collect_names(out);
+                }
+            }
+            JuxType::Nullable(t) | JuxType::RawPtr(t) => t.collect_names(out),
+            JuxType::Array { elem, .. } => elem.collect_names(out),
+            JuxType::Tuple(ts) => ts.iter().for_each(|t| t.collect_names(out)),
+            JuxType::Fn { params, ret, .. } => {
+                params.iter().for_each(|t| t.collect_names(out));
+                ret.collect_names(out);
+            }
+            _ => {}
+        }
     }
 
     /// Wrap in a nullable marker, collapsing `T??` to `T?` (idempotent).
@@ -184,7 +228,10 @@ mod tests {
 
     #[test]
     fn renders_generics() {
-        assert_eq!(JuxType::list(JuxType::String).to_string(), "List<String>");
+        assert_eq!(JuxType::vec(JuxType::String).to_string(), "Vec<String>");
+        assert!(!JuxType::nullable(JuxType::Void).is_spellable());
+        assert!(!JuxType::vec(JuxType::nullable(JuxType::Void)).is_spellable());
+        assert!(JuxType::nullable(JuxType::String).is_spellable());
         assert_eq!(
             JuxType::map(JuxType::String, JuxType::Prim("int")).to_string(),
             "Map<String, int>",

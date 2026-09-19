@@ -1,0 +1,23 @@
+// Rust iterator adaptors on a collection (Bindgen G.6.4.2): the elements
+// are owned values, so a lambda sees `int` and `double`, and collect()
+// builds a new collection.
+void main() {
+    var v = new Vec<int>();
+    v.push(3);
+    v.push(9);
+    v.push(4);
+    print(v.iter().count());
+    int total = v.iter().sum();
+    print(total);
+    print(v.iter().max() ?: -1);
+    int big = v.iter().filter(x -> x > 3).count();
+    print(big);
+    var doubled = v.iter().map(x -> x * 2).collect<Vec<int>>();
+    print(doubled.len());
+    var ds = new Vec<double>();
+    ds.push(2.5);
+    ds.push(-1.0);
+    ds.sort_unstable_by((a, b) -> a.total_cmp(b));
+    print(ds[0]);
+    print(v.iter().position(x -> x == 9) ?: 99);
+}

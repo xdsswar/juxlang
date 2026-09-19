@@ -206,6 +206,11 @@ pub struct VarDecl {
     /// to a value-typed object (`Rc<RefCell<T>>`): aliases see each
     /// other's writes, assignment stores through.
     pub is_ref: bool,
+    /// The initializer was written but could not be read, and the parser has
+    /// reported why (a `{...}` under a type that is not an array). The local
+    /// then counts as initialized, so its uses do not add a second error
+    /// (E0601) about the same line.
+    pub init_error: bool,
     /// Span covering `[modifier] (type | 'var') name [= init] ;`.
     pub span: Span,
 }

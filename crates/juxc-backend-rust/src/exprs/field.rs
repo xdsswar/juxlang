@@ -2582,7 +2582,12 @@ impl RustEmitter {
         let class = self.symbols.classes.get(type_name).or_else(|| {
             self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
         });
-        if let Some(m) = class.and_then(|c| c.methods.get(method)) {
+        // The method may come from a trait the type implements or is reached
+        // by (Bindgen G.6.4.3), whose marker says the same thing.
+        let via_trait = self
+            .resolve_bare_class_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+            .and_then(|fqn| self.external_type_method(&fqn, method));
+        if let Some(m) = class.and_then(|c| c.methods.get(method)).or(via_trait) {
             if m.annotations.iter().any(annotation_is_mut_self) {
                 return true;
             }
@@ -2692,18 +2697,36 @@ impl super::super::RustEmitter {
     /// Without this, `emit_foreign_call_args` passed an owned value into a
     /// `&[T]` slot: `v.extend_from_slice(other)` failed rustc E0308 for a plain
     /// Jux array as well as for a collection handle.
+    /// Parameter `idx` of the foreign method `type_name.method`, whether the
+    /// type declares the method or a trait gives it to the type (Bindgen
+    /// G.6.4.3: `shuffle` on a `Vec` is `SliceRandom`'s).
+    fn external_param(
+        &self,
+        type_name: &str,
+        method: &str,
+        idx: usize,
+    ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
+        let bare = type_name.rsplit('.').next().unwrap_or(type_name);
+        let fqn = if self.symbols.classes.contains_key(type_name) {
+            Some(type_name.to_string())
+        } else {
+            self.resolve_bare_class_fqn(bare)
+        };
+        if let Some(m) = fqn.as_deref().and_then(|f| self.external_type_method(f, method)) {
+            return m.params.get(idx);
+        }
+        self.lookup_class_by_bare_or_fqn(bare)
+            .and_then(|c| c.methods.get(method))
+            .and_then(|m| m.params.get(idx))
+    }
+
     pub(crate) fn external_param_is_slice(
         &self,
         type_name: &str,
         method: &str,
         idx: usize,
     ) -> bool {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        });
-        class
-            .and_then(|c| c.methods.get(method))
-            .and_then(|m| m.params.get(idx))
+        self.external_param(type_name, method, idx)
             .is_some_and(|p| p.ty.array_shape.is_some() && !p.is_ref)
     }
 
@@ -2713,13 +2736,18 @@ impl super::super::RustEmitter {
         method: &str,
         idx: usize,
     ) -> bool {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        });
-        class
-            .and_then(|c| c.methods.get(method))
-            .and_then(|m| m.params.get(idx))
-            .is_some_and(|p| p.is_ref)
+        self.external_param(type_name, method, idx).is_some_and(|p| p.is_ref)
+    }
+
+    /// Whether the foreign parameter is an exclusive borrow (`&mut R`): the
+    /// callee writes through it, so the call lends the caller's own place.
+    pub(crate) fn external_param_is_mut_ref(
+        &self,
+        type_name: &str,
+        method: &str,
+        idx: usize,
+    ) -> bool {
+        self.external_param(type_name, method, idx).is_some_and(|p| p.is_mut_ref)
     }
 }
 

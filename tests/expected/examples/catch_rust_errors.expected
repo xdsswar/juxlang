@@ -1,0 +1,7 @@
+2.5
+not a number: abc (invalid float literal)
+-1.0
+io error, kind entity not found
+caught: cannot parse integer from empty string
+own clause: jux side
+done

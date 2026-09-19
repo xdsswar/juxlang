@@ -381,6 +381,11 @@ impl La {
                         self.reads(init, &mut st);
                         st.insert(v.name.text.clone());
                     }
+                    // An initializer the parser reported as unreadable counts
+                    // as one: its uses are not a second error.
+                    None if v.init_error => {
+                        st.insert(v.name.text.clone());
+                    }
                     None => {
                         // A nullable local starts as null (§S.4.6); only a
                         // non-nullable one has nothing to start as.

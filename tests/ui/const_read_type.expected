@@ -1,0 +1,2 @@
+const_read_type.jux:6:5: [E0410] error: type mismatch in declaration of `label`: expected String, found double
+const_read_type.jux:8:5: [E0410] error: type mismatch in declaration of `flag`: expected bool, found int

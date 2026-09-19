@@ -299,6 +299,24 @@ impl RustEmitter {
         else {
             return false;
         };
+        // A result typed by the method's own type parameter, bound by an
+        // explicit collection type argument: `iter.collect<Vec<int>>()` builds a
+        // plain `Vec`, which the handle-typed slot receives behind a handle.
+        if let Expr::Field(f) = &*call.callee {
+            let generics = owner
+                .as_deref()
+                .and_then(|o| self.external_type_method(o, f.field.text.as_str()))
+                .map(|m| m.generic_params.clone())
+                .unwrap_or_default();
+            if t.name.segments.len() == 1 {
+                if let Some(idx) = generics.iter().position(|g| g.name.text == t.name.segments[0].text) {
+                    return call
+                        .explicit_generic_args
+                        .get(idx)
+                        .is_some_and(|a| self.collection_is_handle(&a.name));
+                }
+            }
+        }
         // An ARRAY return counts too, now that an array is a reference type
         // (§6.5.2): a crate hands back a plain sequence, and the slot taking
         // it is a handle. `s.split(",")` is the everyday case.
@@ -582,7 +600,7 @@ impl RustEmitter {
             "let __jux_exception_of = |__jux_p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>| -> crate::jux::std::exceptions::Exception { ",
         );
         self.w.push_str(
-            "let __jux_p = match __jux_p.downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
+            "let __jux_p = match crate::__jux_foreign_as_exception(__jux_p).downcast::<crate::jux::std::exceptions::Exception>() { Ok(__jux_e) => return *__jux_e, Err(__jux_p) => __jux_p }; ",
         );
         for sub in self.subclass_fqns_of(BASE) {
             let depth = self.extends_chain_distance(&sub, BASE).unwrap_or(0);
@@ -771,11 +789,36 @@ impl RustEmitter {
         // drops the borrow from the stub's type. Jux has no borrowed string, so
         // the value is owned here. `.clone()` would not do it: cloning a `&str`
         // gives another `&str`.
-        if !self.owning_borrowed_string && self.foreign_call_returns_borrowed_string(&call.callee) {
+        // **A foreign iterator over borrowed items** (`v.iter()` yields `&T`).
+        // Jux has no references, so its elements are owned values: the
+        // iterator is taken `.cloned()` where it is made, and every adaptor
+        // after it (`max`, `sum`, `map`, `collect`) sees `T` (G.6.4.2).
+        if !self.cloning_borrowed_iterator {
+            if let Some(view) = self.foreign_call_returns_borrowing_iterator(&call.callee) {
+                self.cloning_borrowed_iterator = true;
+                self.emit_call(call);
+                self.cloning_borrowed_iterator = false;
+                // Borrowed VIEWS (`&str` from `graphemes`) have no `Clone`;
+                // they are owned the way a view is stored.
+                self.w.push_str(if view { ".map(ToOwned::to_owned)" } else { ".cloned()" });
+                return;
+            }
+        }
+        self.cloning_borrowed_iterator = false;
+        let borrowed_view = if self.owning_borrowed_string {
+            None
+        } else {
+            self.foreign_call_returns_borrowed_view(&call.callee)
+        };
+        if let Some(nullable) = borrowed_view {
             self.owning_borrowed_string = true;
             self.emit_call(call);
             self.owning_borrowed_string = false;
-            self.w.push_str(".to_string()");
+            self.w.push_str(if nullable {
+                ".map(ToOwned::to_owned)"
+            } else {
+                ".to_owned()"
+            });
             return;
         }
         self.owning_borrowed_string = false;
@@ -2116,6 +2159,9 @@ impl RustEmitter {
                                 .get(&class_fqn)
                                 .and_then(|r| r.methods.get(f.field.text.as_str()))
                         })
+                        // A foreign trait's associated function on a type the
+                        // trait reaches (`Pcg64Dxsm.seed_from_u64(1)`).
+                        .or_else(|| self.external_type_method(&class_fqn, f.field.text.as_str()))
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {
@@ -2191,6 +2237,32 @@ impl RustEmitter {
                             // An integer argument converts to the parameter's
                             // width and sign, as on every other call path.
                             if self.emit_int_width_converted_arg(call, i, arg) {
+                                continue;
+                            }
+                            // A collection handle (`PathBuf`, `Vec`, an array)
+                            // going into a foreign static method lends its
+                            // interior, exactly as it does for a free function
+                            // or an instance method (6.5.1). This loop is the
+                            // only path a static call takes, and without it
+                            // `File.create(path)` handed the crate the
+                            // `Rc<JuxCell<PathBuf>>` itself (B27).
+                            if let Some(borrow) = self.foreign_arg_handle_lend(&call.callee, i, arg) {
+                                let is_ref = self
+                                    .symbols
+                                    .classes
+                                    .get(&class_fqn)
+                                    .and_then(|c| c.methods.get(f.field.text.as_str()))
+                                    .and_then(|m| m.params.get(i))
+                                    .is_some_and(|p| p.is_ref || p.ty.array_shape.is_some());
+                                // A borrowing slot takes `&`, and so does a
+                                // reslice (`[..]` is unsized).
+                                if is_ref || borrow.ends_with("[..]") {
+                                    self.w.push('&');
+                                }
+                                self.emitting_method_receiver = true;
+                                self.emit_expr(arg);
+                                self.emitting_method_receiver = false;
+                                self.w.push_str(borrow);
                                 continue;
                             }
                             // Interface-typed param slot: wrap a class value in
@@ -2402,7 +2474,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -2789,11 +2861,16 @@ impl RustEmitter {
             let is_str = matches!(args.get(i), Some(FfiArg::Str))
                 || (i >= args.len() && expr_is_string_literal(arg));
             if is_str {
+                // The C string is built from the text's BYTES, a borrow: handing
+                // `CString::new` the `String` itself moved it, so any later use
+                // of the same variable, in this call or after it, was rustc
+                // E0382 (B46). A Jux String passed to C is still the caller's.
                 self.w
-                    .push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
+                    .push_str(&format!("let __c{i} = ::std::ffi::CString::new(("));
                 self.emit_expr(arg);
-                self.w
-                    .push_str(").expect(\"string passed to C contains an interior NUL byte\"); ");
+                self.w.push_str(
+                    ").as_bytes()).expect(\"string passed to C contains an interior NUL byte\"); ",
+                );
             }
             // An `out` integer: the place's current value, at the C width.
             if let Some(FfiArg::OutInt(c_ty, _)) = args.get(i) {
@@ -3295,6 +3372,7 @@ impl RustEmitter {
             // params (not external) keep the `Rc` representation.
             if self.callee_param_is_foreign_fn(&call.callee, i) {
                 self.lambda_bare_target = true;
+                self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
             }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
@@ -3949,7 +4027,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -4133,7 +4211,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -4757,8 +4835,12 @@ impl RustEmitter {
                     // a map's `get(&Q key)` is the case that needs it.
                     self.emit_foreign_call_args(call, name, method);
                     self.w.push_str("))");
-                    self.w
-                        .push_str(if nullable { ".cloned()" } else { ".clone()" });
+                    // A borrowed VIEW (`&str`, `&OsStr`, `&Path`) has no
+                    // `Clone` to copy it out with; the caller in `emit_expr`
+                    // takes it into its owned form instead (B29).
+                    if !self.external_returns_borrowed_view(name, method) {
+                        self.w.push_str(if nullable { ".cloned()" } else { ".clone()" });
+                    }
                     return true;
                 }
             }
@@ -5165,7 +5247,25 @@ impl RustEmitter {
         }
         self.w.push_str("{ ");
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        // A LAMBDA stays in place. Bound to a `let` first, a Rust closure
+        // loses the parameter types the callee's signature would have given
+        // it (`sort_unstable_by((a, b) -> ...)` was E0282), and hoisting buys
+        // nothing: what it captures is taken when it is built either way.
+        let recv_name = match recv_ty {
+            juxc_tycheck::Ty::User { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        // An argument lent by `&mut` stays in place too: it is the caller's
+        // own variable that the callee writes through, never a copy.
+        let lent = |this: &Self, i: usize| {
+            recv_name
+                .as_deref()
+                .is_some_and(|n| this.external_param_is_mut_ref(n, method, i))
+        };
         for (i, arg) in call.args.iter().enumerate() {
+            if matches!(arg, Expr::Lambda(_)) || lent(self, i) {
+                continue;
+            }
             self.w.push_str("let __jux_carg");
             self.w.push_str(&i.to_string());
             self.w.push_str(" = ");
@@ -5174,8 +5274,14 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev_fmt;
         // Synthetic call: same callee/receiver, args replaced by the temps.
-        let temp_args: Vec<Expr> = (0..call.args.len())
-            .map(|i| {
+        let temp_args: Vec<Expr> = call
+            .args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                if matches!(arg, Expr::Lambda(_)) || lent(self, i) {
+                    return arg.clone();
+                }
                 Expr::Path(juxc_ast::QualifiedName {
                     segments: vec![juxc_ast::Ident {
                         text: format!("__jux_carg{i}"),
@@ -5489,8 +5595,6 @@ impl RustEmitter {
                 "isWhitespace" => Some(".is_whitespace()"),
                 "isUppercase" => Some(".is_uppercase()"),
                 "isLowercase" => Some(".is_lowercase()"),
-                "toUppercase" => Some(".to_ascii_uppercase()"),
-                "toLowercase" => Some(".to_ascii_lowercase()"),
                 // `codePoint()` — the Unicode scalar value as `uint`.
                 "codePoint" => Some(" as usize"),
                 _ => None,
@@ -5526,6 +5630,23 @@ impl RustEmitter {
                 _ => None,
             }
         };
+        // `char.toUppercase()` / `toLowercase()` (K.11) are the simple Unicode
+        // mapping, one char in and one char out: `'é'` becomes `'É'`, and a
+        // letter whose full mapping is several chars (`'ß'`) stays as it is.
+        // Rust's own `to_uppercase()` yields an iterator, so the runtime
+        // prelude's `__jux_upper` / `__jux_lower` pick the single
+        // char out of it.
+        if is_char && matches!(method, "toUppercase" | "toLowercase") {
+            self.w.push_str(if method == "toUppercase" {
+                "crate::__jux_upper("
+            } else {
+                "crate::__jux_lower("
+            });
+            self.emit_expr(receiver);
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return true;
+        }
         if let Some(suffix) = simple {
             emit_recv(self);
             self.w.push_str(suffix);
@@ -5665,6 +5786,34 @@ impl RustEmitter {
                 self.emitting_format_arg = prev;
                 return true;
             }
+        }
+        // **The Rust method surface of the primitive** (Bindgen G.6.4.4):
+        // `x.powf(2.0)`, `a.total_cmp(b)`, `w.to_le_bytes()`. The receiver is
+        // written at its exact Rust type (a bare literal is otherwise
+        // ambiguous, E0689), and the arguments go through the foreign-argument
+        // path, which borrows what the real signature borrows (`total_cmp`
+        // takes `&f64`) and converts integer widths.
+        let class = self
+            .symbols
+            .primitive_methods_class(prim.rust_name())
+            .map(str::to_string);
+        if let Some(class) = class.filter(|c| self.external_type_method(c, method).is_some()) {
+            if is_char {
+                emit_recv(self);
+            } else {
+                self.w.push_str("((");
+                self.emit_expr(receiver);
+                self.w.push_str(") as ");
+                self.w.push_str(rust_ty);
+                self.w.push(')');
+            }
+            self.w.push('.');
+            self.w.push_str(method);
+            self.w.push('(');
+            self.emit_foreign_call_args(call, &class, method);
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return true;
         }
         self.emitting_format_arg = prev;
         false
@@ -5898,6 +6047,17 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
+            // An exclusive borrow lends the caller's own place:
+            // `cards.shuffle(generator)` is `shuffle(&mut generator)`.
+            if self.external_param_is_mut_ref(recv_type, method, i) {
+                self.w.push_str("&mut ");
+                let prev_hoist = std::mem::take(&mut self.collection_args_prehoisted);
+                self.emitting_method_receiver = true;
+                self.emit_expr(arg);
+                self.emitting_method_receiver = false;
+                self.collection_args_prehoisted = prev_hoist;
+                continue;
+            }
             // A slice slot needs the borrow just as much as a `&T` one does;
             // it simply has no `&` in the stub to say so.
             let by_ref = self.external_param_is_by_ref(recv_type, method, i)
@@ -5939,6 +6099,66 @@ impl RustEmitter {
         handle.then_some(nullable)
     }
 
+    /// Whether the foreign method `recv_type.method` returns a borrowed VIEW:
+    /// its declared result (nullable or not) is `String` (a `&str`) or a type
+    /// with a discovered owned form (`OsStr`, `Path`). Only meaningful for a
+    /// `@RustRefOut` method, whose result is a reference.
+    fn external_returns_borrowed_view(&self, recv_type: &str, method: &str) -> bool {
+        let Some(fqn) = self.resolve_bare_class_fqn(recv_type.rsplit('.').next().unwrap_or(recv_type))
+        else {
+            return false;
+        };
+        let Some(m) = self.external_type_method(&fqn, method) else {
+            return false;
+        };
+        let juxc_ast::ReturnType::Type(t) = &m.return_type else {
+            return false;
+        };
+        if t.array_shape.is_some() {
+            return false;
+        }
+        let Some(last) = t.name.segments.last() else {
+            return false;
+        };
+        last.text == "String" || self.external_owned_form(&last.text).is_some()
+    }
+
+    /// Whether `callee` is a foreign method or function returning an ITERATOR
+    /// over borrowed items: a stub type whose `next()` is `@RustRefOut`
+    /// (`slice::Iter<T>` from `v.iter()`).
+    /// `Some(is_view)`: `true` when the items are borrowed VIEWS (`&str`,
+    /// `&Path`), which are owned with `to_owned` rather than cloned.
+    fn foreign_call_returns_borrowing_iterator(&self, callee: &Expr) -> Option<bool> {
+        let ret = match callee {
+            Expr::Field(_) => self.foreign_callee_return_name(callee),
+            _ => None,
+        };
+        let fqn = ret.and_then(|n| self.resolve_bare_class_fqn(&n))?;
+        let next = self.external_type_method(&fqn, "next").filter(|m| {
+            m.params.is_empty()
+                && m.annotations.iter().any(crate::exprs::field::annotation_is_rust_ref_out)
+        })?;
+        let juxc_ast::ReturnType::Type(t) = &next.return_type else {
+            return Some(false);
+        };
+        let last = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        Some(t.array_shape.is_none() && (last == "String" || self.external_owned_form(last).is_some()))
+    }
+
+    /// One type argument of a call's turbofish. A FOREIGN method or function
+    /// is Rust code that knows nothing of Jux's collection handle, so a
+    /// collection type argument is the plain Rust collection there
+    /// (`collect::<Vec<isize>>()`); the call's result is put behind a handle
+    /// where it lands (see `call_returns_foreign_collection`).
+    fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
+        let foreign = self.foreign_callee_return_type(&call.callee).is_some();
+        if foreign && self.collection_is_handle(&ty.name) {
+            self.plain_collection_once = true;
+        }
+        self.emit_value_type_as_rust(ty);
+        self.plain_collection_once = false;
+    }
+
     pub(crate) fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
         match receiver {
             Expr::Path(qn) if qn.segments.len() == 1 => self
@@ -5946,6 +6166,10 @@ impl RustEmitter {
                 .iter()
                 .rev()
                 .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned()),
+            // A string literal carries a dummy span, so it has no
+            // `expr_types` entry; without this `"abc".parse<double>()` was
+            // not seen as a String receiver and its `Result` stayed unopened.
+            Expr::Literal(juxc_ast::Literal::String(_)) => Some(juxc_tycheck::Ty::String),
             _ => None,
         }
         .or_else(|| {
@@ -6053,6 +6277,7 @@ impl RustEmitter {
         // which does not implement `FnMut`.
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
+            self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
         }
         // `null` for a raw-pointer parameter is a null pointer (§L.6.1), not the
         // `None` a nullable parameter takes: `count(null, 3)` on `int* p`, and
@@ -6064,6 +6289,19 @@ impl RustEmitter {
             return;
         }
         if self.collection_args_prehoisted {
+            // A lambda left in place (see `emit_mut_collection_method`) is
+            // emitted inside the receiver's l-value context; its body is an
+            // ordinary expression context of its own.
+            if matches!(arg, Expr::Lambda(_)) {
+                let prev_lv = std::mem::take(&mut self.emitting_lvalue);
+                let prev_out = std::mem::take(&mut self.emitting_out_place);
+                let prev_hoist = std::mem::take(&mut self.collection_args_prehoisted);
+                self.emit_expr(arg);
+                self.emitting_lvalue = prev_lv;
+                self.emitting_out_place = prev_out;
+                self.collection_args_prehoisted = prev_hoist;
+                return;
+            }
             self.emit_expr(arg);
             return;
         }

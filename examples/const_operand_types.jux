@@ -1,0 +1,14 @@
+// Constants in arithmetic keep their type, so the numeric methods of
+// core lib K.11 dispatch on them from either side of an operator.
+const double Pi = 3.14159;
+const int Sides = 6;
+
+void main() {
+    double r = 2.0;
+    print((Pi * r).toFixed(2));
+    print((r * Pi).toFixed(2));
+    print($"area ${(Pi * r * r).toFixed(3)}");
+    print(Pi.toFixed(1));
+    long perimeter = Sides * 5;
+    print(perimeter);
+}

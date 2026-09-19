@@ -224,6 +224,30 @@ pub enum Primitive {
     F64,
 }
 
+impl Primitive {
+    /// The Rust primitive a value of this type is (`int` is `isize`,
+    /// `double` is `f64`): the name the `rust.std` method surface of the
+    /// primitive is recorded under (`@RustPrimitive("f64")`).
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            Primitive::Int => "isize",
+            Primitive::Uint => "usize",
+            Primitive::Byte | Primitive::I8 => "i8",
+            Primitive::Ubyte | Primitive::U8 => "u8",
+            Primitive::Short | Primitive::I16 => "i16",
+            Primitive::Ushort | Primitive::U16 => "u16",
+            Primitive::Long | Primitive::I64 => "i64",
+            Primitive::Ulong | Primitive::U64 => "u64",
+            Primitive::I32 => "i32",
+            Primitive::U32 => "u32",
+            Primitive::Float | Primitive::F32 => "f32",
+            Primitive::Double | Primitive::F64 => "f64",
+            Primitive::Bool => "bool",
+            Primitive::Char => "char",
+        }
+    }
+}
+
 /// Discriminates the two array flavors. Distinguishes `T[N]` from `T[]`
 /// — sizing affects lowering and may eventually affect what operations
 /// are permitted.
@@ -755,7 +779,11 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     //        rule applied to every stdlib package.
     if t.name.segments.len() == 1 {
         let bare = &t.name.segments[0].text;
-        if let Some(fqn) = env.unqualified.get(bare) {
+        let declared_import = env
+            .declaring_unit
+            .and_then(|u| symbols.units.get(u))
+            .and_then(|ctx| ctx.unqualified.get(bare));
+        if let Some(fqn) = env.unqualified.get(bare).or(declared_import) {
             if symbols.is_type_name_or_stdlib(fqn) {
                 if let Some(expanded) = expand_alias(fqn, &t.generic_args, env, symbols)
                 {
@@ -805,7 +833,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         // Implicit auto-import: walk every known FQN looking for one whose last
         // segment matches `bare`, preferring this unit's package so a bare name
         // binds to a same-package type over another package's same-named one.
-        if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join(".")) {
+        if let Some(fqn) = symbols.find_visible_fqn_by_bare_in(bare, &env.current_package.join(".")) {
             if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
                 return expanded;
             }
@@ -916,6 +944,9 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
     if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
         env.current_package = pkg.split('.').map(str::to_string).collect();
     }
+    // ...and its imports: a crate type the declaring file imported is visible
+    // in the signature even where the caller did not import it (G.6.5).
+    env.declaring_unit = symbols.decl_unit.get(declaring_class).copied();
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);
@@ -958,6 +989,9 @@ pub fn lower_member_type_in_method(
     if let Some(pkg) = declaring_class.rsplit_once('.').map(|(p, _)| p) {
         env.current_package = pkg.split('.').map(str::to_string).collect();
     }
+    // ...and its imports: a crate type the declaring file imported is visible
+    // in the signature even where the caller did not import it (G.6.5).
+    env.declaring_unit = symbols.decl_unit.get(declaring_class).copied();
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);

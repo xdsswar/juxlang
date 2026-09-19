@@ -761,6 +761,12 @@ struct RustEmitter {
     /// to the end of the enclosing call statement (Rust temporary-lifetime
     /// extension), so the `&mut` into it stays valid for the callee.
     pub(crate) emitting_out_place: bool,
+    /// Set while a call is emitted inside its own `.cloned()` (a foreign
+    /// iterator over borrowed items), so the wrap is applied once.
+    pub(crate) cloning_borrowed_iterator: bool,
+    /// Set for one collection type: emit it as the plain Rust collection, not
+    /// the 6.5.1 handle (a foreign call's turbofish).
+    pub(crate) plain_collection_once: bool,
     /// True while emitting a mutating stdlib-collection call whose
     /// arguments were already **hoisted into temps** (§CR.4.1 / gap N1).
     /// The temps already carry the element coercion ladder (nullable
@@ -1442,6 +1448,10 @@ struct RustEmitter {
     /// `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare closure.
     /// Take-and-cleared by [`Self::emit_lambda`].
     pub(crate) lambda_bare_target: bool,
+    /// Set with [`Self::lambda_bare_target`] when the foreign closure slot is
+    /// called with references (`filter`'s `&Item`): the lambda clones each
+    /// argument out, so its body sees the owned values a Jux lambda takes.
+    pub(crate) lambda_clone_params: bool,
     /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
@@ -3542,6 +3552,25 @@ fn compute_polymorphic_forced_classes(units: &[juxc_ast::CompilationUnit]) -> Ha
     forced
 }
 
+/// The argument an entry shim passes to `main(String[] args)`: the
+/// command line without the program name (§E.1.3).
+pub(crate) const ENTRY_ARGS_EXPR: &str = "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())";
+
+/// Whether an entry point hands back an exit code (§E.1.2): `int main()`, or
+/// `async int main()`, whose inner type is not the `void` sentinel.
+pub(crate) fn entry_returns_code(rt: &juxc_ast::ReturnType) -> bool {
+    match rt {
+        juxc_ast::ReturnType::Type(_) => true,
+        juxc_ast::ReturnType::AsyncType(t) => {
+            !(t.name.segments.len() == 1
+                && t.name.segments[0].text == "void"
+                && t.generic_args.is_empty()
+                && !t.nullable)
+        }
+        juxc_ast::ReturnType::Void => false,
+    }
+}
+
 /// Collect the bare names used as **cast / type-test targets** — the `T` in a
 /// `(T) e` / `e as T` cast or (later) an `e => T` type-test — anywhere in the
 /// program. "Finish polymorphism" emits a runtime-type `__jux_as_<T>` downcast
@@ -4521,6 +4550,64 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         );
         w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
         w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        // Simple Unicode case mapping for `char.toUppercase()` /
+        // `toLowercase()` (K.11): the one-char result of Rust's full mapping,
+        // or the char itself when the full mapping has several (`'ß'`).
+        w.push_str("pub fn __jux_upper(c: char) -> char {\n");
+        w.push_str("    let mut up = c.to_uppercase();\n");
+        w.push_str("    match (up.next(), up.next()) { (Some(u), None) => u, _ => c }\n");
+        w.push_str("}\n");
+        w.push_str("pub fn __jux_lower(c: char) -> char {\n");
+        w.push_str("    let mut low = c.to_lowercase();\n");
+        w.push_str("    match (low.next(), low.next()) { (Some(l), None) => l, _ => c }\n");
+        w.push_str("}\n\n");
+        // A Rust `Err` crossing into Jux (Bindgen G.5.4): thrown wrapped, so
+        // `catch (Exception e)` can recognise it and a clause naming the Rust
+        // type still gets the value itself.
+        w.push_str(r#"/// A Rust `Err` thrown into Jux (Bindgen G.5.4). The error value rides
+/// along untouched for a `catch` that names its type; the text and type name
+/// serve `catch (Exception e)` and the uncaught-exception report.
+pub struct JuxForeignError {
+    pub type_name: &'static str,
+    pub text: String,
+    pub error: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+}
+/// Throw the `Err` of a foreign call; `text` is its Display (or Debug) form.
+pub fn __jux_raise_foreign<E: ::std::any::Any + ::std::marker::Send>(text: String, error: E) -> ! {
+    let type_name = ::std::any::type_name::<E>();
+    let type_name = type_name.rsplit("::").next().unwrap_or(type_name);
+    ::std::panic::panic_any(JuxForeignError { type_name, text, error: ::std::boxed::Box::new(error) })
+}
+/// For `catch (T e)` with `T` a foreign type: the Rust error itself, when it is a `T`.
+pub fn __jux_foreign_error_of<T: ::std::any::Any>(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) if f.error.is::<T>() => f.error,
+        Ok(f) => f,
+        Err(p) => p,
+    }
+}
+/// For `catch (Exception e)`: a foreign error is an `Exception` carrying its text.
+pub fn __jux_foreign_as_exception(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Exception::new(f.text)),
+        Err(p) => p,
+    }
+}
+/// For `catch (Throwable e)`: the same, as a `Throwable`.
+pub fn __jux_foreign_as_throwable(
+    p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+    match p.downcast::<JuxForeignError>() {
+        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Throwable::new(f.text)),
+        Err(p) => p,
+    }
+}
+
+"#);
         // Object identity (§T.1.4, §O.4.1). A class value can sit behind two
         // handle shapes: its own `C(Rc<RefCell<C_Inner>>)` newtype, or a
         // `Rc<dyn BaseKind>` / `Rc<dyn Iface>` that boxes a clone of that
@@ -5178,12 +5265,16 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // mutation analysis from the symbol table keeps `let mut`
         // promotion correct as the library surface evolves — no
         // hardcoded method-name lists.
+        // A foreign TRAIT's `@MutSelf` methods count as well: `random_range`
+        // comes from `rand::Rng`, not from the generator's own impl.
         let extern_mut_methods: HashSet<String> = symbols
             .classes
             .values()
             .filter(|c| c.is_external)
-            .flat_map(|c| {
-                c.methods.iter().filter_map(|(name, m)| {
+            .map(|c| &c.methods)
+            .chain(symbols.interfaces.values().filter(|i| i.is_external).map(|i| &i.methods))
+            .flat_map(|methods| {
+                methods.iter().filter_map(|(name, m)| {
                     if m.annotations
                         .iter()
                         .any(crate::exprs::field::annotation_is_mut_self)
@@ -5213,6 +5304,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             signed_slot_target: None,
             int_literal_as_float: false,
             emitting_out_place: false,
+            cloning_borrowed_iterator: false,
+            plain_collection_once: false,
             collection_args_prehoisted: false,
             emitting_const_context: false,
             emitting_format_arg: false,
@@ -5305,6 +5398,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             pattern_depth: 0,
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
+            lambda_clone_params: false,
             worker_attach: Vec::new(),
         }
     }
@@ -5514,31 +5608,22 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // excluded, like Java). A sync param-taking main was
             // renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = main_decl.is_some_and(|f| !f.params.is_empty());
-            let args_expr = if takes_args {
-                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-            } else {
-                ""
-            };
+            // `int main()` hands back an exit code (§E.1.3) and was renamed
+            // like the args form, since Rust's `main` cannot return an integer.
+            let returns_code = main_decl.is_some_and(|f| entry_returns_code(&f.return_type));
+            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
             let path = juxc_lex::join_rust_path(&package);
-            if async_main {
-                self.w.push_str("futures::executor::block_on(");
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str("));\n");
-            } else if takes_args {
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_args_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str(");\n");
+            let call = if async_main {
+                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+            } else if takes_args || returns_code {
+                format!("{path}::__jux_args_main({args_expr})")
             } else {
-                self.w.push_str(&path);
-                self.w.push_str("::main();\n");
-            }
+                format!("{path}::main()")
+            };
+            self.emit_entry_call(&call, returns_code);
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -5810,11 +5895,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // the shim feeds `std::env::args().skip(1)`. Sync forms
             // were renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = !main_fn.params.is_empty();
-            let args_expr = if takes_args {
-                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-            } else {
-                ""
-            };
+            // `int main()`: the exit code goes to `std::process::exit`, and a
+            // sync one was renamed to `__jux_args_main` like the args form.
+            let returns_code = entry_returns_code(&main_fn.return_type);
+            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
@@ -5830,23 +5914,19 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     self.w.newline();
                     self.w.line("fn main() {");
                     self.w.indent_inc();
-                    self.w.emit_indent();
-                    self.w
-                        .push_str("futures::executor::block_on(__jux_async_main(");
-                    self.w.push_str(args_expr);
-                    self.w.push_str("));\n");
+                    self.emit_entry_call(
+                        &format!("futures::executor::block_on(__jux_async_main({args_expr}))"),
+                        returns_code,
+                    );
                     self.w.indent_dec();
                     self.w.line("}");
-                } else if takes_args {
-                    // Crate-root sync `main(args)` was renamed to
-                    // `__jux_args_main`; this shim is the real entry.
+                } else if takes_args || returns_code {
+                    // Crate-root sync `main(args)` / `int main()` was renamed
+                    // to `__jux_args_main`; this shim is the real entry.
                     self.w.newline();
                     self.w.line("fn main() {");
                     self.w.indent_inc();
-                    self.w.emit_indent();
-                    self.w.push_str("__jux_args_main(");
-                    self.w.push_str(args_expr);
-                    self.w.push_str(");\n");
+                    self.emit_entry_call(&format!("__jux_args_main({args_expr})"), returns_code);
                     self.w.indent_dec();
                     self.w.line("}");
                 }
@@ -5855,26 +5935,19 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
-            self.w.emit_indent();
             let path = juxc_lex::join_rust_path(&pkg);
-            if is_async_main {
-                // Reach into the user's package and drive their async
-                // main via the futures executor. The user's main was
-                // renamed to `__jux_async_main` by `emit_fn_decl`.
-                self.w.push_str("futures::executor::block_on(");
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str("));\n");
-            } else if takes_args {
-                self.w.push_str(&path);
-                self.w.push_str("::__jux_args_main(");
-                self.w.push_str(args_expr);
-                self.w.push_str(");\n");
+            // Reach into the user's package. An async main was renamed to
+            // `__jux_async_main` and runs under the futures executor; a sync
+            // one taking args or returning a code was renamed to
+            // `__jux_args_main` by `emit_fn_decl`.
+            let call = if is_async_main {
+                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+            } else if takes_args || returns_code {
+                format!("{path}::__jux_args_main({args_expr})")
             } else {
-                self.w.push_str(&path);
-                self.w.push_str("::main();\n");
-            }
+                format!("{path}::main()")
+            };
+            self.emit_entry_call(&call, returns_code);
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -5910,22 +5983,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // exit code. This covers BOTH `int main()` (ReturnType::Type) and
         // `async int main()` (ReturnType::AsyncType whose inner isn't the `void`
         // sentinel); the latter would otherwise drop its exit code.
-        let returns_int = match &method.return_type {
-            juxc_ast::ReturnType::Type(_) => true,
-            juxc_ast::ReturnType::AsyncType(t) => {
-                !(t.name.segments.len() == 1
-                    && t.name.segments[0].text == "void"
-                    && t.generic_args.is_empty()
-                    && !t.nullable)
-            }
-            juxc_ast::ReturnType::Void => false,
-        };
+        let returns_int = entry_returns_code(&method.return_type);
         let takes_args = !method.params.is_empty();
-        let args_expr = if takes_args {
-            "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
-        } else {
-            ""
-        };
+        let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
 
         // `ClassName::main` at the crate root, else `pkg::path::ClassName::main`.
         let pkg: Vec<&str> = unit
@@ -5951,17 +6011,25 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         self.w.newline();
         self.w.line("fn main() {");
         self.w.indent_inc();
-        self.w.emit_indent();
-        if returns_int {
-            self.w.push_str("std::process::exit(");
-            self.w.push_str(&inner);
-            self.w.push_str(" as i32);\n");
-        } else {
-            self.w.push_str(&inner);
-            self.w.push_str(";\n");
-        }
+        self.emit_entry_call(&inner, returns_int);
         self.w.indent_dec();
         self.w.line("}");
+    }
+
+    /// One statement of an entry shim: the call to the user's `main`, and for
+    /// an `int main` (§E.1.3) the exit with its result. `std::process::exit`
+    /// flushes stdout before the process ends, and the user's locals are gone
+    /// by then because their function has returned.
+    pub(crate) fn emit_entry_call(&mut self, call: &str, returns_code: bool) {
+        self.w.emit_indent();
+        if returns_code {
+            self.w.push_str("std::process::exit(");
+            self.w.push_str(call);
+            self.w.push_str(" as i32);\n");
+        } else {
+            self.w.push_str(call);
+            self.w.push_str(";\n");
+        }
     }
 
     /// Emit the test-runner `fn main()` for `jux test`
@@ -6108,6 +6176,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                 "if let Some(e) = p.downcast_ref::<{path}>() {{ return format!(\"{fqn}: {{}}\", e.getMessage()); }}",
             ));
         }
+        self.w.line(
+            "if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() { return format!(\"{}: {}\", e.type_name, e.text); }",
+        );
         self.w.line("String::from(\"<panic>\")");
         self.w.indent_dec();
         self.w.line("}");
@@ -6366,6 +6437,33 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     });
                 }
             }
+        }
+
+        // A foreign ENUM, TRAIT or CONSTANT lowers the same way, through the
+        // real path its `@rust` annotation records. Only a class was looked up
+        // here before, so `import rust.std.Component;` fell through to the
+        // flat stub package and emitted `use rust::std::Component;`, and
+        // `import rust.rand.SliceRandom;` became `use rand::SliceRandom;`
+        // where the trait lives at `rand::seq::SliceRandom` (B21).
+        let other_real = self
+            .symbols
+            .enums
+            .get(&fqn)
+            .filter(|e| e.is_external)
+            .and_then(|e| e.rust_path.clone())
+            .or_else(|| {
+                self.symbols
+                    .interfaces
+                    .get(&fqn)
+                    .filter(|i| i.is_external)
+                    .and_then(|i| i.rust_path.clone())
+            })
+            .or_else(|| self.symbols.consts.get(&fqn).and_then(|c| c.rust_path.clone()));
+        if let Some(real) = other_real {
+            return Some(match alias {
+                Some(a) => format!("use {real} as {};", a.text),
+                None => format!("use {real};"),
+            });
         }
 
         // A foreign free FUNCTION with an `@rust("real::path")` annotation
@@ -7056,6 +7154,13 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                         fqn = fqn,
                     ));
                 }
+                // A Rust `Err` nothing caught (Bindgen G.5.4) is reported like
+                // an uncaught exception, under the Rust error type's name.
+                wrapper.push_str(concat!(
+                    "        if let Some(__jux_e) = __jux_p.downcast_ref::<crate::JuxForeignError>() {\n",
+                    "            eprintln!(\"Exception in thread \\\"main\\\" {}: {}\", __jux_e.type_name, __jux_e.text);\n",
+                    "        }\n",
+                ));
                 wrapper.push_str(concat!(
                     "        std::process::exit(101);\n",
                     "    }\n",

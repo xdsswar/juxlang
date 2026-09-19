@@ -1,0 +1,33 @@
+// A foreign borrowed view (`Path`, `OsStr`) is held as its owned form,
+// its borrowed results are owned at the call, and a foreign enum variant
+// pattern names the enum where it really lives (B29, B30, B31).
+import rust.std.Component;
+import rust.std.Path;
+import rust.std.PathBuf;
+import rust.std.temp_dir;
+
+String describe(Path p) {
+    return $"${p.is_absolute()} ${p.to_str() ?: "?"}";
+}
+
+void main() {
+    final Path path = new Path("a/b/c.txt");
+    print(describe(path));
+    final String ext = path.extension()!!.to_str() ?: "?";
+    print(ext);
+    final Path other = new Path("a/b/c.txt");
+    print(path == other);
+    final PathBuf joined = temp_dir().join("x.bin");
+    String? name = joined.file_name()!!.to_str();
+    print(name ?: "none");
+    Path? parent = path.parent();
+    print(parent!!.to_str() ?: "?");
+    var line = "";
+    for (Component part : path.components()) {
+        switch (part) {
+            case Normal(var n) -> line += $"[${n.to_str() ?: "?"}]";
+            case _ -> line += "[?]";
+        }
+    }
+    print(line);
+}

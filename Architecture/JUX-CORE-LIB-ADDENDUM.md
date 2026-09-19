@@ -628,6 +628,8 @@ The full set is too large to specify here exhaustively; the canonical list is in
 - The static constructors `fromBits(uint)` and `char.fromCodePoint(uint)` are not yet available.
 - `bits()` returns `uint` for both `float` and `double` (the spec's `ulong` for `double` is width-identical on 64-bit targets).
 
+**`char` case and class tests.** `toUppercase()` and `toLowercase()` use the simple Unicode case mapping: one `char` in, one `char` out, so `'é'.toUppercase()` is `'É'`. A char whose full mapping is several chars (`'ß'` uppercases to `SS`) is returned unchanged; use the `String` methods for full mappings. `isAlphabetic()`, `isWhitespace()`, `isUppercase()` and `isLowercase()` test the Unicode properties of the same names. `isDigit()` is true for the ASCII digits `0` to `9` only.
+
 ---
 
 ## §K.12 — What's NOT in `core`

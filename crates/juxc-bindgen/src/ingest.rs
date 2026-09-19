@@ -81,9 +81,18 @@ pub fn generate_merged_with_pool(
     }
 
     // Pass 2: ingest, now able to resolve a deref target across crates.
-    for (_crate_name, json) in jsons {
+    let pool_names: HashSet<&str> = pool_only.iter().map(|(n, _)| *n).collect();
+    let mut reexports = PoolReexports::default();
+    // The facade is the crate a program names (`std`): the last one given.
+    // `alloc` re-exports `core` too, but `alloc::slice::...` is not a path a
+    // program's crate can write.
+    let facade = jsons.last().map(|(n, _)| *n);
+    for (crate_name, json) in jsons {
         let krate: Crate = serde_json::from_str(json)?;
         format_version = krate.format_version;
+        if Some(*crate_name) == facade {
+            reexports.record(&krate, &pool_names);
+        }
         for (name, item) in collect_items_with(&krate, &pool) {
             // First definition wins (crates passed core→alloc→std), and
             // platform-duplicated names are collapsed.
@@ -93,7 +102,22 @@ pub fn generate_merged_with_pool(
         }
     }
 
+    // Pass 3: what the ingested crates RE-EXPORT from a pool crate. `std`
+    // publishes `core::time::Duration` as `std::time::Duration` and
+    // `core::cmp::Ordering` through `pub use core::cmp`, and a program reaches
+    // them as std's own; skipping every `core` definition left `sleep`
+    // taking a `Duration` nobody could name (B25, B44).
+    for (_crate_name, json) in pool_only {
+        let krate: Crate = serde_json::from_str(json)?;
+        for (name, item) in reexports.surface(&krate, &pool, &collected) {
+            if seen.insert(name.clone()) {
+                collected.push((name, item));
+            }
+        }
+    }
+
     collected.sort_by(|a, b| a.0.cmp(&b.0));
+    retain_declared_implements(&mut collected);
     // A plain alias is kept only when it ends somewhere this stub can name: a
     // primitive, or a type (or alias) the stub declares. Anything else would
     // be an alias to nothing.
@@ -114,6 +138,219 @@ pub fn generate_merged_with_pool(
     })
 }
 
+/// The items the ingested crates re-export from a POOL crate (`core`), by the
+/// definition path the pool crate records for them.
+#[derive(Default)]
+struct PoolReexports {
+    /// `pub use core::time::Duration;` in `std::time`: definition path to the
+    /// public path (`core::time::Duration` -> `std::time::Duration`).
+    items: HashMap<String, String>,
+    /// `pub use core::cmp;` in `std`: a whole module, by definition prefix
+    /// (`core::cmp` -> `std::cmp`).
+    modules: Vec<(String, String)>,
+}
+
+impl PoolReexports {
+    /// Record every public, non-glob `use` in `krate` whose target lives in
+    /// one of `pool` (by crate name).
+    fn record(&mut self, krate: &Crate, pool: &HashSet<&str>) {
+        for module in krate.index.values() {
+            if module.crate_id != 0 || !is_public(&module.visibility) {
+                continue;
+            }
+            let ItemEnum::Module(m) = &module.inner else { continue };
+            let Some(mpath) = krate.paths.get(&module.id).map(|s| s.path.join("::")) else {
+                continue;
+            };
+            for child in &m.items {
+                let Some(citem) = krate.index.get(child) else { continue };
+                if !is_public(&citem.visibility) {
+                    continue;
+                }
+                let ItemEnum::Use(u) = &citem.inner else { continue };
+                if u.is_glob {
+                    continue;
+                }
+                let Some(target) = u.id.as_ref().and_then(|id| krate.paths.get(id)) else {
+                    continue;
+                };
+                let from_pool = krate
+                    .external_crates
+                    .get(&target.crate_id)
+                    .is_some_and(|c| pool.contains(c.name.as_str()));
+                if !from_pool {
+                    continue;
+                }
+                let def = target.path.join("::");
+                let public = format!("{mpath}::{}", u.name);
+                if matches!(target.kind, rustdoc_types::ItemKind::Module) {
+                    self.modules.push((def, public));
+                } else {
+                    // The shortest public spelling: `std::iter::Iterator`
+                    // over `std::prelude::v1::Iterator`.
+                    let slot = self.items.entry(def).or_insert_with(|| public.clone());
+                    if public.len() < slot.len() {
+                        *slot = public;
+                    }
+                }
+            }
+        }
+        // Longest prefix first, so `core::f64::consts` beats `core::f64`.
+        self.modules.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.cmp(b)));
+    }
+
+    /// The public path a pool item is reached by, and whether that is an
+    /// item-level re-export (`true`) or one through a re-exported module
+    /// (`false`).
+    ///
+    /// `def` is where the item is defined (`core::iter::adapters::map::Map`,
+    /// through private modules), `pool_public` the path the pool crate itself
+    /// publishes it at (`core::iter::Map`). An item re-export is keyed by the
+    /// definition; a module re-export rewrites the published path, since only
+    /// that one threads public modules. The shorter spelling wins when both
+    /// apply (`std::option::Option` over `std::prelude::v1::Option`).
+    fn public_path(&self, def: &str, pool_public: Option<&str>) -> Option<(String, bool)> {
+        let item = self.items.get(def).cloned();
+        let pool_crate = def.split("::").next().unwrap_or_default();
+        let module = pool_public.and_then(|pp| {
+            // Already a facade path: the pool crate's own scan followed the
+            // re-export (`core::cmp::Ordering` comes back `std::cmp::Ordering`).
+            if pp.split("::").next() != Some(pool_crate) {
+                return Some(pp.to_string());
+            }
+            self.modules.iter().find_map(|(prefix, public)| {
+                pp.strip_prefix(prefix.as_str())
+                    .filter(|rest| rest.starts_with("::"))
+                    .map(|rest| format!("{public}{rest}"))
+            })
+        });
+        match (item, module) {
+            (Some(i), Some(m)) if m.len() < i.len() => Some((m, true)),
+            (Some(i), _) => Some((i, true)),
+            (None, Some(m)) => Some((m, false)),
+            (None, None) => None,
+        }
+    }
+
+    /// The pool crate's items to add to the stub, with their `@rust` paths
+    /// rewritten to the public re-export.
+    ///
+    /// Only TYPES (structs, enums), constants and free functions are taken,
+    /// plus the `Iterator` trait. Any other pool trait would put
+    /// `implements Debug, Clone, ...` on every type of the stub, and those are
+    /// language meaning in Jux (operators, `@RustClone`), not interfaces to
+    /// inherit; `Iterator` is the K.5 iteration protocol, whose adaptors a
+    /// program calls.
+    ///
+    /// Everything re-exported ITEM by item is added; that is std choosing to
+    /// publish it. Through a re-exported MODULE only what the ingested crates'
+    /// own items mention is added (`Ordering`, named by `sort_unstable_by`),
+    /// since `pub use core::iter;` alone would otherwise pull all of
+    /// `core::iter` in: the reason the pool exists (G.6.2.1). A name several
+    /// such items share is decided by the shorter public path
+    /// (`std::cmp::Ordering` over `std::sync::atomic::Ordering`); a true tie
+    /// (`INFINITY` for `f32` and `f64`) is left out, since the flat package
+    /// cannot say which one a program means.
+    fn surface(
+        &self,
+        krate: &Crate,
+        pool: &InherentPool,
+        already: &[(String, StubItem)],
+    ) -> Vec<(String, StubItem)> {
+        let mut candidates: Vec<(String, StubItem, bool, String)> = Vec::new();
+        for (id, name, mut item) in collect_items_with_ids(krate, pool) {
+            let Some(def) = krate.paths.get(&Id(id)).map(|s| s.path.join("::")) else {
+                continue;
+            };
+            // The type map folds `Option` and `Result` into `T?` and `throws`
+            // (G.3.1), so they are never types of the stub.
+            if map_path_folds(&name) {
+                continue;
+            }
+            let pool_public = match &item {
+                StubItem::Type(t) => t.rust_path.clone(),
+                StubItem::Function(f) => f.rust_path.clone(),
+                StubItem::Const(c) => c.rust_path.clone(),
+                StubItem::Alias(_) => None,
+            };
+            let Some((public, item_level)) = self.public_path(&def, pool_public.as_deref()) else {
+                continue;
+            };
+            match &mut item {
+                // Of the pool's traits only `Iterator` is taken: it is the K.5
+                // iteration protocol, the one trait Jux gives meaning as an
+                // interface (its adaptors: `count`, `sum`, `position`, ...).
+                StubItem::Type(t) if t.kind != TypeKind::Interface || name == "Iterator" => {
+                    t.rust_path = Some(public.clone());
+                    t.name = stub_trait_name(&t.name).to_string();
+                }
+                StubItem::Function(f) => f.rust_path = Some(public.clone()),
+                StubItem::Const(c) => c.rust_path = Some(public.clone()),
+                _ => continue,
+            }
+            let name = if matches!(&item, StubItem::Type(t) if t.kind == TypeKind::Interface) {
+                stub_trait_name(&name).to_string()
+            } else {
+                name
+            };
+            candidates.push((name, item, item_level, public));
+        }
+        let declared: HashSet<&str> = already.iter().map(|(n, _)| n.as_str()).collect();
+        let mut referenced: HashSet<String> = HashSet::new();
+        for (_, item) in already {
+            item.referenced_type_names(&mut referenced);
+        }
+        // ...and what the `Iterator` trait names: its adaptors return `Filter`,
+        // `Map`, `Zip`, whose own `count`/`sum` a chained call reaches.
+        for (name, item, item_level, _) in &candidates {
+            if *item_level && name == "RustIterator" {
+                item.referenced_type_names(&mut referenced);
+            }
+        }
+        // One winner per name: the shorter public path; a tie drops the name.
+        let mut best: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (name, _, item_level, _)) in candidates.iter().enumerate() {
+            let wanted = *item_level || referenced.contains(name);
+            if wanted && !declared.contains(name.as_str()) {
+                best.entry(name.as_str()).or_default().push(i);
+            }
+        }
+        let mut chosen: Vec<(String, StubItem)> = Vec::new();
+        for (name, idxs) in best {
+            let depth = |i: &usize| candidates[*i].3.matches("::").count();
+            let Some(min) = idxs.iter().map(depth).min() else { continue };
+            let winners: Vec<&usize> = idxs.iter().filter(|i| depth(i) == min).collect();
+            if let [only] = winners.as_slice() {
+                chosen.push((name.to_string(), candidates[**only].1.clone()));
+            }
+        }
+        chosen
+    }
+}
+
+/// Keep in each type's `implements` clause only the traits this stub declares
+/// as interfaces with no type parameters. A trait taken by name from another
+/// crate (see `implemented_trait_names`) is dropped when the stub cannot name
+/// it, since an unresolvable name would help nothing.
+fn retain_declared_implements(collected: &mut [(String, StubItem)]) {
+    let interfaces: HashSet<String> = collected
+        .iter()
+        .filter_map(|(n, it)| match it {
+            StubItem::Type(t) if t.kind == TypeKind::Interface && t.generics.is_empty() => {
+                Some(n.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    for (_, item) in collected.iter_mut() {
+        if let StubItem::Type(t) = item {
+            // `RustIterator` lives in `rust.std` and is reachable from every
+            // stub, so a crate's iterators keep it too.
+            t.implements.retain(|n| interfaces.contains(n) || n == "RustIterator");
+        }
+    }
+}
+
 /// Build a [`StubFile`] from an already-parsed rustdoc [`Crate`].
 ///
 /// Only public items of the local crate (`crate_id == 0`) are emitted, in a
@@ -123,6 +360,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
 
     // Deterministic order: by item name.
     collected.sort_by(|a, b| a.0.cmp(&b.0));
+    retain_declared_implements(&mut collected);
 
     StubFile {
         package: package.to_string(),
@@ -328,6 +566,15 @@ fn build_handle_alias(
 }
 
 fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubItem)> {
+    collect_items_with_ids(krate, pool)
+        .into_iter()
+        .map(|(_, name, item)| (name, item))
+        .collect()
+}
+
+/// [`collect_items_with`], keeping each item's rustdoc id so the caller can
+/// ask the crate where the item is DEFINED (`krate.paths`).
+fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
@@ -400,18 +647,54 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                     }
                 }
             }
+            // The inherent methods of a Rust PRIMITIVE (Bindgen G.6.4.4). The
+            // facade crate's primitive items gather the impls of `core`, `alloc`
+            // and `std` in one place: `f64` has `powf` from std and `total_cmp`
+            // from core. `str` is left out, since `String` already carries its
+            // methods through `Deref`.
+            ItemEnum::Primitive(prim) if primitive_has_jux_type(&prim.name) => {
+                let class = format!("{}_methods", prim.name);
+                let (ctors, mut methods) = collect_inherent_members(krate, &prim.impls, &class);
+                // A primitive has no constructor; `from_bits` and friends are
+                // associated functions, called on the type.
+                for c in ctors {
+                    methods.push(StubFn {
+                        visibility: Vis::Public,
+                        is_static: true,
+                        is_default: false,
+                        name: c.name,
+                        generics: Vec::new(),
+                        params: c.params,
+                        ret: JuxType::Prim(primitive_jux_name(&prim.name)),
+                        throws: c.throws,
+                        is_unsafe: false,
+                        is_mut_self: false,
+                        returns_borrow: false,
+                        carries_borrow: false,
+                        rust_path: None,
+                        doc: None,
+                        closure_ref_params: Vec::new(),
+                    });
+                }
+                dedup_methods_by_name(&mut methods);
+                let mut st = StubType::new(TypeKind::Class, &class);
+                st.methods = methods;
+                st.primitive = Some(prim.name.clone());
+                st.rust_path = Some(prim.name.clone());
+                collected.push((item.id.0, class, StubItem::Type(st)));
+            }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
                 collected.push((
                     item.id.0,
                     name.clone(),
-                    StubItem::Type(build_trait(
-                        krate,
-                        name,
-                        &t.generics,
-                        &t.items,
-                        item,
-                        &public,
-                    )),
+                    StubItem::Type({
+                        let mut st =
+                            build_trait(krate, name, &t.generics, &t.items, item, &public);
+                        let (blanket, by) = trait_impl_reach(krate, &t.implementations);
+                        st.blanket_over = blanket;
+                        st.implemented_by = by;
+                        st
+                    }),
                 ));
             }
             ItemEnum::Function(f)
@@ -440,6 +723,7 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                         // bodyless `const T NAME;` rather than emit unparseable
                         // text.
                         value: None,
+                        rust_path: real_rust_path(krate, item, &public),
                     }),
                 ));
             }
@@ -453,6 +737,7 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                         // See the `Constant` arm: the Rust initializer has no Jux
                         // spelling and a stub never lowers it.
                         value: None,
+                        rust_path: real_rust_path(krate, item, &public),
                     }),
                 ));
             }
@@ -475,9 +760,6 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
             .then_with(|| a.0.cmp(&b.0))
     });
     collected
-        .into_iter()
-        .map(|(_, name, item)| (name, item))
-        .collect()
 }
 
 /// A collected item's recorded Rust path, or the empty string when it has none
@@ -561,6 +843,7 @@ fn build_struct(
     // or `reverse`, which is why the backend had grown hardcoded branches for
     // some of them: the scan was not telling it the truth.
     methods.extend(deref_members(krate, &s.impls, pool));
+    methods.extend(iterator_next(krate, &s.impls));
     dedup_methods_by_name(&mut methods);
 
     // §G.6.3 kind selection: an all-public plain-fielded struct with no methods
@@ -581,6 +864,8 @@ fn build_struct(
     st.rust_path = real_rust_path(krate, item, public);
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
+    st.owned_as = owned_counterpart(krate, &s.impls, name);
+    st.derefs_to = deref_target(krate, &s.impls).as_ref().and_then(shape_name);
     st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
     st.implements = implemented_trait_names(krate, item.id, &s.impls);
     st
@@ -850,6 +1135,82 @@ fn deref_members(krate: &Crate, impls: &[rustdoc_types::Id], pool: &InherentPool
     pool.get(&key).cloned().unwrap_or_default()
 }
 
+/// The name a type's shape is written with in `@RustDerefs` /
+/// `@RustImplementedBy`: `[]` for a slice, the primitive's name (`str`), or a
+/// named type's last segment.
+fn shape_name(t: &Type) -> Option<String> {
+    match t {
+        Type::Slice(_) => Some("[]".to_string()),
+        Type::Primitive(p) => Some(p.clone()),
+        Type::ResolvedPath(p) => Some(last_segment(&p.path).to_string()),
+        _ => None,
+    }
+}
+
+/// How far a trait's impls reach beyond the types that name it
+/// (Bindgen G.6.4.3), from the impls rustdoc lists for the trait:
+///
+/// - a BLANKET impl over a type parameter bounded by one trait
+///   (`impl<R: RngCore + ?Sized> Rng for R`) gives that bound;
+/// - an impl for a slice or a primitive (`impl<T> SliceRandom for [T]`,
+///   `impl UnicodeSegmentation for str`) gives that shape.
+fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>, Vec<String>) {
+    let mut blanket: Vec<String> = Vec::new();
+    let mut shapes: Vec<String> = Vec::new();
+    for id in impls {
+        let Some(item) = krate.index.get(id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.is_synthetic || im.is_negative {
+            continue;
+        }
+        match &im.for_ {
+            Type::Generic(param) => {
+                let mut bounds: Vec<String> = Vec::new();
+                let mut take = |bs: &[GenericBound]| {
+                    for b in bs {
+                        if let GenericBound::TraitBound { trait_, modifier, .. } = b {
+                            let name = last_segment(&trait_.path);
+                            if !matches!(modifier, rustdoc_types::TraitBoundModifier::Maybe)
+                                && name != "Sized"
+                            {
+                                bounds.push(name.to_string());
+                            }
+                        }
+                    }
+                };
+                for gp in &im.generics.params {
+                    if &gp.name == param {
+                        if let GenericParamDefKind::Type { bounds: bs, .. } = &gp.kind {
+                            take(bs);
+                        }
+                    }
+                }
+                for wp in &im.generics.where_predicates {
+                    if let WherePredicate::BoundPredicate { type_: Type::Generic(g), bounds: bs, .. } = wp {
+                        if g == param {
+                            take(bs);
+                        }
+                    }
+                }
+                if let [only] = bounds.as_slice() {
+                    blanket.push(only.clone());
+                }
+            }
+            Type::Slice(_) | Type::Primitive(_) => {
+                if let Some(shape) = shape_name(&im.for_) {
+                    shapes.push(shape);
+                }
+            }
+            _ => {}
+        }
+    }
+    blanket.sort();
+    blanket.dedup();
+    shapes.sort();
+    shapes.dedup();
+    (blanket, shapes)
+}
+
 /// The `Target` of a type's `Deref` impl, if it has one.
 fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
     for impl_id in impls {
@@ -885,7 +1246,17 @@ fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
 
 fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
     let (ret, throws) = map_return(krate, &f.sig.output);
+    let closure_ref_params = f
+        .sig
+        .inputs
+        .iter()
+        .filter(|(n, _)| n != "self")
+        .enumerate()
+        .filter(|(_, (_, ty))| closure_takes_refs(ty, &f.generics))
+        .map(|(i, _)| i)
+        .collect();
     StubFn {
+        closure_ref_params,
         visibility: Vis::Public,
         is_static: false,
         is_default: false,
@@ -944,6 +1315,37 @@ fn map_param_type(ty: &Type, generics: &Generics) -> JuxType {
         }
     }
     map_type(ty)
+}
+
+/// Whether a closure-typed Rust parameter takes any argument by reference:
+/// `P: FnMut(&Self::Item) -> bool`, or `impl Fn(&T)`.
+fn closure_takes_refs(ty: &Type, generics: &Generics) -> bool {
+    let takes_refs = |bounds: &[GenericBound]| {
+        bounds.iter().any(|b| {
+            let GenericBound::TraitBound { trait_, .. } = b else { return false };
+            if !matches!(last_segment(&trait_.path), "Fn" | "FnMut" | "FnOnce") {
+                return false;
+            }
+            matches!(
+                trait_.args.as_deref(),
+                Some(GenericArgs::Parenthesized { inputs, .. })
+                    if inputs.iter().any(|t| matches!(t, Type::BorrowedRef { .. }))
+            )
+        })
+    };
+    match ty {
+        Type::ImplTrait(bounds) => takes_refs(bounds),
+        Type::Generic(name) => {
+            generics.params.iter().any(|p| {
+                &p.name == name
+                    && matches!(&p.kind, GenericParamDefKind::Type { bounds, .. } if takes_refs(bounds))
+            }) || generics.where_predicates.iter().any(|w| {
+                matches!(w, WherePredicate::BoundPredicate { type_: Type::Generic(n), bounds, .. }
+                    if n == name && takes_refs(bounds))
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Recover the closure signature for a generic param `name` whose bound is an
@@ -1222,6 +1624,18 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             continue;
         }
         let Some(decl) = krate.index.get(&tr.id) else {
+            // A trait from ANOTHER crate (`rand_core::SeedableRng` on a
+            // `rand_pcg` generator). Its declaration is not in this JSON, so
+            // it is taken by name when the impl names it without type
+            // arguments; the finished stub keeps it only if it declares an
+            // interface of that name (`retain_declared_implements`).
+            let generic = matches!(
+                tr.args.as_deref(),
+                Some(GenericArgs::AngleBracketed { args, .. }) if !args.is_empty()
+            );
+            if !generic {
+                out.push(stub_trait_name(last_segment(&tr.path)).to_string());
+            }
             continue;
         };
         let ItemEnum::Trait(t) = &decl.inner else {
@@ -1238,11 +1652,23 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             continue;
         }
         let Some(name) = &decl.name else { continue };
-        out.push(name.clone());
+        out.push(stub_trait_name(name).to_string());
     }
     out.sort();
     out.dedup();
     out
+}
+
+/// The name a Rust trait is declared under in a stub. Rust's `Iterator` is
+/// `RustIterator`: Jux's own `Iterator<T>` is the K.5 protocol a program writes
+/// (`jux.std.collections.Iterator`), and two interfaces of one name made every
+/// by-name lookup a guess between them. Every other trait keeps its name.
+fn stub_trait_name(name: &str) -> &str {
+    if name == "Iterator" {
+        "RustIterator"
+    } else {
+        name
+    }
 }
 
 /// Is this type a COLLECTION -- something you can build from elements and add
@@ -1296,6 +1722,97 @@ fn impl_target_is_the_plain_type(own: Id, ty: &Type) -> bool {
         }),
         Some(_) => false,
     }
+}
+
+/// `next()` for a type that implements Rust's `Iterator`, from the impl's
+/// `type Item = ...` binding (Bindgen G.6.4.2).
+///
+/// `Iterator` is a `core` trait, so its methods are not part of the type's
+/// surface otherwise, and the item type of `path.components()` or
+/// `read_dir(dir)` was unknown: a for-each over one bound an untyped
+/// variable. `next()` is the one method that carries the element type, and
+/// it is what K.5 makes the iteration protocol, so it is the one surfaced.
+///
+/// An item that is itself a `Result` (`read_dir` yields `io::Result<DirEntry>`)
+/// is a `next()` that throws, like every other `Result` from Rust (G.5.4), so
+/// the element a for-each binds is the `DirEntry` (B28).
+fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
+    let item = impls.iter().find_map(|id| {
+        let it = krate.index.get(id)?;
+        let ItemEnum::Impl(im) = &it.inner else { return None };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            return None;
+        }
+        if !im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == "Iterator") {
+            return None;
+        }
+        im.items.iter().find_map(|aid| {
+            let a = krate.index.get(aid)?;
+            if a.name.as_deref() != Some("Item") {
+                return None;
+            }
+            match &a.inner {
+                ItemEnum::AssocType { type_: Some(t), .. } => Some(t.clone()),
+                _ => None,
+            }
+        })
+    })?;
+    // An iterator over BORROWED items (`slice::Iter<T>` yields `&T`) is
+    // marked `@RustRefOut` on its `next()`: Jux has no references, so the
+    // program sees owned elements, and the backend takes them with
+    // `.cloned()` where the iterator is made.
+    let borrowed = matches!(item, Type::BorrowedRef { .. });
+    let (elem, throws) = map_return(krate, &Some(item));
+    Some(StubFn {
+        visibility: Vis::Public,
+        is_static: false,
+        is_default: false,
+        name: "next".to_string(),
+        generics: Vec::new(),
+        params: Vec::new(),
+        ret: JuxType::nullable(elem),
+        throws,
+        is_unsafe: false,
+        is_mut_self: true,
+        returns_borrow: borrowed,
+        carries_borrow: false,
+        rust_path: None,
+        doc: None,
+        closure_ref_params: Vec::new(),
+    })
+}
+
+/// The `Owned` type of the type's OWN `ToOwned` impl, when it names another
+/// type: `impl ToOwned for Path { type Owned = PathBuf; }` gives `PathBuf`.
+///
+/// Only a type written for itself counts. The blanket
+/// `impl<T: Clone> ToOwned for T` names `T` again and says nothing, and the
+/// types that have their own impl are exactly the unsized views (`Path`,
+/// `OsStr`, `CStr`) whose values need an owned home.
+fn owned_counterpart(krate: &Crate, impls: &[rustdoc_types::Id], name: &str) -> Option<String> {
+    for id in impls {
+        let Some(item) = krate.index.get(id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            continue;
+        }
+        if !im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == "ToOwned") {
+            continue;
+        }
+        for aid in &im.items {
+            let Some(aitem) = krate.index.get(aid) else { continue };
+            if aitem.name.as_deref() != Some("Owned") {
+                continue;
+            }
+            if let ItemEnum::AssocType { type_: Some(Type::ResolvedPath(p)), .. } = &aitem.inner {
+                let owned = last_segment(&p.path).to_string();
+                if owned != name {
+                    return Some(owned);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str) -> bool {
@@ -1411,10 +1928,40 @@ pub fn map_type(t: &Type) -> JuxType {
                 is_async: false,
             }
         }
-        // Pattern types, qualified paths, and inference markers have no Jux
-        // spelling in this slice.
-        Type::QualifiedPath { name, .. } => JuxType::Unknown(name.clone()),
+        // An associated-type projection (`<I as SliceIndex<[T]>>::Output`,
+        // `Self::Item`) names a type the stub cannot know: it depends on the
+        // argument the call is made with. It is written `I.Output`, a
+        // two-segment name no stub declares, so the checker reads it as an
+        // unknown type and leaves the value to the declared slot. Written as
+        // the bare `Output` it resolved to `std::process::Output`, and
+        // `final int? first = v.get(0);` was refused (B16).
+        Type::QualifiedPath { name, self_type, .. } => {
+            let owner = match self_type.as_ref() {
+                Type::Generic(g) => g.clone(),
+                _ => "Self".to_string(),
+            };
+            JuxType::Unknown(format!("{owner}.{name}"))
+        }
+        // Pattern types and inference markers have no Jux spelling.
         Type::Pat { .. } | Type::Infer => JuxType::Unknown("Object".into()),
+    }
+}
+
+/// Whether a Rust primitive has a Jux primitive type whose values can call
+/// its methods: the integers, the floats, `char` and `bool`.
+fn primitive_has_jux_type(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32"
+            | "f64" | "char" | "bool"
+    )
+}
+
+/// The Jux spelling of a Rust primitive (see [`map_primitive`]).
+fn primitive_jux_name(name: &str) -> &'static str {
+    match map_primitive(name) {
+        JuxType::Prim(p) => p,
+        _ => "int",
     }
 }
 
@@ -1444,8 +1991,15 @@ fn map_primitive(p: &str) -> JuxType {
     }
 }
 
+/// Whether [`map_path`] folds the Rust type of this name into a Jux spelling
+/// of its own (`Option` to `T?`, `Result` to `throws`, the smart pointers to
+/// their pointee), so the type itself is never one the stub declares.
+fn map_path_folds(name: &str) -> bool {
+    matches!(name, "Option" | "Result" | "Box" | "Rc" | "Arc")
+}
+
 /// Map a named path type, applying the §G.3.1 stdlib substitutions
-/// (`Vec`→`List`, `Option`→`T?`, `HashMap`→`Map`, `Box`/`Rc`/`Arc` unwrap…).
+/// (`Vec` kept, `Option`→`T?`, `HashMap`→`Map`, `Box`/`Rc`/`Arc` unwrap…).
 fn map_path(path: &Path) -> JuxType {
     let name = last_segment(&path.path);
     let args = collect_type_args(&path.args);
@@ -1457,7 +2011,7 @@ fn map_path(path: &Path) -> JuxType {
 
     match name {
         "String" => JuxType::String,
-        "Vec" => JuxType::list(arg0()),
+        "Vec" => JuxType::vec(arg0()),
         "Option" => JuxType::nullable(arg0()),
         "HashMap" | "BTreeMap" => JuxType::map(
             args.first()
@@ -2086,7 +2640,7 @@ mod tests {
     fn stdlib_containers_map() {
         assert_eq!(
             map_type(&resolved("Vec", vec![Type::Primitive("u8".into())])).to_string(),
-            "List<ubyte>",
+            "Vec<ubyte>",
         );
         assert_eq!(
             map_type(&resolved("Option", vec![resolved("String", vec![])])).to_string(),

@@ -1,0 +1,9 @@
+// Rust std is read from nightly's rustdoc, but a program builds with the
+// stable toolchain: an unstable std method is not part of rust.std
+// (Bindgen G.6.2.3), so calling one is a juxc error, not a rustc one.
+import rust.std.Path;
+
+void main() {
+    final Path p = new Path("a");
+    print(p.is_empty());
+}

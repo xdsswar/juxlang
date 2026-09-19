@@ -273,6 +273,22 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
+**Catching a Rust error.** The `Err` value is thrown as itself, so a clause naming the foreign error type
+(`catch (ParseFloatError e)`, `catch (Error e)` for `std::io::Error`) receives the Rust value with its own
+methods. It is also an exception in the Jux sense: `catch (Exception e)` and `catch (Throwable e)` catch it too,
+and bind an `Exception` (or `Throwable`) whose message is the error's text, its `Display` form, or its `Debug`
+form when it has no `Display`. Clauses are still tried in source order, so a foreign-typed clause placed after
+`catch (Exception e)` never runs. A Rust error that nothing catches ends the program the way an uncaught Jux
+exception does, with `Exception in thread "main" <ErrorType>: <text>` on stderr and exit status 101.
+
+```jux
+try {
+    double d = text.parse<double>();      // Rust: Result<f64, ParseFloatError>
+} catch (Exception e) {
+    print(e.getMessage());                // invalid float literal
+}
+```
+
 ### G.5.4b. A `new` That Can Return Nothing
 
 A Rust `new` returning `Option<Self>` is **not** a constructor. A Jux constructor always produces the object (§7.3.1), and unlike the `Result` case (§G.5.4) there is no error value to throw, so the only faithful surface is a static method that returns `Self?`, carrying the Rust name verbatim:
@@ -389,9 +405,21 @@ The Rust standard library is auto-loaded into every compile and editor analysis 
 - **Cache.** The generated stub is written once to the OS user-cache dir (`<cache>/juxc/stubs/rust-std.jux.d`) and loaded directly thereafter — no subprocess on the hot path, so the LSP's per-keystroke `check_workspace` stays cheap. A version marker in the cache header invalidates it when the bindgen surface changes; deleting the cache forces regeneration after a toolchain update.
 - **Override.** `$JUX_STUBS_DIR` points the loader at a directory of `.jux.d` files loaded verbatim (no generation) — the hook for tests and for vendoring a frozen std surface.
 
+**What `std` re-exports from `core` is part of `rust.std`.** `core` stays out of the merge set, but `std` publishes a number of its types as its own: `pub use core::time::Duration;` in `std::time`, and whole modules such as `pub use core::cmp;`. A program reaches these as `std` types, so the generated surface includes them under the `std` path (`@rust("std::time::Duration")`):
+
+- every type, constant and free function `std` re-exports item by item;
+- through a re-exported module, only the types the `alloc`/`std` surface itself mentions (`Ordering`, named by `sort_unstable_by`; `Chars`, returned by `chars()`), so a module re-export does not pull its whole module in;
+- traits are not taken this way: a `core` trait on every type's `implements` clause (`Debug`, `Clone`) is language meaning in Jux, not an interface to inherit;
+- `Option` and `Result` never are: the type map folds them (§G.3.1);
+- a name two such items share is decided by the shorter path (`std::cmp::Ordering` over `std::sync::atomic::Ordering`), and a true tie (`INFINITY` for `f32` and `f64`) is left out.
+
 ### G.6.2.2. Merging Layered Crates
 
 A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) items; items it merely re-exports from a lower layer appear as external references and are skipped. Rust's std is layered `core` ⊂ `alloc` ⊂ `std` — `Vec`, `String`, `Box`, `Rc`/`Arc`, `BTreeMap` are *defined* in `alloc` and only re-exported by `std` — so ingesting `std` alone misses them. `bindgen` therefore ingests each crate's JSON in turn (each as the local crate) and merges the results into one package, keyed by item name with **first-definition-wins** (crates supplied most-fundamental-first). Deduplication also collapses the platform-duplicated names std ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that would otherwise collide as duplicate Jux declarations (`E0400`).
+
+### G.6.2.3. Only What the Build Toolchain Accepts
+
+The rustdoc JSON of the standard library ships only with the nightly toolchain, so it describes nightly's `std`, unstable APIs included (`Path::is_empty`, `<[f64]>::sort_floats`, the integer `funnel_shl`). A program is built with the user's own toolchain, where calling one is rustc `E0658`, and the JSON does not record stability. So the generator asks that compiler: every item and method of the surface is named once in a probe crate, the probe is checked by the default `rustc`, and whatever it rejects as unstable is left out of the stub. A generic type is probed with a few type arguments, since a method may exist for only some of them. The probe only ever removes: a line that fails for any other reason keeps its item. Calling an unstable API is then an ordinary juxc error (`E0413`), not a rustc one.
 
 ### G.6.3. Type Kind Selection
 
@@ -438,11 +466,43 @@ Three restrictions, each because the stub could not write the result otherwise:
 
 `Clone`, `Index` and the collection traits stay outside this, read through their own markers (`@RustClone`, `@RustIndexRef`, `@RustCollection`): Jux gives those language meaning rather than a method surface. In std the rule leaves 66 traits over 46 types, `std::io`'s among them.
 
+#### G.6.4.2. Iterators, Views and Projections
+
+Three shapes of a Rust signature need a rule of their own, each discovered from the crate's rustdoc rather than listed:
+
+- **An iterator walks itself.** A type with an `impl Iterator` gets the `next()` of that impl on its stub, typed from the impl's `type Item = X` binding: `X? next()`. That is the K.5 iteration protocol, so a for-each over `path.components()` binds a `Component`. An item that is itself a `Result<Y, E>` (`read_dir` yields `io::Result<DirEntry>`) makes `next()` a `Y? next() throws E`, and a for-each binds the `Y`, throwing each `Err` like any other `Result` from Rust (G.5.4).
+- **A borrowed view is held owned.** `Path`, `OsStr` and `CStr` are unsized and exist only behind a reference, which Jux has no spelling for. A view's own `ToOwned` impl names its owned form (`type Owned = PathBuf`), rendered `@RustOwnedAs("PathBuf")`. A Jux value of the view is stored as the owned form, which derefs back to every method of the view: `new Path("a/b")` is `Path::new(..).to_owned()`. A method returning a borrowed view (`&str`, `&OsStr`, `&Path`, or an `Option` of one) is owned at the call.
+- **A projection is unknown.** An associated-type projection (`<I as SliceIndex<[T]>>::Output`, `Self::Item`) depends on the call's own arguments, so the stub writes it `I.Output`: a name no stub declares, which the checker reads as an unknown type that takes the declared slot's type (`final int? first = v.get(0);`).
+
+A member whose signature has no Jux spelling at all, such as `Option<()>` (`void?`), is left out of the stub, as `W0307` skips any un-mappable item. Constants carry their `@rust("...")` path like types, so an `import` of one, or of a foreign enum or trait, names the place it really lives.
+
+#### G.6.4.3. Traits That Reach a Type Without Naming It
+
+Rust's method lookup finds a trait's methods on more types than the ones that write `impl Trait for Type`, and so does Jux:
+
+- **A trait from another crate.** `rand_pcg`'s generators implement `rand_core::SeedableRng` and `RngCore`. The `implements` clause takes such a trait by name when the impl names it without type arguments, and keeps it when the stub declares an interface of that name.
+- **A blanket impl.** `impl<R: RngCore + ?Sized> Rng for R` gives every `RngCore` the methods of `Rng`. The trait is rendered `@RustBlanket("RngCore")`, and the checker gives its methods to every foreign type that has the bound, repeated until nothing new is reached.
+- **An impl for a slice or a primitive.** `impl<T> SliceRandom for [T]` and `impl UnicodeSegmentation for str` are rendered `@RustImplementedBy("[]")` / `@RustImplementedBy("str")`, and a type records what it derefs to (`@RustDerefs("[]")` on `Vec`, `@RustDerefs("str")` on `String`), so `cards.shuffle(rng)` and `text.graphemes(true)` resolve.
+
+A trait's associated function (no `self`) is marked `@RustStatic` and is called on the type, `Pcg64Dxsm.seed_from_u64(1)`, including through a crate's alias of the type. A call through a trait brings the trait into scope in the emitted crate, spelled through the crate the program imported it from. A foreign value a Jux function mutates through such a method is lent `&mut`, as any foreign value the callee mutates is.
+
+#### G.6.4.4. Primitives and Iterator Adaptors
+
+**A primitive has Rust's methods.** The facade crate's rustdoc gathers every inherent method of a primitive in one place (`f64` has `powf` from `std` and `total_cmp` from `core`). Each integer, float, `char` and `bool` gets a class of those methods, `f64_methods` marked `@RustPrimitive("f64")`, and a Jux value of the matching primitive reaches them: `x.powf(2.0)` on a `double`, `n.pow(2)` on a `long`, `w.to_le_bytes()` on a `u32`. The K.11 methods keep their meaning; a Rust method is found after them.
+
+**Rust's `Iterator` trait is `RustIterator`.** It is the one `core` trait the stub declares, since its adaptors (`count`, `sum`, `max`, `map`, `filter`, `position`, `fold`, `collect`, ...) are what a program calls on an iterator; it is renamed so that K.5's `Iterator<T>`, the protocol a program writes, keeps its name alone. The adaptor types its methods return (`Filter`, `Map`, `Zip`) are surfaced with it.
+
+**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
+
+One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity.
+
 ### G.6.5. First-Class `import rust.X`
 
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**
 
 ---
+
+**A bound crate's types need their `import`.** The implicit auto-import that makes a bare `Vec` or `HashMap` resolve covers `rust.std` only. A type of another bound crate is reached through an `import` (or its full name): with `rust.chrono` in `jux.toml`, a bare `Duration` does not quietly become chrono's `TimeDelta` alias, and a bare `NaiveDate` without `import rust.chrono.NaiveDate;` is an unknown type (`E0417`). The crate's own stub still sees its types.
 
 ### G.6.6. Which Foreign Types Are Collections
 

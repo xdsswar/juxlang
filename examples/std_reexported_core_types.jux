@@ -1,0 +1,28 @@
+// Types std re-exports from core are part of rust.std (Bindgen G.6.2.1):
+// Duration (std::time), Ordering (std::cmp), and the iterator a String's
+// chars() returns.
+import rust.std.Duration;
+import rust.std.Instant;
+import rust.std.Ordering;
+import rust.std.sleep;
+
+void main() {
+    final Instant start = Instant.now();
+    sleep(Duration.from_millis(5uL));
+    final Duration took = start.elapsed();
+    print(took.as_millis() >= 5);
+    print(Duration.from_secs(90uL).as_secs());
+    var words = new Vec<String>();
+    words.push("pear");
+    words.push("fig");
+    words.push("apple");
+    words.sort_unstable_by((a, b) -> a.len() < b.len() ? Ordering.Less : Ordering.Greater);
+    print(words[0]);
+    int vowels = 0;
+    for (var c : "banana".chars()) {
+        if (c == 'a') {
+            vowels += 1;
+        }
+    }
+    print(vowels);
+}

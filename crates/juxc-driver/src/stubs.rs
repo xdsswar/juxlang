@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 23;
+const STD_STUB_CACHE_VERSION: u32 = 40;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -98,8 +98,12 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// stub (e.g. a pre-snake_case cache) is regenerated rather than trusted. Started
 /// at 1 alongside the snake_case-verbatim naming switch. 7: re-exported crates
 /// merged in, handle aliases, `Self` substituted, conversion bounds, renames and
-/// plain aliases declared, `@RustDefault`, `@RustBorrowsSelf`.
-const CRATE_STUB_CACHE_VERSION: u32 = 7;
+/// plain aliases declared, `@RustDefault`, `@RustBorrowsSelf`. 8: `Vec` keeps
+/// its name (it was `List`). 9: constants carry `@rust`. 10: `@RustOwnedAs`. 11: projections
+/// written `I.Output`, iterators get `next()`. 12: traits from other
+/// crates in `implements`, `@RustDerefs`, `@RustBlanket`,
+/// `@RustImplementedBy`, `@RustStatic`.
+const CRATE_STUB_CACHE_VERSION: u32 = 15;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -113,6 +117,23 @@ fn crate_cache_header_for(source: &juxc_backend_rust::CrateSource) -> String {
     )
 }
 
+/// The marker for a stub generated from `dep` as written in `jux.toml`: the
+/// source marker plus the version requirement and the feature set (Bindgen
+/// G.11.2 keys staleness on the dependency version). Changing
+/// `"rust.rand" = "0.8"` to `"0.9"` kept serving the 0.8 stub while cargo
+/// linked 0.9, and only deleting `.jux-stubs/` got out of it (B19).
+fn crate_stub_header(source: &juxc_backend_rust::CrateSource, dep: &crate::manifest::Dependency) -> String {
+    let mut features = dep.features.clone();
+    features.sort();
+    format!(
+        "{} requires {} features [{}]{}\n",
+        crate_cache_header_for(source).trim_end(),
+        dep.version.as_deref().unwrap_or("*"),
+        features.join(","),
+        if dep.default_features { "" } else { " no-default-features" },
+    )
+}
+
 /// True when a generated `rust.*` crate stub on disk carries the current
 /// marker for `source`.
 ///
@@ -120,12 +141,11 @@ fn crate_cache_header_for(source: &juxc_backend_rust::CrateSource) -> String {
 /// is stale, so it regenerates against the current bindgen rules. So is one
 /// generated from a different source: a dependency repointed from crates.io
 /// to a local checkout must not keep serving the registry crate's API.
-fn crate_stub_cache_is_fresh_for(
-    path: &Path,
-    source: &juxc_backend_rust::CrateSource,
-) -> bool {
+fn crate_stub_cache_is_fresh(path: &Path, header: &str) -> bool {
     match std::fs::read_to_string(path) {
-        Ok(text) => text.starts_with(crate_cache_header_for(source).trim_end()),
+        // The WHOLE first line must match: a marker that merely starts the
+        // same (`requires 0.8` for `requires 0.8.5`) is another dependency.
+        Ok(text) => text.lines().next() == Some(header.trim_end()),
         Err(_) => false,
     }
 }
@@ -435,8 +455,11 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         .iter()
         .map(|(n, j)| (n.as_str(), j.as_str()))
         .collect();
-    let stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
+    let mut stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
         .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
+    // The JSON is nightly's std; leave out what the user's own `rustc` would
+    // reject as unstable (B32, Bindgen G.6.2.3).
+    crate::stability::prune_unstable(&mut stub);
     let rendered = juxc_bindgen::render_stub(&stub);
     Ok(Some(format!("{}{rendered}", std_cache_header())))
 }
@@ -588,7 +611,7 @@ pub fn resolve_crate_stub(
         // so trust them as-is. A generated `rust.*` stub is trusted only when its
         // cache-version marker matches; a stale one (pre-snake_case naming) falls
         // through to regeneration.
-        if kind != "rust" || crate_stub_cache_is_fresh_for(&cache, source) {
+        if kind != "rust" || crate_stub_cache_is_fresh(&cache, &crate_stub_header(source, dep)) {
             return Ok(cache);
         }
     }
@@ -636,7 +659,7 @@ pub fn resolve_crate_stub(
     let body = juxc_bindgen::render_stub(&stub_file);
     // Prepend the cache-version marker so a future toolchain can detect a stale
     // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
-    let stub = format!("{}{body}", crate_cache_header_for(source));
+    let stub = format!("{}{body}", crate_stub_header(source, dep));
 
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
@@ -900,11 +923,28 @@ mod tests {
         let path = dir.join("mine.jux.d");
         std::fs::write(&path, format!("{local}package rust.mine;\n")).unwrap();
 
-        assert!(crate_stub_cache_is_fresh_for(
+        assert!(crate_stub_cache_is_fresh(
             &path,
-            &CrateSource::Path("/crates/mine".to_string())
+            &crate_cache_header_for(&CrateSource::Path("/crates/mine".to_string()))
         ));
-        assert!(!crate_stub_cache_is_fresh_for(&path, &CrateSource::Registry));
+        assert!(!crate_stub_cache_is_fresh(&path, &crate_cache_header_for(&CrateSource::Registry)));
+
+        // A stub generated for one version requirement is stale for another
+        // (B19): `"rust.rand" = "0.8"` then `"0.9"`.
+        let dep = |version: &str| crate::manifest::Dependency {
+            name: "rust.rand".to_string(),
+            path: None,
+            version: Some(version.to_string()),
+            git: None,
+            git_ref: None,
+            features: Vec::new(),
+            default_features: true,
+            package: None,
+        };
+        let v8 = crate_stub_header(&CrateSource::Registry, &dep("0.8"));
+        std::fs::write(&path, format!("{v8}package rust.rand;\n")).unwrap();
+        assert!(crate_stub_cache_is_fresh(&path, &crate_stub_header(&CrateSource::Registry, &dep("0.8"))));
+        assert!(!crate_stub_cache_is_fresh(&path, &crate_stub_header(&CrateSource::Registry, &dep("0.9"))));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

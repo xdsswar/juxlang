@@ -1885,6 +1885,21 @@ impl<'a> Checker<'a> {
     /// protocol (the for-each then types its variable Unknown and
     /// rustc reports the real story).
     fn iterable_element_type(&self, class_name: &str) -> Option<Ty> {
+        // An ITERATOR walks itself: its element is what `next()` answers,
+        // with the `?` peeled (K.5). This is how a Rust iterator
+        // (`path.components()`, `read_dir(dir)`) types its loop variable,
+        // since bindgen surfaces the `next()` of its `Iterator` impl.
+        if self.symbols.lookup_method(class_name, "iterator").is_none() {
+            if let Some((next, _)) = self.symbols.lookup_method(class_name, "next") {
+                if let juxc_ast::ReturnType::Type(t) = &next.return_type {
+                    if t.nullable && next.params.is_empty() {
+                        let mut elem = t.clone();
+                        elem.nullable = false;
+                        return Some(crate::ty::lower_member_type(&elem, class_name, self.symbols));
+                    }
+                }
+            }
+        }
         let (method, declaring) = self.symbols.lookup_method(class_name, "iterator")?;
         let ret = match &method.return_type {
             juxc_ast::ReturnType::Type(t) => t,
@@ -10540,7 +10555,16 @@ impl<'a> Checker<'a> {
                                 .classes
                                 .get(&class_fqn)
                                 .and_then(|c| c.methods.get(method_name))
-                                .cloned(),
+                                .cloned()
+                                // A foreign trait's associated function, on a
+                                // type the trait reaches (`seed_from_u64` from
+                                // `SeedableRng`), is called on the type too.
+                                .or_else(|| {
+                                    self.symbols
+                                        .lookup_method(&class_fqn, method_name)
+                                        .filter(|(m, _)| m.is_static)
+                                        .map(|(m, _)| m.clone())
+                                }),
                         };
                         if let Some(method) = class_method {
                             if method.is_static {
@@ -10717,7 +10741,13 @@ impl<'a> Checker<'a> {
                 }
                 if let Ty::Primitive(prim) = &receiver_ty {
                     if let Some(names) = builtin_primitive_methods(*prim) {
-                        if !names.contains(&method_name) {
+                        // The Rust method surface of the primitive counts too
+                        // (`powf`, `total_cmp`, `to_le_bytes`), discovered from
+                        // rustdoc (Bindgen G.6.4.4, B14).
+                        let rust_method =
+                            crate::infer::primitive_rust_method(*prim, method_name, self.symbols)
+                                .is_some();
+                        if !names.contains(&method_name) && !rust_method {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0413_UnresolvedMethod,
@@ -10756,12 +10786,19 @@ impl<'a> Checker<'a> {
                     // and everything else Rust's `String` carries resolves
                     // without this file naming them. Consulting the scan is
                     // what keeps the check honest as the std moves.
+                    // A trait whose impls reach the scanned `String` counts as
+                    // well: `graphemes` is unicode-segmentation's
+                    // `UnicodeSegmentation`, implemented for the `str` a
+                    // `String` derefs to (Bindgen G.6.4.3, B23).
                     if self
                         .symbols
                         .classes
                         .iter()
-                        .filter(|(k, _)| k.rsplit('.').next() == Some("String"))
-                        .any(|(_, c)| c.methods.contains_key(method_name))
+                        .filter(|(k, c)| k.rsplit('.').next() == Some("String") && c.is_external)
+                        .any(|(k, c)| {
+                            c.methods.contains_key(method_name)
+                                || self.symbols.lookup_method(k, method_name).is_some()
+                        })
                     {
                         return;
                     }
@@ -12159,6 +12196,9 @@ impl<'a> Checker<'a> {
                 );
             if !pointer_null
                 && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
+                && (declaring_class.is_some()
+                    || !callee_is_foreign_free_fn(callee_name, self.symbols)
+                    || !slice_arg_bridges(&expected, &found, param, self.symbols))
                 && !compatible(&expected, &found, self.symbols)
             {
                 let mut diag = Diagnostic::error(
@@ -12312,6 +12352,43 @@ fn pointee_is(a: &Ty, b: Ty, pair: &[Primitive; 2]) -> bool {
 /// (non-foreign) call-arg checking is unchanged. `Vec` is the sole owned std
 /// container that derefs to a slice, so naming it is a correct discriminator,
 /// not a maintenance-prone allowlist.
+/// Whether `name` names a FOREIGN free function (`rust.image.load_from_memory`)
+/// and no function the program declares of that name.
+fn callee_is_foreign_free_fn(name: &str, symbols: &SymbolTable) -> bool {
+    let foreign = |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+    let mut found = false;
+    for k in symbols.functions.keys() {
+        if k.rsplit('.').next() == Some(name) {
+            if foreign(k) {
+                found = true;
+            } else {
+                return false;
+            }
+        }
+    }
+    found
+}
+
+/// [`foreign_arg_bridges`] for a foreign FREE function: a Jux array or a
+/// `Vec<E>` argument reaches a slice parameter (`&[u8]`) by Deref coercion,
+/// as it does for a foreign method. `load_from_memory(png)` with a
+/// `Vec<ubyte>` from `encode_png()` is the case.
+fn slice_arg_bridges(expected: &Ty, found: &Ty, param: &ParamSig, symbols: &SymbolTable) -> bool {
+    if param.ty.array_shape.is_none() || param.is_ref {
+        return false;
+    }
+    let Ty::Array { element, .. } = expected else {
+        return false;
+    };
+    match found {
+        Ty::Array { element: found_el, .. } => compatible(element, found_el, symbols),
+        Ty::User { name, generic_args } if generic_args.len() == 1 => {
+            name.rsplit('.').next() == Some("Vec") && compatible(element, &generic_args[0], symbols)
+        }
+        _ => false,
+    }
+}
+
 fn foreign_arg_bridges(
     expected: &Ty,
     found: &Ty,

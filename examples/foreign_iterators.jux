@@ -1,0 +1,35 @@
+// Rust iterators in a for-each (Bindgen G.6.4.2): the element is what the
+// iterator's next() yields, and an item that is a Result throws its error
+// like any other Result from Rust. A projected return type (Vec.get) takes
+// the declared slot's type.
+import rust.std.DirEntry;
+import rust.std.PathBuf;
+import rust.std.create_dir_all;
+import rust.std.read_dir;
+import rust.std.remove_dir_all;
+import rust.std.temp_dir;
+import rust.std.write;
+
+void main() {
+    var v = new Vec<int>();
+    v.push(4);
+    final int? first = v.get(0);
+    final int? none = v.get(5);
+    print(first ?: -1);
+    print(none ?: -1);
+
+    final PathBuf dir = temp_dir().join("jux_foreign_iterators");
+    create_dir_all(dir);
+    write(dir.join("a.txt"), "a");
+    write(dir.join("b.txt"), "bb");
+    var names = new Vec<String>();
+    for (var entry : read_dir(dir)) {
+        final DirEntry found = entry;
+        names.push(found.file_name().to_str() ?: "?");
+    }
+    names.sort_unstable();
+    for (var n : names) {
+        print(n);
+    }
+    remove_dir_all(dir);
+}

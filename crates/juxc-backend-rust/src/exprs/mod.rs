@@ -109,23 +109,59 @@ impl RustEmitter {
                 return sig.rust_path.clone();
             }
         }
-        if let Some(sig) = self.symbols.enums.get(&fqn) {
-            if sig.is_external {
-                // Prefer the crate's RE-EXPORT path (`minifb::Key`) for a
-                // non-std foreign crate: the `@rust("…")` annotation may record
-                // the canonical path through a PRIVATE module (`minifb::key::Key`,
-                // which trips rustc E0603), while the crate re-exports the type at
-                // its root — matching the import's own `use minifb::Key;`. `std`
-                // keeps its annotation path (the stub flattens nested std modules,
-                // so `std::collections::HashSet` is the only valid form).
-                let segs: Vec<&str> = fqn.split('.').collect();
-                if segs.first() == Some(&"rust") && segs.len() >= 3 && segs[1] != "std" {
-                    return Some(juxc_lex::join_rust_path(&segs[1..]));
-                }
+        // A crate's alias of one of its classes (`Pcg64Dxsm` for
+        // `Lcg128CmDxsm64`) is that class wherever a type is written.
+        if let Some(class) = self.symbols.alias_class(&fqn) {
+            if let Some(sig) = self.symbols.classes.get(&class).filter(|c| c.is_external) {
                 return sig.rust_path.clone();
             }
         }
-        None
+        self.external_enum_real_path(&fqn)
+    }
+
+    /// The real Rust path of the FOREIGN enum `fqn`, or `None` when `fqn` is
+    /// not a foreign enum.
+    pub(crate) fn external_enum_real_path(&self, fqn: &str) -> Option<String> {
+        let sig = self.symbols.enums.get(fqn).filter(|e| e.is_external)?;
+        // Prefer the crate's RE-EXPORT path (`minifb::Key`) for a non-std
+        // foreign crate: the `@rust("…")` annotation may record the canonical
+        // path through a PRIVATE module (`minifb::key::Key`, which trips rustc
+        // E0603), while the crate re-exports the type at its root — matching
+        // the import's own `use minifb::Key;`. `std` keeps its annotation path
+        // (the stub flattens nested std modules, so `std::path::Component` is
+        // the only valid form).
+        let segs: Vec<&str> = fqn.split('.').collect();
+        if segs.first() == Some(&"rust") && segs.len() >= 3 && segs[1] != "std" {
+            return Some(juxc_lex::join_rust_path(&segs[1..]));
+        }
+        sig.rust_path.clone()
+    }
+
+    /// The OWNED form of a foreign borrowed-view type, as bindgen discovered it
+    /// from the type's `ToOwned` impl (`@RustOwnedAs("PathBuf")` on `Path`,
+    /// `OsString` for `OsStr`). `None` for every other type.
+    ///
+    /// Rust's `Path` and `OsStr` are unsized: they exist only behind a
+    /// reference, which Jux has no spelling for. A value of one in Jux is
+    /// therefore stored as the owned form, which derefs back to the view, so
+    /// every method of the view is still callable on it (B30).
+    pub(crate) fn external_owned_form(&self, bare_or_fqn: &str) -> Option<String> {
+        use juxc_ast::{AnnotationArg, Expr, Literal};
+        let bare = bare_or_fqn.rsplit('.').next().unwrap_or(bare_or_fqn);
+        if self.bare_name_is_user_type(bare) {
+            return None;
+        }
+        let sig = self.lookup_class_by_bare_or_fqn(bare).filter(|c| c.is_external)?;
+        sig.annotations.iter().find_map(|a| {
+            let is_marker = a.name.segments.len() == 1
+                && a.name.segments[0].text.eq_ignore_ascii_case("rustownedas");
+            match a.args.first() {
+                Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) if is_marker => {
+                    Some(s.clone())
+                }
+                _ => None,
+            }
+        })
     }
 
     /// Whether this type lowers to a shared COLLECTION HANDLE
@@ -352,6 +388,21 @@ impl RustEmitter {
     /// The `is_external` flag distinguishes a real declaration from a generated
     /// `.jux.d` stub entry that happens to sit at the top level.
     pub(crate) fn bare_name_is_user_type(&self, bare: &str) -> bool {
+        // A type the current unit's PACKAGE declares is keyed by its FQN
+        // (`dash.Layout`), so the bare key alone missed it: a wildcard
+        // `import rust.std.*;` then emitted `use std::alloc::Layout;` beside
+        // the program's own `Layout` (rustc E0255).
+        let pkg = self.current_package_path();
+        if !pkg.is_empty() && !bare.contains('.') {
+            let fqn = format!("{pkg}.{bare}");
+            if self.symbols.classes.get(&fqn).is_some_and(|c| !c.is_external)
+                || self.symbols.enums.get(&fqn).is_some_and(|e| !e.is_external)
+                || self.symbols.records.contains_key(&fqn)
+                || self.symbols.interfaces.get(&fqn).is_some_and(|i| !i.is_external)
+            {
+                return true;
+            }
+        }
         if let Some(sig) = self.symbols.classes.get(bare) {
             return !sig.is_external;
         }
@@ -968,7 +1019,17 @@ impl RustEmitter {
         }
         if ctor_is_foreign_result {
             self.w
-                .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
+        }
+        // `new Path("a/b")`: Rust's `Path::new` hands back a `&Path`, and the
+        // value Jux keeps is the owned form (see `external_owned_form`).
+        let owned_form = n
+            .class_name
+            .segments
+            .last()
+            .and_then(|s| self.external_owned_form(&s.text));
+        if owned_form.is_some() {
+            self.w.push_str(".to_owned()");
         }
         self.emitting_format_arg = prev;
     }
@@ -1362,7 +1423,7 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_call(c);
                     self.w
-                        .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
                 } else {
                     self.emit_call(c);
                 }
@@ -2447,6 +2508,7 @@ impl RustEmitter {
         // body doesn't inherit it. The wrapper-capture clone block is kept —
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
+        let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
         let captures = self.collect_wrapper_captures(l);
         // **`this` captured by a lambda shares the handle too.** A closure that
         // reads `this` would otherwise borrow `&self`, and returning it from a
@@ -2530,6 +2592,15 @@ impl RustEmitter {
         let void_target = std::mem::take(&mut self.lambda_void_target);
         // `async (x) -> …` (LANG-V1 §7.9): the body becomes a future the
         // caller awaits, `crate::jux_async(async move { … })`.
+        // Arguments that arrive by reference are cloned out first, so the
+        // body works with values (`x > 3`, `a.total_cmp(b)`).
+        if clone_params {
+            self.w.push_str("{ ");
+            for p in &l.params {
+                let n = to_rust_ident(&p.name.text);
+                self.w.push_str(&format!("let {n} = {n}.clone(); "));
+            }
+        }
         if l.is_async {
             self.w.push_str("crate::jux_async(async move ");
             if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
@@ -2571,6 +2642,9 @@ impl RustEmitter {
                 self.w.push_str(" }");
             }
             self.w.push(')');
+        }
+        if clone_params {
+            self.w.push_str(" }");
         }
         self.local_types.pop();
         for n in &shadowed_refs {

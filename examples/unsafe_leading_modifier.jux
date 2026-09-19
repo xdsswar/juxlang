@@ -1,0 +1,29 @@
+// Layout-ABI L.5: `unsafe` may lead a function declaration, before or
+// after its visibility.
+unsafe void bump(long* p) {
+    p[0] += 1;
+}
+
+unsafe public void twice(long* p) {
+    p[0] *= 2;
+}
+
+class Cell {
+    public long value = 5;
+    unsafe public static void reset(long* p) {
+        p[0] = 0;
+    }
+}
+
+void main() {
+    long v = 1;
+    unsafe {
+        bump(&v);
+        twice(&v);
+    }
+    print(v);
+    unsafe {
+        Cell.reset(&v);
+    }
+    print(v);
+}

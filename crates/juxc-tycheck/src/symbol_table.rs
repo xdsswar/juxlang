@@ -20,7 +20,7 @@
 //! same field/method twice inside a class, or the same variant twice
 //! inside an enum. Other type-system checks live in later phases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use juxc_ast::{
     ClassDecl, CompilationUnit, EnumDecl, FieldDecl, FnDecl, InterfaceDecl, OperatorDecl,
@@ -218,6 +218,54 @@ impl SymbolTable {
         })
     }
 
+    /// The class a type ALIAS stands for, following a chain of aliases:
+    /// `rust.rand_pcg.Pcg64Dxsm` (`public type Pcg64Dxsm = Lcg128CmDxsm64;`)
+    /// gives `rust.rand_pcg.Lcg128CmDxsm64`. The target is resolved in the
+    /// alias's own package. `None` when `fqn` is not an alias of a class.
+    pub fn alias_class(&self, fqn: &str) -> Option<String> {
+        let mut cur = fqn.to_string();
+        for _ in 0..8 {
+            let alias = self.aliases.get(&cur)?;
+            if !alias.target.generic_args.is_empty() && !alias.generic_params.is_empty() {
+                return None;
+            }
+            let target: Vec<&str> = alias.target.name.segments.iter().map(|s| s.text.as_str()).collect();
+            let joined = target.join(".");
+            let pkg = fqn_package(&cur).unwrap_or("");
+            let candidates = [
+                joined.clone(),
+                if pkg.is_empty() { joined.clone() } else { format!("{pkg}.{joined}") },
+            ];
+            if let Some(class) = candidates.iter().find(|c| self.classes.contains_key(c.as_str())) {
+                return Some(class.clone());
+            }
+            cur = candidates.into_iter().find(|c| self.aliases.contains_key(c.as_str()))?;
+        }
+        None
+    }
+
+    /// The `rust.std` class carrying the Rust method surface of the primitive
+    /// `rust_name` (`f64_methods`, marked `@RustPrimitive("f64")`), Bindgen
+    /// G.6.4.4. `None` when no stub declares one.
+    pub fn primitive_methods_class(&self, rust_name: &str) -> Option<&str> {
+        self.classes
+            .iter()
+            .filter(|(_, c)| c.is_external)
+            .find(|(_, c)| {
+                c.annotations.iter().any(|a| {
+                    a.name.segments.len() == 1
+                        && a.name.segments[0].text.eq_ignore_ascii_case("rustprimitive")
+                        && matches!(
+                            a.args.first(),
+                            Some(juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Literal(
+                                juxc_ast::Literal::String(s)
+                            ))) if s == rust_name
+                        )
+                })
+            })
+            .map(|(k, _)| k.as_str())
+    }
+
     pub fn find_fqn_by_bare(&self, name: &str) -> Option<String> {
         self.find_fqn_by_bare_in(name, "")
     }
@@ -231,7 +279,37 @@ impl SymbolTable {
     /// stub class), made **deterministic** with `min()` (a `HashMap`-order
     /// `find()` would otherwise pick arbitrarily on a bare-name collision).
     pub fn find_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
-        let matches_last = |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name);
+        self.find_fqn_by_bare_where(name, prefer_pkg, &|_| true)
+    }
+
+    /// [`Self::find_fqn_by_bare_in`] for a name a PROGRAM wrote, without an
+    /// import: a type of a bound crate (`rust.chrono.NaiveDate`) is not
+    /// visible that way (Bindgen G.6.5). Only `rust.std` is, as it always
+    /// has been; a crate's types need their `import`, which binds through the
+    /// unit's own name map before this is asked. The crate's own stub still
+    /// sees its types (`prefer_pkg` is then the crate's package).
+    ///
+    /// With `rust.chrono` bound, a bare `Duration` silently became chrono's
+    /// `TimeDelta`, and a bare `NaiveDate` resolved with no import at all
+    /// (B26).
+    pub fn find_visible_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
+        let visible = |fqn: &str| match crate_package_of(fqn) {
+            Some(krate) => {
+                krate == "rust.std" || prefer_pkg == krate || prefer_pkg.starts_with(&format!("{krate}."))
+            }
+            None => true,
+        };
+        self.find_fqn_by_bare_where(name, prefer_pkg, &visible)
+    }
+
+    fn find_fqn_by_bare_where(
+        &self,
+        name: &str,
+        prefer_pkg: &str,
+        visible: &dyn Fn(&str) -> bool,
+    ) -> Option<String> {
+        let matches_last =
+            |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name) && visible(fqn);
         // (A) Same-package match wins. A package can't declare two types of one
         //     name (E0400), so at most one of these fires — category order only
         //     disambiguates the (impossible-within-a-package) tie.
@@ -760,8 +838,8 @@ impl SymbolTable {
         // whose FQN's last segment matches. Multiple matches across
         // packages are a future ambiguity to diagnose; for now we
         // pick the first hit.
-        for iface_name in implements_chain {
-            if let Some((iface_key, iface)) = self.interfaces.get_key_value(iface_name) {
+        for iface_name in &implements_chain {
+            if let Some((iface_key, iface)) = self.interfaces.get_key_value(*iface_name) {
                 if let Some(m) = iface.methods.get(method_name) {
                     return Some((m, iface_key.as_str()));
                 }
@@ -769,14 +847,75 @@ impl SymbolTable {
             }
             for (iface_key, iface) in &self.interfaces {
                 let last = iface_key.rsplit('.').next().unwrap_or(iface_key.as_str());
-                if last == iface_name {
+                if last == *iface_name {
                     if let Some(m) = iface.methods.get(method_name) {
                         return Some((m, iface_key.as_str()));
                     }
                 }
             }
         }
-        None
+        // Pass 3: a FOREIGN type also has the methods of the traits whose
+        // impls reach it without naming it (Bindgen G.6.4.3).
+        self.foreign_trait_reach(class_name, &implements_chain)
+            .into_iter()
+            .find_map(|(key, iface)| iface.methods.get(method_name).map(|m| (m, key)))
+    }
+
+    /// The foreign traits whose impls reach the foreign class `class_name`
+    /// without the class naming them (Bindgen G.6.4.3):
+    ///
+    /// - a trait with a blanket impl over a trait the class has
+    ///   (`impl<R: RngCore> Rng for R` reaches every `RngCore`), repeated
+    ///   until nothing new is reached;
+    /// - a trait implemented for the shape the class derefs to
+    ///   (`SliceRandom` for `[T]` reaches `Vec`, `UnicodeSegmentation` for
+    ///   `str` reaches `String`) or for the class itself.
+    ///
+    /// Traits match by their simple name, as the stub's `implements` clauses
+    /// do. Empty for a class the program declares.
+    pub fn foreign_trait_reach<'a>(
+        &'a self,
+        class_name: &str,
+        implements_chain: &[&str],
+    ) -> Vec<(&'a str, &'a InterfaceSig)> {
+        let Some(class) = self.classes.get(class_name) else {
+            return Vec::new();
+        };
+        if !class.is_external {
+            return Vec::new();
+        }
+        let bare = class_name.rsplit('.').next().unwrap_or(class_name);
+        let derefs: Vec<String> = marker_strings(&class.annotations, "rustderefs");
+        let mut have: HashSet<String> = implements_chain.iter().map(|s| s.to_string()).collect();
+        let mut out: Vec<(&'a str, &'a InterfaceSig)> = Vec::new();
+        let mut taken: HashSet<&'a str> = HashSet::new();
+        // Deterministic: interfaces in key order.
+        let mut ifaces: Vec<(&'a String, &'a InterfaceSig)> =
+            self.interfaces.iter().filter(|(_, i)| i.is_external).collect();
+        ifaces.sort_by(|a, b| a.0.cmp(b.0));
+        loop {
+            let mut grew = false;
+            for (key, iface) in &ifaces {
+                if taken.contains(key.as_str()) {
+                    continue;
+                }
+                let by_shape = iface
+                    .implemented_by
+                    .iter()
+                    .any(|shape| shape == bare || derefs.iter().any(|d| d == shape));
+                let by_blanket = iface.blanket_over.iter().any(|b| have.contains(b));
+                if by_shape || by_blanket {
+                    taken.insert(key.as_str());
+                    have.insert(key.rsplit('.').next().unwrap_or(key.as_str()).to_string());
+                    out.push((key.as_str(), *iface));
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        out
     }
 
     /// Look up an enum by name — exact FQN key first, then a unique
@@ -1588,6 +1727,12 @@ pub struct InterfaceSig {
     /// does not have: a Rust trait's methods are callable only while the trait
     /// is IN SCOPE, so a call to one emits `use <rust_path> as _;`.
     pub rust_path: Option<String>,
+    /// For a foreign trait: the traits its blanket impls cover
+    /// (`@RustBlanket("RngCore")` on `Rng`) and the primitive or slice shapes
+    /// it is implemented for (`@RustImplementedBy("[]")`), Bindgen G.6.4.3.
+    pub blanket_over: Vec<String>,
+    /// See [`Self::blanket_over`].
+    pub implemented_by: Vec<String>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -1652,6 +1797,15 @@ pub struct ConstSig {
     /// Declared type — the initializer must match (verified by
     /// tycheck's `check::Checker::check_unit`).
     pub ty: TypeRef,
+    /// Whether [`Self::ty`] is the constant's real type: written out, or
+    /// read off a literal initializer. An inferred constant with any other
+    /// initializer carries a placeholder `int` here, which is not a type a
+    /// read of the constant may be given.
+    pub ty_known: bool,
+    /// For a foreign stub constant: its real Rust path, from the `@rust("...")`
+    /// annotation bindgen writes (`std::path::MAIN_SEPARATOR`). Mirrors
+    /// [`ClassSig::rust_path`]; `None` for a constant the program declares.
+    pub rust_path: Option<String>,
     /// The initializer expression, cloned so the const-eval pass can resolve a
     /// const NAME → value without re-walking the AST.
     pub init: juxc_ast::Expr,
@@ -2475,6 +2629,35 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
     None
 }
 
+/// Whether an annotation list carries the bindgen marker `name`
+/// (case-insensitive, like every annotation).
+fn has_marker(annotations: &[juxc_ast::Annotation], name: &str) -> bool {
+    annotations.iter().any(|a| {
+        a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case(name)
+    })
+}
+
+/// The string arguments of every `@name("...")` marker in `annotations`.
+fn marker_strings(annotations: &[juxc_ast::Annotation], name: &str) -> Vec<String> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    annotations
+        .iter()
+        .filter(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case(name))
+        .filter_map(|a| match a.args.first() {
+            Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) => Some(s.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The bound crate's package a foreign name belongs to: `rust.chrono` for
+/// `rust.chrono.NaiveDate`. `None` for anything outside `rust.`.
+fn crate_package_of(fqn: &str) -> Option<&str> {
+    let rest = fqn.strip_prefix("rust.")?;
+    let krate = rest.split('.').next()?;
+    Some(&fqn[..5 + krate.len()])
+}
+
 /// The declared name of a top-level item, used to key `SymbolTable::decl_unit`.
 /// `None` only if a future variant has no name.
 fn top_level_name(item: &TopLevelDecl) -> Option<&str> {
@@ -2573,6 +2756,8 @@ fn insert_const(
         ConstSig {
             visibility: decl.visibility,
             ty: resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span),
+            ty_known: decl.ty.is_some() || infer_decl_type(Some(&decl.value), decl.span).is_some(),
+            rust_path: rust_path_annotation(&decl.annotations),
             init: decl.value.clone(),
             span: decl.span,
         },
@@ -4771,6 +4956,8 @@ fn insert_interface(
             is_sealed: interface_decl.is_sealed,
             permits: interface_decl.permits.iter().map(|p| p.text.clone()).collect(),
             rust_path: rust_path_annotation(&interface_decl.annotations),
+            blanket_over: marker_strings(&interface_decl.annotations, "rustblanket"),
+            implemented_by: marker_strings(&interface_decl.annotations, "rustimplementedby"),
             span: interface_decl.span,
         },
     );
@@ -5075,10 +5262,14 @@ fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
             .modifiers
             .iter()
             .any(|m| matches!(m, juxc_ast::FnModifier::Final)),
+        // A foreign trait's associated function is marked `@RustStatic`
+        // rather than written `static` (a bodyless static interface method is
+        // not Jux), and is called on the type all the same.
         is_static: method
             .modifiers
             .iter()
-            .any(|m| matches!(m, juxc_ast::FnModifier::Static)),
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static))
+            || (is_external && has_marker(&method.annotations, "ruststatic")),
         is_unsafe: method
             .modifiers
             .iter()

@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use crate::model::{
     StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubType, StubVariant, TypeKind,
 };
+use crate::ty::JuxType;
 
 /// Render a whole stub file to `.jux.d` source text.
 pub fn render(file: &StubFile) -> String {
@@ -31,6 +32,7 @@ pub fn render(file: &StubFile) -> String {
         }
         match item {
             StubItem::Type(t) => render_type(&mut out, t),
+            StubItem::Function(f) if !fn_is_spellable(f) => {}
             StubItem::Function(f) => {
                 // `@rust("real::path")` records a free function's true Rust path
                 // so the backend imports it as `use real::path;` (the Jux stub
@@ -78,6 +80,25 @@ fn render_type(out: &mut String, t: &StubType) {
         let _ = writeln!(out, "@RustCollection");
     }
 
+    // A borrowed view's owned form (`ToOwned::Owned`), e.g. `PathBuf` for `Path`.
+    if let Some(owned) = &t.owned_as {
+        let _ = writeln!(out, "@RustOwnedAs(\"{owned}\")");
+    }
+    // What the type derefs to, and which types a trait's impls reach beyond
+    // its explicit implementors (Bindgen G.6.4.3).
+    if let Some(target) = &t.derefs_to {
+        let _ = writeln!(out, "@RustDerefs(\"{target}\")");
+    }
+    for bound in &t.blanket_over {
+        let _ = writeln!(out, "@RustBlanket(\"{bound}\")");
+    }
+    for shape in &t.implemented_by {
+        let _ = writeln!(out, "@RustImplementedBy(\"{shape}\")");
+    }
+    if let Some(prim) = &t.primitive {
+        let _ = writeln!(out, "@RustPrimitive(\"{prim}\")");
+    }
+
     let keyword = match t.kind {
         TypeKind::Class => "class",
         TypeKind::Interface => "interface",
@@ -103,7 +124,7 @@ fn render_type(out: &mut String, t: &StubType) {
             .join(", ");
         let _ = writeln!(out, "public {keyword} {}{generics}({comps}) {{", t.name);
         // Records may still expose methods.
-        for m in &t.methods {
+        for m in t.methods.iter().filter(|m| fn_is_spellable(m)) {
             let _ = writeln!(out, "    {}", render_fn(m, t.kind == TypeKind::Interface));
         }
         out.push_str("}\n");
@@ -126,7 +147,7 @@ fn render_type(out: &mut String, t: &StubType) {
         }
     }
 
-    for m in &t.methods {
+    for m in t.methods.iter().filter(|m| fn_is_spellable(m)) {
         let _ = writeln!(out, "    {}", render_fn(m, t.kind == TypeKind::Interface));
     }
 
@@ -186,6 +207,14 @@ fn render_ctor(out: &mut String, c: &StubCtor) {
 /// modifier: a Jux interface method that carries `static` (or `default`) must
 /// have a body, which a signature-only stub never does — so inside an interface
 /// every member is surfaced as a plain abstract signature.
+/// Whether every type in `f`'s signature has a Jux spelling (see
+/// [`JuxType::is_spellable`]); a member that fails is left out of the stub.
+fn fn_is_spellable(f: &StubFn) -> bool {
+    f.ret.is_spellable()
+        && f.params.iter().all(|p| p.ty.is_spellable())
+        && f.throws.as_ref().map_or(true, JuxType::is_spellable)
+}
+
 fn render_fn(f: &StubFn, in_interface: bool) -> String {
     let mut s = String::new();
     // `&mut self` receiver → `@MutSelf` marker. The compiler reads this
@@ -204,12 +233,21 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     if f.returns_borrow {
         s.push_str("@RustRefOut ");
     }
+    if !f.closure_ref_params.is_empty() {
+        let list: Vec<String> = f.closure_ref_params.iter().map(|i| i.to_string()).collect();
+        s.push_str(&format!("@RustClosureRefs(\"{}\") ", list.join(",")));
+    }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
     // an interface a bodyless `static` is `E0200`. A Rust trait's associated
     // function (no `self`) is surfaced as a plain interface signature instead.
     if f.is_static && !in_interface {
         s.push_str("static ");
+    }
+    // ...but it is still called on the TYPE (`Pcg64.seed_from_u64(1)`), so
+    // the marker keeps that fact for the checker.
+    if f.is_static && in_interface {
+        s.insert_str(0, "@RustStatic ");
     }
     // An `unsafe` Rust fn surfaces with the Jux `unsafe` modifier (§A.2.4), so
     // the parser records it and the type checker demands an `unsafe` context at
@@ -239,6 +277,9 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
 }
 
 fn render_const(out: &mut String, c: &StubConst) {
+    if let Some(path) = &c.rust_path {
+        let _ = writeln!(out, "@rust(\"{path}\")");
+    }
     match &c.value {
         Some(v) => {
             let _ = writeln!(out, "public const {} {} = {v};", c.ty, c.name);
@@ -322,6 +363,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,
@@ -338,6 +380,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         });
 
         let file = StubFile {
@@ -371,6 +414,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         assert_eq!(
             render_fn(&f, false),
@@ -420,6 +464,7 @@ mod tests {
             carries_borrow: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         let file = StubFile {
             items: vec![StubItem::Function(f)],
@@ -455,6 +500,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }

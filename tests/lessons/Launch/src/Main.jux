@@ -7,10 +7,11 @@
 import rust.std.stdin;
 import rust.std.stdout;
 
-// `std::thread::sleep` takes a `Duration`, which lives in Rust's `core` and is
-// not reachable from Jux yet (B44). `sleep_ms` is the older spelling of the
-// same pause, taking the milliseconds directly.
-import rust.std.sleep_ms;
+// `std::thread::sleep` takes a `Duration`: an amount of time with its unit
+// attached, so a pause can never be read as seconds when it meant
+// milliseconds.
+import rust.std.Duration;
+import rust.std.sleep;
 
 // The pauses in the original are a few hundred milliseconds each, which is
 // right for watching and slow for a test. Every pause here is divided by
@@ -18,7 +19,7 @@ import rust.std.sleep_ms;
 const int SPEEDUP = 100;
 
 void pause(int milliseconds) {
-    sleep_ms((milliseconds / SPEEDUP) as u32);
+    sleep(Duration.from_millis((milliseconds / SPEEDUP) as ulong));
 }
 
 // Leaves the cursor after the question, as the Circle lesson explains.

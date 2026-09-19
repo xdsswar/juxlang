@@ -3,16 +3,3 @@
 # failures and fails the moment a listed lesson passes, so remove the line in
 # the same commit that fixes the bug. The README has a minimal repro for each.
 
-Circle: `int main()` is emitted as Rust `fn main() -> isize` and leaks rustc E0277 (B40); `(Pi * radius * radius).toFixed(4)` with a `const double` on the left leaks E0599 (B41)
-Directory: iterating `read_dir(dir)` binds each item as `DirEntry` but emits the raw io::Result (rustc E0308, B28); `?:` on `OsString.to_str()` emits `.cloned()` on Option<&str> (E0599, B29)
-Extern: a String passed to an `unsafe native` function is moved into its CString, so any other use of it (`WriteFile(file, text, text.byteLength() as u32, ...)`) leaks rustc E0382 (B46)
-File: a `PathBuf` or `Vec` held in a local and passed to a foreign static method (`File.create(path)`, `String.from_utf8(bytes)`) leaks its Rc<JuxCell> handle (rustc E0277/E0308, B27)
-Guess: `int main()` leaks rustc E0277 (B40)
-Json: the generated serde_json stub declares `public void? as_null();` and does not parse (E0200, B17); for-each over a map yields references that leak E0308 when passed on (B18)
-Math: GAP, the Rust f64 methods (powf, ln, log2, log10, exp, sin, cos, tan, hypot, trunc, min, max) are not reachable on `double` (E0413)
-Password: rand_pcg's generators are stubbed without their rand_core `RngCore`/`SeedableRng` impls, so `seed_from_u64` and `random_range` are missing (E0413, B22)
-Path: `import rust.std.Component;` and `MAIN_SEPARATOR` emit `use rust::std::...` (B21); `new Path(...)` makes an unsized local (B30); a foreign enum variant pattern is emitted unqualified (E0531, B31)
-Quadratic: `int main()` leaks rustc E0277 (B40)
-Random: `Pcg64Dxsm.seed_from_u64` through a crate type alias leaks E0423 (B20); `import rust.rand.SliceRandom;` emits the wrong path (B21); cross-crate and blanket trait impls are not surfaced, so `shuffle` on a Vec is E0413 (B22)
-Time: `std::time::Duration` is unreachable (`import rust.std.Duration;` is E0301, B25), and with chrono linked the bare name silently resolves to chrono's `Duration` alias (B26)
-Unicode: `graphemes` from unicode-segmentation (a trait on `str`) is not reachable on `String` (E0413, B23); `char.toUppercase()` is ASCII-only, so `'é'.toUppercase()` prints `é` (B24)

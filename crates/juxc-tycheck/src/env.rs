@@ -77,6 +77,12 @@ pub struct TypeEnv {
     /// `name.get()` infers to `T?` and a bare read of `name` is rejected.
     /// Repopulated per body; not scoped (params live for the whole body).
     pub weak_names: HashSet<String>,
+    /// When a MEMBER signature is lowered from outside its declaration (a
+    /// call to `scene.render()` typing its `Pixmap` return), the index of the
+    /// unit that declared it: a bare name there means what that unit's own
+    /// imports say (`import rust.tiny_skia.Pixmap;` in `Scene.jux`), not what
+    /// the caller's do.
+    pub declaring_unit: Option<usize>,
 }
 
 impl TypeEnv {
@@ -94,6 +100,7 @@ impl TypeEnv {
             current_package: Vec::new(),
             unqualified: HashMap::new(),
             weak_names: HashSet::new(),
+            declaring_unit: None,
         }
     }
 

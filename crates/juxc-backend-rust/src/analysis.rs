@@ -2806,7 +2806,16 @@ impl crate::RustEmitter {
             // parameter of `Vec<T>::push` is bound by the receiver instead,
             // and there the handle IS the element.
             let callee_own_param = self.callee_declares_type_param(callee, type_name);
-            return (names_a_foreign_type || callee_own_param).then_some(".borrow().clone()");
+            // bindgen spells an owned `HashMap` / `HashSet` slot with the
+            // Bindgen G.3.1 names `Map` / `Set`, which the stub never declares
+            // as types of their own, and an owned `Vec` is a collection by its
+            // own name. Either slot wants the owned sequence:
+            // `String.from_utf8(bytes)` takes a `Vec<u8>` and was handed the
+            // handle (B27).
+            let names_a_sequence =
+                matches!(type_name, "Map" | "Set") || self.collection_name_is_handle(type_name);
+            return (names_a_foreign_type || callee_own_param || names_a_sequence)
+                .then_some(".borrow().clone()");
         }
         let aliases_receiver = matches!(callee, juxc_ast::Expr::Field(f)
             if Self::receiver_place_key(&f.object).is_some()
@@ -2860,6 +2869,28 @@ impl crate::RustEmitter {
         self.foreign_callee_param(callee, arg_idx)
             .map(|p| p.ty.closure_shape().is_some())
             .unwrap_or(false)
+    }
+
+    /// Whether the foreign closure parameter `arg_idx` of `callee` is called
+    /// with its arguments BY REFERENCE (`@RustClosureRefs`, Bindgen G.6.4.2):
+    /// `filter`'s predicate gets `&Item`, `sort_unstable_by`'s comparator gets
+    /// `&T, &T`.
+    pub(crate) fn callee_closure_takes_refs(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        use juxc_ast::{AnnotationArg, Expr, Literal};
+        // Methods only: a free function's signature carries no markers.
+        let Some(m) = self.foreign_callee_method(callee) else {
+            return false;
+        };
+        let annotations = &m.annotations;
+        annotations.iter().any(|a| {
+            a.name.segments.len() == 1
+                && a.name.segments[0].text.eq_ignore_ascii_case("rustclosurerefs")
+                && matches!(
+                    a.args.first(),
+                    Some(AnnotationArg::Positional(Expr::Literal(Literal::String(list))))
+                        if list.split(',').any(|n| n.trim() == arg_idx.to_string())
+                )
+        })
     }
 
     /// Resolve the **external** (`rust.std` / crate) method parameter that arg
@@ -2961,7 +2992,12 @@ impl crate::RustEmitter {
                 if qn.segments.len() != 1 {
                     continue;
                 }
-                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut " {
+                // A foreign slot lent `&mut`, or a Jux parameter lowered to
+                // `&mut T` by the C6 rule (a foreign value the callee
+                // mutates): either way the caller's binding is lent mutably.
+                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut "
+                    || self.callee_byref_param(&call.callee, i)
+                {
                     out.insert(qn.segments[0].text.clone());
                 }
             }
@@ -3040,14 +3076,45 @@ impl crate::RustEmitter {
         if let Some(m) = sig.methods.get(name) {
             return Some(m);
         }
-        sig.implements.iter().find_map(|t| {
-            let bare = t.name.segments.last()?.text.as_str();
-            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
-            if !iface.is_external {
-                return None;
+        self.foreign_trait_with(class_fqn, name).map(|(_, iface)| &iface.methods[name])
+    }
+
+    /// The foreign trait (interface) that gives the foreign class `class_fqn`
+    /// its method `name`: one of the traits the class implements, or one whose
+    /// impls reach it without naming it (a blanket impl, or an impl for the
+    /// shape the class derefs to, Bindgen G.6.4.3).
+    ///
+    /// A trait name the class's stub writes is looked up in the class's own
+    /// package first: two bound crates may each declare a `RngCore`.
+    fn foreign_trait_with(
+        &self,
+        class_fqn: &str,
+        name: &str,
+    ) -> Option<(String, &juxc_tycheck::symbol_table::InterfaceSig)> {
+        let sig = self.symbols.classes.get(class_fqn)?;
+        let pkg = class_fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+        let mut chain: Vec<&str> = Vec::new();
+        for t in &sig.implements {
+            let Some(bare) = t.name.segments.last().map(|s| s.text.as_str()) else { continue };
+            chain.push(bare);
+            let own = format!("{pkg}.{bare}");
+            let found = self
+                .symbols
+                .interfaces
+                .get_key_value(&own)
+                .map(|(k, i)| (k.clone(), i))
+                .or_else(|| self.lookup_interface_by_bare_or_fqn(bare).map(|(k, i)| (k.to_string(), i)));
+            if let Some((key, iface)) = found {
+                if iface.is_external && iface.methods.contains_key(name) {
+                    return Some((key, iface));
+                }
             }
-            iface.methods.get(name)
-        })
+        }
+        self.symbols
+            .foreign_trait_reach(class_fqn, &chain)
+            .into_iter()
+            .find(|(_, iface)| iface.methods.contains_key(name))
+            .map(|(k, i)| (k.to_string(), i))
     }
 
     /// The foreign TRAIT that provides `name` for `class_fqn`, by its real Rust
@@ -3062,14 +3129,20 @@ impl crate::RustEmitter {
         if !sig.is_external || sig.methods.contains_key(name) {
             return None;
         }
-        sig.implements.iter().find_map(|t| {
-            let bare = t.name.segments.last()?.text.as_str();
-            let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
-            if !iface.is_external || !iface.methods.contains_key(name) {
-                return None;
-            }
-            iface.rust_path.clone()
-        })
+        let (key, iface) = self.foreign_trait_with(class_fqn, name)?;
+        // The `use` has to name a crate the program depends on. A trait the
+        // unit IMPORTED is spelled through that crate (`rand::SeedableRng`),
+        // where the stub that declares it for the class may record the crate
+        // that defines it (`rand_core::SeedableRng`), which the program does
+        // not link by name.
+        let bare = key.rsplit('.').next().unwrap_or(&key);
+        let imported = self
+            .current_unit_idx
+            .and_then(|idx| self.symbols.units.get(idx))
+            .and_then(|ctx| ctx.unqualified.get(bare))
+            .and_then(|fqn| self.symbols.interfaces.get(fqn))
+            .and_then(|i| i.rust_path.clone());
+        imported.or_else(|| iface.rust_path.clone())
     }
 
     /// The FOREIGN method `callee` names, or `None` when the receiver is not a
@@ -3081,6 +3154,15 @@ impl crate::RustEmitter {
     /// The NAME of the type a foreign method returns, when `callee` names
     /// one. Used to resolve a chained call's receiver from the stub rather
     /// than from the inference map, which does not record every intermediate.
+    /// The declared return of the foreign method `callee` names, if any.
+    pub(crate) fn foreign_callee_return_type(&self, callee: &juxc_ast::Expr) -> Option<&juxc_ast::ReturnType> {
+        self.foreign_callee_method(callee).map(|m| &m.return_type)
+    }
+
+    pub(crate) fn foreign_callee_return_name(&self, callee: &juxc_ast::Expr) -> Option<String> {
+        self.foreign_call_return_type_name(callee)
+    }
+
     fn foreign_call_return_type_name(&self, callee: &juxc_ast::Expr) -> Option<String> {
         let m = self.foreign_callee_method(callee)?;
         match &m.return_type {
@@ -3173,30 +3255,33 @@ impl crate::RustEmitter {
         self.external_type_method(&fqn, f.field.text.as_str())
     }
 
-    /// Does this call return a BORROWED string -- a foreign method whose real
-    /// Rust signature is `-> &str` (or `-> &String`)?
+    /// Does this call return a BORROWED VIEW -- a foreign method whose real
+    /// Rust signature is `-> &str`, `-> &OsStr`, `-> &Path`, or an `Option` of
+    /// one? `Some(nullable)` when it does.
     ///
     /// bindgen drops the borrow from the stub's return type (G.3.4) and records
     /// it as `@RustRefOut` instead, so the declared type reads `String` either
-    /// way and only the marker tells them apart. Jux has no borrowed string, so
-    /// the call site owns the value with `to_string`.
-    pub(crate) fn foreign_call_returns_borrowed_string(&self, callee: &juxc_ast::Expr) -> bool {
-        let Some(m) = self.foreign_callee_method(callee) else {
-            return false;
-        };
+    /// way and only the marker tells them apart. Jux has no borrowed view, so
+    /// the call site owns the value: `to_string` for a string, `to_owned` for
+    /// a view with a discovered owned form, mapped over the `Option` when the
+    /// result is nullable (`path.to_str()` is an `Option<&str>`, B29).
+    pub(crate) fn foreign_call_returns_borrowed_view(&self, callee: &juxc_ast::Expr) -> Option<bool> {
+        let m = self.foreign_callee_method(callee)?;
         if !m
             .annotations
             .iter()
             .any(crate::exprs::field::annotation_is_rust_ref_out)
         {
-            return false;
+            return None;
         }
         let juxc_ast::ReturnType::Type(ty) = &m.return_type else {
-            return false;
+            return None;
         };
-        ty.array_shape.is_none()
+        let last = ty.name.segments.last()?;
+        let view = ty.array_shape.is_none()
             && ty.generic_args.is_empty()
-            && ty.name.segments.last().is_some_and(|s| s.text == "String")
+            && (last.text == "String" || self.external_owned_form(&last.text).is_some());
+        view.then_some(ty.nullable)
     }
 
     // ============================================================

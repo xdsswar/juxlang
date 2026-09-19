@@ -1,0 +1,29 @@
+// Collection handles crossing into Rust std functions and back (6.5.1):
+// a PathBuf or Vec local passed to a foreign STATIC method lends its
+// contents, and a Vec a foreign function returns fills a declared Vec slot.
+import rust.std.File;
+import rust.std.PathBuf;
+import rust.std.temp_dir;
+import rust.std.read;
+import rust.std.write;
+import rust.std.remove_file;
+
+void main() {
+    final PathBuf path = temp_dir().join("jux_foreign_collection_slots.txt");
+    var file = File.create(path);
+    print(file.metadata().len());
+
+    write(path, "jux");
+    final Vec<ubyte> raw = read(path);
+    print(raw.len());
+    print(raw[0]);
+
+    Vec<ubyte> bytes = new Vec<ubyte>();
+    bytes.push(104 as ubyte);
+    bytes.push(105 as ubyte);
+    String text = String.from_utf8(bytes);
+    print(text);
+    print(bytes.len());
+
+    remove_file(path);
+}

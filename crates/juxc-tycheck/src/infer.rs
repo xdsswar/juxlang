@@ -50,6 +50,38 @@ use crate::ty::{
 // Expression inference
 // ============================================================================
 
+/// The result type of a Rust method on a primitive value (`x.powf(2.0)` on
+/// a `double`), from the `rust.std` surface of the primitive (Bindgen
+/// G.6.4.4). `None` when the primitive has no such method.
+pub fn primitive_rust_method(prim: Primitive, method_name: &str, symbols: &SymbolTable) -> Option<Ty> {
+    let class = symbols.primitive_methods_class(prim.rust_name())?;
+    let method = symbols.classes.get(class)?.methods.get(method_name)?;
+    if method.is_static {
+        return None;
+    }
+    match &method.return_type {
+        ReturnType::Type(t) => Some(lower_member_type(t, class, symbols)),
+        _ => Some(Ty::Void),
+    }
+}
+
+/// The type of the top-level constant a bare `name` reads, when there is
+/// one: an import or the current package first, then a package-less constant.
+/// `None` when no constant has the name, or when its type is not known (an
+/// inferred constant whose initializer is not a literal).
+fn const_type(name: &str, env: &TypeEnv, symbols: &SymbolTable) -> Option<Ty> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(fqn) = env.unqualified.get(name) {
+        candidates.push(fqn.clone());
+    }
+    if !env.current_package.is_empty() {
+        candidates.push(format!("{}.{name}", env.current_package.join(".")));
+    }
+    candidates.push(name.to_string());
+    let sig = candidates.iter().find_map(|fqn| symbols.consts.get(fqn))?;
+    sig.ty_known.then(|| ty_from_ref(&sig.ty, env, symbols))
+}
+
 /// Method-overload pick (§T.3): count first, then ARGUMENT TYPES.
 ///
 /// Members whose acceptable-count range covers the call are the
@@ -383,7 +415,7 @@ pub fn owner_type_fqn(name: &str, env: &TypeEnv, symbols: &SymbolTable) -> Optio
         .cloned()
         .filter(|f| symbols.is_type_name(f))
         .or_else(|| symbols.is_type_name(name).then(|| name.to_string()))
-        .or_else(|| symbols.find_fqn_by_bare_in(name, &env.current_package.join(".")))
+        .or_else(|| symbols.find_visible_fqn_by_bare_in(name, &env.current_package.join(".")))
 }
 
 /// `expr` with a fully-qualified class receiver re-shaped into a path (see
@@ -544,6 +576,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         return infer_field(&this_field, env, symbols);
                     }
                 }
+                // A top-level constant (`const double Pi = 3.14;`) read by
+                // name has its declared type. It was Unknown, so `String s =
+                // Pi;` passed juxc and `(Pi * r).toFixed(2)` was not seen as a
+                // double: both reached rustc.
+                if let Some(ty) = const_type(name, env, symbols) {
+                    return ty;
+                }
             }
             Ty::Unknown
         }
@@ -580,7 +619,10 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
         Expr::Unary(u) => infer_unary(u, env, symbols),
         Expr::Binary(b) => infer_binary(b, env, symbols),
-        Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),
+        // A size in bytes is a `uint` (LANG-V1 5.9.1), which is also what the
+        // emitted `std::mem::size_of` gives (`usize`). Typing it `int` let
+        // `int s = sizeof(i32);` pass here and fail in rustc.
+        Expr::SizeOf(_) => Ty::Primitive(Primitive::Uint),
         Expr::InterpString(_) => Ty::String,
         Expr::Switch(s) => {
             // Numeric arms meet in one type (§S.2.6), as the arms of `? :`
@@ -1638,7 +1680,7 @@ fn infer_stdlib_method(
     method_name: &str,
     _args: &[Expr],
     _env: &TypeEnv,
-    _symbols: &SymbolTable,
+    symbols: &SymbolTable,
 ) -> Option<Ty> {
     use crate::ty::Primitive;
     match receiver_ty {
@@ -1697,7 +1739,7 @@ fn infer_stdlib_method(
                     }
                     "toUppercase" | "toLowercase" => Some(Ty::Primitive(Primitive::Char)),
                     "codePoint" => Some(Ty::Primitive(Primitive::Uint)),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
             if is_float {
@@ -1709,7 +1751,7 @@ fn infer_stdlib_method(
                     "bits" => Some(Ty::Primitive(Primitive::Uint)),
                     "totalOrder" => Some(Ty::Primitive(Primitive::Int)),
                     "toFixed" => Some(Ty::String),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
             if is_int {
@@ -1725,10 +1767,10 @@ fn infer_stdlib_method(
                     }
                     "toInt" => Some(checked_result(Ty::Primitive(Primitive::Int))),
                     "toHex" | "toBinary" | "toOctal" => Some(Ty::String),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
-            None
+            primitive_rust_method(prim, method_name, symbols)
         }
         Ty::Array { element, kind } => match method_name {
             // List<T> → int
@@ -1972,6 +2014,11 @@ pub(crate) fn path_resolves_to_class(
             if symbols.classes.contains_key(fqn) {
                 return Some(fqn.clone());
             }
+            // An imported ALIAS of a class (`import rust.rand_pcg.Pcg64Dxsm;`)
+            // names that class, statics included (B20).
+            if let Some(class) = symbols.alias_class(fqn) {
+                return Some(class);
+            }
             // The unit binds the name to a type that is not a class (an
             // imported enum such as `jux.std.option.Option`): that binding
             // wins over a same-named class elsewhere, here a user
@@ -2166,7 +2213,7 @@ pub(crate) fn resolve_class_name(
             // its declared type but not its constructor, so a nested class
             // could not be built from inside the class that owns it.
             nested
-        } else if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
+        } else if let Some(fqn) = symbols.find_visible_fqn_by_bare_in(bare, &env.current_package.join("."))
         {
             // Implicit auto-import: bare name matches the last segment of a
             // known FQN. Mirrors Java's `java.lang.*` rule applied across the
@@ -3490,9 +3537,9 @@ mod tests {
         }
     }
 
-    /// `sizeof(int)` → `Primitive::Int`.
+    /// `sizeof(int)` → `Primitive::Uint` (LANG-V1 5.9.1).
     #[test]
-    fn sizeof_is_int() {
+    fn sizeof_is_uint() {
         let (table, unit) = build_table(
             r#"
             public void main() {
@@ -3504,7 +3551,7 @@ mod tests {
         let env = TypeEnv::new();
         assert_eq!(
             infer_expr(init, &env, &table),
-            Ty::Primitive(Primitive::Int)
+            Ty::Primitive(Primitive::Uint)
         );
     }
 

@@ -1,0 +1,17 @@
+// A String handed to a C function is still the caller's afterwards: the
+// compiler marshals a copy of its bytes (Layout-ABI L.4.2).
+@extern(lib = "kernel32")
+unsafe native {
+    i32 lstrlenA(String s);
+    i32 lstrcmpA(String a, String b);
+}
+
+void main() {
+    String text = "hello";
+    unsafe {
+        i32 n = lstrlenA(text);
+        print($"${n} ${text}");
+        print(lstrcmpA(text, text));
+    }
+    print(text.length());
+}

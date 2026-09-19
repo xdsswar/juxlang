@@ -3112,6 +3112,10 @@ impl<'a> Parser<'a> {
     #[allow(clippy::if_same_then_else)]
     pub(crate) fn parse_fn_modifiers(&mut self) -> Vec<FnModifier> {
         let mut mods = Vec::new();
+        // An `unsafe` written before the visibility (`unsafe public void f()`).
+        if std::mem::take(&mut self.leading_unsafe) {
+            mods.push(FnModifier::Unsafe);
+        }
         loop {
             if self.eat_kw(Keyword::Static)        { mods.push(FnModifier::Static); }
             else if self.eat_kw(Keyword::Final)    { mods.push(FnModifier::Final); }

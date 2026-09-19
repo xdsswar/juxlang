@@ -1,0 +1,5 @@
+// An array-type alias declared in this file serves a `{...}` initializer
+// written in another one (B13).
+package arrayalias.lib;
+
+public type Bytes = ubyte[];

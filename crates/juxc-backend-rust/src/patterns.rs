@@ -274,7 +274,12 @@ impl RustEmitter {
             // Recursive-enum binders bound to a boxed slot need a one-time
             // unbox (`let l = *l;`) so the arm body sees a plain enum value
             // (the decl boxed the self-referential slot to avoid E0072).
-            let rebinds = self.boxed_recursive_binders(&arm.pattern);
+            let mut arm_lets: Vec<String> = self
+                .boxed_recursive_binders(&arm.pattern)
+                .iter()
+                .map(|b| format!("let {b} = *{b};"))
+                .collect();
+            arm_lets.extend(self.foreign_payload_handle_lets(&binders));
             // The arm matched, so the hook answers `Some`: bind its value.
             let downcast_let = runtime_type_test
                 .as_ref()
@@ -292,10 +297,11 @@ impl RustEmitter {
                         && !self.expression_is_already_nullable(e);
                     // An expression-bodied arm with boxed binders becomes a
                     // block so the unbox `let`s can precede the value.
-                    if !rebinds.is_empty() || downcast_let.is_some() {
+                    if !arm_lets.is_empty() || downcast_let.is_some() {
                         self.w.push_str("{ ");
-                        for b in &rebinds {
-                            self.w.push_str(&format!("let {b} = *{b}; "));
+                        for bind in &arm_lets {
+                            self.w.push_str(bind);
+                            self.w.push(' ');
                         }
                         if let Some(bind) = &downcast_let {
                             self.w.push_str(bind);
@@ -333,14 +339,16 @@ impl RustEmitter {
                     if wrap {
                         self.w.push(')');
                     }
-                    if !rebinds.is_empty() || downcast_let.is_some() {
+                    if !arm_lets.is_empty() || downcast_let.is_some() {
                         self.w.push_str(" }");
                     }
                 }
                 juxc_ast::SwitchBody::Block(b) => {
                     self.w.push_str("{\n");
-                    for bind in &rebinds {
-                        self.w.push_str(&format!("        let {bind} = *{bind};\n"));
+                    for bind in &arm_lets {
+                        self.w.push_str("        ");
+                        self.w.push_str(bind);
+                        self.w.push('\n');
                     }
                     if let Some(bind) = &downcast_let {
                         self.w.push_str("        ");
@@ -411,6 +419,13 @@ impl RustEmitter {
     /// `Result.Ok(..)` already follows, because a bare `Result` or `Option`
     /// is Rust's prelude type in the emitted module.
     fn enum_pattern_path(&self, fqn: &str) -> String {
+        // A FOREIGN enum (`std::path::Component`, serde_json's `Value`) lives at
+        // the real path its stub records, never under `crate::rust::...`. An
+        // unqualified `Normal(name)` arm over a `Component` was rustc E0531
+        // (B31); qualified through the stub package it was E0433.
+        if let Some(real) = self.external_enum_real_path(fqn) {
+            return real;
+        }
         let bare = fqn.rsplit('.').next().unwrap_or(fqn);
         let pkg = fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
         if fqn.contains('.') && pkg != self.current_package_path() {
@@ -713,6 +728,40 @@ impl RustEmitter {
     }
 
     /// True when `name` is a variant of the enum currently being switched on.
+    /// `let items = crate::jux_arr(items);` for every binder of a FOREIGN
+    /// enum's payload that Jux treats as a collection handle (6.5.1).
+    ///
+    /// A foreign enum carries the crate's own plain `Vec` / `Map`, while every
+    /// Jux use of a `Vec`-typed name reaches through a handle, so
+    /// `case Array(var items) -> items.len()` over serde_json's `Value` emitted
+    /// `items.borrow()` on a bare `Vec`. Wrapping the bound value once, at the
+    /// top of the arm, makes the binder the handle the rest of the body
+    /// expects. A Jux enum's payload is already stored as a handle.
+    fn foreign_payload_handle_lets(&self, binders: &[(String, juxc_tycheck::Ty)]) -> Vec<String> {
+        let Some(enum_bare) = &self.current_switch_enum else {
+            return Vec::new();
+        };
+        let foreign = self
+            .symbols
+            .enums
+            .iter()
+            .find(|(k, _)| k.as_str() == enum_bare || k.rsplit('.').next() == Some(enum_bare.as_str()))
+            .is_some_and(|(_, sig)| sig.is_external);
+        if !foreign {
+            return Vec::new();
+        }
+        binders
+            .iter()
+            .filter(|(_, ty)| {
+                matches!(ty, juxc_tycheck::Ty::User { name, .. } if self.collection_name_is_handle(name))
+            })
+            .map(|(name, _)| {
+                let ident = to_rust_ident(name);
+                format!("let {ident} = crate::jux_arr({ident});")
+            })
+            .collect()
+    }
+
     fn is_current_switch_variant(&self, name: &str) -> bool {
         let Some(enum_bare) = &self.current_switch_enum else {
             return false;
