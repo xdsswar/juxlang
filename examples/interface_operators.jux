@@ -1,0 +1,90 @@
+// Operators in interfaces, used as generic bounds (LANG-V1 §7.14.6).
+//
+// An interface declares an operator as a contract, `T operator+(T other);`,
+// and every type that implements it declares the operator itself. A generic
+// function bounded by the interface can then write `a + b` on its `T`, and a
+// value typed by the interface can too.
+
+interface Addable<T> {
+    T operator+(T other);
+}
+
+interface Scalable<T> {
+    T operator*(double k);
+}
+
+class Money implements Addable<Money> {
+    public long cents;
+
+    public Money(long cents) {
+        this.cents = cents;
+    }
+
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    public String operator string() {
+        return $"${cents} cents";
+    }
+}
+
+class Vec2 implements Addable<Vec2>, Scalable<Vec2> {
+    public double x;
+    public double y;
+
+    public Vec2(double x, double y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    public Vec2 operator+(Vec2 other) {
+        return new Vec2(x + other.x, y + other.y);
+    }
+
+    // Two `*` (JUX-OPERATORS-ADDENDUM §O.2.3): the contract is met by the
+    // one taking a `double`.
+    public Vec2 operator*(double k) {
+        return new Vec2(x * k, y * k);
+    }
+
+    public double operator*(Vec2 other) {
+        return x * other.x + y * other.y;
+    }
+
+    public String operator string() {
+        return $"(${x}, ${y})";
+    }
+}
+
+// `+` on a `T` goes through the bound.
+<T extends Addable<T>> T sum(Vec<T> items, T zero) {
+    var total = zero;
+    for (var item : items) {
+        total = total + item;
+    }
+    return total;
+}
+
+// Two bounds, two operators, one expression.
+<T extends Addable<T> & Scalable<T>> T midpoint(T a, T b) {
+    return (a + b) * 0.5;
+}
+
+public void main() {
+    var wallet = new Vec<Money>();
+    wallet.push(new Money(250));
+    wallet.push(new Money(125));
+    wallet.push(new Money(5));
+    print(sum(wallet, new Money(0)));
+
+    var path = new Vec<Vec2>();
+    path.push(new Vec2(1.0, 2.0));
+    path.push(new Vec2(3.0, -1.0));
+    print(sum(path, new Vec2(0.0, 0.0)));
+    print(midpoint(new Vec2(0.0, 0.0), new Vec2(4.0, 2.0)));
+
+    // A value typed by the interface.
+    Addable<Money> tip = new Money(40);
+    print(tip + new Money(2));
+}

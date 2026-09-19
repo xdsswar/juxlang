@@ -395,6 +395,10 @@ pub(crate) struct Checker<'a> {
     /// absorbed into `SymbolTable::function_selections`. The same
     /// mechanism as `method_selections`, for the other kind of callee.
     pub(crate) function_selections: HashMap<Span, usize>,
+    /// Member operator overload picks (§O.2.3): binary or compound-assignment
+    /// span -> index into the left type's operator group, absorbed into
+    /// `SymbolTable::operator_selections`. Only picks past member 0.
+    pub(crate) operator_selections: HashMap<Span, usize>,
     /// Binary expressions resolved to a free-function operator (§7.14):
     /// binary span -> (function key, overload index). Absorbed into
     /// `SymbolTable::free_operator_calls` for the backend.
@@ -540,6 +544,7 @@ pub(crate) type CheckerMaps = (
     HashMap<Span, String>,
     HashMap<Span, String>,
     HashMap<Span, (String, usize)>,
+    HashMap<Span, usize>,
 );
 
 impl<'a> Checker<'a> {
@@ -560,6 +565,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
+            operator_selections: HashMap::new(),
             free_operator_calls: HashMap::new(),
             typed_assert_throws: HashMap::new(),
             record_patterns: HashMap::new(),
@@ -690,6 +696,7 @@ impl<'a> Checker<'a> {
             self.record_patterns,
             self.component_names,
             self.free_operator_calls,
+            self.operator_selections,
         )
     }
 
@@ -1444,12 +1451,16 @@ impl<'a> Checker<'a> {
             return;
         }
         let symbol = operator_kind_user_spelling(kind);
+        // The expression's own span keys the overload pick; diagnostics point
+        // at the left operand when it has a span of its own.
+        let site = span;
         let span = [expr_span(left), span].into_iter().find(|sp| *sp != Span::DUMMY).unwrap_or(span);
         if crate::infer::free_operator_for(self.symbols, kind, &left_ty, &right_ty, &self.env).is_some() {
             return;
         }
         if user_declared(self, &left_ty) {
             if self.ty_satisfies_operator(&left_ty, kind) {
+                self.pick_member_operator_overload(kind, &left_ty, &right_ty, site, span);
                 return;
             }
             let Ty::User { name, .. } = &left_ty else { return };
@@ -1473,6 +1484,104 @@ impl<'a> Checker<'a> {
                 .with_span(span)
                 .with_help(format!("declare a free-function operator: `public R operator{symbol}({left_ty} left, {right_ty} right) {{ ... }}`")),
             );
+        }
+    }
+
+    /// `a * b` where `a`'s type declares `operator*`, possibly several, one per
+    /// operand type (§O.2.3): record which one `b` picks, under the
+    /// expression's span `site`, for the backend to call (`__op_mul__ovK`).
+    /// No member taking `b` is `E0410` (a lone operator included, which used
+    /// to leave the mismatch to rustc); two taking it equally well is
+    /// `E0475`, as for a call.
+    fn pick_member_operator_overload(&mut self, kind: OperatorKind, left_ty: &Ty, right_ty: &Ty, site: Span, span: Span) {
+        use crate::infer::OperatorPick;
+        let symbol = operator_kind_user_spelling(kind);
+        let Ty::User { name, .. } = left_ty else { return };
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        match crate::infer::pick_member_operator(left_ty, kind, right_ty, self.symbols) {
+            OperatorPick::Single => {}
+            OperatorPick::Member(k, _) => {
+                if k > 0 {
+                    self.operator_selections.insert(site, k);
+                }
+            }
+            OperatorPick::NoMatch(_) if matches!(right_ty, Ty::Unknown) => {}
+            OperatorPick::NoMatch(takes) => {
+                let takes = match takes.as_slice() {
+                    [one] => format!("it takes `{one}`"),
+                    many => format!("they take {}", many.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")),
+                };
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!("no `operator{symbol}` on `{bare}` takes `{right_ty}` ({takes})"),
+                    )
+                    .with_span(span),
+                );
+            }
+            OperatorPick::Ambiguous(a, b) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0475_AmbiguousOverload,
+                        format!(
+                            "`{symbol}` on `{bare}` is ambiguous: `operator{symbol}({a})` and `operator{symbol}({b})` both take `{right_ty}`, and neither is an exact match (§O.2.3)",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
+        }
+    }
+
+    /// `a..b` / `a..=b` with `a` of a user type (§O.2.4): it calls the type's
+    /// `operator..` / `operator..=`, so that operator must exist (`E0484`)
+    /// and take `b` (`E0410`). A primitive start keeps the built-in range.
+    fn check_user_range_operator(&mut self, r: &juxc_ast::RangeExpr) {
+        let start = infer_expr(&r.start, &self.env, self.symbols);
+        let Ty::User { name, .. } = &start else { return };
+        let declared_here = self.symbols.classes.get(name).is_some_and(|c| !c.is_external)
+            || self.symbols.records.contains_key(name)
+            || self.symbols.enums.get(name).is_some_and(|e| !e.is_external);
+        if !declared_here {
+            return;
+        }
+        let kind = if r.inclusive { OperatorKind::RangeInclusive } else { OperatorKind::Range };
+        let symbol = if r.inclusive { "..=" } else { ".." };
+        let bare = name.rsplit('.').next().unwrap_or(name).to_string();
+        let op = self
+            .symbols
+            .classes
+            .get(name)
+            .and_then(|c| c.operators.get(&kind))
+            .or_else(|| self.symbols.records.get(name).and_then(|rec| rec.operators.get(&kind)))
+            .or_else(|| self.symbols.enums.get(name).and_then(|e| e.operators.get(&kind)))
+            .filter(|op| !op.is_deleted)
+            .cloned();
+        let Some(op) = op else {
+            let end = infer_expr(&r.end, &self.env, self.symbols);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("`{bare}` has no `operator{symbol}`, so `{symbol}` has nothing to call (§O.2.4)"),
+                )
+                .with_span(r.span)
+                .with_help(format!("declare it on `{bare}`: `public Range<{bare}> operator{symbol}({end} end) {{ ... }}`")),
+            );
+            return;
+        };
+        if let Some(param) = op.params.first() {
+            let want = crate::ty::lower_member_type(&param.ty, name, self.symbols);
+            let got = infer_expr(&r.end, &self.env, self.symbols);
+            if !matches!(got, Ty::Unknown) && !compatible(&want, &got, self.symbols) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!("`operator{symbol}` on `{bare}` takes {want}, found {got}"),
+                    )
+                    // A literal can carry no span of its own; the range's does.
+                    .with_span(Some(expr_span(&r.end)).filter(|sp| *sp != Span::DUMMY).unwrap_or(r.span)),
+                );
+            }
         }
     }
 
@@ -6046,6 +6155,7 @@ impl<'a> Checker<'a> {
             Expr::Range(r) => {
                 self.check_expr(&r.start);
                 self.check_expr(&r.end);
+                self.check_user_range_operator(r);
                 // `step` (§M.6.3): integer-typed; Phase 1 supports it
                 // only as a for-each iterable (`for (i : a..b step s)`)
                 // — the ForEach arm clears this flag around its head.

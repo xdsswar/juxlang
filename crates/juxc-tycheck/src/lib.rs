@@ -302,6 +302,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_record_patterns = std::collections::HashMap::new();
     let mut all_component_names = std::collections::HashMap::new();
     let mut all_free_operator_calls = std::collections::HashMap::new();
+    let mut all_operator_selections = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
@@ -323,6 +324,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             record_patterns,
             component_names,
             free_operator_calls,
+            operator_selections,
         ) = checker.into_maps();
         all_expr_types.extend(expr_types);
         all_call_expansions.extend(call_expansions);
@@ -333,6 +335,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         all_record_patterns.extend(record_patterns);
         all_component_names.extend(component_names);
         all_free_operator_calls.extend(free_operator_calls);
+        all_operator_selections.extend(operator_selections);
         for d in &mut tc.diagnostics[before..] {
             d.file = Some(idx);
         }
@@ -347,6 +350,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     symbols.typed_assert_throws = all_typed_assert_throws;
     symbols.record_patterns = all_record_patterns;
     symbols.free_operator_calls = all_free_operator_calls;
+    symbols.operator_selections = all_operator_selections;
     TypeCheckResult {
         diagnostics: tc.diagnostics,
         symbols,

@@ -72,6 +72,8 @@ These replace what other languages call `hashCode()`/`Hashable.hash()` and `toSt
 
 Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary operator. Cannot be overridden separately. `a += b` is `a = a + b`: the result of `operator+` is stored back in `a`, so it must be assignable to `a`'s type (`E0410` otherwise), and `a` names the new value afterwards. An arithmetic or bitwise operator on a value of a user type that declares none, in either form, and that no free-function operator takes (§O.2.6), is `E0484`.
 
+A type may declare one of these binary operators several times, once per operand type: `Vec2 operator*(double k)` beside `double operator*(Vec2 other)`. `a * b` calls the one whose parameter `b` fits, chosen the way a call chooses among a method's overloads (Type system §T.3): a parameter that is exactly `b`'s type beats one `b` is merely assignable to, and each member has its own return type, so `v * 2.0` is a `Vec2` and `v * w` a `double`. A compound assignment chooses the same way. When no member takes `b` it is `E0410`, a lone operator included; when two take it equally well (`operator+(long)` and `operator+(double)` given an `int`) it is `E0475`. Two members with the same operand type are a duplicate (`E0402`), as is a second declaration of any other operator: equality, ordering, `hash`, `string`, indexing, calling, ranges, `in` and the unary forms are declared at most once per type. A subclass that declares none of a symbol inherits its parent's whole set.
+
 ### O.2.4. Indexing, Calling, Range, Containment
 
 | Operator | Method shape                              | Notes                       |
@@ -82,6 +84,14 @@ Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary 
 | `..`     | `Range<T> operator..(T end)`                | Exclusive range              |
 | `..=`    | `Range<T> operator..=(T end)`               | Inclusive range              |
 | `in`     | `bool operator in(T element)`              | Defined on the *container*   |
+
+`a..b` and `a..=b` on a value of a user type call its `operator..` /
+`operator..=` with `b`; the expression's type is whatever the operator
+returns (a `Range<T>`, a collection, or anything else it declares), and a
+for-each over it walks that result like any other iterable. The built-in
+numeric range is used only when `a` is a primitive. A user type that declares
+no `operator..` (or `operator..=`) is `E0484`, as for the arithmetic family,
+and `b` must be assignable to the operator's parameter (`E0410`).
 
 ### O.2.5. What Cannot Be Overridden
 

@@ -1,0 +1,79 @@
+// Operators declared in interfaces and used through generic bounds
+// (LANG-V1 §7.14.6). Java has no operator overloading, so its twin names the
+// contracts as interface methods (`plus`, `times`) that the same bounds reach.
+
+interface Addable<T> {
+    T operator+(T other);
+}
+
+interface Scalable<T> {
+    T operator*(long k);
+}
+
+class Money implements Addable<Money>, Scalable<Money> {
+    public long cents;
+
+    public Money(long cents) {
+        this.cents = cents;
+    }
+
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    public Money operator*(long k) {
+        return new Money(cents * k);
+    }
+}
+
+class Tally implements Addable<Tally> {
+    public int count;
+    public String last;
+
+    public Tally(int count, String last) {
+        this.count = count;
+        this.last = last;
+    }
+
+    public Tally operator+(Tally other) {
+        return new Tally(count + other.count, other.last);
+    }
+}
+
+<T extends Addable<T>> T sum(Vec<T> items, T zero) {
+    var total = zero;
+    for (var item : items) {
+        total = total + item;
+    }
+    return total;
+}
+
+<T extends Addable<T> & Scalable<T>> T sumScaled(Vec<T> items, T zero, long k) {
+    return sum(items, zero) * k;
+}
+
+<T extends Addable<T>> T twice(T x) {
+    return x + x;
+}
+
+public void main() {
+    var prices = new Vec<Money>();
+    prices.push(new Money(199));
+    prices.push(new Money(1));
+    prices.push(new Money(-50));
+    print(sum(prices, new Money(0)).cents);
+    print(sumScaled(prices, new Money(10), 3L).cents);
+    print(twice(new Money(21)).cents);
+
+    var marks = new Vec<Tally>();
+    marks.push(new Tally(2, "a"));
+    marks.push(new Tally(3, "b"));
+    marks.push(new Tally(4, "c"));
+    var t = sum(marks, new Tally(0, "none"));
+    print(t.count);
+    print(t.last);
+    print(twice(t).count);
+
+    Addable<Money> base = new Money(7);
+    print((base + new Money(3)).cents);
+}

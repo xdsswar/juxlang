@@ -1,0 +1,41 @@
+// `..` and `..=` on a user type (JUX-OPERATORS-ADDENDUM §O.2.4): the range
+// calls the type's `operator..` / `operator..=`, the expression has whatever
+// type the operator returns, and a for-each walks that result like any other
+// iterable. A range of primitives stays the built-in numeric range.
+
+record Date(int day) {
+    // Every date from this one up to, but not including, `end`.
+    public Vec<Date> operator..(Date end) {
+        var out = new Vec<Date>();
+        for (int d = day; d < end.day; d++) {
+            out.push(new Date(d));
+        }
+        return out;
+    }
+
+    // The same, with `end` included.
+    public Vec<Date> operator..=(Date end) {
+        var out = new Vec<Date>();
+        for (int d = day; d <= end.day; d++) {
+            out.push(new Date(d));
+        }
+        return out;
+    }
+}
+
+public void main() {
+    var week = new Date(1)..new Date(8);
+    print(week.len());
+    print(week[0].day + " to " + week[6].day);
+
+    for (var d : new Date(10)..=new Date(12)) {
+        print(d.day);
+    }
+
+    // Primitives keep the numeric range.
+    int total = 0;
+    for (var i : 1..=4) {
+        total += i;
+    }
+    print(total);
+}

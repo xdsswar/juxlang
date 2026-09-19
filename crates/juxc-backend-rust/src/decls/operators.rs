@@ -64,7 +64,8 @@ impl RustEmitter {
         } else {
             self.w.push_str("pub fn ");
         }
-        self.w.push_str(synthetic_op_method_name(op.kind));
+        let name = self.operator_method_name(op);
+        self.w.push_str(&name);
         self.w.push('(');
         if needs_mut_self {
             self.w.push_str("&mut self");
@@ -157,7 +158,8 @@ impl RustEmitter {
             return;
         }
         let arity = op.params.len();
-        let synth = synthetic_op_method_name(op.kind);
+        let synth = self.operator_method_name(op);
+        let synth = synth.as_str();
         match op.kind {
             OperatorKind::Eq if arity == 1 => {
                 let arg = self.operator_other_arg(op);
@@ -216,6 +218,20 @@ impl RustEmitter {
             // Anything else (wrong arity, or operators without a Rust
             // counterpart yet): inherent method only.
             _ => {}
+        }
+    }
+
+    /// The inherent method an operator declaration emits as: the synthetic
+    /// `__op_*` name, and for member K of an overload group by operand type
+    /// (§O.2.3) `__op_mul__ovK`, the identity scheme overloaded methods and
+    /// free functions use. Each member keeps its own Rust trait bridge
+    /// (`impl Mul<f64> for Vec2` beside `impl Mul for Vec2`), since Rust picks
+    /// among those by the operand type on its own.
+    pub(crate) fn operator_method_name(&self, op: &OperatorDecl) -> String {
+        let synth = synthetic_op_method_name(op.kind);
+        match self.symbols.operator_overload_index.get(&op.span) {
+            Some(k) => format!("{synth}__ov{k}"),
+            None => synth.to_string(),
         }
     }
 
@@ -430,8 +446,12 @@ impl RustEmitter {
                 }
             }
             subst = next;
+            // The kinds a closer class already has, fixed before this level
+            // adds any: a parent's overload group (§O.2.3) comes over whole,
+            // so its second `*` is not mistaken for one the child redeclared.
+            let closer: Vec<OperatorKind> = out.iter().map(|o| o.kind).collect();
             for op in &parent.operators {
-                if out.iter().any(|o| o.kind == op.kind) {
+                if closer.contains(&op.kind) {
                     continue;
                 }
                 let mut inherited = op.clone();

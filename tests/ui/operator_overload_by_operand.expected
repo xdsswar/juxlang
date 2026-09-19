@@ -1,0 +1,5 @@
+operator_overload_by_operand.jux:8:12: [E0402] error: operator `*` taking `double` is declared more than once in class `Meters`
+operator_overload_by_operand.jux:10:12: [E0402] error: operator `==` is declared more than once in class `Meters`
+operator_overload_by_operand.jux:16:13: [E0475] error: `+` on `Meters` is ambiguous: `operator+(long)` and `operator+(double)` both take `int`, and neither is an exact match (§O.2.3)
+operator_overload_by_operand.jux:17:13: [E0410] error: no `operator*` on `Meters` takes `Meters` (it takes `double`)
+operator_overload_by_operand.jux:20:13: [E0410] error: no `operator+` on `Meters` takes `bool` (they take `long`, `double`, `Meters`)

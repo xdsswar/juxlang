@@ -941,6 +941,12 @@ pub enum Code {
     /// diagnostic — most commonly seen as `print($"$myToken")` after
     /// `OpaqueToken` deleted `operator string`.
     E0935_DeletedOperator,
+    /// E0936 -- An interface declares an operator other than an abstract
+    /// binary arithmetic or bitwise one (LANG-V1 §7.14.6): a body, the wrong
+    /// operand count, or an operator a bounded `T` could not call (`==`,
+    /// `string`, indexing...). Also an operator with no body declared outside
+    /// an interface, which only an interface may leave abstract.
+    E0936_InterfaceOperatorShape,
 
     // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
     /// E0970 — Write to a read-only property outside the place where
@@ -1137,6 +1143,7 @@ impl Code {
             Code::E0932_OperatorNotPublic        => "E0932",
             Code::E0933_KeyHasNoHash             => "E0933",
             Code::E0935_DeletedOperator          => "E0935",
+            Code::E0936_InterfaceOperatorShape   => "E0936",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
             Code::E0975_ObserverShapeMismatch    => "E0975",

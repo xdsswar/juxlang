@@ -508,7 +508,15 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     let instance_property = symbols
                         .lookup_property(class_fqn, name)
                         .is_some_and(|(p, _)| !p.is_static);
+                    // A record's component read bare inside its own body is
+                    // `this.cents` too. Unknown here lost the numeric
+                    // promotion, so `cents * k` (long times int) reached rustc.
+                    let record_component = symbols
+                        .records
+                        .get(class_fqn)
+                        .is_some_and(|r| r.components.iter().any(|c| &c.name == name));
                     if instance_property
+                        || record_component
                         || symbols.lookup_field(class_fqn, name).is_some_and(|(f, _)| !f.is_static)
                     {
                         let this_field = juxc_ast::FieldExpr {
@@ -547,7 +555,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::NewArray(n) => infer_new_array(n, env, symbols),
         Expr::NewArrayLit(n) => infer_new_array_lit(n, env, symbols),
         Expr::Cast(c) => infer_cast(c, env, symbols),
-        Expr::Range(_) => Ty::Unknown,
+        // `a..b` on a user type is its `operator..` (§O.2.4): the
+        // expression has the operator's declared result type.
+        Expr::Range(r) => {
+            let kind = if r.inclusive { OperatorKind::RangeInclusive } else { OperatorKind::Range };
+            let start = infer_expr(&r.start, env, symbols);
+            lookup_user_operator_return_type(&start, kind, env, symbols).unwrap_or(Ty::Unknown)
+        }
         Expr::Unary(u) => infer_unary(u, env, symbols),
         Expr::Binary(b) => infer_binary(b, env, symbols),
         Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),
@@ -2469,6 +2483,22 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // could declare a return type different from its LHS type.
     let left_ty = infer_expr(&b.left, env, symbols);
     if let Some(kind) = binary_op_to_kind(b.op) {
+        // Several operators of this symbol, one per operand type (§O.2.3):
+        // the right operand picks, and each member has its own return type.
+        // An operator contract reached through an interface (§7.14.6): a
+        // value typed by the interface, or a `T` bounded by it.
+        if let Some(ret) = interface_operator_return_type(&left_ty, kind, env, symbols) {
+            return ret;
+        }
+        // The right side is inferred only when there is a group to pick from
+        // (a right-nested chain would otherwise pay for it twice a level).
+        if has_operator_overloads(&left_ty, kind, symbols) {
+            match pick_member_operator(&left_ty, kind, &infer_expr(&b.right, env, symbols), symbols) {
+                OperatorPick::Member(_, ret) => return ret,
+                OperatorPick::NoMatch(_) | OperatorPick::Ambiguous(..) => return Ty::Unknown,
+                OperatorPick::Single => {}
+            }
+        }
         if let Some(ret) = lookup_user_operator_return_type(&left_ty, kind, env, symbols) {
             return ret;
         }
@@ -2700,6 +2730,166 @@ fn binary_op_to_kind(op: BinaryOp) -> Option<OperatorKind> {
 /// `receiver_ty = Ty::User { generic_args: [Int] }` returns `Int`
 /// rather than `Ty::Param("T")`. Mirrors the substitution Phase E
 /// already does for method calls.
+/// What picking among a type's member operators of one symbol by the right
+/// operand found (JUX-OPERATORS-ADDENDUM §O.2.3).
+pub(crate) enum OperatorPick {
+    /// The type declares no operator of the symbol taking one operand (or
+    /// only a deleted one): nothing to pick, the other paths decide.
+    Single,
+    /// Member `K` of the group takes the operand; its signature carries the
+    /// return type, read through the receiver's type arguments.
+    Member(usize, Ty),
+    /// No member takes the operand. Carries each member's operand type, for
+    /// the diagnostic.
+    NoMatch(Vec<Ty>),
+    /// Two members take it equally well: their operand types.
+    Ambiguous(Ty, Ty),
+}
+
+/// The type of `left OP right` when `left` reaches `operator OP` through an
+/// interface's operator contract (LANG-V1 §7.14.6): `left` is typed by an
+/// interface that declares it (or extends one that does), or by a type
+/// parameter one of whose bounds is such an interface. The parser added the
+/// contract to the interface's methods under the operator's function name
+/// (`__op_add`), so its return type is read from there, through the
+/// interface's type arguments: `Addable<T>`'s `T operator+(T other)` is `T`
+/// for a `T extends Addable<T>`.
+pub(crate) fn interface_operator_return_type(
+    left: &Ty,
+    kind: OperatorKind,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<Ty> {
+    interface_operator_return_type_at(left, kind, env, symbols, 0)
+}
+
+/// [`interface_operator_return_type`], `depth` levels up an `extends`
+/// chain. The bound keeps a cyclic chain (already an error) from recursing
+/// without end.
+fn interface_operator_return_type_at(
+    left: &Ty,
+    kind: OperatorKind,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+    depth: usize,
+) -> Option<Ty> {
+    let method = kind.free_function_name()?;
+    if depth > 32 {
+        return None;
+    }
+    match left {
+        Ty::Param(p) => env.generic_bounds.get(p)?.iter().find_map(|bound| {
+            let bound_ty = ty_from_ref(bound, env, symbols);
+            // A bound is a class or interface, never another parameter, but
+            // `T extends U` must not loop either.
+            (!matches!(bound_ty, Ty::Param(_)))
+                .then(|| interface_operator_return_type_at(&bound_ty, kind, env, symbols, depth + 1))
+                .flatten()
+        }),
+        Ty::User { name, generic_args } => {
+            let iface = symbols.interfaces.get(name)?;
+            if let Some(sig) = iface.methods.get(method) {
+                let raw = return_type_in_class(&sig.return_type, name, symbols);
+                return Some(substitute(&raw, &iface.generic_params, generic_args));
+            }
+            // An interface it extends, read through the `extends` arguments.
+            iface.extends.iter().find_map(|parent| {
+                let parent_ty = substitute(
+                    &crate::ty::lower_member_type(parent, name, symbols),
+                    &iface.generic_params,
+                    generic_args,
+                );
+                interface_operator_return_type_at(&parent_ty, kind, env, symbols, depth + 1)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// True when `receiver`'s type declares several operators of `kind`, one per
+/// operand type (§O.2.3), so the right operand has a choice to make.
+pub(crate) fn has_operator_overloads(receiver: &Ty, kind: OperatorKind, symbols: &SymbolTable) -> bool {
+    let Ty::User { name, .. } = receiver else { return false };
+    symbols.classes.get(name).is_some_and(|c| c.operator_overloads.contains_key(&kind))
+        || symbols.records.get(name).is_some_and(|r| r.operator_overloads.contains_key(&kind))
+        || symbols.enums.get(name).is_some_and(|e| e.operator_overloads.contains_key(&kind))
+}
+
+/// Pick the member operator `receiver OP right` calls when `receiver`'s type
+/// declares several operators of `kind`, one per operand type (§O.2.3).
+///
+/// Scored the way a method overload is (§T.3): 2 when the operand's type IS
+/// the parameter's, 1 when it is merely assignable, out when neither. The best
+/// score wins, and a tie at the top is ambiguous. A lone declaration is a
+/// group of one, so its operand is checked the same way.
+pub(crate) fn pick_member_operator(receiver: &Ty, kind: OperatorKind, right: &Ty, symbols: &SymbolTable) -> OperatorPick {
+    let Ty::User { name, generic_args } = receiver else {
+        return OperatorPick::Single;
+    };
+    // The group, or a lone declaration read as a group of one: its operand
+    // has to fit just the same, and the answer is member 0.
+    let as_group = |groups: &std::collections::HashMap<OperatorKind, Vec<crate::symbol_table::OperatorSig>>,
+                    ops: &std::collections::HashMap<OperatorKind, crate::symbol_table::OperatorSig>| {
+        groups
+            .get(&kind)
+            .cloned()
+            .or_else(|| ops.get(&kind).filter(|o| !o.is_deleted && o.params.len() == 1).map(|o| vec![o.clone()]))
+    };
+    let (group, generic_params): (Vec<crate::symbol_table::OperatorSig>, &[juxc_ast::TypeParam]) =
+        if let Some(c) = symbols.classes.get(name) {
+            match as_group(&c.operator_overloads, &c.operators) {
+                Some(g) => (g, &c.generic_params),
+                None => return OperatorPick::Single,
+            }
+        } else if let Some(r) = symbols.records.get(name) {
+            match as_group(&r.operator_overloads, &r.operators) {
+                Some(g) => (g, &r.generic_params),
+                None => return OperatorPick::Single,
+            }
+        } else if let Some(e) = symbols.enums.get(name) {
+            match as_group(&e.operator_overloads, &e.operators) {
+                Some(g) => (g, &[]),
+                None => return OperatorPick::Single,
+            }
+        } else {
+            return OperatorPick::Single;
+        };
+    let operand = |sig: &crate::symbol_table::OperatorSig| -> Ty {
+        sig.params
+            .first()
+            .map(|p| substitute(&crate::ty::lower_member_type(&p.ty, name, symbols), generic_params, generic_args))
+            .unwrap_or(Ty::Unknown)
+    };
+    let mut best: Option<(i32, usize)> = None;
+    let mut tied: Option<usize> = None;
+    for (k, sig) in group.iter().enumerate() {
+        let want = operand(sig);
+        let score = if &want == right {
+            2
+        } else if crate::check::compatible(&want, right, symbols) {
+            1
+        } else {
+            continue;
+        };
+        match best {
+            Some((s, _)) if score < s => {}
+            Some((s, _)) if score == s => tied = tied.or(Some(k)),
+            _ => {
+                best = Some((score, k));
+                tied = None;
+            }
+        }
+    }
+    match (best, tied) {
+        (Some((_, k)), None) => {
+            let raw = return_type_in_class(&group[k].return_type, name, symbols);
+            OperatorPick::Member(k, substitute(&raw, generic_params, generic_args))
+        }
+        (Some((_, a)), Some(b)) => OperatorPick::Ambiguous(operand(&group[a]), operand(&group[b])),
+        (None, _) => OperatorPick::NoMatch(group.iter().map(operand).collect()),
+    }
+}
+
 fn lookup_user_operator_return_type(
     receiver_ty: &Ty,
     kind: OperatorKind,

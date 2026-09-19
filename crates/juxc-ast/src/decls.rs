@@ -253,6 +253,15 @@ pub struct InterfaceDecl {
     /// adds each one's getter (and setter) to [`Self::methods`], so the rest of
     /// the compiler sees ordinary interface methods.
     pub properties: Vec<PropertyDecl>,
+    /// Operator contracts (LANG-V1 §7.14.6): `T operator+(T other);`, which
+    /// every implementing type must declare. Always abstract, and only the
+    /// binary arithmetic and bitwise family (JUX-OPERATORS-ADDENDUM §O.2.3).
+    /// Kept for diagnostics; the parser also adds each one to
+    /// [`Self::methods`] as an abstract method under its synthetic name
+    /// (`__op_add`, [`OperatorKind::free_function_name`]), the way a property
+    /// contract adds its getter, so the rest of the compiler sees an ordinary
+    /// interface method a bounded `T` can call.
+    pub operators: Vec<OperatorDecl>,
     /// `true` for `sealed interface I permits A, B`: only the types in
     /// [`Self::permits`] may implement or extend it, which makes a `switch`
     /// over an `I` exhaustive once every one of them has an arm.

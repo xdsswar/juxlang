@@ -289,6 +289,11 @@ impl RustEmitter {
     /// No parens around operands — they're already at additive
     /// precedence (tighter than range), so they emit naked.
     pub(crate) fn emit_range(&mut self, r: &RangeExpr) {
+        // `a..b` on a user type calls its `operator..` (§O.2.4).
+        if let Some(kind) = self.user_range_operator(r) {
+            self.emit_operator_call(&r.start, crate::decls::synthetic_op_method_name(kind), kind, 0, &r.end);
+            return;
+        }
         self.emit_expr(&r.start);
         if r.inclusive {
             self.w.push_str("..=");
@@ -296,6 +301,17 @@ impl RustEmitter {
             self.w.push_str("..");
         }
         self.emit_expr(&r.end);
+    }
+
+    /// The operator `r` dispatches to, when its start is a user type that
+    /// declares `operator..` (or `operator..=` for an inclusive range).
+    pub(crate) fn user_range_operator(&self, r: &RangeExpr) -> Option<juxc_ast::OperatorKind> {
+        let kind = if r.inclusive {
+            juxc_ast::OperatorKind::RangeInclusive
+        } else {
+            juxc_ast::OperatorKind::Range
+        };
+        self.expr_declares_operator(&r.start, kind).then_some(kind)
     }
 
     /// Lower a prefix unary expression. The operator text comes from

@@ -1,0 +1,17 @@
+record Date(int day) {
+    public Vec<Date> operator..(Date end) {
+        var out = new Vec<Date>();
+        return out;
+    }
+}
+
+class Note {
+    public String text;
+    public Note(String text) { this.text = text; }
+}
+
+public void main() {
+    var a = new Note("a")..new Note("b");
+    var b = new Date(1)..=new Date(3);
+    var c = new Date(1)..5;
+}

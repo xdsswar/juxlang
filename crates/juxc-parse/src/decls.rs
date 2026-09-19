@@ -356,16 +356,11 @@ impl<'a> Parser<'a> {
                 ) {
                     i += 1;
                 }
-                // Skip the return type token. `void` is its own keyword;
-                // any other return type starts with an `Ident`. After
-                // either, the next token must be `Kw(Operator)` for
-                // this to be an operator declaration.
-                let after_type = match self.tokens.get(i).map(|t| &t.kind) {
-                    Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
-                    Some(TokenKind::Ident(_)) => Some(i + 1),
-                    _ => None,
-                };
-                self.operator_kw_starts_decl(after_type)
+                // Skip the WHOLE return type -- `void`, `Money`, and also
+                // `Vec<int>`, `int[]`, `T?` or a tuple -- then the next token
+                // must be `Kw(Operator)`. Stepping over a single token here
+                // missed `Vec<int> operator..(Day end)` and misread the class.
+                self.operator_kw_starts_decl(self.scan_type_at(i))
             };
             if lookahead_is_operator {
                 if let Some(op) = self.parse_operator_decl(member_vis) {
@@ -873,6 +868,7 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         let mut properties = Vec::new();
+        let mut operators = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             // Interface members carry annotations like class members
             // (grammar §A.2.4) — bindgen stubs also emit machine
@@ -884,6 +880,16 @@ impl<'a> Parser<'a> {
             if self.looks_like_property_at(self.pos) {
                 if let Some(prop) = self.parse_interface_property(member_annotations, member_vis) {
                     properties.push(prop);
+                }
+                continue;
+            }
+            // An operator contract (LANG-V1 §7.14.6): `T operator+(T other);`.
+            // The whole return type is skipped before looking for `operator`,
+            // so `Pair<T> operator+(Pair<T> other);` is seen too.
+            if self.operator_kw_starts_decl(self.scan_type_at(self.pos)) {
+                if let Some(op) = self.parse_interface_operator(member_vis) {
+                    methods.push(op.1);
+                    operators.push(op.0);
                 }
                 continue;
             }
@@ -1099,10 +1105,60 @@ impl<'a> Parser<'a> {
             methods,
             fields,
             properties,
+            operators,
             is_sealed,
             permits,
             span: start.join(end),
         })
+    }
+
+    /// One operator contract in an interface body (LANG-V1 §7.14.6), and the
+    /// abstract method it stands for.
+    ///
+    /// An interface has no state and nothing to run, so the operator is a
+    /// contract every implementing type meets by declaring the operator
+    /// itself: abstract (`;`, no body), and one of the binary arithmetic and
+    /// bitwise operators, the family whose `a OP b` a bounded `T` can call.
+    /// Anything else is `E0936`. Like a property contract, it is ALSO an
+    /// ordinary abstract method, under the operator's synthetic name
+    /// (`__op_add`), which is what a `<T extends Addable<T>>` body reaches it
+    /// through and what the interface's Rust trait declares.
+    fn parse_interface_operator(
+        &mut self,
+        visibility: Visibility,
+    ) -> Option<(juxc_ast::OperatorDecl, juxc_ast::FnDecl)> {
+        let mut op = self.parse_operator_decl(visibility)?;
+        // Implicitly public, as an interface method is.
+        if op.visibility == Visibility::Package {
+            op.visibility = Visibility::Public;
+        }
+        let name = op.kind.free_function_name().filter(|_| op.params.len() == 1);
+        let Some(name) = name.filter(|_| op.body.is_none() && !op.is_deleted) else {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0936_InterfaceOperatorShape,
+                    "an interface can declare only an abstract binary arithmetic or bitwise operator (`+ - * / % & | ^ << >>`), with one operand and no body: `T operator+(T other);` (§7.14.6)",
+                )
+                .with_span(op.span),
+            );
+            return None;
+        };
+        let method = juxc_ast::FnDecl {
+            annotations: Vec::new(),
+            visibility: op.visibility,
+            modifiers: Vec::new(),
+            return_type: op.return_type.clone(),
+            name: juxc_ast::Ident { text: name.to_string(), span: op.span },
+            generic_params: Vec::new(),
+            params: op.params.clone(),
+            throws: Vec::new(),
+            wheres: Vec::new(),
+            body: None,
+            is_property: false,
+            is_c_variadic: false,
+            span: op.span,
+        };
+        Some((op, method))
     }
 
     /// One property member of an interface (JUX-MISSING-DEFS §M.7.10):
@@ -1969,7 +2025,15 @@ impl<'a> Parser<'a> {
                 let next_kind = after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
                 let after_member_name: Option<&TokenKind> =
                     after_type_skipped.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
+                // An operator whose return type is generic or suffixed
+                // (`Vec<int> operator..(...)`) sits past the WHOLE type.
+                let operator_after_full_type = self.operator_kw_starts_decl(self.scan_type_at(i));
                 match next_kind {
+                    _ if operator_after_full_type => {
+                        if let Some(op) = self.parse_operator_decl(member_vis) {
+                            operators.push(op);
+                        }
+                    }
                     Some(TokenKind::Kw(Keyword::Operator))
                         if self.operator_kw_starts_decl(after_type) =>
                     {
@@ -2131,12 +2195,8 @@ impl<'a> Parser<'a> {
                     ) {
                         i += 1;
                     }
-                    let after_type = match self.tokens.get(i).map(|t| &t.kind) {
-                        Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
-                        Some(TokenKind::Ident(_)) => Some(i + 1),
-                        _ => None,
-                    };
-                    self.operator_kw_starts_decl(after_type)
+                    // The whole return type, generics and suffixes included.
+                    self.operator_kw_starts_decl(self.scan_type_at(i))
                 };
                 // A constructor (§7.7.4): the enum's own name, then `(`.
                 let names_enum = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text)
@@ -2917,6 +2977,11 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::Semicolon, "';' after `= delete`");
             (None, true)
+        } else if self.eat(&TokenKind::Semicolon) {
+            // An abstract operator, `T operator+(T other);`: only an
+            // interface may declare one (§7.14.6), and the declaring type's
+            // checks say so everywhere else.
+            (None, false)
         } else {
             (Some(self.parse_block()), false)
         };

@@ -1,0 +1,19 @@
+interface Addable<T> {
+    T operator+(T other);
+    bool operator==(T other);
+    T operator-(T other) { return other; }
+    T operator*(T a, T b);
+}
+
+class Money implements Addable<Money> {
+    public long cents;
+    public Money(long cents) { this.cents = cents; }
+    public Money operator-(Money other) { return new Money(cents - other.cents); }
+}
+
+class Draft {
+    public Draft operator+(Draft other);
+}
+
+public void main() {
+}

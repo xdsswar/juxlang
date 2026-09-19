@@ -1,0 +1,65 @@
+// Member operators overloaded by operand type (§O.2.3). Java has no operator
+// overloading, so its twin names each member as a method: `scale`/`dot` for
+// the two `*`, `plus`/`plusCents` for the two `+`.
+
+class Vec2 {
+    public double x;
+    public double y;
+
+    public Vec2(double x, double y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    public Vec2 operator*(double k) {
+        return new Vec2(x * k, y * k);
+    }
+
+    public double operator*(Vec2 other) {
+        return x * other.x + y * other.y;
+    }
+
+    public Vec2 operator+(Vec2 other) {
+        return new Vec2(x + other.x, y + other.y);
+    }
+}
+
+class Point extends Vec2 {
+    public Point(double x, double y) {
+        super(x, y);
+    }
+}
+
+record Money(long cents) {
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    public Money operator+(long more) {
+        return new Money(cents + more);
+    }
+}
+
+public void main() {
+    var a = new Vec2(1.5, -2.0);
+    var b = new Vec2(4.0, 0.5);
+    Vec2 s = a * 3.0;
+    print(s.x);
+    print(s.y);
+    print(a * b);
+    print((a + b) * a);
+    Vec2 acc = b;
+    acc *= 2.0;
+    acc *= 0.25;
+    print(acc.x);
+    print(acc.y);
+    var p = new Point(2.0, 3.0);
+    print(p * b);
+    print((p * 2.0).y);
+
+    var m = new Money(700);
+    m += 45L;
+    m += new Money(255);
+    print(m.cents);
+    print((m + 1L + new Money(-1000)).cents);
+}
