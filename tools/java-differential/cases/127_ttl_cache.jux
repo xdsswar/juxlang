@@ -1,0 +1,160 @@
+// A generic LRU cache whose entries also expire after a time-to-live, driven
+// by a fake clock so the output is exact. Exercises a generic class with two
+// type parameters, a nested generic entry class, a HashMap of handles, a
+// doubly linked list through nullable fields, and an interface for the clock.
+
+interface Clock {
+    long now();
+}
+
+class FakeClock implements Clock {
+    private long t = 0;
+    public long now() { return t; }
+    public void advance(long ms) { t += ms; }
+}
+
+class Entry<K, V> {
+    public K key;
+    public V value;
+    public long expires;
+    public Entry<K, V>? prev = null;
+    public Entry<K, V>? next = null;
+
+    public Entry(K key, V value, long expires) {
+        this.key = key;
+        this.value = value;
+        this.expires = expires;
+    }
+}
+
+class TtlCache<K, V> {
+    private int capacity;
+    private long ttl;
+    private Clock clock;
+    private HashMap<K, Entry<K, V>> map = new HashMap<K, Entry<K, V>>();
+    private Entry<K, V>? head = null;
+    private Entry<K, V>? tail = null;
+    public int hits = 0;
+    public int misses = 0;
+    public int expired = 0;
+    public int evicted = 0;
+
+    public TtlCache(int capacity, long ttl, Clock clock) {
+        this.capacity = capacity;
+        this.ttl = ttl;
+        this.clock = clock;
+    }
+
+    private void unlink(Entry<K, V> e) {
+        var p = e.prev;
+        var n = e.next;
+        if (p != null) { p.next = n; } else { head = n; }
+        if (n != null) { n.prev = p; } else { tail = p; }
+        e.prev = null;
+        e.next = null;
+    }
+
+    private void pushFront(Entry<K, V> e) {
+        e.next = head;
+        var h = head;
+        if (h != null) { h.prev = e; }
+        head = e;
+        if (tail == null) { tail = e; }
+    }
+
+    public V? get(K key) {
+        var found = map.get(key);
+        if (found == null) {
+            misses++;
+            return null;
+        }
+        var e = found!!;
+        if (clock.now() >= e.expires) {
+            unlink(e);
+            map.remove(key);
+            expired++;
+            misses++;
+            return null;
+        }
+        unlink(e);
+        pushFront(e);
+        hits++;
+        return e.value;
+    }
+
+    public void put(K key, V value) {
+        var found = map.get(key);
+        if (found != null) {
+            var e = found!!;
+            e.value = value;
+            e.expires = clock.now() + ttl;
+            unlink(e);
+            pushFront(e);
+            return;
+        }
+        if (map.len() == capacity) {
+            var last = tail;
+            if (last != null) {
+                var old = last!!;
+                unlink(old);
+                map.remove(old.key);
+                evicted++;
+            }
+        }
+        var e = new Entry<K, V>(key, value, clock.now() + ttl);
+        map.insert(key, e);
+        pushFront(e);
+    }
+
+    public int size() { return map.len(); }
+
+    public String order() {
+        String out = "";
+        var cur = head;
+        while (cur != null) {
+            out = out + cur.key + " ";
+            cur = cur.next;
+        }
+        return out.trim();
+    }
+}
+
+String show(String? v) {
+    return v == null ? "-" : v!!;
+}
+
+public void main() {
+    var clock = new FakeClock();
+    var cache = new TtlCache<String, String>(3, 100, clock);
+
+    cache.put("a", "apple");
+    cache.put("b", "banana");
+    cache.put("c", "cherry");
+    print(cache.order());
+
+    print(show(cache.get("a")));
+    print(cache.order());
+
+    cache.put("d", "date");
+    print(cache.order() + " | size " + cache.size());
+    print(show(cache.get("b")));
+
+    clock.advance(60);
+    cache.put("a", "apricot");
+    clock.advance(60);
+    print(show(cache.get("c")));
+    print(show(cache.get("a")));
+    print(cache.order());
+
+    clock.advance(200);
+    print(show(cache.get("a")));
+    print("hits " + cache.hits + " misses " + cache.misses + " expired " + cache.expired + " evicted " + cache.evicted);
+
+    var counts = new TtlCache<int, long>(2, 50, clock);
+    counts.put(1, 10L);
+    counts.put(2, 20L);
+    counts.put(3, 30L);
+    var one = counts.get(1);
+    var three = counts.get(3);
+    print((one == null ? "gone" : "kept") + " " + (three == null ? 0L : three!!));
+}

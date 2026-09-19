@@ -1,0 +1,66 @@
+// A producer and a consumer joined by a bounded channel. The producer sends
+// numbered jobs and closes the channel; the consumer takes them in order,
+// batches them, and reports. Only the consumer prints, so the output is the
+// same however the two are scheduled. Java's twin uses a thread and an
+// ArrayBlockingQueue with an end marker.
+
+record Job(int id, long cost) {}
+
+class Batcher {
+    private Vec<Job> pending = new Vec<Job>();
+    private int size;
+    public int batches = 0;
+    public long total = 0;
+
+    public Batcher(int size) { this.size = size; }
+
+    public void add(Job j) {
+        pending.push(j);
+        if (pending.len() == size) {
+            flush();
+        }
+    }
+
+    public void flush() {
+        if (pending.len() == 0) {
+            return;
+        }
+        long sum = 0;
+        String ids = "";
+        for (var j : pending) {
+            sum += j.cost;
+            ids = ids + (ids.len() == 0 ? "" : ",") + j.id;
+        }
+        batches++;
+        total += sum;
+        print("batch " + batches + " [" + ids + "] cost " + sum);
+        pending.clear();
+    }
+}
+
+async void pipeline(int jobs, int batchSize) {
+    var ch = new Channel<Job>(2);
+    spawn(async () -> {
+        for (var i : 1..=jobs) {
+            await ch.send(new Job(i, i * 7L % 10));
+        }
+        ch.close();
+    });
+    var b = new Batcher(batchSize);
+    int received = 0;
+    while (true) {
+        var next = await ch.receive();
+        if (next == null) {
+            break;
+        }
+        received++;
+        b.add(next!!);
+    }
+    b.flush();
+    print("received " + received + " in " + b.batches + " batches, total " + b.total);
+}
+
+public void main() {
+    block_on(pipeline(7, 3));
+    block_on(pipeline(0, 4));
+}

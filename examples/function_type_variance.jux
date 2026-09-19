@@ -1,0 +1,46 @@
+// Function types vary with their parts (Type system §T.3.6): contravariant in
+// the parameters, covariant in the return.
+//
+// - Something that takes any `Animal` can stand where a `(Dog) -> ...` is
+//   wanted: every `Dog` it is handed is an `Animal`.
+// - Something that makes a `Dog` can stand where a `() -> Animal` is wanted:
+//   the `Dog` it makes is an `Animal`.
+// The reverse of either is a type error. The call still dispatches on the
+// real object, so a `Dog` passed through an `(Animal) -> ...` stays a `Dog`.
+
+class Animal {
+    public String name() { return "animal"; }
+}
+
+class Dog extends Animal {
+    @Override
+    public String name() { return "dog"; }
+}
+
+class Puppy extends Dog {
+    @Override
+    public String name() { return "puppy"; }
+}
+
+String greetDog((Dog) -> String greeter, Dog d) {
+    return greeter(d);
+}
+
+() -> Animal breeder(() -> Dog makeDog) {
+    return makeDog;
+}
+
+public void main() {
+    (Animal) -> String describe = (a) -> "saw a " + a.name();
+
+    // Stored, passed, and handed on as the narrower parameter type.
+    (Dog) -> String onlyDogs = describe;
+    print(onlyDogs(new Dog()));
+    print(greetDog(describe, new Puppy()));
+
+    // Stored and returned as the wider result type.
+    () -> Dog makeDog = () -> new Puppy();
+    () -> Animal makeAnimal = makeDog;
+    print(makeAnimal().name());
+    print(breeder(makeDog)().name());
+}

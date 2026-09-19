@@ -31,6 +31,7 @@ pub(crate) mod field;
 pub(crate) mod fn_pointer;
 pub(crate) use fn_pointer::{fn_pointer_sig_type_ref, type_ref_is_void_name};
 pub(crate) mod fn_value;
+pub(crate) mod outer_capture;
 pub(crate) mod simple;
 
 /// Discriminator for `emit_interp_string`'s deferred-arg emission —
@@ -1577,15 +1578,17 @@ impl RustEmitter {
             .rev()
             .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned())
             .or_else(|| self.expr_types.get(&expr_span_of(inner)).cloned());
+        // The recorded type may already be the NARROWED one (`other` after an
+        // `if (other == null) ... else` is a `Line` to the checker), while the
+        // Rust binding is still the `Option` -- the caller only gets here when
+        // the operand is Option-shaped. Either way the payload decides.
+        let payload = match ty {
+            Some(juxc_tycheck::Ty::Nullable(t)) => Some(*t),
+            other => other,
+        };
         matches!(
-            ty,
-            Some(juxc_tycheck::Ty::Nullable(ref t))
-                if matches!(
-                    **t,
-                    juxc_tycheck::Ty::User { .. }
-                        | juxc_tycheck::Ty::String
-                        | juxc_tycheck::Ty::Array { .. }
-                )
+            payload,
+            Some(juxc_tycheck::Ty::User { .. } | juxc_tycheck::Ty::String | juxc_tycheck::Ty::Array { .. })
         )
     }
 
@@ -2389,6 +2392,71 @@ impl RustEmitter {
         found
     }
 
+    /// The enclosing class's instance fields/properties and instance methods
+    /// that lambda `l` names bare, split in two: what the outer-capture
+    /// rewrite (`outer_capture`) turns into `__jux_outer.<name>`. Only names
+    /// the lambda actually reads are looked up.
+    fn enclosing_members_read_by(
+        &self,
+        l: &juxc_ast::LambdaExpr,
+    ) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+        let mut fields = std::collections::HashSet::new();
+        let mut methods = std::collections::HashSet::new();
+        let Some(class) = self.enclosing_class.clone() else {
+            return (fields, methods);
+        };
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if self.current_fn_params.contains(name)
+                || self.local_types.iter().any(|scope| scope.contains_key(name))
+            {
+                return;
+            }
+            let instance_field = self
+                .lookup_class_field_owner_in_chain(&class, name)
+                .is_some_and(|(_, is_static, _)| !is_static)
+                || self.bare_name_is_property_in_chain(&class, name);
+            if instance_field {
+                fields.insert(name.to_string());
+            }
+            if self.symbols.merged_method_overloads(&class, name).iter().any(|m| !m.is_static) {
+                methods.insert(name.to_string());
+            }
+        });
+        (fields, methods)
+    }
+
+    /// Emit lambda `l` as the anonymous implementation `anon` of a
+    /// single-method interface (LANG-V1 §7.9.1). When the lambda reads the
+    /// enclosing object, the object's handle is bound as `__jux_outer` first
+    /// and typed as the enclosing class, so the anonymous class captures it
+    /// like any other local:
+    ///
+    /// ```text
+    /// { let __jux_outer = self.clone(); { struct __JuxAnon0 { __jux_outer: Pipeline } ... } }
+    /// ```
+    pub(crate) fn emit_lambda_as_anonymous_class(&mut self, l: &juxc_ast::LambdaExpr, anon: &juxc_ast::NewObjectExpr) {
+        let outer = self.lambda_captures_this(l).then(|| self.enclosing_class.clone()).flatten();
+        let Some(class) = outer else {
+            self.emit_anonymous_class(anon);
+            return;
+        };
+        let handle = self.this_alias.clone().unwrap_or_else(|| "self".to_string());
+        self.w.push_str("{ let ");
+        self.w.push_str(outer_capture::OUTER);
+        self.w.push_str(" = ");
+        self.w.push_str(&handle);
+        self.w.push_str(".clone(); ");
+        let mut scope = std::collections::HashMap::new();
+        scope.insert(
+            outer_capture::OUTER.to_string(),
+            juxc_tycheck::Ty::User { name: class, generic_args: Vec::new() },
+        );
+        self.local_types.push(scope);
+        self.emit_anonymous_class(anon);
+        self.local_types.pop();
+        self.w.push_str(" }");
+    }
+
     fn collect_wrapper_captures(&self, l: &juxc_ast::LambdaExpr) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2493,6 +2561,61 @@ impl RustEmitter {
         }
     }
 
+    /// Whether lambda `l` produces an integer: its expression body is one, or
+    /// the first `return` with a value in its block body returns one. Decides
+    /// the sign conversion of a comparator into an `Ordering` slot
+    /// (Operators §O.2.1); a lambda that already yields an `Ordering` answers
+    /// `false` and is emitted as written.
+    fn lambda_result_is_integer(&self, l: &juxc_ast::LambdaExpr) -> bool {
+        use juxc_ast::{ElseBranch, Stmt};
+        fn first_return(stmts: &[Stmt]) -> Option<&Expr> {
+            stmts.iter().find_map(|s| match s {
+                Stmt::Return(Some(e), _) => Some(e),
+                Stmt::Block(b) | Stmt::Unsafe(b) => first_return(&b.statements),
+                Stmt::If(i) => first_return_in_if(i),
+                _ => None,
+            })
+        }
+        fn first_return_in_if(i: &juxc_ast::IfStmt) -> Option<&Expr> {
+            first_return(&i.then_block.statements).or_else(|| {
+                i.else_branch.as_deref().and_then(|eb| match eb {
+                    ElseBranch::Block(b) => first_return(&b.statements),
+                    ElseBranch::If(elif) => first_return_in_if(elif),
+                })
+            })
+        }
+        let value = match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => Some(e.as_ref()),
+            juxc_ast::LambdaBody::Block(b) => first_return(&b.statements),
+        };
+        value
+            .and_then(|e| self.receiver_ty_of(e))
+            .is_some_and(|t| matches!(t, juxc_tycheck::Ty::Primitive(p) if juxc_tycheck::ty::integer_bits(p).is_some()))
+    }
+
+    /// Whether `e` is a built-in `<=>` whose two sides Rust totally orders:
+    /// integers, `char`, `bool` or `String`. Floats are left to the IEEE
+    /// total order `<=>` defines (§S.2.3), and a user type to its own
+    /// `operator<=>`.
+    fn is_plain_ordered_comparison(&self, e: &Expr) -> bool {
+        let Expr::Binary(b) = e else { return false };
+        if !matches!(b.op, juxc_ast::BinaryOp::Cmp) {
+            return false;
+        }
+        let ordered = |side: &Expr| match self.receiver_ty_of(side) {
+            Some(juxc_tycheck::Ty::String) => true,
+            Some(juxc_tycheck::Ty::Primitive(p)) => {
+                juxc_tycheck::ty::integer_bits(p).is_some()
+                    || matches!(p, juxc_tycheck::Primitive::Char | juxc_tycheck::Primitive::Bool)
+            }
+            _ => false,
+        };
+        // Both sides the same kind, so `cmp` type-checks without a cast.
+        ordered(&b.left)
+            && ordered(&b.right)
+            && self.receiver_ty_of(&b.left) == self.receiver_ty_of(&b.right)
+    }
+
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         // `move` is unconditional: Phase-1 lambdas wrap in
         // `Rc<dyn Fn>`, which often outlives the enclosing scope
@@ -2524,6 +2647,8 @@ impl RustEmitter {
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
         let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
+        let int_to_ordering = std::mem::take(&mut self.lambda_int_to_ordering) && bare;
+        let return_slot = self.lambda_return_slot.take();
         let captures = self.collect_wrapper_captures(l);
         // **`this` captured by a lambda shares the handle too.** A closure that
         // reads `this` would otherwise borrow `&self`, and returning it from a
@@ -2622,17 +2747,59 @@ impl RustEmitter {
                 self.w.push_str("{ ");
             }
         }
+        // A comparator returning an `int` into an `Ordering` slot (Operators
+        // §O.2.1): the value converts by its sign. An expression body is
+        // `(a <=> b).cmp(&0)`; a block body runs as its own `int` closure
+        // first, so a `return` inside it still returns the `int`.
+        let ordering_from_int = int_to_ordering && self.lambda_result_is_integer(l);
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => {
                 if void_target {
                     self.w.push_str("{ ");
                     self.emit_expr(e);
                     self.w.push_str("; }");
+                } else if ordering_from_int && self.is_plain_ordered_comparison(e) {
+                    // `(a, b) -> a <=> b` on integers or strings IS an
+                    // `Ordering` already in Rust: `a.cmp(&b)`, no round
+                    // trip through -1/0/+1.
+                    let juxc_ast::Expr::Binary(bin) = e.as_ref() else { unreachable!() };
+                    self.w.push('(');
+                    self.emit_expr(&bin.left);
+                    self.w.push_str(").cmp(&(");
+                    self.emit_expr(&bin.right);
+                    self.w.push_str("))");
+                } else if ordering_from_int {
+                    self.w.push('(');
+                    self.emit_expr(e);
+                    self.w.push_str(").cmp(&0)");
+                } else if let Some(ret) = &return_slot {
+                    // The value converts to the slot's return type, the way
+                    // a `return` into that type would.
+                    self.emit_expr_coerced_to_iface(ret, e);
                 } else {
                     self.emit_expr(e);
                 }
             }
+            juxc_ast::LambdaBody::Block(b) if ordering_from_int => {
+                let prev_lam = self.in_lambda_body;
+                self.in_lambda_body = true;
+                self.w.push_str("(|| {\n");
+                self.w.indent_inc();
+                for stmt in &b.statements {
+                    self.emit_stmt(stmt);
+                }
+                self.patch_lambda_tail_try(b);
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("})().cmp(&0)");
+                self.in_lambda_body = prev_lam;
+            }
             juxc_ast::LambdaBody::Block(b) => {
+                // A known slot return type is the body's return type, so each
+                // `return` converts its value to it.
+                let saved_return = return_slot
+                    .clone()
+                    .map(|ret| self.current_return_type.replace(juxc_ast::ReturnType::Type(ret)));
                 // Mark the body as lambda territory (S9): a `try`
                 // with returns in here can't type its return channel
                 // from `current_return_type` (that's the enclosing
@@ -2650,6 +2817,9 @@ impl RustEmitter {
                 self.w.emit_indent();
                 self.w.push('}');
                 self.in_lambda_body = prev_lam;
+                if let Some(prev) = saved_return {
+                    self.current_return_type = prev;
+                }
             }
         }
         if l.is_async {
@@ -3092,7 +3262,7 @@ impl RustEmitter {
             }
             juxc_ast::ReturnType::AsyncType(_) => return None,
         };
-        let body = match &l.body {
+        let mut body = match &l.body {
             juxc_ast::LambdaBody::Block(b) => (**b).clone(),
             juxc_ast::LambdaBody::Expr(e) => {
                 let stmt = if matches!(return_type, juxc_ast::ReturnType::Void) {
@@ -3103,6 +3273,20 @@ impl RustEmitter {
                 juxc_ast::Block { statements: vec![stmt], span }
             }
         };
+        // Reads of the enclosing object (§7.9: a lambda that reads a field
+        // captures the object) go through the captured `__jux_outer` handle,
+        // since inside the anonymous struct's method `self` is the struct.
+        // [`Self::emit_lambda_as_anonymous_class`] binds the handle.
+        if self.lambda_captures_this(l) {
+            let (fields, methods) = self.enclosing_members_read_by(l);
+            let shadow: std::collections::HashSet<String> =
+                l.params.iter().map(|p| p.name.text.clone()).collect();
+            outer_capture::rewrite_block(
+                &mut body,
+                &outer_capture::OuterMembers { fields: &fields, methods: &methods },
+                &shadow,
+            );
+        }
         let method_decl = juxc_ast::FnDecl {
             annotations: Vec::new(),
             visibility: juxc_ast::Visibility::Public,

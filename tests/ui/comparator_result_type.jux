@@ -1,0 +1,6 @@
+public void main() {
+    var names = new Vec<String>();
+    names.push("a");
+    names.sort_unstable_by((a, b) -> a + b);
+    names.sort_unstable_by((a, b) -> 1.5);
+}

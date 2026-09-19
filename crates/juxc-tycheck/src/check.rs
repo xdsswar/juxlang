@@ -458,6 +458,10 @@ pub(crate) struct Checker<'a> {
     /// lambda. A parameter declared without a type has the slot's type, both
     /// for checking the body and in `expr_types` at the parameter's name.
     pub(crate) lambda_slot_params: Option<Vec<Ty>>,
+    /// Set while checking a lambda passed into a Rust closure slot that
+    /// returns `Ordering` (a comparator, Operators §O.2.1): its result must
+    /// be an integer or an `Ordering`. Take-and-cleared by the lambda arm.
+    pub(crate) lambda_is_comparator: bool,
     /// True while checking a for-each header's iterable expression —
     /// the one position a `step` range is legal in Phase 1.
     pub(crate) in_foreach_iter: bool,
@@ -595,6 +599,7 @@ impl<'a> Checker<'a> {
             value_switch_spans: Vec::new(),
             unsafe_block_depth: 0,
             lambda_slot_params: None,
+            lambda_is_comparator: false,
             in_foreach_iter: false,
             in_static: false,
             in_interface_super_call: false,
@@ -5840,7 +5845,25 @@ impl<'a> Checker<'a> {
                 } else {
                     self.check_expr(&a.target);
                 }
+                // A lambda or method reference ASSIGNED into a typed place
+                // takes that place's function type, or the one method of a
+                // single-method interface (LANG-V1 §7.9.1), the same as one
+                // written in the declaration: `format = (n) -> "#" + n` gives
+                // `n` the type `Mapper<int, String>.apply` takes.
+                if a.op.is_none() && matches!(a.value, Expr::Lambda(_) | Expr::MethodRef(_)) {
+                    let slot = infer_expr(&a.target, &self.env, self.symbols);
+                    let slot = match slot {
+                        Ty::Nullable(inner) => *inner,
+                        other => other,
+                    };
+                    if let Ty::Fn { params, .. } = &slot {
+                        self.lambda_slot_params = Some(params.clone());
+                    } else if matches!(a.value, Expr::Lambda(_)) {
+                        self.lambda_slot_params = self.single_method_interface_params(&slot);
+                    }
+                }
                 self.check_expr(&a.value);
+                self.lambda_slot_params = None;
                 // **Property write-access enforcement (§M.7.2).** A
                 // write to `obj.Prop` / `Class.Prop` where `Prop` is a
                 // read-only / init-only / restricted-visibility property
@@ -7383,6 +7406,31 @@ impl<'a> Checker<'a> {
                 let saved_generator = std::mem::replace(&mut self.in_generator, false);
                 self.env.push_scope();
                 let slot_params = self.lambda_slot_params.take();
+                let comparator = std::mem::take(&mut self.lambda_is_comparator);
+                // A refinement made outside the lambda does not hold inside it
+                // (Type system §T.6.4): the closure may run later, after the
+                // variable changed. Every refined name the body reads is bound
+                // back to its declared type for the body; copying the refined
+                // value to a fresh local first is how to keep it.
+                let mut restore: Vec<(String, Ty)> = Vec::new();
+                let mut note = |qn: &juxc_ast::QualifiedName| {
+                    if let [only] = qn.segments.as_slice() {
+                        if l.params.iter().any(|p| p.name.text == only.text) || restore.iter().any(|(n, _)| *n == only.text) {
+                            return;
+                        }
+                        if let Some(declared) = self.env.declared_type_under_refinement(&only.text) {
+                            restore.push((only.text.clone(), declared.clone()));
+                        }
+                    }
+                };
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(e) => collect_bare_name_reads(e, &mut note),
+                    juxc_ast::LambdaBody::Block(b) => {
+                        for s in &b.statements {
+                            collect_bare_name_reads_stmt(s, &mut note);
+                        }
+                    }
+                }
                 for (i, p) in l.params.iter().enumerate() {
                     let ty = match &p.ty {
                         Some(t) => ty_from_ref(t, &self.env, self.symbols),
@@ -7395,6 +7443,11 @@ impl<'a> Checker<'a> {
                         },
                     };
                     self.env.declare(&p.name.text, ty);
+                }
+                for (name, declared) in restore {
+                    if !l.params.iter().any(|p| p.name.text == name) {
+                        self.env.declare(&name, declared);
+                    }
                 }
                 let saved_return = self.current_return.take();
                 // A lambda introduces its OWN async context: an async lambda
@@ -7409,6 +7462,9 @@ impl<'a> Checker<'a> {
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(e) => self.check_expr(e),
                     juxc_ast::LambdaBody::Block(b) => self.check_block(b),
+                }
+                if comparator {
+                    self.check_comparator_result(l);
                 }
                 let keep = self.labels_outside_closure.len() - hidden;
                 self.labels_outside_closure.truncate(keep);
@@ -8300,6 +8356,53 @@ impl<'a> Checker<'a> {
             })
             .collect();
         Ty::User { name, generic_args }
+    }
+
+    /// A comparator lambda handed to Rust (Operators §O.2.1) must yield an
+    /// integer, whose sign picks the `Ordering`, or an `Ordering` itself.
+    /// Checked while the lambda's parameters are still in scope. The value
+    /// looked at is the expression body, or the first `return` with a value
+    /// in a block body; anything whose type is unknown is left alone.
+    fn check_comparator_result(&mut self, l: &juxc_ast::LambdaExpr) {
+        fn first_return(stmts: &[Stmt]) -> Option<&Expr> {
+            stmts.iter().find_map(|s| match s {
+                Stmt::Return(Some(e), _) => Some(e),
+                Stmt::Block(b) | Stmt::Unsafe(b) => first_return(&b.statements),
+                Stmt::If(i) => first_return_in_if(i),
+                _ => None,
+            })
+        }
+        fn first_return_in_if(i: &juxc_ast::IfStmt) -> Option<&Expr> {
+            first_return(&i.then_block.statements).or_else(|| {
+                i.else_branch.as_deref().and_then(|eb| match eb {
+                    ElseBranch::Block(b) => first_return(&b.statements),
+                    ElseBranch::If(elif) => first_return_in_if(elif),
+                })
+            })
+        }
+        let value = match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => Some(e.as_ref()),
+            juxc_ast::LambdaBody::Block(b) => first_return(&b.statements),
+        };
+        let Some(value) = value else { return };
+        let ty = infer_expr(value, &self.env, self.symbols);
+        let fits = match &ty {
+            Ty::Primitive(p) => crate::ty::integer_bits(*p).is_some(),
+            Ty::User { name, .. } => name.rsplit('.').next() == Some("Ordering"),
+            Ty::Unknown | Ty::Any | Ty::Param(_) | Ty::Wildcard(_) => true,
+            _ => false,
+        };
+        if !fits {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!("a comparator returns an `int` or an `Ordering`, found {ty}"),
+                )
+                // A literal carries no span of its own; the lambda does.
+                .with_span(Some(expr_span(value)).filter(|s| *s != Span::DUMMY).unwrap_or(l.span))
+                .with_help("compare the two values, e.g. `(a, b) -> a <=> b` (a negative result sorts `a` first)"),
+            );
+        }
     }
 
     fn single_method_interface_params(&self, slot: &Ty) -> Option<Vec<Ty>> {
@@ -13010,8 +13113,18 @@ impl<'a> Checker<'a> {
                     self.lambda_slot_params = Some(slot_params);
                 }
             }
+            // A lambda into a Rust closure slot returning `Ordering` is a
+            // comparator: it may return an `int`, converted by its sign
+            // (Operators §O.2.1), or an `Ordering`, and nothing else.
+            if let (Expr::Lambda(_), Some(param)) = (arg, arg_to_param[i].and_then(|j| params.get(j))) {
+                self.lambda_is_comparator = param
+                    .ty
+                    .closure_shape()
+                    .is_some_and(|s| s.return_type.name.segments.last().is_some_and(|n| n.text == "Ordering"));
+            }
             self.check_expr(arg);
             self.lambda_slot_params = None;
+            self.lambda_is_comparator = false;
             let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else {
                 continue;
             };
@@ -14169,6 +14282,15 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     // Positions that are both concrete must match exactly; function-type
     // variance (T.3.6) is not implied.
     if fn_shapes_agree(expected, found) {
+        return true;
+    }
+    // Function-type variance (T.3.6): contravariant in the parameters,
+    // covariant in the return. A `(Animal) -> String` takes every `Dog` a
+    // `(Dog) -> String` slot is handed, and a `() -> Dog` makes the `Animal`
+    // a `() -> Animal` slot promises. Only class and interface subtyping
+    // varies; a numeric or nullable difference in a position still has to
+    // match exactly.
+    if crate::ty::fn_types_vary_soundly(expected, found, symbols) {
         return true;
     }
     // `any` (§T.1.2 / §T.3.6): every value converts, except a nullable one

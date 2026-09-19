@@ -1,0 +1,160 @@
+// A tiny stack-machine interpreter: a program is a list of instructions
+// (a sealed interface of records), run over a value stack with labels,
+// jumps, calls and returns. Exercises sealed records with switch patterns,
+// a HashMap of labels, a Vec used as a stack, and runtime exceptions.
+
+sealed interface Op permits Push, Add, Mul, Sub, Dup, Swap, Over, Jz, Jmp, Label, Call, Ret, Print, Halt {}
+record Push(long value) implements Op {}
+record Add() implements Op {}
+record Mul() implements Op {}
+record Sub() implements Op {}
+record Dup() implements Op {}
+record Swap() implements Op {}
+record Over() implements Op {}
+record Jz(String target) implements Op {}
+record Jmp(String target) implements Op {}
+record Label(String name) implements Op {}
+record Call(String target) implements Op {}
+record Ret() implements Op {}
+record Print(String tag) implements Op {}
+record Halt() implements Op {}
+
+class Machine {
+    private Vec<Op> code;
+    private Vec<long> stack = new Vec<long>();
+    private Vec<int> frames = new Vec<int>();
+    private HashMap<String, int> labels = new HashMap<String, int>();
+    public int steps = 0;
+
+    public Machine(Vec<Op> code) {
+        this.code = code;
+        for (int i = 0; i < code.len(); i++) {
+            var op = code[i];
+            if (op => Label) {
+                labels.insert(op.name, i);
+            }
+        }
+    }
+
+    private long pop() {
+        var top = stack.pop();
+        if (top == null) {
+            throw new IllegalStateException("stack underflow at step " + steps);
+        }
+        return top!!;
+    }
+
+    private int jump(String target) {
+        var at = labels.get(target);
+        if (at == null) {
+            throw new IllegalArgumentException("no label " + target);
+        }
+        return at!!;
+    }
+
+    public void run() {
+        int pc = 0;
+        while (pc < code.len()) {
+            steps++;
+            if (steps > 10000) {
+                throw new IllegalStateException("step limit");
+            }
+            var op = code[pc];
+            pc++;
+            switch (op) {
+                case Push(var v) -> stack.push(v);
+                case Add() -> { var b = pop(); var a = pop(); stack.push(a + b); }
+                case Mul() -> { var b = pop(); var a = pop(); stack.push(a * b); }
+                case Sub() -> { var b = pop(); var a = pop(); stack.push(a - b); }
+                case Dup() -> { var a = pop(); stack.push(a); stack.push(a); }
+                case Swap() -> { var b = pop(); var a = pop(); stack.push(b); stack.push(a); }
+                case Over() -> { var b = pop(); var a = pop(); stack.push(a); stack.push(b); stack.push(a); }
+                case Jz(var t) -> { if (pop() == 0) { pc = jump(t); } }
+                case Jmp(var t) -> pc = jump(t);
+                case Label(var n) -> {}
+                case Call(var t) -> { frames.push(pc); pc = jump(t); }
+                case Ret() -> {
+                    var back = frames.pop();
+                    if (back == null) {
+                        throw new IllegalStateException("return with no caller");
+                    }
+                    pc = back!!;
+                }
+                case Print(var tag) -> print(tag + " " + pop());
+                case Halt() -> pc = code.len();
+            }
+        }
+    }
+}
+
+// [acc, n] on the stack; each round multiplies acc by n in a subroutine.
+Vec<Op> factorial(long n) {
+    var p = new Vec<Op>();
+    p.push(new Push(1));
+    p.push(new Push(n));
+    p.push(new Label("loop"));
+    p.push(new Dup());
+    p.push(new Jz("done"));
+    p.push(new Call("step"));
+    p.push(new Push(1));
+    p.push(new Sub());
+    p.push(new Jmp("loop"));
+    p.push(new Label("done"));
+    p.push(new Swap());
+    p.push(new Print("fact(" + n + ") ="));
+    p.push(new Halt());
+    // step: [acc, n] -> [acc * n, n]
+    p.push(new Label("step"));
+    p.push(new Swap());
+    p.push(new Over());
+    p.push(new Mul());
+    p.push(new Swap());
+    p.push(new Ret());
+    return p;
+}
+
+Vec<Op> countdown(long from) {
+    var p = new Vec<Op>();
+    p.push(new Push(from));
+    p.push(new Label("top"));
+    p.push(new Dup());
+    p.push(new Print("tick"));
+    p.push(new Push(1));
+    p.push(new Sub());
+    p.push(new Dup());
+    p.push(new Jz("end"));
+    p.push(new Jmp("top"));
+    p.push(new Label("end"));
+    p.push(new Halt());
+    return p;
+}
+
+void attempt(String name, Vec<Op> program) {
+    var m = new Machine(program);
+    try {
+        m.run();
+        print(name + ": ok in " + m.steps + " steps");
+    } catch (IllegalStateException e) {
+        print(name + ": failed, " + e.getMessage());
+    } catch (IllegalArgumentException e) {
+        print(name + ": bad program, " + e.getMessage());
+    }
+}
+
+public void main() {
+    attempt("countdown", countdown(3));
+    attempt("factorial", factorial(5));
+
+    var broken = new Vec<Op>();
+    broken.push(new Add());
+    attempt("underflow", broken);
+
+    var lost = new Vec<Op>();
+    lost.push(new Jmp("nowhere"));
+    attempt("jump", lost);
+
+    var loop = new Vec<Op>();
+    loop.push(new Label("x"));
+    loop.push(new Jmp("x"));
+    attempt("forever", loop);
+}

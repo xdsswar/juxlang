@@ -45,6 +45,8 @@ A type may declare any subset of these. Each is introduced by the `operator` key
 
 `<=>` is preferred over the four-operator form. Defining both is `E0930`.
 
+**Comparators into Rust.** A Rust API that sorts or searches takes its comparator as a closure returning `std::cmp::Ordering` (`sort_unstable_by`, `binary_search_by`, `max_by`). A Jux lambda written into such a slot may return the `int` a comparison gives, `(a, b) -> a <=> b` or Java's `(a, b) -> a.age - b.age`, and that `int` converts to an `Ordering` by its sign: negative is `Less`, zero is `Equal`, positive is `Greater`. The conversion applies only to the lambda's result in that slot. A lambda that already returns an `Ordering` (`a.total_cmp(b)`, `a.cmp(b)`) is passed as written.
+
 ### O.2.2. Hashing and Stringification
 
 | Form                | Returns  | Used by                                                    |

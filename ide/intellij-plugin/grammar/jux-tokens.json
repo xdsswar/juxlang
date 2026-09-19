@@ -243,7 +243,8 @@
     "Ignore",
     "extern",
     "export",
-    "layout"
+    "layout",
+    "align"
   ],
   "builtins": [
     "AnnotatedItem",
@@ -264,6 +265,7 @@
     "Error",
     "Exception",
     "ExceptionInInitializerError",
+    "ExclusiveRange",
     "File",
     "FileNotFoundException",
     "HashMap",
@@ -271,6 +273,7 @@
     "IOException",
     "IllegalArgumentException",
     "IllegalStateException",
+    "InclusiveRange",
     "IndexOutOfBoundsException",
     "Instant",
     "Iterable",
@@ -286,6 +289,7 @@
     "Rc",
     "Result",
     "RuntimeException",
+    "SteppedRange",
     "Stream",
     "Task",
     "Throwable",
@@ -297,6 +301,7 @@
     "any",
     "assert",
     "block_on",
+    "never",
     "now_ms",
     "parallel",
     "print",

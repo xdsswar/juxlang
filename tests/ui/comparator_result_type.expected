@@ -1,0 +1,2 @@
+comparator_result_type.jux:4:38: [E0410] error: a comparator returns an `int` or an `Ordering`, found String
+comparator_result_type.jux:5:28: [E0410] error: a comparator returns an `int` or an `Ordering`, found double

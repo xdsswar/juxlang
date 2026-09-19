@@ -1,0 +1,94 @@
+// Reconciling a ledger against a bank statement. Both are keyed by reference
+// in a BTreeMap, so every report walks them in sorted order. Exercises
+// BTreeMap insert/get/contains_key/for-each, records with a comparison
+// operator, a checked exception, long arithmetic and string padding.
+
+record Line(String ref, long cents, String memo) {}
+
+class ReconcileError extends Exception {
+    ReconcileError(String m) { super(m); }
+}
+
+String money(long cents) {
+    String sign = cents < 0 ? "-" : "";
+    long abs = cents < 0 ? -cents : cents;
+    long whole = abs / 100;
+    long part = abs % 100;
+    return sign + whole + "." + (part < 10 ? "0" : "") + part;
+}
+
+String pad(String s, int width) {
+    var out = s;
+    while (out.charLength() < width) {
+        out = out + " ";
+    }
+    return out;
+}
+
+BTreeMap<String, Line> index(Vec<Line> lines) throws ReconcileError {
+    var map = new BTreeMap<String, Line>();
+    for (var l : lines) {
+        if (map.contains_key(l.ref)) {
+            throw new ReconcileError("duplicate reference " + l.ref);
+        }
+        map.insert(l.ref, l);
+    }
+    return map;
+}
+
+void reconcile(Vec<Line> ledger, Vec<Line> bank) {
+    try {
+        var ours = index(ledger);
+        var theirs = index(bank);
+        long matched = 0;
+        long difference = 0;
+        int problems = 0;
+        for (var entry : ours) {
+            var mine = entry.1;
+            var other = theirs.get(entry.0);
+            if (other == null) {
+                print(pad(mine.ref, 6) + " missing from bank   " + money(mine.cents));
+                problems++;
+                difference += mine.cents;
+            } else if (other!!.cents != mine.cents) {
+                long gap = other!!.cents - mine.cents;
+                print(pad(mine.ref, 6) + " amount differs      " + money(gap));
+                problems++;
+                difference += gap;
+            } else {
+                matched += mine.cents;
+            }
+        }
+        for (var entry : theirs) {
+            if (!ours.contains_key(entry.0)) {
+                print(pad(entry.0, 6) + " missing from ledger " + money(entry.1.cents));
+                problems++;
+                difference -= entry.1.cents;
+            }
+        }
+        print("matched " + money(matched) + ", " + problems + " problem(s), net " + money(difference));
+    } catch (ReconcileError e) {
+        print("cannot reconcile: " + e.getMessage());
+    }
+}
+
+public void main() {
+    var ledger = new Vec<Line>();
+    ledger.push(new Line("R104", 12500, "rent share"));
+    ledger.push(new Line("R101", 4999, "phone"));
+    ledger.push(new Line("R103", -2000, "refund"));
+    ledger.push(new Line("R102", 780, "coffee"));
+
+    var bank = new Vec<Line>();
+    bank.push(new Line("R101", 4999, "PHONE CO"));
+    bank.push(new Line("R102", 870, "CAFE"));
+    bank.push(new Line("R105", 1500, "FEE"));
+    bank.push(new Line("R104", 12500, "TRANSFER"));
+
+    reconcile(ledger, bank);
+
+    var twice = new Vec<Line>();
+    twice.push(new Line("R1", 1, "a"));
+    twice.push(new Line("R1", 2, "b"));
+    reconcile(twice, bank);
+}

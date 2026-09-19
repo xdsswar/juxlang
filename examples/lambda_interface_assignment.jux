@@ -1,0 +1,69 @@
+// Lambdas ASSIGNED into single-method interface slots (LANG-V1 §7.9.1).
+//
+// A lambda stored with `=` into a local, a field or `this.field` typed as a
+// single-method interface is that interface's one method, exactly as when it
+// is written in the declaration. Its untyped parameters take the method's
+// parameter types, and like any lambda (§7.9) it captures the enclosing object
+// when it reads one of its fields or calls one of its methods, with or without
+// writing `this`.
+
+interface Mapper<A, B> {
+    B apply(A value);
+}
+
+interface Listener<E> {
+    void on(E event);
+}
+
+class Pipeline {
+    private Mapper<int, String> format;
+    private Listener<String> sink;
+    private Vec<String> seen = new Vec<String>();
+
+    public Pipeline() {
+        // Bare field, set before anything else in the constructor.
+        format = (n) -> "#" + n;
+        // Reads the object's own `seen`: the lambda captures the object, so
+        // the assignment waits until the object exists.
+        this.sink = (s) -> seen.push(s);
+    }
+
+    public void swap() {
+        format = (n) -> "[" + n + "]";
+    }
+
+    public void loud() {
+        sink = (s) -> {
+            var line = s.to_uppercase();
+            seen.push(line);
+            count();
+        };
+    }
+
+    // Calling through the stored listener lets it reach back into this object.
+    public void feed(int n) {
+        sink.on(format.apply(n));
+    }
+
+    public int count() { return seen.len(); }
+    public String last() { return seen[seen.len() - 1]; }
+}
+
+public void main() {
+    // A local reassigned with a new lambda; `s` is a String both times.
+    Mapper<String, int> len = (s) -> s.len();
+    print(len.apply("four"));
+    len = (s) -> s.len() * 2;
+    print(len.apply("four"));
+
+    var p = new Pipeline();
+    p.feed(1);
+    print(p.last());
+    p.swap();
+    p.feed(2);
+    print(p.last());
+    p.loud();
+    p.feed(3);
+    print(p.last());
+    print(p.count());
+}

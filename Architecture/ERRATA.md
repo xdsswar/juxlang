@@ -1232,6 +1232,26 @@ rather than misreported.
 **Spec status:** §R.3.3 and §R.3.6 describe the intended multi-module rule and
 stand; the Phase-1 reading above is noted there.
 
+## E66. `move` closures and `E0820` under reference counting
+
+**Conflict.** Type system §T.9.1 lets a closure be written `move () -> ...`
+to force a move capture, and §T.9.4 reports `E0820` when an inferred capture
+mode would outlive what it borrows. JUX-LANG-V1 §6.4 reserves `move` and
+JUX-MISSING-DEFS defers it: `move` as an operator is `E0203` today, and the
+`move` closure form rests on the same keyword.
+
+**Resolution.** In the `full` profile a closure never borrows: every capture
+is owned by the closure, a class or collection as a shared reference-counted
+handle and a value as a copy (LANG-V1 §7.9, §7.9.1). No capture can outlive
+what it refers to, so `E0820` has nothing to report and stays reserved, and
+`move ()` would change nothing about what a closure holds. Both are left for
+the profiles without reference counting (`jux-core`, `jux-embedded`), where
+§T.9's borrow-based capture modes are the real model, together with the
+`move` operator itself.
+
+**Spec status:** §T.9 describes the borrow-model profiles and stands; the
+`full`-profile reading above is noted here.
+
 ---
 
 ## E71. The `jux new` template's `[module]` table

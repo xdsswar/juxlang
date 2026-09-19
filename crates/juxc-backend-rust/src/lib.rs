@@ -1462,6 +1462,16 @@ struct RustEmitter {
     /// called with references (`filter`'s `&Item`): the lambda clones each
     /// argument out, so its body sees the owned values a Jux lambda takes.
     pub(crate) lambda_clone_params: bool,
+    /// Set with [`Self::lambda_bare_target`] when the foreign closure slot
+    /// returns Rust's `Ordering` (`sort_unstable_by`, `max_by`): a lambda
+    /// whose result is an `int` (`(a, b) -> a <=> b`) turns it into an
+    /// `Ordering` by its sign (Operators §O.2.1).
+    pub(crate) lambda_int_to_ordering: bool,
+    /// Set while emitting a lambda written into a function slot whose return
+    /// type needs a conversion (an interface or polymorphic base, see
+    /// `IfaceCoercion::LambdaReturnUpcast`): the lambda's result is converted
+    /// to it. Take-and-cleared by [`Self::emit_lambda`].
+    pub(crate) lambda_return_slot: Option<juxc_ast::TypeRef>,
     /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
@@ -4182,8 +4192,49 @@ impl RustEmitter {
         ));
         w.push_str("pub trait JuxShowViaDebug { fn jux_show(self) -> String; }\n");
         w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &JuxShow<T> {\n");
-        w.push_str("    fn jux_show(self) -> String { format!(\"{:?}\", self.0) }\n");
+        w.push_str("    fn jux_show(self) -> String { jux_debug_text(&self.0) }\n");
         w.push_str("}\n");
+        // A value reaching the `Debug` tier inside GENERIC code (a class's
+        // `K` holding a `String`) is a type the emitter could not see, and
+        // `Debug` quotes a string or a char: `"c"`, `'x'`. A `String`, `str`
+        // or `char` prints as its text everywhere else, so the quotes and
+        // escapes `Debug` added are taken off again. `escape_debug` is
+        // one-to-one, so undoing it gives back exactly the original text.
+        w.push_str(r##"pub fn jux_debug_text<T: std::fmt::Debug + ?Sized>(v: &T) -> String {
+    let text = format!("{:?}", v);
+    let name = std::any::type_name_of_val(v).trim_start_matches('&');
+    let quoted = matches!(name, "alloc::string::String" | "str" | "char")
+        && text.len() >= 2
+        && (text.starts_with('"') || text.starts_with('\''));
+    if quoted { jux_unescape_debug(&text[1..text.len() - 1]) } else { text }
+}
+/// Undo `escape_debug` on the text between a `Debug` string's quotes.
+fn jux_unescape_debug(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('0') => out.push('\0'),
+            Some('u') => {
+                let code: String = chars.by_ref().skip(1).take_while(|c| *c != '}').collect();
+                if let Some(ch) = u32::from_str_radix(&code, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+"##);
         w.push_str("#[macro_export]\n");
         w.push_str("macro_rules! __jux_show {\n");
         w.push_str("    ($v:expr) => {{\n");
@@ -5505,6 +5556,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
             lambda_clone_params: false,
+            lambda_int_to_ordering: false,
+            lambda_return_slot: None,
             worker_attach: Vec::new(),
         }
     }

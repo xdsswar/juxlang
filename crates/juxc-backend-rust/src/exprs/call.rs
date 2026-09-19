@@ -2562,28 +2562,38 @@ impl RustEmitter {
         //
         // So: ask the scan first, and bridge only the intrinsic it says
         // nothing about.
-        if let Expr::Field(f) = &*call.callee {
-            if f.field.text == "pop" && call.args.is_empty() {
-                let scanned = match self.receiver_ty_of(&f.object) {
-                    Some(juxc_tycheck::Ty::User { name, .. }) => {
-                        self.external_method_sig(&name, "pop").is_some()
-                    }
-                    _ => false,
-                };
-                // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
-                // name matches a user class when it equals some key's last
-                // segment.
-                let receiver_is_user_class =
-                    self.receiver_class_bare(&f.object).is_some_and(|bare| {
-                        self.class_asts
-                            .keys()
-                            .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
-                    });
-                if !receiver_is_user_class && !scanned {
-                    self.w.push_str(".unwrap()");
-                }
-            }
+        if self.pop_needs_intrinsic_unwrap(call) {
+            self.w.push_str(".unwrap()");
         }
+    }
+
+    /// Whether `call` is the array/`Vec` INTRINSIC `pop()`, whose Rust
+    /// `Option<T>` is bridged to the element with `.unwrap()`. A `pop()` the
+    /// scanned stub declares (`rust.std.Vec`'s `T? pop()`) carries its own
+    /// return type, and a user class's own `pop()` (a receiver that is a Jux
+    /// class, `this` included) returns what the user wrote; neither is
+    /// unwrapped, or the `.unwrap()` lands on a value that is not an `Option`.
+    pub(crate) fn pop_needs_intrinsic_unwrap(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else { return false };
+        if f.field.text != "pop" || !call.args.is_empty() {
+            return false;
+        }
+        if matches!(&*f.object, Expr::This(_)) {
+            return false;
+        }
+        let scanned = match self.receiver_ty_of(&f.object) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => self.external_method_sig(&name, "pop").is_some(),
+            _ => false,
+        };
+        // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
+        // name matches a user class when it equals some key's last
+        // segment.
+        let receiver_is_user_class = self.receiver_class_bare(&f.object).is_some_and(|bare| {
+            self.class_asts
+                .keys()
+                .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+        });
+        !receiver_is_user_class && !scanned
     }
 
     /// C6: emit a COMPLETE foreign-collection argument whose matching
@@ -3411,6 +3421,7 @@ impl RustEmitter {
             if self.callee_param_is_foreign_fn(&call.callee, i) {
                 self.lambda_bare_target = true;
                 self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
+                self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
             }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
@@ -3710,6 +3721,32 @@ impl RustEmitter {
             Expr::NotNullAssert(inner, _) => inner.as_ref(),
             other => other,
         };
+        // A bare instance field of the class being emitted (`sink.on(s)` for
+        // `this.sink.on(s)`) reads through the same `self.0.borrow()` guard,
+        // and a listener it calls that touches this object would find it
+        // borrowed. Hoisted exactly like the explicit form.
+        if let Expr::Path(qn) = recv {
+            // Only a field holding a Jux object can run Jux code that comes
+            // back to this one; a collection, a string or a foreign value
+            // cannot, and keeps its in-place read.
+            let holds_jux_object = matches!(
+                self.expr_types.get(&qn.span).cloned().map(crate::exprs::field::strip_nullable),
+                Some(juxc_tycheck::Ty::User { ref name, .. })
+                    if self.lookup_interface_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+                        .is_some_and(|(_, i)| !i.is_external)
+                        || self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+                            .is_some_and(|c| !c.is_external)
+            );
+            let implicit_this_field = qn.segments.len() == 1
+                && holds_jux_object
+                && self.emitting_wrapper_class
+                && self.enclosing_class.as_deref().is_some_and(|c| self.is_wrapper_class(c))
+                && self.bare_name_is_instance_member(&qn.segments[0].text);
+            if implicit_this_field && !self.callee_mutates_external_receiver(cf) {
+                return Some(cf);
+            }
+            return None;
+        }
         let Expr::Field(rf) = recv else { return None };
         // **A method that MUTATES the receiver is never hoisted.** The hoist
         // binds the receiver by value, which for a wrapper field means a clone:
@@ -4092,18 +4129,8 @@ impl RustEmitter {
         // The array `pop()` bridge, under the same rule as `emit_call`: a
         // method the scan declares carries its own return type (`T?`), so only
         // the intrinsic the scan says nothing about is unwrapped here.
-        if let Expr::Field(f) = &*call.callee {
-            if f.field.text == "pop" && call.args.is_empty() {
-                let scanned = match self.receiver_ty_of(&f.object) {
-                    Some(juxc_tycheck::Ty::User { name, .. }) => {
-                        self.external_method_sig(&name, "pop").is_some()
-                    }
-                    _ => false,
-                };
-                if !scanned {
-                    self.w.push_str(".unwrap()");
-                }
-            }
+        if self.pop_needs_intrinsic_unwrap(call) {
+            self.w.push_str(".unwrap()");
         }
         self.w.push_str(" }");
     }
@@ -4276,7 +4303,7 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
-        if callee.field.text == "pop" && call.args.is_empty() {
+        if self.pop_needs_intrinsic_unwrap(call) {
             self.w.push_str(".unwrap()");
         }
         self.w.push_str(" })");
@@ -6316,6 +6343,7 @@ impl RustEmitter {
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
             self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
+            self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
         }
         // `null` for a raw-pointer parameter is a null pointer (§L.6.1), not the
         // `None` a nullable parameter takes: `count(null, 3)` on `int* p`, and
