@@ -747,6 +747,15 @@ class JuxCompletionContributor : CompletionContributor() {
         val qualifier = dev.jux.intellij.resolve.JuxTypeEngine.firstExpressionChild(access) ?: return false
         val qualifierType = dev.jux.intellij.resolve.JuxTypeEngine.typeOf(qualifier)
         if (qualifierType is dev.jux.intellij.resolve.JuxType.Unknown) return false
+        // A tuple's elements, `.0`, `.1`, each with its type.
+        val tuple = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType) as?
+            dev.jux.intellij.resolve.JuxType.TupleType
+        if (tuple != null) {
+            tuple.elements.forEachIndexed { i, t ->
+                sink(LookupElementBuilder.create(i.toString()).withTypeText(t.presentable()))
+            }
+            return true
+        }
         val static = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType) is
             dev.jux.intellij.resolve.JuxType.Static
         if (!static) addNamedOperators(qualifierType, sink)

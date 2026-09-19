@@ -376,3 +376,57 @@ val generateJuxTokens by tasks.registering {
 kotlin.sourceSets.named("main") {
     kotlin.srcDir(generateJuxTokens)
 }
+
+// ---------------------------------------------------------------------------
+// The `jux.std` sources, bundled.
+//
+// The compiler embeds its standard library (`Option`, `Result`, the iterator
+// combinators, `Mutex`, the exceptions, ...) as Jux source inside
+// `crates/juxc-driver/src/stdlib_embedded.rs` and prepends it to every unit.
+// This task writes those same sources out as `jux-std/jux/std/<path>.jux`
+// resources, so the plugin indexes the exact library the compiler checks
+// against: completion, navigation and Quick Documentation for every std
+// member, with no second copy to keep in step by hand.
+//
+// `src/main/juxStdIde/` adds the few types the compiler binds structurally
+// and so never writes as source (the range types of MISSING-DEFS M.6.1),
+// declared exactly as that clause declares them.
+// ---------------------------------------------------------------------------
+val stdlibEmbedded = layout.projectDirectory.file("../../crates/juxc-driver/src/stdlib_embedded.rs")
+val juxStdIdeDir = layout.projectDirectory.dir("src/main/juxStdIde")
+val generatedJuxStdDir = layout.buildDirectory.dir("generated/resources/juxStd")
+
+val generateJuxStd by tasks.registering {
+    description = "Writes the compiler's embedded jux.std sources out as plugin resources."
+    val input = stdlibEmbedded
+    val ide = juxStdIdeDir
+    val outDir = generatedJuxStdDir
+    inputs.file(input)
+    inputs.dir(ide)
+    outputs.dir(outDir)
+
+    doLast {
+        val root = outDir.get().asFile.resolve("jux-std")
+        root.deleteRecursively()
+        val text = input.asFile.readText()
+        // Each entry is `("dir/File.jux", r###"<source>"###)`.
+        val entry = Regex("""\("([A-Za-z0-9_/]+\.jux)",\s*r###"(.*?)"###\)""", RegexOption.DOT_MATCHES_ALL)
+        var count = 0
+        for (m in entry.findAll(text)) {
+            val file = root.resolve("jux/std/" + m.groupValues[1])
+            file.parentFile.mkdirs()
+            file.writeText(m.groupValues[2])
+            count++
+        }
+        check(count > 0) { "no jux.std sources found in ${input.asFile}" }
+        ide.asFile.walkTopDown().filter { it.isFile }.forEach { src ->
+            val dest = root.resolve(src.relativeTo(ide.asFile).path)
+            dest.parentFile.mkdirs()
+            src.copyTo(dest, overwrite = true)
+        }
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(generateJuxStd)
+}
