@@ -29,15 +29,24 @@ class JuxBlock(
     override fun buildChildren(): List<Block> {
         if (isLeaf) return emptyList()
         val out = ArrayList<Block>()
+        // At file level, braces are only ever an annotation block's
+        // (`@export { ... }`): what sits between them indents one level.
+        val isFile = myNode.treeParent == null
+        var annotationBlockDepth = 0
         var child = myNode.firstChildNode
         while (child != null) {
             // Skip whitespace AND zero-length nodes: the parser's recovery
             // emits zero-width PsiErrorElements everywhere, and the engine
             // asserts on empty-range blocks.
             if (child.elementType !== TokenType.WHITE_SPACE && child.textLength > 0) {
-                val indent = if (keepsFirstColumn(child)) Indent.getAbsoluteNoneIndent()
-                else JuxIndentRules.childIndent(myNode, child)
+                if (isFile && child.elementType === T.RBRACE && annotationBlockDepth > 0) annotationBlockDepth--
+                val indent = when {
+                    keepsFirstColumn(child) -> Indent.getAbsoluteNoneIndent()
+                    isFile && annotationBlockDepth > 0 -> Indent.getNormalIndent()
+                    else -> JuxIndentRules.childIndent(myNode, child)
+                }
                 out.add(JuxBlock(child, indent, ctx))
+                if (isFile && child.elementType === T.LBRACE) annotationBlockDepth++
             }
             child = child.treeNext
         }

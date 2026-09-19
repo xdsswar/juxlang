@@ -89,14 +89,24 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
             if (name == "_") continue
             if (decl in usedDecls) continue
             if (name in blindMentions) continue
+            // `case Num(var n) | Neg(var n) -> n`: the alternatives bind one
+            // name, and a use resolves to the first; any use counts for all.
+            if (orPatternSiblings(decl).any { it in usedDecls }) continue
             val target = decl.nameIdentifier ?: continue
             val kind = when (decl) {
                 is JuxLocalVariable -> "Variable"
                 is JuxParameter -> "Parameter"
                 else -> "Field"
             }
+            // Deleting a pattern's binder would change the pattern's shape
+            // (`Pt(a, b)` to `Pt(b)`), so a binder gets no removal fix.
+            val isBinder = decl.parent?.elementType === E.PATTERN ||
+                decl.parent?.elementType === E.DESTRUCTURING_DECLARATION ||
+                dev.jux.intellij.psi.JuxLocals.isTypeTestBinder(decl)
             val fixes =
-                if (decl is JuxLocalVariable || decl is JuxFieldDeclaration) {
+                if (isBinder) {
+                    LocalQuickFix.EMPTY_ARRAY
+                } else if (decl is JuxLocalVariable || decl is JuxFieldDeclaration) {
                     arrayOf<LocalQuickFix>(RemoveDeclarationFix(kind.lowercase()))
                 } else if (decl is JuxParameter && RemoveUnusedParameterFix.callSites(decl) != null) {
                     // Only for a private method: every caller is in this file.
@@ -115,6 +125,20 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
             )
         }
         return problems.toTypedArray()
+    }
+
+    /**
+     * The other binders of the same name in the same switch arm: in
+     * `case Num(var n) | Neg(var n)` each `n` is the other's sibling.
+     */
+    private fun orPatternSiblings(decl: PsiElement): List<PsiElement> {
+        if (decl.elementType !== E.LOCAL_VARIABLE) return emptyList()
+        var arm: PsiElement? = decl.parent
+        while (arm != null && arm.elementType === E.PATTERN) arm = arm.parent
+        if (arm?.elementType !== E.SWITCH_CASE) return emptyList()
+        val name = (decl as? JuxNamedElement)?.name ?: return emptyList()
+        return dev.jux.intellij.psi.JuxLocals.bindersInScope(arm, null)
+            .filter { it !== decl && (it as? JuxNamedElement)?.name == name }
     }
 
     /**
