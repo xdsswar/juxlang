@@ -150,14 +150,58 @@ well, with the rest of Java's refactoring set (see `plugin.xml` and
   - Inspection "Indexed loop can be a for-each" (`for (int i = 0; i <
     xs.len(); i++)` or `for (var i : 0..xs.len())` that only reads `xs[i]`).
 
+### Added in 0.1.0
+
+- **Final-candidate and flow checks without a flow graph.** One read/write
+  census per file (a use is a pure write on the left of `=`, a read and a
+  write for `+=`, `++`, `out x` and `ref x`, a read otherwise; anything not
+  understood counts as both) drives:
+  - "Field may be 'final'": a `private` instance field of a class that has
+    an initializer and is never assigned again, or that every constructor
+    not chaining `this(...)` assigns exactly once as a top-level statement.
+    Its findings on the example corpus are correct advice, so it is not in
+    the zero-findings sweep; its tests pin what it must leave alone.
+  - "Variable is assigned but never read": a plain local whose every use is
+    a plain assignment. No fix, since the assigned values may have effects.
+  - "Local variable may be 'final'" and "Explicit type can be replaced with
+    'var'" (only where the initializer is `new` of the same written type),
+    both off by default as in Java.
+- **Nullability (§T.6).** "Null check on a non-nullable value": `x == null`
+  or `x != null` where `x` has a written type without `?` (a type parameter,
+  `any`, `Option`, a raw pointer or a function pointer excepted), with a fix
+  that writes the answer. "Nullable value used without a check": `x.member`
+  on a `T?` local or parameter when nothing in its function tests, asserts,
+  defaults or reassigns it; the fix writes `!!`.
+- **Extract Interface / Extract Superclass.** The new type is written right
+  after the class in the same file (same package, no imports to copy).
+  Interface: the chosen instance methods' signatures, `implements` added,
+  `@override` on each. Superclass: fields and methods moved (`private`
+  becomes `protected`), a method may stay below as `abstract` above, an
+  existing `extends` moves up. Refused, with the reason, when the name is
+  taken, a moved method uses a member that stays, or the class passes
+  arguments to `super(...)`.
+- **Completion.** Right after `case`, only the enum constants or sealed
+  subtypes no arm names yet, in declaration order (the same labels as the
+  "Create missing 'case' branches" intention; one shared source). Chain
+  completion in smart completion: up to two links (a field, property,
+  component, or no-argument non-void method) from a variable in reach to
+  the wanted type, ranked below direct fits. Postfix `.switch` writes every
+  arm for an enum or sealed value; `.yield` added.
+- **Generate.** `operator<=>` over chosen fields in order (the one ordering
+  member a type needs, §7.14.4), and Properties with `get` / `set`
+  accessors over chosen fields, named in PascalCase.
+- **Method-chain hints.** In a chain of three or more calls written one per
+  line that produces at least two types, each line's type at its end
+  (Settings | Editor | Inlay Hints | Method chains).
+
 ### Known gaps against the Java plugin
 
-The audit also listed what is not built yet, most valuable first: dataflow
-checks (a value assigned and never read, a condition always true on one
-path), "Field may be final", Pull Members Up / Push Members Down and
-Extract Interface / Superclass, chain completion (`.` after a call offering
-what the chain can reach), and postfix templates for the newer syntax
-(`.yield`, `.switch` with generated arms).
+What the audit lists as not built yet, most valuable first: a real
+data-flow engine (a value overwritten before it is read, conditions decided
+along one path, nullability across method calls), Inline Superclass, Type
+Migration, Introduce Functional Parameter,
+code vision (usages and implementations above declarations), and the
+"Structural Search" family.
 
 ### Still open
 
