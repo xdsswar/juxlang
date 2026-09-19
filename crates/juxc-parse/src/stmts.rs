@@ -152,6 +152,22 @@ impl<'a> Parser<'a> {
         // form: the shared object's type must be explicit.
         if self.at_kw(Keyword::Ref) {
             self.advance(); // 'ref'
+            // `ref ref int x`: `ref` is a binding mode, not a type
+            // constructor, so there is nothing for a second one to apply to
+            // (§M.13.4). Report once, drop the extras, and read the rest of
+            // the declaration normally.
+            if self.at_kw(Keyword::Ref) {
+                let span = self.peek_span();
+                while self.eat_kw(Keyword::Ref) {}
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0524_NestedRef,
+                        "`ref` cannot nest: it is a binding mode, not a type, so one `ref` \
+                         already makes the binding shared (§M.13.4)",
+                    )
+                    .with_span(span),
+                );
+            }
             let mut vd = self.parse_typed_local_with(false)?;
             vd.is_ref = true;
             return Some(Stmt::VarDecl(vd));

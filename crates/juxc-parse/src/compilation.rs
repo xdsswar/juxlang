@@ -472,6 +472,22 @@ impl<'a> Parser<'a> {
                 .map(TopLevelDecl::ExternBlock);
         }
 
+        // `ref int f() { … }` -- a `ref` RETURN type. §M.13.2 defers returns
+        // to a later phase, so say that once and read the declaration as if
+        // the `ref` were not there: everything after it is ordinary, and one
+        // clear line beats the cascade the `ref` token caused on its own.
+        if self.at_kw(Keyword::Ref) {
+            let span = self.peek_span();
+            self.advance();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0523_RefReturnType,
+                    "a `ref` return type is not supported yet (§M.13.2) -- return the value, or \
+                     take a `ref` parameter and write through it",
+                )
+                .with_span(span),
+            );
+        }
         // `annotation Name { … }` -- a user-defined annotation type (§A.2).
         if self.at_kw(Keyword::Annotation) {
             return self

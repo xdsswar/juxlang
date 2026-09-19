@@ -2870,6 +2870,9 @@ impl<'a> Checker<'a> {
                 self.check_fn_pointer_signatures(fty);
                 // J4: reject an unresolved field type name.
                 self.validate_sig_type(fty, &[]);
+                if field.is_ref {
+                    self.warn_ref_on_reference_type(fty, field.span);
+                }
             }
             // `weak` field validity (§6.5). A weak field is exempt from
             // definite-assignment (§S.4.5 — pass not yet implemented) and
@@ -3596,6 +3599,48 @@ impl<'a> Checker<'a> {
     /// dynamic-value use is restricted; it can still be implemented and called
     /// through concrete classes. Catching it here keeps the emitted
     /// `Rc<dyn Trait>` from leaking rustc's `E0038` / `E0107`.
+    /// `ref` on a binding whose type is ALREADY a reference -- a class, an
+    /// interface, an array or a collection -- is accepted and adds nothing
+    /// (JUX-MISSING-DEFS §M.13.2, ERRATA E84): those types already share one
+    /// object between every name that holds them. The spec reserves `W0490`
+    /// for exactly this, so say it rather than leave the reader thinking the
+    /// `ref` changed something. Value types -- primitives, `String`, structs,
+    /// records, enums -- are what `ref` is FOR, and never warn.
+    fn warn_ref_on_reference_type(&mut self, tref: &juxc_ast::TypeRef, span: Span) {
+        let bare = tref.name.segments.last().map(|s| s.text.as_str()).unwrap_or_default();
+        let what = if tref.array_shape.is_some() {
+            "an array is already a reference type (§6.5.2)".to_string()
+        } else if self.symbols.is_interface_name(bare) {
+            format!("`{bare}` is an interface, so a value of it is already a handle")
+        } else if bare == "String" {
+            // A `String` is a VALUE type (§M.13.1 names it), even though the
+            // table carries a stub class for its members.
+            return;
+        } else {
+            // Classes and collections (the `rust.std` ones reach the table as
+            // external classes) are reference types; a `struct` shares the
+            // class node but is a value type (ERRATA E20).
+            let fqn = if self.symbols.classes.contains_key(bare) {
+                Some(bare.to_string())
+            } else {
+                self.symbols.find_fqn_by_bare(bare).filter(|f| self.symbols.classes.contains_key(f))
+            };
+            match fqn.and_then(|f| self.symbols.classes.get(&f)) {
+                Some(sig) if !sig.is_struct => {
+                    format!("`{bare}` is already a reference type")
+                }
+                _ => return,
+            }
+        };
+        self.diagnostics.push(
+            Diagnostic::warning(
+                code::Code::W0490_RefOnReferenceType,
+                format!("`ref` adds nothing here: {what}, so every binding of it shares one object (§M.13.2)"),
+            )
+            .with_span(span),
+        );
+    }
+
     fn check_iface_value_type(&mut self, tref: &juxc_ast::TypeRef) {
         // Function-typed and pointer slots are never interface trait objects.
         if tref.fn_shape.is_some() || tref.ptr_depth > 0 {
@@ -5651,6 +5696,15 @@ impl<'a> Checker<'a> {
             // cfg pass); a unit that skipped that pass has nothing to say here.
             Stmt::IfCfg(_) => {}
             Stmt::VarDecl(v) => {
+                // `ref` on a type that is already shared (a class, interface,
+                // array or collection) is accepted and means nothing
+                // (§M.13.2, ERRATA E84): warn instead of letting it read as
+                // if it changed the binding.
+                if v.is_ref {
+                    if let Some(t) = &v.ty {
+                        self.warn_ref_on_reference_type(t, v.span);
+                    }
+                }
                 // A declared interface-typed local lowers to `Rc<dyn Trait>`
                 // — reject the non-dispatchable forms before the backend
                 // emits a broken slot type.

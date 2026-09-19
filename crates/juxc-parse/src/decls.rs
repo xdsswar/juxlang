@@ -3123,6 +3123,21 @@ impl<'a> Parser<'a> {
             else if self.eat_kw(Keyword::Abstract) { mods.push(FnModifier::Abstract); }
             else if self.eat_kw(Keyword::Native)   { mods.push(FnModifier::Native); }
             else if self.eat_kw(Keyword::Unsafe)   { mods.push(FnModifier::Unsafe); }
+            // `ref int f()` as a MEMBER: a `ref` return type, deferred by
+            // §M.13.2. Consume it and say so once, so the method (and the
+            // rest of the class body) still parses.
+            else if self.at_kw(Keyword::Ref) {
+                let span = self.peek_span();
+                self.advance();
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0523_RefReturnType,
+                        "a `ref` return type is not supported yet (§M.13.2) -- return the \
+                         value, or take a `ref` parameter and write through it",
+                    )
+                    .with_span(span),
+                );
+            }
             // `async` here belongs to return-type per §A.2.4, not as a
             // standalone modifier; we don't consume it in the modifier
             // loop.

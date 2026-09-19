@@ -566,6 +566,19 @@ pub enum Code {
     /// types whose sizes are not equal on every target (including a type
     /// with no size fixed that way, such as a class or a `String`).
     E0522_InvalidTransmute,
+    /// E0523 -- A **`ref` return type** (`ref int f()`). JUX-MISSING-DEFS
+    /// §M.13.2 defers `ref` returns to a later phase: a returned cell would
+    /// outlive the body that made it, which Phase 1's lowering cannot check.
+    /// Return the value, or take a `ref` parameter and write through it.
+    E0523_RefReturnType,
+    /// E0524 -- A **nested `ref`** (`ref ref T`, §M.13.4). `ref` is a binding
+    /// mode, not a type constructor, so there is nothing for a second one to
+    /// apply to.
+    E0524_NestedRef,
+    /// E0526 -- A **`ref` generic argument** (`Vec<ref T>`, §M.13.4): a type
+    /// argument names a type, and `ref` is a binding mode. Store the values
+    /// and share the container, which is already a reference type.
+    E0526_RefGenericArgument,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -804,6 +817,10 @@ pub enum Code {
     /// W0470 -- A method that overrides an inherited one without `@Override`
     /// (JUX-LANG-V1 §7.4.1). The annotation is what makes the intent checkable.
     W0470_MissingOverrideAnnotation,
+    /// W0490 -- `ref` on a binding whose type is ALREADY a reference
+    /// (a class, an interface, an array, a collection): §M.13.2 says such a
+    /// `ref` is accepted and means nothing, and reserves this warning for it.
+    W0490_RefOnReferenceType,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -1143,6 +1160,9 @@ impl Code {
             Code::E0520_AlignNotApplicable       => "E0520",
             Code::E0521_ArrayToPointer           => "E0521",
             Code::E0522_InvalidTransmute         => "E0522",
+            Code::E0523_RefReturnType            => "E0523",
+            Code::E0524_NestedRef                => "E0524",
+            Code::E0526_RefGenericArgument       => "E0526",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",
@@ -1193,6 +1213,7 @@ impl Code {
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
             Code::W0470_MissingOverrideAnnotation => "W0470",
+            Code::W0490_RefOnReferenceType       => "W0490",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",
