@@ -893,6 +893,51 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxGeneratorInspection"/>
+    <!-- The `never` return type (Core lib K.4.1): E0485, E0486. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxNeverFunction"
+        displayName="Function returning never"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxNeverFunctionInspection"/>
+    <!-- Layout and ABI rules (Layout-ABI L.1.4, L.6.3, L.7.4; Runtime R.3): E0519-E0522, E0950, E0951. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxAbiRules"
+        displayName="Layout and ABI rules"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxAbiRulesInspection"/>
+    <!-- `// SAFETY:` comment on every unsafe block (Layout-ABI L.5.5): W0820. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxSafetyComment"
+        displayName="Unsafe block without a SAFETY comment"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxSafetyCommentInspection"/>
+    <!-- Time spans are milliseconds or a Duration (Async 18.1.9): E0487. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxTimeSpan"
+        displayName="Time span argument type"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxTimeSpanInspection"/>
+    <!-- Java utility classes Jux does not have (Math, Integer, Objects, String.valueOf): E0301, E0413. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxJavaHabit"
+        displayName="Java library call"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxJavaHabitInspection"/>
     <!-- Operators an interface requires (LANG-V1 sec. 7.14.6): E0936. -->
     <localInspection
         language="Jux"

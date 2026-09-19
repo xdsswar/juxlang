@@ -73,6 +73,8 @@ object JuxImports {
             val pkg = JuxAutoImport.packageOf(c)
             // Reachable without an import: same package, the root package, or imported.
             if (pkg == ownPackage || pkg.isEmpty()) return emptyList()
+            // `jux.std` is prepended to every unit by the compiler: never imported.
+            if (pkg == "jux.std" || pkg.startsWith("jux.std.")) return emptyList()
             if (JuxAutoImport.isImported(file, "$pkg.$name", name)) return emptyList()
         }
         return candidates.filter { JuxHierarchy.typeVisibleFrom(it, ownPackage) }

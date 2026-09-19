@@ -81,6 +81,7 @@ abstract class JuxIntention(private val family: String) : PsiElementBaseIntentio
             is JuxType.Nullable -> isKnown(type.inner)
             is JuxType.Primitive -> type.name != "void"
             is JuxType.TypeVar -> true
+            is JuxType.TupleType -> type.elements.all { isKnown(it) }
         }
 
         /** A local's initializer: the expression after its `=`, or null. */

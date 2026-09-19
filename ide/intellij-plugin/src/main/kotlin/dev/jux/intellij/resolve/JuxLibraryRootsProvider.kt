@@ -39,6 +39,9 @@ class JuxLibraryRootsProvider : AdditionalLibraryRootsProvider() {
             val roots = JuxStubRoots.externalRootFiles()
             if (roots.isNotEmpty()) out.add(JuxStubLibrary(roots))
         }
+        // The compiler's own `jux.std` sources, bundled with the plugin. Fixed
+        // by the build rather than read from the machine, so tests get them too.
+        JuxBundledStd.root()?.let { out.add(JuxStdLibrary(it)) }
         return out
     }
 
@@ -91,6 +94,20 @@ class JuxLibraryRootsProvider : AdditionalLibraryRootsProvider() {
             other is JuxPackageLibrary && other.name == name && other.roots == roots
 
         override fun hashCode(): Int = 31 * name.hashCode() + roots.hashCode()
+    }
+
+    /** The bundled `jux.std` sources ([JuxBundledStd]), read-only. */
+    private class JuxStdLibrary(private val root: VirtualFile) : SyntheticLibrary(), ItemPresentation {
+
+        override fun getSourceRoots(): Collection<VirtualFile> = listOf(root)
+
+        override fun getPresentableText(): String = "Jux: jux.std"
+
+        override fun getIcon(unused: Boolean): Icon = JuxIcons.FILE
+
+        override fun equals(other: Any?): Boolean = other is JuxStdLibrary && other.root == root
+
+        override fun hashCode(): Int = root.hashCode()
     }
 
     private class JuxStubLibrary(private val roots: List<VirtualFile>) :

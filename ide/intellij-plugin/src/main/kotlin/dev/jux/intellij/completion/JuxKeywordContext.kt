@@ -63,7 +63,10 @@ object JuxKeywordContext {
     val EXPRESSION: Set<String> = curated(
         "new", "this", "super", "switch", "move",
         "await", "async", "sizeof", "typeof",
-    ) + JuxKeywords.CONSTANTS
+    ) + JuxKeywords.CONSTANTS +
+        // `alignof(T)` (Layout-ABI §L.1.5) is contextual, not a keyword, so
+        // [curated] would drop it; it joins as a raw name like the constants.
+        setOf("alignof")
 
     /** Inside a code block: statement keywords + locals + expression starters. */
     val STATEMENT: Set<String> = curated(

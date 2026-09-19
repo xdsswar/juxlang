@@ -1,0 +1,8 @@
+<html>
+<body>
+Reports a function declared to return <code>never</code> that can reach the end of its body (E0485) or contains a <code>return</code> (E0486).
+<!-- tooltip end -->
+<p>A <code>never</code> function does not return: every path throws, loops forever, or calls another <code>never</code> function. In return, a call to one ends its path the way a <code>throw</code> does, so the code after it needs no dummy <code>return</code>. A <code>return</code> inside a lambda or an anonymous class belongs to that and is fine.</p>
+<p>Quick-fix: end the body with a <code>throw</code>.</p>
+</body>
+</html>
