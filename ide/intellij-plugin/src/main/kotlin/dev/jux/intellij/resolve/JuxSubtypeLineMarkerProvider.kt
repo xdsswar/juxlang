@@ -46,6 +46,23 @@ class JuxSubtypeLineMarkerProvider : LineMarkerProviderDescriptor() {
         if (index.isEmpty()) return
 
         for (element in elements) {
+            // ↓ on an operator an interface declares (§7.14.6), to the class
+            // operators that fill it.
+            if (element.elementType === JuxTokenTypes.OPERATOR_KW) {
+                val decl = element.parent ?: continue
+                val owner = JuxHierarchy.enclosingType(decl) ?: continue
+                val name = owner.name ?: continue
+                val subs = JuxSubtypes.transitiveSubtypes(name, index)
+                val impls = JuxOperators.implementationsOf(decl, subs).mapNotNull { JuxOperators.anchorOf(it) }
+                val abstractHere = JuxHierarchy.isAbstractMethod(decl)
+                addMarker(
+                    result, element,
+                    if (abstractHere) AllIcons.Gutter.ImplementedMethod else AllIcons.Gutter.OverridenMethod,
+                    if (abstractHere) "Is implemented in" else "Is overridden in",
+                    impls,
+                )
+                continue
+            }
             if (element.elementType !== JuxTokenTypes.IDENTIFIER) continue
             when (val parent = element.parent) {
                 is JuxTypeDeclaration -> {

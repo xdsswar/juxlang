@@ -29,6 +29,10 @@ class JuxLineMarkerProvider : LineMarkerProviderDescriptor() {
     override fun getIcon(): Icon = AllIcons.Gutter.OverridingMethod
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+        // An operator that fills an interface's operator contract (§7.14.6):
+        // the marker sits on the `operator` keyword, since most operators have
+        // no name identifier.
+        if (element.elementType === JuxTokenTypes.OPERATOR_KW) return operatorMarker(element)
         // Markers must sit on leaf elements (platform contract): the method's
         // name identifier.
         if (element.elementType !== JuxTokenTypes.IDENTIFIER) return null
@@ -49,5 +53,19 @@ class JuxLineMarkerProvider : LineMarkerProviderDescriptor() {
             .setTargets(superMethod)
             .setTooltipText("$verb method in '$superOwner'")
             .createLineMarkerInfo(element)
+    }
+
+    /** ↑ on `Money operator+(Money other)` when an interface it implements declares `operator+`. */
+    private fun operatorMarker(keyword: PsiElement): LineMarkerInfo<*>? {
+        val decl = keyword.parent ?: return null
+        val superOp = JuxOperators.findSuperOperator(decl) ?: return null
+        val overrides = JuxHierarchy.hasBody(superOp)
+        val icon = if (overrides) AllIcons.Gutter.OverridingMethod else AllIcons.Gutter.ImplementingMethod
+        val verb = if (overrides) "Overrides" else "Implements"
+        val superOwner = JuxHierarchy.enclosingType(superOp)?.name ?: "supertype"
+        return NavigationGutterIconBuilder.create(icon)
+            .setTargets(superOp)
+            .setTooltipText("$verb operator${JuxOperators.symbolOf(decl)} in '$superOwner'")
+            .createLineMarkerInfo(keyword)
     }
 }

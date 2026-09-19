@@ -150,6 +150,9 @@ object JuxTypeEngine {
             E.POSTFIX_EXPRESSION -> stripNullable(typeOf(firstExpressionChild(expr)))
             E.LITERAL_EXPRESSION -> literalType(expr)
             E.BINARY_EXPRESSION -> binaryType(expr)
+            // `start..end` on a user type calls its `operator..` (§O.2.4) and
+            // has that operator's return type; a primitive range stays unknown.
+            E.RANGE_EXPRESSION -> JuxOperators.resolve(expr)?.let { returnType(it) } ?: JuxType.Unknown
             else -> JuxType.Unknown
         }
     }
@@ -278,6 +281,12 @@ object JuxTypeEngine {
                 it.elementType !in T.COMMENTS
         }?.elementType
         val left = typeOf(operands.getOrNull(0))
+        // A user operator decides the type itself: `v * 2.0` is a `Vec2` and
+        // `v * w` a `double` when Vec2 overloads `*` by operand (§O.2.3).
+        JuxOperators.resolve(expr)?.let { member ->
+            val declared = returnType(member)
+            if (declared !is JuxType.Unknown) return declared
+        }
         return when (op) {
             T.EQ_EQ, T.NOT_EQ, T.LT, T.LE, T.GT, T.GE, T.AND_AND, T.OR_OR, T.STRICT_EQ, T.STRICT_NOT_EQ ->
                 JuxType.Primitive("bool")

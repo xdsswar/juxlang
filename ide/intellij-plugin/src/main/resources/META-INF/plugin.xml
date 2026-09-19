@@ -318,6 +318,10 @@
          the older `definitionsSearch` passes a bare element and threw. -->
     <definitionsScopedSearch
         implementation="dev.jux.intellij.resolve.JuxImplementationSearch"/>
+    <!-- Find Usages of an `operator` declaration: its uses are `a * b`,
+         `a..b`, `v *= k`, which carry no name for the word index to find. -->
+    <referencesSearch
+        implementation="dev.jux.intellij.resolve.JuxOperatorUsagesSearch"/>
     <!-- sec. P.7.8: observed / bound / plain gutter trio on properties. -->
     <codeInsight.lineMarkerProvider
         language="Jux"
@@ -849,6 +853,24 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxMissingReturnInspection"/>
+    <!-- Generators (Missing-defs sec. M.2): E0990, E0994, E0995, E0996, E0997. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxGenerator"
+        displayName="Generator rules (yield)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxGeneratorInspection"/>
+    <!-- Operators an interface requires (LANG-V1 sec. 7.14.6): E0936. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxInterfaceOperator"
+        displayName="Interface operator shape"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxInterfaceOperatorInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxAbstractMethodInClass"

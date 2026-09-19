@@ -40,8 +40,10 @@ class JuxFindUsagesProvider : FindUsagesProvider {
         else -> "declaration"
     }
 
+    /** A name, or `operator*` for an operator (which has only a symbol). */
     override fun getDescriptiveName(element: PsiElement): String =
-        (element as? PsiNamedElement)?.name.orEmpty()
+        JuxOperators.symbolOf(element)?.let { "operator$it" }
+            ?: (element as? PsiNamedElement)?.name.orEmpty()
 
     override fun getNodeText(element: PsiElement, useFullName: Boolean): String =
         getDescriptiveName(element)

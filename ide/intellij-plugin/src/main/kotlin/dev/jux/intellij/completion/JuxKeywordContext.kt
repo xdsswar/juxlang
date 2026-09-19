@@ -3,6 +3,7 @@ package dev.jux.intellij.completion
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.elementType
 import dev.jux.intellij.highlight.JuxKeywords
+import dev.jux.intellij.inspections.JuxGenerators
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 
@@ -88,7 +89,7 @@ object JuxKeywordContext {
                     // only the completion dummy identifier) parses as. Offer
                     // accessors there, statements everywhere else.
                     return if (scope.parent.elementType === E.FIELD_DECLARATION) ACCESSOR
-                    else STATEMENT
+                    else statementsAt(at)
                 // Between accessors of a property block (a caret inside a
                 // setter's CODE_BLOCK hits the arm above first — innermost out).
                 E.PROPERTY_ACCESSOR_LIST -> return ACCESSOR
@@ -104,6 +105,16 @@ object JuxKeywordContext {
         }
         return TOP_LEVEL
     }
+
+    /**
+     * Statement keywords at [at]. `yield` is only offered where it is legal:
+     * in a named function declared to return `Iterator<T>` (`Stream<T>` when
+     * `async`), outside a switch expression's arm (§M.2). Everywhere else it
+     * would be E0990, and Java's switch-arm `yield` is exactly the habit the
+     * popup should not suggest.
+     */
+    private fun statementsAt(at: PsiElement): Set<String> =
+        if (JuxGenerators.yieldAllowedAt(at)) STATEMENT else STATEMENT - "yield"
 
     /** Curate against the generated keyword alphabet — typos can't leak through. */
     private fun curated(vararg words: String): Set<String> =

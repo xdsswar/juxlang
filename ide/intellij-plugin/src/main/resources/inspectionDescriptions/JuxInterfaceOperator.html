@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports an operator an interface cannot declare, and an operator without a body outside an interface (E0936).
+<!-- tooltip end -->
+<p>An interface may require an operator as a contract, <code>T operator+(T other);</code>, and every type that
+implements the interface declares the operator itself. Such an operator has no body, takes one operand, and is
+one of <code>+ - * / % &amp; | ^ &lt;&lt; &gt;&gt;</code>. Equality, ordering, <code>string</code>, indexing and
+unary operators are declared on the implementing types only.</p>
+<p>Quick-fix: remove the body of an interface operator.</p>
+</body>
+</html>

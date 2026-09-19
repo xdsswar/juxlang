@@ -31,6 +31,8 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         JuxSelfAssignmentInspection(),
         JuxEmptyStatementBodyInspection(),
         JuxMissingReturnInspection(),
+        JuxGeneratorInspection(),
+        JuxInterfaceOperatorInspection(),
         JuxAbstractMethodInClassInspection(),
         JuxUnhandledExceptionInspection(),
     )
