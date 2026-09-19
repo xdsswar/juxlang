@@ -1821,6 +1821,20 @@ impl RustEmitter {
                         ) {
                             return true;
                         }
+                        // A record or struct is a VALUE: wrapping a place of
+                        // one (`Rc::new(lamp) as Rc<dyn Item>`) must copy it,
+                        // not move it, or a later read of the local fails
+                        // (rustc E0382). The copy is exactly value semantics.
+                        let is_value_type = self.symbols.records.contains_key(name.as_str())
+                            || self.symbols.records.keys().any(|k| k.rsplit('.').next() == Some(bare))
+                            || self
+                                .symbols
+                                .classes
+                                .get(name.as_str())
+                                .is_some_and(|c| c.is_struct);
+                        if is_value_type {
+                            return true;
+                        }
                         return self.is_wrapper_class(bare);
                     }
                 }
