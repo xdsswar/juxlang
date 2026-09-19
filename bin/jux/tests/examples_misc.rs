@@ -886,3 +886,15 @@ fn record_member_types() {
         &["study", "true", "4", "h", "2", "room"],
     );
 }
+
+/// §5.6: `new T[][] { {…}, {…} }`, the explicit-type form of a
+/// multi-dimensional array literal, in a local, a constructor argument and a
+/// `return`.
+#[test]
+fn nd_array_new_literals() {
+    common::expect_output(
+        "nd_array_new_literals",
+        "nd-array-new-literals",
+        &["2", "3", "2", "2", "6", "1.0", "0.0", "2.0", "6"],
+    );
+}
