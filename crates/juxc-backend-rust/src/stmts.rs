@@ -5569,7 +5569,10 @@ impl RustEmitter {
     /// reach this line are ones the null test has already ruled out.
     fn emit_unwrap_shadow(&mut self, name: &str) {
         let ident = to_rust_ident(name);
-        self.w.line(&format!("let {ident} = {ident}.unwrap();"));
+        // A binding the body assigns again (`best = x;` in a max loop) needs
+        // its shadow mutable too.
+        let binding = if self.mutated_in_fn.contains(name) { "let mut" } else { "let" };
+        self.w.line(&format!("{binding} {ident} = {ident}.unwrap();"));
     }
 }
 

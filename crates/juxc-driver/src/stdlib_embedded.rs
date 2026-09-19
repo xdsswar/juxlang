@@ -33,6 +33,186 @@ public interface Iterable<T> {
      * @return a new iterator starting before the first element.
      */
     Iterator<T> iterator();
+
+    // Combinators (JUX-CORE-LIB-ADDENDUM K.5). The lazy ones (`map`,
+    // `filter`, `take`, `skip`, `zip`, `chain`) return an Iterable that
+    // starts over from this one each time it is walked, and run nothing
+    // until then (K.5.3). The eager ones walk this Iterable once, now.
+
+    /** Each element passed through `f`, lazily. */
+    default <R> Iterable<R> map((T) -> R f) {
+        var source = this;
+        return new LazyIterable<R>(() -> source.iterator().map(f));
+    }
+
+    /** The elements that pass `pred`, lazily. */
+    default Iterable<T> filter((T) -> bool pred) {
+        var source = this;
+        return new LazyIterable<T>(() -> source.iterator().filter(pred));
+    }
+
+    /** The first `n` elements, lazily. */
+    default Iterable<T> take(int n) {
+        var source = this;
+        return new LazyIterable<T>(() -> source.iterator().take(n));
+    }
+
+    /** Every element after the first `n`, lazily. */
+    default Iterable<T> skip(int n) {
+        var source = this;
+        return new LazyIterable<T>(() -> source.iterator().skip(n));
+    }
+
+    /** Pairs of this Iterable's and `other`'s elements, as long as both last. */
+    default <T2> Iterable<(T, T2)> zip(Iterable<T2> other) {
+        var source = this;
+        return new LazyIterable<(T, T2)>(() -> source.iterator().zip(other.iterator()));
+    }
+
+    /** This Iterable's elements, then `other`'s. */
+    default Iterable<T> chain(Iterable<T> other) {
+        var source = this;
+        return new LazyIterable<T>(() -> source.iterator().chain(other.iterator()));
+    }
+
+    /** Folds every element into `initial` with `combine`, first to last. */
+    default <U> U reduce(U initial, (U, T) -> U combine) {
+        return this.iterator().reduce(initial, combine);
+    }
+
+    /** How many elements there are. */
+    default int count() {
+        return this.iterator().count();
+    }
+
+    /** True when some element passes `pred`; stops at the first that does. */
+    default bool any((T) -> bool pred) {
+        return this.iterator().any(pred);
+    }
+
+    /** True when every element passes `pred`; stops at the first that fails. */
+    default bool all((T) -> bool pred) {
+        return this.iterator().all(pred);
+    }
+
+    /** The first element that passes `pred` (any element by default), or null. */
+    default T? firstOrNull((T) -> bool pred = (x) -> true) {
+        return this.iterator().firstOrNull(pred);
+    }
+
+    /** The smallest element by `<=>`, or null when there are none. */
+    default T? minOrNull() where T has operator<=>(T) -> int {
+        return this.iterator().minOrNull();
+    }
+
+    /** The largest element by `<=>`, or null when there are none. */
+    default T? maxOrNull() where T has operator<=>(T) -> int {
+        return this.iterator().maxOrNull();
+    }
+}
+"###),
+    ("collections/LazyIterable.jux", r###"/**
+ * jux.std.collections.LazyIterable<T>
+ *
+ * The Iterable a lazy combinator returns (JUX-CORE-LIB-ADDENDUM K.5.3):
+ * it keeps the recipe for its elements, not the elements, and follows it
+ * afresh every time it is walked. `names.filter(p).map(f)` therefore
+ * allocates no intermediate collection, and walking it twice runs the
+ * steps twice.
+ */
+package jux.std.collections;
+
+public class LazyIterable<T> implements Iterable<T> {
+    private () -> Iterator<T> start;
+
+    /** An Iterable whose every walk begins with a call to `start`. */
+    public LazyIterable(() -> Iterator<T> start) {
+        this.start = start;
+    }
+
+    public Iterator<T> iterator() {
+        return this.start();
+    }
+}
+"###),
+    ("collections/Iterators.jux", r###"/**
+ * jux.std.collections.Iterators
+ *
+ * The lazy steps behind the Iterator and Iterable combinators
+ * (JUX-CORE-LIB-ADDENDUM K.5.3). Each one is a generator (MISSING-DEFS
+ * M.2): it pulls from its source only when its own `next()` is asked, so
+ * a chain of steps does one element's work at a time and an endless
+ * source is fine.
+ */
+package jux.std.collections;
+
+public class Iterators {
+    /** `f` applied to each element of `source`. */
+    public static <T, R> Iterator<R> map(Iterator<T> source, (T) -> R f) {
+        for (var x : source) {
+            yield f(x);
+        }
+    }
+
+    /** The elements of `source` that pass `pred`. */
+    public static <T> Iterator<T> filter(Iterator<T> source, (T) -> bool pred) {
+        for (var x : source) {
+            if (pred(x)) {
+                yield x;
+            }
+        }
+    }
+
+    /**
+     * The first `n` elements of `source`. The element after them is never
+     * pulled, so taking from an endless or costly source stops cleanly.
+     */
+    public static <T> Iterator<T> take(Iterator<T> source, int n) {
+        if (n <= 0) {
+            return;
+        }
+        int taken = 0;
+        for (var x : source) {
+            yield x;
+            taken++;
+            if (taken >= n) {
+                return;
+            }
+        }
+    }
+
+    /** Every element of `source` after the first `n`. */
+    public static <T> Iterator<T> skip(Iterator<T> source, int n) {
+        int passed = 0;
+        for (var x : source) {
+            if (passed < n) {
+                passed++;
+                continue;
+            }
+            yield x;
+        }
+    }
+
+    /** Pairs of elements from `first` and `second`, until either runs out. */
+    public static <T, U> Iterator<(T, U)> zip(Iterator<T> first, Iterator<U> second) {
+        while (true) {
+            var a = first.next();
+            if (a == null) {
+                return;
+            }
+            var b = second.next();
+            if (b == null) {
+                return;
+            }
+            yield (a!!, b!!);
+        }
+    }
+
+    /** Every element of `first`, then every element of `second`. */
+    public static <T> Iterator<T> chain(Iterator<T> first, Iterator<T> second) {
+        yield* first;
+        yield* second;
+    }
 }
 "###),
     ("collections/Iterator.jux", r###"/**
@@ -62,6 +242,131 @@ public interface Iterator<T> {
      * when the sequence is exhausted.
      */
     T? next();
+
+    // Combinators (JUX-CORE-LIB-ADDENDUM K.5, ERRATA E57). A generator
+    // returns an Iterator (K.5.4), so they are here as well as on Iterable.
+    // An Iterator is single-pass: the lazy ones pull from this one as they
+    // are pulled, and the eager ones use it up.
+
+    /** Each element passed through `f`, lazily. */
+    default <R> Iterator<R> map((T) -> R f) {
+        return Iterators.map(this, f);
+    }
+
+    /** The elements that pass `pred`, lazily. */
+    default Iterator<T> filter((T) -> bool pred) {
+        return Iterators.filter(this, pred);
+    }
+
+    /** At most the next `n` elements, lazily. */
+    default Iterator<T> take(int n) {
+        return Iterators.take(this, n);
+    }
+
+    /** The elements after the next `n`, lazily. */
+    default Iterator<T> skip(int n) {
+        return Iterators.skip(this, n);
+    }
+
+    /** Pairs of this Iterator's and `other`'s elements, as long as both last. */
+    default <T2> Iterator<(T, T2)> zip(Iterator<T2> other) {
+        return Iterators.zip(this, other);
+    }
+
+    /** This Iterator's elements, then `other`'s. */
+    default Iterator<T> chain(Iterator<T> other) {
+        return Iterators.chain(this, other);
+    }
+
+    /** Folds every remaining element into `initial` with `combine`. */
+    default <U> U reduce(U initial, (U, T) -> U combine) {
+        var acc = initial;
+        var x = this.next();
+        while (x != null) {
+            acc = combine(acc, x!!);
+            x = this.next();
+        }
+        return acc;
+    }
+
+    /** How many elements remain. */
+    default int count() {
+        int n = 0;
+        var x = this.next();
+        while (x != null) {
+            n++;
+            x = this.next();
+        }
+        return n;
+    }
+
+    /** True when some element passes `pred`; stops at the first that does. */
+    default bool any((T) -> bool pred) {
+        var x = this.next();
+        while (x != null) {
+            if (pred(x!!)) {
+                return true;
+            }
+            x = this.next();
+        }
+        return false;
+    }
+
+    /** True when every element passes `pred`; stops at the first that fails. */
+    default bool all((T) -> bool pred) {
+        var x = this.next();
+        while (x != null) {
+            if (!pred(x!!)) {
+                return false;
+            }
+            x = this.next();
+        }
+        return true;
+    }
+
+    /** The first element that passes `pred` (any element by default), or null. */
+    default T? firstOrNull((T) -> bool pred = (x) -> true) {
+        var x = this.next();
+        while (x != null) {
+            if (pred(x!!)) {
+                return x;
+            }
+            x = this.next();
+        }
+        return null;
+    }
+
+    /** The smallest remaining element by `<=>`, or null when there are none. */
+    default T? minOrNull() where T has operator<=>(T) -> int {
+        var best = this.next();
+        if (best == null) {
+            return null;
+        }
+        var x = this.next();
+        while (x != null) {
+            if (x!! < best!!) {
+                best = x;
+            }
+            x = this.next();
+        }
+        return best;
+    }
+
+    /** The largest remaining element by `<=>`, or null when there are none. */
+    default T? maxOrNull() where T has operator<=>(T) -> int {
+        var best = this.next();
+        if (best == null) {
+            return null;
+        }
+        var x = this.next();
+        while (x != null) {
+            if (x!! > best!!) {
+                best = x;
+            }
+            x = this.next();
+        }
+        return best;
+    }
 }
 "###),
     ("concurrent/MemoryOrder.jux", r###"/**

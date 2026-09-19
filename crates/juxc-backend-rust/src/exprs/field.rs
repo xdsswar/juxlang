@@ -1705,6 +1705,10 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::String) | Some(juxc_tycheck::Ty::Array { .. }) => true,
             // An `any` is a shared handle: re-reading it copies the handle.
             Some(juxc_tycheck::Ty::Any) => true,
+            // So is a function value (`Rc<dyn Fn>`): a lambda that hands its
+            // captured `f` on runs any number of times, and moving `f` out of
+            // it was rustc E0507.
+            Some(juxc_tycheck::Ty::Fn { .. }) => true,
             // A scanned type answers for itself: bindgen records `@RustClone`
             // from the type's real `Clone` impl, so a newly bound crate's
             // collection shares by clone without being named here. The list

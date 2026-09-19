@@ -836,6 +836,7 @@ impl RustEmitter {
         // A method reached through a foreign trait needs that trait in scope in
         // the emitted crate; record it now, splice the `use` in later.
         self.note_foreign_trait_use(&call.callee);
+        self.note_jux_interface_trait_use(&call.callee);
         // Nested calls inside this one are separate statements' worth of
         // borrows again, so release the guard immediately.
         self.wrapping_handle_call = false;

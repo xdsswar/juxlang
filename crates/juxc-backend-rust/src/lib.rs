@@ -6815,6 +6815,60 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         }
     }
 
+    /// Record that this call reaches a `Self: Sized` default method of a Jux
+    /// interface (a generic one such as `Iterator.map`, Core lib K.5) through
+    /// an interface-typed receiver. Such a method lives on the `Rc<dyn Iface>`
+    /// handle's impl, not on the trait object, and Rust looks there only with
+    /// the trait in scope; [`Self::splice_foreign_trait_uses`] brings it in as
+    /// `use path as _;`, which takes no name a program could clash with.
+    pub(crate) fn note_jux_interface_trait_use(&mut self, callee: &juxc_ast::Expr) {
+        let juxc_ast::Expr::Field(f) = callee else { return };
+        let Some(juxc_tycheck::Ty::User { name, .. }) =
+            self.expr_types.get(&crate::exprs::expr_span_of(&f.object)).cloned()
+        else {
+            return;
+        };
+        let Some(owner) = self.interface_declaring_sized_default(&name, &f.field.text, 0) else {
+            return;
+        };
+        let (pkg, _) = owner.rsplit_once('.').unwrap_or(("", owner.as_str()));
+        if pkg == self.current_package_path() {
+            // Declared in this very module: already in scope.
+            return;
+        }
+        self.needed_trait_uses.insert(format!("crate::{}", juxc_lex::to_rust_path(&owner)));
+    }
+
+    /// The FQN of the interface, `fqn` or one it extends, whose default method
+    /// `method` needs a `Sized` receiver, if there is one.
+    fn interface_declaring_sized_default(&self, fqn: &str, method: &str, depth: usize) -> Option<String> {
+        if depth > 16 {
+            return None;
+        }
+        let (full, sig) = self.lookup_interface_by_bare_or_fqn(fqn)?;
+        if sig.is_external {
+            return None;
+        }
+        let full = full.to_string();
+        let bare = full.rsplit('.').next().unwrap_or(full.as_str()).to_string();
+        let decl = self.interface_ast_by_bare(&bare)?;
+        if decl
+            .methods
+            .iter()
+            .any(|m| m.name.text == method && crate::decls::interfaces::default_method_needs_sized_self(m))
+        {
+            return Some(full);
+        }
+        let parents: Vec<String> = decl
+            .extends
+            .iter()
+            .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+            .collect();
+        parents
+            .iter()
+            .find_map(|p| self.interface_declaring_sized_default(p, method, depth + 1))
+    }
+
     fn emit_top_level_decl(&mut self, item: &TopLevelDecl) {
         // Source-map marker (when `source` is set) anchored at the
         // declaration's start. Lets rustc diagnostics on the

@@ -1072,6 +1072,25 @@ and §X.4 name are provided as written (`map`, `mapErr`, `flatMap`,
 **Spec status:** §K.4 should drop the two static constructors and say how
 `unwrap` fails for a non-exception `E`.
 
+## E57. The K.5 combinators are on `Iterator` too
+
+**Conflict.** JUX-CORE-LIB-ADDENDUM §K.5 declares the combinators (`map`,
+`filter`, `reduce`, `take`, `skip`, `zip`, `chain`, `count`, `any`, `all`,
+`firstOrNull`, `minOrNull`, `maxOrNull`) as default methods of `Iterable<T>`
+only. §K.5.4 and MISSING-DEFS §M.2 make a generator return an `Iterator<T>`,
+not an `Iterable<T>`, so the most natural source of a lazy sequence had none
+of them: `numbers().filter(...)` did not exist.
+
+**Resolution.** The same combinators, with the same names and signatures,
+are also default methods of `Iterator<T>`, returning `Iterator<R>` where the
+`Iterable` form returns `Iterable<R>`. An `Iterator` is single-pass: the lazy
+ones pull from their source as they are pulled, and the eager ones use it
+up. The `Iterable` forms are built on them and stay re-iterable: each walk of
+the result starts a fresh `iterator()` of the source (`LazyIterable<T>`). The
+lazy steps are generators in `jux.std.collections.Iterators`.
+
+**Spec status:** §K.5 should list the combinators on `Iterator<T>` as well.
+
 ---
 
 ## How to use this file

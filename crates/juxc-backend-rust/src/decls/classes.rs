@@ -1865,6 +1865,15 @@ impl RustEmitter {
                 if ancestor_has_inherent {
                     continue;
                 }
+                // A default constrained by `where T has operator...` (§O.5)
+                // forwards only where the bound can hold for this class's
+                // type argument; elsewhere the trait default stays reachable
+                // and the call site's own check (E0941) reports the misuse.
+                let Some(forwarder_bounds) =
+                    self.inherited_default_where_bounds(&iface_name.text, name, &type_subst, class_decl)
+                else {
+                    continue;
+                };
                 // Mark provided so a later interface's same-named default
                 // doesn't emit a duplicate forwarder.
                 provided.insert(name.clone());
@@ -1884,6 +1893,12 @@ impl RustEmitter {
                 }
                 self.w.push_str("fn ");
                 self.w.push_str(&to_rust_ident(name));
+                // A generic default (`<R> Iterable<R> map(...)`, Core lib
+                // K.5) forwards with its own type parameters.
+                if !sig.generic_params.is_empty() {
+                    let none = std::collections::HashSet::new();
+                    self.emit_generic_params_with_clone_bound_plus_display(&sig.generic_params, &none, &none);
+                }
                 self.w.push_str("(&self");
                 for param in &sig.params {
                     self.w.push_str(", ");
@@ -1900,6 +1915,10 @@ impl RustEmitter {
                         let rsub = substitute_type_ref(t, &type_subst);
                         self.emit_return_type_as_rust(&rsub);
                     }
+                }
+                if !forwarder_bounds.is_empty() {
+                    self.w.push_str(" where ");
+                    self.w.push_str(&forwarder_bounds.join(", "));
                 }
                 self.w.push_str(" { ");
                 // Body: `<Self as <FQ-trait-path><args>>::<name>(self, …)`.
@@ -1927,6 +1946,72 @@ impl RustEmitter {
                 self.w.push_str(" }\n");
             }
         }
+    }
+
+    /// The `where` bounds an inherited default method's forwarder carries,
+    /// or `None` when its `where T has operator ...` constraints (§O.5)
+    /// cannot hold for the type argument this class gives `T`.
+    ///
+    /// A constraint on a type parameter of the class itself moves onto the
+    /// forwarder, renamed (`Box<E> implements Iterator<E>` forwards
+    /// `maxOrNull` with `where E: PartialOrd`). A concrete argument must
+    /// already have the operator: a primitive or `String` for the comparison
+    /// and equality family, or a user type that declares it. A forwarder
+    /// whose bound could not hold would not compile, so it is left out.
+    fn inherited_default_where_bounds(
+        &self,
+        iface_bare: &str,
+        method: &str,
+        subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> Option<Vec<String>> {
+        let Some(iface) = self.interface_ast_by_bare(iface_bare) else {
+            return Some(Vec::new());
+        };
+        let Some(decl) = iface.methods.iter().find(|m| m.name.text == method) else {
+            return Some(Vec::new());
+        };
+        let mut out = Vec::new();
+        for w in &decl.wheres {
+            let Some(arg) = subst.get(&w.param.text) else {
+                return None;
+            };
+            let bare = arg.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            if arg.generic_args.is_empty()
+                && class_decl.generic_params.iter().any(|p| p.name.text == bare)
+            {
+                let mut renamed = w.clone();
+                renamed.param.text = bare.to_string();
+                out.extend(crate::decls::functions::where_bounds(&[renamed]));
+                continue;
+            }
+            let holds = match juxc_tycheck::ty_from_ref_in_env(arg, &self.symbols) {
+                juxc_tycheck::Ty::Primitive(p) => {
+                    // Floats have no total order or hash in Rust.
+                    let float = matches!(p, juxc_tycheck::Primitive::Float | juxc_tycheck::Primitive::Double);
+                    !(float && matches!(w.kind, juxc_ast::OperatorKind::Hash))
+                }
+                juxc_tycheck::Ty::String => matches!(
+                    w.kind,
+                    juxc_ast::OperatorKind::Eq
+                        | juxc_ast::OperatorKind::Cmp
+                        | juxc_ast::OperatorKind::Hash
+                        | juxc_ast::OperatorKind::ToString
+                        | juxc_ast::OperatorKind::Plus
+                ),
+                juxc_tycheck::Ty::User { name, .. } => {
+                    let symbols = &self.symbols;
+                    symbols.classes.get(&name).is_some_and(|c| c.operators.contains_key(&w.kind))
+                        || symbols.records.get(&name).is_some_and(|r| r.operators.contains_key(&w.kind))
+                        || symbols.enums.get(&name).is_some_and(|e| e.operators.contains_key(&w.kind))
+                }
+                _ => false,
+            };
+            if !holds {
+                return None;
+            }
+        }
+        Some(out)
     }
 
     /// Emit a `fn __jux_super_<m>(&self, …)` inherent shim for every method
