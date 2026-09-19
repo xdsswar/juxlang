@@ -1995,9 +1995,7 @@ impl RustEmitter {
         };
         let mut out = Vec::new();
         for w in &decl.wheres {
-            let Some(arg) = subst.get(&w.param.text) else {
-                return None;
-            };
+            let arg = subst.get(&w.param.text)?;
             let bare = arg.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
             if arg.generic_args.is_empty()
                 && class_decl.generic_params.iter().any(|p| p.name.text == bare)
