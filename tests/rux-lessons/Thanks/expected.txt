@@ -1,0 +1,28 @@
+
+     ##  ##  ##   ##   ##
+     ##  ##  ##    ## ##
+     ##  ##  ##     ###
+     ##  ##  ##     ###
+ ##  ##  ##  ##    ## ##
+  ####    ####    ##   ##
+
+============================================
+            Thank you, everyone
+============================================
+
+Jux exists because of:
+
+  - the ideas, and the patience to explain them twice
+  - the long discussions, and the short sharp ones
+  - the code, the tests, and the unglamorous fixes
+  - the critique that was right, and the kind that stung
+  - the bug reports written carefully by strangers
+  - the documentation nobody is thanked for
+  - the funding that bought time to think
+  - turning up, reading along, and asking good questions
+  - the posts, the shares, the subscribes, the word of mouth
+
+A language is a community that happens to have a compiler.
+Thank you for being part of this one.
+
+                            -- the Jux contributors

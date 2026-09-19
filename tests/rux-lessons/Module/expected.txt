@@ -1,0 +1,7 @@
+rectangle 3x4 area      12
+square 5 area           25
+rectangle 3x4 perimeter 14
+20C in Fahrenheit       68.0
+twice the 3x4 area      24
+geometry covers         areas and perimeters
+temperature covers      degrees, both ways

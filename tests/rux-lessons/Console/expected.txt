@@ -1,0 +1,9 @@
+one two three
+
+42
+Jux 0.4.0
+hello from Jux
+1 2 3 4 5
+|   right|
+|left    |
+| center |
