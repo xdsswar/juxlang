@@ -231,7 +231,37 @@ impl SymbolTable {
     /// stub class), made **deterministic** with `min()` (a `HashMap`-order
     /// `find()` would otherwise pick arbitrarily on a bare-name collision).
     pub fn find_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
-        let matches_last = |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name);
+        self.find_fqn_by_bare_where(name, prefer_pkg, &|_| true)
+    }
+
+    /// [`Self::find_fqn_by_bare_in`] for a name a PROGRAM wrote, without an
+    /// import: a type of a bound crate (`rust.chrono.NaiveDate`) is not
+    /// visible that way (Bindgen G.6.5). Only `rust.std` is, as it always
+    /// has been; a crate's types need their `import`, which binds through the
+    /// unit's own name map before this is asked. The crate's own stub still
+    /// sees its types (`prefer_pkg` is then the crate's package).
+    ///
+    /// With `rust.chrono` bound, a bare `Duration` silently became chrono's
+    /// `TimeDelta`, and a bare `NaiveDate` resolved with no import at all
+    /// (B26).
+    pub fn find_visible_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
+        let visible = |fqn: &str| match crate_package_of(fqn) {
+            Some(krate) => {
+                krate == "rust.std" || prefer_pkg == krate || prefer_pkg.starts_with(&format!("{krate}."))
+            }
+            None => true,
+        };
+        self.find_fqn_by_bare_where(name, prefer_pkg, &visible)
+    }
+
+    fn find_fqn_by_bare_where(
+        &self,
+        name: &str,
+        prefer_pkg: &str,
+        visible: &dyn Fn(&str) -> bool,
+    ) -> Option<String> {
+        let matches_last =
+            |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name) && visible(fqn);
         // (A) Same-package match wins. A package can't declare two types of one
         //     name (E0400), so at most one of these fires — category order only
         //     disambiguates the (impossible-within-a-package) tie.
@@ -2482,6 +2512,14 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
         }
     }
     None
+}
+
+/// The bound crate's package a foreign name belongs to: `rust.chrono` for
+/// `rust.chrono.NaiveDate`. `None` for anything outside `rust.`.
+fn crate_package_of(fqn: &str) -> Option<&str> {
+    let rest = fqn.strip_prefix("rust.")?;
+    let krate = rest.split('.').next()?;
+    Some(&fqn[..5 + krate.len()])
 }
 
 /// The declared name of a top-level item, used to key `SymbolTable::decl_unit`.

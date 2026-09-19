@@ -805,7 +805,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         // Implicit auto-import: walk every known FQN looking for one whose last
         // segment matches `bare`, preferring this unit's package so a bare name
         // binds to a same-package type over another package's same-named one.
-        if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join(".")) {
+        if let Some(fqn) = symbols.find_visible_fqn_by_bare_in(bare, &env.current_package.join(".")) {
             if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
                 return expanded;
             }

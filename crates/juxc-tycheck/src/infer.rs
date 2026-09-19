@@ -400,7 +400,7 @@ pub fn owner_type_fqn(name: &str, env: &TypeEnv, symbols: &SymbolTable) -> Optio
         .cloned()
         .filter(|f| symbols.is_type_name(f))
         .or_else(|| symbols.is_type_name(name).then(|| name.to_string()))
-        .or_else(|| symbols.find_fqn_by_bare_in(name, &env.current_package.join(".")))
+        .or_else(|| symbols.find_visible_fqn_by_bare_in(name, &env.current_package.join(".")))
 }
 
 /// `expr` with a fully-qualified class receiver re-shaped into a path (see
@@ -2193,7 +2193,7 @@ pub(crate) fn resolve_class_name(
             // its declared type but not its constructor, so a nested class
             // could not be built from inside the class that owns it.
             nested
-        } else if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
+        } else if let Some(fqn) = symbols.find_visible_fqn_by_bare_in(bare, &env.current_package.join("."))
         {
             // Implicit auto-import: bare name matches the last segment of a
             // known FQN. Mirrors Java's `java.lang.*` rule applied across the
