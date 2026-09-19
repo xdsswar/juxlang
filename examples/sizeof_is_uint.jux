@@ -1,0 +1,21 @@
+// `sizeof(T)` is a `uint` (LANG-V1 5.9.1), the same type Rust gives it,
+// and it converts into an `int` slot like any other `uint`.
+uint bytesFor(uint count, uint each) {
+    return count * each;
+}
+
+int twice(int a) {
+    return a * 2;
+}
+
+void main() {
+    uint word = sizeof(i32);
+    print(word);
+    ulong count = 3uL;
+    ulong total = count * sizeof(ulong);
+    print(total);
+    print(bytesFor(4u, sizeof(short)));
+    int s = sizeof(i32);
+    print(s);
+    print(twice(sizeof(long)));
+}

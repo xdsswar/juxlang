@@ -588,7 +588,10 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
         Expr::Unary(u) => infer_unary(u, env, symbols),
         Expr::Binary(b) => infer_binary(b, env, symbols),
-        Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),
+        // A size in bytes is a `uint` (LANG-V1 5.9.1), which is also what the
+        // emitted `std::mem::size_of` gives (`usize`). Typing it `int` let
+        // `int s = sizeof(i32);` pass here and fail in rustc.
+        Expr::SizeOf(_) => Ty::Primitive(Primitive::Uint),
         Expr::InterpString(_) => Ty::String,
         Expr::Switch(s) => {
             // Numeric arms meet in one type (§S.2.6), as the arms of `? :`
@@ -3435,9 +3438,9 @@ mod tests {
         }
     }
 
-    /// `sizeof(int)` → `Primitive::Int`.
+    /// `sizeof(int)` → `Primitive::Uint` (LANG-V1 5.9.1).
     #[test]
-    fn sizeof_is_int() {
+    fn sizeof_is_uint() {
         let (table, unit) = build_table(
             r#"
             public void main() {
@@ -3449,7 +3452,7 @@ mod tests {
         let env = TypeEnv::new();
         assert_eq!(
             infer_expr(init, &env, &table),
-            Ty::Primitive(Primitive::Int)
+            Ty::Primitive(Primitive::Uint)
         );
     }
 
