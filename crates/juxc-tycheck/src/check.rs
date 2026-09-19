@@ -1277,6 +1277,9 @@ impl<'a> Checker<'a> {
                 let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
                 self.env.declare(&param.name.text, ty);
                 self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+                if param.is_shared_ref {
+                    self.env.declare_ref_binding(&param.name.text);
+                }
                 self.note_fixed_array_decl(&param.name.text, &param.ty, true);
                 if crate::infer::type_ref_is_void_pointer(&param.ty) {
                     self.env.declare_void_base(&param.name.text);
@@ -2370,6 +2373,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if param.is_shared_ref {
+                self.env.declare_ref_binding(&param.name.text);
+            }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
@@ -3254,6 +3260,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if param.is_shared_ref {
+                self.env.declare_ref_binding(&param.name.text);
+            }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
@@ -3334,6 +3343,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if param.is_shared_ref {
+                self.env.declare_ref_binding(&param.name.text);
+            }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
@@ -4002,6 +4014,9 @@ impl<'a> Checker<'a> {
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
+            if param.is_shared_ref {
+                self.env.declare_ref_binding(&param.name.text);
+            }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
                 self.env.declare_void_base(&param.name.text);
@@ -5701,6 +5716,7 @@ impl<'a> Checker<'a> {
                 // (§M.13.2, ERRATA E84): warn instead of letting it read as
                 // if it changed the binding.
                 if v.is_ref {
+                    self.env.declare_ref_binding(&v.name.text);
                     if let Some(t) = &v.ty {
                         self.warn_ref_on_reference_type(t, v.span);
                     }
@@ -10607,8 +10623,16 @@ impl<'a> Checker<'a> {
             let Some(ty) = self.env.lookup(&name).cloned() else {
                 continue;
             };
-            let Some(why) = self.worker_capture_blocker(&ty, 0) else {
-                continue;
+            // A `ref` binding is a task-local shared cell (§M.13.2): its
+            // TYPE is the plain `T`, so only the binding mode says it
+            // cannot cross a thread.
+            let why = if self.env.is_ref_binding(&name) {
+                "a `ref` binding is a shared cell, which is task-local: copy the value into a local first, or share an `AtomicInt`".to_string()
+            } else {
+                match self.worker_capture_blocker(&ty, 0) {
+                    Some(why) => why,
+                    None => continue,
+                }
             };
             self.diagnostics.push(
                 Diagnostic::error(
