@@ -2794,7 +2794,16 @@ impl crate::RustEmitter {
             // parameter of `Vec<T>::push` is bound by the receiver instead,
             // and there the handle IS the element.
             let callee_own_param = self.callee_declares_type_param(callee, type_name);
-            return (names_a_foreign_type || callee_own_param).then_some(".borrow().clone()");
+            // bindgen spells an owned `HashMap` / `HashSet` slot with the
+            // Bindgen G.3.1 names `Map` / `Set`, which the stub never declares
+            // as types of their own, and an owned `Vec` is a collection by its
+            // own name. Either slot wants the owned sequence:
+            // `String.from_utf8(bytes)` takes a `Vec<u8>` and was handed the
+            // handle (B27).
+            let names_a_sequence =
+                matches!(type_name, "Map" | "Set") || self.collection_name_is_handle(type_name);
+            return (names_a_foreign_type || callee_own_param || names_a_sequence)
+                .then_some(".borrow().clone()");
         }
         let aliases_receiver = matches!(callee, juxc_ast::Expr::Field(f)
             if Self::receiver_place_key(&f.object).is_some()

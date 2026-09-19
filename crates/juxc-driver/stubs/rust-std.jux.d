@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 23
+// juxc rust.std stub cache-version 24
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -34,6 +34,7 @@ public enum AncillaryError {
 @RustClone
 public class Arc<T, A> implements ToOwned, ToString {
     public Arc(T data);
+    @RustDefault public Arc();
     public static T new_cyclic<F>((Weak<T>) -> T data_fn);
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
@@ -42,8 +43,8 @@ public class Arc<T, A> implements ToOwned, ToString {
     public static T try_new(T data) throws AllocError;
     public static MaybeUninit<T> try_new_uninit() throws AllocError;
     public static MaybeUninit<T> try_new_zeroed() throws AllocError;
-    public static U map<U>(Self this, (T) -> U f);
-    public static TryType try_map<R>(Self this, (T) -> R f);
+    public static U map<U>(Arc this, (T) -> U f);
+    public static TryType try_map<R>(Arc this, (T) -> R f);
     public static T new_in(T data, A alloc);
     public static MaybeUninit<T> new_uninit_in(A alloc);
     public static MaybeUninit<T> new_zeroed_in(A alloc);
@@ -53,38 +54,38 @@ public class Arc<T, A> implements ToOwned, ToString {
     public static T try_new_in(T data, A alloc) throws AllocError;
     public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
     public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
-    public static T try_unwrap(Self this) throws Self;
-    public static T? into_inner(Self this);
+    public static T try_unwrap(Arc this) throws Arc;
+    public static T? into_inner(Arc this);
     public static MaybeUninit<T>[] new_uninit_slice(uint len);
     public static MaybeUninit<T>[] new_zeroed_slice(uint len);
     public static MaybeUninit<T>[] new_uninit_slice_in(uint len, A alloc);
     public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
-    public T[] into_array() throws Self;
+    public T[] into_array() throws Arc;
     public unsafe T assume_init();
     public static T clone_from_ref(&T value);
     public static T try_clone_from_ref(&T value) throws AllocError;
     public static T clone_from_ref_in(&T value, A alloc);
     public static T try_clone_from_ref_in(&T value, A alloc) throws AllocError;
-    public static unsafe Self from_raw(T* ptr);
-    public static T* into_raw(Self this);
+    public static unsafe Arc from_raw(T* ptr);
+    public static T* into_raw(Arc this);
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
-    @RustRefOut public static A allocator(&Self this);
-    public static (T*, A) into_raw_with_allocator(Self this);
-    public static T* as_ptr(&Self this);
-    public static unsafe Self from_raw_in(T* ptr, A alloc);
-    public static Weak<T, A> downgrade(&Self this);
-    public static uint weak_count(&Self this);
-    public static uint strong_count(&Self this);
+    @RustRefOut public static A allocator(&Arc this);
+    public static (T*, A) into_raw_with_allocator(Arc this);
+    public static T* as_ptr(&Arc this);
+    public static unsafe Arc from_raw_in(T* ptr, A alloc);
+    public static Weak<T, A> downgrade(&Arc this);
+    public static uint weak_count(&Arc this);
+    public static uint strong_count(&Arc this);
     public static unsafe void increment_strong_count_in(T* ptr, A alloc);
     public static unsafe void decrement_strong_count_in(T* ptr, A alloc);
-    public static bool ptr_eq(&Self this, &Self other);
-    @RustRefOut public static T make_mut(&mut Self this);
-    public static T unwrap_or_clone(Self this);
-    @RustRefOut public static T? get_mut(&mut Self this);
-    @RustRefOut public static unsafe T get_mut_unchecked(&mut Self this);
-    public static bool is_unique(&Self this);
-    public T downcast<T>() throws Self;
+    public static bool ptr_eq(&Arc this, &Arc other);
+    @RustRefOut public static T make_mut(&mut Arc this);
+    public static T unwrap_or_clone(Arc this);
+    @RustRefOut public static T? get_mut(&mut Arc this);
+    @RustRefOut public static unsafe T get_mut_unchecked(&mut Arc this);
+    public static bool is_unique(&Arc this);
+    public T downcast<T>() throws Arc;
     public unsafe T downcast_unchecked<T>();
 }
 
@@ -101,13 +102,13 @@ public class ArgsOs {
 /** A trait to borrow the file descriptor from an underlying object. */
 @rust("std::os::fd::AsFd")
 public interface AsFd {
-    public BorrowedFd as_fd();
+    @RustBorrowsSelf public BorrowedFd as_fd();
 }
 
 /** A trait to borrow the handle from an underlying object. */
 @rust("std::os::windows::io::AsHandle")
 public interface AsHandle {
-    public BorrowedHandle as_handle();
+    @RustBorrowsSelf public BorrowedHandle as_handle();
 }
 
 /** A trait to extract the raw file descriptor from an underlying object. */
@@ -131,7 +132,7 @@ public interface AsRawSocket {
 /** A trait to borrow the socket from an underlying object. */
 @rust("std::os::windows::io::AsSocket")
 public interface AsSocket {
-    public BorrowedSocket as_socket();
+    @RustBorrowsSelf public BorrowedSocket as_socket();
 }
 
 /** Extension methods for ASCII-subset only operations. */
@@ -157,38 +158,38 @@ public class BTreeMap<K, V, A> implements ToOwned {
     @RustRefOut public V? get<Q>(&Q key);
     public (K, V)? get_key_value<Q>(&Q k);
     public (K, V)? first_key_value();
-    @MutSelf public OccupiedEntry<K, V, A>? first_entry();
+    @MutSelf @RustBorrowsSelf public OccupiedEntry<K, V, A>? first_entry();
     @MutSelf public (K, V)? pop_first();
     public (K, V)? last_key_value();
-    @MutSelf public OccupiedEntry<K, V, A>? last_entry();
+    @MutSelf @RustBorrowsSelf public OccupiedEntry<K, V, A>? last_entry();
     @MutSelf public (K, V)? pop_last();
     public bool contains_key<Q>(&Q key);
     @MutSelf @RustRefOut public V? get_mut<Q>(&Q key);
     @MutSelf public V? insert(K key, V value);
-    @MutSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
+    @MutSelf @RustBorrowsSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
     @MutSelf public V? remove<Q>(&Q key);
     @MutSelf public (K, V)? remove_entry<Q>(&Q key);
     @MutSelf public void retain<F>((K, V) -> bool f);
-    @MutSelf public void append(&mut Self other);
-    @MutSelf public void merge(Self other, (K, V, V) -> V conflict);
-    public Range<K, V> range<T, R>(R range);
-    @MutSelf public RangeMut<K, V> range_mut<T, R>(R range);
-    @MutSelf public Entry<K, V, A> entry(K key);
-    @MutSelf public Self split_off<Q>(&Q key);
-    @MutSelf public ExtractIf<K, V, R, F, A> extract_if<F, R>(R range, (K, V) -> bool pred);
+    @MutSelf public void append(&mut BTreeMap other);
+    @MutSelf public void merge(BTreeMap other, (K, V, V) -> V conflict);
+    @RustBorrowsSelf public Range<K, V> range<T, R>(R range);
+    @MutSelf @RustBorrowsSelf public RangeMut<K, V> range_mut<T, R>(R range);
+    @MutSelf @RustBorrowsSelf public Entry<K, V, A> entry(K key);
+    @MutSelf public BTreeMap split_off<Q>(&Q key);
+    @MutSelf @RustBorrowsSelf public ExtractIf<K, V, R, F, A> extract_if<F, R>(R range, (K, V) -> bool pred);
     public IntoKeys<K, V, A> into_keys();
     public IntoValues<K, V, A> into_values();
-    public Iter<K, V> iter();
-    @MutSelf public IterMut<K, V> iter_mut();
-    public Keys<K, V> keys();
-    public Values<K, V> values();
-    @MutSelf public ValuesMut<K, V> values_mut();
+    @RustBorrowsSelf public Iter<K, V> iter();
+    @MutSelf @RustBorrowsSelf public IterMut<K, V> iter_mut();
+    @RustBorrowsSelf public Keys<K, V> keys();
+    @RustBorrowsSelf public Values<K, V> values();
+    @MutSelf @RustBorrowsSelf public ValuesMut<K, V> values_mut();
     public uint len();
     public bool is_empty();
-    public Cursor<K, V> lower_bound<Q>(Bound<Q> bound);
-    @MutSelf public CursorMut<K, V, A> lower_bound_mut<Q>(Bound<Q> bound);
-    public Cursor<K, V> upper_bound<Q>(Bound<Q> bound);
-    @MutSelf public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf public Cursor<K, V> lower_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf public CursorMut<K, V, A> lower_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf public Cursor<K, V> upper_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
 }
 
 /** An ordered set based on a B-Tree. */
@@ -198,11 +199,11 @@ public class BTreeMap<K, V, A> implements ToOwned {
 public class BTreeSet<T, A> implements ToOwned {
     public BTreeSet();
     public static Set<T> new_in(A alloc);
-    public Range<T> range<K, R>(R range);
-    public Difference<T, A> difference(&Set<T> other);
-    public SymmetricDifference<T> symmetric_difference(&Set<T> other);
-    public Intersection<T, A> intersection(&Set<T> other);
-    public Union<T> union(&Set<T> other);
+    @RustBorrowsSelf public Range<T> range<K, R>(R range);
+    @RustBorrowsSelf public Difference<T, A> difference(&Set<T> other);
+    @RustBorrowsSelf public SymmetricDifference<T> symmetric_difference(&Set<T> other);
+    @RustBorrowsSelf public Intersection<T, A> intersection(&Set<T> other);
+    @RustBorrowsSelf public Union<T> union(&Set<T> other);
     @MutSelf public void clear();
     public bool contains<Q>(&Q value);
     @RustRefOut public T? get<Q>(&Q value);
@@ -217,20 +218,20 @@ public class BTreeSet<T, A> implements ToOwned {
     @MutSelf public T? replace(T value);
     @MutSelf @RustRefOut public T get_or_insert(T value);
     @MutSelf @RustRefOut public T get_or_insert_with<Q, F>(&Q value, (Q) -> T f);
-    @MutSelf public Entry<T, A> entry(T value);
+    @MutSelf @RustBorrowsSelf public Entry<T, A> entry(T value);
     @MutSelf public bool remove<Q>(&Q value);
     @MutSelf public T? take<Q>(&Q value);
     @MutSelf public void retain<F>((T) -> bool f);
-    @MutSelf public void append(&mut Self other);
-    @MutSelf public Self split_off<Q>(&Q value);
-    @MutSelf public ExtractIf<T, R, F, A> extract_if<F, R>(R range, (T) -> bool pred);
-    public Iter<T> iter();
+    @MutSelf public void append(&mut BTreeSet other);
+    @MutSelf public BTreeSet split_off<Q>(&Q value);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, R, F, A> extract_if<F, R>(R range, (T) -> bool pred);
+    @RustBorrowsSelf public Iter<T> iter();
     public uint len();
     public bool is_empty();
-    public Cursor<T> lower_bound<Q>(Bound<Q> bound);
-    @MutSelf public CursorMut<T, A> lower_bound_mut<Q>(Bound<Q> bound);
-    public Cursor<T> upper_bound<Q>(Bound<Q> bound);
-    @MutSelf public CursorMut<T, A> upper_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf public Cursor<T> lower_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf public CursorMut<T, A> lower_bound_mut<Q>(Bound<Q> bound);
+    @RustBorrowsSelf public Cursor<T> upper_bound<Q>(Bound<Q> bound);
+    @MutSelf @RustBorrowsSelf public CursorMut<T, A> upper_bound_mut<Q>(Bound<Q> bound);
 }
 
 /** A captured OS thread stack backtrace. */
@@ -256,6 +257,7 @@ public enum BacktraceStatus {
 
 /** The configuration for whether and how the default panic hook will capture */
 @rust("std::panic::BacktraceStyle")
+@RustClone
 public enum BacktraceStyle {
     Short, Full, Off
 }
@@ -282,16 +284,16 @@ public class BinaryHeap<T, A> implements ToOwned {
     public static BinaryHeap<T> with_capacity(uint capacity);
     public static BinaryHeap<T, A> new_in(A alloc);
     public static BinaryHeap<T, A> with_capacity_in(uint capacity, A alloc);
-    public static unsafe BinaryHeap<T, A> from_raw_vec(List<T> vec);
-    @MutSelf public PeekMut<T, A>? peek_mut();
+    public static unsafe BinaryHeap<T, A> from_raw_vec(Vec<T> vec);
+    @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
     @MutSelf public T? pop();
     @MutSelf public T? pop_if((T) -> bool predicate);
     @MutSelf public void push(T item);
-    public List<T> into_sorted_vec();
-    @MutSelf public void append(&mut Self other);
-    @MutSelf public DrainSorted<T, A> drain_sorted();
+    public Vec<T> into_sorted_vec();
+    @MutSelf public void append(&mut BinaryHeap other);
+    @MutSelf @RustBorrowsSelf public DrainSorted<T, A> drain_sorted();
     @MutSelf public void retain<F>((T) -> bool f);
-    public Iter<T> iter();
+    @RustBorrowsSelf public Iter<T> iter();
     public IntoIterSorted<T, A> into_iter_sorted();
     @RustRefOut public T? peek();
     public uint capacity();
@@ -303,11 +305,11 @@ public class BinaryHeap<T, A> implements ToOwned {
     @MutSelf public void shrink_to(uint min_capacity);
     @RustRefOut public T[] as_slice();
     @MutSelf @RustRefOut public unsafe T[] as_mut_slice();
-    public List<T> into_vec();
+    public Vec<T> into_vec();
     @RustRefOut public A allocator();
     public uint len();
     public bool is_empty();
-    @MutSelf public Drain<T, A> drain();
+    @MutSelf @RustBorrowsSelf public Drain<T, A> drain();
     @MutSelf public void clear();
 }
 
@@ -315,7 +317,7 @@ public class BinaryHeap<T, A> implements ToOwned {
 @rust("std::os::fd::BorrowedFd")
 @RustClone
 public class BorrowedFd implements AsFd, AsRawFd, IsTerminal {
-    public static unsafe Self borrow_raw(RawFd fd);
+    public static unsafe BorrowedFd borrow_raw(RawFd fd);
     public OwnedFd try_clone_to_owned() throws Error;
 }
 
@@ -323,7 +325,7 @@ public class BorrowedFd implements AsFd, AsRawFd, IsTerminal {
 @rust("std::os::windows::io::BorrowedHandle")
 @RustClone
 public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal {
-    public static unsafe Self borrow_raw(RawHandle handle);
+    public static unsafe BorrowedHandle borrow_raw(RawHandle handle);
     public OwnedHandle try_clone_to_owned() throws Error;
 }
 
@@ -331,7 +333,7 @@ public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal {
 @rust("std::os::windows::io::BorrowedSocket")
 @RustClone
 public class BorrowedSocket implements AsRawSocket, AsSocket {
-    public static unsafe Self borrow_raw(RawSocket socket);
+    public static unsafe BorrowedSocket borrow_raw(RawSocket socket);
     public OwnedSocket try_clone_to_owned() throws Error;
 }
 
@@ -340,26 +342,27 @@ public class BorrowedSocket implements AsRawSocket, AsSocket {
 @RustClone
 public class Box<T, A> implements ToOwned, ToString {
     public Box(T x);
-    public T downcast<T>() throws Self;
+    @RustDefault public Box();
+    public T downcast<T>() throws Box;
     public unsafe T downcast_unchecked<T>();
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
     public static Pin<T> pin(T x);
-    public static Self try_new(T x) throws AllocError;
+    public static Box try_new(T x) throws AllocError;
     public static MaybeUninit<T> try_new_uninit() throws AllocError;
     public static MaybeUninit<T> try_new_zeroed() throws AllocError;
-    public static U map<U>(Self this, (T) -> U f);
-    public static TryType try_map<R>(Self this, (T) -> R f);
-    public static Self new_in(T x, A alloc);
-    public static Self try_new_in(T x, A alloc) throws AllocError;
+    public static U map<U>(Box this, (T) -> U f);
+    public static TryType try_map<R>(Box this, (T) -> R f);
+    public static Box new_in(T x, A alloc);
+    public static Box try_new_in(T x, A alloc) throws AllocError;
     public static MaybeUninit<T> new_uninit_in(A alloc);
     public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
     public static MaybeUninit<T> new_zeroed_in(A alloc);
     public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
-    public static Pin<Self> pin_in(T x, A alloc);
-    public static T[] into_boxed_slice(Self boxed);
-    public static T into_inner(Self boxed);
-    public static (T, MaybeUninit<T>) take(Self boxed);
+    public static Pin<Box> pin_in(T x, A alloc);
+    public static T[] into_boxed_slice(Box boxed);
+    public static T into_inner(Box boxed);
+    public static (T, MaybeUninit<T>) take(Box boxed);
     public static T clone_from_ref(&T src);
     public static T try_clone_from_ref(&T src) throws AllocError;
     public static T clone_from_ref_in(&T src, A alloc);
@@ -372,22 +375,22 @@ public class Box<T, A> implements ToOwned, ToString {
     public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
     public static MaybeUninit<T>[] try_new_uninit_slice_in(uint len, A alloc) throws AllocError;
     public static MaybeUninit<T>[] try_new_zeroed_slice_in(uint len, A alloc) throws AllocError;
-    public T[] into_array() throws Self;
+    public T[] into_array() throws Box;
     public unsafe T assume_init();
-    public static T write(Self boxed, T value);
-    public static unsafe Self from_raw(T* raw);
-    public static unsafe Self from_non_null(NonNull<T> ptr);
-    public static T* into_raw(Self b);
-    public static NonNull<T> into_non_null(Self b);
-    public static unsafe Self from_raw_in(T* raw, A alloc);
-    public static unsafe Self from_non_null_in(NonNull<T> raw, A alloc);
-    public static (T*, A) into_raw_with_allocator(Self b);
-    public static (NonNull<T>, A) into_non_null_with_allocator(Self b);
-    public static T* as_mut_ptr(&mut Self b);
-    public static T* as_ptr(&Self b);
-    @RustRefOut public static A allocator(&Self b);
-    @RustRefOut public static T leak(Self b);
-    public static Pin<Self> into_pin(Self boxed);
+    public static T write(Box boxed, T value);
+    public static unsafe Box from_raw(T* raw);
+    public static unsafe Box from_non_null(NonNull<T> ptr);
+    public static T* into_raw(Box b);
+    public static NonNull<T> into_non_null(Box b);
+    public static unsafe Box from_raw_in(T* raw, A alloc);
+    public static unsafe Box from_non_null_in(NonNull<T> raw, A alloc);
+    public static (T*, A) into_raw_with_allocator(Box b);
+    public static (NonNull<T>, A) into_non_null_with_allocator(Box b);
+    public static T* as_mut_ptr(&mut Box b);
+    public static T* as_ptr(&Box b);
+    @RustRefOut public static A allocator(&Box b);
+    @RustRefOut public static T leak(Box b);
+    public static Pin<Box> into_pin(Box boxed);
 }
 
 /** A `BufRead` is a type of `Read`er which has an internal buffer, allowing it */
@@ -396,7 +399,7 @@ public interface BufRead {
     @MutSelf @RustRefOut public ubyte[] fill_buf() throws Error;
     @MutSelf public void consume(uint amount);
     @MutSelf public bool has_data_left() throws Error;
-    @MutSelf public uint read_until(ubyte byte, &mut List<ubyte> buf) throws Error;
+    @MutSelf public uint read_until(ubyte byte, &mut Vec<ubyte> buf) throws Error;
     @MutSelf public uint skip_until(ubyte byte) throws Error;
     @MutSelf public uint read_line(&mut String buf) throws Error;
     public Split<Self> split(ubyte byte);
@@ -423,7 +426,7 @@ public class BufWriter<W> implements Seek, Write {
     public BufWriter(W inner);
     public static BufWriter<W> with_capacity(uint capacity, W inner);
     public W into_inner() throws IntoInnerError<BufWriter<W>>;
-    public (W, Result<List<ubyte>, WriterPanicked>) into_parts();
+    public (W, Result<Vec<ubyte>, WriterPanicked>) into_parts();
     @RustRefOut public W get_ref();
     @MutSelf @RustRefOut public W get_mut();
     @RustRefOut public ubyte[] buffer();
@@ -439,7 +442,7 @@ public class Builder {
     public Builder no_hooks();
     public JoinHandle<T> spawn<F, T>(() -> T f) throws Error;
     public unsafe JoinHandle<T> spawn_unchecked<F, T>(() -> T f) throws Error;
-    public ScopedJoinHandle<T> spawn_scoped<F, T>(&Scope scope, () -> T f) throws Error;
+    @RustBorrowsSelf public ScopedJoinHandle<T> spawn_scoped<F, T>(&Scope scope, () -> T f) throws Error;
 }
 
 /** A wrapper for `Vec<u8>` representing a human-readable string that's conventionally, but not */
@@ -447,8 +450,13 @@ public class Builder {
 @RustClone
 @RustCollection
 public class ByteString implements ToOwned, ToString {
+    @RustDefault public ByteString();
     @MutSelf public void push(T value);
     @MutSelf @RustRefOut public T push_mut(T value);
+    @MutSelf public void dedup();
+    @MutSelf public void resize(uint new_len, T value);
+    @MutSelf public void extend_from_slice(T[] other);
+    @MutSelf public void extend_from_within<R>(R src);
     public (T*, uint, uint, A) into_raw_parts_with_alloc();
     public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
@@ -482,9 +490,9 @@ public class ByteString implements ToOwned, ToString {
     @MutSelf @RustRefOut public T push_within_capacity(T value) throws T;
     @MutSelf public T? pop();
     @MutSelf public T? pop_if((T) -> bool predicate);
-    @MutSelf public PeekMut<T, A>? peek_mut();
+    @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
     @MutSelf public void append(&mut Self other);
-    @MutSelf public Drain<T, A> drain<R>(R range);
+    @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
     @MutSelf public void clear();
     public uint len();
     public bool is_empty();
@@ -493,18 +501,14 @@ public class ByteString implements ToOwned, ToString {
     @RustRefOut public T[] leak();
     @MutSelf @RustRefOut public MaybeUninit<T>[] spare_capacity_mut();
     @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
-    public List<T[]> into_chunks();
-    public List<U> recycle<U>();
-    @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    public Vec<T[]> into_chunks();
+    public Vec<U> recycle<U>();
+    public Vec<T> into_flattened();
+    @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     public (T*, uint, uint) into_raw_parts();
     public (NonNull<T>, uint, uint) into_parts();
     @RustRefOut public T[] const_make_global();
-    @MutSelf public void resize(uint new_len, T value);
-    @MutSelf public void extend_from_slice(T[] other);
-    @MutSelf public void extend_from_within<R>(R src);
-    public List<T> into_flattened();
-    @MutSelf public void dedup();
 }
 
 /** An iterator over `u8` values of a reader. */
@@ -517,24 +521,25 @@ public class Bytes<R> {
 @RustClone
 public class CString implements ToOwned {
     public CString(T t) throws NulError;
-    public static unsafe Self from_vec_unchecked(List<ubyte> v);
+    @RustDefault public CString();
+    public static unsafe CString from_vec_unchecked(Vec<ubyte> v);
     public static unsafe CString from_raw(c_char* ptr);
     public c_char* into_raw();
     public String into_string() throws IntoStringError;
-    public List<ubyte> into_bytes();
-    public List<ubyte> into_bytes_with_nul();
+    public Vec<ubyte> into_bytes();
+    public Vec<ubyte> into_bytes_with_nul();
     @RustRefOut public ubyte[] as_bytes();
     @RustRefOut public ubyte[] as_bytes_with_nul();
     @RustRefOut public CStr as_c_str();
     public CStr into_boxed_c_str();
-    public static unsafe Self from_vec_with_nul_unchecked(List<ubyte> v);
-    public static Self from_vec_with_nul(List<ubyte> v) throws FromVecWithNulError;
+    public static unsafe CString from_vec_with_nul_unchecked(Vec<ubyte> v);
+    public static CString from_vec_with_nul(Vec<ubyte> v) throws FromVecWithNulError;
     public c_char* as_ptr();
     public uint count_bytes();
     public bool is_empty();
     @RustRefOut public ubyte[] to_bytes();
     @RustRefOut public ubyte[] to_bytes_with_nul();
-    public Bytes bytes();
+    @RustBorrowsSelf public Bytes bytes();
     @RustRefOut public String to_str() throws Utf8Error;
     public Display display();
 }
@@ -592,8 +597,8 @@ public class Command implements CommandExt {
     @MutSelf public Output output() throws Error;
     @MutSelf public ExitStatus status() throws Error;
     @RustRefOut public OsStr get_program();
-    public CommandArgs get_args();
-    public CommandEnvs get_envs();
+    @RustBorrowsSelf public CommandArgs get_args();
+    @RustBorrowsSelf public CommandEnvs get_envs();
     public CommandResolvedEnvs get_resolved_envs();
     @RustRefOut public Path? get_current_dir();
     public bool get_env_clear();
@@ -622,8 +627,11 @@ public class CommandResolvedEnvs {
 
 /** A single component of a path. */
 @rust("std::path::Component")
+@RustClone
 public enum Component {
-    Prefix(PrefixComponent), RootDir, CurDir, ParentDir, Normal(OsStr)
+    Prefix(PrefixComponent), RootDir, CurDir, ParentDir, Normal(OsStr);
+
+    @RustRefOut public OsStr as_os_str();
 }
 
 /** An iterator over the [`Component`]s of a [`Path`]. */
@@ -643,19 +651,25 @@ public interface Concat<Item> {
 @rust("std::sync::Condvar")
 public class Condvar {
     public Condvar();
-    public LockResult<MutexGuard<T>> wait<T>(MutexGuard<T> guard);
-    public LockResult<MutexGuard<T>> wait_while<T, F>(MutexGuard<T> guard, (T) -> bool condition);
-    public LockResult<(MutexGuard<T>, bool)> wait_timeout_ms<T>(MutexGuard<T> guard, u32 ms);
-    public LockResult<(MutexGuard<T>, WaitTimeoutResult)> wait_timeout<T>(MutexGuard<T> guard, Duration dur);
-    public LockResult<(MutexGuard<T>, WaitTimeoutResult)> wait_timeout_while<T, F>(MutexGuard<T> guard, Duration dur, (T) -> bool condition);
+    @RustBorrowsSelf public MutexGuard<T> wait<T>(MutexGuard<T> guard) throws PoisonError<T>;
+    @RustBorrowsSelf public MutexGuard<T> wait_while<T, F>(MutexGuard<T> guard, (T) -> bool condition) throws PoisonError<T>;
+    public (MutexGuard<T>, bool) wait_timeout_ms<T>(MutexGuard<T> guard, u32 ms) throws PoisonError<T>;
+    public (MutexGuard<T>, WaitTimeoutResult) wait_timeout<T>(MutexGuard<T> guard, Duration dur) throws PoisonError<T>;
+    public (MutexGuard<T>, WaitTimeoutResult) wait_timeout_while<T, F>(MutexGuard<T> guard, Duration dur, (T) -> bool condition) throws PoisonError<T>;
     public void notify_one();
     public void notify_all();
 }
 
 /** A clone-on-write smart pointer. */
 @rust("std::borrow::Cow")
+@RustClone
 public enum Cow<B> implements ToOwned, ToString {
-    Borrowed(B), Owned(Owned)
+    Borrowed(B), Owned(Owned);
+
+    public static bool is_borrowed(&Cow c);
+    public static bool is_owned(&Cow c);
+    @MutSelf @RustRefOut public Owned to_mut();
+    public Owned into_owned();
 }
 
 /** A cursor over a `LinkedList`. */
@@ -682,7 +696,7 @@ public class CursorMut<T, A> {
     @MutSelf @RustRefOut public T? current();
     @MutSelf @RustRefOut public T? peek_next();
     @MutSelf @RustRefOut public T? peek_prev();
-    public Cursor<T, A> as_cursor();
+    @RustBorrowsSelf public Cursor<T, A> as_cursor();
     @RustRefOut public LinkedList<T, A> as_list();
     @MutSelf public void splice_after(LinkedList<T> list);
     @MutSelf public void splice_before(LinkedList<T> list);
@@ -709,7 +723,7 @@ public class CursorMutKey<K, V, A> {
     @MutSelf public (K, V)? prev();
     @MutSelf public (K, V)? peek_next();
     @MutSelf public (K, V)? peek_prev();
-    public Cursor<K, V> as_cursor();
+    @RustBorrowsSelf public Cursor<K, V> as_cursor();
     @MutSelf public unsafe void insert_after_unchecked(K key, V value);
     @MutSelf public unsafe void insert_before_unchecked(K key, V value);
     @MutSelf public void insert_after(K key, V value) throws UnorderedKeyError;
@@ -740,7 +754,7 @@ public class Difference<T, A> implements ToOwned {
 /** An object providing access to a directory on the filesystem. */
 @rust("std::fs::Dir")
 public class Dir implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle {
-    public static Self open<P>(P path) throws Error;
+    public static Dir open<P>(P path) throws Error;
     public File open_file<P>(P path) throws Error;
     public Metadata metadata() throws Error;
 }
@@ -749,7 +763,7 @@ public class Dir implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle 
 @rust("std::fs::DirBuilder")
 public class DirBuilder implements DirBuilderExt {
     public DirBuilder();
-    @MutSelf @RustRefOut public Self recursive(bool recursive);
+    @MutSelf @RustRefOut public DirBuilder recursive(bool recursive);
     public void create<P>(P path) throws Error;
 }
 
@@ -810,7 +824,17 @@ public class EncodeWide {
 /** A view into a single entry in a map, which may either be vacant or occupied. */
 @rust("std::collections::btree_map::Entry")
 public enum Entry<K, V, A> {
-    Vacant(VacantEntry<K, V, A>), Occupied(OccupiedEntry<K, V, A>)
+    Vacant(VacantEntry<K, V, A>), Occupied(OccupiedEntry<K, V, A>);
+
+    @RustRefOut public V or_insert(V default);
+    @RustRefOut public V or_insert_with<F>(() -> V default);
+    @RustRefOut public V or_try_insert_with<F, E>(() -> Result<V, E> default) throws E;
+    @RustRefOut public V or_insert_with_key<F>((K) -> V default);
+    @RustRefOut public V or_try_insert_with_key<F, E>((K) -> Result<V, E> default) throws E;
+    @RustRefOut public K key();
+    public Entry and_modify<F>((V) -> void f);
+    @RustBorrowsSelf public OccupiedEntry<K, V, A> insert_entry(V value);
+    @RustRefOut public V or_default();
 }
 
 /** The error type for I/O operations of the [`Read`], [`Write`], [`Seek`], and */
@@ -824,7 +848,7 @@ public class Error {
     @RustRefOut public Error? get_ref();
     @MutSelf @RustRefOut public Error? get_mut();
     public Error? into_inner();
-    public E downcast<E>() throws Self;
+    public E downcast<E>() throws Error;
     public ErrorKind kind();
 }
 
@@ -832,6 +856,7 @@ public class Error {
 @rust("std::process::ExitCode")
 @RustClone
 public class ExitCode implements ExitCodeExt, Termination {
+    @RustDefault public ExitCode();
     public never exit_process();
 }
 
@@ -845,6 +870,7 @@ public interface ExitCodeExt {
 @rust("std::process::ExitStatus")
 @RustClone
 public class ExitStatus implements ExitStatusExt {
+    @RustDefault public ExitStatus();
     public void exit_ok() throws ExitStatusError;
     public bool success();
     public i32? code();
@@ -919,8 +945,8 @@ public interface FileExt {
 @RustClone
 public class FileTimes implements FileTimesExt {
     public FileTimes();
-    public Self set_accessed(SystemTime t);
-    public Self set_modified(SystemTime t);
+    public FileTimes set_accessed(SystemTime t);
+    public FileTimes set_modified(SystemTime t);
 }
 
 /** OS-specific extensions to [`fs::FileTimes`]. */
@@ -981,7 +1007,7 @@ public class FromUtf16Error implements ToString {
 public class FromUtf8Error implements ToOwned, ToString {
     @RustRefOut public ubyte[] as_bytes();
     public String into_utf8_lossy();
-    public List<ubyte> into_bytes();
+    public Vec<ubyte> into_bytes();
     public Utf8Error utf8_error();
 }
 
@@ -990,13 +1016,14 @@ public class FromUtf8Error implements ToOwned, ToString {
 @RustClone
 public class FromVecWithNulError implements ToOwned, ToString {
     @RustRefOut public ubyte[] as_bytes();
-    public List<ubyte> into_bytes();
+    public Vec<ubyte> into_bytes();
 }
 
 /** The global memory allocator. */
 @rust("std::alloc::Global")
 @RustClone
 public class Global implements ToOwned {
+    @RustDefault public Global();
 }
 
 /** An owned container for `HANDLE` object, closing them on Drop. */
@@ -1007,13 +1034,13 @@ public class Handle {
 /** FFI type for handles in return values or out parameters, where `INVALID_HANDLE_VALUE` is used */
 @rust("std::os::windows::io::HandleOrInvalid")
 public class HandleOrInvalid {
-    public static unsafe Self from_raw_handle(RawHandle handle);
+    public static unsafe HandleOrInvalid from_raw_handle(RawHandle handle);
 }
 
 /** FFI type for handles in return values or out parameters, where `NULL` is used */
 @rust("std::os::windows::io::HandleOrNull")
 public class HandleOrNull {
-    public static unsafe Self from_raw_handle(RawHandle handle);
+    public static unsafe HandleOrNull from_raw_handle(RawHandle handle);
 }
 
 /** A [hash map] implemented with quadratic probing and SIMD lookup. */
@@ -1024,24 +1051,24 @@ public class HandleOrNull {
 public class HashMap<K, V, S, A> {
     public HashMap();
     public static Map<K, V> with_capacity(uint capacity);
-    public static Self new_in(A alloc);
-    public static Self with_capacity_in(uint capacity, A alloc);
+    public static HashMap new_in(A alloc);
+    public static HashMap with_capacity_in(uint capacity, A alloc);
     public static Map<K, V> with_hasher(S hash_builder);
     public static Map<K, V> with_capacity_and_hasher(uint capacity, S hasher);
-    public static Self with_hasher_in(S hash_builder, A alloc);
-    public static Self with_capacity_and_hasher_in(uint capacity, S hash_builder, A alloc);
+    public static HashMap with_hasher_in(S hash_builder, A alloc);
+    public static HashMap with_capacity_and_hasher_in(uint capacity, S hash_builder, A alloc);
     public uint capacity();
-    public Keys<K, V> keys();
+    @RustBorrowsSelf public Keys<K, V> keys();
     public IntoKeys<K, V, A> into_keys();
-    public Values<K, V> values();
-    @MutSelf public ValuesMut<K, V> values_mut();
+    @RustBorrowsSelf public Values<K, V> values();
+    @MutSelf @RustBorrowsSelf public ValuesMut<K, V> values_mut();
     public IntoValues<K, V, A> into_values();
-    public Iter<K, V> iter();
-    @MutSelf public IterMut<K, V> iter_mut();
+    @RustBorrowsSelf public Iter<K, V> iter();
+    @MutSelf @RustBorrowsSelf public IterMut<K, V> iter_mut();
     public uint len();
     public bool is_empty();
-    @MutSelf public Drain<K, V, A> drain();
-    @MutSelf public ExtractIf<K, V, F, A> extract_if<F>((K, V) -> bool pred);
+    @MutSelf @RustBorrowsSelf public Drain<K, V, A> drain();
+    @MutSelf @RustBorrowsSelf public ExtractIf<K, V, F, A> extract_if<F>((K, V) -> bool pred);
     @MutSelf public void retain<F>((K, V) -> bool f);
     @MutSelf public void clear();
     @RustRefOut public S hasher();
@@ -1049,7 +1076,7 @@ public class HashMap<K, V, S, A> {
     @MutSelf public void try_reserve(uint additional) throws TryReserveError;
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
-    @MutSelf public Entry<K, V, A> entry(K key);
+    @MutSelf @RustBorrowsSelf public Entry<K, V, A> entry(K key);
     @RustRefOut public V? get<Q>(&Q k);
     public (K, V)? get_key_value<Q>(&Q k);
     @MutSelf public V?[] get_disjoint_mut<Q>(Q[] ks);
@@ -1057,7 +1084,7 @@ public class HashMap<K, V, S, A> {
     public bool contains_key<Q>(&Q k);
     @MutSelf @RustRefOut public V? get_mut<Q>(&Q k);
     @MutSelf public V? insert(K k, V v);
-    @MutSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
+    @MutSelf @RustBorrowsSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
     @MutSelf public V? remove<Q>(&Q k);
     @MutSelf public (K, V)? remove_entry<Q>(&Q k);
 }
@@ -1076,11 +1103,11 @@ public class HashSet<T, S, A> {
     public static Set<T> with_hasher_in(S hasher, A alloc);
     public static Set<T> with_capacity_and_hasher_in(uint capacity, S hasher, A alloc);
     public uint capacity();
-    public Iter<T> iter();
+    @RustBorrowsSelf public Iter<T> iter();
     public uint len();
     public bool is_empty();
-    @MutSelf public Drain<T, A> drain();
-    @MutSelf public ExtractIf<T, F, A> extract_if<F>((T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public Drain<T, A> drain();
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F>((T) -> bool pred);
     @MutSelf public void retain<F>((T) -> bool f);
     @MutSelf public void clear();
     @RustRefOut public S hasher();
@@ -1088,15 +1115,15 @@ public class HashSet<T, S, A> {
     @MutSelf public void try_reserve(uint additional) throws TryReserveError;
     @MutSelf public void shrink_to_fit();
     @MutSelf public void shrink_to(uint min_capacity);
-    public Difference<T, S, A> difference(&Set<T> other);
-    public SymmetricDifference<T, S, A> symmetric_difference(&Set<T> other);
-    public Intersection<T, S, A> intersection(&Set<T> other);
-    public Union<T, S, A> union(&Set<T> other);
+    @RustBorrowsSelf public Difference<T, S, A> difference(&Set<T> other);
+    @RustBorrowsSelf public SymmetricDifference<T, S, A> symmetric_difference(&Set<T> other);
+    @RustBorrowsSelf public Intersection<T, S, A> intersection(&Set<T> other);
+    @RustBorrowsSelf public Union<T, S, A> union(&Set<T> other);
     public bool contains<Q>(&Q value);
     @RustRefOut public T? get<Q>(&Q value);
     @MutSelf @RustRefOut public T get_or_insert(T value);
     @MutSelf @RustRefOut public T get_or_insert_with<Q, F>(&Q value, (Q) -> T f);
-    @MutSelf public Entry<T, S, A> entry(T value);
+    @MutSelf @RustBorrowsSelf public Entry<T, S, A> entry(T value);
     public bool is_disjoint(&Set<T> other);
     public bool is_subset(&Set<T> other);
     public bool is_superset(&Set<T> other);
@@ -1156,6 +1183,7 @@ public class IntoInnerError<W> {
 @rust("std::collections::IntoIter")
 @RustClone
 public class IntoIter<T, A> implements ToOwned {
+    @RustDefault public IntoIter();
     @RustRefOut public A allocator();
 }
 
@@ -1168,6 +1196,7 @@ public class IntoIterSorted<T, A> implements ToOwned {
 /** An owning iterator over the keys of a `BTreeMap`. */
 @rust("std::collections::btree_map::IntoKeys")
 public class IntoKeys<K, V, A> {
+    @RustDefault public IntoKeys();
 }
 
 /** A trait to express the ability to consume an object and acquire ownership of */
@@ -1199,6 +1228,7 @@ public class IntoStringError implements ToOwned, ToString {
 /** An owning iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::IntoValues")
 public class IntoValues<K, V, A> {
+    @RustDefault public IntoValues();
 }
 
 /** This is the error type used by [`HandleOrInvalid`] when attempting to */
@@ -1217,11 +1247,13 @@ public interface IsTerminal {
 @rust("std::collections::Iter")
 @RustClone
 public class Iter<T> implements ToOwned {
+    @RustDefault public Iter();
 }
 
 /** A mutable iterator over the elements of a `LinkedList`. */
 @rust("std::collections::IterMut")
 public class IterMut<T> {
+    @RustDefault public IterMut();
 }
 
 /** Helper trait for [`[T]::join`](slice::join) */
@@ -1254,13 +1286,15 @@ public class JoinPathsError {
 @rust("std::collections::btree_map::Keys")
 @RustClone
 public class Keys<K, V> implements ToOwned {
+    @RustDefault public Keys();
 }
 
 /** A value which is initialized on the first access. */
 @rust("std::sync::LazyLock")
 public class LazyLock<T, F> {
     public LazyLock(F f);
-    public static T into_inner(Self this) throws F;
+    @RustDefault public LazyLock();
+    public static T into_inner(LazyLock this) throws F;
     @RustRefOut public static T force_mut(&mut LazyLock<T, F> this);
     @RustRefOut public static T force(&LazyLock<T, F> this);
     @RustRefOut public static T? get_mut(&mut LazyLock<T, F> this);
@@ -1288,14 +1322,14 @@ public class Lines<B> {
 @RustCollection
 public class LinkedList<T, A> implements ToOwned {
     public LinkedList();
-    @MutSelf public void append(&mut Self other);
-    public static Self new_in(A alloc);
-    public Iter<T> iter();
-    @MutSelf public IterMut<T> iter_mut();
-    public Cursor<T, A> cursor_front();
-    @MutSelf public CursorMut<T, A> cursor_front_mut();
-    public Cursor<T, A> cursor_back();
-    @MutSelf public CursorMut<T, A> cursor_back_mut();
+    @MutSelf public void append(&mut LinkedList other);
+    public static LinkedList new_in(A alloc);
+    @RustBorrowsSelf public Iter<T> iter();
+    @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
+    @RustBorrowsSelf public Cursor<T, A> cursor_front();
+    @MutSelf @RustBorrowsSelf public CursorMut<T, A> cursor_front_mut();
+    @RustBorrowsSelf public Cursor<T, A> cursor_back();
+    @MutSelf @RustBorrowsSelf public CursorMut<T, A> cursor_back_mut();
     public bool is_empty();
     public uint len();
     @MutSelf public void clear();
@@ -1313,7 +1347,7 @@ public class LinkedList<T, A> implements ToOwned {
     @MutSelf public LinkedList<T, A> split_off(uint at);
     @MutSelf public T remove(uint at);
     @MutSelf public void retain<F>((T) -> bool f);
-    @MutSelf public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
 }
 
 /** A thread local storage (TLS) key which owns its contents. */
@@ -1344,22 +1378,22 @@ public const String MAIN_SEPARATOR_STR;
 /** An RAII mutex guard returned by `MutexGuard::map`, which can point to a */
 @rust("std::sync::MappedMutexGuard")
 public class MappedMutexGuard<T> {
-    public static MappedMutexGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedMutexGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static MappedMutexGuard<U> map<U, F>(MappedMutexGuard orig, (T) -> U f);
+    public static MappedMutexGuard<U> filter_map<U, F>(MappedMutexGuard orig, (T) -> U? f) throws MappedMutexGuard;
 }
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::MappedRwLockReadGuard")
 public class MappedRwLockReadGuard<T> {
-    public static MappedRwLockReadGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedRwLockReadGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static MappedRwLockReadGuard<U> map<U, F>(MappedRwLockReadGuard orig, (T) -> U f);
+    public static MappedRwLockReadGuard<U> filter_map<U, F>(MappedRwLockReadGuard orig, (T) -> U? f) throws MappedRwLockReadGuard;
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::MappedRwLockWriteGuard")
 public class MappedRwLockWriteGuard<T> {
-    public static MappedRwLockWriteGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedRwLockWriteGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static MappedRwLockWriteGuard<U> map<U, F>(MappedRwLockWriteGuard orig, (T) -> U f);
+    public static MappedRwLockWriteGuard<U> filter_map<U, F>(MappedRwLockWriteGuard orig, (T) -> U? f) throws MappedRwLockWriteGuard;
 }
 
 /** This struct is used to iterate through the control messages. */
@@ -1413,23 +1447,24 @@ public interface MetadataExt {
 @rust("std::sync::Mutex")
 public class Mutex<T> {
     public Mutex(T t);
+    @RustDefault public Mutex();
     public T get_cloned() throws PoisonError<void>;
     public void set(T value) throws PoisonError<T>;
-    public LockResult<T> replace(T value);
-    public LockResult<MutexGuard<T>> lock();
-    public TryLockResult<MutexGuard<T>> try_lock();
+    public T replace(T value) throws PoisonError<T>;
+    @RustBorrowsSelf public MutexGuard<T> lock() throws PoisonError<T>;
+    @RustBorrowsSelf public MutexGuard<T> try_lock() throws TryLockError<Guard>;
     public bool is_poisoned();
     public void clear_poison();
-    public LockResult<T> into_inner();
-    @MutSelf @RustRefOut public LockResult<T> get_mut();
+    public T into_inner() throws PoisonError<T>;
+    @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
     public T* data_ptr();
 }
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
 @rust("std::sync::MutexGuard")
 public class MutexGuard<T> {
-    public static MappedMutexGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedMutexGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static MappedMutexGuard<U> map<U, F>(MutexGuard orig, (T) -> U f);
+    public static MappedMutexGuard<U> filter_map<U, F>(MutexGuard orig, (T) -> U? f) throws MutexGuard;
 }
 
 /** An error returned from [`Path::normalize_lexically`] if a `..` parent reference */
@@ -1442,7 +1477,7 @@ public class NormalizeError {
 @RustClone
 public class NulError implements ToOwned, ToString {
     public uint nul_position();
-    public List<ubyte> into_vec();
+    public Vec<ubyte> into_vec();
 }
 
 /** This is the error type used by [`HandleOrNull`] when attempting to convert */
@@ -1529,12 +1564,12 @@ public class OnceState {
 @RustClone
 public class OpenOptions implements OpenOptionsExt, OpenOptionsExt2 {
     public OpenOptions();
-    @MutSelf @RustRefOut public Self read(bool read);
-    @MutSelf @RustRefOut public Self write(bool write);
-    @MutSelf @RustRefOut public Self append(bool append);
-    @MutSelf @RustRefOut public Self truncate(bool truncate);
-    @MutSelf @RustRefOut public Self create(bool create);
-    @MutSelf @RustRefOut public Self create_new(bool create_new);
+    @MutSelf @RustRefOut public OpenOptions read(bool read);
+    @MutSelf @RustRefOut public OpenOptions write(bool write);
+    @MutSelf @RustRefOut public OpenOptions append(bool append);
+    @MutSelf @RustRefOut public OpenOptions truncate(bool truncate);
+    @MutSelf @RustRefOut public OpenOptions create(bool create);
+    @MutSelf @RustRefOut public OpenOptions create_new(bool create_new);
     public File open<P>(P path) throws Error;
 }
 
@@ -1556,9 +1591,10 @@ public interface OpenOptionsExt2 {
 @RustClone
 public class OsStr implements OsStrExt {
     public OsStr(&S s);
-    @RustRefOut public static unsafe Self from_encoded_bytes_unchecked(ubyte[] bytes);
+    @RustDefault public OsStr();
+    @RustRefOut public static unsafe OsStr from_encoded_bytes_unchecked(ubyte[] bytes);
     @RustRefOut public String? to_str();
-    public Cow<String> to_string_lossy();
+    @RustBorrowsSelf public Cow<String> to_string_lossy();
     public OsString to_os_string();
     public bool is_empty();
     public uint len();
@@ -1566,14 +1602,14 @@ public class OsStr implements OsStrExt {
     public (OsStr, OsStr) split_at(uint mid);
     public (OsStr, OsStr)? split_at_checked(uint mid);
     @RustRefOut public ubyte[] as_encoded_bytes();
-    @RustRefOut public Self slice_encoded_bytes<R>(R range);
+    @RustRefOut public OsStr slice_encoded_bytes<R>(R range);
     @MutSelf public void make_ascii_lowercase();
     @MutSelf public void make_ascii_uppercase();
     public OsString to_ascii_lowercase();
     public OsString to_ascii_uppercase();
     public bool is_ascii();
     public bool eq_ignore_ascii_case<S>(S other);
-    public Display display();
+    @RustBorrowsSelf public Display display();
     @RustRefOut public OsStr as_os_str();
 }
 
@@ -1590,9 +1626,9 @@ public interface OsStrExt {
 @RustCollection
 public class OsString implements OsStringExt {
     public OsString();
-    public static unsafe Self from_encoded_bytes_unchecked(List<ubyte> bytes);
+    public static unsafe OsString from_encoded_bytes_unchecked(Vec<ubyte> bytes);
     @RustRefOut public OsStr as_os_str();
-    public List<ubyte> into_encoded_bytes();
+    public Vec<ubyte> into_encoded_bytes();
     public String into_string() throws OsString;
     @MutSelf public void push<T>(T s);
     public static OsString with_capacity(uint capacity);
@@ -1608,7 +1644,7 @@ public class OsString implements OsStringExt {
     @RustRefOut public OsStr leak();
     @MutSelf public void truncate(uint len);
     @RustRefOut public String? to_str();
-    public Cow<String> to_string_lossy();
+    @RustBorrowsSelf public Cow<String> to_string_lossy();
     public OsString to_os_string();
     public bool is_empty();
     public uint len();
@@ -1623,14 +1659,14 @@ public class OsString implements OsStringExt {
     public OsString to_ascii_uppercase();
     public bool is_ascii();
     public bool eq_ignore_ascii_case<S>(S other);
-    public Display display();
+    @RustBorrowsSelf public Display display();
 }
 
 /** Platform-specific extensions to [`OsString`]. */
 @rust("std::os::unix::ffi::OsStringExt")
 public interface OsStringExt {
-    public Self from_vec(List<ubyte> vec);
-    public List<ubyte> into_vec();
+    public Self from_vec(Vec<ubyte> vec);
+    public Vec<ubyte> into_vec();
 }
 
 /** The output of a finished process. */
@@ -1638,27 +1674,27 @@ public interface OsStringExt {
 @RustClone
 public class Output {
     public ExitStatus status;
-    public List<ubyte> stdout;
-    public List<ubyte> stderr;
-    public Self exit_ok() throws ExitStatusError;
+    public Vec<ubyte> stdout;
+    public Vec<ubyte> stderr;
+    public Output exit_ok() throws ExitStatusError;
 }
 
 /** An owned file descriptor. */
 @rust("std::os::fd::OwnedFd")
 public class OwnedFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd, IsTerminal {
-    public Self try_clone() throws Error;
+    public OwnedFd try_clone() throws Error;
 }
 
 /** An owned handle. */
 @rust("std::os::windows::io::OwnedHandle")
 public class OwnedHandle implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle, IsTerminal {
-    public Self try_clone() throws Error;
+    public OwnedHandle try_clone() throws Error;
 }
 
 /** An owned socket. */
 @rust("std::os::windows::io::OwnedSocket")
 public class OwnedSocket implements AsRawSocket, AsSocket, FromRawSocket, IntoRawSocket {
-    public Self try_clone() throws Error;
+    public OwnedSocket try_clone() throws Error;
 }
 
 /** A struct providing information about a panic. */
@@ -1678,13 +1714,13 @@ public class Path {
     @RustRefOut public OsStr as_os_str();
     @MutSelf @RustRefOut public OsStr as_mut_os_str();
     @RustRefOut public String? to_str();
-    public Cow<String> to_string_lossy();
+    @RustBorrowsSelf public Cow<String> to_string_lossy();
     public PathBuf to_path_buf();
     public bool is_absolute();
     public bool is_relative();
     public bool has_root();
     @RustRefOut public Path? parent();
-    public Ancestors ancestors();
+    @RustBorrowsSelf public Ancestors ancestors();
     @RustRefOut public OsStr? file_name();
     @RustRefOut public Path strip_prefix<P>(P base) throws StripPrefixError;
     @RustRefOut public Path trim_prefix<P>(P base);
@@ -1695,15 +1731,15 @@ public class Path {
     @RustRefOut public OsStr? file_prefix();
     @RustRefOut public OsStr? extension();
     public bool has_trailing_sep();
-    public Cow<Path> with_trailing_sep();
+    @RustBorrowsSelf public Cow<Path> with_trailing_sep();
     @RustRefOut public Path trim_trailing_sep();
     public PathBuf join<P>(P path);
     public PathBuf with_file_name<S>(S file_name);
     public PathBuf with_extension<S>(S extension);
     public PathBuf with_added_extension<S>(S extension);
-    public Components components();
-    public Iter iter();
-    public Display display();
+    @RustBorrowsSelf public Components components();
+    @RustBorrowsSelf public Iter iter();
+    @RustBorrowsSelf public Display display();
     @RustRefOut public Path as_path();
     public Metadata metadata() throws Error;
     public Metadata symlink_metadata() throws Error;
@@ -1752,13 +1788,13 @@ public class PathBuf {
     @RustRefOut public OsStr as_os_str();
     @MutSelf @RustRefOut public OsStr as_mut_os_str();
     @RustRefOut public String? to_str();
-    public Cow<String> to_string_lossy();
+    @RustBorrowsSelf public Cow<String> to_string_lossy();
     public PathBuf to_path_buf();
     public bool is_absolute();
     public bool is_relative();
     public bool has_root();
     @RustRefOut public Path? parent();
-    public Ancestors ancestors();
+    @RustBorrowsSelf public Ancestors ancestors();
     @RustRefOut public OsStr? file_name();
     @RustRefOut public Path strip_prefix<P>(P base) throws StripPrefixError;
     @RustRefOut public Path trim_prefix<P>(P base);
@@ -1769,15 +1805,15 @@ public class PathBuf {
     @RustRefOut public OsStr? file_prefix();
     @RustRefOut public OsStr? extension();
     public bool has_trailing_sep();
-    public Cow<Path> with_trailing_sep();
+    @RustBorrowsSelf public Cow<Path> with_trailing_sep();
     @RustRefOut public Path trim_trailing_sep();
     public PathBuf join<P>(P path);
     public PathBuf with_file_name<S>(S file_name);
     public PathBuf with_extension<S>(S extension);
     public PathBuf with_added_extension<S>(S extension);
-    public Components components();
-    public Iter iter();
-    public Display display();
+    @RustBorrowsSelf public Components components();
+    @RustBorrowsSelf public Iter iter();
+    @RustBorrowsSelf public Display display();
     public Metadata metadata() throws Error;
     public Metadata symlink_metadata() throws Error;
     public PathBuf canonicalize() throws Error;
@@ -1827,13 +1863,13 @@ public class PidFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
 /** Read end of an anonymous pipe. */
 @rust("std::io::PipeReader")
 public class PipeReader implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Read {
-    public Self try_clone() throws Error;
+    public PipeReader try_clone() throws Error;
 }
 
 /** Write end of an anonymous pipe. */
 @rust("std::io::PipeWriter")
 public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Write {
-    public Self try_clone() throws Error;
+    public PipeWriter try_clone() throws Error;
 }
 
 /** A type of error which can be returned whenever a lock is acquired. */
@@ -1847,15 +1883,18 @@ public class PoisonError<T> {
 
 /** Windows path prefixes, e.g., `C:` or `\\server\share`. */
 @rust("std::path::Prefix")
+@RustClone
 public enum Prefix {
-    Verbatim(OsStr), VerbatimUNC(OsStr, OsStr), VerbatimDisk(ubyte), DeviceNS(OsStr), UNC(OsStr, OsStr), Disk(ubyte)
+    Verbatim(OsStr), VerbatimUNC(OsStr, OsStr), VerbatimDisk(ubyte), DeviceNS(OsStr), UNC(OsStr, OsStr), Disk(ubyte);
+
+    public bool is_verbatim();
 }
 
 /** A structure wrapping a Windows path prefix as well as its unparsed string */
 @rust("std::path::PrefixComponent")
 @RustClone
 public class PrefixComponent {
-    public Prefix kind();
+    @RustBorrowsSelf public Prefix kind();
     @RustRefOut public OsStr as_os_str();
 }
 
@@ -1869,9 +1908,9 @@ public class ProcThreadAttributeList {
 @rust("std::os::windows::process::ProcThreadAttributeListBuilder")
 @RustClone
 public class ProcThreadAttributeListBuilder {
-    public Self attribute<T>(uint attribute, &T value);
-    public unsafe Self raw_attribute<T>(uint attribute, T* value_ptr, uint value_size);
-    public ProcThreadAttributeList finish() throws Error;
+    public ProcThreadAttributeListBuilder attribute<T>(uint attribute, &T value);
+    public unsafe ProcThreadAttributeListBuilder raw_attribute<T>(uint attribute, T* value_ptr, uint value_size);
+    @RustBorrowsSelf public ProcThreadAttributeList finish() throws Error;
 }
 
 /** `RandomState` is the default state for [`HashMap`] types. */
@@ -1885,18 +1924,27 @@ public class RandomState {
 @rust("std::collections::btree_map::Range")
 @RustClone
 public class Range<K, V> implements ToOwned {
+    @RustDefault public Range();
 }
 
 /** A mutable iterator over a sub-range of entries in a `BTreeMap`. */
 @rust("std::collections::btree_map::RangeMut")
 public class RangeMut<K, V> {
+    @RustDefault public RangeMut();
 }
+
+public type RawPthread = pthread_t;
+
+
+public type RawSocket = SOCKET;
+
 
 /** A single-threaded reference-counting pointer. 'Rc' stands for 'Reference */
 @rust("std::rc::Rc")
 @RustClone
 public class Rc<T, A> implements ToOwned, ToString {
     public Rc(T value);
+    @RustDefault public Rc();
     public static T new_cyclic<F>((Weak<T>) -> T data_fn);
     public static MaybeUninit<T> new_uninit();
     public static MaybeUninit<T> new_zeroed();
@@ -1904,47 +1952,47 @@ public class Rc<T, A> implements ToOwned, ToString {
     public static MaybeUninit<T> try_new_uninit() throws AllocError;
     public static MaybeUninit<T> try_new_zeroed() throws AllocError;
     public static Pin<T> pin(T value);
-    public static U map<U>(Self this, (T) -> U f);
-    public static TryType try_map<R>(Self this, (T) -> R f);
+    public static U map<U>(Rc this, (T) -> U f);
+    public static TryType try_map<R>(Rc this, (T) -> R f);
     public static T new_in(T value, A alloc);
     public static MaybeUninit<T> new_uninit_in(A alloc);
     public static MaybeUninit<T> new_zeroed_in(A alloc);
     public static T new_cyclic_in<F>((Weak<T, A>) -> T data_fn, A alloc);
-    public static Self try_new_in(T value, A alloc) throws AllocError;
+    public static Rc try_new_in(T value, A alloc) throws AllocError;
     public static MaybeUninit<T> try_new_uninit_in(A alloc) throws AllocError;
     public static MaybeUninit<T> try_new_zeroed_in(A alloc) throws AllocError;
-    public static Pin<Self> pin_in(T value, A alloc);
-    public static T try_unwrap(Self this) throws Self;
-    public static T? into_inner(Self this);
+    public static Pin<Rc> pin_in(T value, A alloc);
+    public static T try_unwrap(Rc this) throws Rc;
+    public static T? into_inner(Rc this);
     public static MaybeUninit<T>[] new_uninit_slice(uint len);
     public static MaybeUninit<T>[] new_zeroed_slice(uint len);
     public static MaybeUninit<T>[] new_uninit_slice_in(uint len, A alloc);
     public static MaybeUninit<T>[] new_zeroed_slice_in(uint len, A alloc);
-    public T[] into_array() throws Self;
+    public T[] into_array() throws Rc;
     public unsafe T assume_init();
     public static T clone_from_ref(&T value);
     public static T try_clone_from_ref(&T value) throws AllocError;
     public static T clone_from_ref_in(&T value, A alloc);
     public static T try_clone_from_ref_in(&T value, A alloc) throws AllocError;
-    public static unsafe Self from_raw(T* ptr);
-    public static T* into_raw(Self this);
+    public static unsafe Rc from_raw(T* ptr);
+    public static T* into_raw(Rc this);
     public static unsafe void increment_strong_count(T* ptr);
     public static unsafe void decrement_strong_count(T* ptr);
-    @RustRefOut public static A allocator(&Self this);
-    public static (T*, A) into_raw_with_allocator(Self this);
-    public static T* as_ptr(&Self this);
-    public static unsafe Self from_raw_in(T* ptr, A alloc);
-    public static Weak<T, A> downgrade(&Self this);
-    public static uint weak_count(&Self this);
-    public static uint strong_count(&Self this);
+    @RustRefOut public static A allocator(&Rc this);
+    public static (T*, A) into_raw_with_allocator(Rc this);
+    public static T* as_ptr(&Rc this);
+    public static unsafe Rc from_raw_in(T* ptr, A alloc);
+    public static Weak<T, A> downgrade(&Rc this);
+    public static uint weak_count(&Rc this);
+    public static uint strong_count(&Rc this);
     public static unsafe void increment_strong_count_in(T* ptr, A alloc);
     public static unsafe void decrement_strong_count_in(T* ptr, A alloc);
-    @RustRefOut public static T? get_mut(&mut Self this);
-    @RustRefOut public static unsafe T get_mut_unchecked(&mut Self this);
-    public static bool ptr_eq(&Self this, &Self other);
-    @RustRefOut public static T make_mut(&mut Self this);
-    public static T unwrap_or_clone(Self this);
-    public T downcast<T>() throws Self;
+    @RustRefOut public static T? get_mut(&mut Rc this);
+    @RustRefOut public static unsafe T get_mut_unchecked(&mut Rc this);
+    public static bool ptr_eq(&Rc this, &Rc other);
+    @RustRefOut public static T make_mut(&mut Rc this);
+    public static T unwrap_or_clone(Rc this);
+    public T downcast<T>() throws Rc;
     public unsafe T downcast_unchecked<T>();
 }
 
@@ -1954,7 +2002,7 @@ public interface Read {
     @MutSelf public uint read(&mut ubyte[] buf) throws Error;
     @MutSelf public uint read_vectored(&mut IoSliceMut[] bufs) throws Error;
     public bool is_read_vectored();
-    @MutSelf public uint read_to_end(&mut List<ubyte> buf) throws Error;
+    @MutSelf public uint read_to_end(&mut Vec<ubyte> buf) throws Error;
     @MutSelf public uint read_to_string(&mut String buf) throws Error;
     @MutSelf public void read_exact(&mut ubyte[] buf) throws Error;
     @MutSelf public void read_buf(BorrowedCursor<ubyte> buf) throws Error;
@@ -1981,13 +2029,13 @@ public class Receiver<T> {
     public T recv() throws RecvError;
     public T recv_timeout(Duration timeout) throws RecvTimeoutError;
     public T recv_deadline(Instant deadline) throws RecvTimeoutError;
-    public TryIter<T> try_iter();
+    @RustBorrowsSelf public TryIter<T> try_iter();
     public bool is_empty();
     public bool is_full();
     public uint len();
     public uint? capacity();
     public bool same_channel(&Receiver<T> other);
-    public Iter<T> iter();
+    @RustBorrowsSelf public Iter<T> iter();
     public bool is_disconnected();
 }
 
@@ -1999,6 +2047,7 @@ public class RecvError {
 
 /** This enumeration is the list of possible errors that made [`recv_timeout`] */
 @rust("std::sync::mpsc::RecvTimeoutError")
+@RustClone
 public enum RecvTimeoutError {
     Timeout, Disconnected
 }
@@ -2007,8 +2056,9 @@ public enum RecvTimeoutError {
 @rust("std::sync::ReentrantLock")
 public class ReentrantLock<T> {
     public ReentrantLock(T t);
+    @RustDefault public ReentrantLock();
     public T into_inner();
-    public ReentrantLockGuard<T> lock();
+    @RustBorrowsSelf public ReentrantLockGuard<T> lock();
     @MutSelf @RustRefOut public T get_mut();
     public T* data_ptr();
 }
@@ -2022,41 +2072,42 @@ public class ReentrantLockGuard<T> {
 @rust("std::error::Report")
 public class Report<E> {
     public Report(E error);
-    public Self pretty(bool pretty);
-    public Self show_backtrace(bool show_backtrace);
+    public Report pretty(bool pretty);
+    public Report show_backtrace(bool show_backtrace);
 }
 
 /** A reader-writer lock */
 @rust("std::sync::RwLock")
 public class RwLock<T> {
     public RwLock(T t);
+    @RustDefault public RwLock();
     public T get_cloned() throws PoisonError<void>;
     public void set(T value) throws PoisonError<T>;
-    public LockResult<T> replace(T value);
-    public LockResult<RwLockReadGuard<T>> read();
-    public TryLockResult<RwLockReadGuard<T>> try_read();
-    public LockResult<RwLockWriteGuard<T>> write();
-    public TryLockResult<RwLockWriteGuard<T>> try_write();
+    public T replace(T value) throws PoisonError<T>;
+    @RustBorrowsSelf public RwLockReadGuard<T> read() throws PoisonError<T>;
+    @RustBorrowsSelf public RwLockReadGuard<T> try_read() throws TryLockError<Guard>;
+    @RustBorrowsSelf public RwLockWriteGuard<T> write() throws PoisonError<T>;
+    @RustBorrowsSelf public RwLockWriteGuard<T> try_write() throws TryLockError<Guard>;
     public bool is_poisoned();
     public void clear_poison();
-    public LockResult<T> into_inner();
-    @MutSelf @RustRefOut public LockResult<T> get_mut();
+    public T into_inner() throws PoisonError<T>;
+    @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
     public T* data_ptr();
 }
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::RwLockReadGuard")
 public class RwLockReadGuard<T> {
-    public static MappedRwLockReadGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedRwLockReadGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static MappedRwLockReadGuard<U> map<U, F>(RwLockReadGuard orig, (T) -> U f);
+    public static MappedRwLockReadGuard<U> filter_map<U, F>(RwLockReadGuard orig, (T) -> U? f) throws RwLockReadGuard;
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::RwLockWriteGuard")
 public class RwLockWriteGuard<T> {
-    public static RwLockReadGuard<T> downgrade(Self s);
-    public static MappedRwLockWriteGuard<U> map<U, F>(Self orig, (T) -> U f);
-    public static MappedRwLockWriteGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
+    public static RwLockReadGuard<T> downgrade(RwLockWriteGuard s);
+    public static MappedRwLockWriteGuard<U> map<U, F>(RwLockWriteGuard orig, (T) -> U f);
+    public static MappedRwLockWriteGuard<U> filter_map<U, F>(RwLockWriteGuard orig, (T) -> U? f) throws RwLockWriteGuard;
 }
 
 public const char[] SEPARATORS;
@@ -2068,6 +2119,9 @@ public struct SOCKADDR {
     public ushort sa_family;
     public byte[14] sa_data;
 }
+
+public type SOCKET = ulong;
+
 
 public const BorrowedFd STDERR;
 
@@ -2087,7 +2141,7 @@ public class ScmRights {
 /** A scope to spawn scoped threads in. */
 @rust("std::thread::Scope")
 public class Scope {
-    public ScopedJoinHandle<T> spawn<F, T>(() -> T f);
+    @RustBorrowsSelf public ScopedJoinHandle<T> spawn<F, T>(() -> T f);
 }
 
 /** An owned permission to join on a scoped thread (block on its termination). */
@@ -2115,6 +2169,7 @@ public interface Seek {
 
 /** Enumeration of possible methods to seek within an I/O object. */
 @rust("std::io::SeekFrom")
+@RustClone
 public enum SeekFrom {
     Start(ulong), End(long), Current(long)
 }
@@ -2127,6 +2182,7 @@ public class SendError<T> {
 
 /** An error returned from the [`send_timeout`] method. */
 @rust("std::sync::mpmc::SendTimeoutError")
+@RustClone
 public enum SendTimeoutError<T> {
     Timeout(T), Disconnected(T)
 }
@@ -2149,6 +2205,7 @@ public class Sender<T> {
 
 /** Possible values which can be passed to the [`TcpStream::shutdown`] method. */
 @rust("std::net::Shutdown")
+@RustClone
 public enum Shutdown {
     Read, Write, Both
 }
@@ -2180,7 +2237,7 @@ public class SocketAncillary {
     public uint capacity();
     public bool is_empty();
     public uint len();
-    public Messages messages();
+    @RustBorrowsSelf public Messages messages();
     public bool truncated();
     @MutSelf public bool add_fds(RawFd[] fds);
     @MutSelf public bool add_creds(SocketCred[] creds);
@@ -2287,9 +2344,9 @@ public class String implements ToOwned, ToString {
     public String();
     public static String with_capacity(uint capacity);
     public static String try_with_capacity(uint capacity) throws TryReserveError;
-    public static String from_utf8(List<ubyte> vec) throws FromUtf8Error;
+    public static String from_utf8(Vec<ubyte> vec) throws FromUtf8Error;
     public static Cow<String> from_utf8_lossy(ubyte[] v);
-    public static String from_utf8_lossy_owned(List<ubyte> v);
+    public static String from_utf8_lossy_owned(Vec<ubyte> v);
     public static String from_utf16(ushort[] v) throws FromUtf16Error;
     public static String from_utf16_lossy(ushort[] v);
     public static String from_utf16le(ubyte[] v) throws FromUtf16Error;
@@ -2298,8 +2355,8 @@ public class String implements ToOwned, ToString {
     public static String from_utf16be_lossy(ubyte[] v);
     public (ubyte*, uint, uint) into_raw_parts();
     public static unsafe String from_raw_parts(ubyte* buf, uint length, uint capacity);
-    public static unsafe String from_utf8_unchecked(List<ubyte> bytes);
-    public List<ubyte> into_bytes();
+    public static unsafe String from_utf8_unchecked(Vec<ubyte> bytes);
+    public Vec<ubyte> into_bytes();
     @RustRefOut public String as_str();
     @MutSelf @RustRefOut public String as_mut_str();
     @MutSelf public void push_str(&String string);
@@ -2320,12 +2377,12 @@ public class String implements ToOwned, ToString {
     @MutSelf public void retain<F>((char) -> bool f);
     @MutSelf public void insert(uint idx, char ch);
     @MutSelf public void insert_str(uint idx, &String string);
-    @MutSelf @RustRefOut public unsafe List<ubyte> as_mut_vec();
+    @MutSelf @RustRefOut public unsafe Vec<ubyte> as_mut_vec();
     public uint len();
     public bool is_empty();
     @MutSelf public String split_off(uint at);
     @MutSelf public void clear();
-    @MutSelf public Drain drain<R>(R range);
+    @MutSelf @RustBorrowsSelf public Drain drain<R>(R range);
     public IntoChars into_chars();
     @MutSelf public void replace_range<R>(R range, &String replace_with);
     @MutSelf public void replace_first<P>(P from, &String to);
@@ -2348,32 +2405,32 @@ public class String implements ToOwned, ToString {
     @MutSelf public (String, String) split_at_mut(uint mid);
     public (String, String)? split_at_checked(uint mid);
     @MutSelf public (String, String)? split_at_mut_checked(uint mid);
-    public Chars chars();
-    public CharIndices char_indices();
-    public Bytes bytes();
-    public SplitWhitespace split_whitespace();
-    public SplitAsciiWhitespace split_ascii_whitespace();
-    public Lines lines();
-    public LinesAny lines_any();
-    public EncodeUtf16 encode_utf16();
+    @RustBorrowsSelf public Chars chars();
+    @RustBorrowsSelf public CharIndices char_indices();
+    @RustBorrowsSelf public Bytes bytes();
+    @RustBorrowsSelf public SplitWhitespace split_whitespace();
+    @RustBorrowsSelf public SplitAsciiWhitespace split_ascii_whitespace();
+    @RustBorrowsSelf public Lines lines();
+    @RustBorrowsSelf public LinesAny lines_any();
+    @RustBorrowsSelf public EncodeUtf16 encode_utf16();
     public bool contains<P>(P pat);
     public bool starts_with<P>(P pat);
     public bool ends_with<P>(P pat);
     public uint? find<P>(P pat);
     public uint? rfind<P>(P pat);
-    public Split<P> split<P>(P pat);
-    public SplitInclusive<P> split_inclusive<P>(P pat);
-    public RSplit<P> rsplit<P>(P pat);
-    public SplitTerminator<P> split_terminator<P>(P pat);
-    public RSplitTerminator<P> rsplit_terminator<P>(P pat);
-    public SplitN<P> splitn<P>(uint n, P pat);
-    public RSplitN<P> rsplitn<P>(uint n, P pat);
+    @RustBorrowsSelf public Split<P> split<P>(P pat);
+    @RustBorrowsSelf public SplitInclusive<P> split_inclusive<P>(P pat);
+    @RustBorrowsSelf public RSplit<P> rsplit<P>(P pat);
+    @RustBorrowsSelf public SplitTerminator<P> split_terminator<P>(P pat);
+    @RustBorrowsSelf public RSplitTerminator<P> rsplit_terminator<P>(P pat);
+    @RustBorrowsSelf public SplitN<P> splitn<P>(uint n, P pat);
+    @RustBorrowsSelf public RSplitN<P> rsplitn<P>(uint n, P pat);
     public (String, String)? split_once<P>(P delimiter);
     public (String, String)? rsplit_once<P>(P delimiter);
-    public Matches<P> matches<P>(P pat);
-    public RMatches<P> rmatches<P>(P pat);
-    public MatchIndices<P> match_indices<P>(P pat);
-    public RMatchIndices<P> rmatch_indices<P>(P pat);
+    @RustBorrowsSelf public Matches<P> matches<P>(P pat);
+    @RustBorrowsSelf public RMatches<P> rmatches<P>(P pat);
+    @RustBorrowsSelf public MatchIndices<P> match_indices<P>(P pat);
+    @RustBorrowsSelf public RMatchIndices<P> rmatch_indices<P>(P pat);
     @RustRefOut public String trim();
     @RustRefOut public String trim_start();
     @RustRefOut public String trim_end();
@@ -2400,9 +2457,9 @@ public class String implements ToOwned, ToString {
     @RustRefOut public String trim_ascii_start();
     @RustRefOut public String trim_ascii_end();
     @RustRefOut public String trim_ascii();
-    public EscapeDebug escape_debug();
-    public EscapeDefault escape_default();
-    public EscapeUnicode escape_unicode();
+    @RustBorrowsSelf public EscapeDebug escape_debug();
+    @RustBorrowsSelf public EscapeDefault escape_default();
+    @RustBorrowsSelf public EscapeUnicode escape_unicode();
     public Range<uint>? substr_range(&String substr);
     public ubyte[] into_boxed_bytes();
     public String replace<P>(P from, &String to);
@@ -2441,12 +2498,14 @@ public class SyncSender<T> {
 @rust("std::alloc::System")
 @RustClone
 public class System {
+    @RustDefault public System();
 }
 
 /** The system random number generator. */
 @rust("std::random::SystemRng")
 @RustClone
 public class SystemRng {
+    @RustDefault public SystemRng();
 }
 
 /** A measurement of the system clock, useful for talking to */
@@ -2477,7 +2536,7 @@ public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRa
     public SocketAddr local_addr() throws Error;
     public TcpListener try_clone() throws Error;
     public (TcpStream, SocketAddr) accept() throws Error;
-    public Incoming incoming();
+    @RustBorrowsSelf public Incoming incoming();
     public IntoIncoming into_incoming();
     public void set_ttl(u32 ttl) throws Error;
     public u32 ttl() throws Error;
@@ -2530,8 +2589,8 @@ public interface Termination {
 @rust("std::boxed::ThinBox")
 public class ThinBox<T> implements ToString {
     public ThinBox(T value);
-    public static Self try_new(T value) throws AllocError;
-    public static Self new_unsize<T>(T value);
+    public static ThinBox try_new(T value) throws AllocError;
+    public static ThinBox new_unsize<T>(T value);
 }
 
 /** A handle to a thread. */
@@ -2584,6 +2643,7 @@ public enum TryLockError {
 
 /** This enumeration is the list of the possible reasons that [`try_recv`] could */
 @rust("std::sync::mpsc::TryRecvError")
+@RustClone
 public enum TryRecvError {
     Empty, Disconnected
 }
@@ -2597,12 +2657,14 @@ public class TryReserveError implements ToOwned, ToString {
 
 /** Details of the allocation that caused a `TryReserveError` */
 @rust("std::collections::TryReserveErrorKind")
+@RustClone
 public enum TryReserveErrorKind implements ToOwned {
     CapacityOverflow, AllocError
 }
 
 /** This enumeration is the list of the possible error outcomes for the */
 @rust("std::sync::mpsc::TrySendError")
+@RustClone
 public enum TrySendError<T> {
     Full(T), Disconnected(T)
 }
@@ -2655,22 +2717,22 @@ public class Union<T> implements ToOwned {
 @rust("std::sync::UniqueArc")
 public class UniqueArc<T, A> implements ToString {
     public UniqueArc(T value);
-    public static UniqueArc<U> map<U>(Self this, (T) -> U f);
-    public static TryType try_map<R>(Self this, (T) -> R f);
-    public static Self new_in(T data, A alloc);
-    public static T into_arc(Self this);
-    public static Weak<T, A> downgrade(&Self this);
+    public static UniqueArc<U> map<U>(UniqueArc this, (T) -> U f);
+    public static TryType try_map<R>(UniqueArc this, (T) -> R f);
+    public static UniqueArc new_in(T data, A alloc);
+    public static T into_arc(UniqueArc this);
+    public static Weak<T, A> downgrade(&UniqueArc this);
 }
 
 /** A uniquely owned [`Rc`]. */
 @rust("std::rc::UniqueRc")
 public class UniqueRc<T, A> implements ToString {
     public UniqueRc(T value);
-    public static UniqueRc<U> map<U>(Self this, (T) -> U f);
-    public static TryType try_map<R>(Self this, (T) -> R f);
-    public static Self new_in(T value, A alloc);
-    public static T into_rc(Self this);
-    public static Weak<T, A> downgrade(&Self this);
+    public static UniqueRc<U> map<U>(UniqueRc this, (T) -> U f);
+    public static TryType try_map<R>(UniqueRc this, (T) -> R f);
+    public static UniqueRc new_in(T value, A alloc);
+    public static T into_rc(UniqueRc this);
+    public static Weak<T, A> downgrade(&UniqueRc this);
 }
 
 /** A Unix datagram socket. */
@@ -2716,7 +2778,7 @@ public class UnixListener implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
     public SocketAddr local_addr() throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
     public Error? take_error() throws Error;
-    public Incoming incoming();
+    @RustBorrowsSelf public Incoming incoming();
 }
 
 /** Linux-specific functionality for `AF_UNIX` sockets [`UnixDatagram`] */
@@ -2760,22 +2822,25 @@ public class VacantEntry<K, V, A> {
     @RustRefOut public K key();
     public K into_key();
     @RustRefOut public V insert(V value);
-    public OccupiedEntry<K, V, A> insert_entry(V value);
+    @RustBorrowsSelf public OccupiedEntry<K, V, A> insert_entry(V value);
 }
 
 /** An iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::Values")
 @RustClone
 public class Values<K, V> implements ToOwned {
+    @RustDefault public Values();
 }
 
 /** A mutable iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::ValuesMut")
 public class ValuesMut<K, V> {
+    @RustDefault public ValuesMut();
 }
 
 /** The error type for operations interacting with environment variables. */
 @rust("std::env::VarError")
+@RustClone
 public enum VarError {
     NotPresent, NotUnicode(OsString)
 }
@@ -2796,21 +2861,21 @@ public class VarsOs {
 @RustCollection
 public class Vec<T, A> implements ToOwned {
     public Vec();
-    public static Self with_capacity(uint capacity);
-    public static Self try_with_capacity(uint capacity) throws TryReserveError;
-    public static unsafe Self from_raw_parts(T* ptr, uint length, uint capacity);
-    public static unsafe Self from_parts(NonNull<T> ptr, uint length, uint capacity);
-    public static Self from_fn<F>(uint length, (uint) -> T f);
+    public static Vec with_capacity(uint capacity);
+    public static Vec try_with_capacity(uint capacity) throws TryReserveError;
+    public static unsafe Vec from_raw_parts(T* ptr, uint length, uint capacity);
+    public static unsafe Vec from_parts(NonNull<T> ptr, uint length, uint capacity);
+    public static Vec from_fn<F>(uint length, (uint) -> T f);
     public (T*, uint, uint) into_raw_parts();
     public (NonNull<T>, uint, uint) into_parts();
     @RustRefOut public T[] const_make_global();
-    public static Self with_capacity_in(uint capacity, A alloc);
+    public static Vec with_capacity_in(uint capacity, A alloc);
     @MutSelf public void push(T value);
     @MutSelf @RustRefOut public T push_mut(T value);
-    public static Self new_in(A alloc);
-    public static Self try_with_capacity_in(uint capacity, A alloc) throws TryReserveError;
-    public static unsafe Self from_raw_parts_in(T* ptr, uint length, uint capacity, A alloc);
-    public static unsafe Self from_parts_in(NonNull<T> ptr, uint length, uint capacity, A alloc);
+    public static Vec new_in(A alloc);
+    public static Vec try_with_capacity_in(uint capacity, A alloc) throws TryReserveError;
+    public static unsafe Vec from_raw_parts_in(T* ptr, uint length, uint capacity, A alloc);
+    public static unsafe Vec from_parts_in(NonNull<T> ptr, uint length, uint capacity, A alloc);
     public (T*, uint, uint, A) into_raw_parts_with_alloc();
     public (NonNull<T>, uint, uint, A) into_parts_with_alloc();
     public uint capacity();
@@ -2823,7 +2888,7 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void try_shrink_to_fit() throws TryReserveError;
     @MutSelf public void try_shrink_to(uint min_capacity) throws TryReserveError;
     public T[] into_boxed_slice();
-    public T[] into_array() throws Self;
+    public T[] into_array() throws Vec;
     @MutSelf public void truncate(uint len);
     @RustRefOut public T[] as_slice();
     @MutSelf @RustRefOut public T[] as_mut_slice();
@@ -2844,26 +2909,29 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T push_within_capacity(T value) throws T;
     @MutSelf public T? pop();
     @MutSelf public T? pop_if((T) -> bool predicate);
-    @MutSelf public PeekMut<T, A>? peek_mut();
-    @MutSelf public void append(&mut Self other);
-    @MutSelf public Drain<T, A> drain<R>(R range);
+    @MutSelf @RustBorrowsSelf public PeekMut<T, A>? peek_mut();
+    @MutSelf public void append(&mut Vec other);
+    @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
     @MutSelf public void clear();
     public uint len();
     public bool is_empty();
-    @MutSelf public Self split_off(uint at);
+    @MutSelf public Vec split_off(uint at);
     @MutSelf public void resize_with<F>(uint new_len, () -> T f);
     @RustRefOut public T[] leak();
     @MutSelf @RustRefOut public MaybeUninit<T>[] spare_capacity_mut();
     @MutSelf public (T[], MaybeUninit<T>[]) split_at_spare_mut();
-    public List<T[]> into_chunks();
-    public List<U> recycle<U>();
+    public Vec<T[]> into_chunks();
+    public Vec<U> recycle<U>();
     @MutSelf public void resize(uint new_len, T value);
     @MutSelf public void extend_from_slice(T[] other);
     @MutSelf public void extend_from_within<R>(R src);
-    public List<T> into_flattened();
+    public Vec<T> into_flattened();
     @MutSelf public void dedup();
-    @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @MutSelf public void sort_floats();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -2891,42 +2959,42 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public void swap(uint a, uint b);
     @MutSelf public unsafe void swap_unchecked(uint a, uint b);
     @MutSelf public void reverse();
-    public Iter<T> iter();
-    @MutSelf public IterMut<T> iter_mut();
-    public Windows<T> windows(uint size);
-    public Chunks<T> chunks(uint chunk_size);
-    @MutSelf public ChunksMut<T> chunks_mut(uint chunk_size);
-    public ChunksExact<T> chunks_exact(uint chunk_size);
-    @MutSelf public ChunksExactMut<T> chunks_exact_mut(uint chunk_size);
+    @RustBorrowsSelf public Iter<T> iter();
+    @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
+    @RustBorrowsSelf public Windows<T> windows(uint size);
+    @RustBorrowsSelf public Chunks<T> chunks(uint chunk_size);
+    @MutSelf @RustBorrowsSelf public ChunksMut<T> chunks_mut(uint chunk_size);
+    @RustBorrowsSelf public ChunksExact<T> chunks_exact(uint chunk_size);
+    @MutSelf @RustBorrowsSelf public ChunksExactMut<T> chunks_exact_mut(uint chunk_size);
     @RustRefOut public unsafe T[][] as_chunks_unchecked();
     public (T[][], T[]) as_chunks();
     public (T[], T[][]) as_rchunks();
     @MutSelf @RustRefOut public unsafe T[][] as_chunks_unchecked_mut();
     @MutSelf public (T[][], T[]) as_chunks_mut();
     @MutSelf public (T[], T[][]) as_rchunks_mut();
-    public ArrayWindows<T> array_windows();
-    public RChunks<T> rchunks(uint chunk_size);
-    @MutSelf public RChunksMut<T> rchunks_mut(uint chunk_size);
-    public RChunksExact<T> rchunks_exact(uint chunk_size);
-    @MutSelf public RChunksExactMut<T> rchunks_exact_mut(uint chunk_size);
-    public ChunkBy<T, F> chunk_by<F>((T, T) -> bool pred);
-    @MutSelf public ChunkByMut<T, F> chunk_by_mut<F>((T, T) -> bool pred);
+    @RustBorrowsSelf public ArrayWindows<T> array_windows();
+    @RustBorrowsSelf public RChunks<T> rchunks(uint chunk_size);
+    @MutSelf @RustBorrowsSelf public RChunksMut<T> rchunks_mut(uint chunk_size);
+    @RustBorrowsSelf public RChunksExact<T> rchunks_exact(uint chunk_size);
+    @MutSelf @RustBorrowsSelf public RChunksExactMut<T> rchunks_exact_mut(uint chunk_size);
+    @RustBorrowsSelf public ChunkBy<T, F> chunk_by<F>((T, T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public ChunkByMut<T, F> chunk_by_mut<F>((T, T) -> bool pred);
     public (T[], T[]) split_at(uint mid);
     @MutSelf public (T[], T[]) split_at_mut(uint mid);
     public unsafe (T[], T[]) split_at_unchecked(uint mid);
     @MutSelf public unsafe (T[], T[]) split_at_mut_unchecked(uint mid);
     public (T[], T[])? split_at_checked(uint mid);
     @MutSelf public (T[], T[])? split_at_mut_checked(uint mid);
-    public Split<T, F> split<F>((T) -> bool pred);
-    @MutSelf public SplitMut<T, F> split_mut<F>((T) -> bool pred);
-    public SplitInclusive<T, F> split_inclusive<F>((T) -> bool pred);
-    @MutSelf public SplitInclusiveMut<T, F> split_inclusive_mut<F>((T) -> bool pred);
-    public RSplit<T, F> rsplit<F>((T) -> bool pred);
-    @MutSelf public RSplitMut<T, F> rsplit_mut<F>((T) -> bool pred);
-    public SplitN<T, F> splitn<F>(uint n, (T) -> bool pred);
-    @MutSelf public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
-    public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
-    @MutSelf public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
+    @RustBorrowsSelf public Split<T, F> split<F>((T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public SplitMut<T, F> split_mut<F>((T) -> bool pred);
+    @RustBorrowsSelf public SplitInclusive<T, F> split_inclusive<F>((T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public SplitInclusiveMut<T, F> split_inclusive_mut<F>((T) -> bool pred);
+    @RustBorrowsSelf public RSplit<T, F> rsplit<F>((T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public RSplitMut<T, F> rsplit_mut<F>((T) -> bool pred);
+    @RustBorrowsSelf public SplitN<T, F> splitn<F>(uint n, (T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public SplitNMut<T, F> splitn_mut<F>(uint n, (T) -> bool pred);
+    @RustBorrowsSelf public RSplitN<T, F> rsplitn<F>(uint n, (T) -> bool pred);
+    @MutSelf @RustBorrowsSelf public RSplitNMut<T, F> rsplitn_mut<F>(uint n, (T) -> bool pred);
     public (T[], T[])? split_once<F>((T) -> bool pred);
     public (T[], T[])? rsplit_once<F>((T) -> bool pred);
     public bool contains(&T x);
@@ -2979,16 +3047,13 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
     public bool is_ascii();
     @RustRefOut public Char[]? as_ascii();
     @RustRefOut public unsafe Char[] as_ascii_unchecked();
     public bool eq_ignore_ascii_case(ubyte[] other);
     @MutSelf public void make_ascii_uppercase();
     @MutSelf public void make_ascii_lowercase();
-    public EscapeAscii escape_ascii();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
     @RustRefOut public ubyte[] trim_ascii_start();
     @RustRefOut public ubyte[] trim_ascii_end();
     @RustRefOut public ubyte[] trim_ascii();
@@ -3002,8 +3067,8 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    public Utf8Chunks utf8_chunks();
-    @MutSelf public void sort_floats();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @RustRefOut public String as_str();
 }
 
@@ -3013,7 +3078,7 @@ public class Vec<T, A> implements ToOwned {
 @RustCollection
 public class VecDeque<T, A> implements ToOwned {
     public VecDeque();
-    @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    @MutSelf @RustBorrowsSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
     public static VecDeque<T> with_capacity(uint capacity);
     public static VecDeque<T> try_with_capacity(uint capacity) throws TryReserveError;
     public static VecDeque<T, A> new_in(A alloc);
@@ -3031,16 +3096,16 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf public void truncate(uint len);
     @MutSelf public void truncate_front(uint len);
     @RustRefOut public A allocator();
-    public Iter<T> iter();
-    @MutSelf public IterMut<T> iter_mut();
+    @RustBorrowsSelf public Iter<T> iter();
+    @MutSelf @RustBorrowsSelf public IterMut<T> iter_mut();
     public (T[], T[]) as_slices();
     @MutSelf public (T[], T[]) as_mut_slices();
     public uint len();
     public bool is_empty();
-    public Iter<T> range<R>(R range);
-    @MutSelf public IterMut<T> range_mut<R>(R range);
-    @MutSelf public Drain<T, A> drain<R>(R range);
-    @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
+    @RustBorrowsSelf public Iter<T> range<R>(R range);
+    @MutSelf @RustBorrowsSelf public IterMut<T> range_mut<R>(R range);
+    @MutSelf @RustBorrowsSelf public Drain<T, A> drain<R>(R range);
+    @MutSelf @RustBorrowsSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf public void clear();
     public bool contains(&T x);
     @RustRefOut public T? front();
@@ -3062,8 +3127,8 @@ public class VecDeque<T, A> implements ToOwned {
     @MutSelf public void insert(uint index, T value);
     @MutSelf @RustRefOut public T insert_mut(uint index, T value);
     @MutSelf public T? remove(uint index);
-    @MutSelf public Self split_off(uint at);
-    @MutSelf public void append(&mut Self other);
+    @MutSelf public VecDeque split_off(uint at);
+    @MutSelf public void append(&mut VecDeque other);
     @MutSelf public void retain<F>((T) -> bool f);
     @MutSelf public void retain_mut<F>((T) -> bool f);
     @MutSelf public void resize_with(uint new_len, () -> T generator);
@@ -3099,16 +3164,16 @@ public interface Wake {
 public class Weak<T, A> implements ToOwned {
     public Weak();
     public static Weak<T, A> new_in(A alloc);
-    public static unsafe Self from_raw(T* ptr);
+    public static unsafe Weak from_raw(T* ptr);
     public T* into_raw();
     @RustRefOut public A allocator();
     public T* as_ptr();
     public (T*, A) into_raw_with_allocator();
-    public static unsafe Self from_raw_in(T* ptr, A alloc);
+    public static unsafe Weak from_raw_in(T* ptr, A alloc);
     public T? upgrade();
     public uint strong_count();
     public uint weak_count();
-    public bool ptr_eq(&Self other);
+    public bool ptr_eq(&Weak other);
 }
 
 /** A lock could not be acquired at this time because the operation would otherwise block. */
@@ -3132,7 +3197,7 @@ public interface Write {
 /** Error returned for the buffered data from `BufWriter::into_parts`, when the underlying */
 @rust("std::io::WriterPanicked")
 public class WriterPanicked {
-    public List<ubyte> into_inner();
+    public Vec<ubyte> into_inner();
 }
 
 /** An iterator that produces directory paths from XDG environment configuration. */
@@ -3170,6 +3235,12 @@ public NonZero<uint> available_parallelism() throws Error;
 
 @rust("std::panicking::begin_panic")
 public never begin_panic<M>(M msg);
+
+public type blkcnt_t = ulong;
+
+
+public type blksize_t = ulong;
+
 
 @rust("std::os::unix::xdg::cache_home_dir")
 public PathBuf cache_home_dir();
@@ -3225,6 +3296,9 @@ public PathBuf data_home_dir();
 @rust("std::alloc::dealloc")
 public unsafe void dealloc(ubyte* ptr, Layout layout);
 
+public type dev_t = ulong;
+
+
 @rust("std::fs::exists")
 public bool exists<P>(P path) throws Error;
 
@@ -3243,6 +3317,9 @@ public unsafe String from_boxed_utf8_unchecked(ubyte[] v);
 @rust("std::panic::get_backtrace_style")
 public BacktraceStyle? get_backtrace_style();
 
+public type gid_t = u32;
+
+
 @rust("std::alloc::handle_alloc_error")
 public never handle_alloc_error(Layout layout);
 
@@ -3257,6 +3334,9 @@ public OsString hostname() throws Error;
 
 @rust("std::process::id")
 public u32 id();
+
+public type ino_t = ulong;
+
 
 @rust("std::path::is_separator")
 public bool is_separator(char c);
@@ -3279,6 +3359,15 @@ public Metadata metadata<P>(P path) throws Error;
 @rust("std::os::unix::fs::mkfifo")
 public void mkfifo<P>(P path, Permissions permissions) throws Error;
 
+public type mode_t = u32;
+
+
+public type nlink_t = ulong;
+
+
+public type off_t = ulong;
+
+
 @rust("std::panic::panic_any")
 public never panic_any<M>(M msg);
 
@@ -3297,6 +3386,9 @@ public void park_timeout(Duration dur);
 @rust("std::thread::park_timeout_ms")
 public void park_timeout_ms(u32 ms);
 
+public type pid_t = i32;
+
+
 @rust("std::io::pipe")
 public (PipeReader, PipeWriter) pipe() throws Error;
 
@@ -3304,7 +3396,7 @@ public (PipeReader, PipeWriter) pipe() throws Error;
 public T random<T>(Distribution dist);
 
 @rust("std::fs::read")
-public List<ubyte> read<P>(P path) throws Error;
+public Vec<ubyte> read<P>(P path) throws Error;
 
 @rust("std::fs::read_dir")
 public ReadDir read_dir<P>(P path) throws Error;
@@ -3448,6 +3540,12 @@ public Fn take_hook();
 
 @rust("std::env::temp_dir")
 public PathBuf temp_dir();
+
+public type time_t = long;
+
+
+public type uid_t = u32;
+
 
 @rust("std::panic::update_hook")
 public void update_hook<F>((Fn, PanicHookInfo) -> void hook_fn);

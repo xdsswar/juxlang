@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use crate::model::{
     StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubType, StubVariant, TypeKind,
 };
+use crate::ty::JuxType;
 
 /// Render a whole stub file to `.jux.d` source text.
 pub fn render(file: &StubFile) -> String {
@@ -31,6 +32,7 @@ pub fn render(file: &StubFile) -> String {
         }
         match item {
             StubItem::Type(t) => render_type(&mut out, t),
+            StubItem::Function(f) if !fn_is_spellable(f) => {}
             StubItem::Function(f) => {
                 // `@rust("real::path")` records a free function's true Rust path
                 // so the backend imports it as `use real::path;` (the Jux stub
@@ -103,7 +105,7 @@ fn render_type(out: &mut String, t: &StubType) {
             .join(", ");
         let _ = writeln!(out, "public {keyword} {}{generics}({comps}) {{", t.name);
         // Records may still expose methods.
-        for m in &t.methods {
+        for m in t.methods.iter().filter(|m| fn_is_spellable(m)) {
             let _ = writeln!(out, "    {}", render_fn(m, t.kind == TypeKind::Interface));
         }
         out.push_str("}\n");
@@ -126,7 +128,7 @@ fn render_type(out: &mut String, t: &StubType) {
         }
     }
 
-    for m in &t.methods {
+    for m in t.methods.iter().filter(|m| fn_is_spellable(m)) {
         let _ = writeln!(out, "    {}", render_fn(m, t.kind == TypeKind::Interface));
     }
 
@@ -186,6 +188,14 @@ fn render_ctor(out: &mut String, c: &StubCtor) {
 /// modifier: a Jux interface method that carries `static` (or `default`) must
 /// have a body, which a signature-only stub never does — so inside an interface
 /// every member is surfaced as a plain abstract signature.
+/// Whether every type in `f`'s signature has a Jux spelling (see
+/// [`JuxType::is_spellable`]); a member that fails is left out of the stub.
+fn fn_is_spellable(f: &StubFn) -> bool {
+    f.ret.is_spellable()
+        && f.params.iter().all(|p| p.ty.is_spellable())
+        && f.throws.as_ref().is_none_or(JuxType::is_spellable)
+}
+
 fn render_fn(f: &StubFn, in_interface: bool) -> String {
     let mut s = String::new();
     // `&mut self` receiver → `@MutSelf` marker. The compiler reads this

@@ -1445,7 +1445,7 @@ fn map_primitive(p: &str) -> JuxType {
 }
 
 /// Map a named path type, applying the §G.3.1 stdlib substitutions
-/// (`Vec`→`List`, `Option`→`T?`, `HashMap`→`Map`, `Box`/`Rc`/`Arc` unwrap…).
+/// (`Vec` kept, `Option`→`T?`, `HashMap`→`Map`, `Box`/`Rc`/`Arc` unwrap…).
 fn map_path(path: &Path) -> JuxType {
     let name = last_segment(&path.path);
     let args = collect_type_args(&path.args);
@@ -1457,7 +1457,7 @@ fn map_path(path: &Path) -> JuxType {
 
     match name {
         "String" => JuxType::String,
-        "Vec" => JuxType::list(arg0()),
+        "Vec" => JuxType::vec(arg0()),
         "Option" => JuxType::nullable(arg0()),
         "HashMap" | "BTreeMap" => JuxType::map(
             args.first()
@@ -2086,7 +2086,7 @@ mod tests {
     fn stdlib_containers_map() {
         assert_eq!(
             map_type(&resolved("Vec", vec![Type::Primitive("u8".into())])).to_string(),
-            "List<ubyte>",
+            "Vec<ubyte>",
         );
         assert_eq!(
             map_type(&resolved("Option", vec![resolved("String", vec![])])).to_string(),

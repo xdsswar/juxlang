@@ -2146,6 +2146,32 @@ impl RustEmitter {
                             if self.emit_int_width_converted_arg(call, i, arg) {
                                 continue;
                             }
+                            // A collection handle (`PathBuf`, `Vec`, an array)
+                            // going into a foreign static method lends its
+                            // interior, exactly as it does for a free function
+                            // or an instance method (6.5.1). This loop is the
+                            // only path a static call takes, and without it
+                            // `File.create(path)` handed the crate the
+                            // `Rc<JuxCell<PathBuf>>` itself (B27).
+                            if let Some(borrow) = self.foreign_arg_handle_lend(&call.callee, i, arg) {
+                                let is_ref = self
+                                    .symbols
+                                    .classes
+                                    .get(&class_fqn)
+                                    .and_then(|c| c.methods.get(f.field.text.as_str()))
+                                    .and_then(|m| m.params.get(i))
+                                    .is_some_and(|p| p.is_ref || p.ty.array_shape.is_some());
+                                // A borrowing slot takes `&`, and so does a
+                                // reslice (`[..]` is unsized).
+                                if is_ref || borrow.ends_with("[..]") {
+                                    self.w.push('&');
+                                }
+                                self.emitting_method_receiver = true;
+                                self.emit_expr(arg);
+                                self.emitting_method_receiver = false;
+                                self.w.push_str(borrow);
+                                continue;
+                            }
                             // Interface-typed param slot: wrap a class value in
                             // `Rc<dyn Trait>` / clone a dyn handle.
                             if let Some(pty) = self.callee_param_type(&call.callee, i) {
