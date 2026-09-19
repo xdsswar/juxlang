@@ -21,6 +21,7 @@ import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
+import dev.jux.intellij.psi.JuxLocals
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxObservableProps
 import dev.jux.intellij.psi.JuxPropertyDeclaration
@@ -151,6 +152,9 @@ class JuxCompletionContributor : CompletionContributor() {
                     // the branch returns having offered nothing at all.
                     if (addImportPathCompletion(parameters, result)) return
 
+                    // After `::` of a method reference: the qualifier's methods.
+                    if (addMethodRefCompletion(parameters, result::addElement)) return
+
                     // After a `.` (member access): offer the receiver's real
                     // members (methods/fields/properties/enum constants of an
                     // in-file-resolvable type — see JuxTypeInference). The §P
@@ -268,13 +272,21 @@ class JuxCompletionContributor : CompletionContributor() {
 
         // Value-position tiers (locals, params, members, setter `value`) — skipped
         // in a type-only position, where none of them could legally appear.
+        var from: PsiElement = parameters.position
         var scope: PsiElement? = if (typesOnly) null else parameters.position.parent
         while (scope != null && scope !is JuxFile) {
+            // Pattern binders: `case Circle(var r) -> r`, `if (x => Dog d) d`.
+            for (binder in JuxLocals.bindersInScope(scope, from)) {
+                val named = binder as? JuxNamedElement ?: continue
+                val name = named.name ?: continue
+                add(declaration(named, name, AllIcons.Nodes.Variable, P_LOCAL), name)
+            }
             when (scope.elementType) {
                 E.CODE_BLOCK ->
-                    // Locals are visible only after their declaration. The
-                    // sorter puts the nearest one first.
-                    for (child in scope.children) {
+                    // Locals are visible only after their declaration, a
+                    // destructuring's binders included. The sorter puts the
+                    // nearest one first.
+                    for (child in JuxLocals.blockLocals(scope)) {
                         if (child.elementType !== E.LOCAL_VARIABLE) continue
                         if (child.textOffset >= offset) continue
                         val named = child as? JuxNamedElement ?: continue
@@ -341,6 +353,7 @@ class JuxCompletionContributor : CompletionContributor() {
                 }
                 else -> {}
             }
+            from = scope
             scope = scope.parent
         }
 
@@ -780,6 +793,78 @@ class JuxCompletionContributor : CompletionContributor() {
                     ),
                 )
             }
+        }
+        // An enum's built-in helpers (§7.7.3): `Color.fromName(..)`,
+        // `c.ordinal()`. Nothing declares them, so they come from the table.
+        for (builtin in dev.jux.intellij.resolve.JuxEnumBuiltins.of(receiverClass.decl, static)) {
+            if (!seen.add("${builtin.name}/builtin")) continue
+            val type = dev.jux.intellij.resolve.JuxEnumBuiltins.returnType(receiverClass.decl, builtin, parameters.position)
+            val shown = type.takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }?.presentable()
+                ?: builtin.returns.replace("Self", receiverClass.decl.name ?: "Self")
+            val takesArgs = builtin.params != "()"
+            val item = LookupElementBuilder.create(builtin.name)
+                .withIcon(AllIcons.Nodes.Method)
+                .withTailText(builtin.params, true)
+                .withTypeText(shown, true)
+                .withInsertHandler { ctx, _ ->
+                    // `name(` + `)`, the caret inside when arguments are due.
+                    val doc = ctx.document
+                    doc.insertString(ctx.tailOffset, "()")
+                    ctx.editor.caretModel.moveToOffset(ctx.tailOffset - if (takesArgs) 1 else 0)
+                }
+            val element = ranked(item, P_MEMBER, JuxCompletionRanking.Kind.INHERITED)
+            if (type !is dev.jux.intellij.resolve.JuxType.Unknown) element.putUserData(JuxCompletionRanking.TYPE, type)
+            sink(element)
+        }
+        return true
+    }
+
+    /**
+     * `obj::` / `Type::` (§M.8): the methods a method reference can name.
+     * After a value, its instance methods (`g::greet`, bound); after a type,
+     * its static methods, its instance methods (unbound, the receiver becomes
+     * the first argument) and `new` for its constructor. A reference is not a
+     * call, so accepting one writes the bare name, as Java does. Reports
+     * whether the caret was after `::` at all.
+     */
+    private fun addMethodRefCompletion(parameters: CompletionParameters, sink: (LookupElement) -> Unit): Boolean {
+        val ref = parameters.position.parent ?: return false
+        if (ref.elementType !== E.METHOD_REF_EXPRESSION) return false
+        var prev = parameters.position.prevSibling
+        while (prev is com.intellij.psi.PsiWhiteSpace) prev = prev.prevSibling
+        if (prev?.elementType !== T.COLON_COLON) return false
+        val engine = dev.jux.intellij.resolve.JuxTypeEngine
+        val qualifier = engine.firstExpressionChild(ref) ?: ref.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return true
+        val qualifierType = if (qualifier.elementType === E.TYPE_REFERENCE) {
+            engine.typeOfTypeReference(qualifier).let { t -> engine.classOf(t)?.let { dev.jux.intellij.resolve.JuxType.Static(it.decl) } ?: t }
+        } else {
+            engine.typeOf(qualifier)
+        }
+        val onType = engine.stripNullable(qualifierType) is dev.jux.intellij.resolve.JuxType.Static
+        val receiver = engine.classOf(qualifierType) ?: return true
+        val from = PsiTreeUtil.getParentOfType(parameters.position, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
+        val seen = HashSet<String>()
+        // What a caller would see: instance members through a value, and
+        // everything but the fields through a type.
+        val members = engine.membersOf(if (onType) dev.jux.intellij.resolve.JuxType.ClassType(receiver.decl, receiver.args) else qualifierType)
+        for (member in members) {
+            val m = member.element
+            if (m.elementType !== E.METHOD_DECLARATION) continue
+            if (!onType && engine.isStaticMember(m)) continue
+            if (!dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(m, from)) continue
+            val named = m as? JuxNamedElement ?: continue
+            val name = named.name ?: continue
+            if (!seen.add(name)) continue
+            val returnType = engine.returnType(member).takeUnless { it is dev.jux.intellij.resolve.JuxType.Unknown }
+            var b = LookupElementBuilder.create(CompletionUtil.getOriginalOrSelf(m), name).withIcon(AllIcons.Nodes.Method)
+            val params = m.node.findChildByType(E.PARAMETER_LIST)?.text
+            if (params != null) b = b.withTailText(params, true)
+            if (returnType != null) b = b.withTypeText(returnType.presentable(), true)
+            val kind = if (member.owner.decl == receiver.decl) JuxCompletionRanking.Kind.MEMBER else JuxCompletionRanking.Kind.INHERITED
+            sink(ranked(b, P_MEMBER, kind))
+        }
+        if (onType) {
+            sink(ranked(LookupElementBuilder.create("new").bold().withTypeText(receiver.decl.name ?: "", true), P_MEMBER))
         }
         return true
     }

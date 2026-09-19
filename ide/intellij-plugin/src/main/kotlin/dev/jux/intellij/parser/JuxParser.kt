@@ -37,9 +37,46 @@ class JuxParser : PsiParser {
 
     private fun parseFile(b: PsiBuilder) {
         if (b.at(T.PACKAGE_KW)) parsePackage(b)
-        while (!b.eof()) {
+        while (!b.eof()) parseFileItem(b)
+    }
+
+    /**
+     * `@export { decl* }` (JUX-LANG-V1 §8.4, Grammar §3.6): an annotation
+     * applied to every declaration in the braces, which opens no scope. The
+     * annotation is an ANNOTATION node and the braces are plain file-level
+     * tokens around ordinary top-level declarations, so everything that
+     * reads a file's declarations (resolution, completion, the structure
+     * view, test detection) sees them exactly as if unwrapped.
+     */
+    private fun parseAnnotationBlock(b: PsiBuilder) {
+        parseAnnotations(b)
+        b.advanceLexer() // `{`
+        while (!b.eof() && !b.at(T.RBRACE)) {
+            val before = b.currentOffset
+            parseFileItem(b)
+            if (b.currentOffset == before) b.advanceLexer()
+        }
+        b.expectOrError(T.RBRACE, "'}' expected")
+    }
+
+    /** `@name {` or `@name(...) {` at the cursor. Always rolls back. */
+    private fun atAnnotationBlock(b: PsiBuilder): Boolean {
+        if (!b.at(T.AT) || b.lookAhead(1) !== T.IDENTIFIER) return false
+        val probe = b.mark()
+        b.advanceLexer() // `@`
+        b.advanceLexer() // name
+        if (b.at(T.LPAREN)) b.skipMatched(T.LPAREN, T.RPAREN)
+        val ok = b.at(T.LBRACE)
+        probe.rollbackTo()
+        return ok
+    }
+
+    /** One item of a compilation unit: an import, a declaration, an annotation block, or a statement. */
+    private fun parseFileItem(b: PsiBuilder) {
+        run {
             when {
                 b.at(T.IMPORT_KW) -> parseImport(b)
+                atAnnotationBlock(b) -> parseAnnotationBlock(b)
                 // `@cfg(...) import …;` — a conditional import (grammar A.2.1).
                 atCfgImport(b) -> {
                     parseAnnotations(b)

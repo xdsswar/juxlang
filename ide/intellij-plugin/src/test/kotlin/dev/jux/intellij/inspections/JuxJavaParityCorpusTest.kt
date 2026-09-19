@@ -64,7 +64,7 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         val examples = File(testDataPath)
         assertTrue("examples dir not found at ${examples.absolutePath}", examples.isDirectory)
         val ids = inspections.map { it.shortName }.toSet()
-        val files = JuxCorpus.entries(examples)
+        val files = JuxCorpus.sweep(examples)
         // All files first, so cross-file lookups see the whole project.
         val added = files.map { myFixture.addFileToProject(it.name, it.file.readText()) }
         val failures = StringBuilder()

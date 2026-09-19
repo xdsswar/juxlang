@@ -29,17 +29,39 @@ class JuxBlock(
     override fun buildChildren(): List<Block> {
         if (isLeaf) return emptyList()
         val out = ArrayList<Block>()
+        // At file level, braces are only ever an annotation block's
+        // (`@export { ... }`): what sits between them indents one level.
+        val isFile = myNode.treeParent == null
+        var annotationBlockDepth = 0
         var child = myNode.firstChildNode
         while (child != null) {
             // Skip whitespace AND zero-length nodes: the parser's recovery
             // emits zero-width PsiErrorElements everywhere, and the engine
             // asserts on empty-range blocks.
             if (child.elementType !== TokenType.WHITE_SPACE && child.textLength > 0) {
-                out.add(JuxBlock(child, JuxIndentRules.childIndent(myNode, child), ctx))
+                if (isFile && child.elementType === T.RBRACE && annotationBlockDepth > 0) annotationBlockDepth--
+                val indent = when {
+                    keepsFirstColumn(child) -> Indent.getAbsoluteNoneIndent()
+                    isFile && annotationBlockDepth > 0 -> Indent.getNormalIndent()
+                    else -> JuxIndentRules.childIndent(myNode, child)
+                }
+                out.add(JuxBlock(child, indent, ctx))
+                if (isFile && child.elementType === T.LBRACE) annotationBlockDepth++
             }
             child = child.treeNext
         }
         return out
+    }
+
+    /**
+     * "Keep when reformatting: Comment at first column", as Java has it: a
+     * comment written at column 0 (code commented out, usually) stays there.
+     */
+    private fun keepsFirstColumn(child: ASTNode): Boolean {
+        if (!ctx.common.KEEP_FIRST_COLUMN_COMMENT) return false
+        if (child.elementType !== T.LINE_COMMENT && child.elementType !== T.BLOCK_COMMENT) return false
+        val before = com.intellij.psi.impl.source.tree.TreeUtil.prevLeaf(child) ?: return false
+        return before.elementType === TokenType.WHITE_SPACE && before.text.endsWith("\n")
     }
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? =

@@ -13,5 +13,9 @@ import dev.jux.intellij.JuxLanguage
  */
 class JuxFormatContext(val settings: CodeStyleSettings) {
     val common: CommonCodeStyleSettings = settings.getCommonSettings(JuxLanguage)
+
+    /** Jux's own settings: brace placement. */
+    val jux: JuxCodeStyleSettings = settings.getCustomSettings(JuxCodeStyleSettings::class.java)
+
     val spacingBuilder: SpacingBuilder = JuxSpacingRules.create(settings, common)
 }

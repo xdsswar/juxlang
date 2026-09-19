@@ -68,8 +68,12 @@ object JuxTypeInference {
      */
     private fun resolveValueDecl(name: String, context: PsiElement): JuxNamedElement? {
         val offset = context.textOffset
+        var child: PsiElement = context
         var scope: PsiElement? = context.parent
         while (scope != null) {
+            // Pattern binders: `case Circle(var r) -> r`, `if (x => Dog d) d`.
+            dev.jux.intellij.psi.JuxLocals.bindersInScope(scope, child)
+                .firstOrNull { (it as? JuxNamedElement)?.name == name }?.let { return it as JuxNamedElement }
             when (scope.elementType) {
                 E.CODE_BLOCK ->
                     for (child in dev.jux.intellij.psi.JuxLocals.blockLocals(scope)) {
@@ -106,6 +110,7 @@ object JuxTypeInference {
                     }
             }
             if (scope is JuxFile) break
+            child = scope
             scope = scope.parent
         }
         return null

@@ -68,6 +68,7 @@ class JuxParserDefinition : ParserDefinition {
         // node but no named PSI, so none of that worked.
         E.TYPE_PARAMETER -> JuxTypeParameter(node)
         E.LOCAL_VARIABLE -> JuxLocalVariable(node)
+        E.LABELED_STATEMENT -> JuxLabeledStatement(node)
 
         else -> JuxCompositeElement(node)
     }

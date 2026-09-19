@@ -201,6 +201,12 @@
     <lang.foldingBuilder
         language="Jux"
         implementationClass="dev.jux.intellij.folding.JuxFoldingBuilder"/>
+    <!-- Which Jux regions start collapsed: the "Jux" group of
+         Settings | Editor | General | Code Folding, beside Java's. -->
+    <applicationService
+        serviceImplementation="dev.jux.intellij.folding.JuxCodeFoldingSettings"/>
+    <codeFoldingOptionsProvider
+        instance="dev.jux.intellij.folding.JuxCodeFoldingOptionsProvider"/>
 
     <!-- PSI semantic highlighting: declaration names, reference uses
          (call sites, params, locals, type parameters, enum constants),
@@ -306,8 +312,11 @@
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.JuxSubtypeLineMarkerProvider"/>
     <!-- Go To Implementation(s) (Ctrl+Alt+B): class -> subclasses,
-         method -> overriding methods. Self-guards on Jux elements. -->
-    <definitionsSearch
+         method -> overriding methods. Self-guards on Jux elements. Quick
+         Definition (Ctrl+Shift+I) lists the same. The executor takes
+         DefinitionsScopedSearch.SearchParameters, which is this EP's query;
+         the older `definitionsSearch` passes a bare element and threw. -->
+    <definitionsScopedSearch
         implementation="dev.jux.intellij.resolve.JuxImplementationSearch"/>
     <!-- sec. P.7.8: observed / bound / plain gutter trio on properties. -->
     <codeInsight.lineMarkerProvider
@@ -444,6 +453,20 @@
     <codeInsight.gotoSuper
         language="Jux"
         implementationClass="dev.jux.intellij.codeInsight.JuxGotoSuperHandler"/>
+    <!-- View | Type Info (Ctrl+Shift+P): the type of the expression at the caret. -->
+    <codeInsight.typeInfo
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxExpressionTypeProvider"/>
+    <!-- Navigate | Type Declaration (Ctrl+Shift+B). -->
+    <typeDeclarationProvider
+        implementation="dev.jux.intellij.codeInsight.JuxTypeDeclarationProvider"/>
+    <!-- Navigate | Test (Ctrl+Shift+T) and Create New Test, by the
+         src/ and test/ layout of the build system's section B.1.2. -->
+    <testFinder
+        implementation="dev.jux.intellij.run.JuxTestFinder"/>
+    <testCreator
+        language="Jux"
+        implementationClass="dev.jux.intellij.run.JuxTestCreator"/>
     <!-- Keyword highlight-usages: exit points, break-outs, exceptions,
          overriding methods (Java's handlers). -->
     <highlightUsagesHandlerFactory
@@ -579,6 +602,10 @@
         implementationClass="dev.jux.intellij.format.JuxFormattingModelBuilder"/>
     <langCodeStyleSettingsProvider
         implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
+    <!-- Wrapping and Braces | Force braces: wraps single-statement bodies
+         after Reformat Code, as Java's brace enforcer does. -->
+    <postFormatProcessor
+        implementation="dev.jux.intellij.format.JuxBraceEnforcer"/>
 
     <!-- Alt+Enter intentions. -->
 

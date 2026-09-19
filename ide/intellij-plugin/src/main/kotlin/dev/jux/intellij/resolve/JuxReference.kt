@@ -54,14 +54,31 @@ class JuxReference(element: PsiElement, range: TextRange) :
         // The type engine first: it follows the receiver's real type through
         // chains, `var` inference, generics and bounds, inherited members and
         // imports -- the cases a name walk cannot see.
+        // A name inside a type's `[...]` dimension is a value or a const
+        // type parameter (`new int[N]`, `int[N] xs`), not the type.
+        if (t === E.TYPE_REFERENCE && isInsideArrayDimension()) {
+            return JuxTypeEngine.resolveReferenceExpression(element, null, value)
+        }
         when (t) {
             E.FIELD_ACCESS_EXPRESSION ->
                 JuxTypeEngine.resolveMemberAccess(element, argCount)?.let { return it.element }
+            // `obj::greet`, `Type::staticMethod`, `Type::new` (§M.8): the
+            // qualifier's type holds the member, exactly as for `obj.greet`.
+            E.METHOD_REF_EXPRESSION -> {
+                if (value == "new") {
+                    JuxTypeEngine.constructorReferenceTarget(element)?.let { return it }
+                } else {
+                    JuxTypeEngine.resolveMemberAccess(element, null)?.let { return it.element }
+                }
+            }
             E.REFERENCE_EXPRESSION ->
                 JuxTypeEngine.resolveReferenceExpression(element, argCount)?.let { return it }
             E.TYPE_REFERENCE -> {
+                // `sealed enum Signal permits Red, Amber` (§7.7): the permitted
+                // names are the enum's own variants.
+                permittedEnumVariant()?.let { return it }
                 val ids = element.node.getChildren(null)
-                    .takeWhile { it.elementType !== E.TYPE_ARGUMENT_LIST }
+                    .takeWhile { it.elementType !== E.TYPE_ARGUMENT_LIST && it.elementType !== JuxTokenTypes.LBRACKET }
                     .filter { it.elementType === JuxTokenTypes.IDENTIFIER }
                     .map { it.text }
                 if (ids.isNotEmpty()) {
@@ -85,6 +102,29 @@ class JuxReference(element: PsiElement, range: TextRange) :
             return null
         }
         return resolveLocally() ?: resolveCrossFile()
+    }
+
+    /** Whether this reference's name sits inside a type reference's `[...]`. */
+    private fun isInsideArrayDimension(): Boolean {
+        var c = element.node.firstChildNode
+        var inside = false
+        while (c != null) {
+            if (c.startOffset - element.textRange.startOffset >= rangeInElement.startOffset) return inside
+            when (c.elementType) {
+                JuxTokenTypes.LBRACKET -> inside = true
+                JuxTokenTypes.RBRACKET -> inside = false
+            }
+            c = c.treeNext
+        }
+        return false
+    }
+
+    /** The enum variant a name in an enum's own `permits` clause names, if any. */
+    private fun permittedEnumVariant(): PsiElement? {
+        if (element.parent?.elementType !== E.PERMITS_CLAUSE) return null
+        val enumDecl = element.parent?.parent?.takeIf { it.elementType === E.ENUM_DECLARATION } ?: return null
+        return com.intellij.psi.util.PsiTreeUtil.findChildrenOfType(enumDecl, JuxNamedElement::class.java)
+            .firstOrNull { it.elementType === E.ENUM_CONSTANT && it.name == value }
     }
 
     /**
@@ -146,9 +186,14 @@ class JuxReference(element: PsiElement, range: TextRange) :
     fun resolveLocally(): PsiElement? {
         val name = value
         val refOffset = element.textOffset
+        var child: PsiElement = element
         var scope: PsiElement? = element.parent
         while (scope != null) {
+            // Pattern binders: `case Circle(var r) -> r`, `if (x => Dog d) d`.
+            dev.jux.intellij.psi.JuxLocals.bindersInScope(scope, child)
+                .firstOrNull { (it as? JuxNamedElement)?.name == name }?.let { return it }
             lookupInScope(scope, name, refOffset)?.let { return it }
+            child = scope
             scope = scope.parent
         }
         return null

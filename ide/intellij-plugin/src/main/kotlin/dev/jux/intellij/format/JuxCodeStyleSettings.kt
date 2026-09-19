@@ -3,11 +3,13 @@ package dev.jux.intellij.format
 import com.intellij.psi.PsiFile
 import com.intellij.application.options.CodeStyle
 import com.intellij.psi.codeStyle.CodeStyleSettings
+import com.intellij.psi.codeStyle.CommonCodeStyleSettings
 import com.intellij.psi.codeStyle.CustomCodeStyleSettings
 
 /**
  * Jux's own code style settings: the Imports tab (Settings | Editor | Code
- * Style | Jux | Imports), Java's "Imports" page for Jux.
+ * Style | Jux | Imports), Java's "Imports" page for Jux, and the brace
+ * placement of the Wrapping and Braces tab.
  *
  * Public fields, because the platform serializes a [CustomCodeStyleSettings]
  * by reflecting over them, and a project that shares its code style in
@@ -38,11 +40,42 @@ class JuxCodeStyleSettings(container: CodeStyleSettings) : CustomCodeStyleSettin
     @JvmField
     var NAMES_COUNT_TO_USE_WILDCARD: Int = 0
 
+    // ---- Wrapping and Braces | Braces placement ------------------------------
+    //
+    // Java keeps these in the common settings, with five choices; Jux keeps
+    // its own with the three its formatter implements (see [BRACE_STYLES]),
+    // under Java's names.
+
+    /** Where a type body's `{` goes: class, interface, enum, record. */
+    @JvmField
+    var CLASS_BRACE_STYLE: Int = END_OF_LINE
+
+    /** Where a method's, constructor's or operator's body `{` goes. */
+    @JvmField
+    var METHOD_BRACE_STYLE: Int = END_OF_LINE
+
+    /** Where a block-bodied lambda's `{` goes. */
+    @JvmField
+    var LAMBDA_BRACE_STYLE: Int = END_OF_LINE
+
+    /** Where every other `{` goes: `if`, loops, `try`, `switch`, labeled blocks. */
+    @JvmField
+    var BRACE_STYLE: Int = END_OF_LINE
+
     /** The layout as groups of prefixes; `*` is the catch-all group. */
     fun layoutGroups(): List<List<String>> = parseLayout(IMPORT_LAYOUT)
 
     companion object {
         const val DEFAULT_LAYOUT = "rust.|c.|cpp.;jux.;*"
+
+        /** Java's values for the brace styles Jux implements (CommonCodeStyleSettings). */
+        const val END_OF_LINE = CommonCodeStyleSettings.END_OF_LINE
+        const val NEXT_LINE = CommonCodeStyleSettings.NEXT_LINE
+        const val NEXT_LINE_IF_WRAPPED = CommonCodeStyleSettings.NEXT_LINE_IF_WRAPPED
+
+        /** The brace styles, as the Wrapping and Braces tab names them, and their values. */
+        val BRACE_STYLE_NAMES = arrayOf("End of line", "Next line", "Next line if wrapped")
+        val BRACE_STYLES = intArrayOf(END_OF_LINE, NEXT_LINE, NEXT_LINE_IF_WRAPPED)
 
         /** The Jux code style in effect for [file]. */
         fun of(file: PsiFile): JuxCodeStyleSettings = CodeStyle.getCustomSettings(file, JuxCodeStyleSettings::class.java)

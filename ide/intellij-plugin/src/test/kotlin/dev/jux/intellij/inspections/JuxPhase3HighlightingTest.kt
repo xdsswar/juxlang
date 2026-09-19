@@ -120,6 +120,36 @@ void main() {
     print(sum);
 }
 """)
+        probe("landing", """
+record Pt(int x, int y) {}
+record Line(Pt start, Pt end) {}
+sealed interface Expr {}
+record Num(int v) implements Expr {}
+record Neg(int v) implements Expr {}
+interface Addable<T> { T operator+(T other); }
+record V(int x) implements Addable<V> {
+    public V operator+(V other) { return new V(x + other.x); }
+    public V operator*(int k) { return new V(x * k); }
+    public V operator*(V other) { return new V(x * other.x); }
+}
+<T extends Addable<T>> T sum(T a, T b) { return a + b; }
+Iterator<int> upTo(int n) {
+    for (int i = 0; i < n; i++) { yield i; }
+}
+Iterator<int> both(Iterator<int> a, Iterator<int> b) {
+    yield* a;
+    yield* b;
+}
+@export {
+    public int add(int a, int b) { return a + b; }
+}
+int value(Expr e) { return switch (e) { case Num(var n) | Neg(var n) -> n; default -> 0; }; }
+void main() {
+    var Line(Pt(a, b), var end) = new Line(new Pt(1, 2), new Pt(3, 4));
+    print(a + b + end.x + add(1, 2) + value(new Num(1)));
+    print(sum(new V(1), new V(2)) * 2);
+}
+""")
         probe("decls", """
 record Pt(int x, int y) {}
 int twice(int x) = x * 2;

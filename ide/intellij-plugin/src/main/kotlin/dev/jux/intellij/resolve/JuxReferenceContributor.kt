@@ -32,13 +32,22 @@ class JuxReferenceContributor : PsiReferenceContributor() {
             object : PsiReferenceProvider() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
                     importReferences(element)?.let { return it }
+                    labelReference(element)?.let { return arrayOf(it) }
                     if (element.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
                     val name = nameLeaf(element) ?: return PsiReference.EMPTY_ARRAY
                     // `x.operator hash()` (§O.2.7) names an operator every value
                     // has, not a member called `hash`.
                     if (isNamedOperatorName(name)) return PsiReference.EMPTY_ARRAY
                     val range = TextRange.from(name.startOffsetInParent, name.textLength)
-                    return arrayOf(JuxReference(element, range))
+                    val main = JuxReference(element, range)
+                    // `int[N]` / `new Cell[size]`: a name inside an array
+                    // dimension is a value (or a const type parameter), with a
+                    // reference of its own beside the type's.
+                    val dims = arrayDimensionNames(element)
+                    if (dims.isEmpty()) return arrayOf(main)
+                    return (listOf<PsiReference>(main) + dims.map {
+                        JuxReference(element, TextRange.from(it.startOffsetInParent, it.textLength))
+                    }).toTypedArray()
                 }
             },
         )
@@ -95,6 +104,34 @@ class JuxReferenceContributor : PsiReferenceContributor() {
     }
 
     /**
+     * `break outer;` / `continue outer;`: a reference from the label to the
+     * labeled statement it leaves (Grammar §A.2.8), so go-to, find usages and
+     * rename treat a label like any other name.
+     */
+    private fun labelReference(element: PsiElement): PsiReference? {
+        if (element.elementType !== E.BREAK_STATEMENT && element.elementType !== E.CONTINUE_STATEMENT) return null
+        val label = element.node.findChildByType(JuxTokenTypes.IDENTIFIER)?.psi ?: return null
+        return JuxLabelReference(element, TextRange.from(label.startOffsetInParent, label.textLength))
+    }
+
+    /** The identifiers inside a type reference's `[...]` dimensions. */
+    private fun arrayDimensionNames(element: PsiElement): List<PsiElement> {
+        if (element.elementType !== E.TYPE_REFERENCE) return emptyList()
+        val out = ArrayList<PsiElement>()
+        var inside = false
+        var c: PsiElement? = element.firstChild
+        while (c != null) {
+            when (c.elementType) {
+                JuxTokenTypes.LBRACKET -> inside = true
+                JuxTokenTypes.RBRACKET -> inside = false
+                JuxTokenTypes.IDENTIFIER -> if (inside) out.add(c)
+            }
+            c = c.nextSibling
+        }
+        return out
+    }
+
+    /**
      * The identifier leaf the reference points at: the **last direct**
      * IDENTIFIER child — the simple name after any qualifier (`a.b.C` → `C`,
      * `obj.field` → `field`); generic arguments are nested nodes, so they
@@ -104,6 +141,8 @@ class JuxReferenceContributor : PsiReferenceContributor() {
         var last: PsiElement? = null
         var c: PsiElement? = element.firstChild
         while (c != null) {
+            // A type's name comes before its `[...]` dimensions.
+            if (c.elementType === JuxTokenTypes.LBRACKET && element.elementType === E.TYPE_REFERENCE) break
             // A reserved keyword in member position (`recv.default`, `x.type`) is
             // the member name — accept it as the name leaf so keyword-named crate
             // members still get a reference (go-to / completion / highlight).
