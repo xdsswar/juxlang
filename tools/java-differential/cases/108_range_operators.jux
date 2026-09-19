@@ -1,0 +1,33 @@
+// A user type's `operator..` / `operator..=` (§O.2.4). Java has no operator
+// overloading, so its twin names the same two operations as methods.
+
+record Date(int day) {
+    public Vec<Date> operator..(Date end) {
+        var out = new Vec<Date>();
+        for (int d = day; d < end.day; d++) {
+            out.push(new Date(d));
+        }
+        return out;
+    }
+
+    public Vec<Date> operator..=(Date end) {
+        var out = new Vec<Date>();
+        for (int d = day; d <= end.day; d++) {
+            out.push(new Date(d));
+        }
+        return out;
+    }
+}
+
+public void main() {
+    var span = new Date(3)..new Date(7);
+    print(span.len());
+    for (var d : span) {
+        print(d.day);
+    }
+    var closed = new Date(5)..=new Date(6);
+    print(closed.len());
+    print(closed[1].day);
+    var empty = new Date(9)..new Date(9);
+    print(empty.len());
+}

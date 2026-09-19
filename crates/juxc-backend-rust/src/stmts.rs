@@ -2126,7 +2126,10 @@ impl RustEmitter {
                 return;
             }
         }
-        if matches!(&f.iter, Expr::Range(_)) {
+        // A numeric range becomes a Rust range loop. A range over a user type
+        // is its `operator..` (§O.2.4), whose result is walked like any other
+        // iterable by the general path below.
+        if matches!(&f.iter, Expr::Range(r) if self.user_range_operator(r).is_none()) {
             self.w.push_str("for ");
             self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");

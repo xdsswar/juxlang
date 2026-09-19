@@ -356,16 +356,11 @@ impl<'a> Parser<'a> {
                 ) {
                     i += 1;
                 }
-                // Skip the return type token. `void` is its own keyword;
-                // any other return type starts with an `Ident`. After
-                // either, the next token must be `Kw(Operator)` for
-                // this to be an operator declaration.
-                let after_type = match self.tokens.get(i).map(|t| &t.kind) {
-                    Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
-                    Some(TokenKind::Ident(_)) => Some(i + 1),
-                    _ => None,
-                };
-                self.operator_kw_starts_decl(after_type)
+                // Skip the WHOLE return type -- `void`, `Money`, and also
+                // `Vec<int>`, `int[]`, `T?` or a tuple -- then the next token
+                // must be `Kw(Operator)`. Stepping over a single token here
+                // missed `Vec<int> operator..(Day end)` and misread the class.
+                self.operator_kw_starts_decl(self.scan_type_at(i))
             };
             if lookahead_is_operator {
                 if let Some(op) = self.parse_operator_decl(member_vis) {
@@ -1969,7 +1964,15 @@ impl<'a> Parser<'a> {
                 let next_kind = after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
                 let after_member_name: Option<&TokenKind> =
                     after_type_skipped.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
+                // An operator whose return type is generic or suffixed
+                // (`Vec<int> operator..(...)`) sits past the WHOLE type.
+                let operator_after_full_type = self.operator_kw_starts_decl(self.scan_type_at(i));
                 match next_kind {
+                    _ if operator_after_full_type => {
+                        if let Some(op) = self.parse_operator_decl(member_vis) {
+                            operators.push(op);
+                        }
+                    }
                     Some(TokenKind::Kw(Keyword::Operator))
                         if self.operator_kw_starts_decl(after_type) =>
                     {
@@ -2131,12 +2134,8 @@ impl<'a> Parser<'a> {
                     ) {
                         i += 1;
                     }
-                    let after_type = match self.tokens.get(i).map(|t| &t.kind) {
-                        Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
-                        Some(TokenKind::Ident(_)) => Some(i + 1),
-                        _ => None,
-                    };
-                    self.operator_kw_starts_decl(after_type)
+                    // The whole return type, generics and suffixes included.
+                    self.operator_kw_starts_decl(self.scan_type_at(i))
                 };
                 // A constructor (§7.7.4): the enum's own name, then `(`.
                 let names_enum = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text)

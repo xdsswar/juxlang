@@ -1714,25 +1714,44 @@ impl RustEmitter {
     /// call binds tighter than every binary op). The RHS is cloned
     /// before being passed by value.
     fn emit_class_op_method_call(&mut self, b: &BinaryExpr, synth: &str) {
+        match binary_operator_kind(b.op) {
+            Some(kind) => self.emit_operator_call(&b.left, synth, kind, &b.right),
+            None => {
+                self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
+                self.w.push('.');
+                self.w.push_str(synth);
+                self.w.push('(');
+                self.emit_expr(&b.right);
+                self.w.push_str(".clone())");
+            }
+        }
+    }
+
+    /// `left.synth(right)`: a user operator called through its inherent
+    /// method, shared by the binary operators and ranges.
+    ///
+    /// The left operand is borrowed by the method call; the right one is
+    /// passed by value, so a class or record operand is cloned (an `Rc` bump)
+    /// and a primitive goes in as written.
+    pub(crate) fn emit_operator_call(&mut self, left: &Expr, synth: &str, kind: OperatorKind, right: &Expr) {
         // Use the maximum precedence value so any non-atomic LHS
         // (binary, range, etc.) gets wrapped in parens — method-call
         // dot binds tighter than every binary op.
-        self.emit_expr_with_parent_prec(&b.left, u8::MAX, /*right=*/ false);
+        self.emit_expr_with_parent_prec(left, u8::MAX, /*right=*/ false);
         self.w.push('.');
         self.w.push_str(synth);
         self.w.push('(');
         // An operator over a polymorphic base takes the base handle, so a
         // concrete or subclass-typed operand converts on the way in.
-        let param = match (&b.op, self.identity_operand(&b.left)) {
-            (op, Some(left)) => binary_operator_kind(*op).and_then(|k| self.class_operator_param(&left.name, k)),
-            _ => None,
-        };
-        match (param, self.identity_operand(&b.right)) {
-            (Some(param), Some(right)) => self.emit_operator_argument(&b.right, &right, &param),
-            _ => {
-                self.emit_expr(&b.right);
+        let param = self.identity_operand(left).and_then(|l| self.class_operator_param(&l.name, kind));
+        match (param, self.identity_operand(right)) {
+            (Some(param), Some(r)) => self.emit_operator_argument(right, &r, &param),
+            (_, Some(_)) => {
+                self.emit_expr(right);
                 self.w.push_str(".clone()");
             }
+            // A primitive or other plain value needs no clone.
+            (_, None) => self.emit_expr(right),
         }
         self.w.push(')');
     }

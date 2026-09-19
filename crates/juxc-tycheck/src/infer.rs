@@ -547,7 +547,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::NewArray(n) => infer_new_array(n, env, symbols),
         Expr::NewArrayLit(n) => infer_new_array_lit(n, env, symbols),
         Expr::Cast(c) => infer_cast(c, env, symbols),
-        Expr::Range(_) => Ty::Unknown,
+        // `a..b` on a user type is its `operator..` (§O.2.4): the
+        // expression has the operator's declared result type.
+        Expr::Range(r) => {
+            let kind = if r.inclusive { OperatorKind::RangeInclusive } else { OperatorKind::Range };
+            let start = infer_expr(&r.start, env, symbols);
+            lookup_user_operator_return_type(&start, kind, env, symbols).unwrap_or(Ty::Unknown)
+        }
         Expr::Unary(u) => infer_unary(u, env, symbols),
         Expr::Binary(b) => infer_binary(b, env, symbols),
         Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),

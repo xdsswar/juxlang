@@ -83,6 +83,14 @@ Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary 
 | `..=`    | `Range<T> operator..=(T end)`               | Inclusive range              |
 | `in`     | `bool operator in(T element)`              | Defined on the *container*   |
 
+`a..b` and `a..=b` on a value of a user type call its `operator..` /
+`operator..=` with `b`; the expression's type is whatever the operator
+returns (a `Range<T>`, a collection, or anything else it declares), and a
+for-each over it walks that result like any other iterable. The built-in
+numeric range is used only when `a` is a primitive. A user type that declares
+no `operator..` (or `operator..=`) is `E0484`, as for the arithmetic family,
+and `b` must be assignable to the operator's parameter (`E0410`).
+
 ### O.2.5. What Cannot Be Overridden
 
 - `&&`, `||` — would lose short-circuit

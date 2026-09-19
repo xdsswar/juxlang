@@ -1,0 +1,3 @@
+range_operator_rules.jux:14:13: [E0484] error: `Note` has no `operator..`, so `..` has nothing to call (§O.2.4)
+range_operator_rules.jux:15:13: [E0484] error: `Date` has no `operator..=`, so `..=` has nothing to call (§O.2.4)
+range_operator_rules.jux:16:13: [E0410] error: `operator..` on `Date` takes Date, found int

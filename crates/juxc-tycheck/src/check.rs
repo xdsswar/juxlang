@@ -1470,6 +1470,58 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `a..b` / `a..=b` with `a` of a user type (§O.2.4): it calls the type's
+    /// `operator..` / `operator..=`, so that operator must exist (`E0484`)
+    /// and take `b` (`E0410`). A primitive start keeps the built-in range.
+    fn check_user_range_operator(&mut self, r: &juxc_ast::RangeExpr) {
+        let start = infer_expr(&r.start, &self.env, self.symbols);
+        let Ty::User { name, .. } = &start else { return };
+        let declared_here = self.symbols.classes.get(name).is_some_and(|c| !c.is_external)
+            || self.symbols.records.contains_key(name)
+            || self.symbols.enums.get(name).is_some_and(|e| !e.is_external);
+        if !declared_here {
+            return;
+        }
+        let kind = if r.inclusive { OperatorKind::RangeInclusive } else { OperatorKind::Range };
+        let symbol = if r.inclusive { "..=" } else { ".." };
+        let bare = name.rsplit('.').next().unwrap_or(name).to_string();
+        let op = self
+            .symbols
+            .classes
+            .get(name)
+            .and_then(|c| c.operators.get(&kind))
+            .or_else(|| self.symbols.records.get(name).and_then(|rec| rec.operators.get(&kind)))
+            .or_else(|| self.symbols.enums.get(name).and_then(|e| e.operators.get(&kind)))
+            .filter(|op| !op.is_deleted)
+            .cloned();
+        let Some(op) = op else {
+            let end = infer_expr(&r.end, &self.env, self.symbols);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0484_OperatorNotDefined,
+                    format!("`{bare}` has no `operator{symbol}`, so `{symbol}` has nothing to call (§O.2.4)"),
+                )
+                .with_span(r.span)
+                .with_help(format!("declare it on `{bare}`: `public Range<{bare}> operator{symbol}({end} end) {{ ... }}`")),
+            );
+            return;
+        };
+        if let Some(param) = op.params.first() {
+            let want = crate::ty::lower_member_type(&param.ty, name, self.symbols);
+            let got = infer_expr(&r.end, &self.env, self.symbols);
+            if !matches!(got, Ty::Unknown) && !compatible(&want, &got, self.symbols) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!("`operator{symbol}` on `{bare}` takes {want}, found {got}"),
+                    )
+                    // A literal can carry no span of its own; the range's does.
+                    .with_span(Some(expr_span(&r.end)).filter(|sp| *sp != Span::DUMMY).unwrap_or(r.span)),
+                );
+            }
+        }
+    }
+
     /// True when `ty` can satisfy a `where T has operator KIND`
     /// constraint (§O.5): user classes/records by declaring the
     /// operator; primitives and String through their native operator
@@ -6038,6 +6090,7 @@ impl<'a> Checker<'a> {
             Expr::Range(r) => {
                 self.check_expr(&r.start);
                 self.check_expr(&r.end);
+                self.check_user_range_operator(r);
                 // `step` (§M.6.3): integer-typed; Phase 1 supports it
                 // only as a for-each iterable (`for (i : a..b step s)`)
                 // — the ForEach arm clears this flag around its head.
