@@ -1,0 +1,4 @@
+Add(20, 22)    42
+SumTo(10)      55
+SumTo(100)     5050
+built for a known architecture: true

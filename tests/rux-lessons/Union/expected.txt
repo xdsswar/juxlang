@@ -1,0 +1,8 @@
+sizeof(Bits)    4
+sizeof(Uneven)  8   (not 1 + 8)
+zero as signed   0
+zero as unsigned 0
+as signed        -1
+as unsigned      4294967295
+as bytes         255 255 255 255
+256 as bytes     0 1 0 0

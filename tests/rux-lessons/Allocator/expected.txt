@@ -1,0 +1,4 @@
+fresh arena     blocks 0  bytes used 0
+two boxes made  blocks 1  bytes used 16
+their values    10 and 20
+after reset     blocks 1  bytes used 0
