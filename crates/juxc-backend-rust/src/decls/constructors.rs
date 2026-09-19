@@ -875,10 +875,24 @@ impl RustEmitter {
             // individual FIELD it reads -- a snapshot, so a later write to
             // that field is invisible to the closure. Deferring binds `this`
             // to the handle, and the capture becomes the object itself.
+            // The same holds for a lambda that reads a field or calls a
+            // method WITHOUT writing `this` (§7.9: it captures the object).
             if let juxc_ast::Expr::Lambda(l) = e {
                 let mut uses_this = false;
+                let lambda_params: std::collections::HashSet<&str> =
+                    l.params.iter().map(|p| p.name.text.as_str()).collect();
                 let mut probe = |inner: &juxc_ast::Expr| {
                     uses_this |= matches!(inner, juxc_ast::Expr::This(_));
+                    if let juxc_ast::Expr::Path(qn) = inner {
+                        if let [only] = qn.segments.as_slice() {
+                            let n = only.text.as_str();
+                            uses_this |= !lambda_params.contains(n)
+                                && !ctor.params.iter().any(|p| p.name.text == n)
+                                && (class_decl.fields.iter().any(|f| !f.is_static && f.name.text == n)
+                                    || class_decl.properties.iter().any(|p| p.name.text == n)
+                                    || instance_method(n));
+                        }
+                    }
                 };
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(b) => crate::worker::walk_expr(b, &mut probe),

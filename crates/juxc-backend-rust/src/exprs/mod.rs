@@ -31,6 +31,7 @@ pub(crate) mod field;
 pub(crate) mod fn_pointer;
 pub(crate) use fn_pointer::{fn_pointer_sig_type_ref, type_ref_is_void_name};
 pub(crate) mod fn_value;
+pub(crate) mod outer_capture;
 pub(crate) mod simple;
 
 /// Discriminator for `emit_interp_string`'s deferred-arg emission —
@@ -2389,6 +2390,71 @@ impl RustEmitter {
         found
     }
 
+    /// The enclosing class's instance fields/properties and instance methods
+    /// that lambda `l` names bare, split in two: what the outer-capture
+    /// rewrite (`outer_capture`) turns into `__jux_outer.<name>`. Only names
+    /// the lambda actually reads are looked up.
+    fn enclosing_members_read_by(
+        &self,
+        l: &juxc_ast::LambdaExpr,
+    ) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+        let mut fields = std::collections::HashSet::new();
+        let mut methods = std::collections::HashSet::new();
+        let Some(class) = self.enclosing_class.clone() else {
+            return (fields, methods);
+        };
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if self.current_fn_params.contains(name)
+                || self.local_types.iter().any(|scope| scope.contains_key(name))
+            {
+                return;
+            }
+            let instance_field = self
+                .lookup_class_field_owner_in_chain(&class, name)
+                .is_some_and(|(_, is_static, _)| !is_static)
+                || self.bare_name_is_property_in_chain(&class, name);
+            if instance_field {
+                fields.insert(name.to_string());
+            }
+            if self.symbols.merged_method_overloads(&class, name).iter().any(|m| !m.is_static) {
+                methods.insert(name.to_string());
+            }
+        });
+        (fields, methods)
+    }
+
+    /// Emit lambda `l` as the anonymous implementation `anon` of a
+    /// single-method interface (LANG-V1 §7.9.1). When the lambda reads the
+    /// enclosing object, the object's handle is bound as `__jux_outer` first
+    /// and typed as the enclosing class, so the anonymous class captures it
+    /// like any other local:
+    ///
+    /// ```text
+    /// { let __jux_outer = self.clone(); { struct __JuxAnon0 { __jux_outer: Pipeline } ... } }
+    /// ```
+    pub(crate) fn emit_lambda_as_anonymous_class(&mut self, l: &juxc_ast::LambdaExpr, anon: &juxc_ast::NewObjectExpr) {
+        let outer = self.lambda_captures_this(l).then(|| self.enclosing_class.clone()).flatten();
+        let Some(class) = outer else {
+            self.emit_anonymous_class(anon);
+            return;
+        };
+        let handle = self.this_alias.clone().unwrap_or_else(|| "self".to_string());
+        self.w.push_str("{ let ");
+        self.w.push_str(outer_capture::OUTER);
+        self.w.push_str(" = ");
+        self.w.push_str(&handle);
+        self.w.push_str(".clone(); ");
+        let mut scope = std::collections::HashMap::new();
+        scope.insert(
+            outer_capture::OUTER.to_string(),
+            juxc_tycheck::Ty::User { name: class, generic_args: Vec::new() },
+        );
+        self.local_types.push(scope);
+        self.emit_anonymous_class(anon);
+        self.local_types.pop();
+        self.w.push_str(" }");
+    }
+
     fn collect_wrapper_captures(&self, l: &juxc_ast::LambdaExpr) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3181,7 +3247,7 @@ impl RustEmitter {
             }
             juxc_ast::ReturnType::AsyncType(_) => return None,
         };
-        let body = match &l.body {
+        let mut body = match &l.body {
             juxc_ast::LambdaBody::Block(b) => (**b).clone(),
             juxc_ast::LambdaBody::Expr(e) => {
                 let stmt = if matches!(return_type, juxc_ast::ReturnType::Void) {
@@ -3192,6 +3258,20 @@ impl RustEmitter {
                 juxc_ast::Block { statements: vec![stmt], span }
             }
         };
+        // Reads of the enclosing object (§7.9: a lambda that reads a field
+        // captures the object) go through the captured `__jux_outer` handle,
+        // since inside the anonymous struct's method `self` is the struct.
+        // [`Self::emit_lambda_as_anonymous_class`] binds the handle.
+        if self.lambda_captures_this(l) {
+            let (fields, methods) = self.enclosing_members_read_by(l);
+            let shadow: std::collections::HashSet<String> =
+                l.params.iter().map(|p| p.name.text.clone()).collect();
+            outer_capture::rewrite_block(
+                &mut body,
+                &outer_capture::OuterMembers { fields: &fields, methods: &methods },
+                &shadow,
+            );
+        }
         let method_decl = juxc_ast::FnDecl {
             annotations: Vec::new(),
             visibility: juxc_ast::Visibility::Public,

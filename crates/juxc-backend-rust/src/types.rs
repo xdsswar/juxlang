@@ -1441,6 +1441,48 @@ impl RustEmitter {
     /// for non-primitive types — that requires the user type to
     /// implement `Default + Copy`, otherwise Rust will surface the
     /// constraint failure.
+    /// A stand-in value for a slot typed as a Jux single-method interface,
+    /// used only where a value is needed before the program supplies one: the
+    /// `__self` builder of a constructor that assigns the field later. Built
+    /// as the lambda `(a0, …) -> throw new IllegalStateException(..)` would
+    /// be, so it takes the slot's type arguments the same way.
+    pub(crate) fn unset_single_method_stand_in(&self, ty: &juxc_ast::TypeRef) -> Option<juxc_ast::NewObjectExpr> {
+        let bare = ty.name.segments.last()?.text.as_str();
+        let (_, iface) = self.lookup_interface_by_bare_or_fqn(bare)?;
+        let mut abstract_methods = iface
+            .methods
+            .values()
+            .filter(|m| m.is_abstract && !m.is_static && !m.is_property);
+        let method = abstract_methods.next()?;
+        if abstract_methods.next().is_some() {
+            return None;
+        }
+        let span = ty.span;
+        let ident = |text: &str| juxc_ast::Ident { text: text.to_string(), span };
+        let message = format!("`{bare}` value used before the constructor assigned it");
+        let throw = juxc_ast::Expr::Throw(
+            Box::new(juxc_ast::Expr::NewObject(juxc_ast::NewObjectExpr {
+                class_name: juxc_ast::QualifiedName { segments: vec![ident("IllegalStateException")], span },
+                generic_args: Vec::new(),
+                args: vec![juxc_ast::Expr::Literal(juxc_ast::Literal::String(message))],
+                arg_names: vec![None],
+                anonymous_body: None,
+                eval_order: Vec::new(),
+                span,
+            })),
+            span,
+        );
+        let lambda = juxc_ast::Expr::Lambda(juxc_ast::LambdaExpr {
+            is_async: false,
+            params: (0..method.params.len())
+                .map(|i| juxc_ast::LambdaParam { ty: None, name: ident(&format!("_a{i}")), span })
+                .collect(),
+            body: juxc_ast::LambdaBody::Expr(Box::new(throw)),
+            span,
+        });
+        self.lambda_as_anonymous_class(ty, &lambda)
+    }
+
     pub(crate) fn emit_default_value_for(&mut self, ty: &juxc_ast::TypeRef) {
         // A raw pointer (`T*`, `void*`) defaults to the null pointer, not the
         // pointee's `0` (§L.6.1) — a `*mut T` can't hold an integer literal.
@@ -1515,6 +1557,13 @@ impl RustEmitter {
                 _ => "0",
             };
             self.w.push_str(default);
+        } else if let Some(stand_in) = self.unset_single_method_stand_in(ty) {
+            // A slot typed as a single-method interface (`Listener<String>`)
+            // lowers to `Rc<dyn Listener<String>>`, which has no `Default`.
+            // The `__self` builder gets an implementation whose one method
+            // throws; the constructor body replaces it before anything can
+            // call it (LANG-V1 §7.9.1).
+            self.emit_anonymous_class(&stand_in);
         } else if ty.name.segments.len() == 1 && !ty.nullable && ty.fn_shape.is_none() {
             // Named, so the default has a type even where nothing else pins
             // it: `var cells = new Point[4]` has no declared element type to

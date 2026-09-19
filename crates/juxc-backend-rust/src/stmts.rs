@@ -5000,6 +5000,29 @@ impl RustEmitter {
     /// `Option`-shaped). Callers MUST gate on non-compound assigns: `+=` has
     /// no upcast meaning. Shared by the general store path and the
     /// wrapper-field store-through path so both apply the same coercion.
+    /// The declared type of an assignment target that names a field of the
+    /// class being emitted, written bare (`format`) or as `this.format`, and
+    /// not shadowed by a parameter or local of the same name.
+    fn own_field_type_ref(&self, target: &Expr) -> Option<juxc_ast::TypeRef> {
+        let name = match target {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let n = qn.segments[0].text.as_str();
+                let shadowed = self.current_fn_params.contains(n)
+                    || self.local_types.iter().any(|s| s.contains_key(n))
+                    || self.nullable_locals.contains(n);
+                if shadowed {
+                    return None;
+                }
+                n
+            }
+            Expr::Field(f) if matches!(f.object.as_ref(), Expr::This(_)) => f.field.text.as_str(),
+            _ => return None,
+        };
+        let class = self.enclosing_class.as_deref()?;
+        let field = self.lookup_class_by_bare_or_fqn(class)?.fields.get(name)?;
+        (!field.is_static).then(|| field.ty.clone())
+    }
+
     fn assign_iface_coercion_tref(&self, target: &Expr, value: &Expr) -> Option<juxc_ast::TypeRef> {
         // An `any` / `any?` target (§T.1.2) boxes the value, whatever it is.
         let any_slot = match self.expr_recorded_ty(target) {
@@ -5012,6 +5035,17 @@ impl RustEmitter {
             tref.nullable = nullable;
             return Some(tref);
         }
+        // A lambda stored into one of the enclosing class's own fields
+        // (`format = (n) -> ...` or `this.sink = (s) -> ...` in a constructor
+        // or method): the checker records no type for an implicit-`this`
+        // target, so the field's declared type is the slot (LANG-V1 §7.9.1).
+        if matches!(value, Expr::Lambda(_)) {
+            if let Some(fty) = self.own_field_type_ref(target) {
+                if !matches!(self.iface_coercion_to(&fty, value), crate::analysis::IfaceCoercion::None) {
+                    return Some(fty);
+                }
+            }
+        }
         let ty = self
             .expr_types
             .get(&crate::exprs::expr_span_of(target))
@@ -5020,13 +5054,23 @@ impl RustEmitter {
             juxc_tycheck::Ty::Nullable(inner) => (*inner, true),
             other => (other, false),
         };
-        let juxc_tycheck::Ty::User { name, .. } = inner else {
+        let juxc_tycheck::Ty::User { ref name, .. } = inner else {
             return None;
         };
-        let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+        let bare = name.rsplit('.').next().unwrap_or(name).to_string();
         let mut tref =
             crate::analysis::synth_iface_type_ref(&bare, crate::exprs::expr_span_of(target));
         tref.nullable = slot_nullable;
+        // A lambda filling a GENERIC single-method interface (LANG-V1 §7.9.1,
+        // `format = (n) -> "#" + n` into a `Mapper<int, String>`) implements
+        // it at the slot's type arguments, so they have to come along; the
+        // bare name alone matched no instantiation and the closure reached
+        // rustc unconverted.
+        if matches!(value, Expr::Lambda(_)) {
+            if let Some(full) = crate::types::ty_to_type_ref(&inner, crate::exprs::expr_span_of(target)) {
+                tref.generic_args = full.generic_args;
+            }
+        }
         if matches!(
             self.iface_coercion_to(&tref, value),
             crate::analysis::IfaceCoercion::None,

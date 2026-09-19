@@ -1573,14 +1573,18 @@ pub(crate) fn extract_ctor_prefix_seeds(
             // A compound assignment reads the slot it writes.
             break;
         }
-        let Expr::Field(f) = &a.target else { break };
-        if !matches!(&*f.object, Expr::This(_)) {
-            break;
-        }
+        // `this.f = expr`, or the bare `f = expr` Java writes for the same
+        // field (a parameter of that name shadows the field, and is not it).
+        let name = match &a.target {
+            Expr::Field(f) if matches!(&*f.object, Expr::This(_)) => f.field.text.clone(),
+            Expr::Path(qn) if qn.segments.len() == 1 && instance_names.contains(&qn.segments[0].text) => {
+                qn.segments[0].text.clone()
+            }
+            _ => break,
+        };
         if expr_reads_instance_state(&a.value, &instance_names) {
             break;
         }
-        let name = f.field.text.clone();
         if !taken.insert(name.clone()) {
             // Assigned twice in the prefix: the second write has to stay in
             // the body, and letting it run after the first was lifted would
@@ -4380,8 +4384,8 @@ impl crate::RustEmitter {
         match coercion {
             IfaceCoercion::None | IfaceCoercion::IntoAny => unreachable!("handled above"),
             IfaceCoercion::FromLambda => {
-                if let Some(anon) = self.lambda_as_anonymous_class(target_ty, expr) {
-                    self.emit_anonymous_class(&anon);
+                if let (Some(anon), Expr::Lambda(l)) = (self.lambda_as_anonymous_class(target_ty, expr), expr) {
+                    self.emit_lambda_as_anonymous_class(l, &anon);
                 }
             }
             IfaceCoercion::UpcastDyn { clone_first } => {

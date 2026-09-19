@@ -5845,7 +5845,25 @@ impl<'a> Checker<'a> {
                 } else {
                     self.check_expr(&a.target);
                 }
+                // A lambda or method reference ASSIGNED into a typed place
+                // takes that place's function type, or the one method of a
+                // single-method interface (LANG-V1 §7.9.1), the same as one
+                // written in the declaration: `format = (n) -> "#" + n` gives
+                // `n` the type `Mapper<int, String>.apply` takes.
+                if a.op.is_none() && matches!(a.value, Expr::Lambda(_) | Expr::MethodRef(_)) {
+                    let slot = infer_expr(&a.target, &self.env, self.symbols);
+                    let slot = match slot {
+                        Ty::Nullable(inner) => *inner,
+                        other => other,
+                    };
+                    if let Ty::Fn { params, .. } = &slot {
+                        self.lambda_slot_params = Some(params.clone());
+                    } else if matches!(a.value, Expr::Lambda(_)) {
+                        self.lambda_slot_params = self.single_method_interface_params(&slot);
+                    }
+                }
                 self.check_expr(&a.value);
+                self.lambda_slot_params = None;
                 // **Property write-access enforcement (§M.7.2).** A
                 // write to `obj.Prop` / `Class.Prop` where `Prop` is a
                 // read-only / init-only / restricted-visibility property

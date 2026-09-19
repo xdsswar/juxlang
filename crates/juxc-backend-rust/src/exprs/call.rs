@@ -3711,6 +3711,32 @@ impl RustEmitter {
             Expr::NotNullAssert(inner, _) => inner.as_ref(),
             other => other,
         };
+        // A bare instance field of the class being emitted (`sink.on(s)` for
+        // `this.sink.on(s)`) reads through the same `self.0.borrow()` guard,
+        // and a listener it calls that touches this object would find it
+        // borrowed. Hoisted exactly like the explicit form.
+        if let Expr::Path(qn) = recv {
+            // Only a field holding a Jux object can run Jux code that comes
+            // back to this one; a collection, a string or a foreign value
+            // cannot, and keeps its in-place read.
+            let holds_jux_object = matches!(
+                self.expr_types.get(&qn.span).cloned().map(crate::exprs::field::strip_nullable),
+                Some(juxc_tycheck::Ty::User { ref name, .. })
+                    if self.lookup_interface_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+                        .is_some_and(|(_, i)| !i.is_external)
+                        || self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+                            .is_some_and(|c| !c.is_external)
+            );
+            let implicit_this_field = qn.segments.len() == 1
+                && holds_jux_object
+                && self.emitting_wrapper_class
+                && self.enclosing_class.as_deref().is_some_and(|c| self.is_wrapper_class(c))
+                && self.bare_name_is_instance_member(&qn.segments[0].text);
+            if implicit_this_field && !self.callee_mutates_external_receiver(cf) {
+                return Some(cf);
+            }
+            return None;
+        }
         let Expr::Field(rf) = recv else { return None };
         // **A method that MUTATES the receiver is never hoisted.** The hoist
         // binds the receiver by value, which for a wrapper field means a clone:
