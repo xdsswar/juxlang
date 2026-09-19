@@ -1,0 +1,64 @@
+// `while` repeats a block for as long as its condition holds. The condition is
+// tested before every pass, including the first, so a loop that starts out
+// false never runs at all.
+//
+// `print` always ends the line, so the last example builds each row as a
+// `String` first and prints the finished row in one call.
+
+void main() {
+    // The loop counts by changing a local that its own condition reads. Miss
+    // the `i += 1` and the condition never becomes false.
+    i32 i = 1;
+    while (i <= 5) {
+        print($"i is ${i}");
+        i += 1;
+    }
+
+    // `continue` abandons the current pass and goes back to the condition.
+    // `break` leaves the loop entirely. Note that `n` is incremented before
+    // either can run: a `continue` placed above the increment would skip it
+    // forever and the loop would never end.
+    i32 n = 0;
+    while (n < 100) {
+        n += 1;
+        if (n % 2 == 0) {
+            continue;
+        }
+        if (n > 7) {
+            break;
+        }
+        print($"odd ${n}");
+    }
+
+    // `while (true)` repeats with no real condition and depends on `break` to
+    // stop, which suits a loop whose ending is decided in the middle of the
+    // body. (`do { ... } while (cond);` is the other shape for that: it runs
+    // the body once before testing.)
+    i32 countdown = 3;
+    while (true) {
+        print($"countdown ${countdown}");
+        countdown -= 1;
+        if (countdown == 0) {
+            break;
+        }
+    }
+
+    // Loops nest. `break` and `continue` always act on the nearest enclosing
+    // loop, so the `break` below ends one row rather than the whole shape.
+    // (A label such as `outer:` in front of a loop lets `break outer;` reach
+    // further out when that is what you mean.)
+    i32 row = 1;
+    while (row <= 4) {
+        var line = "";
+        i32 col = 1;
+        while (col <= 4) {
+            if (col > row) {
+                break;
+            }
+            line += "*";
+            col += 1;
+        }
+        print(line);
+        row += 1;
+    }
+}

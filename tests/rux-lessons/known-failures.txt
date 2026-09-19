@@ -1,0 +1,4 @@
+# Lessons that fail today because of a compiler or standard-library problem,
+# one per line as `Name: reason`. bin/jux/tests/rux_lessons.rs accepts these
+# failures and fails the moment a listed lesson passes, so remove the line in
+# the same commit that fixes the bug. The README has a minimal repro for each.

@@ -1,0 +1,40 @@
+// `if` chooses which statements to run. Sometimes what is wanted is smaller
+// than that: choosing between two *values*, in the middle of an expression.
+//
+// `condition ? whenTrue : whenFalse` is that. It is an expression, so it can
+// go wherever a value goes.
+
+void main() {
+    final var n = 7;
+
+    // Written with `if`, this needs a non-final local and four lines, because
+    // the value is assigned after the declaration.
+    var labelTheLongWay = "";
+    if (n % 2 == 0) {
+        labelTheLongWay = "even";
+    } else {
+        labelTheLongWay = "odd";
+    }
+
+    // Written as an expression, it is one line and the local stays `final`,
+    // which is the real gain, not the brevity.
+    final var label = n % 2 == 0 ? "even" : "odd";
+
+    print($"${n} is ${label} (and ${labelTheLongWay})");
+
+    // Because it is an expression, it nests inside anything, including an
+    // interpolation.
+    print($"larger of 3 and 5 is ${3 > 5 ? 3 : 5}");
+
+    final var count = 3;
+    print($"${count} item${count == 1 ? "" : "s"}");
+
+    // Chaining works, and reads as a list of cases.
+    final var sign = n < 0 ? "negative" : n == 0 ? "zero" : "positive";
+    print($"${n} is ${sign}");
+
+    // The limit is worth knowing: both branches must produce the same type,
+    // because the whole thing is one value with one type. And a chain longer
+    // than about two is usually clearer as an `if` chain or a `switch`; this
+    // is for the small choice made in passing, not for hiding a decision.
+}

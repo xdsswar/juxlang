@@ -1,0 +1,7 @@
+Limit     100
+Doubled   200
+Half      50
+Pi        3.141592653589793
+Greeting  a constant string
+50 is     within the limit
+150 is    over the limit
