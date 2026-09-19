@@ -556,6 +556,11 @@ pub enum Code {
     /// ERRATA E62): on a field (Phase 1 aligns whole types only; wrap the
     /// field in an `@align` struct), or on an interface, enum or function.
     E0520_AlignNotApplicable,
+    /// E0521 -- `array as T*` that cannot give a lasting pointer (Layout-ABI
+    /// §L.6.3): the array is a temporary (freed at the end of the statement),
+    /// nested (`int[][]`, whose elements are handles), or the target is a
+    /// pointer to a pointer.
+    E0521_ArrayToPointer,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -1104,6 +1109,7 @@ impl Code {
             Code::E0518_InvalidPointerOperation  => "E0518",
             Code::E0519_InvalidAlignment         => "E0519",
             Code::E0520_AlignNotApplicable       => "E0520",
+            Code::E0521_ArrayToPointer           => "E0521",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",

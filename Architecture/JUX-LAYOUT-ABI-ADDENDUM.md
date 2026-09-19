@@ -632,6 +632,15 @@ unsafe {
 
 The cast `data as byte*` (where `data: byte[]`) inside `unsafe` produces a pointer to the array's first element. The pointer is **valid** (in the sense of pointing at live memory) as long as the underlying array is live. The borrow checker does **not** enforce this; the programmer does.
 
+**Implemented.** The array must be a *named* one-dimensional array (a local, a
+parameter or a field) and the target a single-level pointer, `T*`. A temporary
+array (`(new byte[4]) as byte*`) would be freed at the end of the statement,
+the elements of a nested array are handles to other arrays, and `T**` has no
+meaning here, so each of these is **E0521**. The cast lowers to the storage's
+own `as_mut_ptr()`; a different pointee type (`ubyte[] as void*`) is a plain
+pointer reinterpretation, as in C. See `examples/array_as_pointer.jux`, which
+also hands a Jux array to C's `memset`.
+
 ### L.6.4. Function Pointers
 
 `fn(int) -> int` is a function-pointer type: the address of a function that follows the C calling convention. It is **not** the same as `(int) -> int`, which is a closure type that may capture state. A function pointer is a plain code address with no environment, which is what C expects wherever it takes a callback, and what C hands back in function tables such as JNI's `JNIEnv` or a COM vtable.

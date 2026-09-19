@@ -4293,6 +4293,41 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `array as T*` (Layout-ABI §L.6.3): the address of the array's first
+    /// element. It is only meaningful while that array is alive, so the operand
+    /// must be a NAMED array (a local, a parameter or a field): a temporary
+    /// `(new byte[4]) as byte*` is freed at the end of the statement and would
+    /// leave the pointer dangling at once. The array must be one-dimensional,
+    /// since the elements of an `int[][]` are handles to other arrays, not
+    /// contiguous ints. Violations are E0521; the `unsafe` requirement is the
+    /// general pointer-cast rule (E0506).
+    fn check_array_to_pointer_cast(&mut self, c: &juxc_ast::CastExpr) {
+        if c.ty.ptr_depth == 0 {
+            return;
+        }
+        let Ty::Array { element, .. } = infer_expr(&c.value, &self.env, self.symbols) else {
+            return;
+        };
+        let problem = if matches!(*element, Ty::Array { .. }) {
+            Some("only a one-dimensional array converts to a pointer: the elements of a nested array are handles to other arrays")
+        } else if !matches!(c.value.as_ref(), Expr::Path(_) | Expr::Field(_)) {
+            Some("the array must be a named one (a local, a parameter or a field): a temporary array is freed at the end of the statement, and the pointer would dangle")
+        } else if c.ty.ptr_depth > 1 {
+            Some("an array converts to a pointer to its elements (`T*`), not to a pointer to a pointer")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0521_ArrayToPointer,
+                    format!("cannot convert this array to a pointer: {problem} (§L.6.3)"),
+                )
+                .with_span(c.span),
+            );
+        }
+    }
+
     /// `@align(N)` where it cannot apply (Layout-ABI §L.1.4, ERRATA E62): a
     /// field (Phase 1 aligns whole types; Rust has no per-field alignment, so
     /// the way to align one field is an `@align` struct holding it), an enum
@@ -6570,6 +6605,7 @@ impl<'a> Checker<'a> {
                     // §L.5.2 items 3-4: reinterpreting an address.
                     self.unsafe_pointer_op("a cast to or from a raw pointer", c.span);
                 }
+                self.check_array_to_pointer_cast(c);
             }
 
             Expr::TypeTest(t) => {
