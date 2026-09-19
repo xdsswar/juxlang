@@ -1,0 +1,7 @@
+<html>
+<body>
+Reports a comparator lambda, one given where the callee expects a function returning <code>Ordering</code> (<code>sort_unstable_by</code>, <code>binary_search_by</code>, <code>max_by</code>), whose result is neither an integer nor an <code>Ordering</code> (E0410).
+An integer is fine: its sign picks the order, so <code>(a, b) -&gt; a.age - b.age</code> sorts by age.
+<!-- tooltip end -->
+</body>
+</html>
