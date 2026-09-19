@@ -33,7 +33,15 @@ fn has_ts_annotation(fn_decl: &FnDecl) -> bool {
 /// `@export` uses the Jux name; `@export(name = "…")` overrides it. The match is
 /// case-insensitive, like every built-in annotation.
 fn export_symbol_name(fn_decl: &FnDecl) -> Option<String> {
-    let ann = fn_decl.annotations.iter().find(|a| {
+    export_symbol_for(&fn_decl.annotations, &fn_decl.name.text)
+}
+
+/// The C symbol an `@export` among `annotations` asks for: its `name = "..."`
+/// when given, else `default_name` (the declaration's own name). `None` when
+/// there is no `@export`. Shared by functions, static methods and exported
+/// constants (Layout-ABI §L.3.2-L.3.3).
+pub(crate) fn export_symbol_for(annotations: &[juxc_ast::Annotation], default_name: &str) -> Option<String> {
+    let ann = annotations.iter().find(|a| {
         a.name
             .segments
             .last()
@@ -51,7 +59,7 @@ fn export_symbol_name(fn_decl: &FnDecl) -> Option<String> {
             }
         }
     }
-    Some(fn_decl.name.text.clone())
+    Some(default_name.to_string())
 }
 
 /// True when `t` is a plain Jux `String` (no pointer / array / generic shape) —
@@ -788,9 +796,65 @@ impl RustEmitter {
         // marshalling wrapper now that the real fn has been emitted (§L.3.2).
         if needs_string_wrapper {
             if let Some(sym) = &export_name {
-                self.emit_export_string_wrapper(fn_decl, sym);
+                let callee = to_rust_ident(&fn_decl.name.text);
+                self.emit_export_string_wrapper(fn_decl, sym, &callee, &fn_decl.name.text);
             }
         }
+    }
+
+    /// Exported members of a class, struct or record (Layout-ABI §L.3.2-L.3.3),
+    /// emitted at module level right after the type. Each `@export static`
+    /// method gets the C-ABI wrapper a free function gets, calling
+    /// `Type::method`; each `@export static final` field becomes C-visible
+    /// data. Tycheck has already held both to C-compatible shapes (E0508).
+    pub(crate) fn emit_member_exports(
+        &mut self,
+        type_name: &str,
+        methods: &[FnDecl],
+        fields: &[juxc_ast::FieldDecl],
+    ) {
+        let rust_type = to_rust_ident(type_name);
+        for m in methods {
+            let is_static = m.modifiers.iter().any(|md| matches!(md, juxc_ast::FnModifier::Static));
+            let Some(sym) = export_symbol_for(&m.annotations, &m.name.text) else {
+                continue;
+            };
+            if !is_static || m.body.is_none() {
+                continue;
+            }
+            let callee = format!("{rust_type}::{}", to_rust_ident(&m.name.text));
+            self.emit_export_string_wrapper(m, &sym, &callee, &format!("{type_name}_{}", m.name.text));
+        }
+        for f in fields {
+            let Some(sym) = export_symbol_for(&f.annotations, &f.name.text) else {
+                continue;
+            };
+            if !f.is_static {
+                continue;
+            }
+            if let Some(ty) = &f.ty {
+                let value = format!("{rust_type}::{}", to_rust_ident(&f.name.text));
+                self.emit_exported_constant(&sym, ty, &value, &format!("{type_name}_{}", f.name.text));
+            }
+        }
+    }
+
+    /// An `@export`ed constant (Layout-ABI §L.3.3): read-only data under its C
+    /// symbol, at its C type (§8.1.1: a Jux `int` is a C `int`), initialized
+    /// from the Jux constant. A Rust `static` has one address for the whole
+    /// process, which is what C's `extern const int VERSION;` links to.
+    pub(crate) fn emit_exported_constant(&mut self, sym: &str, ty: &juxc_ast::TypeRef, value: &str, rust_name: &str) {
+        let name = ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        let c_ty = c_abi_type(name)
+            .or_else(|| crate::types::jux_primitive_to_rust(ty))
+            .unwrap_or("()");
+        self.w.line(&format!("#[export_name = \"{sym}\"]"));
+        let init = if c_ty == "bool" { value.to_string() } else { format!("{value} as {c_ty}") };
+        self.w.line(&format!(
+            "pub static __JUX_EXPORT_{}: {c_ty} = {init};",
+            rust_name.to_uppercase(),
+        ));
+        self.w.newline();
     }
 
     /// Emit the C-ABI marshalling wrapper for an `@export`ed function whose
@@ -807,7 +871,18 @@ impl RustEmitter {
     ///   kept in a thread-local slot of this wrapper until its next call on the
     ///   same thread frees it (see `emit_held_c_string_return`). An interior
     ///   NUL makes the result a null pointer.
-    fn emit_export_string_wrapper(&mut self, fn_decl: &FnDecl, sym: &str) {
+    ///
+    /// `callee` is the Rust path the wrapper calls (the free function's name,
+    /// or `Class::method` for an exported static method, §L.3.2), and
+    /// `wrapper_name` the part after `__jux_cabi_` in the wrapper's own Rust
+    /// name, which only has to be unique in the module.
+    pub(crate) fn emit_export_string_wrapper(
+        &mut self,
+        fn_decl: &FnDecl,
+        sym: &str,
+        callee: &str,
+        wrapper_name: &str,
+    ) {
         let ret_is_string = matches!(
             &fn_decl.return_type,
             ReturnType::Type(t) if type_ref_is_string(t)
@@ -827,7 +902,7 @@ impl RustEmitter {
         // (the C symbol itself is set by the attribute above), so it never
         // collides with the real fn that keeps the Jux name.
         self.w
-            .push_str(&format!("pub extern \"C\" fn __jux_cabi_{}(", fn_decl.name.text));
+            .push_str(&format!("pub extern \"C\" fn __jux_cabi_{wrapper_name}("));
         for (i, p) in fn_decl.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -894,9 +969,9 @@ impl RustEmitter {
         // Call the real Jux fn by name, forwarding every parameter.
         self.w.emit_indent();
         if matches!(fn_decl.return_type, ReturnType::Void) {
-            self.w.push_str(&to_rust_ident(&fn_decl.name.text));
+            self.w.push_str(callee);
         } else {
-            self.w.push_str(&format!("let __r = {}", fn_decl.name.text));
+            self.w.push_str(&format!("let __r = {callee}"));
         }
         self.w.push('(');
         for (i, p) in fn_decl.params.iter().enumerate() {

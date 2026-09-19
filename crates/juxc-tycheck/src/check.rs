@@ -784,6 +784,9 @@ impl<'a> Checker<'a> {
                 TopLevelDecl::Const(c) => {
                     let found = self.infer_and_record(&c.value);
                     self.check_expr(&c.value);
+                    // `@export const` (§L.3.3): C-visible read-only data.
+                    let const_ty = crate::resolved_const_type(c);
+                    self.check_exported_constant(&c.annotations, Some(&const_ty), true, &c.name.text, c.span);
                     // When the type is written, check the initializer matches.
                     // When it's omitted (inferred), the initializer's type IS
                     // the constant's type — nothing to compare against.
@@ -2676,6 +2679,8 @@ impl<'a> Checker<'a> {
         self.check_align_annotation(&class.annotations, &field_tys, kind, &class.name.text);
         for field in &class.fields {
             self.reject_align_on(&field.annotations, "a field", &field.name.text);
+            let constant = field.is_static && field.is_final;
+            self.check_exported_constant(&field.annotations, field.ty.as_ref(), constant, &field.name.text, field.span);
         }
         // `@layout(c)` is permitted only on a value aggregate (`struct`), not a
         // `class` (Layout-ABI §L.1.2) — a class has an `Rc`/vtable header with no
@@ -3189,23 +3194,28 @@ impl<'a> Checker<'a> {
     /// plus a `this` binding. Abstract methods (body = None) are
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
-        // `@export` (C linkage) is only honored on FREE functions in Phase 1.
-        // On a method it was silently ignored (no C symbol emitted), so flag it:
-        // an instance method has a receiver C can't express, and static-method
-        // export is a deferred spec item (JUX-LANG-V1 §8.4 / Layout-ABI §L.3.2).
+        // `@export` (C linkage, Layout-ABI §L.3.2): a STATIC method is exported
+        // like a free function, through a C wrapper that calls `Type::method`,
+        // and its signature is held to the same C rules. An instance method
+        // has a receiver C cannot express.
         if crate::symbol_table::has_annotation(&method.annotations, "export") {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0508_FfiTypeNotAllowed,
-                    format!(
-                        "`@export` is not supported on method `{}` in this phase -- `@export` gives \
-                         C linkage to a FREE function; move it out of the class (an instance method \
-                         has a receiver C cannot express, and static-method export is deferred)",
-                        method.name.text,
-                    ),
-                )
-                .with_span(method.span),
-            );
+            let method_is_static = method.modifiers.iter().any(|m| matches!(m, juxc_ast::FnModifier::Static));
+            if method_is_static {
+                self.check_export_signature(method);
+            } else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "`@export` on instance method `{}`: C has no way to pass the object it is \
+                             called on -- make the method `static`, or export a free function that \
+                             takes what it needs as parameters",
+                            method.name.text,
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
         }
         let Some(body) = &method.body else { return };
         self.check_param_defaults(&method.params);
@@ -4461,6 +4471,59 @@ impl<'a> Checker<'a> {
                 .with_span(c.span),
             );
         }
+    }
+
+    /// `@export` on data (Layout-ABI §L.3.3, ERRATA E64): only a constant (a
+    /// top-level `const`, or a `static final` field) of a numeric or `bool`
+    /// type can be exported. C links to it as read-only data at its C type. A
+    /// mutable `static` lives behind a lock, since any thread may touch it,
+    /// and C cannot take that lock, so handing C its address would invite a
+    /// data race; an instance field has no single address at all. E0508.
+    fn check_exported_constant(
+        &mut self,
+        annotations: &[juxc_ast::Annotation],
+        ty: Option<&juxc_ast::TypeRef>,
+        is_constant: bool,
+        name: &str,
+        span: Span,
+    ) {
+        if !crate::symbol_table::has_annotation(annotations, "export") {
+            return;
+        }
+        let problem = if !is_constant {
+            Some(
+                "only a constant can be exported: a mutable `static` sits behind a lock C cannot take, \
+                 and an instance field has no single address -- export `static final` data, or \
+                 functions that read and write it"
+                    .to_string(),
+            )
+        } else {
+            match ty {
+                Some(t) if self.exportable_constant_type(t) => None,
+                Some(t) => Some(format!(
+                    "a `{}` constant has no C data representation -- export a number or a `bool`",
+                    type_ref_display(t),
+                )),
+                None => None,
+            }
+        };
+        if let Some(problem) = problem {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0508_FfiTypeNotAllowed, format!("`@export` on `{name}`: {problem} (§L.3.3)"))
+                    .with_span(span),
+            );
+        }
+    }
+
+    /// A type C can see as exported read-only data: a numeric primitive or
+    /// `bool`, not nullable, not a pointer or an array.
+    fn exportable_constant_type(&self, t: &juxc_ast::TypeRef) -> bool {
+        t.ptr_depth == 0
+            && !t.nullable
+            && t.array_shape.is_none()
+            && t.generic_args.is_empty()
+            && t.name.segments.len() == 1
+            && crate::ty::primitive_from_name(&t.name.segments[0].text).is_some_and(|p| p != Primitive::Char)
     }
 
     /// `@align(N)` where it cannot apply (Layout-ABI §L.1.4, ERRATA E62): a
@@ -14273,14 +14336,15 @@ mod tests {
         assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
     }
 
-    /// `@export` on a method (static or instance) is E0508 in Phase 1 — it is
-    /// only honored on free functions.
+    /// `@export` on a static method is exported like a free function
+    /// (§L.3.2); on an instance method it is E0508, since C cannot pass the
+    /// object.
     #[test]
     fn export_on_method_is_e0508() {
         let st = run(
             "class Foo { @export public static int bar(int x) { return x; } } public void main() {}",
         );
-        assert!(has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
+        assert!(!has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
         let inst =
             run("class Foo { @export public int baz(int x) { return x; } } public void main() {}");
         assert!(has(&inst, code::Code::E0508_FfiTypeNotAllowed), "{inst:?}");

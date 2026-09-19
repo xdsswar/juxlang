@@ -6873,9 +6873,16 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // what it means lives at the sites that carry it, which the
             // registry records. Nothing to emit for the declaration.
             TopLevelDecl::Annotation(_) => {}
-            TopLevelDecl::Class(class_decl) => self.emit_class_decl(class_decl),
+            TopLevelDecl::Class(class_decl) => {
+                self.emit_class_decl(class_decl);
+                // `@export` static methods and constants (§L.3.2-L.3.3).
+                self.emit_member_exports(&class_decl.name.text, &class_decl.methods, &class_decl.fields);
+            }
             TopLevelDecl::Enum(enum_decl) => self.emit_enum_decl(enum_decl),
-            TopLevelDecl::Record(record_decl) => self.emit_record_decl(record_decl),
+            TopLevelDecl::Record(record_decl) => {
+                self.emit_record_decl(record_decl);
+                self.emit_member_exports(&record_decl.name.text, &record_decl.methods, &[]);
+            }
             TopLevelDecl::Interface(interface_decl) => {
                 self.emit_interface_decl(interface_decl);
             }
@@ -6922,6 +6929,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.newline();
+        // `@export const` (Layout-ABI §L.3.3): the same value as C-visible data.
+        if let Some(sym) = crate::decls::functions::export_symbol_for(&decl.annotations, &decl.name.text) {
+            let name = to_rust_ident(&decl.name.text);
+            self.emit_exported_constant(&sym, &const_ty, &name, &decl.name.text);
+        }
     }
 
     /// Emit a Jux `type Foo<...>? = TargetTy;` as a Rust

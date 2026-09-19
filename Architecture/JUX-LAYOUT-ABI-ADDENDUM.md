@@ -320,7 +320,11 @@ The mangling is **not stable across compiler versions**. Programs that depend on
 - The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
 - The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
 
-> **Phase-1 limitation.** `@export` is currently implemented on **free functions only**. `@export` on a method (static or instance) is rejected with **E0508** (an instance method has a receiver C cannot express; static-method export is deferred). Move the body to a free function for now.
+**Static methods (implemented).** `@export` on a `static` method of a class,
+struct or record exports it exactly like a free function: the same signature
+rules (E0508), the same `String` marshalling, and a C entry point that calls
+`Type.method`. `@export` on an instance method is **E0508**: C has no way to
+pass the object it is called on. See `examples/ffi_export_members.jux`.
 
 **Lowering (implemented).** A purely-primitive / pointer / `@layout(c)` export is
 emitted inline as `#[no_mangle] pub extern "C" fn <symbol>(…)`. An export whose
@@ -361,7 +365,16 @@ A non-`@export` function is **not** part of any stable ABI. Other Jux modules li
 
 ### L.3.3. Static and Const Visibility
 
-`public const` items lower to read-only data with `@export`-equivalent linkage (no mangling) when explicitly marked `@export`; otherwise they are mangled and module-local. Mutable `static` items have a single global address per process and follow the same rules.
+`public const` items lower to read-only data with `@export`-equivalent linkage (no mangling) when explicitly marked `@export`; otherwise they are mangled and module-local.
+
+**Implemented (ERRATA E64).** A top-level `const`, or a `static final` field,
+of a numeric or `bool` type can be `@export`ed: it becomes a Rust `static`
+under the C symbol (`#[export_name]`), at its C type (§8.1.1: a Jux `int` is a
+C `int`), which C reads as `extern const int NAME;`. A mutable `static` cannot
+be exported: it lives behind a lock so any thread can use it safely, and C
+cannot take that lock. `@export` on one, on an instance field, or on a
+constant of another type (a `String`, a class) is **E0508**; export functions
+that read and write the value instead.
 
 ---
 

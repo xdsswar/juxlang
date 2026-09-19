@@ -1,0 +1,5 @@
+export_members_rules.jux:8:12: [E0508] error: `@export` on instance method `instanceMethod`: C has no way to pass the object it is called on -- make the method `static`, or export a free function that takes what it needs as parameters
+export_members_rules.jux:13:12: [E0508] error: return type `Registry` of `@export` function `make` is not C-compatible -- use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, `String`, or `void`
+export_members_rules.jux:18:12: [E0508] error: `@export` on `counter`: only a constant can be exported: a mutable `static` sits behind a lock C cannot take, and an instance field has no single address -- export `static final` data, or functions that read and write it (§L.3.3)
+export_members_rules.jux:21:12: [E0508] error: `@export` on `NAME`: a `String` constant has no C data representation -- export a number or a `bool` (§L.3.3)
+export_members_rules.jux:30:14: [E0508] error: `@export` on `GREETING`: a `String` constant has no C data representation -- export a number or a `bool` (§L.3.3)

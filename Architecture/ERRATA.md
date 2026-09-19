@@ -1122,6 +1122,28 @@ that way and cannot be transmuted. The example becomes
 
 ---
 
+## E64. Exporting a mutable `static`
+
+**Conflict.** Layout-ABI §L.3.3 says mutable `static` items "have a single
+global address per process and follow the same rules" as exported constants.
+A Jux mutable static is not bare memory: any thread may read or write it, so
+it lowers behind a lock (a `LazyLock<Mutex<T>>`, or a thread-local where the
+value cannot be shared). C cannot take that lock. Exporting its address would
+let C read and write the value while Jux code holds the lock, a data race the
+language otherwise rules out.
+
+**Resolution.** Only constants are exported as data: a top-level `const`, or
+a `static final` field, of a numeric or `bool` type (C sees it at its C type,
+§8.1.1). `@export` on a mutable `static`, on an instance field, or on a
+constant of another type is `E0508`, and the message names the alternative:
+export functions that read and write the value. This matches how the rest of
+the FFI surface already treats shared state (functions cross, lock-guarded
+data does not).
+
+**Spec status:** §L.3.3 is updated to match.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,
