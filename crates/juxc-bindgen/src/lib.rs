@@ -12,6 +12,8 @@
 //! - [`model`] — the language-agnostic stub IR (§G.2 / §G.5).
 //! - [`emit`] — renders the IR to signature-only `.jux.d` text.
 //! - [`ingest`] — builds the IR from a rustdoc-JSON crate (§G.6).
+//! - [`source`] — the second source: `alloc`'s inherent slice and `str`
+//!   methods, read from the toolchain's library source (§G.6.4.4).
 //!
 //! The first four modules are pure and independent of the rustdoc schema, so
 //! the spec's mapping rules are unit-tested on plain data.
@@ -20,6 +22,7 @@ pub mod emit;
 pub mod ingest;
 pub mod model;
 pub mod naming;
+pub mod source;
 pub mod ty;
 
 pub use model::StubFile;

@@ -1,1 +1,1 @@
-vec_method_near_miss.jux:3:5: [E0413] error: no method `sort` on type `rust.std.Vec` -- did you mean `sort_unstable`, `sort_unstable_by`, `sort_unstable_by_key`?
+vec_method_near_miss.jux:5:5: [E0413] error: no method `sorted` on type `rust.std.Vec` -- did you mean `sort`, `sort_by`?

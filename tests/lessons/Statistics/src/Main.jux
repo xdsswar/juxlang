@@ -9,7 +9,7 @@
 // turn slides left past every larger one. Quadratic, and perfectly good for a
 // handful of readings.
 //
-// (A `Vec<int>` sorts with its own `sort_unstable()`. Doubles are different:
+// (A `Vec<int>` sorts with its own `sort()`. Doubles are different:
 // NaN is not smaller, larger or equal to anything, so Rust gives floats no
 // default order, and the ordering-closure forms are not reachable from Jux
 // yet. Writing the sort out keeps this lesson honest about that.)

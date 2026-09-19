@@ -1,0 +1,3 @@
+slice_order_bound.jux:10:5: [E0446] error: `sort` needs the elements of `Vec<Person>` to be ordered, and `Person` declares no `operator<=>`
+slice_order_bound.jux:14:5: [E0446] error: `sort` needs the elements of `Vec<double>` to be ordered, and a `double` has no total order (NaN compares with nothing)
+slice_order_bound.jux:17:5: [E0446] error: `sort` needs the elements of `Vec<rust.std.Vec<int>>` to be ordered, and a collection has no order (it is a shared handle)

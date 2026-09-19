@@ -1,4 +1,6 @@
+// A near-miss method name on a scanned collection suggests the real ones.
+// (`sort` itself exists now, from `alloc`'s slice impl, Bindgen G.6.4.4.)
 public void main() {
     var xs = new Vec<int>();
-    xs.sort();
+    xs.sorted();
 }

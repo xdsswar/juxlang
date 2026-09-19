@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 40;
+const STD_STUB_CACHE_VERSION: u32 = 42;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -102,8 +102,9 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// its name (it was `List`). 9: constants carry `@rust`. 10: `@RustOwnedAs`. 11: projections
 /// written `I.Output`, iterators get `next()`. 12: traits from other
 /// crates in `implements`, `@RustDerefs`, `@RustBlanket`,
-/// `@RustImplementedBy`, `@RustStatic`.
-const CRATE_STUB_CACHE_VERSION: u32 = 15;
+/// `@RustImplementedBy`, `@RustStatic`. 16: `@RustBounds` (a method's bounds
+/// on the type's own parameters, Bindgen G.6.4.4).
+const CRATE_STUB_CACHE_VERSION: u32 = 16;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -426,6 +427,54 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         }
     }
 }
+/// Every `.rs` file of `alloc`'s source, as `(path, text)`, for the second
+/// discovery source (Bindgen G.6.4.4). Read from the DEFAULT toolchain first:
+/// it is the `rustc` that builds the program, so the `#[stable]` markings in
+/// its source are the ones that apply. The nightly toolchain is a fallback.
+/// Empty when neither has the `rust-src` component: the surface then just
+/// lacks `alloc`'s slice and `str` methods.
+///
+/// The whole tree is handed over rather than a list of files; bindgen reads
+/// only the files that carry an incoherent impl.
+fn alloc_source_files() -> Vec<(String, String)> {
+    for toolchain in [None, Some("nightly")] {
+        let Some(sysroot) = rustc_sysroot(toolchain) else { continue };
+        let root = sysroot
+            .join("lib")
+            .join("rustlib")
+            .join("src")
+            .join("rust")
+            .join("library")
+            .join("alloc")
+            .join("src");
+        if !root.is_dir() {
+            continue;
+        }
+        let mut files: Vec<(String, String)> = Vec::new();
+        collect_rs_files(&root, &mut files);
+        // Directory order is not portable; a stable order keeps the
+        // generated stub identical from run to run.
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        return files;
+    }
+    Vec::new()
+}
+
+/// Append every `.rs` file under `dir` (recursively) to `out`.
+fn collect_rs_files(dir: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                out.push((path.to_string_lossy().into_owned(), text));
+            }
+        }
+    }
+}
+
 /// Read the [`STD_MERGE_CRATES`] JSON from `json_dir`, merge them into one
 /// `rust.std` stub via [`juxc_bindgen`], and return the rendered `.jux.d` text
 /// (prefixed with the [`std_cache_header`] version marker). `Ok(None)` when a
@@ -455,8 +504,21 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         .iter()
         .map(|(n, j)| (n.as_str(), j.as_str()))
         .collect();
-    let mut stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
-        .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
+    // The second source (Bindgen G.6.4.4): `alloc`'s inherent `[T]` and
+    // `str` methods (`sort`, `join`, `to_uppercase`), which no rustdoc JSON
+    // carries, read from the build toolchain's library source.
+    let source_texts = alloc_source_files();
+    let source_refs: Vec<(&str, &str)> = source_texts
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let mut stub = juxc_bindgen::ingest::generate_merged_with_sources(
+        &refs,
+        &pool_refs,
+        &source_refs,
+        "rust.std",
+    )
+    .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
     // The JSON is nightly's std; leave out what the user's own `rustc` would
     // reject as unstable (B32, Bindgen G.6.2.3).
     crate::stability::prune_unstable(&mut stub);

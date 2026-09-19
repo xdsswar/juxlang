@@ -237,6 +237,11 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
         let list: Vec<String> = f.closure_ref_params.iter().map(|i| i.to_string()).collect();
         s.push_str(&format!("@RustClosureRefs(\"{}\") ", list.join(",")));
     }
+    // What the method asks of the type's own parameters (`T: Ord` for
+    // `sort`), so the checker can report an unmet bound in Jux terms.
+    if !f.bounds.is_empty() {
+        s.push_str(&format!("@RustBounds(\"{}\") ", f.bounds.join(", ")));
+    }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
     // an interface a bodyless `static` is `E0200`. A Rust trait's associated
@@ -364,6 +369,7 @@ mod tests {
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            bounds: Vec::new(),
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,
@@ -381,6 +387,7 @@ mod tests {
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            bounds: Vec::new(),
         });
 
         let file = StubFile {
@@ -415,6 +422,7 @@ mod tests {
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            bounds: Vec::new(),
         };
         assert_eq!(
             render_fn(&f, false),
@@ -465,6 +473,7 @@ mod tests {
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
             closure_ref_params: Vec::new(),
+            bounds: Vec::new(),
         };
         let file = StubFile {
             items: vec![StubItem::Function(f)],
@@ -501,6 +510,7 @@ mod tests {
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            bounds: Vec::new(),
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }

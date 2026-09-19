@@ -106,6 +106,73 @@ impl SymbolTable {
         self.hash_blocker(&Ty::User { name: fqn.to_string(), generic_args }).is_none()
     }
 
+    /// Why values of `ty` cannot be ORDERED, or `None` when they can. `total`
+    /// asks for Rust's `Ord` (what `sort`, `binary_search` and `BTreeMap` keys
+    /// need); otherwise `PartialOrd`.
+    ///
+    /// The rule is the backend's (JUX-OPERATORS-ADDENDUM §O.2.1, LANG-V1
+    /// §7.14.4): the primitives and `String` are ordered, a floating-point
+    /// value only partially (NaN), and a class, record, struct or enum exactly
+    /// when it (or a class it extends) declares `operator<=>`, since nothing
+    /// derives an order. A tuple is ordered when its elements are. A foreign
+    /// type answers for itself, and a type parameter is checked where it is
+    /// instantiated.
+    pub fn order_blocker(&self, ty: &Ty, total: bool) -> Option<String> {
+        match ty {
+            Ty::Nullable(inner) => self.order_blocker(inner, total),
+            Ty::Primitive(p) if total && is_float_primitive(*p) => Some(format!(
+                "a `{ty}` has no total order (NaN compares with nothing)"
+            )),
+            Ty::Primitive(_) | Ty::String | Ty::Param(_) | Ty::Unknown | Ty::Void | Ty::Wildcard(_) | Ty::Never => None,
+            Ty::Array { .. } => Some("an array has no order".into()),
+            Ty::Fn { .. } | Ty::FnPtr { .. } => Some("a function value has no order".into()),
+            Ty::Any => Some("an `any` has no order".into()),
+            Ty::User { name, generic_args } if name == juxc_ast::TUPLE_SENTINEL => {
+                generic_args.iter().find_map(|t| self.order_blocker(t, total))
+            }
+            Ty::User { name, .. } => {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                let declares = |ops: &std::collections::HashMap<OperatorKind, crate::symbol_table::OperatorSig>| {
+                    ops.contains_key(&OperatorKind::Cmp)
+                };
+                if let Some((_, record)) = self.lookup_by(name, &self.records) {
+                    return (!declares(&record.operators))
+                        .then(|| format!("`{bare}` declares no `operator<=>`"));
+                }
+                if let Some((_, en)) = self.lookup_by(name, &self.enums) {
+                    if en.is_external {
+                        return None;
+                    }
+                    return (!declares(&en.operators)).then(|| format!("`{bare}` declares no `operator<=>`"));
+                }
+                let (_, class) = self.resolve_class(name)?;
+                if class.is_external {
+                    // A collection is a shared handle (§6.5.1), which Rust
+                    // gives no order; any other foreign type answers for itself.
+                    let collection = class.annotations.iter().any(|a| {
+                        a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustcollection")
+                    });
+                    return collection.then(|| "a collection has no order (it is a shared handle)".to_string());
+                }
+                // `<=>` is inherited along the `extends` chain.
+                let mut current = Some(class);
+                let mut seen: HashSet<String> = HashSet::new();
+                while let Some(c) = current {
+                    if declares(&c.operators) {
+                        return None;
+                    }
+                    current = c
+                        .extends_fqn
+                        .as_deref()
+                        .filter(|p| seen.insert(p.to_string()))
+                        .and_then(|p| self.resolve_class(p))
+                        .map(|(_, c)| c);
+                }
+                Some(format!("`{bare}` declares no `operator<=>`"))
+            }
+        }
+    }
+
     fn hash_blocker_in(&self, ty: &Ty, visiting: &mut HashSet<String>) -> Option<String> {
         match ty {
             Ty::Nullable(inner) => self.hash_blocker_in(inner, visiting),

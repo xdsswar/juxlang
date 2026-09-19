@@ -1330,6 +1330,41 @@ type stays deferred, as §M.13.2 says, and is `E0523`.
 
 ## How to use this file
 
+## E76. A second discovery source for `alloc`'s slice and `str` methods
+
+**Conflict.** Bindgen §G.6.1 makes rustdoc JSON *the* source of a foreign
+API, and §G.6.4.4 says a `Vec` reaches the methods of the slice it derefs to.
+Both cannot hold: `alloc` writes `impl<T> [T]` and `impl str` for primitives
+`core` defines, and rustdoc attaches those blocks to `core`'s pages, so no
+JSON carries `sort`, `sort_by`, `sort_by_key`, `to_vec`, `concat`, `join` or
+`str::to_uppercase`. Checked against the prebuilt `alloc.json`, `core.json`
+and `std.json`, and against a JSON built from `rust-src`.
+
+**Resolution.** Those impls are read from the toolchain's own library source
+(the `rust-src` component of the toolchain that builds the program), parsed
+for inherent impls on a slice or a primitive, keeping the `pub`,
+`#[stable]`, `self`-taking methods. Nothing is named by hand: the file is
+chosen by the `#[rustc_allow_incoherent_impl]` marker such methods must
+carry. The signatures are mapped exactly as rustdoc's are and pooled under
+the same shape, so the rest of the compiler cannot tell the sources apart.
+Without `rust-src` installed the surface simply lacks those methods.
+
+**Spec status:** §G.6.4.4 carries the rule.
+
+## E77. What a foreign method's bound asks of a Jux type
+
+**Conflict.** `sort` is `where T: Ord`, and nothing in the spec said what
+`Ord` means for a Jux type, so `people.sort()` on a `Vec<Person>` reached
+rustc as E0277 -- exactly the leak §G.1 exists to prevent.
+
+**Resolution.** A method's bounds on its type's own parameters are carried
+on the stub (`@RustBounds("T: Ord")`) and checked at the call as E0446.
+The reading follows the backend: `Ord`/`PartialOrd` is `operator<=>`
+(LANG-V1 §7.14.4), `Hash` is `operator hash`. A floating-point element meets
+`PartialOrd` but not `Ord`, an array or a collection meets neither, and a
+foreign element type answers for itself.
+
+**Spec status:** §G.6.4.4 and the E0446 catalog row carry the rule.
 When you edit any addendum that touches one of the items above,
 either:
 

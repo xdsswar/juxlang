@@ -18,3 +18,7 @@ workspace = true
 rustdoc-types = { workspace = true }
 # Reads the rustdoc JSON file off disk.
 serde_json    = { workspace = true }
+# Reads the toolchain's library SOURCE for the inherent impls rustdoc JSON
+# leaves out (`alloc`'s `impl<T> [T]` and `impl str`, §G.6.4.4). Parsing only:
+# no proc-macro support or printing is needed.
+syn           = { version = "2", default-features = false, features = ["full", "parsing", "clone-impls"] }

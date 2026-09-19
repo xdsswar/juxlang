@@ -1,0 +1,18 @@
+// A slice method's bound on the element type, reported in Jux terms
+// (Bindgen G.6.4.4): `sort` asks Rust for `Ord`, which a Jux type has when it
+// declares `operator<=>`. Each of these used to reach rustc as E0277.
+
+record Person(String name) {}
+
+public void main() {
+    var people = new Vec<Person>();
+    people.push(new Person("Ann"));
+    people.sort();
+
+    var reals = new Vec<double>();
+    reals.push(1.5);
+    reals.sort();
+
+    var rows = new Vec<Vec<int>>();
+    rows.sort();
+}
