@@ -1,0 +1,1 @@
+struct_eq_without_hash.jux:4:12: [E0931] error: struct `Circle` defines `operator==` but no `operator hash`; structural equality requires consistent hashing

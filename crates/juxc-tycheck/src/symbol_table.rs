@@ -4390,9 +4390,11 @@ fn insert_class(
         }
         operators.insert(op.kind, operator_sig(op));
     }
-    // §O.2.7 pairing: `operator==` requires `operator hash`.
+    // §O.2.7 pairing: `operator==` requires `operator hash`. A `struct`
+    // shares the class declaration and is named as what it was written as.
     let class_ops: Vec<&juxc_ast::OperatorDecl> = class_decl.operators.iter().collect();
-    check_eq_hash_pairing(&class_ops, "class", &class_decl.name.text, diagnostics);
+    let kind_label = if class_decl.is_struct { "struct" } else { "class" };
+    check_eq_hash_pairing(&class_ops, kind_label, &class_decl.name.text, diagnostics);
     // §O.2.1: `<=>` conflicts with individual `<`/`<=`/`>`/`>=`.
     check_cmp_individual_conflict(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1/§O.2.2: fixed return types for ==, <=>, hash, string, etc.
