@@ -1006,6 +1006,11 @@ struct RustEmitter {
     /// (`self.clone()`, enums always derive Clone) so binders own
     /// their payloads and `return v;` type-checks for generic `T`.
     pub(crate) in_enum_method: bool,
+    /// True while a record's declaration (its methods and operators) is
+    /// emitted. `this` there is `&Self`, so as an operand of a user operator
+    /// (`this * this` in `operator<=>`) it is taken as a copy of the record,
+    /// `self.clone()`: the operator traits are implemented on the value.
+    pub(crate) in_record_body: bool,
     /// The per-variant fields (JUX-LANG-V1 §7.7.4) of the enum whose methods
     /// are being emitted, by name. A bare `mass` in one of its methods reads
     /// `this.mass`, which lowers through the enum's `__field` accessor.
@@ -5342,6 +5347,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             in_catch_arm: false,
             catch_rethrow: None,
             in_enum_method: false,
+            in_record_body: false,
             enclosing_enum_fields: std::collections::HashMap::new(),
             current_switch_enum: None,
             current_switch_enum_path: None,

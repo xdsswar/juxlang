@@ -29,6 +29,14 @@ impl RustEmitter {
     /// natively, written by hand when a component is a float (hashed by its
     /// bits, §O.3.1), and absent when a component has no hash at all.
     pub(crate) fn emit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
+        // Inside a record's methods and operators `this` is `&Self`; see
+        // `in_record_body`.
+        let prev = std::mem::replace(&mut self.in_record_body, true);
+        self.emit_record_decl_inner(record_decl);
+        self.in_record_body = prev;
+    }
+
+    fn emit_record_decl_inner(&mut self, record_decl: &juxc_ast::RecordDecl) {
         // (Migrated to Writer indent-aware API)
         // Per `JUX-OPERATORS-ADDENDUM.md` §O.3.1 records auto-provide
         // `operator==`, `operator hash`, and copy-on-assignment when
