@@ -5614,7 +5614,7 @@ impl RustEmitter {
             match step {
                 Step::Field(field) => {
                     let slot = format!("{}_{}", class_decl.name.text, to_rust_ident(&field.name.text));
-                    if self.static_type_needs_thread_local(&juxc_tycheck::resolved_field_type(field)) {
+                    if self.static_field_is_thread_local(field.is_ref, &juxc_tycheck::resolved_field_type(field)) {
                         self.w.line(&format!("{slot}.with(|_| ());"));
                     } else {
                         self.w.line(&format!("std::sync::LazyLock::force(&{slot});"));
@@ -5811,11 +5811,50 @@ impl RustEmitter {
                 .any(|k| k == bare || k.rsplit('.').next().unwrap_or(k) == bare)
     }
 
+    /// Whether a static field's storage is the `thread_local!` slot: a `!Send`
+    /// payload ([`Self::static_type_needs_thread_local`]) or a `ref` static
+    /// (§M.13), whose slot IS the shared `Rc<RefCell<T>>` cell. Every read,
+    /// write and initializer of a static asks this, so all of them agree.
+    pub(crate) fn static_field_is_thread_local(&self, is_ref: bool, ty: &juxc_ast::TypeRef) -> bool {
+        is_ref || self.static_type_needs_thread_local(ty)
+    }
+
     pub(crate) fn emit_mutable_static_field(
         &mut self,
         class_name: &str,
         field: &juxc_ast::FieldDecl,
     ) {
+        // **`static ref` (§M.13).** A static is already one place, but a
+        // `ref` one is a shared CELL: a `ref` local or parameter taken from
+        // it aliases it, so the callee's writes are the static's writes. The
+        // slot holds the `Rc<RefCell<T>>` itself (never reassigned: a write
+        // stores through, §M.13.2), and because `Rc` derefs to the `RefCell`
+        // the ordinary thread_local read and write shapes work unchanged; the
+        // aliasing read is `.with(|__s| __s.clone())`.
+        if field.is_ref {
+            let ty = juxc_tycheck::resolved_field_type(field);
+            self.w.emit_indent();
+            self.w.push_str("thread_local! {\n");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("pub static ");
+            self.w.push_str(class_name);
+            self.w.push('_');
+            self.w.push_str(&to_rust_ident(&field.name.text));
+            self.w.push_str(": std::rc::Rc<std::cell::RefCell<");
+            self.emit_field_type_as_rust(&ty);
+            self.w.push_str(">> = std::rc::Rc::new(std::cell::RefCell::new(");
+            if let Some(init) = &field.default {
+                self.emit_expr(init);
+            } else {
+                self.emit_field_default_value_for(&ty);
+            }
+            self.w.push_str("));\n");
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+            return;
+        }
         // **`!Send` payload → `thread_local!` storage.** See
         // `static_type_needs_thread_local`. The `RefCell` makes the
         // SLOT reassignable (`Registry.global = new Counter()`);

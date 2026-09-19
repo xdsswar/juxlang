@@ -1283,6 +1283,11 @@ pub struct FieldSig {
     /// `Weak<RefCell<…>>` storage lowering, the `.get()` → `T?` typing,
     /// the downgrade-on-store, and the definite-assignment exemption.
     pub is_weak: bool,
+    /// True if the field is declared `ref` (JUX-MISSING-DEFS §M.13): the slot
+    /// holds a shared `Rc<RefCell<T>>` cell, so a `ref` local or parameter
+    /// initialized from it ALIASES it. On a `static` field it also routes the
+    /// storage to the `thread_local!` shape, whose slot is that cell.
+    pub is_ref: bool,
     /// Declared type as written in source.
     pub ty: TypeRef,
     /// Default initializer expression (`= expr`) if present. Lifted
@@ -5125,6 +5130,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         is_static: field.is_static,
         is_final: field.is_final,
         is_weak: field.is_weak,
+        is_ref: field.is_ref,
         // Resolved type: the written type, or one inferred from the
         // initializer when the field omits it (`const I = 2;` → `int`).
         ty: resolve_decl_type(field.ty.as_ref(), field.default.as_ref(), field.span),
