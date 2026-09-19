@@ -213,6 +213,27 @@ pub(crate) fn cross_target() -> Option<String> {
     }
 }
 
+/// How to ask cargo for the build profile, and where cargo puts its output.
+///
+/// `jux build --profile <name>` (§B.9) selects a named `[profile.<name>]`;
+/// the CLI records it in `JUX_PROFILE`, read here the same way `--target` is
+/// read through `JUX_TARGET`. Without one, `release` picks between Cargo's two
+/// built-ins as before. Returns the extra `cargo build` arguments and the
+/// profile's output directory under `target/[<triple>/]`, which follows
+/// Cargo's rule: `dev` and `test` land in `debug/`, `release` and `bench` in
+/// `release/`, and a custom profile in a directory of its own name.
+pub fn cargo_profile_args(release: bool) -> (Vec<String>, String) {
+    let named = std::env::var("JUX_PROFILE").ok().filter(|p| !p.trim().is_empty());
+    match named.as_deref() {
+        None if release => (vec!["--release".into()], "release".into()),
+        None | Some("dev") => (Vec::new(), "debug".into()),
+        Some("release") => (vec!["--release".into()], "release".into()),
+        Some(name @ "test") => (vec!["--profile".into(), name.into()], "debug".into()),
+        Some(name @ "bench") => (vec!["--profile".into(), name.into()], "release".into()),
+        Some(name) => (vec!["--profile".into(), name.into()], name.into()),
+    }
+}
+
 pub mod annotations;
 pub mod big_stack;
 pub mod cfg;
@@ -929,9 +950,9 @@ fn cargo_build(
     // with optimizations (and lands under `target/release/`).
     let mut cmd = Command::new("cargo");
     cmd.arg("build").arg("--quiet");
-    if release {
-        cmd.arg("--release");
-    }
+    // `--release`, `--profile <name>`, or nothing for the dev profile.
+    let (profile_args, profile_dir) = cargo_profile_args(release);
+    cmd.args(&profile_args);
     if let Some(triple) = cross_target() {
         cmd.args(["--target", &triple]);
     }
@@ -958,16 +979,15 @@ fn cargo_build(
     // `target/debug/{name}{exe-suffix}` (or `target/release/...`
     // when `--release` was passed); a cross-compile target adds its
     // triple segment (`target/<triple>/<profile>/...`).
-    let profile_dir = if release { "release" } else { "debug" };
     let mut out_dir = cargo_target_dir(crate_dir);
     if let Some(triple) = cross_target() {
         out_dir = out_dir.join(triple);
     }
     let mut binary_path = out_dir
-        .join(profile_dir)
+        .join(&profile_dir)
         .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
     if bin != crate_name {
-        binary_path = publish_binary(&binary_path, crate_dir, profile_dir, crate_name)?;
+        binary_path = publish_binary(&binary_path, crate_dir, &profile_dir, crate_name)?;
     }
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
@@ -1222,9 +1242,9 @@ pub fn build_emitted_crate(
     // Run `cargo build`.
     let mut cmd = Command::new("cargo");
     cmd.arg("build").arg("--quiet");
-    if release {
-        cmd.arg("--release");
-    }
+    // `--release`, `--profile <name>`, or nothing for the dev profile.
+    let (profile_args, profile_dir) = cargo_profile_args(release);
+    cmd.args(&profile_args);
     if let Some(triple) = cross_target() {
         cmd.args(["--target", &triple]);
     }
@@ -1253,12 +1273,11 @@ pub fn build_emitted_crate(
 
     // Compute the produced-artifact path (cross targets add their
     // triple segment: `target/<triple>/<profile>/...`).
-    let profile_dir = if release { "release" } else { "debug" };
     let mut out_dir = cargo_target_dir(crate_dir);
     if let Some(triple) = cross_target() {
         out_dir = out_dir.join(triple);
     }
-    let out_dir = out_dir.join(profile_dir);
+    let out_dir = out_dir.join(&profile_dir);
     let binary_path = match target {
         juxc_backend_rust::CrateTarget::Bin { name } => {
             let bin = cargo_bin_name(crate_, crate_dir, name);
@@ -1266,7 +1285,7 @@ pub fn build_emitted_crate(
             if &bin == name {
                 built
             } else {
-                publish_binary(&built, crate_dir, profile_dir, name)?
+                publish_binary(&built, crate_dir, &profile_dir, name)?
             }
         }
         juxc_backend_rust::CrateTarget::Lib { name, .. } => {

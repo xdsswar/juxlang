@@ -145,3 +145,56 @@ fn workspace_member_outside_the_defaults_is_still_selectable() {
         .unwrap();
     assert_eq!(main["edition"], "2026", "edition was not inherited");
 }
+
+/// `--profile <name>` selects a custom `[profile.<name>]` (§B.9): the build
+/// lands in cargo's directory for that profile, `cfg(release)` follows the
+/// profile's `extends` chain, and an unknown name is an error listing the
+/// profiles there are.
+#[test]
+fn custom_profiles_are_selectable() {
+    let root = scratch("profiles");
+    write(
+        &root,
+        "jux.toml",
+        "[package]
+name = \"prof\"
+version = \"0.1.0\"
+
+[profile.fast]
+extends = \"release\"
+opt-level = 2
+
+[profile.trace]
+debug = \"full\"
+",
+    );
+    write(
+        &root,
+        "src/main.jux",
+        "public void main() {
+    if cfg(release) {
+        print(\"optimized\");
+    } else {
+        print(\"debug\");
+    }
+}
+",
+    );
+    let (ok, out, err) = jux(&root, &["run", "--profile", "fast"]);
+    assert!(ok, "--profile fast failed:
+{err}");
+    assert_eq!(out.trim(), "optimized");
+    let fast_dir = format!("{}fast{}", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR);
+    assert!(err.contains(&fast_dir), "not built in the profile's own directory:
+{err}");
+
+    let (ok, out, err) = jux(&root, &["run", "--profile", "trace"]);
+    assert!(ok, "--profile trace failed:
+{err}");
+    assert_eq!(out.trim(), "debug", "a profile with no extends derives from dev");
+
+    let (ok, _out, err) = jux(&root, &["build", "--profile", "ghost"]);
+    assert!(!ok, "an unknown profile must fail");
+    assert!(err.contains("no profile `ghost`") && err.contains("fast, trace"), "got:
+{err}");
+}

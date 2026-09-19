@@ -76,6 +76,10 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Type-check under this `[profile.<name>]` (§B.9); it decides
+        /// `cfg(debug)` / `cfg(release)`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Build the project (or a single file). (§B.15 — `jux build`.)
     Build {
@@ -113,6 +117,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
@@ -153,6 +162,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Run tests (JUX-TESTING-ADDENDUM §TS.2/§TS.8).
     Test {
@@ -174,6 +188,11 @@ enum CliCommand {
         /// Leave the package's `default` features off.
         #[arg(long)]
         no_default_features: bool,
+        /// Build with this `[profile.<name>]` (§B.9): a custom profile from
+        /// `jux.toml`, or one of `dev`, `release`, `test`, `bench`. Replaces
+        /// `--release`, which is the same as `--profile release`.
+        #[arg(long, value_name = "NAME", conflicts_with = "release")]
+        profile: Option<String>,
     },
     /// Re-fetch the project's git dependencies (§B.2.2). Branch-pinned
     /// deps pick up new commits; tag/rev pins re-validate. Without
@@ -265,8 +284,9 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
     let root = resolve_project_root(cli.manifest_path.as_deref());
     match cli.command {
         CliCommand::New { name } => cmd_new(&name),
-        CliCommand::Test { pattern, package, release, features, no_default_features } => {
+        CliCommand::Test { pattern, package, release, features, no_default_features, profile } => {
             set_features(features, no_default_features);
+            set_profile(profile);
             cmd_test(root, package.as_deref(), pattern, release)
         }
         CliCommand::Update       => cmd_update(root),
@@ -277,21 +297,24 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         CliCommand::Target { cmd } => match cmd {
             TargetCmd::List { installed } => cmd_target_list(installed),
         },
-        CliCommand::Check { file, package, target, features, no_default_features } => {
+        CliCommand::Check { file, package, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
+            set_profile(profile);
             let sel = Selection { package, ..Selection::default() };
             run_single_or_project(root, file, Action::Check, None, false, sel)
         }
-        CliCommand::Build { file, emit_dir, release, package, bin, lib, target, features, no_default_features } => {
+        CliCommand::Build { file, emit_dir, release, package, bin, lib, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
+            set_profile(profile);
             let sel = Selection { package, bin, lib };
             run_single_or_project(root, file, Action::Build, emit_dir, release, sel)
         }
-        CliCommand::Run { file, emit_dir, release, package, bin, args, target, features, no_default_features } => {
+        CliCommand::Run { file, emit_dir, release, package, bin, args, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
+            set_profile(profile);
             set_program_args(args);
             let sel = Selection { package, bin, lib: false };
             run_single_or_project(root, file, Action::Run, emit_dir, release, sel)
@@ -352,6 +375,50 @@ fn set_features(features: Vec<String>, no_default_features: bool) {
 fn set_cross_target(triple: Option<String>) {
     if let Some(t) = triple {
         std::env::set_var("JUX_TARGET", t);
+    }
+}
+
+/// Record `--profile <name>` in `JUX_PROFILE`, which the driver's cargo
+/// invocations read (`juxc_driver::cargo_profile_args`), the same way
+/// `--target` travels through `JUX_TARGET`.
+fn set_profile(profile: Option<String>) {
+    if let Some(p) = profile {
+        std::env::set_var("JUX_PROFILE", p);
+    }
+}
+
+/// The `--profile` the user asked for, if any.
+fn selected_profile() -> Option<String> {
+    std::env::var("JUX_PROFILE").ok().filter(|p| !p.trim().is_empty())
+}
+
+/// Decide the build type for a project build: the named `--profile` when one
+/// was given (validated against the manifest, which owns custom profiles),
+/// else the manifest's default (`[build] optimization`) overridden by
+/// `--release`. `Err` carries the message for an unknown profile.
+fn resolve_release(manifest: &juxc_driver::Manifest, cli_release: bool) -> std::result::Result<bool, String> {
+    let Some(name) = selected_profile() else {
+        return Ok(manifest.effective_release(cli_release));
+    };
+    manifest.profile_is_optimized(&name).ok_or_else(|| {
+        format!(
+            "no profile `{name}` in {}; available: {}",
+            manifest.project_root.join("jux.toml").display(),
+            manifest.selectable_profiles().join(", "),
+        )
+    })
+}
+
+/// The same for a file with no manifest: only the four built-in profiles
+/// exist there.
+fn resolve_release_without_manifest(cli_release: bool) -> std::result::Result<bool, String> {
+    match selected_profile().as_deref() {
+        None => Ok(cli_release),
+        Some("release") | Some("bench") => Ok(true),
+        Some("dev") | Some("test") => Ok(false),
+        Some(other) => Err(format!(
+            "profile `{other}` needs a project: custom profiles are declared as `[profile.{other}]` in jux.toml"
+        )),
     }
 }
 
@@ -714,6 +781,18 @@ fn run_single_or_project(
     release: bool,
     selection: Selection,
 ) -> Result<ExitCode> {
+    // A file or loose directory has no manifest, so only the built-in
+    // profiles are selectable there. A project directory is resolved below.
+    let release = match &file {
+        Some(path) if !path.join("jux.toml").exists() => match resolve_release_without_manifest(release) {
+            Ok(r) => r,
+            Err(msg) => {
+                eprintln!("jux: {msg}");
+                return Ok(ExitCode::from(1));
+            }
+        },
+        _ => release,
+    };
     match file {
         // Single-file mode ignores package/target selection (the file is the
         // unit). Warn rather than silently dropping a `-p`/`--bin` the user
@@ -768,7 +847,13 @@ fn run_project(
     // `[build] optimization` sets the default debug/release build type; an
     // explicit CLI `--release` still wins (§B.9). `[build] target` supplies a
     // default cross-compile triple unless `--target` already set JUX_TARGET.
-    let release = root_manifest.effective_release(release);
+    let release = match resolve_release(&root_manifest, release) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
     apply_default_target(&root_manifest);
 
     // Every package (standalone or workspace member) emits under the resolved
@@ -782,7 +867,8 @@ fn run_project(
     let selected: juxc_driver::Manifest = if is_workspace {
         if let Some(pkg) = &selection.package {
             match select_member(&root_manifest, &root_dir, pkg) {
-                Ok((_dir, m)) => m,
+                // The member builds with the root's profiles (§B.9.2).
+                Ok((_dir, m)) => juxc_driver::project::with_root_profiles(&m, &root_manifest),
                 Err(msg) => {
                     eprintln!("jux: {msg}");
                     return Ok(ExitCode::from(1));
@@ -1050,7 +1136,7 @@ fn cmd_test(
             (root_dir.clone(), root_manifest)
         } else {
             match select_member(&root_manifest, &root_dir, pkg) {
-                Ok((dir, m)) => (dir, m),
+                Ok((dir, m)) => (dir, juxc_driver::project::with_root_profiles(&m, &root_manifest)),
                 Err(msg) => {
                     eprintln!("jux: {msg}");
                     return Ok(ExitCode::from(1));
@@ -1062,7 +1148,13 @@ fn cmd_test(
     };
     // `jux test` honors the manifest's default build type too (§B.9); the
     // `assert` builtin stays checked regardless (§TS.2).
-    let release = manifest.effective_release(release);
+    let release = match resolve_release(&manifest, release) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("jux: {msg}");
+            return Ok(ExitCode::from(1));
+        }
+    };
     apply_default_target(&manifest);
     let binary_name = format!(
         "{}_test",
@@ -1108,7 +1200,12 @@ fn cmd_test(
         eprintln!("jux: nothing to test");
         return Ok(ExitCode::SUCCESS);
     };
-    let artifact = juxc_driver::build(&crate_, &emit_dir, &binary_name, release)?;
+    // A named `--profile` must be defined in the runner's emitted Cargo.toml,
+    // so the manifest (which carries the `[profile.*]` tables) is woven in
+    // then. Without one the runner keeps its plain manifest as before.
+    let with_profiles = selected_profile().is_some().then_some(&manifest);
+    let artifact =
+        juxc_driver::build_with_manifest(&crate_, &emit_dir, &binary_name, release, with_profiles)?;
     // Run the test binary, inherit stdio so the user sees PASS/FAIL
     // output in real time. Forward the filter pattern as argv and
     // the exit code so CI gates work.

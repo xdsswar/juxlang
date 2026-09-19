@@ -297,7 +297,7 @@ pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild>
 
     let mut built: Vec<(String, PackageBuild)> = Vec::new();
     for name in &order {
-        let m = &members[name];
+        let m = &with_root_profiles(&members[name], root);
         // Gather dependency sources + path-dep links for intra-workspace
         // path deps that are themselves workspace members.
         let (dep_sources, path_deps) = resolve_member_deps(m, &members, &emit_root)?;
@@ -523,6 +523,18 @@ fn add_dep(
 
 /// Topologically order workspace members so a member is built after the
 /// members it path-depends on. Detects cycles (rejected per §B.4.6).
+/// `member` as it builds inside `root`'s workspace: the root owns the build
+/// profiles (§B.9.2), so a member that declares none takes the root's
+/// `[profile.*]` tables. Without them a member's emitted crate had no custom
+/// profile, and `jux build --profile <name>` at the root failed in cargo.
+pub fn with_root_profiles(member: &Manifest, root: &Manifest) -> Manifest {
+    let mut m = member.clone();
+    if m.profiles.is_empty() {
+        m.profiles = root.profiles.clone();
+    }
+    m
+}
+
 /// The package names a bare workspace build must compile: every
 /// `default-members` package plus, transitively, the members it depends on
 /// through `path` dependencies.

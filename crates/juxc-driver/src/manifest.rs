@@ -799,6 +799,53 @@ impl Manifest {
         )
     }
 
+    /// Whether the build profile `name` is an optimized one, for
+    /// `jux build --profile <name>` (§B.9). `None` when the manifest declares
+    /// no such profile and it is not one of the four built-ins.
+    ///
+    /// The answer follows `extends` up to a built-in: `release` and `bench`
+    /// are optimized, `dev` and `test` are not, and a custom profile with no
+    /// `extends` derives from `dev` (the same default the emitted Cargo
+    /// `inherits` gets). It decides `cfg(debug)` / `cfg(release)` for the
+    /// build. A cycle of `extends` is treated as not optimized; Cargo rejects
+    /// the cycle itself when it reads the emitted manifest.
+    pub fn profile_is_optimized(&self, name: &str) -> Option<bool> {
+        let builtin = |n: &str| match n {
+            "release" | "bench" => Some(true),
+            "dev" | "test" => Some(false),
+            _ => None,
+        };
+        if builtin(name).is_none() && !self.profiles.iter().any(|p| p.name == name) {
+            return None;
+        }
+        let mut current = name.to_string();
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            if !seen.insert(current.clone()) {
+                return Some(false);
+            }
+            let declared = self.profiles.iter().find(|p| p.name == current);
+            match declared.and_then(|p| p.extends.clone()) {
+                // A declared parent wins, even over a built-in's default.
+                Some(parent) => current = parent,
+                None => return Some(builtin(&current).unwrap_or(false)),
+            }
+        }
+    }
+
+    /// The profile names `--profile` accepts for this package: the four
+    /// built-ins plus every declared `[profile.<name>]`.
+    pub fn selectable_profiles(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            ["dev", "release", "test", "bench"].iter().map(|s| s.to_string()).collect();
+        for p in &self.profiles {
+            if !names.contains(&p.name) {
+                names.push(p.name.clone());
+            }
+        }
+        names
+    }
+
     /// Lower the parsed `[profile.*]` tables to the backend's
     /// [`juxc_backend_rust::CargoProfile`] shape — Cargo-spelled keys with
     /// pre-rendered TOML values. Also injects `opt-level = "z"` into the
@@ -1291,6 +1338,22 @@ mod tests {
             m.workspace_members,
             vec!["greeter".to_string(), "app".to_string()]
         );
+    }
+
+    /// `--profile` resolution: built-ins answer directly, a custom profile
+    /// follows `extends`, and an unknown name is `None`.
+    #[test]
+    fn profile_optimization_follows_extends() {
+        let (m, _d) = load_toml(
+            "[package]\nname = \"app\"\n\n[profile.embedded]\nextends = \"release\"\nopt-level = \"s\"\n\n[profile.small]\nextends = \"embedded\"\n\n[profile.trace]\ndebug = \"full\"\n",
+        );
+        assert_eq!(m.profile_is_optimized("release"), Some(true));
+        assert_eq!(m.profile_is_optimized("dev"), Some(false));
+        assert_eq!(m.profile_is_optimized("embedded"), Some(true));
+        assert_eq!(m.profile_is_optimized("small"), Some(true));
+        assert_eq!(m.profile_is_optimized("trace"), Some(false));
+        assert_eq!(m.profile_is_optimized("ghost"), None);
+        assert!(m.selectable_profiles().contains(&"small".to_string()));
     }
 
     #[test]
