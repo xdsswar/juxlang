@@ -105,6 +105,13 @@ enum CliCommand {
         /// Build only the `[lib]` target. Mutually exclusive with `--bin`.
         #[arg(long)]
         lib: bool,
+        /// Build the program `examples/<NAME>.jux` (or `examples/<NAME>/`)
+        /// against this package's library code (§B.1.3).
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["bin", "lib", "examples"])]
+        example: Option<String>,
+        /// Build every program under `examples/` (§B.1.3).
+        #[arg(long, conflicts_with_all = ["bin", "lib"])]
+        examples: bool,
         /// Cross-compile for the given Rust target triple (forwards
         /// `--target` to the inner `cargo build`). The toolchain must
         /// be installed: `rustup target add <triple>`.
@@ -145,6 +152,10 @@ enum CliCommand {
         /// package's first binary.
         #[arg(long)]
         bin: Option<String>,
+        /// Run the program `examples/<NAME>.jux` (or `examples/<NAME>/`)
+        /// instead of a `[[bin]]` (§B.15.3).
+        #[arg(long, value_name = "NAME", conflicts_with = "bin")]
+        example: Option<String>,
         /// Arguments for the program itself, after a `--` separator.
         ///
         /// `main(String[] args)` has always been a legal entry point; until
@@ -304,19 +315,19 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
             let sel = Selection { package, ..Selection::default() };
             run_single_or_project(root, file, Action::Check, None, false, sel)
         }
-        CliCommand::Build { file, emit_dir, release, package, bin, lib, target, features, no_default_features, profile } => {
+        CliCommand::Build { file, emit_dir, release, package, bin, lib, example, examples, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
             set_profile(profile);
-            let sel = Selection { package, bin, lib };
+            let sel = Selection { package, bin, lib, example, examples };
             run_single_or_project(root, file, Action::Build, emit_dir, release, sel)
         }
-        CliCommand::Run { file, emit_dir, release, package, bin, args, target, features, no_default_features, profile } => {
+        CliCommand::Run { file, emit_dir, release, package, bin, example, args, target, features, no_default_features, profile } => {
             set_cross_target(target);
             set_features(features, no_default_features);
             set_profile(profile);
             set_program_args(args);
-            let sel = Selection { package, bin, lib: false };
+            let sel = Selection { package, bin, lib: false, example, examples: false };
             run_single_or_project(root, file, Action::Run, emit_dir, release, sel)
         }
     }
@@ -333,12 +344,20 @@ struct Selection {
     bin: Option<String>,
     /// `--lib` — restrict to the `[lib]` target.
     lib: bool,
+    /// `--example <name>` — build (or run) one program from `examples/`.
+    example: Option<String>,
+    /// `--examples` — build every program under `examples/`.
+    examples: bool,
 }
 
 impl Selection {
     /// True when no package/target restriction was requested.
     fn is_empty(&self) -> bool {
-        self.package.is_none() && self.bin.is_none() && !self.lib
+        self.package.is_none()
+            && self.bin.is_none()
+            && !self.lib
+            && self.example.is_none()
+            && !self.examples
     }
 }
 
@@ -874,11 +893,15 @@ fn run_project(
                     return Ok(ExitCode::from(1));
                 }
             }
-        } else if selection.bin.is_some() || selection.lib {
+        } else if selection.bin.is_some()
+            || selection.lib
+            || selection.example.is_some()
+            || selection.examples
+        {
             // `--bin`/`--lib` need a single package to act on; in a workspace
             // that's ambiguous without `-p`.
             eprintln!(
-                "jux: --bin/--lib require selecting a member with --package in a workspace",
+                "jux: --bin/--lib/--example require selecting a member with --package in a workspace",
             );
             return Ok(ExitCode::from(1));
         } else {
@@ -898,6 +921,12 @@ fn run_project(
         }
         root_manifest.clone()
     };
+
+    // `--example` / `--examples` build programs from `examples/` instead of
+    // the package's own targets (§B.1.3, §B.15.3).
+    if selection.example.is_some() || selection.examples {
+        return build_examples(&selected, &emit_root, action, release, &selection);
+    }
 
     if selected.lib.is_none() && selected.bins.is_empty() {
         eprintln!(
@@ -919,6 +948,69 @@ fn run_project(
     };
 
     build_and_act(&selected, &emit_root, action, release, &target_sel)
+}
+
+/// `--example <name>` / `--examples`: build (and for `run`, execute) programs
+/// from the package's `examples/` directory. Each one compiles against the
+/// package's library code and dependencies as its own binary (§B.1.3).
+fn build_examples(
+    manifest: &juxc_driver::Manifest,
+    emit_root: &Path,
+    action: Action,
+    release: bool,
+    selection: &Selection,
+) -> Result<ExitCode> {
+    let all = juxc_driver::project::discover_examples(manifest)?;
+    let chosen: Vec<&juxc_driver::project::Example> = match &selection.example {
+        Some(name) => match all.iter().find(|e| &e.name == name) {
+            Some(e) => vec![e],
+            None => {
+                let names: Vec<&str> = all.iter().map(|e| e.name.as_str()).collect();
+                eprintln!(
+                    "jux: package `{}` has no example `{name}`; available: {}",
+                    manifest.package.name,
+                    if names.is_empty() { "(none: examples/ is empty or missing)".to_string() } else { names.join(", ") },
+                );
+                return Ok(ExitCode::from(1));
+            }
+        },
+        None => all.iter().collect(),
+    };
+    if chosen.is_empty() {
+        eprintln!("jux: package `{}` has no examples", manifest.package.name);
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (dep_sources, _path_deps) = juxc_driver::project::resolve_package_deps(manifest, emit_root)?;
+    let facts = juxc_driver::project::cfg_facts_for(manifest, release);
+    for example in chosen {
+        let build = juxc_driver::project::build_example(
+            manifest, &dep_sources, emit_root, release, example, &facts,
+        )?;
+        print_diagnostics(&build.diagnostics, &build.sources);
+        if build.has_errors() {
+            eprintln!("jux: example `{}` failed to build", example.name);
+            return Ok(ExitCode::from(1));
+        }
+        let Some(bin) = build.binaries.first() else {
+            continue;
+        };
+        match action {
+            Action::Check => {}
+            Action::Build => eprintln!("jux: built example `{}` at {}", example.name, bin.binary_path.display()),
+            Action::Run => {
+                eprintln!("jux: built {}", bin.binary_path.display());
+                let status = Command::new(&bin.binary_path)
+                    .args(program_args())
+                    .status()
+                    .with_context(|| format!("running {}", bin.binary_path.display()))?;
+                return Ok(ExitCode::from(status.code().unwrap_or(1) as u8));
+            }
+        }
+    }
+    if matches!(action, Action::Check) {
+        eprintln!("jux: check ok");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Build one package's (filtered) targets and act on the result: report for

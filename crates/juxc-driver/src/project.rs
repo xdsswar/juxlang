@@ -240,6 +240,97 @@ pub fn build_package_selected(
     })
 }
 
+/// One runnable program under a package's `examples/` directory (§B.1.3,
+/// §B.15.3): either a single file `examples/<name>.jux` or a directory
+/// `examples/<name>/` whose `.jux` files make one program.
+#[derive(Debug, Clone)]
+pub struct Example {
+    /// The name `--example` takes: the file stem or the directory name.
+    pub name: String,
+    /// The example's own sources.
+    pub files: Vec<PathBuf>,
+}
+
+/// Every example in `manifest`'s `examples/` directory, sorted by name.
+/// Hidden entries and a `README.md` are not examples; a directory with no
+/// `.jux` file in it is skipped.
+pub fn discover_examples(manifest: &Manifest) -> Result<Vec<Example>> {
+    let dir = manifest.project_root.join("examples");
+    let mut out: Vec<Example> = Vec::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('.') || file_name == "target" {
+            continue;
+        }
+        if path.is_dir() {
+            let mut files = Vec::new();
+            walk_jux(&path, &mut files)?;
+            files.sort();
+            if !files.is_empty() {
+                out.push(Example { name: file_name.to_string(), files });
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jux") {
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+            out.push(Example { name: name.to_string(), files: vec![path.clone()] });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Build one example as its own program (§B.1.3): the package's library code
+/// (every `src/` source except the `[[bin]]` entry files, which each declare
+/// their own `main`), the package's dependencies, and the example's sources.
+/// The binary is named after the example and emitted under
+/// `<emit_root>/example-<name>/`.
+pub fn build_example(
+    manifest: &Manifest,
+    dep_sources: &[SourceFile],
+    emit_root: &Path,
+    release: bool,
+    example: &Example,
+    cfg: &crate::cfg::CfgFacts,
+) -> Result<PackageBuild> {
+    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut all_sources: Vec<SourceFile> = Vec::new();
+    let mut binaries = Vec::new();
+
+    let mut sources = dep_sources.to_vec();
+    sources.extend(resolve_and_load_stub_sources(manifest));
+    let entries: Vec<&Path> = manifest.bins.iter().map(|b| b.path.as_path()).collect();
+    sources.extend(
+        load_src_tree(&manifest.project_root.join("src"))?
+            .into_iter()
+            .filter(|s| !entries.iter().any(|e| same_path(s.path(), e))),
+    );
+    for file in &example.files {
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("reading {}", file.display()))?;
+        sources.push(SourceFile::new(file.clone(), text));
+    }
+
+    let result = crate::compile_workspace_as_cfg(
+        sources,
+        |u, s, e, src| juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, None),
+        cfg,
+    )?;
+    record(&result, &mut all_diagnostics, &mut all_sources);
+    if let Some(crate_) = result.crate_ {
+        let target = CrateTarget::Bin { name: example.name.clone() };
+        let dir = emit_root.join(format!("example-{}", sanitize(&example.name)));
+        let artifact =
+            build_emitted_crate(&crate_, &dir, &target, release, Some(manifest), &[], false)?;
+        binaries.push(artifact);
+    }
+    Ok(PackageBuild { binaries, library: None, diagnostics: all_diagnostics, sources: all_sources })
+}
+
 /// Outcome of a workspace build: each member's build keyed by package name,
 /// in topological (dependency-first) order.
 pub struct WorkspaceBuild {
