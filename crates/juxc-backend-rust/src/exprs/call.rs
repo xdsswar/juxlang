@@ -796,8 +796,19 @@ impl RustEmitter {
         if !self.cloning_borrowed_iterator {
             if let Some(view) = self.foreign_call_returns_borrowing_iterator(&call.callee) {
                 self.cloning_borrowed_iterator = true;
+                let saved = std::mem::replace(&mut self.w, crate::writer::Writer::new());
                 self.emit_call(call);
+                let text = std::mem::replace(&mut self.w, saved).into_string();
                 self.cloning_borrowed_iterator = false;
+                self.w.push_str(&text);
+                // A lowering that already took an owned snapshot (a shared
+                // collection's `keys()` becomes
+                // `m.borrow().keys().cloned().collect::<Vec<_>>()`) has
+                // nothing borrowed left to own; a second `.cloned()` on that
+                // `Vec` does not compile.
+                if text.ends_with(".collect::<Vec<_>>()") {
+                    return;
+                }
                 // Borrowed VIEWS (`&str` from `graphemes`) have no `Clone`;
                 // they are owned the way a view is stored.
                 self.w.push_str(if view { ".map(ToOwned::to_owned)" } else { ".cloned()" });
