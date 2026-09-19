@@ -1753,6 +1753,22 @@ fn sizeof_of_primitive_parses() {
     assert_eq!(qn.segments[0].text, "int");
 }
 
+/// `alignof(long)` (Layout-ABI §L.1.5, ERRATA E61) parses to the same
+/// `SizeOf` node with `is_align` set, and `alignof` stays an ordinary name
+/// anywhere it is not directly followed by `(`.
+#[test]
+fn alignof_parses_as_sizeof_twin() {
+    let ast = parse_clean("public void main() { print(alignof(long)); var alignof = 3; print(alignof); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::SizeOf(s) = &call.args[0] else {
+        panic!("expected SizeOf, got {:?}", call.args[0]);
+    };
+    assert!(s.is_align, "alignof sets is_align");
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[2] else { panic!() };
+    assert!(matches!(&call.args[0], Expr::Path(_)), "a bare `alignof` is a name: {:?}", call.args[0]);
+}
+
 /// `sizeof(count)` also parses to `SizeOf(Path(count))` — value-form
 /// detection happens later at lowering.
 #[test]

@@ -547,6 +547,25 @@ pub enum Code {
     /// stepping a `void*`, adding two pointers, multiplying or dividing one,
     /// or a bitwise operator on one (Layout-ABI §L.6.1a).
     E0518_InvalidPointerOperation,
+    /// E0519 -- An `@align(N)` that cannot hold (Layout-ABI §L.1.4, ERRATA
+    /// E62): `N` is not an integer literal, not a power of two, above the
+    /// largest alignment the target supports (2^29), or lower than an
+    /// alignment the type's own fields already need (aligning down).
+    E0519_InvalidAlignment,
+    /// E0520 -- `@align(N)` somewhere it cannot apply (Layout-ABI §L.1.4,
+    /// ERRATA E62): on a field (Phase 1 aligns whole types only; wrap the
+    /// field in an `@align` struct), or on an interface, enum or function.
+    E0520_AlignNotApplicable,
+    /// E0521 -- `array as T*` that cannot give a lasting pointer (Layout-ABI
+    /// §L.6.3): the array is a temporary (freed at the end of the statement),
+    /// nested (`int[][]`, whose elements are handles), or the target is a
+    /// pointer to a pointer.
+    E0521_ArrayToPointer,
+    /// E0522 -- An invalid `transmute<A, B>(value)` (Layout-ABI §L.7.4,
+    /// ERRATA E63): not exactly two type arguments and one argument, or two
+    /// types whose sizes are not equal on every target (including a type
+    /// with no size fixed that way, such as a class or a `String`).
+    E0522_InvalidTransmute,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -757,6 +776,11 @@ pub enum Code {
     /// whole cycle alive forever. Annotating one back-edge field `weak` breaks
     /// it. A **warning**, not an error — the program still compiles and runs.
     W0457_UnannotatedRefCycle,
+    /// W0820 -- An `unsafe { }` block with no `// SAFETY:` comment saying why
+    /// its obligations hold (Layout-ABI §L.5.5). Raised by the checking entry
+    /// points (`juxc --check`, `jux check`, the editor), not by a build: a
+    /// style lint for review, never an error.
+    W0820_UnsafeWithoutSafetyComment,
     /// W0240 -- `@Derive(...)` does nothing: records, structs and enums derive
     /// their operators without it (MISSING-DEFS §M.3, OPERATORS §O.9).
     W0240_DeriveNoOp,
@@ -962,6 +986,15 @@ pub enum Code {
     /// `string`, indexing...). Also an operator with no body declared outside
     /// an interface, which only an interface may leave abstract.
     E0936_InterfaceOperatorShape,
+    /// E0950 -- An orphan free-function operator (Runtime/ABI §R.3.1-R.3.3):
+    /// neither operand type, nor a record/struct/enum return type, is
+    /// declared by this program. `double * int` or `String + int` would
+    /// redefine arithmetic on types someone else owns.
+    E0950_OrphanOperator,
+    /// E0951 -- The same free-function operator declared twice for the same
+    /// operand types (Runtime/ABI §R.3.3): a call could not tell which one
+    /// runs.
+    E0951_DuplicateOperator,
 
     // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
     /// E0970 — Write to a read-only property outside the place where
@@ -1093,6 +1126,10 @@ impl Code {
             Code::E0516_AddressOfNonPlace        => "E0516",
             Code::E0517_DerefOfNonPointer        => "E0517",
             Code::E0518_InvalidPointerOperation  => "E0518",
+            Code::E0519_InvalidAlignment         => "E0519",
+            Code::E0520_AlignNotApplicable       => "E0520",
+            Code::E0521_ArrayToPointer           => "E0521",
+            Code::E0522_InvalidTransmute         => "E0522",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",
@@ -1136,6 +1173,7 @@ impl Code {
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
             Code::W0457_UnannotatedRefCycle      => "W0457",
+            Code::W0820_UnsafeWithoutSafetyComment => "W0820",
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
             Code::W0470_MissingOverrideAnnotation => "W0470",
@@ -1164,6 +1202,8 @@ impl Code {
             Code::E0933_KeyHasNoHash             => "E0933",
             Code::E0935_DeletedOperator          => "E0935",
             Code::E0936_InterfaceOperatorShape   => "E0936",
+            Code::E0950_OrphanOperator           => "E0950",
+            Code::E0951_DuplicateOperator        => "E0951",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
             Code::E0975_ObserverShapeMismatch    => "E0975",

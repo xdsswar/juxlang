@@ -752,6 +752,15 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Question)
                 | Some(TokenKind::Kw(Keyword::Extends))
                 | Some(TokenKind::Kw(Keyword::Super)) => saw_inner = true,
+                // A pointer type's `*` (`transmute<int*, uint>(p)`, §L.7.4),
+                // only right after a name or another `*`: an expression
+                // `a < b * c > (d)` would be a chained comparison, which Jux
+                // rejects anyway.
+                Some(TokenKind::Star)
+                    if matches!(
+                        self.tokens.get(i - 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_)) | Some(TokenKind::Star)
+                    ) => {}
                 // Anything else (operators, `(`, EOF, …) means this `<` is a
                 // comparison, not a type-arg list.
                 _ => return None,
@@ -1286,6 +1295,29 @@ impl<'a> Parser<'a> {
                 let lit = parse_float_literal_text(&text);
                 Some(Expr::Literal(Literal::Float(lit)))
             }
+            // `alignof '(' (type | expression) ')'` (Layout-ABI §L.1.5, ERRATA
+            // E61): `sizeof`'s twin for alignment. It is a contextual word, not
+            // a keyword, so it only takes this meaning directly before `(`.
+            TokenKind::Ident(name)
+                if name == "alignof" && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LParen)) =>
+            {
+                let start = self.peek_span();
+                self.advance(); // 'alignof'
+                self.expect(&TokenKind::LParen, "'(' after `alignof`");
+                let type_operand = self.try_sizeof_type_operand();
+                let operand = match &type_operand {
+                    Some(t) => Expr::Path(t.name.clone()),
+                    None => self.parse_expr()?,
+                };
+                self.expect(&TokenKind::RParen, "')' to close `alignof`");
+                let end = self.last_consumed_span();
+                Some(Expr::SizeOf(SizeOfExpr {
+                    operand: Box::new(operand),
+                    type_operand,
+                    is_align: true,
+                    span: start.join(end),
+                }))
+            }
             TokenKind::Ident(_) => {
                 // Single identifier. Dotted member access (`a.b.c`) is
                 // built up by `parse_postfix` as a chain of `FieldExpr`,
@@ -1596,6 +1628,7 @@ impl<'a> Parser<'a> {
                 Some(Expr::SizeOf(SizeOfExpr {
                     operand: Box::new(operand),
                     type_operand,
+                    is_align: false,
                     span: start.join(end),
                 }))
             }

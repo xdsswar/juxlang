@@ -1,1 +1,2 @@
+yield_in_unsafe.jux:5:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 yield_in_unsafe.jux:6:9: [E0997] error: a `yield` cannot sit inside an `unsafe { }` block: the generator suspends there, and the block's invariants would not hold across the pause (§M.2.4)

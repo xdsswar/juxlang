@@ -489,6 +489,13 @@ Unwinding does **not** cross the FFI boundary safely. A `throw` that would unwin
 - A Jux function called from C must not unwind past the FFI boundary. The compiler inserts a barrier: an exception that reaches the boundary is converted to a process abort with the exception's message.
 - A C function called from Jux that uses C++ exceptions or `setjmp`/`longjmp` is the user's responsibility; Jux's compiler does not detect this.
 
+**Implemented.** Every Jux entry point C can call runs behind the barrier: an
+`@export` function (free or static), including its `String`-marshalling
+wrapper, and the C entry point generated for a function used as a function
+pointer. An exception that escapes prints
+`Exception reached the C boundary in `<symbol>`, aborting: <type>: <message>`
+and the process aborts. See `examples/ffi_unwind_barrier.jux`.
+
 Programmers crossing the FFI boundary in either direction should use `Result<T, E>` returns or out-parameters (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.4) for error reporting. This is what the wrappers in `JUX-LAYOUT-ABI-ADDENDUM.md` §L.7.2 are for.
 
 ---

@@ -1,2 +1,3 @@
+class_pointer_and_c_widths.jux:23:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 class_pointer_and_c_widths.jux:26:26: [E0515] error: `get` is a method of `Box`, and a class pointer reaches the object's fields, not its methods -- call it on a handle to the object instead
 class_pointer_and_c_widths.jux:28:28: [E0513] error: `readWide` cannot be used as `fn(int*) -> int`: parameter `p` is a pointer to `int`, which is a different width in Jux and in C, so no Jux function can take that C pointer -- spell the pointee with a fixed width (`i32*`, `i64*`, `byte*`) in both places

@@ -1,0 +1,45 @@
+// The FFI unwind barrier (Exceptions §X.6.5).
+//
+// An exception must never unwind through a C stack frame: C has no idea how to
+// clean one up, and doing it anyway is undefined behaviour. So every Jux
+// function C can call, an `@export` or a function handed to C as a function
+// pointer, runs behind a barrier. An exception that reaches it is reported
+// with its type and message, and the process aborts on the spot.
+//
+// The cure is not to let exceptions get that far: a function C calls should
+// report failure the C way, with a status code, an `out` parameter or a
+// `Result` turned into one, and catch what it cannot handle itself.
+//
+// This program ends by design: the last call throws through the barrier.
+
+int checked(int x) {
+    if (x < 0) {
+        throw new IllegalArgumentException($"negative: ${x}");
+    }
+    return x * 2;
+}
+
+/** Callable from C. A failure inside it is caught here, the C way. */
+@export
+public i32 doubledOr(i32 x, i32 fallback) {
+    try {
+        return (i32) checked(x);
+    } catch (IllegalArgumentException e) {
+        return fallback;
+    }
+}
+
+public void main() {
+    print(doubledOr(5, -1));
+    print(doubledOr(-5, -1));
+
+    // A function pointer is a C entry point too.
+    fn(int) -> int f = checked;
+    // SAFETY: `f` points at `checked`, a function that lives for the whole
+    // program.
+    unsafe {
+        print(f(21));
+        print(f(-3));          // throws through the barrier: reported, then abort
+    }
+    print("not reached");
+}

@@ -1,0 +1,15 @@
+// A `@layout(c) record` follows the `@layout(c) struct` rules (§L.1.2):
+// C-compatible components only, and no type parameters.
+
+@layout(c)
+record Named(String label, i32 id) {}
+
+@layout(c)
+record Boxed<T>(T value) {}
+
+@layout(c)
+record Fine(i32 x, double y, void* data) {}
+
+public void main() {
+    print(new Fine(1, 2.0, null).x);
+}

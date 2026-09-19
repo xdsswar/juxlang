@@ -1,6 +1,8 @@
+pointer_ops_outside_unsafe.jux:7:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
 pointer_ops_outside_unsafe.jux:8:13: [E0506] error: indexing a raw pointer `p[i]` requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
 pointer_ops_outside_unsafe.jux:9:14: [E0506] error: pointer arithmetic requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
 pointer_ops_outside_unsafe.jux:10:5: [E0506] error: pointer arithmetic requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
 pointer_ops_outside_unsafe.jux:11:5: [E0506] error: pointer arithmetic requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
 pointer_ops_outside_unsafe.jux:12:17: [E0506] error: pointer arithmetic requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
 pointer_ops_outside_unsafe.jux:13:14: [E0506] error: pointer arithmetic requires an `unsafe` block; wrap it in `unsafe { … }` or mark the enclosing function `unsafe`
+pointer_ops_outside_unsafe.jux:15:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)

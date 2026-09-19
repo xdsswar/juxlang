@@ -1,0 +1,3 @@
+layout_c_record_rules.jux:5:14: [E0509] error: component `label` of `@layout(c) record Named` has type `String`, which is not C-compatible -- use a primitive, a raw pointer (`T*`), or another `@layout(c)` type
+layout_c_record_rules.jux:8:1: [E0509] error: `@layout(c) record Boxed` may not be generic -- a C-compatible type has one concrete layout; remove the type parameters
+layout_c_record_rules.jux:8:17: [E0509] error: component `value` of `@layout(c) record Boxed` has type `T`, which is not C-compatible -- use a primitive, a raw pointer (`T*`), or another `@layout(c)` type

@@ -110,7 +110,13 @@ positional constructor** synthesized from its fields (declaration order), like a
 initializers) opts out of the synthesis. Field access through a pointer
 (`(*ptr).field`) and the by-value path are supported.
 
-> Not yet emitted: `@layout(c)` on `record`.
+**`@layout(c)` on a `record` (implemented).** A record is already a value
+(copied on assignment, structural `==`), so `@layout(c) record R(i32 a, i32 b)`
+lowers to the same `#[repr(C)]` `Copy` struct, components in declaration order,
+with the record's own constructor, `with(...)` and derives kept. The component
+rules are the struct's: each must be a C `Copy` type, and the record may not be
+generic (**E0509** otherwise). It crosses the FFI boundary by value or as `R*`.
+See `examples/ffi_layout_c_record.jux`, where C's `div` returns a `div_t`.
 
 ### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
 
@@ -167,22 +173,30 @@ public struct CacheLine {
 }
 ```
 
-`@align(N)` is permitted on a type declaration (forces every instance to that alignment) or on a field (forces that field's offset within its enclosing aggregate to that alignment). Aligning *up* — `@align(N)` where `N` exceeds the natural alignment — is permitted; aligning down is rejected (`E0710`).
+`@align(N)` is permitted on a type declaration (forces every instance to that alignment) or on a field (forces that field's offset within its enclosing aggregate to that alignment). Aligning *up* — `@align(N)` where `N` exceeds the natural alignment — is permitted; aligning down is rejected.
+
+**Implemented (ERRATA E62).** On a `class`, `struct` or `record`, `@align(N)`
+lowers to `#[repr(align(N))]` (on a class, on the object its shared handle
+points at), and the type's size rounds up to a multiple of `N`. `N` must be an
+integer literal, a power of two, and at most 2^29; aligning below what a
+fixed-width field already needs is caught too. All of these are **E0519**.
+`@align` on a field, an enum or an interface is **E0520**: Phase 1 aligns whole
+types only, and a field gets an alignment by having an `@align(N) struct` as
+its type. See `examples/align_and_alignof.jux`.
 
 ### L.1.5. Size and Alignment Introspection
 
-Inside `unsafe { }`, the compiler-built-in functions `sizeof<T>()` and `alignof<T>()` return the size and alignment of `T` for the current target, in bytes:
+`sizeof(T)` (JUX-LANG-V1 §5.9) and its twin `alignof(T)` return the size and alignment of `T` for the current target, in bytes, as a `uint` compile-time constant. Both take a type or an expression (whose type is asked about; the expression is never evaluated), and both are available in safe code (ERRATA E61):
 
 ```jux
-unsafe {
-    var n = sizeof<Point>();        // 16 on a typical 64-bit target
-    var a = alignof<long>();        // 8
-}
+var n = sizeof(Point);        // 16 on a typical 64-bit target
+var a = alignof(long);        // 8
+var b = alignof(p);           // the alignment of p's type
 ```
 
-Outside `unsafe`, these are not available. The reasoning: a program that wants `sizeof` is almost certainly doing pointer arithmetic and should be in `unsafe` anyway.
+`alignof` follows `sizeof`'s rules exactly: the §5.9.3 type-or-value rule, the E0461-E0463 errors, and the lowering (`std::mem::align_of::<T>()`, `std::mem::align_of_val(&expr)`). It is a contextual word, meaningful only directly before `(`.
 
-Generic instantiations have stable sizes — `sizeof<List<int>>()` produces a value, not an error. The borrow checker and type system do not depend on size queries.
+Generic instantiations have stable sizes — `sizeof(List<int>)` produces a value, not an error. The type system does not depend on size queries.
 
 ### L.1.6. Niche Optimization
 
@@ -306,7 +320,11 @@ The mangling is **not stable across compiler versions**. Programs that depend on
 - The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
 - The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
 
-> **Phase-1 limitation.** `@export` is currently implemented on **free functions only**. `@export` on a method (static or instance) is rejected with **E0508** (an instance method has a receiver C cannot express; static-method export is deferred). Move the body to a free function for now.
+**Static methods (implemented).** `@export` on a `static` method of a class,
+struct or record exports it exactly like a free function: the same signature
+rules (E0508), the same `String` marshalling, and a C entry point that calls
+`Type.method`. `@export` on an instance method is **E0508**: C has no way to
+pass the object it is called on. See `examples/ffi_export_members.jux`.
 
 **Lowering (implemented).** A purely-primitive / pointer / `@layout(c)` export is
 emitted inline as `#[no_mangle] pub extern "C" fn <symbol>(…)`. An export whose
@@ -347,7 +365,16 @@ A non-`@export` function is **not** part of any stable ABI. Other Jux modules li
 
 ### L.3.3. Static and Const Visibility
 
-`public const` items lower to read-only data with `@export`-equivalent linkage (no mangling) when explicitly marked `@export`; otherwise they are mangled and module-local. Mutable `static` items have a single global address per process and follow the same rules.
+`public const` items lower to read-only data with `@export`-equivalent linkage (no mangling) when explicitly marked `@export`; otherwise they are mangled and module-local.
+
+**Implemented (ERRATA E64).** A top-level `const`, or a `static final` field,
+of a numeric or `bool` type can be `@export`ed: it becomes a Rust `static`
+under the C symbol (`#[export_name]`), at its C type (§8.1.1: a Jux `int` is a
+C `int`), which C reads as `extern const int NAME;`. A mutable `static` cannot
+be exported: it lives behind a lock so any thread can use it safely, and C
+cannot take that lock. `@export` on one, on an instance field, or on a
+constant of another type (a `String`, a class) is **E0508**; export functions
+that read and write the value instead.
 
 ---
 
@@ -487,6 +514,13 @@ These are exactly the obligations Rust's `unsafe` carries. The list is short and
   ```
 - **Lint rule:** `juxc check` warns on any `unsafe` block lacking a `// SAFETY:` comment (`W0820`).
 
+**Implemented.** `juxc --check`, `jux check` and the editor report `W0820` for
+an `unsafe { }` block with no comment containing `SAFETY:` either directly above
+it (a run of comment lines touching the `unsafe` line) or at the top of its
+body (right after `{`). A build does not report it: it is a review lint, not a
+correctness check. `unsafe native` blocks and `unsafe` functions are not
+blocks and are not linted.
+
 ---
 
 ## §L.6 — Raw Pointers
@@ -617,6 +651,15 @@ unsafe {
 ```
 
 The cast `data as byte*` (where `data: byte[]`) inside `unsafe` produces a pointer to the array's first element. The pointer is **valid** (in the sense of pointing at live memory) as long as the underlying array is live. The borrow checker does **not** enforce this; the programmer does.
+
+**Implemented.** The array must be a *named* one-dimensional array (a local, a
+parameter or a field) and the target a single-level pointer, `T*`. A temporary
+array (`(new byte[4]) as byte*`) would be freed at the end of the statement,
+the elements of a nested array are handles to other arrays, and `T**` has no
+meaning here, so each of these is **E0521**. The cast lowers to the storage's
+own `as_mut_ptr()`; a different pointee type (`ubyte[] as void*`) is a plain
+pointer reinterpretation, as in C. See `examples/array_as_pointer.jux`, which
+also hands a Jux array to C's `memset`.
 
 ### L.6.4. Function Pointers
 
@@ -893,14 +936,25 @@ The `asm(...)` form uses GCC's extended-asm syntax: template, output operands, i
 
 ### L.7.4. `transmute` Built-in
 
-`transmute<A, B>(value: A): B` reinterprets the bits of `value` (of type `A`) as a `B`. It is permitted only inside `unsafe` and only when `sizeof<A>() == sizeof<B>()`. Mismatched sizes are a compile error (`E0840`).
+`transmute<A, B>(value: A): B` reinterprets the bits of `value` (of type `A`) as a `B`. It is permitted only inside `unsafe` (E0506) and only when `A` and `B` are the same size on every target the program can be built for (ERRATA E63). Mismatched sizes are a compile error (`E0522`).
 
 ```jux
 unsafe {
     float f = 1.5f;
-    uint bits = transmute<float, uint>(f);          // 0x3FC00000
+    u32 bits = transmute<float, u32>(f);            // 0x3FC00000
 }
 ```
+
+**Implemented.** The fixed-width primitives, and `@layout(c)` structs and
+records made only of them (laid out by the C rules, `@align` included), have
+one byte count everywhere. `int`, `uint`, pointers and function pointers are
+exactly one machine word, so they pair only with each other
+(`transmute<int*, uint>(p)` is fine; `transmute<int, long>` is not, since the
+two differ on a 32-bit target). A class, a `String`, a collection or an
+aggregate holding a pointer has no size fixed that way. Each of these, and a
+call without exactly two type arguments and one value, is **E0522**. The call
+lowers to Rust's `std::mem::transmute::<A, B>(value)`. See
+`examples/transmute_bits.jux`.
 
 Most uses of `transmute` are wrong. Prefer typed conversions (the `as` operator, dedicated methods like `Float.toBits()`) when they exist. `transmute` is the last resort.
 

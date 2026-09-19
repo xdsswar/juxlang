@@ -1497,23 +1497,40 @@ pub(crate) fn class_decl_uses_wrapper(cd: &juxc_ast::ClassDecl) -> bool {
 /// before the symbol table is built); mirrors
 /// `juxc_tycheck::symbol_table::is_layout_c_annotation`.
 pub(crate) fn is_layout_c_struct(cd: &juxc_ast::ClassDecl) -> bool {
-    cd.is_struct
-        && cd.annotations.iter().any(|a| {
-            let is_layout = a
-                .name
-                .segments
-                .last()
-                .map(|s| s.text.eq_ignore_ascii_case("layout"))
-                .unwrap_or(false);
-            is_layout
-                && a.args.iter().any(|arg| {
-                    matches!(arg,
-                        juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Path(qn))
-                            if qn.segments.last()
-                                .map(|s| s.text.eq_ignore_ascii_case("c"))
-                                .unwrap_or(false))
-                })
-        })
+    cd.is_struct && has_layout_c(&cd.annotations)
+}
+
+/// Write `#[repr(align(N))]` for an `@align(N)` on a type (Layout-ABI §L.1.4).
+/// The checker has already held `N` to a power of two that does not align
+/// down (E0519), so anything else here is simply not written.
+pub(crate) fn emit_align_attribute(w: &mut crate::writer::Writer, annotations: &[juxc_ast::Annotation]) {
+    if let Some((_, Some(n))) = juxc_tycheck::symbol_table::align_annotation(annotations) {
+        if n > 0 && n & (n - 1) == 0 {
+            w.line(&format!("#[repr(align({n}))]"));
+        }
+    }
+}
+
+/// True when `annotations` carry `@layout(c, ...)`: a `@layout` annotation
+/// with a positional `c`. Shared by `@layout(c) struct` and `@layout(c)
+/// record` (§L.1.2), which lower the same way: `#[repr(C)]`, `Copy`.
+pub(crate) fn has_layout_c(annotations: &[juxc_ast::Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        let is_layout = a
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("layout"))
+            .unwrap_or(false);
+        is_layout
+            && a.args.iter().any(|arg| {
+                matches!(arg,
+                    juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Path(qn))
+                        if qn.segments.last()
+                            .map(|s| s.text.eq_ignore_ascii_case("c"))
+                            .unwrap_or(false))
+            })
+    })
 }
 
 /// Compute the **global wrapper-class set** for a workspace.
@@ -6868,9 +6885,16 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // what it means lives at the sites that carry it, which the
             // registry records. Nothing to emit for the declaration.
             TopLevelDecl::Annotation(_) => {}
-            TopLevelDecl::Class(class_decl) => self.emit_class_decl(class_decl),
+            TopLevelDecl::Class(class_decl) => {
+                self.emit_class_decl(class_decl);
+                // `@export` static methods and constants (§L.3.2-L.3.3).
+                self.emit_member_exports(&class_decl.name.text, &class_decl.methods, &class_decl.fields);
+            }
             TopLevelDecl::Enum(enum_decl) => self.emit_enum_decl(enum_decl),
-            TopLevelDecl::Record(record_decl) => self.emit_record_decl(record_decl),
+            TopLevelDecl::Record(record_decl) => {
+                self.emit_record_decl(record_decl);
+                self.emit_member_exports(&record_decl.name.text, &record_decl.methods, &[]);
+            }
             TopLevelDecl::Interface(interface_decl) => {
                 self.emit_interface_decl(interface_decl);
             }
@@ -6917,6 +6941,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.newline();
+        // `@export const` (Layout-ABI §L.3.3): the same value as C-visible data.
+        if let Some(sym) = crate::decls::functions::export_symbol_for(&decl.annotations, &decl.name.text) {
+            let name = to_rust_ident(&decl.name.text);
+            self.emit_exported_constant(&sym, &const_ty, &name, &decl.name.text);
+        }
     }
 
     /// Emit a Jux `type Foo<...>? = TargetTy;` as a Rust
@@ -7197,6 +7226,48 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             }
             hook.push_str("    if let Some(s) = p.downcast_ref::<&str>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
             source.push_str(&hook);
+        }
+        // **The FFI unwind barrier** (Exceptions §X.6.5). A Jux function C
+        // calls (an `@export`, or a function-pointer entry point) runs its body
+        // through this helper: an exception that reaches the C boundary is
+        // reported with its type and message, and the process aborts rather
+        // than unwinding through a C frame, which is undefined behaviour in C.
+        // Emitted once, when used.
+        if source.contains("__jux_ffi_barrier(") || split_text.contains("__jux_ffi_barrier(") {
+            let mut helper = String::from(concat!(
+                "\n/// Run `f`, a Jux body C called into; an exception that escapes it ends\n",
+                "/// the process instead of unwinding into C (Exceptions §X.6.5).\n",
+                "pub fn __jux_ffi_barrier<R>(symbol: &str, f: impl FnOnce() -> R) -> R {\n",
+                "    match std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f)) {\n",
+                "        Ok(r) => r,\n",
+                "        Err(p) => {\n",
+                "            let what: String = 'what: {\n",
+            ));
+            for fqn in &throwable_fqns {
+                let path = self_path(fqn);
+                helper.push_str(&format!(
+                    "                if let Some(e) = p.downcast_ref::<{path}>() {{\n                    break 'what format!(\"{fqn}: {{}}\", e.getMessage());\n                }}\n"
+                ));
+            }
+            helper.push_str(concat!(
+                "                if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() {\n",
+                "                    break 'what format!(\"{}: {}\", e.type_name, e.text);\n",
+                "                }\n",
+                "                if let Some(s) = p.downcast_ref::<&str>() {\n",
+                "                    break 'what s.to_string();\n",
+                "                }\n",
+                "                if let Some(s) = p.downcast_ref::<String>() {\n",
+                "                    break 'what s.clone();\n",
+                "                }\n",
+                "                String::from(\"an exception\")\n",
+                "            };\n",
+                "            eprintln!(\"Exception reached the C boundary in `{symbol}`, aborting: {what}\");\n",
+                "            std::process::abort()\n",
+                "        }\n",
+                "    }\n",
+                "}\n",
+            ));
+            source.push_str(&helper);
         }
         // **The `Exception` part of a thrown payload** (§X.3.2). A `finally`
         // that throws while another exception propagates records the new one

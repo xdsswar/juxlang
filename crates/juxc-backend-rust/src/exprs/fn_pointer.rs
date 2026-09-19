@@ -272,8 +272,11 @@ impl RustEmitter {
         if returns {
             self.w.push_str("let __r = ");
         }
+        // C calls this entry point, so an exception must not unwind out of it
+        // (Exceptions §X.6.5): the call runs behind the FFI barrier.
+        self.w.push_str("crate::__jux_ffi_barrier(\"a function pointer\", || ");
         self.emit_expr(&call);
-        self.w.push_str(";\n");
+        self.w.push_str(");\n");
         self.local_types.pop();
         // Outbound: the result at its C width.
         if returns {

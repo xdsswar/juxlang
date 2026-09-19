@@ -90,6 +90,9 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "print", "assert", "spawn", "Channel", "AsyncMutex",
     "Stream", "Task", "withTimeout", "parallel", "block_on",
     "yield_now", "Worker", "now_ms", "File", "Iterable",
+    // `transmute<A, B>(value)`, the unsafe bit reinterpretation (Layout-ABI
+    // §L.7.4).
+    "transmute",
     "Iterator",
     "HashMap", "HashSet", "Vec", "VecDeque", "BTreeMap",
     "BTreeSet", "Rc", "Arc", "Throwable", "Exception",

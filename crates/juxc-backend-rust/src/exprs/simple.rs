@@ -93,6 +93,31 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
+        // **`array as T*`** (Layout-ABI §L.6.3): the address of the first
+        // element. A Jux array is a shared handle around its storage, so the
+        // pointer comes from the storage itself; the guard is released at once
+        // and the pointer stays valid while the array is alive (tycheck has
+        // required a named array, E0521). A different element type is a plain
+        // pointer reinterpretation, as in C.
+        if c.ty.ptr_depth == 1 {
+            if let Some(juxc_tycheck::Ty::Array { element, .. }) =
+                self.expr_types.get(&crate::exprs::expr_span_of(&c.value)).cloned()
+            {
+                let pointee = c.ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                let reinterpret = element.to_string() != pointee;
+                if reinterpret {
+                    self.w.push('(');
+                }
+                self.emit_expr(&c.value);
+                self.w.push_str(".borrow_mut().as_mut_ptr()");
+                if reinterpret {
+                    self.w.push_str(" as ");
+                    self.emit_type_as_rust(&c.ty);
+                    self.w.push(')');
+                }
+                return;
+            }
+        }
         // **Reference cast between user types** (class / interface): an upcast
         // coerces into the target trait object, a downcast goes through the
         // runtime-type `__jux_as_<T>` hook (panicking `ClassCastException` on

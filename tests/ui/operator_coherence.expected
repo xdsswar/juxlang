@@ -1,0 +1,3 @@
+operator_coherence.jux:15:8: [E0951] error: `operator*(double, Vec3)` is declared more than once -- a call could not tell which one runs; keep one (§R.3.3)
+operator_coherence.jux:17:8: [E0950] error: orphan operator: `operator+(double, int)` is declared here, but neither `double` nor `int` is declared by this program, so this would redefine `+` on types it does not own (§R.3.1)
+operator_coherence.jux:18:8: [E0950] error: orphan operator: `operator+(String, int)` is declared here, but neither `String` nor `int` is declared by this program, so this would redefine `+` on types it does not own (§R.3.1)

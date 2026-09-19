@@ -1,0 +1,62 @@
+// `array as T*` (Layout-ABI §L.6.3): the address of an array's first element.
+//
+// Inside `unsafe`, a named one-dimensional array converts to a pointer to its
+// elements. The pointer is valid for as long as the array is alive, which the
+// compiler does not track: that is the programmer's side of `unsafe`. This is
+// how a Jux array is handed to C code that fills or reads a buffer.
+//
+// `memset` is linked from `msvcrt` on Windows; elsewhere link `c` instead
+// (`@extern(lib = "c")`).
+
+@extern(lib = "msvcrt")
+unsafe native {
+    void* memset(void* dest, int value, ulong count);
+}
+
+final class Buffer {
+    private byte[] data;
+
+    public Buffer(int size) {
+        this.data = new byte[size];
+    }
+
+    public unsafe byte* dataPtr() {
+        // SAFETY: the caller must not keep the pointer past this buffer's
+        // lifetime.
+        return data as byte*;
+    }
+
+    public byte at(int i) {
+        return data[i];
+    }
+}
+
+public void main() {
+    var buf = new Buffer(8);
+    unsafe {
+        // SAFETY: `buf` lives to the end of `main`, past every use of `p`.
+        var p = buf.dataPtr();
+        p[0] = 0x7F;
+        p[3] = 42;
+    }
+    print(buf.at(0));
+    print(buf.at(3));
+
+    // Writes through the pointer land in the array itself.
+    int[] counts = {1, 2, 3, 4};
+    unsafe {
+        // SAFETY: `counts` outlives the pointer, and index 3 is in bounds.
+        int* q = counts as int*;
+        q[3] = q[0] + q[1] + q[2];
+    }
+    print(counts[3]);
+
+    // A C function filling a Jux array: as `void*`, the pointer C expects.
+    ubyte[] block = new ubyte[5];
+    unsafe {
+        // SAFETY: `block` holds 5 bytes, exactly what `memset` is told.
+        memset(block as void*, 0xAB, 5);
+    }
+    print(block[0]);
+    print(block[4]);
+}

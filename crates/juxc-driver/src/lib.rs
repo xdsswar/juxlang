@@ -222,6 +222,7 @@ pub mod grammar_export;
 pub mod ice;
 pub mod manifest;
 mod package_check;
+mod safety_lint;
 pub mod project;
 mod source_map;
 mod stability;
@@ -648,6 +649,8 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
     all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
+    // Where the user's own files start in the list: only they are linted.
+    let user_start = all_sources.len();
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -688,6 +691,12 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
+
+    // W0820 (§L.5.5): an `unsafe` block without a `// SAFETY:` comment. A
+    // review lint, so the checking path raises it and a build does not.
+    for source in sources.iter().skip(user_start) {
+        diagnostics.extend(safety_lint::check_safety_comments(source));
+    }
 
     // Trusted foreign-API stubs are never validated (see
     // `stubs::drop_external_diagnostics`): the LSP must not surface false errors

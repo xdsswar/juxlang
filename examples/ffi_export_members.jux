@@ -1,0 +1,53 @@
+// `@export` on static methods and constants (Layout-ABI §L.3.2-L.3.3).
+//
+// A static method needs no object, so C can call it like a free function: the
+// compiler emits a C entry point under the method's name (or `name = "..."`)
+// that calls `Type.method`, with the same C-compatible signature rules and the
+// same `String` marshalling a free function gets.
+//
+// A constant is exported as read-only data at its C type: C declares
+// `extern const int ABI_VERSION;` and reads it. Only constants can be
+// exported: a mutable `static` sits behind a lock C cannot take.
+//
+// (Build a `[lib]` with `crate-type = ["cdylib"]` or `["staticlib"]` to hand
+// these symbols to a C program; here they are also called from Jux.)
+
+/** The C-visible version of this library's interface. */
+@export
+public const int ABI_VERSION = 3;
+
+class MathLib {
+    /** C: `long mathlib_square(long x);` */
+    @export(name = "mathlib_square")
+    public static long square(long x) {
+        return x * x;
+    }
+
+    /** C: `const char* describe(int n);`, the text kept until the next call. */
+    @export
+    public static String describe(int n) {
+        return $"n=${n}";
+    }
+
+    /** C: `extern const double SCALE;` */
+    @export
+    public static final double SCALE = 2.5;
+}
+
+@layout(c)
+record Pt(i32 x, i32 y) {
+    /** C: `int pt_sum(int a, int b);`. A record's static methods export too. */
+    @export(name = "pt_sum")
+    public static i32 sum(i32 a, i32 b) {
+        return a + b;
+    }
+}
+
+public void main() {
+    // The exported members stay ordinary Jux members.
+    print(MathLib.square(7));
+    print(MathLib.describe(4));
+    print(MathLib.SCALE);
+    print(Pt.sum(2, 3));
+    print(ABI_VERSION);
+}

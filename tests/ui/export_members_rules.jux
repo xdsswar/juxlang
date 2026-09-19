@@ -1,0 +1,34 @@
+// `@export` on members (Layout-ABI §L.3.2-L.3.3, ERRATA E64): static
+// methods with a C signature, and constants of a number or `bool` type.
+
+class Registry {
+    public int count = 0;
+
+    @export
+    public int instanceMethod() {
+        return count;
+    }
+
+    @export
+    public static Registry make() {
+        return new Registry();
+    }
+
+    @export
+    public static int counter = 0;
+
+    @export
+    public static final String NAME = "registry";
+
+    @export
+    public static int fine(int x) {
+        return x + 1;
+    }
+}
+
+@export
+public const String GREETING = "hello";
+
+public void main() {
+    print(Registry.fine(1));
+}

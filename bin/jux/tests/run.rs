@@ -74,6 +74,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     // prints the JDK's JNI version. `tests/examples_ffi.rs` runs it against
     // `JAVA_HOME` and skips without one.
     ("jni_java_vm", "needs a JDK; covered by tests/examples_ffi.rs"),
+    // Ends in a process abort by design, whose exit status is platform
+    // specific (3 on Windows, SIGABRT elsewhere). `tests/examples_ffi.rs`
+    // checks what it prints and that it did not finish.
+    ("ffi_unwind_barrier", "aborts by design; covered by tests/examples_ffi.rs"),
 ];
 
 /// How many examples to compile at once.
