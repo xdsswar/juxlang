@@ -52,6 +52,16 @@ sealed class JuxType {
         override fun presentable(): String = elements.joinToString(", ", "(", ")") { it.presentable() }
     }
 
+    /**
+     * A function type `(A, B) -> R` (LANG-V1 §5.9): what a lambda, a method
+     * reference or a function-typed local has. Its parameters are
+     * contravariant and its result covariant (Type system §T.3.6).
+     */
+    data class FunctionType(val params: List<JuxType>, val ret: JuxType) : JuxType() {
+        override fun presentable(): String =
+            params.joinToString(", ", "(", ")") { it.presentable() } + " -> " + ret.presentable()
+    }
+
     data class Nullable(val inner: JuxType) : JuxType() {
         override fun presentable(): String = inner.presentable() + "?"
     }
@@ -102,11 +112,29 @@ object JuxTypeEngine {
 
     /** The type of [expr], or [JuxType.Unknown]. */
     fun typeOf(expr: PsiElement?): JuxType {
-        if (expr == null) return JuxType.Unknown
-        return CachedValuesManager.getManager(expr.project).getCachedValue(expr, EXPR_TYPE_KEY, {
+        if (expr == null || !expr.isValid) return JuxType.Unknown
+        val cached = CachedValuesManager.getManager(expr.project).getCachedValue(expr, EXPR_TYPE_KEY, {
             val computed = RecursionManager.doPreventingRecursion(expr, false) { computeType(expr) }
             CachedValueProvider.Result.create(computed ?: JuxType.Unknown, PsiModificationTracker.MODIFICATION_COUNT)
         }, false)
+        // Completion's file copy is non-physical and can outlive the file it
+        // was copied from: a type cached there may name a declaration whose
+        // tree has since been thrown away. Such a type is recomputed, never
+        // handed out (found by the random completion sweep).
+        return if (isValidType(cached)) cached
+        else RecursionManager.doPreventingRecursion(expr, false) { computeType(expr) } ?: JuxType.Unknown
+    }
+
+    /** True when every declaration [t] names is still live PSI. */
+    fun isValidType(t: JuxType): Boolean = when (t) {
+        is JuxType.ClassType -> t.decl.isValid && t.args.all { isValidType(it) }
+        is JuxType.Static -> t.decl.isValid
+        is JuxType.TypeVar -> t.param.isValid && (t.bound?.let { isValidType(it) } ?: true)
+        is JuxType.ArrayType -> isValidType(t.element)
+        is JuxType.Nullable -> isValidType(t.inner)
+        is JuxType.TupleType -> t.elements.all { isValidType(it) }
+        is JuxType.FunctionType -> t.params.all { isValidType(it) } && isValidType(t.ret)
+        is JuxType.Primitive, JuxType.Unknown -> true
     }
 
     private fun computeType(expr: PsiElement): JuxType {
@@ -287,7 +315,11 @@ object JuxTypeEngine {
                     val owner = PsiTreeUtil.getParentOfType(target, JuxTypeDeclaration::class.java)
                     if (owner != null) returnType(JuxMember(target, selfType(owner)))
                     else typeOfDeclarationTypeRef(target)
-                } else JuxType.Unknown
+                } else {
+                    // A call through a function-typed local, parameter or
+                    // field (`f(x)` with `(int) -> String f`) has its result type.
+                    (stripNullable(declaredType(target)) as? JuxType.FunctionType)?.ret ?: JuxType.Unknown
+                }
             }
             else -> JuxType.Unknown
         }
@@ -366,11 +398,17 @@ object JuxTypeEngine {
     // ------------------------------------------------------------ declarations
 
     /** The type a value declaration introduces: a local, parameter, field, property, component, enum constant. */
-    fun declaredType(decl: PsiElement): JuxType =
-        CachedValuesManager.getManager(decl.project).getCachedValue(decl, DECL_TYPE_KEY, {
+    fun declaredType(decl: PsiElement): JuxType {
+        // A declaration reached through a stale cached type (see [typeOf]) is
+        // dead PSI: it has no type to give, and asking would throw.
+        if (!decl.isValid) return JuxType.Unknown
+        val cached = CachedValuesManager.getManager(decl.project).getCachedValue(decl, DECL_TYPE_KEY, {
             val computed = RecursionManager.doPreventingRecursion(decl, false) { computeDeclaredType(decl) }
             CachedValueProvider.Result.create(computed ?: JuxType.Unknown, PsiModificationTracker.MODIFICATION_COUNT)
         }, false)
+        return if (isValidType(cached)) cached
+        else RecursionManager.doPreventingRecursion(decl, false) { computeDeclaredType(decl) } ?: JuxType.Unknown
+    }
 
     private fun computeDeclaredType(decl: PsiElement): JuxType {
         when (decl.elementType) {
@@ -418,6 +456,16 @@ object JuxTypeEngine {
     }
 
     /**
+     * The function type [lambda] must fit, when what it is given to spells one
+     * out (`(T, T) -> Ordering compare`), with the receiver's type arguments
+     * carried in. Null for an interface slot or an unknown one.
+     */
+    fun expectedFunctionType(lambda: PsiElement): JuxType.FunctionType? {
+        val (slot, subst) = expectedLambdaSlot(lambda) ?: return null
+        return substitute(typeOfTypeReference(slot), subst) as? JuxType.FunctionType
+    }
+
+    /**
      * The written type the lambda must fit, with the substitution its type
      * variables take: a call argument's parameter type, a declared variable or
      * field type, or the enclosing method's return type.
@@ -439,6 +487,14 @@ object JuxTypeEngine {
             }
             E.LOCAL_VARIABLE, E.FIELD_DECLARATION, E.PROPERTY_DECLARATION ->
                 return parent.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { it to emptyMap() }
+            E.ASSIGNMENT_EXPRESSION -> {
+                // `p = (a, b) -> ...`, `this.f = ...`, a bare field `f = ...`
+                // (§7.9.1): the slot is the declared type of what is assigned.
+                // Only the right-hand side is a lambda in that position.
+                val target = firstExpressionChild(parent) ?: return null
+                if (target == node) return null
+                return assignmentTargetSlot(target)
+            }
             E.RETURN_STATEMENT -> {
                 // The nearest function the `return` belongs to; a lambda's own
                 // return type is not written, so nothing is known there.
@@ -451,6 +507,35 @@ object JuxTypeEngine {
             }
         }
         return null
+    }
+
+    /**
+     * The written type of an assignment's target, with its owner's type
+     * arguments: a local, parameter or bare field by name, or a member reached
+     * with `this.f` / `obj.f`. A target declared without a type (`var p = ...`)
+     * has no written slot, so nothing is inferred from it.
+     */
+    private fun assignmentTargetSlot(target: PsiElement): Pair<PsiElement, Map<String, JuxType>>? {
+        var t = target
+        while (t.elementType === E.PARENTHESIZED_EXPRESSION) t = firstExpressionChild(t) ?: return null
+        return when (t.elementType) {
+            E.REFERENCE_EXPRESSION -> {
+                val decl = resolveReferenceExpression(t) ?: return null
+                if (decl is JuxTypeDeclaration || decl is JuxTypeParameter) return null
+                val ref = decl.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+                val owner = if (decl.elementType === E.FIELD_DECLARATION || decl.elementType === E.PROPERTY_DECLARATION) {
+                    PsiTreeUtil.getParentOfType(decl, JuxTypeDeclaration::class.java)?.let { substitution(selfType(it)) }
+                } else null
+                ref to (owner ?: emptyMap())
+            }
+            E.FIELD_ACCESS_EXPRESSION -> {
+                val member = resolveMemberAccess(t) ?: return null
+                if (member.element.elementType === E.METHOD_DECLARATION) return null
+                val ref = member.element.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
+                ref to substitution(member.owner)
+            }
+            else -> null
+        }
     }
 
     /** The method a call or `new` invokes, with the receiver's type arguments as a substitution. */
@@ -542,7 +627,7 @@ object JuxTypeEngine {
         if (t.isEmpty()) return JuxType.Unknown
         if (t.endsWith("?")) return JuxType.Nullable(typeFromText(context, t.dropLast(1)))
         if (t.endsWith("[]")) return JuxType.ArrayType(typeFromText(context, t.dropLast(2)))
-        if (t.startsWith("(")) return JuxType.Unknown // a function or tuple type
+        if (t.startsWith("(")) return functionTypeFromText(context, t) ?: JuxType.Unknown // or a tuple type
         val lt = t.indexOf('<')
         val base = if (lt >= 0) t.substring(0, lt).trim() else t
         val args = if (lt >= 0 && t.endsWith(">")) splitTopLevel(t.substring(lt + 1, t.length - 1)).map { typeFromText(context, it) }
@@ -560,6 +645,21 @@ object JuxTypeEngine {
                 else -> JuxType.Unknown
             }
         }
+    }
+
+    /**
+     * `(A, B) -> R` (also `async (A) -> R`, whose result is the awaited value's
+     * type as far as fitting goes) read from its text, or null when [t] is not
+     * a function type (a tuple `(A, B)` has no arrow after its parentheses).
+     */
+    private fun functionTypeFromText(context: PsiElement, t: String): JuxType.FunctionType? {
+        val text = t.removePrefix("async").trim()
+        if (!text.startsWith("(")) return null
+        val close = matchingParen(text) ?: return null
+        val rest = text.substring(close + 1).trim()
+        if (!rest.startsWith("->")) return null
+        val params = splitTopLevel(text.substring(1, close)).map { typeFromText(context, it) }
+        return JuxType.FunctionType(params, typeFromText(context, rest.removePrefix("->")))
     }
 
     private fun typeOfDeclarationTypeRef(decl: PsiElement): JuxType =
@@ -649,6 +749,16 @@ object JuxTypeEngine {
 
     /** The type a written TYPE_REFERENCE denotes, resolved from where it is written. */
     fun typeOfTypeReference(ref: PsiElement): JuxType {
+        // A function type has no name to resolve; it is read from its text
+        // (its pieces are not type references of their own).
+        val written = ref.text.trim()
+        if (written.startsWith("(") || written.startsWith("async")) {
+            if (written.endsWith("?")) {
+                val inner = written.dropLast(1).trim().removeSurrounding("(", ")")
+                functionTypeFromText(ref, inner)?.let { return JuxType.Nullable(it) }
+            }
+            functionTypeFromText(ref, written)?.let { return it }
+        }
         val node = ref.node
         var name: String? = null
         var c = node.firstChildNode
@@ -785,6 +895,8 @@ object JuxTypeEngine {
             is JuxType.ClassType -> JuxType.ClassType(t.decl, t.args.map { substitute(it, subst) })
             is JuxType.ArrayType -> JuxType.ArrayType(substitute(t.element, subst))
             is JuxType.Nullable -> JuxType.Nullable(substitute(t.inner, subst))
+            is JuxType.TupleType -> JuxType.TupleType(t.elements.map { substitute(it, subst) })
+            is JuxType.FunctionType -> JuxType.FunctionType(t.params.map { substitute(it, subst) }, substitute(t.ret, subst))
             else -> t
         }
     }

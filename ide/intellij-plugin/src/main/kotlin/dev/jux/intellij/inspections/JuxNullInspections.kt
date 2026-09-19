@@ -121,7 +121,13 @@ class JuxNullableAccessInspection : LocalInspectionTool() {
                 val decl = storageOf(receiver) ?: return
                 if (decl.elementType !== E.LOCAL_VARIABLE && decl.elementType !== E.PARAMETER) return
                 if (writtenTypeText(decl)?.endsWith("?") != true) return
-                val scope = functionOf(decl) ?: return
+                val declScope = functionOf(decl) ?: return
+                // A check made outside a lambda does not hold inside it (Type
+                // system §T.6.4, E0418 in the compiler): for a use inside a
+                // lambda nested in the declaring function, only checks inside
+                // that lambda count. `var u = maybe;` inside the lambda is a
+                // new local with its own scope, so that pattern stays clean.
+                val scope = innermostLambdaBetween(receiver, declScope) ?: declScope
                 val name = receiver.text
                 if (checkedOrReassigned(scope, name, decl)) return
                 holder.registerProblem(
@@ -135,6 +141,21 @@ class JuxNullableAccessInspection : LocalInspectionTool() {
     /** The function (or lambda) whose body the declaration's scope is. */
     private fun functionOf(decl: PsiElement): PsiElement? =
         PsiTreeUtil.findFirstParent(decl) { it.elementType in FUNCTIONS }
+
+    /**
+     * The innermost lambda that encloses [use] but lies strictly inside
+     * [declScope], or null when the use is not inside such a lambda. Every
+     * lambda boundary drops refinements (§T.6.4), so a check in an outer
+     * lambda does not hold in one nested inside it either.
+     */
+    private fun innermostLambdaBetween(use: PsiElement, declScope: PsiElement): PsiElement? {
+        var p: PsiElement? = use.parent
+        while (p != null && p !== declScope) {
+            if (p.elementType === E.LAMBDA_EXPRESSION) return p
+            p = p.parent
+        }
+        return null
+    }
 
     private fun checkedOrReassigned(scope: PsiElement, name: String, decl: PsiElement): Boolean {
         var found = false
