@@ -2001,6 +2001,84 @@ impl<'a> Checker<'a> {
     /// satisfies both (§T.4.2). Only the certain case is reported: a number
     /// against text, a `bool` against either, or a value type against a class.
     /// Two classes may still share a supertype, which inference resolves.
+    /// A `? super T` slot whose `T` the call fixes from another argument
+    /// (`copyAll(List<? extends T> src, List<? super T> dst)` called with a
+    /// `List<Dog>` and a `List<Animal>`) must, in this phase, be passed a
+    /// container of exactly `T` (ERRATA E50). A container of a strict
+    /// supertype is refused here, as E0410, rather than reaching rustc.
+    fn check_super_wildcard_args(
+        &mut self,
+        generic_params: &[TypeParam],
+        param_tys: &[&TypeRef],
+        arg_tys: &[Ty],
+        c: &CallExpr,
+    ) {
+        // The `? super T` parameter of type parameter `T`, if `param` is one.
+        let super_param = |param: &TypeRef| -> Option<String> {
+            param.generic_args.iter().find_map(|g| match g {
+                juxc_ast::GenericArg::Wildcard(juxc_ast::WildcardArg {
+                    bound: Some(juxc_ast::WildcardBound::Super(b)),
+                    ..
+                }) if b.name.segments.len() == 1
+                    && b.generic_args.is_empty()
+                    && generic_params.iter().any(|g| g.name.text == b.name.segments[0].text) =>
+                {
+                    Some(b.name.segments[0].text.clone())
+                }
+                _ => None,
+            })
+        };
+        if !param_tys.iter().any(|p| super_param(p).is_some()) {
+            return;
+        }
+        // What the OTHER arguments fix each `T` as. Inference over every slot
+        // would let the `? super` argument itself vote.
+        let (fixing_params, fixing_args): (Vec<&TypeRef>, Vec<Ty>) = param_tys
+            .iter()
+            .zip(arg_tys)
+            .filter(|(p, _)| super_param(p).is_none())
+            .map(|(p, a)| (*p, a.clone()))
+            .unzip();
+        let inferred = infer_generic_args(generic_params, &fixing_params, &fixing_args);
+        let same = |a: &Ty, b: &Ty| match (a, b) {
+            (Ty::User { name: x, generic_args: xa }, Ty::User { name: y, generic_args: ya }) => {
+                x.rsplit('.').next() == y.rsplit('.').next() && xa.len() == ya.len()
+            }
+            _ => a == b,
+        };
+        for (i, (param, arg_ty)) in param_tys.iter().zip(arg_tys).enumerate() {
+            let Ty::User { generic_args: arg_elems, .. } = arg_ty else { continue };
+            for (slot, garg) in param.generic_args.iter().enumerate() {
+                let juxc_ast::GenericArg::Wildcard(w) = garg else { continue };
+                let Some(juxc_ast::WildcardBound::Super(bound)) = &w.bound else { continue };
+                if bound.name.segments.len() != 1 || !bound.generic_args.is_empty() {
+                    continue;
+                }
+                let t = &bound.name.segments[0].text;
+                if !generic_params.iter().any(|g| &g.name.text == t) {
+                    continue;
+                }
+                let (Some(fixed), Some(elem)) = (inferred.get(t), arg_elems.get(slot)) else { continue };
+                if matches!(fixed, Ty::Unknown) || matches!(elem, Ty::Unknown) || same(fixed, elem) {
+                    continue;
+                }
+                let span = c.args.get(i).map(expr_span).unwrap_or(c.span);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!(
+                            "this `? super {t}` argument holds {elem}, but the call fixes `{t}` as {fixed}: in this phase a `? super` parameter whose type parameter comes from another argument takes a container of exactly {fixed} (ERRATA E50)"
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help(format!(
+                        "pass a container of {fixed}, or declare this parameter with a concrete bound (`? super {fixed}`), which takes a container of any supertype"
+                    )),
+                );
+            }
+        }
+    }
+
     fn report_generic_conflict(
         &mut self,
         name: &str,
@@ -9989,6 +10067,7 @@ impl<'a> Checker<'a> {
                             .collect();
                         let inferred = infer_generic_args(&generic_params, &param_tys, &arg_tys);
                         self.report_generic_conflict(name, &generic_params, &param_tys, &arg_tys, c);
+                        self.check_super_wildcard_args(&generic_params, &param_tys, &arg_tys, c);
                         let args: Vec<Ty> = generic_params
                             .iter()
                             .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))

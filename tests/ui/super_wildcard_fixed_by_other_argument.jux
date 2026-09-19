@@ -1,0 +1,24 @@
+// `? super T` with `T` fixed by the other argument (Type-system T.2.6): in
+// this phase the destination must hold exactly `T` (ERRATA E50). The help
+// names the concrete-bound spelling, which does take a supertype container.
+
+class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+}
+
+class Dog extends Animal {
+    public Dog(String name) { super(name); }
+}
+
+<T> void copyAll(Vec<? extends T> source, Vec<? super T> dest) {
+    for (var item : source) {
+        dest.push(item);
+    }
+}
+
+public void main() {
+    Vec<Dog> dogs = new Vec<Dog>();
+    Vec<Animal> animals = new Vec<Animal>();
+    copyAll(dogs, animals);
+}
