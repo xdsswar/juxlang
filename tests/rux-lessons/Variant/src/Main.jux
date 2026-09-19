@@ -1,0 +1,71 @@
+// An enum says a value is one of a fixed list of cases. The same `enum` can
+// also let each case carry data of its own; Rux calls that a `variant`, and in
+// Jux it is still an enum.
+//
+// That combination is what makes it useful: the data is reachable only after
+// the case has been established, so there is no way to read a radius from
+// something that turned out to be a rectangle.
+
+// Three shapes of case. `Missing` carries nothing; `Exact` carries one value;
+// `Range` carries two. Each payload is declared like a parameter list, with a
+// type and a name for every value.
+enum Reading {
+    Missing,
+    Exact(double value),
+    Range(double low, double high)
+}
+
+// A `switch` tests which case is active and unpacks its data in the same step.
+// The `var` names in a pattern are new locals holding that case's payload.
+double describe(Reading reading) {
+    return switch (reading) {
+        case Missing -> 0.0;
+        case Exact(var value) -> value;
+        case Range(var low, var high) -> (low + high) / 2.0;
+    };
+}
+
+// `_` ignores a payload value the arm has no use for.
+String label(Reading reading) {
+    return switch (reading) {
+        case Missing -> "no reading";
+        case Exact(_) -> "exact";
+        case Range(_, _) -> "a range";
+    };
+}
+
+// Pads `text` with spaces on the right to `width` characters, standing in for
+// the Rux `{:12}` placeholder.
+String padRight(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+void main() {
+    // Each case is built with its own shape: nothing, or its payload values in
+    // order.
+    final var absent = Reading.Missing;
+    final var precise = Reading.Exact(21.5);
+    final var between = Reading.Range(20.0, 24.0);
+
+    print($"${padRight(label(absent), 12)} -> ${describe(absent)}");
+    print($"${padRight(label(precise), 12)} -> ${describe(precise)}");
+    print($"${padRight(label(between), 12)} -> ${describe(between)}");
+
+    // Equality is structural and case-aware, derived for every enum. Two
+    // values are equal when they hold the same case and that case's payload
+    // matches; different cases are never equal.
+    print($"same case, same payload      ${Reading.Exact(21.5) == precise}");
+    print($"same case, different payload ${Reading.Exact(9.0) == precise}");
+    print($"different cases              ${Reading.Missing == precise}");
+
+    // Every enum can also print itself, payload and all, which is handy while
+    // debugging.
+    print($"printed                      ${between}");
+
+    // The tag recording which case is active has no number you control. When
+    // a value has to survive outside the program, encode a C-layout enum,
+    // whose numbers you do control, and translate at the boundary.
+}

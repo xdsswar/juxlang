@@ -1,0 +1,130 @@
+// The containers hold values. Algorithms do things with them: search, count,
+// total, sort.
+//
+// `Vec` is Rust's, so it brings Rust's own methods along: `contains`,
+// `sort_unstable` and `reverse` are used below exactly as Rust names them.
+// The questions a `Vec` does not answer by itself are a few lines each, and
+// writing them once, taking the varying part as a function value, is the same
+// idea the Callback lesson introduced.
+
+// Pads on the right with spaces to `width` characters.
+String padRight(String text, int width) {
+    if (text.charLength() >= width) {
+        return text;
+    }
+    return text + " ".repeat(width - text.charLength());
+}
+
+void show(String label, Vec<int> items) {
+    var line = padRight(label, 12);
+    for (var item : items) {
+        line += $" ${item}";
+    }
+    print(line);
+}
+
+// How many elements equal `wanted`.
+int countOf(Vec<int> items, int wanted) {
+    var found = 0;
+    for (var item : items) {
+        if (item == wanted) {
+            found += 1;
+        }
+    }
+    return found;
+}
+
+// The position of the first element passing `test`, or null when none does.
+// Searching for a plain value is the same call with an equality test.
+int? indexWhere(Vec<int> items, (int) -> bool test) {
+    for (var i : 0..items.len()) {
+        if (test(items[i])) {
+            return i;
+        }
+    }
+    return null;
+}
+
+// The position of the smallest element, or null for an empty `Vec`.
+int? minIndex(Vec<int> items) {
+    if (items.len() == 0) {
+        return null;
+    }
+    var best = 0;
+    for (var i : 1..items.len()) {
+        if (items[i] < items[best]) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+// The position of the largest element, or null for an empty `Vec`.
+int? maxIndex(Vec<int> items) {
+    if (items.len() == 0) {
+        return null;
+    }
+    var best = 0;
+    for (var i : 1..items.len()) {
+        if (items[i] > items[best]) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+// Walks the sequence carrying a running answer: `step` receives the answer so
+// far and the next element, and returns the new answer. A sum is a fold whose
+// step adds.
+int fold(Vec<int> items, int start, (int, int) -> int step) {
+    var answer = start;
+    for (var item : items) {
+        answer = step(answer, item);
+    }
+    return answer;
+}
+
+void main() {
+    var numbers = new Vec<int>();
+    numbers.push(5);
+    numbers.push(-2);
+    numbers.push(9);
+    numbers.push(1);
+    numbers.push(-2);
+    numbers.push(7);
+    show("start", numbers);
+
+    // Searching. Each answers a different question, and the ones that may
+    // find nothing return a nullable, which `?:` or a null test resolves.
+    print($"contains 9   ${numbers.contains(9)}");
+    print($"count of -2  ${countOf(numbers, -2)}");
+    final int? at = indexWhere(numbers, (n) -> n == 1);
+    if (at != null) {
+        print($"1 is at      ${at}");
+    } else {
+        print("1 not found");
+    }
+
+    // `indexWhere` takes a function rather than a value, so the question can
+    // be anything expressible as a test.
+    final int? negative = indexWhere(numbers, (n) -> n < 0);
+    print(negative != null ? $"first < 0 at ${negative}" : "none negative");
+
+    print($"smallest at  ${minIndex(numbers) ?: -1}");
+    print($"largest at   ${maxIndex(numbers) ?: -1}");
+
+    // Folding walks the sequence carrying a running value. A sum is the
+    // common case; the general one takes the step as a function.
+    print($"sum          ${fold(numbers, 0, (total, n) -> total + n)}");
+    print($"sum squares  ${fold(numbers, 0, (total, n) -> total + n * n)}");
+
+    // Sorting rearranges in place. A `Vec` is a reference, so `numbers` is
+    // itself rearranged, not a copy. `sort_unstable` may reorder equal
+    // elements, which for plain numbers makes no visible difference.
+    numbers.sort_unstable();
+    show("sorted", numbers);
+
+    // Descending is ascending, reversed.
+    numbers.reverse();
+    show("descending", numbers);
+}

@@ -1,0 +1,5 @@
+doubled  2 4 6 8 10
+squared  4 16 36 64 100
+even     5
+chosen   42
+odd      0

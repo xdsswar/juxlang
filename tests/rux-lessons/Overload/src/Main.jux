@@ -1,0 +1,52 @@
+// Several functions may share one name as long as their parameters differ.
+// The compiler picks by the arguments at each call, so the caller writes one
+// name and gets the version that fits.
+
+// Four functions, one name, told apart by the type of their argument.
+void describe(int value) {
+    print($"an integer: ${value}");
+}
+
+void describe(double value) {
+    print($"a number with a fraction: ${value}");
+}
+
+void describe(bool value) {
+    print($"a truth value: ${value}");
+}
+
+void describe(String value) {
+    print($"some text: ${value}");
+}
+
+// Overloads may also differ in how many parameters they take. These two are
+// unambiguous because no call can match both.
+int area(int side) {
+    return side * side;
+}
+
+int area(int width, int height) {
+    return width * height;
+}
+
+void main() {
+    // Nothing here says which `describe` to run. The literal's type decides,
+    // which is why the same call spelling produces four different messages.
+    describe(42);
+    describe(2.5);
+    describe(true);
+    describe("hello");
+
+    // The count of arguments chooses just as well as their types.
+    print($"square      ${area(4)}");
+    print($"rectangle   ${area(4, 5)}");
+
+    // Overloading is resolved by the parameters, never by the result. Two
+    // functions differing only in return type could not be told apart at a
+    // call, so that is not allowed:
+    //
+    //     int parse(String text) { ... }
+    //     double parse(String text) { ... }
+    //
+    // Give them separate names when the difference is what comes back.
+}

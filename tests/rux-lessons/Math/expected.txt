@@ -1,0 +1,28 @@
+Pi            3.141592653589793
+E             2.718281828459045
+
+Sqrt(2)       1.414214
+Pow(2, 10)    1024.0
+Pow(2, 0.5)   1.414214
+
+Log(E)        1.0
+Log2(1024)    10.0
+Log10(1000)   3.0
+Exp(1)        2.718282
+
+Sin(Pi / 2)   1.0
+Cos(0)        1.0
+Tan(Pi / 4)   1.000000
+Sin(30 deg)   0.500000
+
+Hypot(3, 4)   5.0
+
+value         -2.5
+Floor         -3.0   (towards minus infinity)
+Ceil          -2.0   (towards plus infinity)
+Trunc         -2.0   (towards zero)
+Round         -2.0   (to nearest, ties to even)
+Abs           2.5
+
+Min(3, 7)     3.0
+Max(3, 7)     7.0

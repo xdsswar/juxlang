@@ -1,0 +1,4 @@
+inferred   5  2.5  A
+annotated  5  2.5
+counter    11
+doubled    22

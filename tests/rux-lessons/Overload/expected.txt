@@ -1,0 +1,6 @@
+an integer: 42
+a number with a fraction: 2.5
+a truth value: true
+some text: hello
+square      16
+rectangle   20

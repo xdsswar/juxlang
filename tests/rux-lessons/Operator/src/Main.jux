@@ -1,0 +1,72 @@
+// What the operators do, and the order they apply in. The bitwise section
+// prints in binary using `toBinary()` from the Primitive lesson: a mask or a
+// shift is close to unreadable in decimal.
+
+// Renders `value` as eight binary digits, zero-padded on the left, the way a
+// `ubyte` is usually drawn: every bit visible, including the leading zeros.
+String bits8(ubyte value) {
+    final String digits = value.toBinary();
+    return "0".repeat(8 - digits.charLength()) + digits;
+}
+
+void main() {
+    // Arithmetic. Division between two integers truncates towards zero instead
+    // of producing a fraction (17 / 5 is 3, not 3.4), and `%` is the remainder
+    // that division left behind.
+    final i32 a = 17;
+    final i32 b = 5;
+    print($"${a} + ${b} = ${a + b}");
+    print($"${a} - ${b} = ${a - b}");
+    print($"${a} * ${b} = ${a * b}");
+    print($"${a} / ${b} = ${a / b}");
+    print($"${a} % ${b} = ${a % b}");
+
+    // Comparison always yields a `bool`, whatever the operands were.
+    print($"${a} < ${b}  is ${a < b}");
+    print($"${a} >= ${b} is ${a >= b}");
+    print($"${a} == ${b} is ${a == b}");
+
+    // `&&` and `||` combine bools, `!` negates one.
+    final var ready = true;
+    final var busy = false;
+    print($"ready && !busy is ${ready && !busy}");
+    print($"ready || busy  is ${ready || busy}");
+
+    // The bitwise operators work on the bits themselves rather than on the
+    // number they spell. A literal starting `0b` is written in binary too, so
+    // the operands are as readable as the results.
+    final ubyte mask = 0b1100;
+    final ubyte bits = 0b1010;
+    print($"mask         ${bits8(mask)}");
+    print($"bits         ${bits8(bits)}");
+    print($"mask & bits  ${bits8(mask & bits)}");
+    print($"mask | bits  ${bits8(mask | bits)}");
+    print($"mask ^ bits  ${bits8(mask ^ bits)}");
+
+    // `~` flips every bit in the value's width, so the width matters: this is
+    // a `ubyte`, and all eight bits turn over.
+    print($"~mask        ${bits8(~mask)}");
+
+    // Shifting slides the bits along, which doubles or halves the number once
+    // per position moved.
+    print($"mask << 2    ${bits8(mask << 2)}  ${mask} becomes ${mask << 2}");
+    print($"mask >> 2    ${bits8(mask >> 2)}  ${mask} becomes ${mask >> 2}");
+
+    // Each binary operator has a compound form that reads a variable and
+    // writes the result back to it.
+    i32 total = 10;
+    total += 5;
+    total *= 2;
+    total -= 3;
+    print($"total    ${total}");
+
+    ubyte flags = 0b1111;
+    flags &= 0b1010;
+    flags |= 0b0001;
+    print($"flags    ${bits8(flags)}");
+
+    // Multiplication binds tighter than addition, and parentheses override
+    // that. Where a line takes a moment to read, parenthesise it.
+    print($"2 + 3 * 4   = ${2 + 3 * 4}");
+    print($"(2 + 3) * 4 = ${(2 + 3) * 4}");
+}

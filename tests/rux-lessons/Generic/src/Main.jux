@@ -1,0 +1,53 @@
+// The Overload lesson wrote one name for several functions, each spelled out
+// by hand. This one writes a single function for many *types*.
+//
+// A name in angle brackets is a type parameter: it stands for a type the
+// caller supplies, and the compiler produces a separate version of the
+// function for each type actually used.
+
+// `T` is decided by the arguments. Both must be the same type, and the result
+// is that type too, so calling this with two `int` values yields an `int`.
+//
+// Comparing two `T` values needs `T` to have an ordering, and the `where`
+// clause says so up front: `T` must have `operator<=>`, the three-way compare
+// that `<`, `>` and friends are built on. Numbers, characters and `String`
+// have it already; a type of your own gets it by declaring the operator.
+<T> T larger(T first, T second) where T has operator<=>(T) -> int {
+    if (first > second) {
+        return first;
+    }
+    return second;
+}
+
+// Nothing here depends on what `T` can do, so it needs no `where` clause and
+// works for absolutely any type.
+<T> T second(T first, T second) {
+    return second;
+}
+
+// A type parameter may appear anywhere a type may, including as the element
+// type of an array. This one function counts elements of an array of any
+// element type.
+<T> int countOf(T[] values) {
+    return values.length;
+}
+
+void main() {
+    // One function, three types. There is no cast and no shared base type:
+    // each call compiles its own version of `larger`.
+    print($"Larger(3, 9)          ${larger(3, 9)}");
+    print($"Larger(2.5, 1.5)      ${larger(2.5, 1.5)}");
+    print($"Larger('a', 'z')      ${larger('a', 'z')}");
+
+    print($"Second(1, 2)          ${second(1, 2)}");
+    print($"Second(\"a\", \"b\")      ${second("a", "b")}");
+
+    final int[] numbers = {10, 20, 30};
+    final String[] words = {"one", "two"};
+    print($"CountOf(numbers)      ${countOf(numbers)}");
+    print($"CountOf(words)        ${countOf(words)}");
+
+    // The `where` clause is checked at every call: passing a type without
+    // `operator<=>` to `larger` is rejected there, with a message naming the
+    // missing operator, rather than failing somewhere inside the body.
+}

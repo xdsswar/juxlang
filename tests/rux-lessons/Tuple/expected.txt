@@ -1,0 +1,6 @@
+pair.0 is 1 and pair.1 is 2.5
+count 1 ratio 2.5
+17 / 5 is 3
+1 / 0 has no answer, and the value returned was 0
+origin at 0.0, 0.0
+point is at 3, 4

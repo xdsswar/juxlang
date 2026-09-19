@@ -1,0 +1,71 @@
+// The Struct lesson ended on a difference: a struct copies, a class shares.
+// This lesson looks at the other half of a value's life, its end.
+//
+// Two questions decide how a value behaves. What happens when it is assigned
+// somewhere else, and what happens when it goes out of scope.
+
+// A plain struct. Both fields are numbers, and assigning one copies it.
+struct Point {
+    public int x;
+    public int y;
+}
+
+// A value standing for something that has to be given back: a file, a
+// connection, a block of memory. Copying one of these would be wrong, since
+// two copies would each try to release the same thing. So it is a class: an
+// instance is never copied, only shared, and every name for it refers to the
+// one object.
+class Handle {
+    public int id;
+
+    public Handle(int id) {
+        this.id = id;
+    }
+
+    // The destructor. It runs when the value's life ends, and its job is to
+    // give back whatever the value was holding. Here it just says so.
+    //
+    // For a class, "its life ends" means the last reference to it goes away.
+    // However many names share the object, the block runs exactly once.
+    drop {
+        print($"    closing handle ${id}");
+    }
+}
+
+// A scope small enough to watch. The handle made here dies when this returns.
+void scoped() {
+    final var temporary = new Handle(1);
+    print($"    made handle ${temporary.id} inside scoped");
+}
+
+void main() {
+    // Copying. `second` is a separate point from here on, so changing one
+    // leaves the other alone. Nothing had to be written to make this happen.
+    print("copying a Point:");
+    final var first = new Point(1, 2);
+    var second = first;
+    second.x = 99;
+    print($"    first.x ${first.x}   second.x ${second.x}");
+
+    // Destruction. The handle is created inside `scoped` and released as that
+    // function returns: the printed line arrives before the next one here,
+    // without anything asking for it.
+    print("calling scoped:");
+    scoped();
+    print("    back in main");
+
+    // Sharing. Assigning a class instance gives a second name to the same
+    // object rather than a copy, so there is still only one handle to close.
+    print("sharing a Handle:");
+    final var owner = new Handle(2);
+    final var alias = owner;
+    print($"    shared, also held as id ${alias.id}");
+
+    // Rux marks a transfer of ownership with `<-`, and forbids using the old
+    // name afterwards. Jux reserves the `move` keyword for the same idea, but
+    // Phase 1 does not implement it yet: a class is shared by reference
+    // counting instead, so there is no old name to invalidate and no chance
+    // of closing the handle twice. Watch the output: handle 2 is closed once,
+    // at the end of `main`, after both names are gone.
+    print("end of main:");
+}

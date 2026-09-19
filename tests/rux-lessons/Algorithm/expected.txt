@@ -1,0 +1,11 @@
+start        5 -2 9 1 -2 7
+contains 9   true
+count of -2  2
+1 is at      3
+first < 0 at 1
+smallest at  1
+largest at   2
+sum          18
+sum squares  164
+sorted       -2 -2 1 5 7 9
+descending   9 7 5 1 -2 -2

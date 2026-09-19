@@ -1,0 +1,62 @@
+// A nullable says a value is missing. A `Result` says an operation failed and
+// carries what went wrong, which is what a caller needs in order to respond
+// differently to different failures.
+//
+// `Result<T, E>` has two cases: `Ok` holding the answer, and `Err` holding a
+// value describing the problem (Core lib §K.4). `E` is whatever type suits,
+// often an enum listing the ways this particular operation can go wrong.
+//
+// Jux has a second way to report failure, exceptions, which the Propagate
+// lesson uses. A `Result` is the right choice when failing is an ordinary,
+// expected outcome that the caller is meant to look at every time.
+
+// The failures this operation can have. Making it an enum rather than, say,
+// an error code means a case can carry detail: `NotExact` brings the remainder
+// with it.
+enum DivideError {
+    ByZero,
+    NotExact(int remainder)
+}
+
+// The signature says everything: it produces an `int`, or a `DivideError`.
+Result<int, DivideError> exactDivide(int numerator, int denominator) {
+    if (denominator == 0) {
+        return Result.Err(DivideError.ByZero);
+    }
+    final var remainder = numerator % denominator;
+    if (remainder != 0) {
+        return Result.Err(DivideError.NotExact(remainder));
+    }
+    return Result.Ok(numerator / denominator);
+}
+
+void report(int numerator, int denominator) {
+    // Bind the error, then switch on it: two steps, and each one reads
+    // plainly.
+    switch (exactDivide(numerator, denominator)) {
+        case Ok(var value) -> print($"${numerator} / ${denominator} is exactly ${value}");
+        case Err(var reason) -> {
+            switch (reason) {
+                case ByZero -> print($"${numerator} / ${denominator} cannot be done: no dividing by zero");
+                case NotExact(var remainder) -> print($"${numerator} / ${denominator} is not exact: ${remainder} left over");
+            }
+        }
+    }
+}
+
+void main() {
+    report(12, 4);
+    report(12, 0);
+    report(13, 4);
+
+    // Where the reason does not matter, shortcuts ask the simple question.
+    print($"13 / 4 or zero    ${exactDivide(13, 4).unwrapOr(0)}");
+    print($"12 / 4 succeeded  ${exactDivide(12, 4).isOk()}");
+
+    // Worth noticing, because it differs from switching on a number: a switch
+    // on an enum must cover every case. Leaving out `Err` above is a compile
+    // error. The Match lesson's integer example fell through silently instead,
+    // because there is no way to list every `int`. Here the compiler knows the
+    // whole list, so it holds you to it, and adding a case later makes every
+    // switch that has not handled it fail rather than quietly ignore it.
+}

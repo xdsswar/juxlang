@@ -1,0 +1,50 @@
+// Finding every prime below a limit, using the sieve of Eratosthenes, which
+// is older than arithmetic notation and still the way to do it.
+//
+// The idea: write down every number, then repeatedly take the next one not
+// yet crossed out and cross out all its multiples. Whatever survives is prime.
+// It is faster than testing each number for divisors because it never divides
+// at all; it only counts.
+
+void main() {
+    final int limit = 100;
+
+    // One flag per number, all starting false. `Vec` is Rust's growable
+    // array, used under its own name: `push` adds to the end and `[i]` reads
+    // or writes by position. Index into it by the number itself, which is why
+    // it is one longer than the limit.
+    var crossedOut = new Vec<bool>();
+    for (var i : 0..=limit) {
+        crossedOut.push(false);
+    }
+
+    // 0 and 1 are not prime, and no rule below would exclude them.
+    crossedOut[0] = true;
+    crossedOut[1] = true;
+
+    // Cross out multiples. Starting each pass at n*n is the one optimisation
+    // worth taking: anything smaller has a factor below n and was crossed out
+    // by an earlier pass already.
+    int n = 2;
+    while (n * n <= limit) {
+        if (!crossedOut[n]) {
+            int multiple = n * n;
+            while (multiple <= limit) {
+                crossedOut[multiple] = true;
+                multiple += n;
+            }
+        }
+        n += 1;
+    }
+
+    var found = 0;
+    var line = $"primes below ${limit}:";
+    for (var i : 0..=limit) {
+        if (!crossedOut[i]) {
+            line += $" ${i}";
+            found += 1;
+        }
+    }
+    print(line);
+    print($"${found} of them");
+}

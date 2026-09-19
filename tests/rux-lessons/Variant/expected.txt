@@ -1,0 +1,7 @@
+no reading   -> 0.0
+exact        -> 21.5
+a range      -> 22.0
+same case, same payload      true
+same case, different payload false
+different cases              false
+printed                      Range(low: 20.0, high: 24.0)

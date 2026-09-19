@@ -1,0 +1,15 @@
+-- arithmetic --
+Add(2, 3)     5
+Triple(7)     21
+Add(Add(1,2),4) 7
+-- recursion --
+Factorial(1) 1
+Factorial(2) 2
+Factorial(3) 6
+Factorial(4) 24
+Factorial(5) 120
+Factorial(6) 720
+-- early return --
+Sign(-4)      negative
+Sign(0)       zero
+Sign(9)       positive

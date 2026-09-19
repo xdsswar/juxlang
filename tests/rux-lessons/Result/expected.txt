@@ -1,0 +1,5 @@
+12 / 4 is exactly 3
+12 / 0 cannot be done: no dividing by zero
+13 / 4 is not exact: 1 left over
+13 / 4 or zero    0
+12 / 4 succeeded  true

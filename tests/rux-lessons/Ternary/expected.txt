@@ -1,0 +1,4 @@
+7 is odd (and odd)
+larger of 3 and 5 is 5
+3 items
+7 is positive

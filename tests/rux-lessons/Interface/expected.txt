@@ -1,0 +1,4 @@
+a circle has area 12.566370614359172
+a square has area 9.0
+radius 2 equals radius 2  true
+radius 2 equals radius 5  false

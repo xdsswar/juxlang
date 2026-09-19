@@ -1,0 +1,8 @@
+text            héllo wörld
+bytes           13
+characters      11
+byte 1 starts a character  true
+byte 2 starts a character  false
+non-ASCII chars 2
+built           one two three
+built length    13

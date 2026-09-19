@@ -1,0 +1,81 @@
+// An interface is a list of what a type must be able to do. A type that
+// declares it implements one, and provides those methods, can then be used
+// wherever the interface is asked for, so one function can work with several
+// unrelated types without knowing which it has.
+
+// The requirements. A method with no body is abstract: the interface says
+// what must exist, and each implementation supplies the body.
+interface Shape {
+    double area();
+    String name();
+}
+
+// Two structs with nothing in common but the ability to answer those two
+// questions. `implements Shape` is the promise, and the compiler checks that
+// every requirement is met.
+struct Circle implements Shape {
+    public double radius;
+
+    public double area() {
+        return 3.141592653589793 * radius * radius;
+    }
+
+    public String name() {
+        return "circle";
+    }
+
+    // Equality is an operator. Declaring `operator==` is what decides when
+    // two circles count as equal; here, when their radii match. (A struct
+    // would derive this from its fields anyway; it is written out to show
+    // where the rule lives.)
+    public bool operator==(Circle other) {
+        return radius == other.radius;
+    }
+
+    // Equal values must hash alike, or a `HashMap` would file two equal
+    // circles under different keys. So a type that writes its own `==` must
+    // write its own `hash` too, and the compiler refuses one without the
+    // other (E0931). Hashing the radius's bit pattern keeps the two in step.
+    public int operator hash() {
+        return (int) radius.bits();
+    }
+}
+
+struct Square implements Shape {
+    public double side;
+
+    public double area() {
+        return side * side;
+    }
+
+    public String name() {
+        return "square";
+    }
+}
+
+// The payoff: this takes any `Shape` at all. It has no idea whether it holds
+// a circle or a square, and calls through the interface.
+void report(Shape shape) {
+    print($"a ${shape.name()} has area ${shape.area()}");
+}
+
+void main() {
+    final var round = new Circle(2.0);
+    final var boxy = new Square(3.0);
+
+    // A concrete value converts to the interface wherever one is expected, so
+    // both go straight into `report`.
+    report(round);
+    report(boxy);
+
+    // The operator is used with the ordinary `==` spelling.
+    final var twin = new Circle(2.0);
+    final var other = new Circle(5.0);
+    print($"radius 2 equals radius 2  ${round == twin}");
+    print($"radius 2 equals radius 5  ${round == other}");
+
+    // Interfaces also serve as bounds on a generic, `<T extends Shape>`, for a
+    // function that needs to call interface methods on a `T`. Capabilities
+    // such as comparing or hashing are not interfaces in Jux; they are
+    // operators, asked for with a `where` clause as in the Generic lesson.
+}
