@@ -129,6 +129,70 @@ class JuxStdLibraryCompletionTest : BasePlatformTestCase() {
         assertTrue("endInclusive in $inclusive", "endInclusive" in inclusive)
     }
 
+    fun testStdMembersNavigateAndDocument() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            void main() {
+                Option<String> opt = Option.Some("x");
+                var n = opt.m<caret>ap((s) -> s.len());
+            }
+            """.trimIndent(),
+        )
+        val target = myFixture.file.findReferenceAt(myFixture.caretOffset)?.resolve()
+        assertNotNull("Option.map resolves into the bundled jux.std", target)
+        assertTrue(target!!.containingFile.name, target.containingFile.name == "Option.jux")
+        val doc = dev.jux.intellij.documentation.JuxDocumentationProvider().generateDoc(target, null) ?: ""
+        assertTrue(doc, doc.contains("jux.std.option.Option"))
+        assertTrue(doc, doc.contains("map"))
+    }
+
+    fun testMutexAndIteratorCombinatorsComplete() {
+        val m = names(
+            """
+            void main() {
+                var lock = new Mutex<int>(0);
+                lock.<caret>
+            }
+            """,
+        )
+        assertTrue("lock in $m", "lock" in m)
+        val it = names(
+            """
+            Iterator<int> numbers() {
+                yield 1;
+            }
+
+            void main() {
+                numbers().<caret>
+            }
+            """,
+        )
+        for (c in listOf("map", "filter", "take", "skip", "zip", "chain", "reduce", "count", "any", "all", "firstOrNull")) {
+            assertTrue("$c in $it", c in it)
+        }
+    }
+
+    fun testAbiNamesComplete() {
+        val expr = names(
+            """
+            void main() {
+                var n = al<caret>
+            }
+            """,
+        )
+        assertTrue("alignof in $expr", "alignof" in expr)
+        val ann = names(
+            """
+            @<caret>
+            struct Wide {
+                long v;
+            }
+            """,
+        )
+        assertTrue("align in $ann", "align" in ann)
+    }
+
     fun testMapForEachBindsATuple() {
         myFixture.addFileToProject(
             ".jux-stubs/rust/std.jux.d",
