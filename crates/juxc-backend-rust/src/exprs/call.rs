@@ -299,6 +299,24 @@ impl RustEmitter {
         else {
             return false;
         };
+        // A result typed by the method's own type parameter, bound by an
+        // explicit collection type argument: `iter.collect<Vec<int>>()` builds a
+        // plain `Vec`, which the handle-typed slot receives behind a handle.
+        if let Expr::Field(f) = &*call.callee {
+            let generics = owner
+                .as_deref()
+                .and_then(|o| self.external_type_method(o, f.field.text.as_str()))
+                .map(|m| m.generic_params.clone())
+                .unwrap_or_default();
+            if t.name.segments.len() == 1 {
+                if let Some(idx) = generics.iter().position(|g| g.name.text == t.name.segments[0].text) {
+                    return call
+                        .explicit_generic_args
+                        .get(idx)
+                        .is_some_and(|a| self.collection_is_handle(&a.name));
+                }
+            }
+        }
         // An ARRAY return counts too, now that an array is a reference type
         // (§6.5.2): a crate hands back a plain sequence, and the slot taking
         // it is a handle. `s.split(",")` is the everyday case.
@@ -771,6 +789,22 @@ impl RustEmitter {
         // drops the borrow from the stub's type. Jux has no borrowed string, so
         // the value is owned here. `.clone()` would not do it: cloning a `&str`
         // gives another `&str`.
+        // **A foreign iterator over borrowed items** (`v.iter()` yields `&T`).
+        // Jux has no references, so its elements are owned values: the
+        // iterator is taken `.cloned()` where it is made, and every adaptor
+        // after it (`max`, `sum`, `map`, `collect`) sees `T` (G.6.4.2).
+        if !self.cloning_borrowed_iterator {
+            if let Some(view) = self.foreign_call_returns_borrowing_iterator(&call.callee) {
+                self.cloning_borrowed_iterator = true;
+                self.emit_call(call);
+                self.cloning_borrowed_iterator = false;
+                // Borrowed VIEWS (`&str` from `graphemes`) have no `Clone`;
+                // they are owned the way a view is stored.
+                self.w.push_str(if view { ".map(ToOwned::to_owned)" } else { ".cloned()" });
+                return;
+            }
+        }
+        self.cloning_borrowed_iterator = false;
         let borrowed_view = if self.owning_borrowed_string {
             None
         } else {
@@ -2440,7 +2474,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -3338,6 +3372,7 @@ impl RustEmitter {
             // params (not external) keep the `Rc` representation.
             if self.callee_param_is_foreign_fn(&call.callee, i) {
                 self.lambda_bare_target = true;
+                self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
             }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
@@ -3992,7 +4027,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -4176,7 +4211,7 @@ impl RustEmitter {
                 if crate::analysis::is_jux_string_type(ty) {
                     self.w.push_str("String");
                 } else {
-                    self.emit_value_type_as_rust(ty);
+                    self.emit_turbofish_arg(call, ty);
                 }
             }
             self.w.push('>');
@@ -5752,6 +5787,34 @@ impl RustEmitter {
                 return true;
             }
         }
+        // **The Rust method surface of the primitive** (Bindgen G.6.4.4):
+        // `x.powf(2.0)`, `a.total_cmp(b)`, `w.to_le_bytes()`. The receiver is
+        // written at its exact Rust type (a bare literal is otherwise
+        // ambiguous, E0689), and the arguments go through the foreign-argument
+        // path, which borrows what the real signature borrows (`total_cmp`
+        // takes `&f64`) and converts integer widths.
+        let class = self
+            .symbols
+            .primitive_methods_class(prim.rust_name())
+            .map(str::to_string);
+        if let Some(class) = class.filter(|c| self.external_type_method(c, method).is_some()) {
+            if is_char {
+                emit_recv(self);
+            } else {
+                self.w.push_str("((");
+                self.emit_expr(receiver);
+                self.w.push_str(") as ");
+                self.w.push_str(rust_ty);
+                self.w.push(')');
+            }
+            self.w.push('.');
+            self.w.push_str(method);
+            self.w.push('(');
+            self.emit_foreign_call_args(call, &class, method);
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return true;
+        }
         self.emitting_format_arg = prev;
         false
     }
@@ -6060,6 +6123,42 @@ impl RustEmitter {
         last.text == "String" || self.external_owned_form(&last.text).is_some()
     }
 
+    /// Whether `callee` is a foreign method or function returning an ITERATOR
+    /// over borrowed items: a stub type whose `next()` is `@RustRefOut`
+    /// (`slice::Iter<T>` from `v.iter()`).
+    /// `Some(is_view)`: `true` when the items are borrowed VIEWS (`&str`,
+    /// `&Path`), which are owned with `to_owned` rather than cloned.
+    fn foreign_call_returns_borrowing_iterator(&self, callee: &Expr) -> Option<bool> {
+        let ret = match callee {
+            Expr::Field(_) => self.foreign_callee_return_name(callee),
+            _ => None,
+        };
+        let fqn = ret.and_then(|n| self.resolve_bare_class_fqn(&n))?;
+        let next = self.external_type_method(&fqn, "next").filter(|m| {
+            m.params.is_empty()
+                && m.annotations.iter().any(crate::exprs::field::annotation_is_rust_ref_out)
+        })?;
+        let juxc_ast::ReturnType::Type(t) = &next.return_type else {
+            return Some(false);
+        };
+        let last = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        Some(t.array_shape.is_none() && (last == "String" || self.external_owned_form(last).is_some()))
+    }
+
+    /// One type argument of a call's turbofish. A FOREIGN method or function
+    /// is Rust code that knows nothing of Jux's collection handle, so a
+    /// collection type argument is the plain Rust collection there
+    /// (`collect::<Vec<isize>>()`); the call's result is put behind a handle
+    /// where it lands (see `call_returns_foreign_collection`).
+    fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
+        let foreign = self.foreign_callee_return_type(&call.callee).is_some();
+        if foreign && self.collection_is_handle(&ty.name) {
+            self.plain_collection_once = true;
+        }
+        self.emit_value_type_as_rust(ty);
+        self.plain_collection_once = false;
+    }
+
     pub(crate) fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
         match receiver {
             Expr::Path(qn) if qn.segments.len() == 1 => self
@@ -6178,6 +6277,7 @@ impl RustEmitter {
         // which does not implement `FnMut`.
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
+            self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
         }
         // `null` for a raw-pointer parameter is a null pointer (§L.6.1), not the
         // `None` a nullable parameter takes: `count(null, 3)` on `int* p`, and

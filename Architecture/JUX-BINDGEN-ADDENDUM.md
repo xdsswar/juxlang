@@ -482,12 +482,22 @@ Rust's method lookup finds a trait's methods on more types than the ones that wr
 
 A trait's associated function (no `self`) is marked `@RustStatic` and is called on the type, `Pcg64Dxsm.seed_from_u64(1)`, including through a crate's alias of the type. A call through a trait brings the trait into scope in the emitted crate, spelled through the crate the program imported it from. A foreign value a Jux function mutates through such a method is lent `&mut`, as any foreign value the callee mutates is.
 
+#### G.6.4.4. Primitives and Iterator Adaptors
+
+**A primitive has Rust's methods.** The facade crate's rustdoc gathers every inherent method of a primitive in one place (`f64` has `powf` from `std` and `total_cmp` from `core`). Each integer, float, `char` and `bool` gets a class of those methods, `f64_methods` marked `@RustPrimitive("f64")`, and a Jux value of the matching primitive reaches them: `x.powf(2.0)` on a `double`, `n.pow(2)` on a `long`, `w.to_le_bytes()` on a `u32`. The K.11 methods keep their meaning; a Rust method is found after them.
+
+**Rust's `Iterator` trait is `RustIterator`.** It is the one `core` trait the stub declares, since its adaptors (`count`, `sum`, `max`, `map`, `filter`, `position`, `fold`, `collect`, ...) are what a program calls on an iterator; it is renamed so that K.5's `Iterator<T>`, the protocol a program writes, keeps its name alone. The adaptor types its methods return (`Filter`, `Map`, `Zip`) are surfaced with it.
+
+**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
+
+One gap is the toolchain's: the prebuilt rustdoc JSON of `alloc` leaves out `alloc`'s own `impl<T> [T]` block, so `sort`, `sort_by`, `to_vec`, `concat` and `join` on a slice are not discoverable. `sort_unstable` and `sort_unstable_by` (from `core`) are, and give the same order for values without identity.
+
 ### G.6.5. First-Class `import rust.X`
 
 Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures directly. `bindgen`-generated `.jux.d` files are the Phase-1/Phase-2 realization of that: `import rust.serde_json.Value` resolves to the `Value` declaration in the generated `serde_json.jux.d`. When Layer 3 lands, the same import surface is served by an in-compiler reader instead of a pre-generated file; **the Jux-facing spelling does not change.**
 
 ---
-
+
 **A bound crate's types need their `import`.** The implicit auto-import that makes a bare `Vec` or `HashMap` resolve covers `rust.std` only. A type of another bound crate is reached through an `import` (or its full name): with `rust.chrono` in `jux.toml`, a bare `Duration` does not quietly become chrono's `TimeDelta` alias, and a bare `NaiveDate` without `import rust.chrono.NaiveDate;` is an unknown type (`E0417`). The crate's own stub still sees its types.
 
 ### G.6.6. Which Foreign Types Are Collections

@@ -95,6 +95,9 @@ fn render_type(out: &mut String, t: &StubType) {
     for shape in &t.implemented_by {
         let _ = writeln!(out, "@RustImplementedBy(\"{shape}\")");
     }
+    if let Some(prim) = &t.primitive {
+        let _ = writeln!(out, "@RustPrimitive(\"{prim}\")");
+    }
 
     let keyword = match t.kind {
         TypeKind::Class => "class",
@@ -230,6 +233,10 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     if f.returns_borrow {
         s.push_str("@RustRefOut ");
     }
+    if !f.closure_ref_params.is_empty() {
+        let list: Vec<String> = f.closure_ref_params.iter().map(|i| i.to_string()).collect();
+        s.push_str(&format!("@RustClosureRefs(\"{}\") ", list.join(",")));
+    }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
     // an interface a bodyless `static` is `E0200`. A Rust trait's associated
@@ -356,6 +363,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,
@@ -372,6 +380,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         });
 
         let file = StubFile {
@@ -405,6 +414,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         assert_eq!(
             render_fn(&f, false),
@@ -454,6 +464,7 @@ mod tests {
             carries_borrow: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         let file = StubFile {
             items: vec![StubItem::Function(f)],
@@ -489,6 +500,7 @@ mod tests {
             carries_borrow: false,
             rust_path: None,
             doc: None,
+            closure_ref_params: Vec::new(),
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }

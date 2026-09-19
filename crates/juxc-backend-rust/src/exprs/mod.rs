@@ -2493,6 +2493,7 @@ impl RustEmitter {
         // body doesn't inherit it. The wrapper-capture clone block is kept —
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
+        let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
         let captures = self.collect_wrapper_captures(l);
         // **`this` captured by a lambda shares the handle too.** A closure that
         // reads `this` would otherwise borrow `&self`, and returning it from a
@@ -2576,6 +2577,15 @@ impl RustEmitter {
         let void_target = std::mem::take(&mut self.lambda_void_target);
         // `async (x) -> …` (LANG-V1 §7.9): the body becomes a future the
         // caller awaits, `crate::jux_async(async move { … })`.
+        // Arguments that arrive by reference are cloned out first, so the
+        // body works with values (`x > 3`, `a.total_cmp(b)`).
+        if clone_params {
+            self.w.push_str("{ ");
+            for p in &l.params {
+                let n = to_rust_ident(&p.name.text);
+                self.w.push_str(&format!("let {n} = {n}.clone(); "));
+            }
+        }
         if l.is_async {
             self.w.push_str("crate::jux_async(async move ");
             if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
@@ -2617,6 +2627,9 @@ impl RustEmitter {
                 self.w.push_str(" }");
             }
             self.w.push(')');
+        }
+        if clone_params {
+            self.w.push_str(" }");
         }
         self.local_types.pop();
         for n in &shadowed_refs {

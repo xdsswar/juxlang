@@ -761,6 +761,12 @@ struct RustEmitter {
     /// to the end of the enclosing call statement (Rust temporary-lifetime
     /// extension), so the `&mut` into it stays valid for the callee.
     pub(crate) emitting_out_place: bool,
+    /// Set while a call is emitted inside its own `.cloned()` (a foreign
+    /// iterator over borrowed items), so the wrap is applied once.
+    pub(crate) cloning_borrowed_iterator: bool,
+    /// Set for one collection type: emit it as the plain Rust collection, not
+    /// the 6.5.1 handle (a foreign call's turbofish).
+    pub(crate) plain_collection_once: bool,
     /// True while emitting a mutating stdlib-collection call whose
     /// arguments were already **hoisted into temps** (§CR.4.1 / gap N1).
     /// The temps already carry the element coercion ladder (nullable
@@ -1442,6 +1448,10 @@ struct RustEmitter {
     /// `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare closure.
     /// Take-and-cleared by [`Self::emit_lambda`].
     pub(crate) lambda_bare_target: bool,
+    /// Set with [`Self::lambda_bare_target`] when the foreign closure slot is
+    /// called with references (`filter`'s `&Item`): the lambda clones each
+    /// argument out, so its body sees the owned values a Jux lambda takes.
+    pub(crate) lambda_clone_params: bool,
     /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
@@ -5294,6 +5304,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             signed_slot_target: None,
             int_literal_as_float: false,
             emitting_out_place: false,
+            cloning_borrowed_iterator: false,
+            plain_collection_once: false,
             collection_args_prehoisted: false,
             emitting_const_context: false,
             emitting_format_arg: false,
@@ -5386,6 +5398,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             pattern_depth: 0,
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
+            lambda_clone_params: false,
             worker_attach: Vec::new(),
         }
     }

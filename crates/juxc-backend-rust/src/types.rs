@@ -611,7 +611,8 @@ impl RustEmitter {
             // collection instead of a copy: the `.clone()` the value path
             // already emits becomes an `Rc` refcount bump rather than a deep
             // copy of the elements.
-            let handle = self.collection_is_handle(&ty.name);
+            let handle =
+                self.collection_is_handle(&ty.name) && !std::mem::take(&mut self.plain_collection_once);
             if handle {
                 self.w.push_str("crate::JuxArr<");
             }

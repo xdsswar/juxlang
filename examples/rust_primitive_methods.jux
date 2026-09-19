@@ -1,0 +1,17 @@
+// The Rust method surface of the primitives (Bindgen G.6.4.4): a `double`
+// has f64's `powf`, `sin`, `max` and `total_cmp`, an integer its `pow`,
+// `rem_euclid` and `to_le_bytes`, a `char` its `is_ascii_lowercase`.
+void main() {
+    double x = 2.0;
+    print(x.powf(3.0));
+    print(x.sin() < 1.0);
+    print(x.max(5.0));
+    long n = 5;
+    print(n.pow(2));
+    int k = 7;
+    print(k.rem_euclid(3));
+    u32 w = (u32) 258;
+    print(w.to_le_bytes()[0]);
+    print(3.5.total_cmp(2.0));
+    print('x'.is_ascii_lowercase());
+}

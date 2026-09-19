@@ -10741,7 +10741,13 @@ impl<'a> Checker<'a> {
                 }
                 if let Ty::Primitive(prim) = &receiver_ty {
                     if let Some(names) = builtin_primitive_methods(*prim) {
-                        if !names.contains(&method_name) {
+                        // The Rust method surface of the primitive counts too
+                        // (`powf`, `total_cmp`, `to_le_bytes`), discovered from
+                        // rustdoc (Bindgen G.6.4.4, B14).
+                        let rust_method =
+                            crate::infer::primitive_rust_method(*prim, method_name, self.symbols)
+                                .is_some();
+                        if !names.contains(&method_name) && !rust_method {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0413_UnresolvedMethod,

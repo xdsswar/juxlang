@@ -224,6 +224,30 @@ pub enum Primitive {
     F64,
 }
 
+impl Primitive {
+    /// The Rust primitive a value of this type is (`int` is `isize`,
+    /// `double` is `f64`): the name the `rust.std` method surface of the
+    /// primitive is recorded under (`@RustPrimitive("f64")`).
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            Primitive::Int => "isize",
+            Primitive::Uint => "usize",
+            Primitive::Byte | Primitive::I8 => "i8",
+            Primitive::Ubyte | Primitive::U8 => "u8",
+            Primitive::Short | Primitive::I16 => "i16",
+            Primitive::Ushort | Primitive::U16 => "u16",
+            Primitive::Long | Primitive::I64 => "i64",
+            Primitive::Ulong | Primitive::U64 => "u64",
+            Primitive::I32 => "i32",
+            Primitive::U32 => "u32",
+            Primitive::Float | Primitive::F32 => "f32",
+            Primitive::Double | Primitive::F64 => "f64",
+            Primitive::Bool => "bool",
+            Primitive::Char => "char",
+        }
+    }
+}
+
 /// Discriminates the two array flavors. Distinguishes `T[N]` from `T[]`
 /// — sizing affects lowering and may eventually affect what operations
 /// are permitted.

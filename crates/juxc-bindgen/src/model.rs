@@ -181,6 +181,11 @@ pub struct StubType {
     /// (`impl<T> SliceRandom for [T]` gives `[]`, `impl UnicodeSegmentation for
     /// str` gives `str`). Rendered as `@RustImplementedBy("[]")`.
     pub implemented_by: Vec<String>,
+    /// For the method surface of a Rust PRIMITIVE (`f64`, `u32`, `char`,
+    /// `bool`): its Rust name. Rendered as `@RustPrimitive("f64")`; the checker
+    /// reaches this class's methods from a Jux value of that primitive
+    /// (`x.powf(2.0)` on a `double`).
+    pub primitive: Option<String>,
 }
 
 impl StubType {
@@ -204,6 +209,7 @@ impl StubType {
             derefs_to: None,
             blanket_over: Vec::new(),
             implemented_by: Vec::new(),
+            primitive: None,
         }
     }
 }
@@ -276,6 +282,12 @@ pub struct StubFn {
     /// (dispatched on the type) and when unavailable.
     pub rust_path: Option<String>,
     pub doc: Option<String>,
+    /// Indices of the closure parameters whose Rust closure takes its
+    /// arguments BY REFERENCE (`filter(P) where P: FnMut(&Self::Item) -> bool`,
+    /// `sort_unstable_by(F) where F: FnMut(&T, &T) -> Ordering`). Rendered as
+    /// `@RustClosureRefs("0")`; a Jux lambda in that slot takes owned values,
+    /// so the backend clones each argument out of its reference.
+    pub closure_ref_params: Vec<usize>,
 }
 
 /// A single parameter (`ty name`).

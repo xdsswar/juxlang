@@ -50,6 +50,21 @@ use crate::ty::{
 // Expression inference
 // ============================================================================
 
+/// The result type of a Rust method on a primitive value (`x.powf(2.0)` on
+/// a `double`), from the `rust.std` surface of the primitive (Bindgen
+/// G.6.4.4). `None` when the primitive has no such method.
+pub fn primitive_rust_method(prim: Primitive, method_name: &str, symbols: &SymbolTable) -> Option<Ty> {
+    let class = symbols.primitive_methods_class(prim.rust_name())?;
+    let method = symbols.classes.get(class)?.methods.get(method_name)?;
+    if method.is_static {
+        return None;
+    }
+    match &method.return_type {
+        ReturnType::Type(t) => Some(lower_member_type(t, class, symbols)),
+        _ => Some(Ty::Void),
+    }
+}
+
 /// The type of the top-level constant a bare `name` reads, when there is
 /// one: an import or the current package first, then a package-less constant.
 /// `None` when no constant has the name, or when its type is not known (an
@@ -1665,7 +1680,7 @@ fn infer_stdlib_method(
     method_name: &str,
     _args: &[Expr],
     _env: &TypeEnv,
-    _symbols: &SymbolTable,
+    symbols: &SymbolTable,
 ) -> Option<Ty> {
     use crate::ty::Primitive;
     match receiver_ty {
@@ -1724,7 +1739,7 @@ fn infer_stdlib_method(
                     }
                     "toUppercase" | "toLowercase" => Some(Ty::Primitive(Primitive::Char)),
                     "codePoint" => Some(Ty::Primitive(Primitive::Uint)),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
             if is_float {
@@ -1736,7 +1751,7 @@ fn infer_stdlib_method(
                     "bits" => Some(Ty::Primitive(Primitive::Uint)),
                     "totalOrder" => Some(Ty::Primitive(Primitive::Int)),
                     "toFixed" => Some(Ty::String),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
             if is_int {
@@ -1752,10 +1767,10 @@ fn infer_stdlib_method(
                     }
                     "toInt" => Some(checked_result(Ty::Primitive(Primitive::Int))),
                     "toHex" | "toBinary" | "toOctal" => Some(Ty::String),
-                    _ => None,
+                    _ => primitive_rust_method(prim, method_name, symbols),
                 };
             }
-            None
+            primitive_rust_method(prim, method_name, symbols)
         }
         Ty::Array { element, kind } => match method_name {
             // List<T> → int

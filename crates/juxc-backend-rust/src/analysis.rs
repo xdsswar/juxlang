@@ -2871,6 +2871,28 @@ impl crate::RustEmitter {
             .unwrap_or(false)
     }
 
+    /// Whether the foreign closure parameter `arg_idx` of `callee` is called
+    /// with its arguments BY REFERENCE (`@RustClosureRefs`, Bindgen G.6.4.2):
+    /// `filter`'s predicate gets `&Item`, `sort_unstable_by`'s comparator gets
+    /// `&T, &T`.
+    pub(crate) fn callee_closure_takes_refs(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        use juxc_ast::{AnnotationArg, Expr, Literal};
+        // Methods only: a free function's signature carries no markers.
+        let Some(m) = self.foreign_callee_method(callee) else {
+            return false;
+        };
+        let annotations = &m.annotations;
+        annotations.iter().any(|a| {
+            a.name.segments.len() == 1
+                && a.name.segments[0].text.eq_ignore_ascii_case("rustclosurerefs")
+                && matches!(
+                    a.args.first(),
+                    Some(AnnotationArg::Positional(Expr::Literal(Literal::String(list))))
+                        if list.split(',').any(|n| n.trim() == arg_idx.to_string())
+                )
+        })
+    }
+
     /// Resolve the **external** (`rust.std` / crate) method parameter that arg
     /// `arg_idx` of `callee` maps to, or `None` when `callee` is not a foreign
     /// method/static-method call. Shared by [`Self::callee_param_is_ref`] and
@@ -3132,6 +3154,15 @@ impl crate::RustEmitter {
     /// The NAME of the type a foreign method returns, when `callee` names
     /// one. Used to resolve a chained call's receiver from the stub rather
     /// than from the inference map, which does not record every intermediate.
+    /// The declared return of the foreign method `callee` names, if any.
+    pub(crate) fn foreign_callee_return_type(&self, callee: &juxc_ast::Expr) -> Option<&juxc_ast::ReturnType> {
+        self.foreign_callee_method(callee).map(|m| &m.return_type)
+    }
+
+    pub(crate) fn foreign_callee_return_name(&self, callee: &juxc_ast::Expr) -> Option<String> {
+        self.foreign_call_return_type_name(callee)
+    }
+
     fn foreign_call_return_type_name(&self, callee: &juxc_ast::Expr) -> Option<String> {
         let m = self.foreign_callee_method(callee)?;
         match &m.return_type {

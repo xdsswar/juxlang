@@ -2213,7 +2213,9 @@ impl RustEmitter {
         }
         // A class that IS an iterator (and not also an iterable, whose
         // `iterator()` the loop below prefers).
-        if self.symbols.classes.contains_key(name.as_str())
+        // A FOREIGN iterator (one that implements Rust's `Iterator`) is walked
+        // by Rust's own `for`, see `foreign_iterator_next`.
+        if self.symbols.classes.get(name.as_str()).is_some_and(|c| !c.is_external)
             && self.symbols.lookup_method(name, "iterator").is_none()
             && juxc_tycheck::ty::class_implements_interface(name, "Iterator", &self.symbols)
         {

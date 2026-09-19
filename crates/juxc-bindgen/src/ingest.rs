@@ -235,10 +235,12 @@ impl PoolReexports {
     /// The pool crate's items to add to the stub, with their `@rust` paths
     /// rewritten to the public re-export.
     ///
-    /// Only TYPES (structs, enums), constants and free functions are taken.
-    /// A pool trait would put `implements Debug, Clone, Iterator, ...` on
-    /// every type of the stub, and those are language meaning in Jux
-    /// (operators, `@RustClone`, K.5), not interfaces to inherit.
+    /// Only TYPES (structs, enums), constants and free functions are taken,
+    /// plus the `Iterator` trait. Any other pool trait would put
+    /// `implements Debug, Clone, ...` on every type of the stub, and those are
+    /// language meaning in Jux (operators, `@RustClone`), not interfaces to
+    /// inherit; `Iterator` is the K.5 iteration protocol, whose adaptors a
+    /// program calls.
     ///
     /// Everything re-exported ITEM by item is added; that is std choosing to
     /// publish it. Through a re-exported MODULE only what the ingested crates'
@@ -275,17 +277,35 @@ impl PoolReexports {
                 continue;
             };
             match &mut item {
-                StubItem::Type(t) if t.kind != TypeKind::Interface => t.rust_path = Some(public.clone()),
+                // Of the pool's traits only `Iterator` is taken: it is the K.5
+                // iteration protocol, the one trait Jux gives meaning as an
+                // interface (its adaptors: `count`, `sum`, `position`, ...).
+                StubItem::Type(t) if t.kind != TypeKind::Interface || name == "Iterator" => {
+                    t.rust_path = Some(public.clone());
+                    t.name = stub_trait_name(&t.name).to_string();
+                }
                 StubItem::Function(f) => f.rust_path = Some(public.clone()),
                 StubItem::Const(c) => c.rust_path = Some(public.clone()),
                 _ => continue,
             }
+            let name = if matches!(&item, StubItem::Type(t) if t.kind == TypeKind::Interface) {
+                stub_trait_name(&name).to_string()
+            } else {
+                name
+            };
             candidates.push((name, item, item_level, public));
         }
         let declared: HashSet<&str> = already.iter().map(|(n, _)| n.as_str()).collect();
         let mut referenced: HashSet<String> = HashSet::new();
         for (_, item) in already {
             item.referenced_type_names(&mut referenced);
+        }
+        // ...and what the `Iterator` trait names: its adaptors return `Filter`,
+        // `Map`, `Zip`, whose own `count`/`sum` a chained call reaches.
+        for (name, item, item_level, _) in &candidates {
+            if *item_level && name == "RustIterator" {
+                item.referenced_type_names(&mut referenced);
+            }
         }
         // One winner per name: the shorter public path; a tie drops the name.
         let mut best: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -324,7 +344,9 @@ fn retain_declared_implements(collected: &mut [(String, StubItem)]) {
         .collect();
     for (_, item) in collected.iter_mut() {
         if let StubItem::Type(t) = item {
-            t.implements.retain(|n| interfaces.contains(n));
+            // `RustIterator` lives in `rust.std` and is reachable from every
+            // stub, so a crate's iterators keep it too.
+            t.implements.retain(|n| interfaces.contains(n) || n == "RustIterator");
         }
     }
 }
@@ -624,6 +646,42 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                         ));
                     }
                 }
+            }
+            // The inherent methods of a Rust PRIMITIVE (Bindgen G.6.4.4). The
+            // facade crate's primitive items gather the impls of `core`, `alloc`
+            // and `std` in one place: `f64` has `powf` from std and `total_cmp`
+            // from core. `str` is left out, since `String` already carries its
+            // methods through `Deref`.
+            ItemEnum::Primitive(prim) if primitive_has_jux_type(&prim.name) => {
+                let class = format!("{}_methods", prim.name);
+                let (ctors, mut methods) = collect_inherent_members(krate, &prim.impls, &class);
+                // A primitive has no constructor; `from_bits` and friends are
+                // associated functions, called on the type.
+                for c in ctors {
+                    methods.push(StubFn {
+                        visibility: Vis::Public,
+                        is_static: true,
+                        is_default: false,
+                        name: c.name,
+                        generics: Vec::new(),
+                        params: c.params,
+                        ret: JuxType::Prim(primitive_jux_name(&prim.name)),
+                        throws: c.throws,
+                        is_unsafe: false,
+                        is_mut_self: false,
+                        returns_borrow: false,
+                        carries_borrow: false,
+                        rust_path: None,
+                        doc: None,
+                        closure_ref_params: Vec::new(),
+                    });
+                }
+                dedup_methods_by_name(&mut methods);
+                let mut st = StubType::new(TypeKind::Class, &class);
+                st.methods = methods;
+                st.primitive = Some(prim.name.clone());
+                st.rust_path = Some(prim.name.clone());
+                collected.push((item.id.0, class, StubItem::Type(st)));
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
                 collected.push((
@@ -1188,7 +1246,17 @@ fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
 
 fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
     let (ret, throws) = map_return(krate, &f.sig.output);
+    let closure_ref_params = f
+        .sig
+        .inputs
+        .iter()
+        .filter(|(n, _)| n != "self")
+        .enumerate()
+        .filter(|(_, (_, ty))| closure_takes_refs(ty, &f.generics))
+        .map(|(i, _)| i)
+        .collect();
     StubFn {
+        closure_ref_params,
         visibility: Vis::Public,
         is_static: false,
         is_default: false,
@@ -1247,6 +1315,37 @@ fn map_param_type(ty: &Type, generics: &Generics) -> JuxType {
         }
     }
     map_type(ty)
+}
+
+/// Whether a closure-typed Rust parameter takes any argument by reference:
+/// `P: FnMut(&Self::Item) -> bool`, or `impl Fn(&T)`.
+fn closure_takes_refs(ty: &Type, generics: &Generics) -> bool {
+    let takes_refs = |bounds: &[GenericBound]| {
+        bounds.iter().any(|b| {
+            let GenericBound::TraitBound { trait_, .. } = b else { return false };
+            if !matches!(last_segment(&trait_.path), "Fn" | "FnMut" | "FnOnce") {
+                return false;
+            }
+            matches!(
+                trait_.args.as_deref(),
+                Some(GenericArgs::Parenthesized { inputs, .. })
+                    if inputs.iter().any(|t| matches!(t, Type::BorrowedRef { .. }))
+            )
+        })
+    };
+    match ty {
+        Type::ImplTrait(bounds) => takes_refs(bounds),
+        Type::Generic(name) => {
+            generics.params.iter().any(|p| {
+                &p.name == name
+                    && matches!(&p.kind, GenericParamDefKind::Type { bounds, .. } if takes_refs(bounds))
+            }) || generics.where_predicates.iter().any(|w| {
+                matches!(w, WherePredicate::BoundPredicate { type_: Type::Generic(n), bounds, .. }
+                    if n == name && takes_refs(bounds))
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Recover the closure signature for a generic param `name` whose bound is an
@@ -1535,7 +1634,7 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
                 Some(GenericArgs::AngleBracketed { args, .. }) if !args.is_empty()
             );
             if !generic {
-                out.push(last_segment(&tr.path).to_string());
+                out.push(stub_trait_name(last_segment(&tr.path)).to_string());
             }
             continue;
         };
@@ -1553,11 +1652,23 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             continue;
         }
         let Some(name) = &decl.name else { continue };
-        out.push(name.clone());
+        out.push(stub_trait_name(name).to_string());
     }
     out.sort();
     out.dedup();
     out
+}
+
+/// The name a Rust trait is declared under in a stub. Rust's `Iterator` is
+/// `RustIterator`: Jux's own `Iterator<T>` is the K.5 protocol a program writes
+/// (`jux.std.collections.Iterator`), and two interfaces of one name made every
+/// by-name lookup a guess between them. Every other trait keeps its name.
+fn stub_trait_name(name: &str) -> &str {
+    if name == "Iterator" {
+        "RustIterator"
+    } else {
+        name
+    }
 }
 
 /// Is this type a COLLECTION -- something you can build from elements and add
@@ -1646,6 +1757,11 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
             }
         })
     })?;
+    // An iterator over BORROWED items (`slice::Iter<T>` yields `&T`) is
+    // marked `@RustRefOut` on its `next()`: Jux has no references, so the
+    // program sees owned elements, and the backend takes them with
+    // `.cloned()` where the iterator is made.
+    let borrowed = matches!(item, Type::BorrowedRef { .. });
     let (elem, throws) = map_return(krate, &Some(item));
     Some(StubFn {
         visibility: Vis::Public,
@@ -1658,10 +1774,11 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
         throws,
         is_unsafe: false,
         is_mut_self: true,
-        returns_borrow: false,
+        returns_borrow: borrowed,
         carries_borrow: false,
         rust_path: None,
         doc: None,
+        closure_ref_params: Vec::new(),
     })
 }
 
@@ -1827,6 +1944,24 @@ pub fn map_type(t: &Type) -> JuxType {
         }
         // Pattern types and inference markers have no Jux spelling.
         Type::Pat { .. } | Type::Infer => JuxType::Unknown("Object".into()),
+    }
+}
+
+/// Whether a Rust primitive has a Jux primitive type whose values can call
+/// its methods: the integers, the floats, `char` and `bool`.
+fn primitive_has_jux_type(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32"
+            | "f64" | "char" | "bool"
+    )
+}
+
+/// The Jux spelling of a Rust primitive (see [`map_primitive`]).
+fn primitive_jux_name(name: &str) -> &'static str {
+    match map_primitive(name) {
+        JuxType::Prim(p) => p,
+        _ => "int",
     }
 }
 

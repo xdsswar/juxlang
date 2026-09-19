@@ -244,6 +244,28 @@ impl SymbolTable {
         None
     }
 
+    /// The `rust.std` class carrying the Rust method surface of the primitive
+    /// `rust_name` (`f64_methods`, marked `@RustPrimitive("f64")`), Bindgen
+    /// G.6.4.4. `None` when no stub declares one.
+    pub fn primitive_methods_class(&self, rust_name: &str) -> Option<&str> {
+        self.classes
+            .iter()
+            .filter(|(_, c)| c.is_external)
+            .find(|(_, c)| {
+                c.annotations.iter().any(|a| {
+                    a.name.segments.len() == 1
+                        && a.name.segments[0].text.eq_ignore_ascii_case("rustprimitive")
+                        && matches!(
+                            a.args.first(),
+                            Some(juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Literal(
+                                juxc_ast::Literal::String(s)
+                            ))) if s == rust_name
+                        )
+                })
+            })
+            .map(|(k, _)| k.as_str())
+    }
+
     pub fn find_fqn_by_bare(&self, name: &str) -> Option<String> {
         self.find_fqn_by_bare_in(name, "")
     }
