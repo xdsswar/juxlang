@@ -1,0 +1,9 @@
+// What something interested in an event implements.
+//
+// One method, so a lambda stands in for it wherever one is expected
+// (LANG-V1 §7.9.1).
+package orders.events;
+
+public interface Listener<T> {
+    void on(T event);
+}

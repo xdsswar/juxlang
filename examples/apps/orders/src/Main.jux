@@ -1,0 +1,62 @@
+// An order system: events, generics, exceptions with causes, and `Result`.
+import orders.events.{Bus, Listener};
+import orders.model.{Order, Stock};
+import orders.service.{Orders, OrderFailed};
+
+public void main() {
+    final var stock = new Stock();
+    stock.put("ada", 10);
+    stock.put("grace", 1);
+
+    // A bus of orders, with three listeners. Two are lambdas standing in for
+    // the interface (§7.9.1); the third is an anonymous class that keeps
+    // state of its own.
+    final var placed = new Bus<Order>();
+    placed.subscribe((o) -> print($"  audit: ${o}"));
+    placed.subscribe((o) -> print($"  ship:  ${o.quantity} to ${o.customer}"));
+
+    final var totals = new Totals();
+    placed.subscribe(totals);
+
+    final var orders = new Orders(stock, placed, 500.0);
+    print($"listeners: ${placed.count()}");
+    print("");
+
+    // Four orders: one fine, one too big to pay for, one short of stock, one
+    // for something the shelf never had.
+    attempt(orders, new Order("A-1", "ada", 2, 25.0));
+    attempt(orders, new Order("A-2", "ada", 8, 100.0));
+    attempt(orders, new Order("A-3", "grace", 4, 10.0));
+    attempt(orders, new Order("A-4", "alan", 1, 10.0));
+
+    print("");
+    print($"delivered events: ${placed.delivered}");
+    print($"orders seen: ${totals.count}, value ${totals.value.toFixed(2)}");
+    print($"ada left: ${stock.available("ada")}, grace left: ${stock.available("grace")}");
+}
+
+/** Places one order and reports what happened, cause included. */
+void attempt(Orders orders, Order order) {
+    print($"placing ${order.id}");
+    try {
+        orders.place(order);
+        print("  placed");
+    } catch (OrderFailed failed) {
+        print($"  failed: ${failed.getMessage()}");
+        final Exception? cause = failed.getCause();
+        if (cause != null) {
+            print($"  because: ${cause.getMessage()}");
+        }
+    }
+}
+
+/** A listener that keeps a running total: an object where a lambda cannot. */
+class Totals implements Listener<Order> {
+    public int count = 0;
+    public double value = 0.0;
+
+    public void on(Order event) {
+        count++;
+        value += event.total();
+    }
+}

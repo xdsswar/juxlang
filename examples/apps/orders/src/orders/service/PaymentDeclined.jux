@@ -1,0 +1,8 @@
+// The payment failure an order failure carries as its cause.
+package orders.service;
+
+public class PaymentDeclined extends Exception {
+    public PaymentDeclined(String message) {
+        super(message);
+    }
+}

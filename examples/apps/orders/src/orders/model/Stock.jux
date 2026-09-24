@@ -1,0 +1,31 @@
+// What is on the shelf, and the failures of taking from it.
+package orders.model;
+
+public class Stock {
+    private HashMap<String, int> onHand = new HashMap<String, int>();
+
+    public void put(String sku, int count) {
+        onHand.insert(sku, count);
+    }
+
+    public int available(String sku) {
+        final int? count = onHand.get(sku);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * Takes `count` of `sku`. A failure is a value here rather than a throw:
+     * the caller is expected to handle it, and `?` passes it on.
+     */
+    public Result<int, String> take(String sku, int count) {
+        final int have = this.available(sku);
+        if (have == 0) {
+            return Result.Err($"no ${sku} in stock");
+        }
+        if (have < count) {
+            return Result.Err($"only ${have} of ${sku} left, wanted ${count}");
+        }
+        onHand.insert(sku, have - count);
+        return Result.Ok(have - count);
+    }
+}

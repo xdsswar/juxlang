@@ -1,0 +1,8 @@
+# An order system driven by events.
+#
+# Interfaces with lambdas standing in for them, generics, exceptions with
+# causes, and `Result` with `?` where a failure is a value rather than a
+# throw.
+[package]
+name = "apps.orders"
+version = "0.1.0"

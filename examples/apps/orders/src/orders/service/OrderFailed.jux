@@ -1,0 +1,8 @@
+// Why an order could not be placed, with the failure underneath it.
+package orders.service;
+
+public class OrderFailed extends Exception {
+    public OrderFailed(String message, Exception cause) {
+        super(message, cause);
+    }
+}

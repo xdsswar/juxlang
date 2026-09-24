@@ -1,0 +1,19 @@
+listeners: 3
+
+placing A-1
+  audit: A-1 for ada: 2 x 25.00
+  ship:  2 to ada
+  placed
+placing A-2
+  failed: cannot pay for A-2
+  because: 800.00 is over the 500.00 limit
+placing A-3
+  failed: cannot fill A-3
+  because: only 1 of grace left, wanted 4
+placing A-4
+  failed: cannot fill A-4
+  because: no alan in stock
+
+delivered events: 3
+orders seen: 1, value 50.00
+ada left: 8, grace left: 1
