@@ -1362,7 +1362,14 @@ mod catalog_tests {
             let description = after.split('|').nth(1).unwrap_or("");
             // `(reserved` rather than `(reserved)`: a row may qualify the
             // marker, as E0261 does with "(reserved; statement form is E0440)".
-            if !implemented.iter().any(|c| c == code) && !description.contains("(reserved") {
+            //
+            // `(retired` is the third answer, and a stronger one: the check
+            // exists, under a different number, and this one will never be
+            // raised again (§D.5.1 keeps the row so `juxc explain` can still
+            // answer for a code a user read in an old build). `W0530` is the
+            // first, retired by ERRATA E89 in favour of the error `E0497`.
+            let marked = description.contains("(reserved") || description.contains("(retired");
+            if !implemented.iter().any(|c| c == code) && !marked {
                 unmarked.push(code.to_string());
             }
         }

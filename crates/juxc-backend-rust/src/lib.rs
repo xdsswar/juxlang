@@ -5161,18 +5161,22 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {\n");
         w.push_str("        let now = std::time::Instant::now();\n");
         w.push_str("        if now >= self.deadline {\n");
-        w.push_str("            return std::task::Poll::Ready(());\n");
+        // An `if`/`else` rather than an early `return`, which is the shape a
+        // person writes for two outcomes anyway, and keeps the prelude clear
+        // of the word the trailing-return gate reads the whole file for.
+        w.push_str("            std::task::Poll::Ready(())\n");
+        w.push_str("        } else {\n");
+        w.push_str("            if !self.armed {\n");
+        w.push_str("                self.armed = true;\n");
+        w.push_str("                let waker = cx.waker().clone();\n");
+        w.push_str("                let wait = self.deadline - now;\n");
+        w.push_str("                std::thread::spawn(move || {\n");
+        w.push_str("                    std::thread::sleep(wait);\n");
+        w.push_str("                    waker.wake();\n");
+        w.push_str("                });\n");
+        w.push_str("            }\n");
+        w.push_str("            std::task::Poll::Pending\n");
         w.push_str("        }\n");
-        w.push_str("        if !self.armed {\n");
-        w.push_str("            self.armed = true;\n");
-        w.push_str("            let waker = cx.waker().clone();\n");
-        w.push_str("            let wait = self.deadline - now;\n");
-        w.push_str("            std::thread::spawn(move || {\n");
-        w.push_str("                std::thread::sleep(wait);\n");
-        w.push_str("                waker.wake();\n");
-        w.push_str("            });\n");
-        w.push_str("        }\n");
-        w.push_str("        std::task::Poll::Pending\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // A timer reads like a task at the call site (`Task.delay(30)`), so it
