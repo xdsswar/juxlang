@@ -138,7 +138,10 @@ class JuxParser : PsiParser {
         }
         if (b.at(T.AS_KW)) {
             b.advanceLexer()
-            b.expectOrError(T.IDENTIFIER, "Import alias expected")
+            // The alias is a declaration name, so it follows the same rule as
+            // one: `import rust.x.record as record;` is legal and used in
+            // practice, since the crate member it renames often IS a keyword.
+            b.consumeDeclName("Import alias expected")
         }
         b.semicolon()
         m.done(E.IMPORT_STATEMENT)
