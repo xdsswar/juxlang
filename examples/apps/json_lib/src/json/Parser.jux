@@ -1,0 +1,198 @@
+// Recursive descent over the characters of a document.
+//
+// One scanner, one position, one method per shape. Every failure carries the
+// position it happened at, which is the only thing that makes a parse error
+// useful.
+package json;
+
+public class Parser {
+    private char[] text;
+    private int at = 0;
+
+    public Parser(String source) {
+        var chars = new char[source.charLength()];
+        var i = 0;
+        for (var c : source.chars()) {
+            chars[i] = c;
+            i++;
+        }
+        this.text = chars;
+    }
+
+    /** The whole document, which must hold exactly one value. */
+    public Value parse() throws ParseError {
+        this.skipSpace();
+        final Value value = this.value();
+        this.skipSpace();
+        if (at < text.length) {
+            throw new ParseError(at, $"trailing text `${text[at]}`");
+        }
+        return value;
+    }
+
+    private Value value() throws ParseError {
+        if (at >= text.length) {
+            throw new ParseError(at, "a value was expected");
+        }
+        final char c = text[at];
+        if (c == '{') {
+            return this.object();
+        }
+        if (c == '[') {
+            return this.array();
+        }
+        if (c == '"') {
+            return new JsonString(this.string());
+        }
+        if (c == 't' || c == 'f') {
+            return new JsonBool(this.literal(c == 't' ? "true" : "false") == "true");
+        }
+        if (c == 'n') {
+            this.literal("null");
+            return new JsonNull();
+        }
+        return new JsonNumber(this.number());
+    }
+
+    private Value object() throws ParseError {
+        this.expect('{');
+        var keys = new Vec<String>();
+        var values = new Vec<Value>();
+        this.skipSpace();
+        if (this.peek() == '}') {
+            at++;
+            return new JsonObject(keys, values);
+        }
+        while (true) {
+            this.skipSpace();
+            keys.push(this.string());
+            this.skipSpace();
+            this.expect(':');
+            this.skipSpace();
+            values.push(this.value());
+            this.skipSpace();
+            final char next = this.peek();
+            at++;
+            if (next == '}') {
+                return new JsonObject(keys, values);
+            }
+            if (next != ',') {
+                throw new ParseError(at - 1, $"`,` or `}` was expected, found `${next}`");
+            }
+        }
+    }
+
+    private Value array() throws ParseError {
+        this.expect('[');
+        var items = new Vec<Value>();
+        this.skipSpace();
+        if (this.peek() == ']') {
+            at++;
+            return new JsonArray(items);
+        }
+        while (true) {
+            this.skipSpace();
+            items.push(this.value());
+            this.skipSpace();
+            final char next = this.peek();
+            at++;
+            if (next == ']') {
+                return new JsonArray(items);
+            }
+            if (next != ',') {
+                throw new ParseError(at - 1, $"`,` or `]` was expected, found `${next}`");
+            }
+        }
+    }
+
+    /** A quoted string, with the escapes JSON defines. */
+    private String string() throws ParseError {
+        this.expect('"');
+        var out = "";
+        while (true) {
+            if (at >= text.length) {
+                throw new ParseError(at, "the string never ends");
+            }
+            final char c = text[at];
+            at++;
+            if (c == '"') {
+                return out;
+            }
+            if (c != '\\') {
+                out = out + c;
+                continue;
+            }
+            if (at >= text.length) {
+                throw new ParseError(at, "the escape never ends");
+            }
+            final char escaped = text[at];
+            at++;
+            if (escaped == 'n') {
+                out = out + "\n";
+            } else if (escaped == 't') {
+                out = out + "\t";
+            } else if (escaped == '"' || escaped == '\\' || escaped == '/') {
+                out = out + escaped;
+            } else {
+                throw new ParseError(at - 1, $"`\\${escaped}` is not an escape");
+            }
+        }
+    }
+
+    private double number() throws ParseError {
+        final int start = at;
+        if (this.peek() == '-') {
+            at++;
+        }
+        while (at < text.length && (this.isDigit(text[at]) || text[at] == '.'
+            || text[at] == 'e' || text[at] == 'E' || text[at] == '+' || text[at] == '-')) {
+            at++;
+        }
+        if (at == start) {
+            throw new ParseError(start, $"a number was expected, found `${text[start]}`");
+        }
+        var digits = "";
+        for (var i = start; i < at; i++) {
+            digits = digits + text[i];
+        }
+        try {
+            return digits.parse<double>();
+        } catch (Exception e) {
+            throw new ParseError(start, $"`${digits}` is not a number");
+        }
+    }
+
+    /** A bare word (`true`, `false`, `null`), which must match exactly. */
+    private String literal(String word) throws ParseError {
+        final int start = at;
+        for (var c : word.chars()) {
+            if (at >= text.length || text[at] != c) {
+                throw new ParseError(start, $"`${word}` was expected");
+            }
+            at++;
+        }
+        return word;
+    }
+
+    private void expect(char c) throws ParseError {
+        if (at >= text.length || text[at] != c) {
+            throw new ParseError(at, $"`${c}` was expected");
+        }
+        at++;
+    }
+
+    private char peek() {
+        return at < text.length ? text[at] : ' ';
+    }
+
+    private bool isDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    private void skipSpace() {
+        while (at < text.length && (text[at] == ' ' || text[at] == '\n'
+            || text[at] == '\t' || text[at] == '\r')) {
+            at++;
+        }
+    }
+}

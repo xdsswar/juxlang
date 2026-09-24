@@ -1,0 +1,79 @@
+// The library in use: parse a document, read parts of it, print it back.
+import json.*;
+
+const String DOC = "{\n"
+    + "  \"name\": \"jux\",\n"
+    + "  \"version\": 0.1,\n"
+    + "  \"native\": true,\n"
+    + "  \"runtime\": null,\n"
+    + "  \"targets\": [\"windows\", \"linux\", \"macos\"],\n"
+    + "  \"limits\": { \"depth\": 64, \"size\": 1048576 }\n"
+    + "}";
+
+public void main() {
+    try {
+        final Value parsed = new Parser(DOC).parse();
+        print("parsed:");
+        print(new Printer(2).print(parsed));
+        print("");
+        print("compact:");
+        print(new Printer(0).print(parsed));
+        print("");
+
+        // Reading parts of it, which is where the sealed set pays off.
+        switch (parsed) {
+            case JsonObject o -> {
+                print($"members: ${o.size()}");
+                print($"name: ${text(o.get("name"))}");
+                print($"version: ${text(o.get("version"))}");
+                print($"missing: ${o.get("nope") == null}");
+                final Value? targets = o.get("targets");
+                if (targets != null) {
+                    print($"targets: ${count(targets)}");
+                }
+            }
+            default -> print("the document is not an object");
+        }
+    } catch (ParseError e) {
+        print($"broken document: ${e.getMessage()}");
+    }
+
+    print("");
+    reject("{\"a\": }");
+    reject("[1, 2");
+    reject("\"unterminated");
+    reject("{\"a\": 1} extra");
+    reject("nope");
+}
+
+/** Parses a document that should fail, and prints why it did. */
+void reject(String source) {
+    try {
+        new Parser(source).parse();
+        print($"`${source}` parsed, which is wrong");
+    } catch (ParseError e) {
+        print($"rejected ${e.getMessage()}");
+    }
+}
+
+/** A value's text, for the few shapes that have one. */
+String text(Value? value) {
+    if (value == null) {
+        return "(absent)";
+    }
+    return switch (value) {
+        case JsonString(var s) -> s;
+        case JsonNumber(var d) -> number(d);
+        case JsonBool(var b) -> b ? "true" : "false";
+        case JsonNull n -> "null";
+        default -> "(not a scalar)";
+    };
+}
+
+/** How many items an array holds, or -1 for anything else. */
+int count(Value value) {
+    return switch (value) {
+        case JsonArray(var items) -> items.len();
+        default -> -1;
+    };
+}

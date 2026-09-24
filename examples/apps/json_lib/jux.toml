@@ -1,0 +1,7 @@
+# A JSON library written in Jux: tokenizer, parser, pretty printer.
+#
+# Nothing foreign is used. The value hierarchy is a sealed interface, the
+# parser is recursive descent, and `jux test` runs the tests under test/.
+[package]
+name = "apps.json_lib"
+version = "0.1.0"
