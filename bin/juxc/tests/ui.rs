@@ -51,7 +51,23 @@ fn normalize(raw: &str, case: &str) -> String {
         let needle = format!("{case}.jux");
         let cleaned = match line.find(&needle) {
             Some(i) => &line[i..],
-            None => line,
+            None => {
+                // A DIRECTORY case names the files INSIDE it (`app.jux`), so
+                // the case name never appears with a `.jux` after it and the
+                // line above left the whole absolute path in. Cut at the case
+                // DIRECTORY instead: blessed with the path, such a case only
+                // passed in the checkout it was blessed in, and failed in
+                // every git worktree of the same repository.
+                let (fwd, back) = (format!("{case}/"), format!("{case}\\"));
+                match line
+                    .find(&fwd)
+                    .map(|i| i + fwd.len())
+                    .or_else(|| line.find(&back).map(|i| i + back.len()))
+                {
+                    Some(i) => &line[i..],
+                    None => line,
+                }
+            }
         };
         out.push_str(cleaned);
         out.push('\n');
