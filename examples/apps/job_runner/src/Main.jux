@@ -91,8 +91,7 @@ public async void main() {
     // do keep it.
     final Vec<String?> notes = ledger.notes();
     print($"notes: ${notes.len()}");
-    for (var i = 0; i < notes.len(); i++) {
-        final String? note = notes[i];
+    for (var note : notes) {
         print($"  ${note == null ? "(none)" : note}");
     }
 

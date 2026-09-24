@@ -47,8 +47,7 @@ public class Table {
             // A nullable element type: the reason is absent for a release
             // that was pulled without one being recorded.
             final Vec<String?> reasons = one.yankReasons();
-            for (var i = 0; i < reasons.len(); i++) {
-                final String? reason = reasons[i];
+            for (var reason : reasons) {
                 print($"yanked: ${one.name}: ${reason == null ? "(no reason given)" : reason}");
                 any = true;
             }
