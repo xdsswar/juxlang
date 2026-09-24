@@ -7660,7 +7660,7 @@ pub fn cargo_toml_for_with(name: &str, uses_async: bool) -> String {
     // `[build-dependencies]` are emitted. The output is byte-for-byte
     // identical to the legacy template, so the no-manifest path
     // (loose `.jux` files, the example corpus) is unchanged.
-    cargo_toml_for_with_meta(name, uses_async, &CargoMeta::default())
+    cargo_toml_for_with_meta(name, uses_async, &CargoMeta::default(), &[])
 }
 
 /// Binary-resource / package metadata threaded from a project's
@@ -7774,7 +7774,12 @@ impl CargoMeta {
 ///
 /// `escape_toml` is used on every interpolated value so quotes/backslashes
 /// in user metadata can't corrupt the emitted manifest.
-pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) -> String {
+pub fn cargo_toml_for_with_meta(
+    name: &str,
+    uses_async: bool,
+    meta: &CargoMeta,
+    registry_deps: &[RegistryDep],
+) -> String {
     let version = meta.version.as_deref().unwrap_or("0.0.0");
     let mut pkg = format!(
         "[package]\n\
@@ -7812,11 +7817,22 @@ pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) 
         pkg.push_str("build = \"build.rs\"\n");
     }
 
-    let deps = if uses_async {
-        "[dependencies]\nfutures = { version = \"0.3\", features = [\"thread-pool\"] }\n\n"
-    } else {
-        ""
-    };
+    // `futures` (the emitted prelude always references it) plus the foreign
+    // registry crates a `rust.<crate>` dependency binds. Without the latter
+    // the emitted crate had the bound API in scope at type-check time and no
+    // crate to link it from: `jux test` on a package using `rust.serde_json`
+    // was a rustc "unresolved module or unlinked crate".
+    let mut deps = String::new();
+    if uses_async || !registry_deps.is_empty() {
+        deps.push_str("[dependencies]\n");
+        if uses_async {
+            deps.push_str("futures = { version = \"0.3\", features = [\"thread-pool\"] }\n");
+        }
+        for d in registry_deps {
+            deps.push_str(&registry_dep_line(d));
+        }
+        deps.push('\n');
+    }
 
     // The Windows-resource compiler dependency. `winresource` is the
     // maintained fork of `winres`; it is a build-dependency only and a

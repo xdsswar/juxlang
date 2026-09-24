@@ -815,7 +815,7 @@ pub fn collect_dependency_sources(dep_manifest: &Manifest) -> Result<Vec<SourceF
 /// every `.jux.d` under `.jux-stubs/` is loaded as a source — including the
 /// default `rust.std.*` set, which the front end auto-prepends separately, so
 /// only project-local crate stubs come from here.
-fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
+pub fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
     let root = &manifest.project_root;
     for dep in &manifest.dependencies {
         let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
