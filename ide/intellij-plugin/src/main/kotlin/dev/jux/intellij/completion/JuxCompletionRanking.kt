@@ -37,7 +37,11 @@ import dev.jux.intellij.resolve.JuxTypeEngine
  *     operand) beats one that does not.
  *  3. **Locality**: locals, nearest declaration first, then parameters, the
  *     enclosing type's own members, inherited members, top-level functions,
- *     keywords, then types (this file's, the project's, the libraries').
+ *     keywords, then types. The type tiers follow how far the name is from
+ *     the caret in the language's own terms: this file's declarations and its
+ *     type parameters, this file's package (no `import` needed, §4.4), the
+ *     built-in primitives, what this file already imports, the auto-prelude,
+ *     and last everything that accepting would have to write an `import` for.
  *  4. **Usage statistics**: what the user picked before in the same kind of
  *     position floats up, through [JuxCompletionStatistician].
  *  5. **Accessibility**, then **deprecation**: an item the caret cannot
@@ -70,9 +74,30 @@ object JuxCompletionRanking {
         KEYWORD,
         /** A type declared in this file (or an enclosing type parameter). */
         TYPE_FILE,
-        /** A type from another file of the project. */
+        /**
+         * A type in this file's own package, declared in another file. It
+         * needs no `import` (§4.4), so it is as reachable as one written
+         * here, and ranks directly below what the file itself declares.
+         */
+        TYPE_PACKAGE,
+        /**
+         * A built-in type name: the primitives, `String` and `string`. Always
+         * in scope and never imported, but a name the user declared is more
+         * likely to be the one they are reaching for, so they sit below the
+         * file's and the package's own types.
+         */
+        TYPE_PRIMITIVE,
+        /** A type this file already imports: the user has already chosen it once. */
+        TYPE_IMPORTED,
+        /**
+         * A type the auto-prelude binds with no declaration and no `import`
+         * (`Vec`, `HashMap`, `Option`, the exception hierarchy). Reachable
+         * everywhere, but not something this file has committed to.
+         */
+        TYPE_PRELUDE,
+        /** A type from another file of the project, which accepting would import. */
         TYPE_PROJECT,
-        /** A type from a dependency package or a generated stub. */
+        /** A type from a dependency package or a generated stub, which accepting would import. */
         TYPE_LIBRARY,
         /** Anything else. */
         OTHER,
