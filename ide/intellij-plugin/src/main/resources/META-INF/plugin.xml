@@ -1066,6 +1066,30 @@
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxNullableAccessInspection"/>
 
+    <!-- 0.1.5: `ref` bindings (MISSING-DEFS sec. M.13, ERRATA E84) — the
+         deferred `ref` return type (E0523), nesting (E0524), a `ref` generic
+         argument (E0526), a pointless `ref` on an already-shared type (W0490),
+         and a `ref` captured by a `Worker.spawn` closure (E0702). -->
+    <localInspection
+        language="Jux"
+        shortName="JuxRefBinding"
+        displayName="'ref' binding rules (E0523/E0524/E0526/W0490/E0702)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxRefBindingInspection"/>
+    <!-- 0.1.5: a bound a foreign method puts on its own type parameters
+         (`@RustBounds("T: Ord")`, Bindgen sec. G.6.4.4, ERRATA E77), checked
+         at the call as E0446 instead of leaking rustc's E0277. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxForeignBounds"
+        displayName="Foreign method bound not satisfied (E0446)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxForeignBoundsInspection"/>
+
     <!-- "Create method from usage" on `receiver.name(...)` when the receiver's
          class has no such method (the language server draws the error). -->
     <intentionAction>
