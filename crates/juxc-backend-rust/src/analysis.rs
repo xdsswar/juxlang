@@ -3103,7 +3103,16 @@ impl crate::RustEmitter {
         class_fqn: &str,
         name: &str,
     ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
-        let sig = self.symbols.classes.get(class_fqn)?;
+        // A foreign type is as often an ENUM as a class: serde_json's `Value`
+        // is one, and `as_str`, `as_array` and `as_i64` are its whole surface.
+        // While this asked only `symbols.classes`, every marker on such a
+        // method was invisible -- the `@RustRefOut` on `as_str()` went unread
+        // and its borrowed `Option<&str>` was handed to a slot typed
+        // `Option<String>` (rustc E0308, leaked as the program's own error).
+        let Some(sig) = self.symbols.classes.get(class_fqn) else {
+            let e = self.symbols.enums.get(class_fqn)?;
+            return if e.is_external { e.methods.get(name) } else { None };
+        };
         if !sig.is_external {
             return None;
         }
@@ -3218,7 +3227,12 @@ impl crate::RustEmitter {
         // outer method is looked up on.
         if let juxc_ast::Expr::Call(inner) = &*f.object {
             if let Some(ty) = self.foreign_call_return_type_name(&inner.callee) {
-                if let Some(fqn) = self.resolve_bare_class_fqn(&ty) {
+                // As a TYPE, not only as a class: a foreign enum carries
+                // methods too (serde_json's `Value`).
+                if let Some(fqn) = self
+                    .resolve_bare_class_fqn(&ty)
+                    .or_else(|| self.resolve_bare_type_fqn(&ty))
+                {
                     if let Some(m) = self.external_type_method(&fqn, f.field.text.as_str()) {
                         return Some(m);
                     }
@@ -3281,10 +3295,14 @@ impl crate::RustEmitter {
             },
             _ => return None,
         };
-        let fqn = if self.symbols.classes.contains_key(&recv_ty) {
+        let bare = recv_ty.rsplit('.').next().unwrap_or(&recv_ty);
+        let fqn = if self.symbols.classes.contains_key(&recv_ty)
+            || self.symbols.enums.contains_key(&recv_ty)
+        {
             recv_ty.clone()
         } else {
-            self.resolve_bare_class_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty))?
+            self.resolve_bare_class_fqn(bare)
+                .or_else(|| self.resolve_bare_type_fqn(bare))?
         };
         self.external_type_method(&fqn, f.field.text.as_str())
     }
