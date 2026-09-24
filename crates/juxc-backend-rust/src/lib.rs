@@ -4968,6 +4968,68 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("pub struct JuxTaskShared {\n");
         w.push_str("    // (orphaned, parked failure)\n");
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
+        w.push_str("    // Set by `cancel()`: the task throws where it next resumes.\n");
+        w.push_str("    cancelled: std::sync::atomic::AtomicBool,\n");
+        w.push_str("}\n");
+        // **Cooperative cancellation** (EXCEPTIONS §X.7.3, ERRATA E88).
+        // `cancel()` sets the flag above and returns; the task notices it
+        // where it RESUMES, which is exactly where an `await` hands control
+        // back, and throws `CancellationException` there. From that point it
+        // is an ordinary Jux exception: it unwinds the task's body, runs its
+        // `finally` blocks, drops its values, and is what `await task`
+        // re-throws at the awaiter.
+        //
+        // Phase 1 used to DROP the task's `RemoteHandle` instead, which drops
+        // the running future outright. A dropped future never resumes, so no
+        // `finally` block of a cancelled task ever ran and no `drop` block
+        // ever ran, in a program that compiled and ran without a word. That
+        // made `cancel()` unsafe for any task holding a resource, which is
+        // the one thing §X.7.3 promises it is not.
+        //
+        // The flag a task is running under sits on this stack while it is
+        // polled, so an `await` anywhere inside it finds the flag without
+        // threading a token through every async signature. Outside a spawned
+        // task the stack is empty and the check is one thread-local read.
+        w.push_str("thread_local! {\n");
+        w.push_str("    static __JUX_CANCEL: std::cell::RefCell<Vec<std::sync::Arc<JuxTaskShared>>> =\n");
+        w.push_str("        const { std::cell::RefCell::new(Vec::new()) };\n");
+        w.push_str("}\n");
+        w.push_str("/// A spawned task's future, with its cancellation flag in scope while it runs.\n");
+        w.push_str("pub struct JuxCancelScope<F> {\n");
+        w.push_str("    inner: std::pin::Pin<::std::boxed::Box<F>>,\n");
+        w.push_str("    shared: std::sync::Arc<JuxTaskShared>,\n");
+        w.push_str("}\n");
+        w.push_str("impl<F: std::future::Future> std::future::Future for JuxCancelScope<F> {\n");
+        w.push_str("    type Output = F::Output;\n");
+        w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<F::Output> {\n");
+        w.push_str("        // A guard, so the flag leaves the stack even when the body unwinds.\n");
+        w.push_str("        struct Pop;\n");
+        w.push_str("        impl Drop for Pop {\n");
+        w.push_str("            fn drop(&mut self) {\n");
+        w.push_str("                __JUX_CANCEL.with(|c| {\n");
+        w.push_str("                    c.borrow_mut().pop();\n");
+        w.push_str("                });\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("        let me = self.as_mut().get_mut();\n");
+        w.push_str("        __JUX_CANCEL.with(|c| c.borrow_mut().push(me.shared.clone()));\n");
+        w.push_str("        let _pop = Pop;\n");
+        w.push_str("        me.inner.as_mut().poll(cx)\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("/// What an `await` resumed with, unless this task was cancelled meanwhile.\n");
+        w.push_str("pub fn __jux_awaited<T>(value: T) -> T {\n");
+        w.push_str("    let cancelled = __JUX_CANCEL.with(|c| {\n");
+        w.push_str("        c.borrow()\n");
+        w.push_str("            .last()\n");
+        w.push_str("            .map_or(false, |s| s.cancelled.load(std::sync::atomic::Ordering::SeqCst))\n");
+        w.push_str("    });\n");
+        w.push_str("    if cancelled {\n");
+        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(\n");
+        w.push_str("            String::from(\"task was cancelled\"),\n");
+        w.push_str("        ));\n");
+        w.push_str("    }\n");
+        w.push_str("    value\n");
         w.push_str("}\n");
         // The handle sits in a `Cell` so `cancel()` works through `&self`: a
         // cancelled task is still a value the program may `await`.
@@ -4993,10 +5055,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        Self::settle(&self.1, crate::__jux_block_on(handle))\n");
         w.push_str("    }\n");
         w.push_str("    pub fn cancel(&self) {\n");
-        w.push_str("        // Dropping the RemoteHandle stops the remote computation\n");
-        w.push_str("        // at its next suspension point (the Drop impl would FORGET\n");
-        w.push_str("        // it instead). A cancelled task has no failure to report.\n");
-        w.push_str("        std::mem::drop(self.0.take());\n");
+        w.push_str("        // Cooperative, per EXCEPTIONS X.7.3: the task throws\n");
+        w.push_str("        // CancellationException where it next resumes, so its finally\n");
+        w.push_str("        // blocks and drops run. The handle stays, and awaiting it\n");
+        w.push_str("        // afterwards re-throws what the task threw.\n");
+        w.push_str("        self.1.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
@@ -5014,7 +5077,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("                state.0 = true;\n");
         w.push_str("                state.1.take()\n");
         w.push_str("            };\n");
-        w.push_str("            if let Some(p) = parked {\n");
+        w.push_str("            // A CANCELLED task reports nothing (ERRATA E88): the caller\n");
+        w.push_str("            // said it no longer wants the result, so there is no\n");
+        w.push_str("            // rejection left to be unhandled.\n");
+        w.push_str("            let cancelled = self.1.cancelled.load(std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("            if let (Some(p), false) = (parked, cancelled) {\n");
         w.push_str("                crate::__jux_unhandled_rejection(p);\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
@@ -5122,7 +5189,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("pub fn __jux_spawn<T: 'static>(\n");
         w.push_str("    fut: impl std::future::Future<Output = T> + 'static,\n");
         w.push_str(") -> JuxTask<T> {\n");
-        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared { state: std::sync::Mutex::new((false, None)) });\n");
+        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
+        w.push_str("        state: std::sync::Mutex::new((false, None)),\n");
+        w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("    });\n");
         w.push_str("    let task_side = shared.clone();\n");
         w.push_str("    let guarded = async move {\n");
         w.push_str("        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {\n");
@@ -5137,15 +5207,22 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("                        None\n");
         w.push_str("                    }\n");
         w.push_str("                };\n");
-        w.push_str("                if let Some(p) = orphaned {\n");
+        w.push_str("                // A cancelled task reports nothing (ERRATA E88).\n");
+        w.push_str("                let quiet = task_side.cancelled.load(std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("                if let (Some(p), false) = (orphaned, quiet) {\n");
         w.push_str("                    crate::__jux_unhandled_rejection(p);\n");
         w.push_str("                }\n");
         w.push_str("                Err(())\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    };\n");
+        // The scope wraps the catch_unwind rather than sitting inside it: it
+        // puts this task's cancellation flag in scope for every `await` in the
+        // task, and the throw an `await` then makes is caught where every
+        // other Jux exception in a task is caught.
+        w.push_str("    let scoped = JuxCancelScope { inner: ::std::boxed::Box::pin(guarded), shared: shared.clone() };\n");
         w.push_str("    let handle = __JUX_LOOP.with(|l| {\n");
-        w.push_str("        futures::task::LocalSpawnExt::spawn_local_with_handle(&l.spawner, guarded).expect(\"spawn\")\n");
+        w.push_str("        futures::task::LocalSpawnExt::spawn_local_with_handle(&l.spawner, scoped).expect(\"spawn\")\n");
         w.push_str("    });\n");
         w.push_str("    JuxTask(\n");
         w.push_str("        std::cell::Cell::new(Some(handle)),\n");

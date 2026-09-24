@@ -1,4 +1,7 @@
 cancelled: task was cancelled
+guarded: start
+guarded: cleanup
+guarded: task was cancelled
 42
 timed out: operation timed out
 42

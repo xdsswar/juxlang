@@ -1559,6 +1559,49 @@ which is what makes the same lambda work one call deeper.
 
 ---
 
+## E88. What `task.cancel()` does to the task it cancels
+
+**Conflict.** `JUX-EXCEPTIONS-ADDENDUM.md` §X.7.3 says cancellation "is"
+an exception: it "propagates the same way, runs `finally` blocks, runs
+drops, and so on", and JUX-LANG-V1 §10.1.9 says a cancelled task stops at
+its next `await`. The Phase-1 lowering instead DROPPED the task's
+`RemoteHandle`, which drops the running future outright. A dropped future
+never resumes, so no `finally` block of a cancelled task ever ran and no
+Jux `drop` block ever ran, while the program compiled and ran without a
+word. That makes `cancel()` unsafe for any task holding a resource, which
+is the one thing §X.7.3 promises it is not.
+
+**Resolution.** Cancellation is cooperative, as §X.7.3 describes it.
+`task.cancel()` sets a flag the task shares with its handle and returns
+at once; it drops nothing. Where the task next RESUMES, which is where an
+`await` hands control back, it throws
+`CancellationException("task was cancelled")`. From there it is an
+ordinary Jux exception: it unwinds the task's body, its `finally` blocks
+run in order, its values drop, and it is what `await task` re-throws at
+the awaiter.
+
+Two consequences the spec did not state, and now does:
+
+- **A cancelled task reports nothing.** Whatever a cancelled task fails
+  with, its own `CancellationException` included, never reaches the
+  unhandled-rejection hook of §10.1.8. Cancelling is the caller saying it
+  no longer wants the result, so there is no rejection left to be
+  unhandled. The Phase-1 handle-drop achieved this by accident, and
+  `examples/unhandled_task_failure.jux` pins it.
+- **A task that never awaits again is never interrupted.** Cancellation
+  has effect only at a resumption point, so a task that has already
+  finished, or that runs to its end without suspending, completes
+  normally. §X.7.3's "the next `await`" is the whole of the contract.
+
+**Not `withTimeout`.** That is a different mechanism, a race whose loser
+is DROPPED (`JUX-ASYNC-ADDENDUM-v2.md` §18.1.9). The timed-out work is
+dropped, not thrown into, and Phase 1 keeps the distinction: a `finally`
+inside work that runs out of time still does not run.
+
+**Spec status:** §X.7.3 carries the rule.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 
