@@ -1,0 +1,31 @@
+// A `$name` interpolation renders the value the same way `${name}` and
+// `print(name)` render it (JUX-LANG-V1 §3.4): a double keeps its decimal
+// point, and it makes no difference whether the binding was written with its
+// type or inferred with `var`.
+//
+// Before the fix the bare `$name` form over a `var`-inferred double printed
+// `2` where the other three spellings printed `2.0`, because the inferred
+// primitive was never recorded under the name and the interpolation's
+// synthesized span found nothing to look up.
+
+public void main() {
+    double d = 1.0;
+    var v = 2.0;
+    print($"$d");
+    print($"$v");
+    print($"${v}");
+    print(v);
+
+    var sum = 1.0 + 2;
+    print($"$sum");
+    var half = 1 / 2.0;
+    print($"$half");
+    var whole = 6.0 / 2.0;
+    print($"$whole");
+
+    var n = 5;
+    print($"$n");
+    var text = "hi";
+    print($"$text");
+    print($"$v $n $text");
+}

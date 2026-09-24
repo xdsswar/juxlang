@@ -6299,3 +6299,40 @@ fn a_call_through_a_binding_ignores_a_same_named_free_function() {
         "a call through a lambda parameter must not take the free fn's ref mode: {rust}",
     );
 }
+
+/// A bare `$name` interpolation of a `var`-inferred double keeps its decimal
+/// point, the same as `${name}`, `print(name)` and the declared-type spelling
+/// (LANG-V1 §3.4).
+///
+/// Interpolation synthesizes the argument's span, so the `expr_types` lookup
+/// for the interpolated name misses and the name-keyed `local_types` map is
+/// the only source left. A `var` local recorded nothing there unless its type
+/// was a user type, so `var v = 2.0; print($"$v")` did not know it held a
+/// double, took the plain `{}` slot, and printed `2`.
+#[test]
+fn bare_interp_of_an_inferred_double_keeps_its_point() {
+    let rust = emit(
+        r#"public void main() {
+               double d = 1.0;
+               var v = 2.0;
+               print($"$d");
+               print($"$v");
+           }"#,
+    );
+    assert!(
+        rust.contains(r#"println!("{}", crate::jux_float(v))"#),
+        "an inferred double must render through the float formatter: {rust}",
+    );
+    assert!(
+        rust.contains(r#"println!("{}", crate::jux_float(d))"#),
+        "the declared-type spelling must keep doing the same: {rust}",
+    );
+}
+
+/// An inferred INT stays on the clean `{}` fast path: recording the inferred
+/// primitive must not wrap every `var` in a formatter.
+#[test]
+fn bare_interp_of_an_inferred_int_stays_plain() {
+    let rust = emit(r#"public void main() { var n = 5; print($"$n"); }"#);
+    assert!(rust.contains(r#"println!("{}", n)"#), "got: {rust}");
+}
