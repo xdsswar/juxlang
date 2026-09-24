@@ -1447,7 +1447,7 @@ rejected as before, since the lowered `use` path could not name them.
 
 **Spec status:** §A.2.1 carries the production and §G.4.2 the reasoning.
 
-## E79. A projection over a method's own type parameter is resolved
+## E85. A projection over a method's own type parameter is resolved
 
 **Conflict.** Bindgen §G.6.4.2 makes every associated-type projection an
 unknown type, on the reasoning that a projection "depends on the call's own
@@ -1462,17 +1462,19 @@ the user asked about never reached the checker.
 
 **Resolution.** A projection whose self type is one of the METHOD's own type
 parameters, bounded by the projection's trait, is resolved from that trait's
-impls, and the method fans out into one overload per resolvable impl: the
+impls, and the method fans out into one overload per resolvable RESULT: the
 impl's self type becomes the parameter, the impl's associated-type binding
-becomes the result. `Self::Item` and any other projection the receiver
-settles keep the §G.6.4.2 reading. Discovery does all of it, by rustdoc ID,
+becomes the result, and impls that agree on the result are represented by the
+simplest of their parameter shapes. `Self::Item` and any other projection
+the receiver settles keep the §G.6.4.2 reading. Discovery does all of it,
+by rustdoc ID,
 and three guards bound it: the parameter type must be a name this stub
 declares for that very Rust type, at most four overloads are kept per method,
 and an impl that cannot be resolved contributes nothing.
 
 **Spec status:** §G.6.4.5 carries the rule, §G.6.4.2 the narrowed one.
 
-## E80. An unresolved projection is reported, not silently accepted
+## E86. An unresolved projection is reported, not silently accepted
 
 **Conflict.** §G.6.4.2 says an unresolved projection "takes the declared
 slot's type", and §G.1 says a rustc error is always a juxc bug. An unknown

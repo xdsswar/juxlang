@@ -792,7 +792,7 @@ pub enum Code {
     E0467_DefaultParamOrdering,
     /// E0469 — A call to a **foreign method whose return is an associated-type
     /// projection the binder could not resolve** (Bindgen §G.6.4.6, ERRATA
-    /// E80). A Rust `fn get<I>(&self, i: I) -> Option<&I::Output>` says what it
+    /// E86). A Rust `fn get<I>(&self, i: I) -> Option<&I::Output>` says what it
     /// gives back only once `I` is known; §G.6.4.5 resolves that from the
     /// bound's own impls, and when it cannot, the stub writes the projection as
     /// a name nothing declares. The checker would otherwise read that as an

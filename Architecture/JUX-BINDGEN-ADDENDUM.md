@@ -518,7 +518,7 @@ impl<T> [T] {
 
 `I` is the METHOD's own type parameter here, and the call's own argument fixes it, so `<I as SliceIndex<[T]>>::Output` is knowable the moment the argument type is. Left unknown, every `v.get(i)` on every `Vec` typed as `<unknown>?` whatever the element was, and a `Vec<string?>` element handed to a `string?` slot reached rustc instead of the checker.
 
-The binder therefore RESOLVES such a projection and fans the method out into one overload per resolvable impl. Everything it needs is discovered from the rustdoc JSON already being ingested; no trait, impl or method name is written into the binder:
+The binder therefore RESOLVES such a projection and fans the method out into one overload per resolvable result. Everything it needs is discovered from the rustdoc JSON already being ingested; no trait, impl or method name is written into the binder:
 
 - The projection names its trait by rustdoc ID, which is what is read: the trait item's own impl list gives the impls, and each impl's `type Assoc = ...` member gives the binding.
 - The bound the method puts on the parameter (`where I: SliceIndex<Self>`) is matched against each impl's trait arguments, with `Self` standing for the type the impl the method lives in is written for. An impl whose arguments do not match describes a different haystack, `SliceIndex<str>` is not `SliceIndex<[T]>`, and contributes nothing.
@@ -527,9 +527,18 @@ The binder therefore RESOLVES such a projection and fans the method out into one
 
 Three guards keep the fan-out from saying something the stub cannot mean:
 
-- **The parameter type must be one the stub names, and must mean the same type.** An overload is kept only when the head of its parameter type is a Jux primitive or a type this stub declares, AND that declaration is the very Rust type the impl was written for, compared by the real `@rust("...")` path. `rust.std` declares `Range` for `std::collections::btree_map::Range`, so the name does not mean `core::ops::Range` there, and the range overloads are dropped rather than left pointing at the wrong type.
-- **At most four overloads per method.** `SliceIndex` alone has seventeen impls for `[T]`, and fanning all of them across `get`, `get_mut`, `get_unchecked` and `get_unchecked_mut` on the slice, `Vec`, `str` and `String` would add hundreds of declarations to a surface every compile parses. Four covers the element form plus the main slicing forms. The four are chosen by taking one impl per distinct RESULT type first, so the element form is never crowded out by a run of range forms, and by the crate's own impl order after that.
-- **Anything unresolvable stays unresolved.** When the trait item, an impl's associated-type binding or a substituted type is missing from the rustdoc being ingested, that impl contributes no overload; when no impl contributes one, the method keeps the §G.6.4.2 form and its `I.Output` return.
+- **One overload per distinct RESULT type.** The fan-out exists to make the result knowable, and the seventeen `SliceIndex<[T]>` impls say only two things: `usize` gives the element back, every range shape gives a sub-slice. A second parameter shape with the same result adds surface without adding an answer, so the shapes that agree are represented by ONE of them: the one whose Jux type has the simplest shape, a primitive before a bare named type before a generic one before a tuple, with the crate's own impl order breaking a tie so the same rustdoc always regenerates the same stub. That is also the shape a program would write, `usize` rather than the internal `Last` or `Clamp<usize>` that `core` also implements. The choice is made where the impls are read, not later, because a type is pulled into a stub when some declaration mentions it (§G.6.2.1) and an overload that was never going to be kept would pull in an orphan.
+- **The parameter type must be one the stub names, and must mean the same type.** An overload survives only when every named type in its parameter is one this stub declares AND that declaration is the very Rust type the impl was written for, compared by the real `@rust("...")` path. `rust.std` declares `Range` for `std::collections::btree_map::Range`, so the name does not mean `core::ops::Range` there, and that overload is dropped rather than left pointing at a two-parameter map view. This check needs the whole stub's declared set, so it runs once every crate of the ingest has been read.
+- **Anything unresolvable stays unresolved.** When the trait item, an impl's associated-type binding or a substituted type is missing from the rustdoc being ingested, that impl contributes no overload; when no impl contributes one, the method keeps the §G.6.4.2 form and its `I.Output` return. Four overloads is the ceiling in any case, a backstop for a trait whose associated type varies more widely than `SliceIndex`'s.
+
+In `rust.std` the rule gives the slice and, through `Deref`, `Vec`:
+
+```jux
+@RustRefOut public T? get(uint index);
+@RustRefOut public T[]? get(RangeFull index);
+```
+
+`String` gets only the second form, since `SliceIndex<str>` has no `usize` impl: a byte of a string is not a character, and Rust does not offer one.
 
 A fanned-out group is an ordinary Jux overload group (§T.3.1), with one difference at the boundary: it emits under ONE Rust name. Rust resolves the impl from the argument type itself, so a foreign group never takes the `name__ovK` suffix a Jux-declared group does.
 
