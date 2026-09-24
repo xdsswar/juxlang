@@ -1,0 +1,16 @@
+// What a finished job left behind.
+//
+// `note` is nullable: most jobs have nothing to say, and the ones that do
+// say it once.
+package jobs;
+
+public record Outcome(String name, long checksum, String? note) {
+
+    public bool hasNote() {
+        return note != null;
+    }
+
+    public String operator string() {
+        return note == null ? $"${name}=${checksum}" : $"${name}=${checksum} (${note})";
+    }
+}

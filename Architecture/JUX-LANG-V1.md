@@ -2835,8 +2835,14 @@ as is a compound assignment (`x += 1`, and `x++`) to a `T?` target. The
 result is the operator's own type, never nullable. The operators that take
 a null by design are left alone: `==`, `!=`, `===`, `!==` and `??`, and
 `+` with a `String` on either side, which concatenates and prints a null as
-`null`. An auto-property with no initializer is `T?` (§M.7.3.1), so this
-holds for `c.Age + 1` and a bare `Age + 1` alike; only a local narrows, so a
+`null`. **A `T?` equals a `T` when it holds that value**, and a null
+equals nothing: `recorded == job.run()` is false when nothing was
+recorded, never a failure, and `!=` answers the mirror. The two sides
+must otherwise be the same type; mixed numeric widths promote first, by
+the ordinary rules.
+
+An auto-property with no initializer is `T?` (§M.7.3.1), so the
+value rule holds for `c.Age + 1` and a bare `Age + 1` alike; only a local narrows, so a
 property is asserted (`Age!! + 1`), defaulted (`(Age ?? 0) + 1`) or copied
 into a local and tested.
 

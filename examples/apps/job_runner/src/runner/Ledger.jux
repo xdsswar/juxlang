@@ -1,0 +1,75 @@
+// What the run added up to.
+//
+// The outcomes arrive in whatever order the threads finish in, so nothing
+// here depends on that order: the ledger holds a set and reports totals and
+// sorted lists.
+package runner;
+
+import jobs.Outcome;
+
+public class Ledger {
+    private Vec<Outcome> outcomes = new Vec<Outcome>();
+
+    public void record(Outcome outcome) {
+        outcomes.push(outcome);
+    }
+
+    public int count() {
+        return outcomes.len();
+    }
+
+    /** The checksums added together, which does not depend on their order. */
+    public long total() {
+        var sum = 0L;
+        for (var outcome : outcomes) {
+            sum += outcome.checksum;
+        }
+        return sum;
+    }
+
+    /** The recorded names, sorted, as one line. */
+    public String names() {
+        var sorted = new Vec<String>();
+        for (var outcome : outcomes) {
+            sorted.push(outcome.name);
+        }
+        sorted.sort_unstable();
+        var line = "";
+        for (var name : sorted) {
+            line = line.is_empty() ? name : line + "," + name;
+        }
+        return line;
+    }
+
+    /** The notes the outcomes carried, in name order. */
+    public Vec<String?> notes() {
+        var out = new Vec<String?>();
+        for (var name : this.sortedNames()) {
+            for (var outcome : outcomes) {
+                if (outcome.name == name && outcome.hasNote()) {
+                    out.push(outcome.note);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The checksum recorded for `name`, or null when nothing was. */
+    public long? checksumOf(String name) {
+        for (var outcome : outcomes) {
+            if (outcome.name == name) {
+                return outcome.checksum;
+            }
+        }
+        return null;
+    }
+
+    private Vec<String> sortedNames() {
+        var sorted = new Vec<String>();
+        for (var outcome : outcomes) {
+            sorted.push(outcome.name);
+        }
+        sorted.sort_unstable();
+        return sorted;
+    }
+}

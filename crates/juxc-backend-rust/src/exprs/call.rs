@@ -283,7 +283,9 @@ impl RustEmitter {
                 // Instance `value.method(...)`: resolve the receiver's type.
                 let by_value = || match self.receiver_ty_of(&f.object) {
                     Some(juxc_tycheck::Ty::User { name, .. }) => {
-                        self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))
+                        let bare = name.rsplit('.').next().unwrap_or(&name);
+                        self.resolve_bare_class_fqn(bare)
+                            .or_else(|| self.resolve_bare_type_fqn(bare))
                     }
                     _ => None,
                 };
@@ -1363,8 +1365,26 @@ impl RustEmitter {
                 self.emit_time_span(call.args.first());
                 self.w.push_str(") });\n");
                 self.w.emit_indent();
+                // The work captures its free names the same way a spawned
+                // task does, so it rebinds them the same way: without it
+                // `withTimeout(5000, async () -> job.run())` MOVED `job` into
+                // the task and the next line that read it was a rustc "borrow
+                // of moved value" -- a Jux record is a value (§7.6), and
+                // handing one to a task leaves the caller's own.
+                let rebinds = self.task_capture_rebinds(call.args.get(1));
                 self.w
-                    .push_str("match futures::future::select(std::pin::pin!(async move { ");
+                    .push_str("match futures::future::select(std::pin::pin!(");
+                if !rebinds.is_empty() {
+                    self.w.push_str("{ ");
+                    for name in &rebinds {
+                        self.w.push_str("let ");
+                        self.w.push_str(&to_rust_ident(name));
+                        self.w.push_str(" = ");
+                        self.w.push_str(&to_rust_ident(name));
+                        self.w.push_str(".clone(); ");
+                    }
+                }
+                self.w.push_str("async move { ");
                 match call.args.get(1) {
                     Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
                         juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
@@ -1387,7 +1407,11 @@ impl RustEmitter {
                     }
                     None => {}
                 }
-                self.w.push_str(" }), __jux_timer).await {\n");
+                self.w.push_str(" }");
+                if !rebinds.is_empty() {
+                    self.w.push_str(" }");
+                }
+                self.w.push_str("), __jux_timer).await {\n");
                 self.w.indent_inc();
                 self.w
                     .line("futures::future::Either::Left((__jux_v, _)) => __jux_v,");
@@ -1530,46 +1554,7 @@ impl RustEmitter {
                 // task its own handle. Only known non-primitive
                 // locals rebind (primitives are Copy; body-local
                 // names aren't in scope here).
-                let mut rebinds: Vec<String> = Vec::new();
-                // The argument is usually a lambda (`spawn(() -> …)`) but may
-                // be an async CALL written directly (`spawn(produce(ch, 5))`).
-                // Both capture their free names into the task, so both need the
-                // rebind — without it the direct-call form moved the channel
-                // and the caller's next use was a rustc "borrow of moved value".
-                let mut names: Vec<String> = Vec::new();
-                match call.args.first() {
-                    Some(Expr::Lambda(l)) => {
-                        crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
-                            if !names.iter().any(|x| x == n) {
-                                names.push(n.to_string());
-                            }
-                        });
-                    }
-                    Some(other) => {
-                        crate::worker::walk_expr(other, &mut |e| {
-                            if let Expr::Path(qn) = e {
-                                if qn.segments.len() == 1 && !names.contains(&qn.segments[0].text) {
-                                    names.push(qn.segments[0].text.clone());
-                                }
-                            }
-                        });
-                    }
-                    None => {}
-                }
-                {
-                    for name in names {
-                        let known = self
-                            .local_types
-                            .iter()
-                            .rev()
-                            .find_map(|s| s.get(&name).cloned());
-                        if let Some(ty) = known {
-                            if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
-                                rebinds.push(name);
-                            }
-                        }
-                    }
-                }
+                let rebinds = self.task_capture_rebinds(call.args.first());
                 if rebinds.is_empty() {
                     self.w.push_str("crate::__jux_spawn(async move { ");
                 } else {
@@ -5054,7 +5039,8 @@ impl RustEmitter {
                     self.w.push_str("))");
                     // A borrowed VIEW (`&str`, `&OsStr`, `&Path`) has no
                     // `Clone` to copy it out with; the caller in `emit_expr`
-                    // takes it into its owned form instead (B29).
+                    // takes it into its owned form instead (B29), nullable or
+                    // not, so nothing is appended for one here.
                     if !self.external_returns_borrowed_view(name, method) {
                         self.w.push_str(if nullable { ".cloned()" } else { ".clone()" });
                     }
@@ -6298,6 +6284,51 @@ impl RustEmitter {
         self.emitting_format_arg = prev;
     }
 
+    /// The in-scope locals a task argument CAPTURES and which therefore have
+    /// to be clone-rebound before the `async move` block that swallows them.
+    ///
+    /// A capture moves into the task, but the caller usually keeps using the
+    /// value -- a channel, a collection handle, a record. Rebinding
+    /// `let x = x.clone();` in a wrapper block hands the task its own. Only
+    /// KNOWN non-primitive locals rebind: a primitive is `Copy` and a name
+    /// local to the task's own body is not in scope out here.
+    ///
+    /// The argument is usually a lambda (`spawn(() -> …)`) but may be an async
+    /// call written directly (`spawn(produce(ch, 5))`); both capture their
+    /// free names, so both are walked.
+    fn task_capture_rebinds(&self, arg: Option<&Expr>) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        match arg {
+            Some(Expr::Lambda(l)) => {
+                crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
+                    if !names.iter().any(|x| x == n) {
+                        names.push(n.to_string());
+                    }
+                });
+            }
+            Some(other) => {
+                crate::worker::walk_expr(other, &mut |e| {
+                    if let Expr::Path(qn) = e {
+                        if qn.segments.len() == 1 && !names.contains(&qn.segments[0].text) {
+                            names.push(qn.segments[0].text.clone());
+                        }
+                    }
+                });
+            }
+            None => {}
+        }
+        names
+            .into_iter()
+            .filter(|name| {
+                self.local_types
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.get(name))
+                    .is_some_and(|ty| !matches!(ty, juxc_tycheck::Ty::Primitive(_)))
+            })
+            .collect()
+    }
+
     /// The type of a receiver expression, from the two places the emitter
     /// records it: a declared local, else the span-keyed inference map.
     /// `Some(nullable)` when a `Worker.spawn` capture of type `ty` is a
@@ -6329,7 +6360,10 @@ impl RustEmitter {
     /// with a discovered owned form (`OsStr`, `Path`). Only meaningful for a
     /// `@RustRefOut` method, whose result is a reference.
     fn external_returns_borrowed_view(&self, recv_type: &str, method: &str) -> bool {
-        let Some(fqn) = self.resolve_bare_class_fqn(recv_type.rsplit('.').next().unwrap_or(recv_type))
+        let bare = recv_type.rsplit('.').next().unwrap_or(recv_type);
+        let Some(fqn) = self
+            .resolve_bare_class_fqn(bare)
+            .or_else(|| self.resolve_bare_type_fqn(bare))
         else {
             return false;
         };

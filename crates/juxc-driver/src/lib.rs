@@ -867,7 +867,12 @@ pub fn write_crate_with_manifest(
         .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
     let cargo_toml = with_bin_name(
-        juxc_backend_rust::cargo_toml_for_with_meta(crate_name, true, &cargo_meta),
+        juxc_backend_rust::cargo_toml_for_with_meta(
+            crate_name,
+            true,
+            &cargo_meta,
+            &manifest.map(collect_registry_deps).unwrap_or_default(),
+        ),
         crate_name,
         &cargo_bin_name(crate_, crate_dir, crate_name),
     );

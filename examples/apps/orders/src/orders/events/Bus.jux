@@ -1,0 +1,27 @@
+// Listeners by event name, and the dispatch that reaches them.
+//
+// Generic in the event type: one bus per kind of event, so a listener
+// registered for an order never sees a payment.
+package orders.events;
+
+public class Bus<T> {
+    private Vec<Listener<T>> listeners = new Vec<Listener<T>>();
+    public int delivered = 0;
+
+    /** Adds a listener. A lambda is one. */
+    public void subscribe(Listener<T> listener) {
+        listeners.push(listener);
+    }
+
+    /** Hands `event` to every listener, in the order they subscribed. */
+    public void publish(T event) {
+        for (var listener : listeners) {
+            listener.on(event);
+            delivered++;
+        }
+    }
+
+    public int count() {
+        return listeners.len();
+    }
+}

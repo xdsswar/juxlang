@@ -342,8 +342,37 @@ impl RustEmitter {
         }
     }
 
+    /// The receiver's type with a nullability a GUARD has already taken off.
+    ///
+    /// `Vec<Value>? listed = …; if (listed == null) { throw … } for (var v :
+    /// listed)` leaves `listed` holding the collection for the rest of the
+    /// block (§7.10), and the emitter shadows the binding with its contents.
+    /// The DECLARED type still reads `T?`, though, so the handle question
+    /// answered "not a collection" and the loop iterated the `Rc` itself
+    /// rather than the sequence inside it (rustc E0599, no method `iter`).
+    ///
+    /// A narrowed name is exactly one whose declared type is nullable and
+    /// which is no longer in `nullable_locals`: that set is what the guard
+    /// removes it from, and what the enclosing block puts back.
+    fn narrowed_receiver_ty_of(&self, e: &Expr) -> Option<juxc_tycheck::Ty> {
+        let ty = self.receiver_ty_of(e)?;
+        let juxc_tycheck::Ty::Nullable(inner) = &ty else {
+            return Some(ty);
+        };
+        let Expr::Path(qn) = e else {
+            return Some(ty.clone());
+        };
+        let narrowed = qn.segments.len() == 1
+            && self.name_is_local_binding(&qn.segments[0].text)
+            && !self.nullable_locals.contains(&qn.segments[0].text);
+        if narrowed {
+            return Some((**inner).clone());
+        }
+        Some(ty.clone())
+    }
+
     pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
-        match self.receiver_ty_of(e) {
+        match self.narrowed_receiver_ty_of(e) {
             // An array is a reference type on the same terms (§6.5.2), so it
             // takes the same handle and every rule written for a collection --
             // the borrow before a method, the snapshot in a for-each, the lend
@@ -367,7 +396,7 @@ impl RustEmitter {
         recv: &Expr,
         method: &str,
     ) -> Option<&'static str> {
-        let juxc_tycheck::Ty::User { name, .. } = self.receiver_ty_of(recv)? else {
+        let juxc_tycheck::Ty::User { name, .. } = self.narrowed_receiver_ty_of(recv)? else {
             return None;
         };
         if !self.collection_name_is_handle(&name) {
@@ -1443,8 +1472,20 @@ impl RustEmitter {
                 // before it becomes an owned handle.
                 let borrowed = array && self.call_yields_borrowed_array(c);
                 let wrap = self.call_returns_foreign_collection(c) || array;
-                if wrap {
+                // A NULLABLE collection result (`Vec<Value>? as_array()`) is an
+                // `Option` AROUND the bare container, so the handle belongs
+                // inside it. Wrapping the `Option` itself made a `Vec<Value>?`
+                // slot take a handle over an `Option` (rustc E0308).
+                let wrap_inside_option = wrap
+                    && matches!(
+                        self.expr_types.get(&c.span),
+                        Some(juxc_tycheck::Ty::Nullable(_))
+                    );
+                if wrap && !wrap_inside_option {
                     self.w.push_str("crate::jux_arr(");
+                }
+                if wrap_inside_option {
+                    self.w.push('(');
                 }
                 // A call to a foreign (`.jux.d`) function/method whose `throws E`
                 // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
@@ -1461,7 +1502,9 @@ impl RustEmitter {
                 if borrowed {
                     self.w.push_str(".to_vec()");
                 }
-                if wrap {
+                if wrap_inside_option {
+                    self.w.push_str(").map(crate::jux_arr)");
+                } else if wrap {
                     self.w.push(')');
                 }
             }

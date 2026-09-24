@@ -1,0 +1,51 @@
+// A guard clause narrows a nullable COLLECTION (§7.10).
+//
+// Past the guard the name holds the collection for the rest of the block,
+// and it is still the handle a collection is (§6.5.1): iterating it walks
+// the sequence inside, calling a method reaches through it, and writing
+// through it is seen by everyone holding it.
+
+/** The palette for a name, or nothing for a name with no palette. */
+Vec<String>? palette(String name) {
+    if (name == "warm") {
+        var out = new Vec<String>();
+        out.push("red");
+        out.push("orange");
+        out.push("amber");
+        return out;
+    }
+    if (name == "cold") {
+        var out = new Vec<String>();
+        out.push("blue");
+        return out;
+    }
+    return null;
+}
+
+public void main() {
+    show("warm");
+    show("cold");
+    show("mauve");
+
+    // The narrowed name is the same object, so a write through it is seen by
+    // the binding it was narrowed from.
+    Vec<String>? held = palette("cold");
+    if (held == null) {
+        print("cold has no palette, which is wrong");
+        return;
+    }
+    held.push("teal");
+    print($"cold now holds ${held.len()}");
+}
+
+void show(String name) {
+    final Vec<String>? found = palette(name);
+    if (found == null) {
+        print($"${name}: nothing");
+        return;
+    }
+    print($"${name}: ${found.len()}");
+    for (var colour : found) {
+        print($"  ${colour}");
+    }
+}

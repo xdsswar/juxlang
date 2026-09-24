@@ -1,0 +1,8 @@
+// The stock failure an order failure carries as its cause.
+package orders.service;
+
+public class StockShort extends Exception {
+    public StockShort(String message) {
+        super(message);
+    }
+}

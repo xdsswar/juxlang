@@ -103,11 +103,13 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// written `I.Output`, iterators get `next()`. 12: traits from other
 /// crates in `implements`, `@RustDerefs`, `@RustBlanket`,
 /// `@RustImplementedBy`, `@RustStatic`. 16: `@RustBounds` (a method's bounds
-/// on the type's own parameters, Bindgen G.6.4.4). 17: a projection over the
-/// method's OWN type parameter is resolved and the method fans out into one
-/// overload per impl (Bindgen G.6.4.5), so a cached stub still saying
-/// `I.Output` has to be rebuilt.
-const CRATE_STUB_CACHE_VERSION: u32 = 17;
+/// on the type's own parameters, Bindgen G.6.4.4).
+/// 17: `@RustIndexOutput` (the `Index` impl's own `type Output`), and an
+/// enum is asked the indexing questions only a struct was asked before.
+/// 18: a projection over the method's OWN type parameter is resolved and the
+/// method fans out into one overload per impl (Bindgen G.6.4.5), so a cached
+/// stub still saying `I.Output` has to be rebuilt.
+const CRATE_STUB_CACHE_VERSION: u32 = 18;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///

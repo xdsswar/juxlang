@@ -1,0 +1,11 @@
+// What went wrong, and where.
+package json;
+
+public class ParseError extends Exception {
+    public int at;
+
+    public ParseError(int at, String why) {
+        super($"at ${at}: ${why}");
+        this.at = at;
+    }
+}

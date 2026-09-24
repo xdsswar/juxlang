@@ -1532,6 +1532,12 @@ fn cmd_test(
     let (dep_sources, _path_deps) =
         juxc_driver::project::resolve_package_deps(&manifest, &emit_dir)?;
     let mut sources: Vec<juxc_source::SourceFile> = dep_sources;
+    // …and against the same FOREIGN dependencies. A `rust.<crate>` binding is
+    // a `.jux.d` stub, and without loading them the sources that `jux run`
+    // compiles were unknown types under `jux test`: a package using
+    // `rust.serde_json` could be run but not tested (E0301/E0417 on every
+    // import of it).
+    sources.extend(juxc_driver::project::resolve_and_load_stub_sources(&manifest));
     let src_dir = cwd.join("src");
     if src_dir.exists() {
         sources.extend(collect_project_sources(&src_dir)?);
@@ -1561,12 +1567,18 @@ fn cmd_test(
         eprintln!("jux: nothing to test");
         return Ok(ExitCode::SUCCESS);
     };
-    // A named `--profile` must be defined in the runner's emitted Cargo.toml,
-    // so the manifest (which carries the `[profile.*]` tables) is woven in
-    // then. Without one the runner keeps its plain manifest as before.
-    let with_profiles = selected_profile().is_some().then_some(&manifest);
-    let artifact =
-        juxc_driver::build_with_manifest(&crate_, &emit_dir, &binary_name, release, with_profiles)?;
+    // The runner is built from the package's own manifest: it carries the
+    // `[profile.*]` tables a named `--profile` needs, and the foreign
+    // `[dependencies]` that actually LINK the crates the tests compile
+    // against. Passing it only for a profile left the runner without them,
+    // so a package binding `rust.serde_json` could be run but not tested.
+    let artifact = juxc_driver::build_with_manifest(
+        &crate_,
+        &emit_dir,
+        &binary_name,
+        release,
+        Some(&manifest),
+    )?;
     // Run the test binary, inherit stdio so the user sees PASS/FAIL
     // output in real time. Forward the filter pattern as argv and
     // the exit code so CI gates work.

@@ -1,0 +1,68 @@
+// Tests for the reader, which is where the foreign document meets Jux.
+//
+// A reader is mostly its failures: a member that is missing, one of the
+// wrong shape, a date that is not a date. Each is pinned to the path it is
+// reported at, because that path is the whole value of the message.
+package report.feed;
+
+import jux.std.testing.*;
+import report.model.{Crate, Release};
+
+/** A feed with one crate and one release of it. */
+const String ONE = "{\"generated\": \"2026-04-30\", \"crates\": ["
+    + "{\"name\": \"a\", \"owner\": \"ada\", \"releases\": ["
+    + "{\"version\": \"1.0.0\", \"date\": \"2026-01-01\", \"downloads\": 5}]}]}";
+
+@Test
+void readsTheDocument() throws FeedError {
+    final var feed = new Feed(ONE);
+    assertEqual("2026-04-30", $"${feed.generated().format("%Y-%m-%d")}");
+    final Vec<Crate> crates = feed.crates();
+    assertEqual(1, crates.len());
+    assertEqual("a", crates[0].name);
+    assertEqual("ada", crates[0].owner);
+    assertEqual(5L, crates[0].downloads());
+}
+
+@Test
+void aReleaseKeepsItsDateAndItsAbsentReason() throws FeedError {
+    final Crate one = new Feed(ONE).crates()[0];
+    final Release? first = one.first();
+    assertFalse(first == null);
+    assertEqual("2026-01-01", first!!.isoDay());
+    assertFalse(first!!.isYanked());
+    assertEqual(0, one.yankReasons().len());
+}
+
+@Test
+void aYankedReleaseKeepsItsReason() throws FeedError {
+    final String source = "{\"generated\": \"2026-04-30\", \"crates\": ["
+        + "{\"name\": \"a\", \"owner\": \"ada\", \"releases\": ["
+        + "{\"version\": \"1.0.0\", \"date\": \"2026-01-01\", \"downloads\": 5,"
+        + " \"yanked\": \"wrong toolchain\"}]}]}";
+    final Crate one = new Feed(source).crates()[0];
+    final Vec<String?> reasons = one.yankReasons();
+    assertEqual(1, reasons.len());
+    assertEqual("wrong toolchain", reasons[0]!!);
+}
+
+@Test
+void theSpanIsBetweenTheFirstAndTheLast() throws FeedError {
+    final String source = "{\"generated\": \"2026-04-30\", \"crates\": ["
+        + "{\"name\": \"a\", \"owner\": \"ada\", \"releases\": ["
+        + "{\"version\": \"1.0.0\", \"date\": \"2026-01-01\", \"downloads\": 1},"
+        + "{\"version\": \"1.0.1\", \"date\": \"2026-01-31\", \"downloads\": 2}]}]}";
+    final Crate one = new Feed(source).crates()[0];
+    assertEqual(30L, one.span());
+    assertEqual(3L, one.downloads());
+    assertEqual("1.0.1", one.latest()!!.version);
+}
+
+@Test
+void aBrokenDocumentNamesThePath() {
+    assertThrows<FeedError>(() -> new Feed("not json").crates());
+    assertThrows<FeedError>(() -> new Feed("{\"crates\": {}}").crates());
+    final FeedError broken = assertThrows<FeedError>(() ->
+        new Feed("{\"generated\": \"2026-04-30\", \"crates\": [{\"name\": 7}]}").crates());
+    assertEqual("crates[0].name", broken.path);
+}

@@ -1,0 +1,31 @@
+parsed:
+{
+  "name": "jux",
+  "version": 0.1,
+  "native": true,
+  "runtime": null,
+  "targets": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "limits": {
+    "depth": 64,
+    "size": 1048576
+  }
+}
+
+compact:
+{"name":"jux","version":0.1,"native":true,"runtime":null,"targets":["windows","linux","macos"],"limits":{"depth":64,"size":1048576}}
+
+members: 6
+name: jux
+version: 0.1
+missing: true
+targets: 3
+
+rejected at 6: a number was expected, found `}`
+rejected at 5: `,` or `]` was expected, found ` `
+rejected at 13: the string never ends
+rejected at 9: trailing text `e`
+rejected at 0: `null` was expected

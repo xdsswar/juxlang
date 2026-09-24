@@ -5627,7 +5627,7 @@ impl RustEmitter {
 
     /// True when `name` is a local or parameter in scope here, as opposed to
     /// a field reached through implicit `this`.
-    fn name_is_local_binding(&self, name: &str) -> bool {
+    pub(crate) fn name_is_local_binding(&self, name: &str) -> bool {
         self.nullable_locals.contains(name)
             || self.local_types.iter().any(|scope| scope.contains_key(name))
             || self.current_fn_params.iter().any(|p| p == name)

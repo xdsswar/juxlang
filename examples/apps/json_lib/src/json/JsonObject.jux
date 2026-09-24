@@ -1,0 +1,20 @@
+// An object keeps its members in the order they were written, so printing
+// a parsed document gives the document back.
+package json;
+
+public record JsonObject(Vec<String> keys, Vec<Value> values) implements Value {
+
+    /** The value for `key`, or null when the object has no such member. */
+    public Value? get(String key) {
+        for (var i = 0; i < keys.len(); i++) {
+            if (keys[i] == key) {
+                return values[i];
+            }
+        }
+        return null;
+    }
+
+    public int size() {
+        return keys.len();
+    }
+}

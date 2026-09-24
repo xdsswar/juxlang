@@ -895,6 +895,7 @@ fn build_struct(
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item, public);
     st.index_ref = has_ref_index_impl(krate, &s.impls);
+    st.index_output = index_output_name(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
     st.owned_as = owned_counterpart(krate, &s.impls, name);
     st.derefs_to = deref_target(krate, &s.impls).as_ref().and_then(shape_name);
@@ -916,6 +917,11 @@ fn build_enum(
     st.rust_path = real_rust_path(krate, item, public);
     st.implements = implemented_trait_names(krate, item.id, &e.impls);
     st.is_clone = implements_trait(krate, &e.impls, "Clone");
+    // An enum is indexable as readily as a struct: serde_json's `Value` is
+    // an enum, and `doc["releases"]` is how anyone reads one. Asking these
+    // two questions only of structs left every such read untyped.
+    st.index_ref = has_ref_index_impl(krate, &e.impls);
+    st.index_output = index_output_name(krate, &e.impls);
     // An enum carries behaviour in its inherent impls exactly as a struct
     // does, and a Jux enum can hold methods too (§7.7). Keeping only the
     // variants described `image::DynamicImage` as a bare tag union, so
@@ -1911,6 +1917,48 @@ fn owned_counterpart(krate: &Crate, impls: &[rustdoc_types::Id], name: &str) -> 
                 if owned != name {
                     return Some(owned);
                 }
+            }
+        }
+    }
+    None
+}
+
+/// The element an `Index` impl PRODUCES, by name: the impl's own
+/// `type Output`. `impl<I: Index> ops::Index<I> for Value { type Output =
+/// Value; }` gives `"Value"`, and a map's `type Output = V;` gives the
+/// parameter name `"V"`, which the checker substitutes from the receiver's
+/// type arguments.
+///
+/// DISCOVERED from the type's real `Index` impls (§G.6), never from a list of
+/// container names. Only a plainly NAMED output is reported: a slice's
+/// `type Output = <I as SliceIndex<[T]>>::Output` is a projection that depends
+/// on the key, and the stub has no way to write it.
+fn index_output_name(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<String> {
+    for id in impls {
+        let Some(item) = krate.index.get(id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        // A blanket impl describes some other type, and a synthetic or
+        // negative one describes no impl at all.
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            continue;
+        }
+        if !im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == "Index") {
+            continue;
+        }
+        for aid in &im.items {
+            let Some(aitem) = krate.index.get(aid) else { continue };
+            if aitem.name.as_deref() != Some("Output") {
+                continue;
+            }
+            match &aitem.inner {
+                ItemEnum::AssocType { type_: Some(Type::ResolvedPath(p)), .. } => {
+                    return Some(last_segment(&p.path).to_string());
+                }
+                // `type Output = V;` -- one of the type's own parameters.
+                ItemEnum::AssocType { type_: Some(Type::Generic(g)), .. } => {
+                    return Some(g.clone());
+                }
+                _ => {}
             }
         }
     }

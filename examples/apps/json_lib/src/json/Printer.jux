@@ -1,0 +1,95 @@
+// A value back into text, compact or indented.
+//
+// The `switch` over the sealed set needs no `default`: every shape is named,
+// and a new one would be a compile error here until it is handled.
+package json;
+
+public class Printer {
+    private int indent;
+
+    /** `indent` of zero prints on one line. */
+    public Printer(int indent) {
+        this.indent = indent;
+    }
+
+    public String print(Value value) {
+        return this.write(value, 0);
+    }
+
+    private String write(Value value, int depth) {
+        return switch (value) {
+            case JsonNull n -> "null";
+            case JsonBool(var b) -> b ? "true" : "false";
+            case JsonNumber(var d) -> number(d);
+            case JsonString(var s) -> quote(s);
+            case JsonArray(var items) -> this.writeArray(items, depth);
+            case JsonObject o -> this.writeObject(o, depth);
+        };
+    }
+
+    private String writeArray(Vec<Value> items, int depth) {
+        if (items.len() == 0) {
+            return "[]";
+        }
+        var out = "[" + this.newline();
+        for (var i = 0; i < items.len(); i++) {
+            out = out + this.pad(depth + 1) + this.write(items[i], depth + 1);
+            out = out + (i + 1 < items.len() ? "," : "") + this.newline();
+        }
+        return out + this.pad(depth) + "]";
+    }
+
+    private String writeObject(JsonObject o, int depth) {
+        if (o.size() == 0) {
+            return "{}";
+        }
+        var out = "{" + this.newline();
+        for (var i = 0; i < o.size(); i++) {
+            out = out + this.pad(depth + 1) + quote(o.keys[i]) + ":" + this.space();
+            out = out + this.write(o.values[i], depth + 1);
+            out = out + (i + 1 < o.size() ? "," : "") + this.newline();
+        }
+        return out + this.pad(depth) + "}";
+    }
+
+    private String newline() {
+        return indent == 0 ? "" : "\n";
+    }
+
+    private String space() {
+        return indent == 0 ? "" : " ";
+    }
+
+    private String pad(int depth) {
+        var out = "";
+        for (var i = 0; i < depth * indent; i++) {
+            out = out + " ";
+        }
+        return out;
+    }
+}
+
+/** A number without the trailing `.0` a whole value would print. */
+public String number(double value) {
+    final long whole = (long) value;
+    return whole == value ? $"${whole}" : $"${value}";
+}
+
+/** A string with the quotes and escapes JSON needs. */
+public String quote(String text) {
+    var out = "\"";
+    for (var c : text.chars()) {
+        if (c == '"') {
+            out = out + "\\\"";
+        } else if (c == '\\') {
+            out = out + "\\\\";
+        } else if (c == '\n') {
+            out = out + "\\n";
+        } else if (c == '\t') {
+            out = out + "\\t";
+        } else {
+            out = out + c;
+        }
+    }
+    return out + "\"";
+}

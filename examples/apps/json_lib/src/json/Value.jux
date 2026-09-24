@@ -1,0 +1,8 @@
+// What a piece of JSON is, as a closed set of shapes.
+//
+// A sealed interface: a `switch` over a value covers every one of them, and
+// a new shape cannot be added without the compiler pointing at every switch
+// that has to learn it.
+package json;
+
+public sealed interface Value permits JsonNull, JsonBool, JsonNumber, JsonString, JsonArray, JsonObject {}

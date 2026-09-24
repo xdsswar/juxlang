@@ -417,6 +417,17 @@ pub(crate) struct Checker<'a> {
     /// [`Self::narrowable`]: an assignment can put a null back, so a binding
     /// the block writes to is never narrowed by a null test (§7.10).
     pub(crate) assigned_in_block: std::collections::HashSet<String>,
+    /// Names assigned by the statements AFTER the one being checked, in the
+    /// block being checked. Maintained by [`Self::check_block`].
+    ///
+    /// A guard clause narrows the REST of the enclosing block (§7.10), so
+    /// that is the region an assignment can un-narrow: "an assignment OUTSIDE
+    /// the region does not matter: the branch starts from the value just
+    /// tested". Asking [`Self::assigned_in_block`] instead counted the
+    /// assignments BEFORE the guard as well, which is how the ordinary shape
+    /// of a fold -- fill a `T?` in a loop, guard it, then use it -- was
+    /// refused `E0418` on the line after the guard.
+    pub(crate) assigned_after_stmt: std::collections::HashSet<String>,
     /// `Some(index)` while walking constructor `index`'s body —
     /// `this(...)` delegation is only legal there (and only as the
     /// first statement), and a delegation may not resolve back to
@@ -588,6 +599,7 @@ impl<'a> Checker<'a> {
             typed_assert_throws: HashMap::new(),
             record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
+            assigned_after_stmt: std::collections::HashSet::new(),
             current_ctor: None,
             labels: Vec::new(),
             labels_outside_closure: Vec::new(),
@@ -5182,9 +5194,24 @@ impl<'a> Checker<'a> {
             &mut self.assigned_in_block,
             crate::assigned::names_assigned_in(block),
         );
-        for stmt in &block.statements {
+        // …and, per statement, the names the REST of the block assigns, which
+        // is the region a guard clause on that statement narrows. Built once
+        // from the back, so a long block costs one walk rather than one per
+        // statement.
+        let saved_after = std::mem::take(&mut self.assigned_after_stmt);
+        let mut suffix: Vec<std::collections::HashSet<String>> =
+            Vec::with_capacity(block.statements.len());
+        let mut running = std::collections::HashSet::new();
+        for stmt in block.statements.iter().rev() {
+            suffix.push(running.clone());
+            running.extend(crate::assigned::names_assigned_in_stmt(stmt));
+        }
+        suffix.reverse();
+        for (stmt, after) in block.statements.iter().zip(suffix) {
+            self.assigned_after_stmt = after;
             self.check_stmt(stmt);
         }
+        self.assigned_after_stmt = saved_after;
         self.assigned_in_block = saved;
         // A `T[N]` local this block declared, handed both to a `T[]` slot and
         // to a `T[N]` one: the two need different storage for one array.
@@ -6220,7 +6247,9 @@ impl<'a> Checker<'a> {
                     _ => self.assigned_in_block.clone(),
                 };
                 let narrow_else = self.narrowings(&if_stmt.condition, false, &else_assigned);
-                let enclosing_assigned = self.assigned_in_block.clone();
+                // The guard clause narrows the rest of the enclosing block, so
+                // only what the rest of it assigns can take that back (§7.10).
+                let enclosing_assigned = self.assigned_after_stmt.clone();
                 let narrow_after = self.narrowings(&if_stmt.condition, false, &enclosing_assigned);
 
                 self.env.push_scope();

@@ -376,8 +376,13 @@ point assigns it.** The rules follow the shape of the control flow:
   A `do`/`while` body runs at least once, so its assignments do count.
 - A path that cannot complete normally -- one ending in `return` or `throw` --
   imposes no obligation, because nothing after it is reachable from that path.
-- A `try` body may abort partway through, so only assignments in a `finally`
-  block survive to the statements after it.
+- A `try` statement leaves assigned what every branch that can complete
+  normally leaves assigned: the body, and each `catch` whose own body falls
+  out of the bottom. A branch that ends in `throw` or `return` imposes
+  nothing, by the rule above. A `finally` runs on every path, so its
+  assignments are added on top of that. A `catch` is analysed from the state
+  at the `try`, never from the middle of the body, because it may run from any
+  point inside it (ERRATA E88).
 
 **A nullable local needs no initializer.** `String? s;` starts as null, the
 same rule §S.4.5 gives nullable fields, and reading it is well defined. It is

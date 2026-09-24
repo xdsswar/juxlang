@@ -1,0 +1,75 @@
+// What a `try` statement leaves definitely assigned (§S.4.6, ERRATA E85).
+//
+// A branch that cannot complete normally imposes nothing, so a constructor
+// that converts one failure into another may assign its fields inside the
+// `try`: the only way past the statement is through the body, which ran to
+// the end. The same rule covers a local.
+
+/** The failure the reader converts everything into. */
+class Unreadable extends Exception {
+    public Unreadable(String why) {
+        super(why);
+    }
+}
+
+/** A setting read from text, or a failure naming the text. */
+class Setting {
+    private String text;
+    private int number;
+
+    public Setting(String written) throws Unreadable {
+        try {
+            this.text = written.trim();
+            this.number = written.trim().parse<int>();
+        } catch (Exception e) {
+            throw new Unreadable($"`${written}` is not a number");
+        }
+    }
+
+    public String text() {
+        return text;
+    }
+
+    public int number() {
+        return number;
+    }
+}
+
+public void main() {
+    // A local assigned in the body, with a `catch` that leaves.
+    int parsed;
+    try {
+        parsed = "41".parse<int>();
+    } catch (Exception e) {
+        print("41 did not parse, which cannot happen");
+        return;
+    }
+    print(parsed + 1);
+
+    // Both branches assign, so both agree it is assigned.
+    int either;
+    try {
+        either = "x".parse<int>();
+    } catch (Exception e) {
+        either = -1;
+    }
+    print(either);
+
+    // A `finally` adds its own assignment on top of whatever the body left.
+    int always;
+    try {
+        print("working");
+    } finally {
+        always = 9;
+    }
+    print(always);
+
+    try {
+        final var good = new Setting(" 7 ");
+        print($"${good.text()} + 1 = ${good.number() + 1}");
+        new Setting("seven");
+        print("`seven` was read as a number, which is wrong");
+    } catch (Unreadable e) {
+        print(e.getMessage());
+    }
+}

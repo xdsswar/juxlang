@@ -1,0 +1,12 @@
+// A job the workload will not accept.
+package jobs;
+
+public class TooBig extends Exception {
+    /** The job's size, so the caller can say by how much it overshot. */
+    public int size;
+
+    public TooBig(String name, int size, int limit) {
+        super($"`${name}` is ${size} steps, over the limit of ${limit}");
+        this.size = size;
+    }
+}

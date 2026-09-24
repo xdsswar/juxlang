@@ -2771,10 +2771,7 @@ impl RustEmitter {
     /// Does `type_name::method` return a value that borrows its receiver
     /// without being a reference (`@RustBorrowsSelf`, e.g. `Pixmap<'_>`)?
     pub(crate) fn external_method_carries_borrow(&self, type_name: &str, method: &str) -> bool {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        });
-        class.and_then(|c| c.methods.get(method)).is_some_and(|m| {
+        self.foreign_method_sig(type_name, method).is_some_and(|m| {
             m.annotations.iter().any(|a| {
                 a.name.segments.len() == 1
                     && a.name.segments[0].text.eq_ignore_ascii_case("rustborrowsself")
@@ -2783,11 +2780,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn external_method_returns_borrow(&self, type_name: &str, method: &str) -> bool {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        });
-        class
-            .and_then(|c| c.methods.get(method))
+        self.foreign_method_sig(type_name, method)
             .is_some_and(|m| m.annotations.iter().any(annotation_is_rust_ref_out))
     }
 }
@@ -2807,8 +2800,19 @@ impl super::super::RustEmitter {
     /// not second-guess them.
     /// Whether the scanned type `name` implements Rust `Clone`.
     pub(crate) fn class_is_rust_clone(&self, name: &str) -> bool {
-        self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        if self
+            .lookup_class_by_bare_or_fqn(bare)
             .is_some_and(|sig| sig.annotations.iter().any(annotation_is_rust_clone))
+        {
+            return true;
+        }
+        // A foreign ENUM answers the same question: serde_json's `Value` is
+        // `@RustClone`, and reading one out of a place has to copy it.
+        self.symbols
+            .lookup_enum(name)
+            .or_else(|| self.symbols.lookup_enum(bare))
+            .is_some_and(|(_, e)| e.annotations.iter().any(annotation_is_rust_clone))
     }
 
     pub(crate) fn external_method_sig(
@@ -2816,10 +2820,7 @@ impl super::super::RustEmitter {
         type_name: &str,
         method: &str,
     ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        })?;
-        class.methods.get(method)
+        self.foreign_method_sig(type_name, method)
     }
 
     /// By-NAME twin of [`Self::callee_param_is_foreign_slice`]: parameter
@@ -2845,16 +2846,22 @@ impl super::super::RustEmitter {
 
     /// The stub signature of the foreign method `type_name.method`: the type's
     /// own, or one reached through a foreign trait.
-    fn foreign_method_sig(
+    ///
+    /// The type may be a foreign ENUM as readily as a foreign class, so the
+    /// name resolves as a TYPE rather than only as a class; see
+    /// [`Self::external_type_method`], which reads the members of either.
+    pub(crate) fn foreign_method_sig(
         &self,
         type_name: &str,
         method: &str,
     ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
         let bare = type_name.rsplit('.').next().unwrap_or(type_name);
-        let fqn = if self.symbols.classes.contains_key(type_name) {
+        let fqn = if self.symbols.classes.contains_key(type_name)
+            || self.symbols.enums.contains_key(type_name)
+        {
             Some(type_name.to_string())
         } else {
-            self.resolve_bare_class_fqn(bare)
+            self.resolve_bare_class_fqn(bare).or_else(|| self.resolve_bare_type_fqn(bare))
         };
         if let Some(m) = fqn.as_deref().and_then(|f| self.external_type_method(f, method)) {
             return Some(m);

@@ -1,0 +1,46 @@
+// Tests for the parser and the printer, run by `jux test`.
+package json;
+
+import jux.std.testing.*;
+
+@Test
+void parsesScalars() throws ParseError {
+    assertTrue(new Parser("true").parse() => JsonBool);
+    assertTrue(new Parser("null").parse() => JsonNull);
+    assertTrue(new Parser("  12.5 ").parse() => JsonNumber);
+    assertTrue(new Parser("\"hi\"").parse() => JsonString);
+}
+
+@Test
+void parsesNesting() throws ParseError {
+    final Value value = new Parser("{\"a\": [1, 2, {\"b\": false}]}").parse();
+    assertTrue(value => JsonObject);
+    final JsonObject object = value as JsonObject;
+    assertEqual(1, object.size());
+    final Value? a = object.get("a");
+    assertFalse(a == null);
+    assertTrue(a!! => JsonArray);
+}
+
+@Test
+void keepsTheDocument() throws ParseError {
+    // Printing a parsed document compactly gives the document back.
+    final String source = "{\"n\":1,\"s\":\"x\",\"b\":[true,false],\"o\":{},\"e\":[]}";
+    final String printed = new Printer(0).print(new Parser(source).parse());
+    assertEqual(source, printed);
+}
+
+@Test
+void escapesSurvive() throws ParseError {
+    final Value value = new Parser("\"a\\nb\\\"c\"").parse();
+    final JsonString text = value as JsonString;
+    assertEqual("a\nb\"c", text.value);
+    assertEqual("\"a\\nb\\\"c\"", new Printer(0).print(value));
+}
+
+@Test
+void badInputThrows() {
+    assertThrows<ParseError>(() -> new Parser("{").parse());
+    assertThrows<ParseError>(() -> new Parser("[1,]").parse());
+    assertThrows<ParseError>(() -> new Parser("tru").parse());
+}

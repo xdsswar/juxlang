@@ -1,0 +1,13 @@
+// An order, and what happens to it.
+package orders.model;
+
+public record Order(String id, String customer, int quantity, double unitPrice) {
+
+    public double total() {
+        return quantity * unitPrice;
+    }
+
+    public String operator string() {
+        return $"${id} for ${customer}: ${quantity} x ${unitPrice.toFixed(2)}";
+    }
+}

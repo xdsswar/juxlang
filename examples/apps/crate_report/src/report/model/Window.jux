@@ -1,0 +1,37 @@
+// The first and the last of something, in the order it was offered.
+//
+// Generic in what it holds, and what this report holds in it is a chrono
+// `NaiveDate`: a foreign type living inside a Jux generic, which is the
+// interesting half of binding a crate at all.
+package report.model;
+
+public class Window<T> {
+    private T? earliest = null;
+    private T? latest = null;
+    private int seen = 0;
+
+    /** Offers one value. The first one offered stays the first. */
+    public void offer(T value) {
+        if (earliest == null) {
+            earliest = value;
+        }
+        latest = value;
+        seen++;
+    }
+
+    public T? first() {
+        return earliest;
+    }
+
+    public T? last() {
+        return latest;
+    }
+
+    public int count() {
+        return seen;
+    }
+
+    public bool isEmpty() {
+        return seen == 0;
+    }
+}

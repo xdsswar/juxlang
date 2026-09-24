@@ -1,0 +1,92 @@
+// The set of jobs to run, and the order to run them in.
+//
+// The scheduler part is deliberately ordinary: sorting by cost so the long
+// jobs start first is what a real runner does, and it makes the plan a fact
+// about the workload rather than about the threads.
+package jobs;
+
+public class Workload {
+    /** Nothing bigger than this is accepted. */
+    private int limit;
+    private Vec<Job> jobs = new Vec<Job>();
+
+    public Workload(int limit) {
+        this.limit = limit;
+    }
+
+    /** Adds a job, or refuses it for being too big to run at all. */
+    public void add(Job job) throws TooBig {
+        if (job.size > limit) {
+            throw new TooBig(job.name, job.size, limit);
+        }
+        jobs.push(job);
+    }
+
+    public int size() {
+        return jobs.len();
+    }
+
+    public Job at(int index) {
+        return jobs[index];
+    }
+
+    /** Every job, in the order they were added. */
+    public Vec<Job> all() {
+        return jobs;
+    }
+
+    /** What the whole workload costs. */
+    public long cost() {
+        var total = 0L;
+        for (var job : jobs) {
+            total += job.cost();
+        }
+        return total;
+    }
+
+    /**
+     * The jobs by descending cost, ties broken by name so the plan is the
+     * same on every run.
+     */
+    public Vec<String> plan() {
+        var ordered = new Vec<Job>();
+        for (var job : jobs) {
+            ordered.push(job);
+        }
+        // An insertion sort: the workload is small, and a comparator here
+        // would say less than the two lines it replaces.
+        for (var i = 1; i < ordered.len(); i++) {
+            final Job moving = ordered[i];
+            var j = i - 1;
+            while (j >= 0 && this.after(ordered[j], moving)) {
+                ordered[j + 1] = ordered[j];
+                j--;
+            }
+            ordered[j + 1] = moving;
+        }
+        var names = new Vec<String>();
+        for (var job : ordered) {
+            names.push(job.name);
+        }
+        return names;
+    }
+
+    /** Whether `left` sorts after `right`: cheaper first, then later by name. */
+    private bool after(Job left, Job right) {
+        if (left.cost() != right.cost()) {
+            return left.cost() < right.cost();
+        }
+        return left.name > right.name;
+    }
+
+    /** How many jobs fall in each size band, in band order. */
+    public BTreeMap<String, int> bands() {
+        var counts = new BTreeMap<String, int>();
+        for (var job : jobs) {
+            final String band = job.size < 1000 ? "small" : (job.size < 2000 ? "medium" : "large");
+            final int? seen = counts.get(band);
+            counts.insert(band, seen == null ? 1 : seen + 1);
+        }
+        return counts;
+    }
+}

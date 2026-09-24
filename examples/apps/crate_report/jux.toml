@@ -1,0 +1,15 @@
+# A release report over a registry feed, built from two crates.io crates.
+#
+# `rust.serde_json` reads the feed and `rust.chrono` turns its dates into
+# real dates, so the report can talk about spans and staleness. Both are
+# used in Jux syntax, with foreign values flowing through Jux generics;
+# nothing here is hand-written glue.
+#
+# Three packages under src/: the reader, the domain, and the report.
+[package]
+name = "apps.crate_report"
+version = "0.1.0"
+
+[dependencies]
+"rust.serde_json" = "1.0"
+"rust.chrono" = "0.4"

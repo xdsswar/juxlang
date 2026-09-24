@@ -1,0 +1,86 @@
+// Tests for placing an order: the happy path, and each way it fails.
+package orders.service;
+
+import jux.std.testing.*;
+import orders.events.{Bus, Listener};
+import orders.model.{Order, Stock};
+
+/** A stock with two customers on the shelf, as every test wants one. */
+Stock shelf() {
+    final var stock = new Stock();
+    stock.put("ada", 10);
+    stock.put("grace", 1);
+    return stock;
+}
+
+@Test
+void placingAnOrderTakesTheStockAndPublishes() throws OrderFailed {
+    final var stock = shelf();
+    final var placed = new Bus<Order>();
+    final var seen = new Vec<String>();
+    placed.subscribe((o) -> seen.push(o.id));
+
+    new Orders(stock, placed, 500.0).place(new Order("A-1", "ada", 2, 25.0));
+
+    assertEqual(8, stock.available("ada"));
+    assertEqual(1, seen.len());
+    assertEqual("A-1", seen[0]);
+    assertEqual(1, placed.delivered);
+}
+
+@Test
+void aDeclinedOrderLeavesTheStockAlone() {
+    final var stock = shelf();
+    final var placed = new Bus<Order>();
+    final var orders = new Orders(stock, placed, 500.0);
+
+    assertThrows<OrderFailed>(() -> orders.place(new Order("A-2", "ada", 8, 100.0)));
+    assertEqual(10, stock.available("ada"));
+    assertEqual(0, placed.delivered);
+}
+
+@Test
+void aFailureCarriesTheOneUnderneathIt() {
+    final var orders = new Orders(shelf(), new Bus<Order>(), 500.0);
+    final OrderFailed failed =
+        assertThrows<OrderFailed>(() -> orders.place(new Order("A-3", "grace", 4, 10.0)));
+    assertEqual("cannot fill A-3", failed.getMessage());
+    final Exception? cause = failed.getCause();
+    assertNotNull(cause);
+    assertEqual("only 1 of grace left, wanted 4", cause!!.getMessage());
+}
+
+@Test
+void anUnknownCustomerIsNotAShortage() {
+    final var orders = new Orders(shelf(), new Bus<Order>(), 500.0);
+    final OrderFailed failed =
+        assertThrows<OrderFailed>(() -> orders.place(new Order("A-4", "alan", 1, 10.0)));
+    assertEqual("no alan in stock", failed.getCause()!!.getMessage());
+}
+
+@Test
+void everyListenerSeesEveryEvent() {
+    final var placed = new Bus<Order>();
+    final var first = new Vec<String>();
+    final var second = new Vec<String>();
+    placed.subscribe((o) -> first.push(o.id));
+    placed.subscribe((o) -> second.push(o.id));
+
+    placed.publish(new Order("B-1", "ada", 1, 1.0));
+    placed.publish(new Order("B-2", "ada", 1, 1.0));
+
+    assertEqual(2, placed.count());
+    assertEqual(4, placed.delivered);
+    assertEqual(2, first.len());
+    assertEqual("B-2", second[1]);
+}
+
+@Test
+void takingFromTheShelfReportsWhatIsLeft() {
+    final var stock = shelf();
+    final Result<int, String> taken = stock.take("ada", 3);
+    assertTrue(taken.isOk());
+    assertEqual(7, taken.ok().unwrap());
+    assertTrue(stock.take("ada", 100).isErr());
+    assertEqual(7, stock.available("ada"));
+}

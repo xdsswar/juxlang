@@ -160,6 +160,17 @@ fn ctor_delegates_this(ctor: &ConstructorDecl) -> bool {
     )
 }
 
+/// Everything every completing branch of a `try` assigns: the intersection of
+/// `branches`, or `fallback` (the state at the `try`) when no branch completes
+/// normally, in which case nothing follows the statement anyway.
+fn merge_branches(branches: Vec<HashSet<String>>, fallback: &HashSet<String>) -> HashSet<String> {
+    let mut iter = branches.into_iter();
+    let Some(first) = iter.next() else {
+        return fallback.clone();
+    };
+    iter.fold(first, |acc, next| acc.intersection(&next).cloned().collect())
+}
+
 /// Result of analyzing a block / statement: which fields are definitely
 /// assigned if control completes normally past it, and whether control *can*
 /// fall through (a `return`/`throw`/`break`/`continue` makes it unreachable).
@@ -175,6 +186,28 @@ struct Da<'a> {
 }
 
 impl Da<'_> {
+    /// The assigned-sets of every branch of a `try` that can COMPLETE
+    /// NORMALLY: the body, and each `catch` whose own body falls out of the
+    /// bottom.
+    ///
+    /// Every sub-block is walked whether or not it contributes, so an inner
+    /// `return` is still validated. A `catch` is analysed from `st`, the state
+    /// at the `try`, because it may run from any point inside the body.
+    fn try_branches(&mut self, t: &juxc_ast::TryStmt, st: &HashSet<String>) -> Vec<HashSet<String>> {
+        let mut out = Vec::new();
+        let body = self.block(&t.body, st.clone());
+        if body.reachable {
+            out.push(body.assigned);
+        }
+        for c in &t.catches {
+            let flow = self.block(&c.body, st.clone());
+            if flow.reachable {
+                out.push(flow.assigned);
+            }
+        }
+        out
+    }
+
     fn block(&mut self, b: &Block, mut st: HashSet<String>) -> Flow {
         let mut reachable = true;
         for s in &b.statements {
@@ -238,16 +271,20 @@ impl Da<'_> {
             Stmt::Labeled { stmt, .. } => self.stmt(stmt, st),
             Stmt::Unsafe(b) => self.block(b, st),
             Stmt::Try(t) => {
-                // The try body may abort partway, and a catch only runs on
-                // failure — neither contributes guaranteed assignments. Only a
-                // `finally` (always runs) does. We still walk every sub-block
-                // so inner `return`s are validated.
-                self.block(&t.body, st.clone());
-                for c in &t.catches {
-                    self.block(&c.body, st.clone());
-                }
-                let mut out = st;
+                // §S.4.6 / ERRATA E88: what survives a `try` is what every
+                // branch that can COMPLETE NORMALLY leaves assigned. A `catch`
+                // that ends in `throw` never reaches the code after the
+                // statement, so it imposes nothing -- which is the whole reason
+                // `try { this.doc = read(); } catch (…) { throw … }`, the
+                // ordinary shape of a constructor that converts one failure
+                // into another, is legal. A `catch` starts from the state at
+                // the `try`, never from the middle of the body, because it may
+                // run from any point inside it.
+                let branches = self.try_branches(t, &st);
+                let mut out = merge_branches(branches, &st);
                 if let Some(fin) = &t.finally {
+                    // A `finally` runs on every path that leaves, so its own
+                    // assignments are added on top.
                     out = self.block(fin, out).assigned;
                 }
                 Flow { assigned: out, reachable: true }
@@ -345,6 +382,28 @@ struct La {
 }
 
 impl La {
+    /// The assigned-sets of every branch of a `try` that can COMPLETE
+    /// NORMALLY: the body, and each `catch` whose own body falls out of the
+    /// bottom.
+    ///
+    /// Every sub-block is walked whether or not it contributes, so an inner
+    /// `return` is still validated. A `catch` is analysed from `st`, the state
+    /// at the `try`, because it may run from any point inside the body.
+    fn try_branches(&mut self, t: &juxc_ast::TryStmt, st: &HashSet<String>) -> Vec<HashSet<String>> {
+        let mut out = Vec::new();
+        let body = self.block(&t.body, st.clone());
+        if body.reachable {
+            out.push(body.assigned);
+        }
+        for c in &t.catches {
+            let flow = self.block(&c.body, st.clone());
+            if flow.reachable {
+                out.push(flow.assigned);
+            }
+        }
+        out
+    }
+
     /// Walk a block. `st` is the set of pending locals ASSIGNED on every path
     /// reaching this point; the returned flow carries it forward.
     fn block(&mut self, b: &Block, mut st: HashSet<String>) -> Flow {
@@ -500,17 +559,17 @@ impl La {
             Stmt::Labeled { stmt, .. } => self.stmt(stmt, st),
             Stmt::Block(b) | Stmt::Unsafe(b) => self.block(b, st),
             Stmt::Try(t) => {
-                // The body can abort partway, and a catch arm runs from an
-                // unknown point inside it, so neither one's assignments are
-                // guaranteed past the statement. Only `finally` runs to
-                // completion on every path that leaves.
-                self.block(&t.body, st.clone());
-                for c in &t.catches {
-                    self.block(&c.body, st.clone());
-                }
+                // The local twin of the field rule (§S.4.6, ERRATA E88): the
+                // body and every `catch` that falls out of its own bottom
+                // contribute, a branch that throws or returns does not, and a
+                // `finally` adds its own on top. `int n; try { n = parse(s); }
+                // catch (E e) { return; } print(n);` reads a local every path
+                // to the read assigned.
+                let branches = self.try_branches(t, &st);
+                let out = merge_branches(branches, &st);
                 match &t.finally {
-                    Some(fin) => self.block(fin, st),
-                    None => Flow { assigned: st, reachable: true },
+                    Some(fin) => self.block(fin, out),
+                    None => Flow { assigned: out, reachable: true },
                 }
             }
             // Anything else (a `super(...)` call, a declaration) assigns

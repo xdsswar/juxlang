@@ -1,0 +1,42 @@
+// Placing an order: stock, payment, and the event that follows.
+package orders.service;
+
+import orders.events.Bus;
+import orders.model.{Order, Stock};
+
+public class Orders {
+    private Stock stock;
+    private Bus<Order> placed;
+    private double limit;
+
+    public Orders(Stock stock, Bus<Order> placed, double limit) {
+        this.stock = stock;
+        this.placed = placed;
+        this.limit = limit;
+    }
+
+    /**
+     * Places `order`, or throws saying why. A payment failure is kept as the
+     * cause, so the caller can report both layers.
+     */
+    public void place(Order order) throws OrderFailed {
+        // Payment first: a declined order must not consume stock.
+        try {
+            this.charge(order);
+        } catch (PaymentDeclined declined) {
+            throw new OrderFailed($"cannot pay for ${order.id}", declined);
+        }
+        final Result<int, String> taken = stock.take(order.customer, order.quantity);
+        if (taken.isErr()) {
+            throw new OrderFailed($"cannot fill ${order.id}", new StockShort(taken.err().unwrap()));
+        }
+        placed.publish(order);
+    }
+
+    /** The payment step, which fails above the limit. */
+    private void charge(Order order) throws PaymentDeclined {
+        if (order.total() > limit) {
+            throw new PaymentDeclined($"${order.total().toFixed(2)} is over the ${limit.toFixed(2)} limit");
+        }
+    }
+}

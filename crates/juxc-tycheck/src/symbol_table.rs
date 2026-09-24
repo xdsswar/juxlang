@@ -27,6 +27,8 @@ use juxc_ast::{
     OperatorKind, RecordDecl, ReturnType, TopLevelDecl, TypeParam, TypeRef, Visibility,
 };
 use juxc_diagnostics::{code, Diagnostic};
+
+use crate::ty::Ty;
 use juxc_source::Span;
 
 // ============================================================================
@@ -574,6 +576,50 @@ impl SymbolTable {
             (Some(kv), None) => Some(kv),
             _ => None,
         }
+    }
+
+    /// What indexing a value of `name` PRODUCES, when the type's stub records
+    /// it (`@RustIndexOutput("…")`, bindgen's reading of the `Index` impl's
+    /// own `type Output`).
+    ///
+    /// The recorded name is either one of the type's OWN generic parameters,
+    /// which substitutes from `generic_args` (a map's `type Output = V;` makes
+    /// `scores["ada"]` the map's value type), or another type in the same
+    /// package, which is qualified with the declaring type's package so the
+    /// result is a fully-qualified `Ty::User` like every other inferred type
+    /// (serde_json's `type Output = Value;` makes `doc["releases"]` a
+    /// `rust.serde_json.Value`).
+    ///
+    /// `None` when nothing records an output, which is every user type and
+    /// every foreign type whose `Index` output is a projection bindgen cannot
+    /// write down.
+    pub fn index_output_ty(&self, name: &str, generic_args: &[Ty]) -> Option<Ty> {
+        // A class and an enum both index; serde_json's `Value` is an enum.
+        let (fqn, annotations, params): (&str, &[juxc_ast::Annotation], &[TypeParam]) =
+            match self.resolve_class(name) {
+                Some((k, c)) => (k.as_str(), &c.annotations, &c.generic_params),
+                None => {
+                    let (k, e) = self.lookup_enum(name)?;
+                    (k, &e.annotations, &e.generic_params)
+                }
+            };
+        let output = marker_string(annotations, "rustindexoutput")?;
+        // The type's own parameter: take the matching type argument.
+        if let Some(i) = params.iter().position(|p| p.name.text == output) {
+            return generic_args.get(i).cloned();
+        }
+        // Another type, named as the stub spells it -- unqualified, and so
+        // read in the declaring type's own package.
+        let package = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
+        let qualified = if package.is_empty() {
+            output
+        } else {
+            format!("{package}.{output}")
+        };
+        Some(Ty::User {
+            name: qualified,
+            generic_args: Vec::new(),
+        })
     }
 
     /// The **merged overload group** for `method_name` as seen from
@@ -1497,6 +1543,14 @@ pub struct RecordComponentSig {
 /// other Sig types.
 #[derive(Debug, Clone)]
 pub struct EnumSig {
+    /// Source-order annotation list, exactly as [`ClassSig::annotations`]
+    /// carries a class's.
+    ///
+    /// A generated `.jux.d` stub puts real information here. serde_json's
+    /// `Value` is an ENUM, and its `@RustIndexOutput` is the only record of
+    /// what `doc["releases"]` produces; with no field to keep it, indexing a
+    /// foreign enum had no type at all.
+    pub annotations: Vec<juxc_ast::Annotation>,
     /// Enum visibility.
     pub visibility: Visibility,
     /// Generic parameters in declaration order (`T`, `E` of
@@ -2630,6 +2684,28 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
             continue;
         };
         if !seg.text.eq_ignore_ascii_case("rust") {
+            continue;
+        }
+        if let Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) = ann.args.first()
+        {
+            if !s.is_empty() {
+                return Some(s.clone());
+            }
+        }
+    }
+    None
+}
+
+/// The single string argument of the bindgen marker `name`
+/// (`@RustIndexOutput("Value")` under `"rustindexoutput"`), or `None` when the
+/// list has no such marker. Annotation names are case-insensitive, so the
+/// caller passes the lower-case spelling.
+fn marker_string(annotations: &[juxc_ast::Annotation], name: &str) -> Option<String> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    for ann in annotations {
+        if ann.name.segments.len() != 1
+            || !ann.name.segments[0].text.eq_ignore_ascii_case(name)
+        {
             continue;
         }
         if let Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) = ann.args.first()
@@ -4898,6 +4974,7 @@ fn insert_enum(
     table.enums.insert(
         fqn,
         EnumSig {
+            annotations: enum_decl.annotations.clone(),
             visibility: enum_decl.visibility,
             generic_params: enum_decl.generic_params.clone(),
             implements: enum_decl.implements.clone(),

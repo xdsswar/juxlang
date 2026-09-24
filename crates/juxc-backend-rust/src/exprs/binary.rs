@@ -982,6 +982,39 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
+        // **A `T?` compared with a `T`.** `==` and `!=` take a null by design
+        // (LANG-V1 §7.10), so one side being nullable and the other not is a
+        // question anyone may ask: `ledger.checksumOf(name) == job.run()` asks
+        // whether the recorded checksum is that value, and is false when
+        // nothing was recorded. The nullable side is an `Option<T>` and the
+        // other a bare `T`, so the bare one is lifted; emitted as a plain `==`
+        // between the two it was rustc E0308 (ERRATA E89).
+        if matches!(b.op, BinaryOp::Eq | BinaryOp::NotEq) {
+            if let Some(lift_right) = self.nullable_equality_lift(b) {
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                let operator = if b.op == BinaryOp::Eq { " == " } else { " != " };
+                // Source order is kept, so the emitted Rust reads the way the
+                // Jux line does.
+                self.w.push('(');
+                if lift_right {
+                    self.emit_expr(&b.left);
+                    self.w.push_str(operator);
+                    self.w.push_str("Some(");
+                    self.emit_expr(&b.right);
+                    self.w.push(')');
+                } else {
+                    self.w.push_str("Some(");
+                    self.emit_expr(&b.left);
+                    self.w.push(')');
+                    self.w.push_str(operator);
+                    self.emit_expr(&b.right);
+                }
+                self.w.push(')');
+                self.emitting_format_arg = prev;
+                return;
+            }
+        }
         let prec = binary_prec(b.op);
         // Comparison ops (`==`, `!=`, `<`, `<=`, `>`, `>=`) borrow
         // both operands through `PartialEq`/`PartialOrd` — String /
@@ -1969,6 +2002,38 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
+    }
+    /// Which side of a `==` / `!=` has to be lifted into `Some(…)`, when one
+    /// side is a `T?` and the other a plain `T`: `Some(true)` for the right
+    /// operand, `Some(false)` for the left, `None` when neither applies.
+    ///
+    /// The inner type must match EXACTLY. A mixed-width numeric comparison
+    /// (`long? == int`) has its own promotion to do and is left to it, and
+    /// two nullables or two plain values already line up.
+    fn nullable_equality_lift(&self, b: &juxc_ast::BinaryExpr) -> Option<bool> {
+        let left = self.emitted_operand_ty(&b.left)?;
+        let right = self.emitted_operand_ty(&b.right)?;
+        match (&left, &right) {
+            (juxc_tycheck::Ty::Nullable(inner), other) if inner.as_ref() == other => Some(true),
+            (other, juxc_tycheck::Ty::Nullable(inner)) if inner.as_ref() == other => Some(false),
+            _ => None,
+        }
+    }
+
+    /// An operand's type AS IT IS EMITTED. A `T?` binding that a test has
+    /// already narrowed reads as a plain `T` here, so it is not an `Option`
+    /// at this point even though it was declared one -- lifting the other
+    /// side against it would be exactly wrong.
+    fn emitted_operand_ty(&self, e: &Expr) -> Option<juxc_tycheck::Ty> {
+        // Takes the guard-clause narrowing off (`nullable_locals`).
+        let ty = self.narrowed_receiver_ty_of(e)?;
+        // …and the operand-scoped narrowing a `&&` chain proves (§7.10).
+        if let (juxc_tycheck::Ty::Nullable(inner), Expr::Path(qn)) = (&ty, e) {
+            if qn.segments.len() == 1 && self.expr_narrowed.contains(&qn.segments[0].text) {
+                return Some(inner.as_ref().clone());
+            }
+        }
+        Some(ty)
     }
 }
 
