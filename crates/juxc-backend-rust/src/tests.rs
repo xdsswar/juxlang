@@ -618,12 +618,12 @@ fn typed_for_each_drops_type_annotation_for_now() {
 // For-each on arrays (borrow + pattern-deref)
 // ----------------------------------------------------------------------
 
-/// For-each over a dynamic array of a NON-Copy element type
-/// iterates by `.iter().cloned()` so the Vec stays usable after
-/// the loop and the loop variable is an owned `T` value (works
-/// for non-Copy types like `String`).
+/// For-each over a dynamic array of a NON-Copy element type snapshots
+/// the sequence and walks the snapshot BY VALUE, so the Vec stays usable
+/// after the loop and the loop variable is the owned `T` the Jux program
+/// wrote (which matters for non-Copy types like `String`).
 #[test]
-fn for_each_on_string_vec_borrows_when_body_doesnt_move() {
+fn for_each_on_string_vec_walks_its_snapshot_by_value() {
     let rust = emit(
         r#"public void main() {
                String[] xs = {"a", "b"};
@@ -631,13 +631,16 @@ fn for_each_on_string_vec_borrows_when_body_doesnt_move() {
                print(xs.length);
            }"#,
     );
-    // Body only borrows via `print(x)` — no `.iter().cloned()`
-    // needed. The cheaper `for x in &xs` form fires here so each
-    // iteration runs without a per-element heap clone.
-    assert!(rust.contains("for x in &__jux_fe_iter {"), "got: {rust}");
+    // The snapshot is already a private copy of the sequence, so walking it
+    // by value costs nothing extra and hands the body an owned `String`.
+    // Borrowing it instead yielded `&String`, which compares with nothing:
+    // `for (var held : carried) { if (held == item) }` over a `Vec<String>`
+    // field failed with "can't compare `&String` with `String`".
+    assert!(rust.contains("let __jux_fe_iter = xs.borrow().clone();"), "got: {rust}");
+    assert!(rust.contains("for x in __jux_fe_iter {"), "got: {rust}");
     assert!(
         !rust.contains(".iter().cloned()"),
-        "non-moving body shouldn't clone: {rust}",
+        "the snapshot makes a per-element clone pointless: {rust}",
     );
     // The post-loop `.length` reads xs — proves we didn't move it.
     // Identifier receiver, so no parens around it.
@@ -1919,7 +1922,9 @@ fn interface_lowers_to_pub_trait_with_method_signatures() {
         "#,
     );
     assert!(
-        rust.contains("pub trait Drawable: std::fmt::Debug + crate::JuxIdentity {"),
+        rust.contains(
+            "pub trait Drawable: std::fmt::Debug + std::fmt::Display + crate::JuxIdentity {"
+        ),
         "trait header: {rust}"
     );
     // Interface methods emit as `&self` so the interface can be used as a
@@ -3565,11 +3570,13 @@ fn empty_record_emits_display_with_just_name() {
     );
 }
 
-/// Records containing a user-class field skip Display emission — we
-/// can't statically prove the class supports Display, and emitting a
-/// broken impl would fail rustc. Debug stays available from the derive.
+/// A record containing a user-class field DOES get a Display impl: each
+/// component renders through `__jux_show!`, which picks Display when the
+/// value has one and Debug otherwise, so the impl cannot fail to compile
+/// whatever the field's type turns out to support. This used to be skipped,
+/// back when a component was formatted with a bare `{}`.
 #[test]
-fn record_with_user_type_field_skips_display() {
+fn record_with_user_type_field_still_gets_display() {
     let rust = emit(
         r#"
         public class Tag {}
@@ -3578,8 +3585,12 @@ fn record_with_user_type_field_skips_display() {
         "#,
     );
     assert!(
-        !rust.contains("impl std::fmt::Display for Boxed"),
-        "should skip Display for user-typed field: {rust}",
+        rust.contains("impl std::fmt::Display for Boxed"),
+        "a user-typed field no longer blocks Display: {rust}",
+    );
+    assert!(
+        rust.contains(r#"write!(f, "Boxed(t: {})", crate::__jux_show!(self.t))"#),
+        "the component renders through the universal formatter: {rust}",
     );
 }
 

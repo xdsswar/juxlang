@@ -360,13 +360,6 @@ impl RustEmitter {
             .operators
             .iter()
             .any(|o| o.kind == OperatorKind::ToString);
-        // A component typed as one of the record's own parameters counts:
-        // the impl below bounds that parameter `Display`.
-        let own_params: std::collections::HashSet<String> = record_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.clone())
-            .collect();
         // Only an `operator string` of the record's own stops the derived
         // one. A component that is not a plain value (an interface, a class,
         // a collection) no longer does: it prints through the universal

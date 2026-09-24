@@ -5,7 +5,7 @@
 
 use juxc_ast::{
     BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr, Ident, IndexExpr,
-    InterpStringExpr, Literal, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, QualifiedName,
+    InterpStringExpr, Literal, NewArrayExpr, NewObjectExpr, QualifiedName,
     RangeExpr, SizeOfExpr, TypeRef, UnaryExpr, UnaryOp,
 };
 use juxc_diagnostics::{code, Diagnostic};
@@ -1578,7 +1578,7 @@ impl<'a> Parser<'a> {
                     let mut array_ty = element_type.clone();
                     array_ty.array_shape = Some(juxc_ast::ArrayShape {
                         dims: vec![juxc_ast::ArrayDim::Dynamic; dims],
-                        elem_nullable: elem_nullable,
+                        elem_nullable,
                     });
                     return self.parse_array_initializer_between(
                         &array_ty,
@@ -1707,7 +1707,6 @@ impl<'a> Parser<'a> {
     /// left to the expression parser, which the §5.9.3 rule disambiguates
     /// later. Speculative: on no match nothing is consumed and no diagnostic
     /// is left behind.
-
     fn try_sizeof_type_operand(&mut self) -> Option<juxc_ast::TypeRef> {
         if matches!(self.peek(), TokenKind::Kw(Keyword::Void))
             && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::RParen))
