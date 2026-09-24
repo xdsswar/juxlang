@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.4</h3>
+            <p>Imports stop flickering "unresolved": the generated crate stubs parse, keyword paths are accepted, and a stub is never missing while it regenerates.</p>
+            <ul>
+              <li><b>Generated .jux.d stubs parse in full</b>: a member named with a reserved word (<b>NonNull.new</b>, <b>Stdio.null</b>, <b>Shader.new</b>) is accepted exactly as the compiler accepts it, so the bundled standard library stub no longer stops being indexed at its first <b>new</b>.</li>
+              <li><b>Keywords in import and package paths</b>: <b>import rust.x.record;</b> and <b>package demo.type;</b> are names, not errors, and so is a keyword-spelled import alias.</li>
+              <li><b>A keyword used as a member</b> (<b>window.default()</b>) is colored as the member it is rather than as a keyword.</li>
+              <li><b>Workspace members see their siblings</b>: always-on diagnostics now check from the <b>[workspace]</b> root, as the language server does, so a sibling package's types resolve.</li>
+              <li><b>A regenerating crate stub stays readable</b>: the old declarations are kept until the new stub lands, instead of the file being removed for the minutes the generation takes.</li>
+              <li><b>No import for a type you already see</b>: completion, the Import type fix and add-on-the-fly never write an <b>import</b> for a type declared in this file or in this file's package, including a file with no <b>package</b> line, whose package comes from where it sits.</li>
+            </ul>
             <h3>0.1.3</h3>
             <p>Function types, assigned lambdas, comparators and variance, and sturdier completion.</p>
             <ul>
