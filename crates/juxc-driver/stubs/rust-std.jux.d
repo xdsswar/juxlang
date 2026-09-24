@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 42
+// juxc rust.std stub cache-version 43
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -1359,6 +1359,29 @@ public class IoSlice {
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
     @MutSelf public void sort_floats();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    public bool is_ascii();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
+    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
+    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
+    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    @RustRefOut public unsafe T[] assume_init_ref();
+    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @RustRefOut public String as_str();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1377,10 +1400,14 @@ public class IoSlice {
     @MutSelf public (T[], T[])? split_last_chunk_mut();
     @RustRefOut public T[]? last_chunk();
     @MutSelf @RustRefOut public T[]? last_chunk_mut();
-    @RustRefOut public I.Output? get<I>(I index);
-    @MutSelf @RustRefOut public I.Output? get_mut<I>(I index);
-    @RustRefOut public unsafe I.Output get_unchecked<I>(I index);
-    @MutSelf @RustRefOut public unsafe I.Output get_unchecked_mut<I>(I index);
+    @RustRefOut public T? get(uint index);
+    @RustRefOut public T[]? get(RangeFull index);
+    @MutSelf @RustRefOut public T? get_mut(uint index);
+    @MutSelf @RustRefOut public T[]? get_mut(RangeFull index);
+    @RustRefOut public unsafe T get_unchecked(uint index);
+    @RustRefOut public unsafe T[] get_unchecked(RangeFull index);
+    @MutSelf @RustRefOut public unsafe T get_unchecked_mut(uint index);
+    @MutSelf @RustRefOut public unsafe T[] get_unchecked_mut(RangeFull index);
     public T* as_ptr();
     @MutSelf public T* as_mut_ptr();
     public Range<T*> as_ptr_range();
@@ -1459,32 +1486,11 @@ public class IoSlice {
     @MutSelf @RustRefOut public T? split_off_first_mut();
     @MutSelf @RustRefOut public T? split_off_last();
     @MutSelf @RustRefOut public T? split_off_last_mut();
-    @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
-    @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
+    @MutSelf public unsafe T[] get_disjoint_unchecked_mut(uint[] indices);
+    @MutSelf public unsafe T[][] get_disjoint_unchecked_mut(RangeFull[] indices);
+    @MutSelf public T[] get_disjoint_mut(uint[] indices) throws GetDisjointMutError;
+    @MutSelf public T[][] get_disjoint_mut(RangeFull[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public bool is_ascii();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** A buffer type used with `Read::read_vectored`. */
@@ -1506,6 +1512,29 @@ public class IoSliceMut {
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
     @MutSelf public void sort_floats();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    public bool is_ascii();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
+    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
+    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
+    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    @RustRefOut public unsafe T[] assume_init_ref();
+    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @RustRefOut public String as_str();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1524,10 +1553,14 @@ public class IoSliceMut {
     @MutSelf public (T[], T[])? split_last_chunk_mut();
     @RustRefOut public T[]? last_chunk();
     @MutSelf @RustRefOut public T[]? last_chunk_mut();
-    @RustRefOut public I.Output? get<I>(I index);
-    @MutSelf @RustRefOut public I.Output? get_mut<I>(I index);
-    @RustRefOut public unsafe I.Output get_unchecked<I>(I index);
-    @MutSelf @RustRefOut public unsafe I.Output get_unchecked_mut<I>(I index);
+    @RustRefOut public T? get(uint index);
+    @RustRefOut public T[]? get(RangeFull index);
+    @MutSelf @RustRefOut public T? get_mut(uint index);
+    @MutSelf @RustRefOut public T[]? get_mut(RangeFull index);
+    @RustRefOut public unsafe T get_unchecked(uint index);
+    @RustRefOut public unsafe T[] get_unchecked(RangeFull index);
+    @MutSelf @RustRefOut public unsafe T get_unchecked_mut(uint index);
+    @MutSelf @RustRefOut public unsafe T[] get_unchecked_mut(RangeFull index);
     public T* as_ptr();
     @MutSelf public T* as_mut_ptr();
     public Range<T*> as_ptr_range();
@@ -1606,32 +1639,11 @@ public class IoSliceMut {
     @MutSelf @RustRefOut public T? split_off_first_mut();
     @MutSelf @RustRefOut public T? split_off_last();
     @MutSelf @RustRefOut public T? split_off_last_mut();
-    @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
-    @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
+    @MutSelf public unsafe T[] get_disjoint_unchecked_mut(uint[] indices);
+    @MutSelf public unsafe T[][] get_disjoint_unchecked_mut(RangeFull[] indices);
+    @MutSelf public T[] get_disjoint_mut(uint[] indices) throws GetDisjointMutError;
+    @MutSelf public T[][] get_disjoint_mut(RangeFull[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public bool is_ascii();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** An IP address, either IPv4 or IPv6. */
@@ -1997,7 +2009,8 @@ public class NonNull<T> {
     public T* as_mut_ptr();
     @RustRefOut public unsafe MaybeUninit<T>[] as_uninit_slice();
     @RustRefOut public unsafe MaybeUninit<T>[] as_uninit_slice_mut();
-    public unsafe NonNull<I.Output> get_unchecked_mut<I>(I index);
+    public unsafe NonNull<T> get_unchecked_mut(uint index);
+    public unsafe NonNull<T[]> get_unchecked_mut(RangeFull index);
 }
 
 /** A value that is known not to equal zero. */
@@ -2197,7 +2210,6 @@ public class NonZeroIsize {
 /** A [`u128`] that is known not to equal zero. */
 @rust("std::num::NonZeroU128")
 public class NonZeroU128 {
-    public NonZeroU128 div_ceil(NonZeroU128 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2214,6 +2226,7 @@ public class NonZeroU128 {
     public NonZeroU128 saturating_mul(NonZeroU128 other);
     public NonZeroU128? checked_pow(u32 other);
     public NonZeroU128 saturating_pow(u32 other);
+    public NonZeroU128 div_ceil(NonZeroU128 rhs);
 }
 
 /** A [`u16`] that is known not to equal zero. */
@@ -2241,6 +2254,7 @@ public class NonZeroU16 {
 /** A [`u32`] that is known not to equal zero. */
 @rust("std::num::NonZeroU32")
 public class NonZeroU32 {
+    public NonZeroU32 div_ceil(NonZeroU32 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2257,12 +2271,12 @@ public class NonZeroU32 {
     public NonZeroU32 saturating_mul(NonZeroU32 other);
     public NonZeroU32? checked_pow(u32 other);
     public NonZeroU32 saturating_pow(u32 other);
-    public NonZeroU32 div_ceil(NonZeroU32 rhs);
 }
 
 /** A [`u64`] that is known not to equal zero. */
 @rust("std::num::NonZeroU64")
 public class NonZeroU64 {
+    public NonZeroU64 div_ceil(NonZeroU64 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2279,12 +2293,12 @@ public class NonZeroU64 {
     public NonZeroU64 saturating_mul(NonZeroU64 other);
     public NonZeroU64? checked_pow(u32 other);
     public NonZeroU64 saturating_pow(u32 other);
-    public NonZeroU64 div_ceil(NonZeroU64 rhs);
 }
 
 /** A [`u8`] that is known not to equal zero. */
 @rust("std::num::NonZeroU8")
 public class NonZeroU8 {
+    public NonZeroU8 div_ceil(NonZeroU8 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2301,7 +2315,6 @@ public class NonZeroU8 {
     public NonZeroU8 saturating_mul(NonZeroU8 other);
     public NonZeroU8? checked_pow(u32 other);
     public NonZeroU8 saturating_pow(u32 other);
-    public NonZeroU8 div_ceil(NonZeroU8 rhs);
 }
 
 /** A [`usize`] that is known not to equal zero. */
@@ -2853,6 +2866,13 @@ public class RandomState implements ToOwned {
 public class Range<K, V> implements RustIterator, ToOwned {
     @RustDefault public Range();
     @MutSelf public (K, V)? next();
+}
+
+/** An unbounded range (`..`). */
+@rust("std::ops::RangeFull")
+@RustClone
+public class RangeFull {
+    @RustDefault public RangeFull();
 }
 
 /** A mutable iterator over a sub-range of entries in a `BTreeMap`. */
@@ -3427,10 +3447,6 @@ public class String implements ToOwned, ToString, Write {
     @MutSelf @RustRefOut public unsafe ubyte[] as_bytes_mut();
     public ubyte* as_ptr();
     @MutSelf public ubyte* as_mut_ptr();
-    @RustRefOut public I.Output? get<I>(I i);
-    @MutSelf @RustRefOut public I.Output? get_mut<I>(I i);
-    @RustRefOut public unsafe I.Output get_unchecked<I>(I i);
-    @MutSelf @RustRefOut public unsafe I.Output get_unchecked_mut<I>(I i);
     @RustRefOut public unsafe String slice_unchecked(uint begin, uint end);
     @MutSelf @RustRefOut public unsafe String slice_mut_unchecked(uint begin, uint end);
     public (String, String) split_at(uint mid);
@@ -3475,7 +3491,6 @@ public class String implements ToOwned, ToString, Write {
     @RustRefOut public String trim_end_matches<P>(P pat);
     @RustRefOut public String trim_left_matches<P>(P pat);
     @RustRefOut public String trim_right_matches<P>(P pat);
-    public F parse<F>() throws Error;
     public bool is_ascii();
     public bool eq_ignore_ascii_case(&String other);
     public bool eq_ignore_case_unnormalized(&String other);
@@ -3491,6 +3506,11 @@ public class String implements ToOwned, ToString, Write {
     public String word_to_titlecase();
     public String to_casefold_unnormalized();
     public String into_string();
+    @RustRefOut public String? get(RangeFull i);
+    @MutSelf @RustRefOut public String? get_mut(RangeFull i);
+    @RustRefOut public unsafe String get_unchecked(RangeFull i);
+    @MutSelf @RustRefOut public unsafe String get_unchecked_mut(RangeFull i);
+    public float parse() throws Error;
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -3949,6 +3969,31 @@ public class Vec<T, A> implements ToOwned {
     public Self.Output connect<Separator>(Separator sep);
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
+    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
+    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
+    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
+    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
+    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
+    @RustRefOut public MaybeUninit<ubyte>[] as_bytes();
+    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    @RustRefOut public unsafe T[] assume_init_ref();
+    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustRefOut public T[] as_flattened();
+    @MutSelf @RustRefOut public T[] as_flattened_mut();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
+    @RustRefOut public String as_str();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -3965,10 +4010,14 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public (T[], T[])? split_last_chunk_mut();
     @RustRefOut public T[]? last_chunk();
     @MutSelf @RustRefOut public T[]? last_chunk_mut();
-    @RustRefOut public I.Output? get<I>(I index);
-    @MutSelf @RustRefOut public I.Output? get_mut<I>(I index);
-    @RustRefOut public unsafe I.Output get_unchecked<I>(I index);
-    @MutSelf @RustRefOut public unsafe I.Output get_unchecked_mut<I>(I index);
+    @RustRefOut public T? get(uint index);
+    @RustRefOut public T[]? get(RangeFull index);
+    @MutSelf @RustRefOut public T? get_mut(uint index);
+    @MutSelf @RustRefOut public T[]? get_mut(RangeFull index);
+    @RustRefOut public unsafe T get_unchecked(uint index);
+    @RustRefOut public unsafe T[] get_unchecked(RangeFull index);
+    @MutSelf @RustRefOut public unsafe T get_unchecked_mut(uint index);
+    @MutSelf @RustRefOut public unsafe T[] get_unchecked_mut(RangeFull index);
     public Range<T*> as_ptr_range();
     @MutSelf public Range<T*> as_mut_ptr_range();
     @RustRefOut public T[]? as_array();
@@ -4044,34 +4093,11 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf @RustRefOut public T? split_off_first_mut();
     @MutSelf @RustRefOut public T? split_off_last();
     @MutSelf @RustRefOut public T? split_off_last_mut();
-    @MutSelf public unsafe I.Output[] get_disjoint_unchecked_mut<I>(I[] indices);
-    @MutSelf public I.Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
+    @MutSelf public unsafe T[] get_disjoint_unchecked_mut(uint[] indices);
+    @MutSelf public unsafe T[][] get_disjoint_unchecked_mut(RangeFull[] indices);
+    @MutSelf public T[] get_disjoint_mut(uint[] indices) throws GetDisjointMutError;
+    @MutSelf public T[][] get_disjoint_mut(RangeFull[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
-    @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
-    @RustRefOut public String as_str();
-    @RustRefOut public ubyte[] as_bytes();
-    @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
-    @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_filled(T value);
-    @MutSelf @RustRefOut public T[] write_with<F>((uint) -> T f);
-    @MutSelf public (T[], MaybeUninit<T>[]) write_iter<I>(I it);
-    @MutSelf @RustRefOut public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    @RustRefOut public unsafe T[] assume_init_ref();
-    @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
-    @RustRefOut public T[] as_flattened();
-    @MutSelf @RustRefOut public T[] as_flattened_mut();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */

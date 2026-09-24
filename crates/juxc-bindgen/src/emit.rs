@@ -370,6 +370,7 @@ mod tests {
             doc: None,
             closure_ref_params: Vec::new(),
             bounds: Vec::new(),
+            projection_role: None,
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,
@@ -388,6 +389,7 @@ mod tests {
             doc: None,
             closure_ref_params: Vec::new(),
             bounds: Vec::new(),
+            projection_role: None,
         });
 
         let file = StubFile {
@@ -423,6 +425,7 @@ mod tests {
             doc: None,
             closure_ref_params: Vec::new(),
             bounds: Vec::new(),
+            projection_role: None,
         };
         assert_eq!(
             render_fn(&f, false),
@@ -474,6 +477,7 @@ mod tests {
             doc: None,
             closure_ref_params: Vec::new(),
             bounds: Vec::new(),
+            projection_role: None,
         };
         let file = StubFile {
             items: vec![StubItem::Function(f)],
@@ -511,6 +515,7 @@ mod tests {
             doc: None,
             closure_ref_params: Vec::new(),
             bounds: Vec::new(),
+            projection_role: None,
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }

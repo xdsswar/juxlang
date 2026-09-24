@@ -293,6 +293,42 @@ pub struct StubFn {
     /// `@RustBounds("T: Ord")`, so the checker can report an unmet bound in
     /// Jux terms (E0446) instead of rustc's E0277 (Bindgen G.6.4.4).
     pub bounds: Vec<String>,
+    /// What this declaration is to an associated-type projection fan-out
+    /// (§G.6.4.5). `None` for an ordinary method. See [`ProjectionRole`].
+    pub projection_role: Option<ProjectionRole>,
+}
+
+/// A method's part in an associated-type projection fan-out (§G.6.4.5).
+///
+/// `Vec::get` is `fn get<I>(&self, index: I) -> Option<&I::Output> where I:
+/// SliceIndex<[T]>`: one Rust declaration that behaves as several, one per
+/// impl of the bound. The ingest emits one [`ProjectionRole::Overload`] per
+/// impl it could resolve, plus the original, unresolved
+/// [`ProjectionRole::Fallback`]. A LATE pass then drops the overloads whose
+/// parameter type this stub cannot name (the check needs the whole stub's
+/// declared set, which the ingest does not have yet) and keeps the fallback
+/// only when nothing survived, so the method never disappears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionRole {
+    /// One resolved impl: the parameter is that impl's self type and the
+    /// return is its associated-type binding.
+    Overload {
+        /// Every named type the parameter mentions, as `(Jux name, real Rust
+        /// path)`. The late pass keeps the overload only when this stub
+        /// declares each name for that very Rust type: `rust.std` declares
+        /// `Range` for `std::collections::btree_map::Range`, so an overload
+        /// taking `core::ops::Range` must not be written `Range` there.
+        param_paths: Vec<(String, String)>,
+        /// How complicated the parameter's shape is: 0 for a primitive, up to
+        /// 4 for anything the mapping could not simplify. Several impls of one
+        /// trait often give one result from several index types, and the late
+        /// pass keeps the simplest of those, which is the one a program would
+        /// write (`usize`, not `core`'s internal `Clamp<usize>`).
+        param_rank: u8,
+    },
+    /// The original declaration, projection and all. Emitted only when no
+    /// overload of the group survived.
+    Fallback,
 }
 
 /// A single parameter (`ty name`).
