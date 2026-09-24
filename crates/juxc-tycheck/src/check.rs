@@ -11324,11 +11324,13 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 }
-                // `spawn(f)` (§18.1.3): the lambda's body runs on a
-                // pool thread — same Send gate as Worker.spawn
-                // (E0702: no wrapper-class captures).
+                // `spawn(f)` (§18.1.3): the lambda's body runs on the ONE
+                // built-in event loop, concurrent with its siblings and not
+                // parallel to them (ERRATA E85), so it may hold and hand back
+                // anything an ordinary value may hold, a class included. No
+                // capture gate: E0702 belongs to `Worker.spawn` (§M.12),
+                // which is a real thread boundary and keeps it.
                 if name == "spawn" {
-                    self.check_spawn_captures(&c.args);
                     // `spawn(asyncFn())` consumes the future (E0705 exempt).
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
@@ -11629,6 +11631,45 @@ impl<'a> Checker<'a> {
                                 self.check_time_span_arg(span, c.span);
                             }
                         }
+                        let prev_slot = self.in_future_slot;
+                        self.in_future_slot = true;
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        self.in_future_slot = prev_slot;
+                        return;
+                    }
+                    // Any OTHER name after `Task.` is a mistake the checker
+                    // can see. It used to pass, and rustc then reported
+                    // "expected value, found struct `Task`" about a struct the
+                    // program never wrote.
+                    // `Task` is a name a program may use for a type of its own
+                    // (`examples/apps/todo` has a `todo.model.Task`), so this
+                    // only speaks for the runtime's `Task`, when no declared
+                    // type of any package answers to the name.
+                    let task_is_declared = self
+                        .symbols
+                        .classes
+                        .keys()
+                        .chain(self.symbols.records.keys())
+                        .chain(self.symbols.enums.keys())
+                        .chain(self.symbols.interfaces.keys())
+                        .any(|k| k.rsplit('.').next() == Some("Task"));
+                    if qn.segments.len() == 1
+                        && qn.segments[0].text == "Task"
+                        && !task_is_declared
+                        && self.env.lookup("Task").is_none()
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0413_UnresolvedMethod,
+                                format!(
+                                    "no static `{method_name}` on `Task` -- the task statics are \
+                                     `all`, `any`, `race`, `allSettled` and `delay` (§18.1.4)",
+                                ),
+                            )
+                            .with_span(field.field.span),
+                        );
                         let prev_slot = self.in_future_slot;
                         self.in_future_slot = true;
                         for arg in &c.args {
@@ -12033,6 +12074,30 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     if bare == "Channel" && matches!(method_name, "send" | "receive" | "close") {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                    // `Task<T>` (§18.1.4) — same builtin treatment: its
+                    // methods live on the emitted JuxTask handle. Naming one
+                    // it does not have is an ordinary Jux error here rather
+                    // than a rustc message about a type the program never
+                    // wrote, which is all a typo used to get.
+                    if name == juxc_ast::TASK_SENTINEL {
+                        if !matches!(method_name, "cancel" | "blockingGet") {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    format!(
+                                        "no method `{method_name}` on `Task` -- a task's own \
+                                         members are `cancel()` and `blockingGet()`; `await task` \
+                                         is what reads its value (§18.1.4)",
+                                    ),
+                                )
+                                .with_span(field.field.span),
+                            );
+                        }
                         for arg in &c.args {
                             self.check_expr(arg);
                         }

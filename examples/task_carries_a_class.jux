@@ -1,0 +1,66 @@
+// A spawned task carries an ordinary Jux value, a class included
+// (JUX-ASYNC-ADDENDUM-v2 §18.1.3, ERRATA E85).
+//
+// `spawn` schedules onto the one built-in event loop, so a task is CONCURRENT
+// with its siblings rather than parallel to them, and nothing crosses a thread
+// boundary. A class lowers to a shared reference, which cannot cross one, and
+// requiring that it could is what used to make `spawn` unusable with the
+// reference type of the language: the program below failed with a rustc error
+// about `Rc<RefCell<..>>` not being `Send`, a type it never wrote. The thread
+// boundary is a different feature with a different name, `Worker.spawn`
+// (JUX-MISSING-DEFS §M.12), and it still refuses what cannot cross.
+
+package tasks;
+
+class User {
+    public String name;
+    public int visits;
+
+    public User(String n, int v) {
+        this.name = n;
+        this.visits = v;
+    }
+
+    public String greeting() {
+        return "hi " + this.name;
+    }
+}
+
+async User makeUser(String n) {
+    return new User(n, 1);
+}
+
+async int visitsOf(User u) {
+    return u.visits;
+}
+
+public async void main() {
+    // The async call written directly as the argument.
+    var direct = spawn(makeUser("ada"));
+    print((await direct).name);
+
+    // The same work behind a zero-argument lambda: the lambda's body is a
+    // call to an async function, and the task awaits it.
+    var wrapped = spawn(() -> makeUser("bob"));
+    var bob = await wrapped;
+    print(bob.greeting());
+
+    // A class travels INTO a task as well as out of it.
+    var counted = spawn(() -> visitsOf(bob));
+    print(await counted);
+
+    // Two tasks at once, and the object one of them built is a real handle:
+    // writing through it is seen through the other name.
+    var first = spawn(makeUser("cleo"));
+    var second = spawn(() -> makeUser("dora"));
+    var c = await first;
+    var d = await second;
+    var alias = c;
+    alias.visits = 9;
+    print(c.name + " " + c.visits + " " + d.name);
+
+    // A plain value still works the way it always did.
+    var n = spawn(() -> 6 * 7);
+    print(await n);
+    print("done");
+}

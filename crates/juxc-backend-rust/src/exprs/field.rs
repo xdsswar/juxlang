@@ -1753,6 +1753,15 @@ impl RustEmitter {
             other => other,
         };
         let Expr::Path(qn) = expr else { return false };
+        // An `observer<T>` binding (§P.2.4) shares on EVERY read, last one
+        // included. The property it is attached to holds only a weak
+        // reference (§P.2.3), so this binding is the observer's one strong
+        // owner: moving it out at its last read is what made `wire(m, o)`
+        // attach an observer that was already dead by the time the property
+        // fired. See `crate::analysis::collect_observer_locals`.
+        if qn.segments.len() == 1 && self.observer_locals.contains(qn.segments[0].text.as_str()) {
+            return true;
+        }
         // A record's own component read by its bare name is `self.items`,
         // behind `&self`: every read of a non-`Copy` one copies, the last
         // included, since the value stays in the record. Its type is the

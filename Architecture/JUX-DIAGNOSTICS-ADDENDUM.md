@@ -510,6 +510,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0494`  | An enum's per-variant field is not `final` | LANG-V1 §7.7.4 |
 | `E0495`  | An enum constructor does more than give each field its value once | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
+| `E0497`  | A cycle among static-field initializers: no order initializes them | Semantics §S.4.2 / `ERRATA.md` E89 |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
@@ -694,7 +695,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |
 | `W0307`  | A foreign item was skipped (macro, unmappable type) *(reserved)* | Bindgen §G.12              |
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
-| `W0530`  | Cyclic class initialization within a module *(reserved)*    | Semantics §S.4.2               |
+| `W0530`  | Cyclic class initialization within a module *(retired: the check is the error `E0497`, ERRATA E93; the number is not reused)* | Semantics §S.4.2 |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
 | `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor, not by a build) | Layout-ABI §L.5.5 |
 | `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |

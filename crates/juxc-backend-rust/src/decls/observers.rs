@@ -1058,10 +1058,14 @@ impl RustEmitter {
             self.emit_observer_arg_expr(prop, arg);
             self.w.push(')');
         } else {
-            self.w
-                .push_str("crate::JuxObserver::Weak(std::rc::Rc::downgrade(&(");
+            // Weak when something else owns the observer, strong when nothing
+            // does (§P.2.3, ERRATA E91). The attach site cannot tell those
+            // apart -- a parameter looks the same whether the caller kept the
+            // observer or wrote the lambda in the argument list -- so the
+            // helper asks the handle itself.
+            self.w.push_str("crate::__jux_observer(&(");
             self.emit_expr(arg);
-            self.w.push_str(")))");
+            self.w.push_str("))");
         }
     }
 

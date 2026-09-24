@@ -863,6 +863,17 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// Locals of the body being emitted that are declared `observer<T>`
+    /// (§P.2.4). A property holds its observers WEAKLY (§P.2.3), so the
+    /// binding that names one is its only strong owner, and the emitter's
+    /// move-on-last-use would hand that owner to a call and drop it when the
+    /// call returned. The observer the call just attached would then be a
+    /// dead weak reference, pruned on the next fire: `wire(m, o)` attached
+    /// nothing, fired nothing, and `.observers.size` said `0`, in a program
+    /// that compiled and ran clean. Every read of one therefore shares the
+    /// handle. Computed per body in `emit_fn_body_at`, saved and restored
+    /// around nested bodies.
+    pub(crate) observer_locals: HashSet<String>,
     /// Names of locals that are **captured by a closure AND mutated** in the
     /// current function body, so they lower to an `Rc<RefCell<T>>` shared cell
     /// (the FnMut / mutable-capture case). A closure capturing such a local
@@ -4592,6 +4603,27 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
         w.push_str("        f.write_str(\"observer\")\n");
         w.push_str("    }\n");
+        w.push_str("}\n");
+        // How a NAMED observer is stored (§P.2.3, ERRATA E91). Weak is the
+        // rule, and it works because the name that holds the observer is its
+        // owner: when the owner dies the weak reference dies with it and the
+        // property prunes it. An observer that reaches an attach with NO other
+        // owner has nobody to be kept alive by, so a weak attach would be dead
+        // on arrival: the property is then its owner, and holds it strongly.
+        //
+        // That is the case a lambda written at a CALL makes, which the attach
+        // site cannot see: `wire(m, (old, now) -> ...)` hands `wire` a closure
+        // the caller does not keep, and `wire`'s attach of its own parameter
+        // used to store a weak reference to it. The observer never fired and
+        // `.observers.size` said 0, in a program that compiled and ran clean.
+        // The strong count answers the question the attach site cannot: one
+        // means this reference is the only one there is.
+        w.push_str("pub fn __jux_observer<F: ?Sized>(f: &std::rc::Rc<F>) -> JuxObserver<F> {\n");
+        w.push_str("    if std::rc::Rc::strong_count(f) == 1 {\n");
+        w.push_str("        JuxObserver::Strong(f.clone())\n");
+        w.push_str("    } else {\n");
+        w.push_str("        JuxObserver::Weak(std::rc::Rc::downgrade(f))\n");
+        w.push_str("    }\n");
         w.push_str("}\n\n");
         // Memory-ordering adapter (§S.6.2): maps the Jux stdlib
         // `MemoryOrder` enum onto Rust's `atomic::Ordering` for the
@@ -4936,6 +4968,68 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("pub struct JuxTaskShared {\n");
         w.push_str("    // (orphaned, parked failure)\n");
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
+        w.push_str("    // Set by `cancel()`: the task throws where it next resumes.\n");
+        w.push_str("    cancelled: std::sync::atomic::AtomicBool,\n");
+        w.push_str("}\n");
+        // **Cooperative cancellation** (EXCEPTIONS §X.7.3, ERRATA E92).
+        // `cancel()` sets the flag above and returns; the task notices it
+        // where it RESUMES, which is exactly where an `await` hands control
+        // back, and throws `CancellationException` there. From that point it
+        // is an ordinary Jux exception: it unwinds the task's body, runs its
+        // `finally` blocks, drops its values, and is what `await task`
+        // re-throws at the awaiter.
+        //
+        // Phase 1 used to DROP the task's `RemoteHandle` instead, which drops
+        // the running future outright. A dropped future never resumes, so no
+        // `finally` block of a cancelled task ever ran and no `drop` block
+        // ever ran, in a program that compiled and ran without a word. That
+        // made `cancel()` unsafe for any task holding a resource, which is
+        // the one thing §X.7.3 promises it is not.
+        //
+        // The flag a task is running under sits on this stack while it is
+        // polled, so an `await` anywhere inside it finds the flag without
+        // threading a token through every async signature. Outside a spawned
+        // task the stack is empty and the check is one thread-local read.
+        w.push_str("thread_local! {\n");
+        w.push_str("    static __JUX_CANCEL: std::cell::RefCell<Vec<std::sync::Arc<JuxTaskShared>>> =\n");
+        w.push_str("        const { std::cell::RefCell::new(Vec::new()) };\n");
+        w.push_str("}\n");
+        w.push_str("/// A spawned task's future, with its cancellation flag in scope while it runs.\n");
+        w.push_str("pub struct JuxCancelScope<F> {\n");
+        w.push_str("    inner: std::pin::Pin<::std::boxed::Box<F>>,\n");
+        w.push_str("    shared: std::sync::Arc<JuxTaskShared>,\n");
+        w.push_str("}\n");
+        w.push_str("impl<F: std::future::Future> std::future::Future for JuxCancelScope<F> {\n");
+        w.push_str("    type Output = F::Output;\n");
+        w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<F::Output> {\n");
+        w.push_str("        // A guard, so the flag leaves the stack even when the body unwinds.\n");
+        w.push_str("        struct Pop;\n");
+        w.push_str("        impl Drop for Pop {\n");
+        w.push_str("            fn drop(&mut self) {\n");
+        w.push_str("                __JUX_CANCEL.with(|c| {\n");
+        w.push_str("                    c.borrow_mut().pop();\n");
+        w.push_str("                });\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("        let me = self.as_mut().get_mut();\n");
+        w.push_str("        __JUX_CANCEL.with(|c| c.borrow_mut().push(me.shared.clone()));\n");
+        w.push_str("        let _pop = Pop;\n");
+        w.push_str("        me.inner.as_mut().poll(cx)\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("/// What an `await` resumed with, unless this task was cancelled meanwhile.\n");
+        w.push_str("pub fn __jux_awaited<T>(value: T) -> T {\n");
+        w.push_str("    let cancelled = __JUX_CANCEL.with(|c| {\n");
+        w.push_str("        c.borrow()\n");
+        w.push_str("            .last()\n");
+        w.push_str("            .map_or(false, |s| s.cancelled.load(std::sync::atomic::Ordering::SeqCst))\n");
+        w.push_str("    });\n");
+        w.push_str("    if cancelled {\n");
+        w.push_str("        std::panic::panic_any(crate::jux::std::exceptions::CancellationException::new(\n");
+        w.push_str("            String::from(\"task was cancelled\"),\n");
+        w.push_str("        ));\n");
+        w.push_str("    }\n");
+        w.push_str("    value\n");
         w.push_str("}\n");
         // The handle sits in a `Cell` so `cancel()` works through `&self`: a
         // cancelled task is still a value the program may `await`.
@@ -4958,13 +5052,14 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    #[allow(non_snake_case)]\n");
         w.push_str("    pub fn blockingGet(self) -> T {\n");
         w.push_str("        let Some(handle) = self.0.take() else { Self::cancelled() };\n");
-        w.push_str("        Self::settle(&self.1, futures::executor::block_on(handle))\n");
+        w.push_str("        Self::settle(&self.1, crate::__jux_block_on(handle))\n");
         w.push_str("    }\n");
         w.push_str("    pub fn cancel(&self) {\n");
-        w.push_str("        // Dropping the RemoteHandle stops the remote computation\n");
-        w.push_str("        // at its next suspension point (the Drop impl would FORGET\n");
-        w.push_str("        // it instead). A cancelled task has no failure to report.\n");
-        w.push_str("        std::mem::drop(self.0.take());\n");
+        w.push_str("        // Cooperative, per EXCEPTIONS X.7.3: the task throws\n");
+        w.push_str("        // CancellationException where it next resumes, so its finally\n");
+        w.push_str("        // blocks and drops run. The handle stays, and awaiting it\n");
+        w.push_str("        // afterwards re-throws what the task threw.\n");
+        w.push_str("        self.1.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
@@ -4982,7 +5077,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("                state.0 = true;\n");
         w.push_str("                state.1.take()\n");
         w.push_str("            };\n");
-        w.push_str("            if let Some(p) = parked {\n");
+        w.push_str("            // A CANCELLED task reports nothing (ERRATA E92): the caller\n");
+        w.push_str("            // said it no longer wants the result, so there is no\n");
+        w.push_str("            // rejection left to be unhandled.\n");
+        w.push_str("            let cancelled = self.1.cancelled.load(std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("            if let (Some(p), false) = (parked, cancelled) {\n");
         w.push_str("                crate::__jux_unhandled_rejection(p);\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
@@ -5002,14 +5101,102 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
-        w.push_str(
-            "pub static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n",
-        );
-        w.push_str("    std::sync::LazyLock::new(|| futures::executor::ThreadPool::new().expect(\"task pool\"));\n");
-        w.push_str("pub fn __jux_spawn<T: Send + 'static>(\n");
-        w.push_str("    fut: impl std::future::Future<Output = T> + Send + 'static,\n");
+        // **The one built-in event loop** (§18.1.3, ERRATA E85). A spawned
+        // task is CONCURRENT with its siblings, not parallel to them: it runs
+        // on this loop, on the thread that started the program. That is what
+        // lets it hold and hand back an ordinary Jux value, a class included.
+        //
+        // The Phase-1 lowering scheduled onto a work-stealing thread pool and
+        // put `Send` on the spawned computation. Every class lowers to
+        // `Rc<RefCell<..>>`, which is not `Send`, so `spawn` could not carry
+        // the reference type of the language, and with it went `Task.all`,
+        // `Task.any`, `map`, `flatMap`, `parallel` and the rest of the surface
+        // that only `spawn` can produce a `Task<T>` for. `Worker.spawn`
+        // (MISSING-DEFS §M.12) is the thread boundary, and keeps its `Send`
+        // requirement and its `E0702`.
+        //
+        // The pool is TAKEN out of its cell while it runs, rather than
+        // borrowed, so a nested drive finds `None` instead of panicking on a
+        // second `borrow_mut`. The guard puts it back even if the run unwinds,
+        // which a Jux exception reaching an async `main` does.
+        w.push_str("pub struct JuxLoop {\n");
+        w.push_str("    pool: std::cell::RefCell<Option<futures::executor::LocalPool>>,\n");
+        w.push_str("    spawner: futures::executor::LocalSpawner,\n");
+        w.push_str("}\n");
+        w.push_str("thread_local! {\n");
+        w.push_str("    static __JUX_LOOP: JuxLoop = {\n");
+        w.push_str("        let pool = futures::executor::LocalPool::new();\n");
+        w.push_str("        let spawner = pool.spawner();\n");
+        w.push_str("        JuxLoop { pool: std::cell::RefCell::new(Some(pool)), spawner }\n");
+        w.push_str("    };\n");
+        w.push_str("}\n");
+        w.push_str("/// Drive `f` to completion, running the loop's other tasks meanwhile.\n");
+        w.push_str("pub fn __jux_block_on<F: std::future::Future>(f: F) -> F::Output {\n");
+        w.push_str("    struct Restore(Option<futures::executor::LocalPool>);\n");
+        w.push_str("    impl Drop for Restore {\n");
+        w.push_str("        fn drop(&mut self) {\n");
+        w.push_str("            if let Some(p) = self.0.take() {\n");
+        w.push_str("                __JUX_LOOP.with(|l| *l.pool.borrow_mut() = Some(p));\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("    let mut held = Restore(__JUX_LOOP.with(|l| l.pool.borrow_mut().take()));\n");
+        w.push_str("    match held.0.as_mut() {\n");
+        w.push_str("        Some(pool) => pool.run_until(f),\n");
+        w.push_str("        // Already inside the loop: this drive is nested, and runs the\n");
+        w.push_str("        // future it was handed on the thread that is already here.\n");
+        w.push_str("        None => futures::executor::block_on(f),\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // A timer the loop can WAIT on. `Task.delay` used to spawn a task that
+        // slept, which was fine while tasks had threads of their own; on one
+        // loop it would stop every other task for the duration. Returning
+        // Pending and waking from a thread of its own leaves the loop free.
+        w.push_str("pub struct JuxDelay {\n");
+        w.push_str("    deadline: std::time::Instant,\n");
+        w.push_str("    armed: bool,\n");
+        w.push_str("}\n");
+        w.push_str("impl std::future::Future for JuxDelay {\n");
+        w.push_str("    type Output = ();\n");
+        w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {\n");
+        w.push_str("        let now = std::time::Instant::now();\n");
+        w.push_str("        if now >= self.deadline {\n");
+        // An `if`/`else` rather than an early `return`, which is the shape a
+        // person writes for two outcomes anyway, and keeps the prelude clear
+        // of the word the trailing-return gate reads the whole file for.
+        w.push_str("            std::task::Poll::Ready(())\n");
+        w.push_str("        } else {\n");
+        w.push_str("            if !self.armed {\n");
+        w.push_str("                self.armed = true;\n");
+        w.push_str("                let waker = cx.waker().clone();\n");
+        w.push_str("                let wait = self.deadline - now;\n");
+        w.push_str("                std::thread::spawn(move || {\n");
+        w.push_str("                    std::thread::sleep(wait);\n");
+        w.push_str("                    waker.wake();\n");
+        w.push_str("                });\n");
+        w.push_str("            }\n");
+        w.push_str("            std::task::Poll::Pending\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // A timer reads like a task at the call site (`Task.delay(30)`), so it
+        // answers `blockingGet()` as one: drive it from sync code.
+        w.push_str("impl JuxDelay {\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn blockingGet(self) {\n");
+        w.push_str("        crate::__jux_block_on(self);\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("pub fn __jux_delay(d: std::time::Duration) -> JuxDelay {\n");
+        w.push_str("    JuxDelay { deadline: std::time::Instant::now() + d, armed: false }\n");
+        w.push_str("}\n");
+        w.push_str("pub fn __jux_spawn<T: 'static>(\n");
+        w.push_str("    fut: impl std::future::Future<Output = T> + 'static,\n");
         w.push_str(") -> JuxTask<T> {\n");
-        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared { state: std::sync::Mutex::new((false, None)) });\n");
+        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
+        w.push_str("        state: std::sync::Mutex::new((false, None)),\n");
+        w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("    });\n");
         w.push_str("    let task_side = shared.clone();\n");
         w.push_str("    let guarded = async move {\n");
         w.push_str("        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {\n");
@@ -5024,15 +5211,25 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("                        None\n");
         w.push_str("                    }\n");
         w.push_str("                };\n");
-        w.push_str("                if let Some(p) = orphaned {\n");
+        w.push_str("                // A cancelled task reports nothing (ERRATA E92).\n");
+        w.push_str("                let quiet = task_side.cancelled.load(std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("                if let (Some(p), false) = (orphaned, quiet) {\n");
         w.push_str("                    crate::__jux_unhandled_rejection(p);\n");
         w.push_str("                }\n");
         w.push_str("                Err(())\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    };\n");
+        // The scope wraps the catch_unwind rather than sitting inside it: it
+        // puts this task's cancellation flag in scope for every `await` in the
+        // task, and the throw an `await` then makes is caught where every
+        // other Jux exception in a task is caught.
+        w.push_str("    let scoped = JuxCancelScope { inner: ::std::boxed::Box::pin(guarded), shared: shared.clone() };\n");
+        w.push_str("    let handle = __JUX_LOOP.with(|l| {\n");
+        w.push_str("        futures::task::LocalSpawnExt::spawn_local_with_handle(&l.spawner, scoped).expect(\"spawn\")\n");
+        w.push_str("    });\n");
         w.push_str("    JuxTask(\n");
-        w.push_str("        std::cell::Cell::new(Some(futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, guarded).expect(\"spawn\"))),\n");
+        w.push_str("        std::cell::Cell::new(Some(handle)),\n");
         w.push_str("        shared,\n");
         w.push_str("    )\n");
         w.push_str("}\n\n");
@@ -5402,7 +5599,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // `join()` — block the calling thread until the worker completes.
         // Uses futures::executor::block_on so no additional runtime dep needed.
         w.push_str(
-            "impl<T> Task<T> { pub fn join(self) -> T { futures::executor::block_on(self) } }\n",
+            "impl<T> Task<T> { pub fn join(self) -> T { crate::__jux_block_on(self) } }\n",
         );
         w.push_str("pub struct Worker;\n");
         w.push_str("impl Worker {\n");
@@ -5495,6 +5692,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             concrete_polybase_locals: HashSet::new(),
             enclosing_record: None,
             ref_locals: HashSet::new(),
+            observer_locals: HashSet::new(),
             forced_cell_locals: HashSet::new(),
             pointer_locals: HashMap::new(),
             captured_locals: HashSet::new(),
@@ -5799,7 +5997,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             self.w.indent_inc();
             let path = juxc_lex::join_rust_path(&package);
             let call = if async_main {
-                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+                format!("crate::__jux_block_on({path}::__jux_async_main({args_expr}))")
             } else if takes_args || returns_code {
                 format!("{path}::__jux_args_main({args_expr})")
             } else {
@@ -6097,7 +6295,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     self.w.line("fn main() {");
                     self.w.indent_inc();
                     self.emit_entry_call(
-                        &format!("futures::executor::block_on(__jux_async_main({args_expr}))"),
+                        &format!("crate::__jux_block_on(__jux_async_main({args_expr}))"),
                         returns_code,
                     );
                     self.w.indent_dec();
@@ -6123,7 +6321,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // one taking args or returning a code was renamed to
             // `__jux_args_main` by `emit_fn_decl`.
             let call = if is_async_main {
-                format!("futures::executor::block_on({path}::__jux_async_main({args_expr}))")
+                format!("crate::__jux_block_on({path}::__jux_async_main({args_expr}))")
             } else if takes_args || returns_code {
                 format!("{path}::__jux_args_main({args_expr})")
             } else {
@@ -6186,7 +6384,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // forward an `int` return as the exit code. Unified so async-int doesn't
         // lose its code and async-void / sync-void stay plain statements.
         let inner = if is_async {
-            format!("futures::executor::block_on({call})")
+            format!("crate::__jux_block_on({call})")
         } else {
             call
         };
@@ -6325,7 +6523,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // the executor.
         let call_text = |call: &str, is_async: bool| -> String {
             if is_async {
-                format!("futures::executor::block_on({call}());")
+                format!("crate::__jux_block_on({call}());")
             } else {
                 format!("{call}();")
             }

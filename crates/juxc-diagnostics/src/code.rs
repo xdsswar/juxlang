@@ -686,6 +686,22 @@ pub enum Code {
     /// payload variant (`Ok(int status)`) sits in an enum that has one, or a
     /// generic enum declares one.
     E0496_EnumArgumentsWithoutConstructor,
+    /// E0497 -- A cycle among static-field initializers (Semantics §S.4.2,
+    /// ERRATA E93): each of the named fields needs another's value before it
+    /// has one, so there is no order that initializes them.
+    ///
+    /// The graph has one node per static field with an initializer and an edge
+    /// to every static field that initializer reads, following the static
+    /// methods it calls. A dependency only a runtime value can reveal, through
+    /// a virtual call or a function value, is outside it.
+    ///
+    /// `W0530` was reserved for this case as a lint, with a promise that the
+    /// second entry into a partly-initialized class would read a partial value.
+    /// Neither existed: a static lowers to a `LazyLock`, and re-entering one
+    /// blocks forever, so `class A { public static int X = A.X + 1; }` checked
+    /// clean, built, printed nothing and never exited. There is no value an
+    /// initializer cycle can produce that is right, so it is an error.
+    E0497_StaticInitializerCycle,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -1199,6 +1215,7 @@ impl Code {
             Code::E0494_EnumFieldNotFinal        => "E0494",
             Code::E0495_EnumConstructorShape     => "E0495",
             Code::E0496_EnumArgumentsWithoutConstructor => "E0496",
+            Code::E0497_StaticInitializerCycle   => "E0497",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",
@@ -1356,7 +1373,14 @@ mod catalog_tests {
             let description = after.split('|').nth(1).unwrap_or("");
             // `(reserved` rather than `(reserved)`: a row may qualify the
             // marker, as E0261 does with "(reserved; statement form is E0440)".
-            if !implemented.iter().any(|c| c == code) && !description.contains("(reserved") {
+            //
+            // `(retired` is the third answer, and a stronger one: the check
+            // exists, under a different number, and this one will never be
+            // raised again (§D.5.1 keeps the row so `juxc explain` can still
+            // answer for a code a user read in an old build). `W0530` is the
+            // first, retired by ERRATA E93 in favour of the error `E0497`.
+            let marked = description.contains("(reserved") || description.contains("(retired");
+            if !implemented.iter().any(|c| c == code) && !marked {
                 unmarked.push(code.to_string());
             }
         }

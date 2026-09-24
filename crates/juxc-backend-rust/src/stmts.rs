@@ -3218,6 +3218,26 @@ impl RustEmitter {
                 if let Some(scope) = self.local_types.last_mut() {
                     scope.insert(var.name.text.clone(), ty);
                 }
+            } else if let Some(prim) = self.operand_primitive(init) {
+                // A `var` over a PRIMITIVE records that primitive for the same
+                // reason: `$name` interpolation synthesizes a span, so the
+                // `expr_types` lookup for the interpolated name misses and the
+                // name-keyed `local_types` is the only source left.
+                //
+                // Without the record, `var v = 2.0; print($"$v");` did not know
+                // `v` was a double, so the arg took the plain `{}` slot and
+                // printed `2`, where `${v}`, `print(v)` and the declared
+                // `double v = 2.0;` spelling all printed `2.0`. A float keeping
+                // its decimal point is LANG-V1 §3.4, and the bare `$name` form
+                // was the one path that did not know it was looking at one.
+                //
+                // `operand_primitive` answers from the checker's inferred type
+                // where there is one, and structurally for the literal-only
+                // initializers that carry a DUMMY span and have no recorded
+                // type at all.
+                if let Some(scope) = self.local_types.last_mut() {
+                    scope.insert(var.name.text.clone(), juxc_tycheck::Ty::Primitive(prim));
+                }
             }
         }
         self.w.push_str("let ");

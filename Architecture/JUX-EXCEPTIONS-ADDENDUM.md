@@ -536,7 +536,14 @@ The async-throws-Result lowering applies to spawned tasks too: in Result-mode pr
 
 ### X.7.3. Cancellation as Exception
 
-`task.cancel()` causes the next `await` in the task to throw `CancellationException`. Cancellation **is** an exception in this design — it propagates the same way, runs `finally` blocks, runs drops, and so on. Per JUX-LANG-V1 §10.1.9.
+`task.cancel()` sets a flag the task shares with its handle and returns at once; it drops nothing. Where the task next RESUMES, which is where an `await` hands control back, it throws `CancellationException("task was cancelled")`. Cancellation **is** an exception in this design: it propagates the same way, runs `finally` blocks, runs drops, and is what `await task` re-throws at the awaiter. Per JUX-LANG-V1 §10.1.9.
+
+Two consequences follow from cancellation being cooperative (ERRATA E92):
+
+- **A cancelled task reports nothing.** Whatever it fails with, its own `CancellationException` included, never reaches the unhandled-rejection hook of §X.7.2 / §10.1.8. Cancelling is the caller saying it no longer wants the result, so there is no rejection left to be unhandled.
+- **A task that never awaits again is never interrupted.** A task that has already finished, or that runs to its end without suspending, completes normally. "The next `await`" is the whole of the contract.
+
+`withTimeout` is a different mechanism, a race whose loser is dropped (`JUX-ASYNC-ADDENDUM-v2.md` §18.1.9): the timed-out work is dropped, not thrown into.
 
 ---
 

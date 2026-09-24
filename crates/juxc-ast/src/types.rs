@@ -18,6 +18,16 @@ use crate::exprs::Expr;
 /// out of user namespace; helpers below construct/recognize it.
 pub const TUPLE_SENTINEL: &str = "__tuple";
 
+/// The sentinel type-name for the handle `spawn(f)` gives back (§18.1.4), the
+/// same encoding trick: `Task<T>` is `Ty::User { name: "__jux_task" }` with `T`
+/// as its one generic arg, and `await` on one peels it.
+///
+/// The sentinel, rather than the bare name `Task`, because `Task` is a name a
+/// program may use: `examples/apps/todo` declares a `todo.model.Task` record,
+/// and a spawn handle typed plainly `Task` collided with it, so every call on
+/// one of its records was reported as a method a task does not have.
+pub const TASK_SENTINEL: &str = "__jux_task";
+
 /// **Record destructuring** (`var Pt(a, b) = p;`, JUX-LANG-V1 §5.4) is
 /// desugared by the parser into a typed temporary and one read per binder:
 ///

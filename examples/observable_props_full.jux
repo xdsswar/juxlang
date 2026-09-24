@@ -106,6 +106,25 @@ void p6_ctor_bind() {
     print("follows: " + m.Shown);
 }
 
+// P8: an `observer<T>` PARAMETER (§P.2.4). A property keeps only a weak
+// reference to an observer (§P.2.3), so the variable that names one is its
+// only strong owner: handing it to a function SHARES the handle. Moving it
+// would kill the observer when the callee returned, and the attach the
+// callee just made with it.
+void wire(Field f, observer<int> o) {
+    f.Value.observers.attach(o);
+}
+
+void p8_observer_parameter() {
+    var f = new Field();
+    observer<int> o = (old, now) -> {
+        print("param: " + old + " -> " + now);
+    };
+    wire(f, o);
+    f.Value = 4;
+    print("param size: " + f.Value.observers.size);
+}
+
 void p7_static_props() {
     Config.Level.observers.attach((old, now) -> {
         print("level: " + old + " -> " + now);
@@ -129,5 +148,6 @@ public void main() {
     print("size after owner death: " + f.Value.observers.size);
     p6_ctor_bind();
     p7_static_props();
+    p8_observer_parameter();
     print("done");
 }

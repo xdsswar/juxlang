@@ -581,54 +581,136 @@ pub(crate) fn collect_captured_mutated_locals(
         .collect()
 }
 
-/// Var-decl names declared directly in `block` (recursing statement nesting, but
-/// NOT into lambda bodies — a `var` inside a lambda is that lambda's local).
-fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
+/// Call `f` on every var-decl declared directly in `block` (recursing statement
+/// nesting, but NOT into lambda bodies — a `var` inside a lambda is that
+/// lambda's local).
+///
+/// One walk for the two questions asked of a body's own declarations: which
+/// names it declares ([`collect_local_decl_names`]) and which of them a `ref`
+/// binding aliases ([`collect_ref_aliased_locals`]).
+fn for_each_body_var_decl(block: &Block, f: &mut dyn FnMut(&juxc_ast::VarDecl)) {
     for stmt in &block.statements {
         match stmt {
-            Stmt::VarDecl(v) => {
-                out.insert(v.name.text.clone());
-            }
+            Stmt::VarDecl(v) => f(v),
             Stmt::If(i) => {
-                collect_local_decl_names(&i.then_block, out);
+                for_each_body_var_decl(&i.then_block, f);
                 let mut cursor = i.else_branch.as_deref();
                 while let Some(b) = cursor {
                     match b {
                         ElseBranch::If(inner) => {
-                            collect_local_decl_names(&inner.then_block, out);
+                            for_each_body_var_decl(&inner.then_block, f);
                             cursor = inner.else_branch.as_deref();
                         }
                         ElseBranch::Block(blk) => {
-                            collect_local_decl_names(blk, out);
+                            for_each_body_var_decl(blk, f);
                             cursor = None;
                         }
                     }
                 }
             }
-            Stmt::While(w) => collect_local_decl_names(&w.body, out),
-            Stmt::DoWhile(d) => collect_local_decl_names(&d.body, out),
-            Stmt::ForEach(f) => collect_local_decl_names(&f.body, out),
-            Stmt::ForC(f) => collect_local_decl_names(&f.body, out),
+            Stmt::While(w) => for_each_body_var_decl(&w.body, f),
+            Stmt::DoWhile(d) => for_each_body_var_decl(&d.body, f),
+            Stmt::ForEach(fe) => for_each_body_var_decl(&fe.body, f),
+            Stmt::ForC(fc) => for_each_body_var_decl(&fc.body, f),
             Stmt::Try(t) => {
-                collect_local_decl_names(&t.body, out);
+                for_each_body_var_decl(&t.body, f);
                 for c in &t.catches {
-                    collect_local_decl_names(&c.body, out);
+                    for_each_body_var_decl(&c.body, f);
                 }
                 if let Some(fin) = &t.finally {
-                    collect_local_decl_names(fin, out);
+                    for_each_body_var_decl(fin, f);
                 }
             }
-            Stmt::Block(b) | Stmt::Unsafe(b) => collect_local_decl_names(b, out),
+            Stmt::Block(b) | Stmt::Unsafe(b) => for_each_body_var_decl(b, f),
             Stmt::Labeled { stmt, .. } => {
                 let synth = Block {
                     statements: vec![(**stmt).clone()],
                     span: Span::DUMMY,
                 };
-                collect_local_decl_names(&synth, out);
+                for_each_body_var_decl(&synth, f);
             }
             _ => {}
         }
     }
+}
+
+/// Var-decl names declared directly in `block` (recursing statement nesting, but
+/// NOT into lambda bodies — a `var` inside a lambda is that lambda's local).
+fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
+    for_each_body_var_decl(block, &mut |v| {
+        out.insert(v.name.text.clone());
+    });
+}
+
+/// A bare `observer<T>` type (§P.2): the closure handle a property attaches.
+/// Written without a function shape and without an array shape, so
+/// `observer<int>[]` and `(int) -> void` are not it.
+pub(crate) fn type_ref_is_observer(t: &juxc_ast::TypeRef) -> bool {
+    t.fn_shape.is_none()
+        && t.array_shape.is_none()
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "observer"
+}
+
+/// The locals this body declares `observer<T>` (§P.2.4).
+///
+/// A property holds its observers WEAKLY (§P.2.3), so the binding that names
+/// one is its only strong owner. Move-on-last-use would hand that owner to a
+/// call and drop it when the call returned, which DETACHES the observer the
+/// call just attached: `wire(m, o)` moved `o` into `wire`, `wire` attached a
+/// weak reference to it and returned, `o` died with the frame, and the
+/// property pruned the dead reference on its next fire. The observer never
+/// ran and `.observers.size` reported `0`, in a program that compiled and ran
+/// without a word. Every read of an observer binding therefore shares the
+/// handle instead of moving it.
+pub(crate) fn collect_observer_locals(block: &Block) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for_each_body_var_decl(block, &mut |v| {
+        if v.ty.as_ref().is_some_and(type_ref_is_observer) {
+            out.insert(v.name.text.clone());
+        }
+    });
+    out
+}
+
+/// The locals and parameters that a `ref` binding in this body ALIASES
+/// (§M.13.2, ERRATA E90): the names that appear, bare, as the initializer of a
+/// `ref` declaration.
+///
+/// `ref int acc = total;` makes `acc` and `total` two names for one object, so
+/// `total`'s own slot has to BE that object: it is promoted to the same
+/// `Rc<RefCell<T>>` cell the `ref` binding holds, for the whole body. Without
+/// the promotion `total` stayed a plain `let` and the `ref` quietly copied it,
+/// which is why `JUX-POINTERS-REFERENCES-GUIDE.md` §2.2's own worked example
+/// printed `0` where the guide says `5`, and why a `ref` appeared to work at
+/// all: it aliased only when its source was ALREADY a cell.
+///
+/// Names that are themselves declared `ref` are excluded, because their slot is
+/// already a cell and promoting it again would wrap a cell in a cell. `ref`
+/// PARAMETERS are excluded by the caller, which knows them from `ref_locals`.
+/// Only a name this body declares can be promoted: a field's storage is fixed
+/// by its class, so `ref int s = p.counter;` still copies (ERRATA E90).
+pub(crate) fn collect_ref_aliased_locals(
+    block: &Block,
+    params: &HashSet<String>,
+) -> HashSet<String> {
+    let mut declared: HashSet<String> = params.clone();
+    let mut already_ref: HashSet<String> = HashSet::new();
+    let mut aliased: HashSet<String> = HashSet::new();
+    for_each_body_var_decl(block, &mut |v| {
+        declared.insert(v.name.text.clone());
+        if !v.is_ref {
+            return;
+        }
+        already_ref.insert(v.name.text.clone());
+        if let Some(Expr::Path(qn)) = v.init.as_ref() {
+            if qn.segments.len() == 1 {
+                aliased.insert(qn.segments[0].text.clone());
+            }
+        }
+    });
+    aliased.retain(|n| declared.contains(n) && !already_ref.contains(n));
+    aliased
 }
 
 /// Names that are the target of a WHOLE-NAME reassignment (`name = …`, a
@@ -2575,9 +2657,11 @@ impl crate::RustEmitter {
         callee: &juxc_ast::Expr,
         arg_idx: usize,
     ) -> bool {
-        // Top-level fn: `f(...)`.
+        // Top-level fn: `f(...)`. A local or parameter of the same name holds
+        // the callee instead, and its own slot decides nullability, so the
+        // free function is not consulted (see `bare_name_is_binding`).
         if let juxc_ast::Expr::Path(qn) = callee {
-            if qn.segments.len() == 1 {
+            if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) {
                 if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
                     return f
                         .params
@@ -2629,6 +2713,28 @@ impl crate::RustEmitter {
         false
     }
 
+    /// True when a bare single-segment callee name is an in-scope BINDING (a
+    /// parameter or a local) rather than a top-level declaration.
+    ///
+    /// `f(x)` written through such a binding calls the lambda or function
+    /// pointer the binding holds. It does NOT call a free function that
+    /// happens to share the name, so the free function's parameter modes say
+    /// nothing about this call's arguments.
+    ///
+    /// Without the test one user function named `f` with a `ref` parameter
+    /// re-shaped every call through a lambda parameter called `f`,
+    /// program-wide: `jux.std`'s `Result.map` invokes its own `f` parameter,
+    /// so `void f(ref P p)` in the user's file wrapped the standard library's
+    /// arguments in cells and took the build down with eight rustc errors
+    /// inside `Result.jux`, none of them pointing at the user's code. The
+    /// function did not even have to be called.
+    pub(crate) fn bare_name_is_binding(&self, name: &str) -> bool {
+        self.current_fn_params.contains(name)
+            || self.local_types.iter().any(|scope| scope.contains_key(name))
+            || self.nullable_locals.contains(name)
+            || self.ref_locals.contains(name)
+    }
+
     /// True when arg `arg_idx` of the call maps to a `ref` (§M.13)
     /// SHARED-reference parameter — so the call site passes an
     /// aliasing handle (`x.clone()` for `ref` args) or wraps a plain
@@ -2672,7 +2778,10 @@ impl crate::RustEmitter {
             }
         };
         if let juxc_ast::Expr::Path(qn) = callee {
-            if qn.segments.len() == 1 {
+            // A local or parameter of this name holds the callee: the call goes
+            // through the VALUE, and the free function sharing the name has no
+            // say over its arguments. See `bare_name_is_binding`.
+            if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) {
                 let name = qn.segments[0].text.as_str();
                 let f_sig = self
                     .symbols

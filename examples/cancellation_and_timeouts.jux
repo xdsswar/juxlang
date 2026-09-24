@@ -26,6 +26,22 @@ async int slow() {
     return 99;
 }
 
+// Cancelling is throwing, so the task's `finally` runs on the way out
+// (§X.7.3). That is what makes `cancel()` safe for a task holding a
+// resource: it releases what it holds before the exception reaches the
+// awaiter.
+async void guarded() {
+    try {
+        print("guarded: start");
+        for (var i = 0; i < 1000; i++) {
+            await Task.delay(Duration.from_millis(10));
+        }
+        print("guarded: not reached");
+    } finally {
+        print("guarded: cleanup");
+    }
+}
+
 async void driver() {
     var task = spawn(longOperation());
     await Task.delay(Duration.from_millis(50));
@@ -34,6 +50,17 @@ async void driver() {
         print(await task);
     } catch (CancellationException e) {
         print("cancelled: " + e.getMessage());
+    }
+
+    // The cancelled task's `finally` runs before the awaiter sees anything.
+    var g = spawn(guarded());
+    await Task.delay(Duration.from_millis(50));
+    g.cancel();
+    try {
+        await g;
+        print("guarded: not reached");
+    } catch (CancellationException e) {
+        print("guarded: " + e.getMessage());
     }
 
     // A timeout, with a Duration and with milliseconds.

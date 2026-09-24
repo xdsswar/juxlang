@@ -70,5 +70,6 @@ pub use stmts::{
 };
 pub use types::{
     record_component_index, record_component_marker, record_destructure_arity, record_destructure_temp,
-    ArrayDim, ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound, TUPLE_SENTINEL,
+    ArrayDim, ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound,
+    TASK_SENTINEL, TUPLE_SENTINEL,
 };

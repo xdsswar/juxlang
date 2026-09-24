@@ -1602,6 +1602,210 @@ nothing.
 
 ---
 
+## E90. A `ref` binding initialized from a plain local
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.13.2 says "Initializing a
+`ref` binding from a plain `T` value creates a NEW shared object holding
+that value", while `JUX-POINTERS-REFERENCES-GUIDE.md` §2.2 works the same
+declaration out the other way round:
+
+```jux
+int total = 0;
+ref int acc = total;     // acc aliases total
+acc = acc + 5;           // total is now 5
+```
+
+The compiler implemented the first sentence, so the guide's own worked
+example printed `0` where the guide says `5`, with no diagnostic. A `ref`
+aliased only when its source was ALREADY a `ref` cell, which is why
+`examples/ref_bindings.jux` passed: every `ref` in it is initialized from
+a literal or from another `ref`, never from a plain local.
+
+**Resolution.** The two sentences are about different initializers, and
+the distinguishing word in §M.13.2 is *value*. A `ref` binding
+initialized from a **variable** of the enclosing body (a local or a
+parameter) ALIASES that variable: one object, two names, and every write
+through either name is seen by both. A `ref` binding initialized from
+something that is not a variable (a literal, a call result, an arithmetic
+expression, a `new`) has nothing to alias, so it creates a fresh object
+holding that value, exactly as §M.13.2 says. Initializing from another
+`ref` binding keeps aliasing it, as before.
+
+Three neighbouring positions are deliberately unchanged:
+
+- **An argument.** Passing a plain value to a `ref` parameter still wraps
+  it in a fresh object, so the callee's writes stay invisible to the
+  caller (§M.13.2, and `examples/ref_bindings.jux` pins it). An argument
+  list is not a binding, and Jux has no call-site `ref` with which to
+  mark the one argument that should alias.
+- **A field.** `ref int s = p.counter;` still copies `counter` unless the
+  field is itself declared `ref`. A local's storage is chosen by the body
+  that declares it, so that body can promote it; a field's storage is
+  fixed by its class for every instance of it, so only the field's own
+  declaration can make it shared.
+- **`ref` on an already-shared type** stays the W0490 case (E84).
+
+**Lowering.** A local or parameter named as the initializer of a `ref`
+binding is PROMOTED, for the whole body, to the same `Rc<RefCell<T>>`
+slot the `ref` binding uses: its declaration wraps, its reads clone out
+and its writes store through. That is the machinery a closure-captured,
+reassigned local already uses, so the promoted variable and the `ref`
+binding end up the same kind of slot and an `Rc` clone aliases it.
+
+**Spec status:** §M.13.2 carries the rule and points here.
+
+---
+
+## E91. Who owns an observer that was passed to a function
+
+**Conflict.** `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.2.4 says an
+`observer<T>` may be declared "field, local, parameter", and §P.3.2 says
+`.observers.attach(o)` registers it. §P.2.3 says a property holds its
+observers WEAKLY, because "if the observer's OWNER is dropped, the
+observer silently stops firing". Neither section says who the owner is
+when the observer reached the attach through a parameter, and both
+answers the compiler could give are wrong for the other case:
+
+```jux
+class M { public int V { get; set; } = 0; }
+void wire(M m, observer<int> o) { m.V.observers.attach(o); }
+
+public void main() {
+    var m = new M();
+    observer<int> o = (old, now) -> { print("p " + now); };
+    wire(m, o);
+    m.V = 3;
+    print("size=" + m.V.observers.size);   // said 0
+}
+```
+
+`wire` attached a weak reference to its parameter, which held the only
+strong reference left, because the call MOVED `o` out of `main` at its
+last read. The parameter died with `wire`'s frame and took the
+attachment with it. The program compiled, ran, printed `size=0`, and
+never fired. Writing the lambda in the argument list, or letting `var`
+infer its type, failed the same way.
+
+**Resolution.** Two rules, one at each end.
+
+- **An observer binding is a handle.** Reading one shares it, exactly as
+  reading a class or a collection does; it is never moved out of the
+  binding that names it. A binding declared `observer<T>`, and any
+  argument that fills an `observer<T>` parameter, therefore leaves its
+  owner in place. This is what §P.2.3's weak reference assumes, and the
+  cleanup story it promises only works when it holds.
+- **An observer with no other owner is owned by the property.** Weak
+  stays the rule, and it is right whenever something else holds the
+  observer. When nothing else does, a weak attach would be dead on
+  arrival, so the property holds it strongly instead. The attach site
+  cannot see the difference between `wire(m, o)` and
+  `wire(m, (old, now) -> ...)`, since both arrive as a parameter, so the
+  handle answers for itself: exactly one strong reference means this is
+  the only one there is.
+
+The second rule is what an inline `attach((old, now) -> ...)` already
+did by hand (§P.2.2's examples would attach nothing otherwise). It is
+now the general rule rather than a special case at one syntactic site,
+which is what makes the same lambda work one call deeper.
+
+**Spec status:** §P.2.3 carries both rules.
+
+---
+
+## E92. What `task.cancel()` does to the task it cancels
+
+**Conflict.** `JUX-EXCEPTIONS-ADDENDUM.md` §X.7.3 says cancellation "is"
+an exception: it "propagates the same way, runs `finally` blocks, runs
+drops, and so on", and JUX-LANG-V1 §10.1.9 says a cancelled task stops at
+its next `await`. The Phase-1 lowering instead DROPPED the task's
+`RemoteHandle`, which drops the running future outright. A dropped future
+never resumes, so no `finally` block of a cancelled task ever ran and no
+Jux `drop` block ever ran, while the program compiled and ran without a
+word. That makes `cancel()` unsafe for any task holding a resource, which
+is the one thing §X.7.3 promises it is not.
+
+**Resolution.** Cancellation is cooperative, as §X.7.3 describes it.
+`task.cancel()` sets a flag the task shares with its handle and returns
+at once; it drops nothing. Where the task next RESUMES, which is where an
+`await` hands control back, it throws
+`CancellationException("task was cancelled")`. From there it is an
+ordinary Jux exception: it unwinds the task's body, its `finally` blocks
+run in order, its values drop, and it is what `await task` re-throws at
+the awaiter.
+
+Two consequences the spec did not state, and now does:
+
+- **A cancelled task reports nothing.** Whatever a cancelled task fails
+  with, its own `CancellationException` included, never reaches the
+  unhandled-rejection hook of §10.1.8. Cancelling is the caller saying it
+  no longer wants the result, so there is no rejection left to be
+  unhandled. The Phase-1 handle-drop achieved this by accident, and
+  `examples/unhandled_task_failure.jux` pins it.
+- **A task that never awaits again is never interrupted.** Cancellation
+  has effect only at a resumption point, so a task that has already
+  finished, or that runs to its end without suspending, completes
+  normally. §X.7.3's "the next `await`" is the whole of the contract.
+
+**Not `withTimeout`.** That is a different mechanism, a race whose loser
+is DROPPED (`JUX-ASYNC-ADDENDUM-v2.md` §18.1.9). The timed-out work is
+dropped, not thrown into, and Phase 1 keeps the distinction: a `finally`
+inside work that runs out of time still does not run.
+
+**Spec status:** §X.7.3 carries the rule.
+
+---
+
+## E93. A static initializer that depends on itself
+
+**Conflict.** `JUX-SEMANTICS-ADDENDUM.md` §S.4.2 said two things about a
+cycle between static initializers. First, "cycles are detected at compile
+time when `A -> B -> A` is statically determinable", without saying what
+detection then does. Second, "at runtime, the second entry into a
+partially-initialized class returns the current (partial) state, the same
+trap Java has", and "cycles within a single module are linted (`W0530`)".
+
+Neither half described the compiler. `W0530` was reserved and never
+raised, and the runtime half cannot hold for the Phase-1 lowering: a
+static lowers to a `LazyLock`, and re-entering a `LazyLock`'s initializer
+does not return a partial value, it blocks forever. So
+
+```jux
+class A3 { public static int X = A3.X + 1; }
+public void main() { print(A3.X); }
+```
+
+checked clean, built, printed nothing and never exited.
+
+**Resolution.** A cycle in the static-initializer dependency graph that
+the compiler can determine statically is a hard error, **`E0497`**,
+naming the cycle. It is not a warning, and there is no runtime fallback.
+
+The reasoning, recorded because it overrides §S.4.2's own words:
+
+- The partial-state read §S.4.2 offers is a silent wrong answer, and
+  Phase 1 cannot even produce it. An initializer cycle has no value that
+  is right, so there is nothing to warn about and carry on with.
+- A warning would leave the program that provoked it hanging forever with
+  no output, which is worse than any error.
+- The graph is over declarations the compiler already has, so a
+  statically determinable cycle is exactly the case where an error costs
+  the programmer nothing to fix.
+
+**What "statically determinable" covers.** One node per static field that
+has an initializer, and an edge from a field to every static field its
+initializer reads, following the bodies of the static methods the
+initializer calls. A dependency only a runtime value can reveal, such as
+one reached through a virtual call or a function value, stays outside the
+graph and stays §S.4.2's runtime trap.
+
+`W0530` is retired: it was reserved for this check, and this check is an
+error. The number is not reused (§D.5.1).
+
+**Spec status:** §S.4.2 carries the rule, and §D.4 lists `E0497` and
+marks `W0530` retired.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

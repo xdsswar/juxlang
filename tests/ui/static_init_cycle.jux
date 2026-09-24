@@ -1,0 +1,32 @@
+// A static field whose value needs its own value, directly, through another
+// class, or through a static method it calls. None of the three has an order
+// that initializes it, and each used to compile clean and hang forever.
+class Direct {
+    public static int X = Direct.X + 1;
+}
+
+class Left {
+    public static int P = Right.Q;
+}
+
+class Right {
+    public static int Q = Left.P;
+}
+
+class ViaMethod {
+    public static int V = seed();
+    public static int seed() { return ViaMethod.V + 1; }
+}
+
+// Not a cycle: a static that reads another static, in one direction only.
+class Fine {
+    public static int Base = 10;
+    public static int Doubled = Fine.Base * 2;
+}
+
+public void main() {
+    print(Direct.X);
+    print(Left.P);
+    print(ViaMethod.V);
+    print(Fine.Doubled);
+}

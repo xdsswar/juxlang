@@ -1673,6 +1673,14 @@ impl RustEmitter {
                 | Expr::NewObject(_)
                 | Expr::Literal(_)
         );
+        // **Cancellation is cooperative** (EXCEPTIONS §X.7.3, ERRATA E92): a
+        // cancelled task throws `CancellationException` where it next RESUMES,
+        // and an `await` is the only place a task resumes. `__jux_awaited`
+        // hands the value straight back unless this task's cancellation flag
+        // has been set meanwhile, in which case it throws there, so the
+        // unwinding runs the task's `finally` blocks and drops on the way out.
+        // Outside a spawned task the check reads an empty thread-local stack.
+        self.w.push_str("crate::__jux_awaited(");
         if needs_parens {
             self.w.push('(');
         }
@@ -1680,7 +1688,7 @@ impl RustEmitter {
         if needs_parens {
             self.w.push(')');
         }
-        self.w.push_str(".await");
+        self.w.push_str(".await)");
     }
 
     /// Lower `cond ? then : else` to Rust's `if cond { then }
@@ -2340,7 +2348,7 @@ impl RustEmitter {
         // to completion right there. Without this the body emitted as
         // a plain closure and any `await` inside was rustc E0728.
         if l.is_async {
-            self.w.push_str("futures::executor::block_on(async move ");
+            self.w.push_str("crate::__jux_block_on(async move ");
             match &l.body {
                 juxc_ast::LambdaBody::Expr(e) if prelude.is_empty() => {
                     self.w.push_str("{ ");

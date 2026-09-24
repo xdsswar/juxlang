@@ -5,4 +5,8 @@ double: 30
 n: 16
 plain: keep
 copy: renamed
+total: 5
+acc: 9
+label: two
+param: 6
 done

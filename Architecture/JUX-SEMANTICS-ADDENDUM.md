@@ -314,7 +314,11 @@ If a static initializer throws an exception, the class is marked **erroneous**; 
 
 ### S.4.2. Static Initializer Order Across Classes
 
-When class `A`'s initializer triggers class `B`'s initializer (e.g., it reads `B.constant`), `B` initializes fully before `A` continues. Cycles are detected at compile time when `A → B → A` is statically determinable; otherwise at runtime, the second entry into a partially-initialized class returns the current (partial) state — the same trap Java has. In practice, sealed cycles in the import graph are forbidden by the module system (per JUX-LANG-V1 §4.3); cycles within a single module are linted (`W0530`).
+When class `A`'s initializer triggers class `B`'s initializer (e.g., it reads `B.constant`), `B` initializes fully before `A` continues.
+
+A **cycle** among static-field initializers is an error, `E0497`, reported at compile time and naming the cycle (ERRATA E93). The graph has one node per static field that has an initializer, and an edge to every static field that initializer reads, following the bodies of the static methods it calls. There is no value such a cycle can produce that is right, and the Phase-1 lowering cannot even fail usefully: a static lowers to a `LazyLock`, and re-entering one blocks forever, so a cycle left undiagnosed is a program that prints nothing and never exits. `W0530` was reserved for this case as a lint and is retired; the number is not reused (§D.5.1).
+
+A dependency the compiler cannot determine statically, one that only a runtime value reveals through a virtual call or a function value, stays outside that graph. There, the second entry into a partially-initialized class reads the current (partial) state, the same trap Java has. Sealed cycles in the import graph remain forbidden by the module system (per JUX-LANG-V1 §4.3).
 
 ### S.4.3. Module Initializers
 

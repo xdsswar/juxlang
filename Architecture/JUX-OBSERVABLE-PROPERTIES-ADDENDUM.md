@@ -241,6 +241,19 @@ Consequences:
 - No manual `detach()` is required when a component is destroyed.
 - No retain cycles can form through the observer relationship.
 
+**Who the owner is** (ERRATA E91). An observer binding is a HANDLE: reading one
+shares it, the way reading a class or a collection does, and it is never moved
+out of the binding that names it. Passing an observer to an `observer<T>`
+parameter therefore leaves the caller's binding as its owner, which is exactly
+what the weak reference above assumes.
+
+**An observer with no other owner is owned by the property.** Weak is the rule
+wherever something else holds the observer. Where nothing does, a weak attach
+would be dead on arrival, so the property holds it strongly instead. That is
+the inline case, `Name.observers.attach((old, now) -> { ... })`, and it holds
+one call deeper as well: a lambda written in a call's argument list and
+attached by the callee has no owner either.
+
 ```java
 public class MyController {
     private final observer<String> nameObs = (old, now) -> {
