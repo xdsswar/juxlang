@@ -1447,6 +1447,67 @@ rejected as before, since the lowered `use` path could not name them.
 
 **Spec status:** §A.2.1 carries the production and §G.4.2 the reasoning.
 
+## E85. What a `try` statement leaves definitely assigned
+
+**Conflict.** JUX-SEMANTICS-ADDENDUM §S.4.6 says "a `try` body may abort
+partway through, so only assignments in a `finally` block survive to the
+statements after it". Read literally that discards the try body's assignments
+even when the body ran to the end, which makes the ordinary shape of a
+constructor that converts one failure into another illegal:
+
+```java
+public Feed(String text) throws FeedError {
+    try {
+        this.doc = from_str<Value>(text);       // E0600: `doc` not assigned
+    } catch (Exception e) {
+        throw new FeedError("<document>", "the feed is not JSON");
+    }
+}
+```
+
+There is nothing to rewrite it into: the assignment has to be inside the
+`try`, and a `finally` cannot assign a value the failing call never produced.
+
+**Resolution.** A `try` statement leaves assigned what every branch that can
+COMPLETE NORMALLY leaves assigned: the body, and each `catch` whose own body
+falls out of the bottom. A branch ending in `throw` or `return` imposes
+nothing, exactly as §S.4.6 already says of any such path. A `finally` runs on
+every path and adds its own assignments on top. When no branch can complete
+normally the whole statement cannot either, and the code after it is
+unreachable. A `catch` still starts from the state at the `try`, since it may
+run from any point inside the body; that part of the old rule is why the body
+being able to abort matters at all.
+
+This is Java's rule (JLS 16.2.15) and the same soundness argument the rest of
+§S.4.6 makes: the value is read only on paths that wrote it.
+
+**Spec status:** §S.4.6 carries the rule.
+
+## E86. What `==` means between a `T?` and a `T`
+
+**Conflict.** JUX-LANG-V1 §7.10 lists `==`, `!=`, `===` and `!==` among the
+operators that "take a null by design", so a comparison with a nullable
+operand is not `E0418` and the checker accepts it. What it MEANS when only one
+side is nullable is not written anywhere, and the backend, having no rule to
+follow, compared an `Option<T>` with a bare `T` -- a rustc `E0308` reported
+against the user's line.
+
+```java
+long? recorded = ledger.checksumOf(job.name);
+print(recorded == job.run());       // leaked rustc E0308
+```
+
+**Resolution.** A `T?` equals a `T` when it HOLDS that value, and a null
+equals nothing: `null == v` is false and `null != v` is true, for every `v`.
+The comparison is total, so it has no null case to guard and cannot throw. The
+two sides must otherwise be the same type; mixed numeric widths promote first,
+by the ordinary rules, and an unrelated type is `E0410` as it always was.
+
+`===` and `!==` (identity) answer the same way: a null is the identity of
+nothing.
+
+**Spec status:** §7.10 carries the rule.
+
 ---
 
 When you edit any addendum that touches one of the items above,
