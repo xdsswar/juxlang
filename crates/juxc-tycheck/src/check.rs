@@ -196,7 +196,7 @@ pub const BUILTIN_INT_METHODS: &[&str] = &[
     "checkedSub",
     "countOnes",
     "leadingZeros",
-    "rotateLeft",
+    "rotateLeft",
     "rotateRight",
     "saturatingToInt",
     "saturatingAdd",
@@ -2309,6 +2309,46 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// Whether `name` is a type declared by a `.jux.d` stub, so its members
+    /// are a foreign crate's and its overload groups are Rust's own
+    /// (Bindgen §G.6.4.5).
+    fn declaring_type_is_external(&self, name: &str) -> bool {
+        // Through `resolve_class`, because a receiver's type name reaches here
+        // either fully qualified (`rust.std.Vec`) or bare (`Vec`) depending on
+        // how the program wrote it, and both name the same declaration.
+        self.symbols.resolve_class(name).is_some_and(|(_, c)| c.is_external)
+            || self.symbols.interfaces.get(name).is_some_and(|i| i.is_external)
+    }
+
+    /// E0469: a call to a foreign method whose return type is an
+    /// associated-type projection the binder could not resolve
+    /// (Bindgen §G.6.4.6). `projection` is the stub's own spelling of it,
+    /// `I.Output`, so the message names the thing the user can look up.
+    fn report_unresolved_projection(
+        &mut self,
+        owner: &str,
+        method: &str,
+        projection: &str,
+        span: Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0469_UnresolvedForeignProjection,
+                format!(
+                    "`{owner}.{method}` returns the Rust associated type `{projection}`, \
+                     which juxc could not resolve, so the type of this call is not known \
+                     (Bindgen §G.6.4.6)",
+                ),
+            )
+            .with_span(span)
+            .with_help(
+                "the value cannot be given a Jux type here; use a method whose return type \
+                 the stub states, or cast the result explicitly"
+                    .to_string(),
+            ),
+        );
     }
 
     /// E0475: an overloaded call that several members accept with none more
@@ -12034,12 +12074,38 @@ impl<'a> Checker<'a> {
                         &self.env,
                     ) {
                         Some((k, picked)) => {
-                            self.method_selections.insert(c.span, k); self.method_selections.insert(expr_span(&c.callee), k);
+                            // A FOREIGN overload group emits under one Rust
+                            // name: `Vec::get` is a single Rust method, fanned
+                            // out per index type (Bindgen §G.6.4.5), and rustc
+                            // picks the impl from the argument itself. Recording
+                            // the pick would append `__ovK` to a name the real
+                            // crate does not have.
+                            if !self.declaring_type_is_external(&name) {
+                                self.method_selections.insert(c.span, k);
+                                self.method_selections.insert(expr_span(&c.callee), k);
+                            }
                             picked
                         }
                         None => method.clone(),
                     };
                     let method = &method;
+                    // A foreign method whose return is an associated-type
+                    // projection the binder could not resolve (Bindgen
+                    // §G.6.4.6). The stub writes it as a name nothing declares,
+                    // which the checker reads as an unknown type -- and an
+                    // unknown type fits EVERY slot, so the value would reach
+                    // the backend untyped and the error would come back in
+                    // rustc's words instead of Jux's (§G.1).
+                    if self.declaring_type_is_external(&name) {
+                        if let Some(projection) = unresolved_foreign_projection(method) {
+                            self.report_unresolved_projection(
+                                &name,
+                                method_name,
+                                &projection,
+                                field.field.span,
+                            );
+                        }
+                    }
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;
@@ -13366,6 +13432,24 @@ impl<'a> Checker<'a> {
                 if let Some(help) = fn_kind_mismatch_help(&expected, &found) {
                     diag = diag.with_help(help);
                 }
+                // A nullable OF a nullable reaching a plain `T?` slot.
+                // Nullability NESTS for a generic instantiation (§M.15.2), so an
+                // element of a `Vec<string?>` is a `string??`: one `?` because
+                // the element may be null, one because the index may be out of
+                // range. Saying only "expected String?, found String??" leaves
+                // the reader counting question marks; the operator that
+                // collapses a layer is the answer.
+                if let (Ty::Nullable(want), Ty::Nullable(got)) = (&expected, &found) {
+                    if let Ty::Nullable(inner) = got.as_ref() {
+                        if compatible(want, inner, self.symbols) {
+                            diag = diag.with_help(
+                                "nullability nests for a generic instantiation (§M.15.2): \
+                                 this is a nullable of a nullable. Collapse one layer with \
+                                 `?? null`, or unwrap the outer one with `!!`",
+                            );
+                        }
+                    }
+                }
                 // A nullable `T?` flowing into a non-nullable slot is the #1
                 // foreign-boundary mistake (e.g. a `WindowOptions?` field
                 // passed to `new Window(.., WindowOptions)`). Point the user at
@@ -14395,6 +14479,42 @@ fn fn_shapes_agree(expected: &Ty, found: &Ty) -> bool {
         ) => ea == fa && ep.len() == fp.len() && ep.iter().zip(fp).all(|(e, f)| agree(e, f)) && agree(er, fr),
         _ => false,
     }
+}
+
+/// The associated-type projection a foreign method's RETURN type is written
+/// as, when the binder could not resolve it (Bindgen §G.6.4.6).
+///
+/// A stub writes an unresolved projection as the two-segment name the Rust
+/// signature had, `I.Output`, whose head is one of the METHOD's own type
+/// parameters. That is exactly the case the call could have settled, so it is
+/// the case worth reporting: `Self.Item` and `Ptr.Target` are settled by the
+/// receiver, not the call, and keep the §G.6.4.2 unknown-type reading.
+///
+/// The name resolves to nothing, so the checker types the call `Ty::Unknown`,
+/// and an unknown type is the SUPPRESSION value: it fits every slot. Silence
+/// there is what let a `Vec<string?>` element reach a `string?` parameter and
+/// fail in rustc instead of here.
+fn unresolved_foreign_projection(method: &crate::symbol_table::MethodSig) -> Option<String> {
+    let ty = match &method.return_type {
+        juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,
+        juxc_ast::ReturnType::Void => return None,
+    };
+    // `T[]?`, `T?` and `T` all project the same head name.
+    let segments = &ty.name.segments;
+    let (head, rest) = segments.split_first()?;
+    if rest.is_empty() {
+        return None; // a plain name, not a projection
+    }
+    if !method.generic_params.iter().any(|p| p.name.text == head.text) {
+        return None; // settled by the receiver, not by this call
+    }
+    Some(
+        segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
 }
 
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {

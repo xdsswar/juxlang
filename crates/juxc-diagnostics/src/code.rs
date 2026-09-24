@@ -790,6 +790,16 @@ pub enum Code {
     /// defaulted one could never be omitted — move all defaulted parameters to
     /// the end of the list.
     E0467_DefaultParamOrdering,
+    /// E0469 — A call to a **foreign method whose return is an associated-type
+    /// projection the binder could not resolve** (Bindgen §G.6.4.6, ERRATA
+    /// E80). A Rust `fn get<I>(&self, i: I) -> Option<&I::Output>` says what it
+    /// gives back only once `I` is known; §G.6.4.5 resolves that from the
+    /// bound's own impls, and when it cannot, the stub writes the projection as
+    /// a name nothing declares. The checker would otherwise read that as an
+    /// unknown type, which fits EVERY slot, so the mistyped value would travel
+    /// to rustc and the error would arrive in Rust's words (§G.1). Reported at
+    /// the call instead, naming the method and the projection.
+    E0469_UnresolvedForeignProjection,
     /// E0454 — **Retired.** Reserved: a generic class used as a polymorphic
     /// base was a Phase-1 limitation. Generic `Kind` traits and generic trait
     /// objects (`Rc<dyn ContainerKind<isize>>`) are emitted now, so
@@ -1208,6 +1218,7 @@ impl Code {
             Code::E0465_FinalFieldReassigned     => "E0465",
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
+            Code::E0469_UnresolvedForeignProjection => "E0469",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::W0820_UnsafeWithoutSafetyComment => "W0820",
             Code::W0240_DeriveNoOp               => "W0240",
