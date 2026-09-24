@@ -6227,3 +6227,75 @@ fn float_literal_edges() {
     assert!(rust.contains("1e40f64 as f32"), "got: {rust}");
     assert!(rust.contains("f64::from_bits(1)"), "got: {rust}");
 }
+
+/// §M.13.2 / ERRATA E85: a `ref` initialized from a plain LOCAL aliases that
+/// local, so the local is PROMOTED to the very cell the `ref` holds and the
+/// `ref` is an `Rc` clone of it.
+///
+/// Before the fix the local stayed an ordinary `let` and the `ref` wrapped a
+/// COPY of its value, so `JUX-POINTERS-REFERENCES-GUIDE.md` §2.2's own worked
+/// example printed `0` where the guide says `5`, with nothing diagnosed. A
+/// `ref` aliased only when its source was already a cell, which is why the
+/// examples never caught it.
+#[test]
+fn ref_binding_from_a_plain_local_promotes_and_aliases_it() {
+    let rust = emit(
+        r#"public void main() {
+               int total = 0;
+               ref int acc = total;
+               acc = 5;
+               print(total);
+               total = 9;
+               print(acc);
+           }"#,
+    );
+    assert!(
+        rust.contains("let total = std::rc::Rc::new(std::cell::RefCell::new(0));"),
+        "the aliased local must BE the shared cell: {rust}",
+    );
+    assert!(
+        rust.contains("let acc = total.clone();"),
+        "the ref must share the local's handle, not wrap a copy: {rust}",
+    );
+    assert!(
+        rust.contains("*total.borrow_mut() = __jux_v;"),
+        "a write to the promoted local must store through the cell: {rust}",
+    );
+}
+
+/// A `ref` initialized from something that is NOT a variable has nothing to
+/// alias, so it still wraps the value in a fresh cell (§M.13.2, ERRATA E85).
+/// The promotion must not spread to every `ref` declaration.
+#[test]
+fn ref_binding_from_a_value_still_wraps_a_fresh_cell() {
+    let rust = emit(r#"public void main() { ref int n = 10; print(n); }"#);
+    assert!(
+        rust.contains("let n = std::rc::Rc::new(std::cell::RefCell::new(10));"),
+        "a ref from a literal keeps its own fresh cell: {rust}",
+    );
+}
+
+/// A call written through a BINDING that holds the callee is a call of that
+/// value, not of a free function that happens to share the name, so the free
+/// function's parameter modes say nothing about the arguments.
+///
+/// One user function `void f(ref P p)` used to reshape every `f(...)` call
+/// made through a lambda-valued parameter named `f`, program-wide.
+/// `jux.std`'s `Result.map` calls its own `f` parameter, so declaring that
+/// function, without ever calling it, took the build down with eight rustc
+/// errors inside `Result.jux` and none of them pointed at the user's file.
+#[test]
+fn a_call_through_a_binding_ignores_a_same_named_free_function() {
+    let rust = emit(
+        r#"
+        struct P { public int x; }
+        void f(ref P p) { p.x = 9; }
+        int apply((int) -> int f, int v) { return f(v); }
+        public void main() { print(apply((n) -> n + 1, 2)); }
+        "#,
+    );
+    assert!(
+        !rust.contains("f(std::rc::Rc::new(std::cell::RefCell::new(v)))"),
+        "a call through a lambda parameter must not take the free fn's ref mode: {rust}",
+    );
+}

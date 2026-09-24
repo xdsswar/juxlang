@@ -1343,8 +1343,21 @@ impl RustEmitter {
             &mut self.captures_read_again,
             crate::lastuse::captures_read_again(body, &self.current_fn_params),
         );
-        let cell_locals =
+        let mut cell_locals =
             crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
+        // §M.13.2 / ERRATA E85: a local or parameter that a `ref` binding
+        // aliases (`int total = 0; ref int acc = total;`) has to BE the shared
+        // object, so it is promoted to the very same cell the `ref` holds. It
+        // is the identical slot a captured-and-mutated local gets, so one set
+        // drives both and `acc = total.clone()` aliases it. Names already
+        // declared `ref` are cells already: `ref_locals` holds the `ref`
+        // PARAMETERS seeded just above, and the collector drops the `ref`
+        // locals, so neither is wrapped twice.
+        for name in crate::analysis::collect_ref_aliased_locals(body, &self.current_fn_params) {
+            if !self.ref_locals.contains(&name) {
+                cell_locals.insert(name);
+            }
+        }
         // A captured-and-reassigned PARAMETER has no declaration to wrap, so it
         // is rebound as a cell before the first statement. The shadowing `let`
         // is what a person would write, and every later use goes through the

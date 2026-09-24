@@ -1174,9 +1174,15 @@ public void main() {
 - `ref T` is a binding mode, not a distinct type: the expression type of a
   `ref T` binding is `T` everywhere — reads produce a `T` value, method
   calls dispatch on `T`, and `typeof` reports `T`.
-- **Initialization.** Initializing a `ref` binding from a plain `T` value
-  creates a NEW shared object holding that value. Initializing (or
-  argument-passing) from another `ref T` binding ALIASES the same object.
+- **Initialization.** Initializing a `ref` binding from a VARIABLE of the
+  enclosing body, a local or a parameter, ALIASES that variable: the two
+  names denote one object, and each sees every write made through the
+  other (ERRATA E85). Initializing from another `ref T` binding aliases
+  it the same way. Initializing from something that is not a variable, a
+  literal, a call result, an arithmetic expression or a `new`, has
+  nothing to alias, so it creates a NEW shared object holding that value.
+  A field read is not a variable of the body: `ref int s = p.counter;`
+  copies `counter` unless the field is itself declared `ref`.
 - **Assignment stores through.** `x = v` on a `ref` binding writes `v`
   into the shared object — every alias observes it (C++ reference /
   JavaFX-property mental model; there is no rebinding form in Phase 1).
@@ -1202,6 +1208,7 @@ public void main() {
 |------|----------|
 | `ref T x = <plain value>` | `let x = Rc::new(RefCell::new(v));` |
 | `ref T x = <ref binding>` | `let x = y.clone();` (handle share) |
+| `ref T x = <local or param>` | the source is PROMOTED to a cell for the whole body, then `let x = y.clone();` (ERRATA E85) |
 | read in value position    | `x.borrow().clone()` (statement-scoped) |
 | `x = v` (store-through)   | `{ let __jux_v = v; *x.borrow_mut() = __jux_v; }` |
 | `ref` field               | field type `Rc<RefCell<T>>`, same rules |

@@ -1449,6 +1449,60 @@ rejected as before, since the lowered `use` path could not name them.
 
 ---
 
+## E85. A `ref` binding initialized from a plain local
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.13.2 says "Initializing a
+`ref` binding from a plain `T` value creates a NEW shared object holding
+that value", while `JUX-POINTERS-REFERENCES-GUIDE.md` §2.2 works the same
+declaration out the other way round:
+
+```jux
+int total = 0;
+ref int acc = total;     // acc aliases total
+acc = acc + 5;           // total is now 5
+```
+
+The compiler implemented the first sentence, so the guide's own worked
+example printed `0` where the guide says `5`, with no diagnostic. A `ref`
+aliased only when its source was ALREADY a `ref` cell, which is why
+`examples/ref_bindings.jux` passed: every `ref` in it is initialized from
+a literal or from another `ref`, never from a plain local.
+
+**Resolution.** The two sentences are about different initializers, and
+the distinguishing word in §M.13.2 is *value*. A `ref` binding
+initialized from a **variable** of the enclosing body (a local or a
+parameter) ALIASES that variable: one object, two names, and every write
+through either name is seen by both. A `ref` binding initialized from
+something that is not a variable (a literal, a call result, an arithmetic
+expression, a `new`) has nothing to alias, so it creates a fresh object
+holding that value, exactly as §M.13.2 says. Initializing from another
+`ref` binding keeps aliasing it, as before.
+
+Three neighbouring positions are deliberately unchanged:
+
+- **An argument.** Passing a plain value to a `ref` parameter still wraps
+  it in a fresh object, so the callee's writes stay invisible to the
+  caller (§M.13.2, and `examples/ref_bindings.jux` pins it). An argument
+  list is not a binding, and Jux has no call-site `ref` with which to
+  mark the one argument that should alias.
+- **A field.** `ref int s = p.counter;` still copies `counter` unless the
+  field is itself declared `ref`. A local's storage is chosen by the body
+  that declares it, so that body can promote it; a field's storage is
+  fixed by its class for every instance of it, so only the field's own
+  declaration can make it shared.
+- **`ref` on an already-shared type** stays the W0490 case (E84).
+
+**Lowering.** A local or parameter named as the initializer of a `ref`
+binding is PROMOTED, for the whole body, to the same `Rc<RefCell<T>>`
+slot the `ref` binding uses: its declaration wraps, its reads clone out
+and its writes store through. That is the machinery a closure-captured,
+reassigned local already uses, so the promoted variable and the `ref`
+binding end up the same kind of slot and an `Rc` clone aliases it.
+
+**Spec status:** §M.13.2 carries the rule and points here.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

@@ -1,0 +1,43 @@
+// A `ref` binding taken from a plain LOCAL aliases that local (§M.13.2,
+// ERRATA E85, and the worked example in JUX-POINTERS-REFERENCES-GUIDE §2.2).
+// The two names are one object from then on, so every write through either is
+// seen by both.
+//
+// Java has no `ref`, so its twin models the same object with a one-element
+// array, which Java shares the way Jux shares a `ref` cell. Both programs do
+// the same thing and must print the same numbers, which is the point: before
+// the fix Jux printed 0 / 5 / 5 where the guide, and Java, say 5 / 5 / 9.
+
+int aliasParam(int seed) {
+    ref int r = seed;
+    r = seed + 1;
+    return seed;
+}
+
+public void main() {
+    int total = 0;
+    ref int acc = total;
+    acc = 5;
+    print(total);
+    print(acc);
+    total = 9;
+    print(acc);
+
+    // A String is a value type too, so the same rule applies to it.
+    String label = "one";
+    ref String labelAlias = label;
+    labelAlias = "two";
+    print(label);
+    print(labelAlias);
+
+    // A ref from a literal has nothing to alias: it gets a fresh object.
+    ref int fresh = 3;
+    fresh = 4;
+    print(fresh);
+
+    // A parameter is a variable of its body, so a ref aliases it there.
+    print(aliasParam(5));
+    int caller = 5;
+    print(aliasParam(caller));
+    print(caller);
+}

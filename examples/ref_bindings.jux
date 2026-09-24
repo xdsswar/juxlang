@@ -13,6 +13,15 @@ int readOnly(ref int n) {
     return n * 2;
 }
 
+// A parameter is a variable of this body like any other, so a `ref` taken
+// from it aliases it here (ERRATA E85). The caller is untouched: the
+// parameter itself was filled with a copy.
+int aliasParam(int seed) {
+    ref int r = seed;
+    r = seed + 1;
+    return seed;
+}
+
 public void main() {
     // Locals: alias + store-through.
     ref String a = "first";
@@ -44,6 +53,26 @@ public void main() {
     String copy = a;
     a = "changed";
     print("copy: " + copy);    // "renamed"
+
+    // A `ref` taken from a plain LOCAL aliases that local (ERRATA E85, and
+    // the worked example in JUX-POINTERS-REFERENCES-GUIDE §2.2): the local
+    // IS the shared object from here on, so a write through either name is
+    // seen by both.
+    int total = 0;
+    ref int acc = total;
+    acc = 5;
+    print("total: " + total);  // 5
+    total = 9;
+    print("acc: " + acc);      // 9
+
+    // The same, on a String.
+    String label = "one";
+    ref String labelAlias = label;
+    labelAlias = "two";
+    print("label: " + label);  // "two"
+
+    // A ref taken from a PARAMETER aliases it inside the callee only.
+    print("param: " + aliasParam(5));  // 6
 
     print("done");
 }

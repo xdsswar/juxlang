@@ -51,6 +51,14 @@ fn ref_locals_and_params() {
             "n: 16",       // self-referential store-through
             "plain: keep", // plain value into ref param: caller keeps copy
             "copy: renamed", // value read out is a copy
+            // ERRATA E85: a `ref` taken from a plain LOCAL aliases it, which
+            // is the worked example in the pointers guide §2.2. Before the
+            // fix these two printed "total: 0" and "acc: 5" -- the `ref`
+            // silently copied, and nothing said so.
+            "total: 5",
+            "acc: 9",
+            "label: two",
+            "param: 6", // and from a plain PARAMETER, inside the callee
             "done",
         ],
     );
