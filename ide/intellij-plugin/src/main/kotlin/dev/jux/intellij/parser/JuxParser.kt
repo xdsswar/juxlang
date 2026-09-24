@@ -138,10 +138,11 @@ class JuxParser : PsiParser {
         }
         if (b.at(T.AS_KW)) {
             b.advanceLexer()
-            // The alias is a declaration name, so it follows the same rule as
-            // one: `import rust.x.record as record;` is legal and used in
-            // practice, since the crate member it renames often IS a keyword.
-            b.consumeDeclName("Import alias expected")
+            // The alias stays an IDENTIFIER, as `Parser::parse_import_spec`
+            // keeps it: the keyword relaxation is a PATH-segment rule, and the
+            // alias is a name the file itself chooses, so nothing forces it to
+            // be a reserved word.
+            b.expectOrError(T.IDENTIFIER, "Import alias expected")
         }
         b.semicolon()
         m.done(E.IMPORT_STATEMENT)

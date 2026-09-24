@@ -95,9 +95,8 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
 
             import rust.x.record;
             import rust.y.drop.*;
-            import rust.z.when.{ Alpha, Beta as when };
-            import rust.w.box as unbox;
-            import rust.v.match as match;
+            import rust.z.when.{ Alpha, Beta };
+            import rust.w.box as Unboxed;
 
             public class Uses {}
             """.trimIndent(),
@@ -115,6 +114,20 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("`type` is a package segment: $segments", "type" in segments)
         assertTrue("`record` is an import segment: $segments", "record" in segments)
         assertTrue("`drop` is an import segment: $segments", "drop" in segments)
+    }
+
+    /**
+     * The relaxation is a PATH-segment rule only. The first segment and the
+     * `as` alias stay identifiers, exactly as `Parser::parse_import_spec`
+     * keeps them: a keyword there would be a different statement, or a name
+     * the file itself chose and had no reason to spell with a reserved word.
+     */
+    fun testKeywordIsStillRejectedAsFirstSegmentOrAlias() {
+        val alias = createPsiFile("Alias.jux", "import rust.x.record as record;\n")
+        assertTrue(
+            "a keyword alias is still an error",
+            PsiTreeUtil.collectElementsOfType(alias, PsiErrorElement::class.java).isNotEmpty(),
+        )
     }
 
     /**
