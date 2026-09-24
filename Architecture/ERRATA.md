@@ -1365,6 +1365,27 @@ The reading follows the backend: `Ord`/`PartialOrd` is `operator<=>`
 foreign element type answers for itself.
 
 **Spec status:** §G.6.4.4 and the E0446 catalog row carry the rule.
+## E78. A path segment that is a Jux keyword
+
+**Conflict.** §G.4.2 says a foreign member whose name is a Jux keyword is
+surfaced as-is, because a member-name position cannot hold anything else. The
+grammar's `qualified-name` (§A.2.1) is `identifier ( '.' identifier )*`, so the
+same reasoning was never extended to the segments of an `import` or a
+`package` path -- yet those positions are just as unambiguous. A crate with a
+module named `record`, `type`, `when` or `drop` was therefore unimportable:
+`import rust.x.record;` died at `E0200 expected identifier`, with no way to
+write it at all.
+
+**Resolution.** Every segment of a `qualified-name`, and every name in an
+`import-item`, is a member-position name: a keyword there is read as a name.
+The first segment is not, since a path may begin where a statement may begin.
+The four Rust words with no raw form (`self`, `Self`, `crate`, `super`) stay
+rejected as before, since the lowered `use` path could not name them.
+
+**Spec status:** §A.2.1 carries the production and §G.4.2 the reasoning.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

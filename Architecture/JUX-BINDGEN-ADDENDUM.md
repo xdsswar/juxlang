@@ -209,6 +209,8 @@ The three literal constants (`null`, `true`, `false`, §A.2.9) are accepted the 
 
 A Rust member whose name is a Jux reserved keyword (`default`, `match`, `type`, …) is surfaced **as-is**: the parser accepts a keyword spelling both in foreign stub declarations and at the call site (`opts.default()`), and the backend re-escapes any Rust keyword with `r#` when it lowers. A Jux *user* declaration, by contrast, may not be named after a Rust keyword — that is `E0305` (the lowered Rust would collide). The two rules are complementary: foreign members keep their real name, user code stays clear of Rust's reserved words.
 
+The same reading covers a **path segment**. `import rust.x.record;` and `package demo.type;` name a module, not a statement, so a keyword there is a name too (§A.2.1, ERRATA E78). Without it a crate whose module is named after one of Jux's 58 keywords could not be imported at all, which would make the verbatim rule above unusable exactly where it matters. The first segment of a path is still an ordinary identifier, since a path may begin where a statement may begin.
+
 ---
 
 ## §G.5 — Member Mapping
@@ -298,7 +300,7 @@ A Rust `new` returning `Option<Self>` is **not** a constructor. A Jux constructo
 public static Self? new(u32 width, u32 height);
 ```
 
-Called as `Pixmap.new(w, h)`, which yields a nullable the caller has to open. `new` is a Jux keyword, but a name in member position is read as a name, so the verbatim spelling stands (§G.5.0).
+Called as `Pixmap.new(w, h)`, which yields a nullable the caller has to open. `new` is a Jux keyword, but a name in member position is read as a name, so the verbatim spelling stands (§G.4.2).
 
 Rendered as a constructor instead, the `None` disappeared from the type: the call site believed it had a `Pixmap`, and the emitted Rust handed an `Option<Pixmap>` to something expecting the value.
 

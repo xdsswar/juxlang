@@ -493,7 +493,15 @@ impl<'a> Parser<'a> {
         };
         segments.push(first);
         while self.eat(&TokenKind::Dot) {
-            match self.parse_ident() {
+            // Every segment after the first is a MEMBER-NAME position
+            // (grammar §A.2.1, ERRATA E78): it names a module or a type, never
+            // a statement, so a reserved word there is read as an ordinary
+            // name. `package demo.type;` and `import rust.x.record;` are what
+            // this buys -- a Rust crate whose module is named after one of
+            // Jux's keywords was previously unimportable, with no spelling
+            // that would work. The FIRST segment stays an identifier, since a
+            // path may begin where a statement may begin.
+            match self.parse_member_name() {
                 Some(next) => segments.push(next),
                 None => break,
             }

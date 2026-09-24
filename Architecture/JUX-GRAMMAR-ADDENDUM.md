@@ -180,12 +180,16 @@ import-decl       = '@cfg' '(' cfg-pred ')' import-decl
 import-spec       = qualified-name ( '.' '*' )? ( 'as' identifier )?
                   | qualified-name '.' '{' import-item ( ',' import-item )* '}'
 
-import-item       = identifier ( 'as' identifier )?
+import-item       = member-name ( 'as' identifier )?
 
-qualified-name    = identifier ( '.' identifier )*
+qualified-name    = identifier ( '.' member-name )*
+
+member-name       = identifier | keyword | 'null' | 'true' | 'false'
 ```
 
 A compilation unit is one `.jux` file. Top-level statements (§7.15) are permitted only in the file that the module names as the entry point; in any other file they are a parse error (`E0150`).
+
+A `member-name` is the same rule that governs a name after a `.` in an expression: the position is unambiguous, so a reserved word there is read as an ordinary name. It applies to every segment of a `qualified-name` after the first, and to each `import-item`. That is what lets a Rust crate with a module named `record`, `type`, `when` or `drop` be imported at all, and it matches how the member itself is called (§G.4.2). The FIRST segment stays an `identifier`, because a path may start where a statement may start. The four Rust words with no raw-identifier form (`self`, `Self`, `crate`, `super`) remain rejected, since the lowered `use` path could not name them (`E0305`).
 
 ### A.2.2. Top-Level Declarations
 

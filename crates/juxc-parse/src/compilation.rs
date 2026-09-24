@@ -307,11 +307,15 @@ impl<'a> Parser<'a> {
                 };
                 return self.parse_import_items(prefix);
             }
-            match self.parse_ident() {
+            // A segment after the first is a member-name position (§A.2.1,
+            // ERRATA E78), so a keyword there is a module name, not a
+            // statement: `import rust.x.record;` parses.
+            match self.parse_member_name() {
                 Some(ident) => segments.push(ident),
                 None => {
-                    // `import foo.;` or `import foo.123;` — parse_ident
-                    // emitted E0200. Recover and return what we have.
+                    // `import foo.;` or `import foo.123;`: parse_member_name
+                    // fell through to parse_ident, which emitted E0200.
+                    // Recover and return what we have.
                     self.recover_to_import_terminator();
                     let path = QualifiedName {
                         segments,
@@ -369,8 +373,12 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            // Each item is `ident ( 'as' ident )?`.
-            let Some(name) = self.parse_ident() else {
+            // Each item is `member-name ( 'as' ident )?`. The name is what the
+            // prefix package declares, so a keyword spelling is a name here
+            // for the same reason it is in a dotted path (§A.2.1). The ALIAS
+            // is an ordinary identifier: it becomes a Jux binding, and a
+            // binding named after a keyword could not be referred to.
+            let Some(name) = self.parse_member_name() else {
                 // Recovery: consume up to `}` or `;`.
                 self.recover_to_group_terminator();
                 break;

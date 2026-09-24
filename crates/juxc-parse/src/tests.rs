@@ -2738,6 +2738,44 @@ fn multiple_imports_preserve_order() {
     assert!(matches!(&ast.imports[2].spec, juxc_ast::ImportSpec::Items { .. }));
 }
 
+/// A path segment that is a Jux keyword names a module, not a statement.
+///
+/// Grammar §A.2.1 (ERRATA E78): every segment after the first, and every
+/// grouped item, is a member-name position. Without it a Rust crate whose
+/// module is named after one of Jux's 58 keywords could not be imported at
+/// all -- `import rust.x.record;` died at "expected identifier" and there was
+/// no spelling that worked.
+#[test]
+fn a_keyword_may_be_a_path_segment() {
+    let ast = parse_clean("package demo.type;\nimport rust.x.record;\nimport rust.y.{ default, when as w };\n");
+    let pkg = ast.package.as_ref().expect("package declaration");
+    let segs: Vec<&str> = pkg.name.segments.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(segs, vec!["demo", "type"]);
+    match &ast.imports[0].spec {
+        juxc_ast::ImportSpec::Path { name, .. } => {
+            let segs: Vec<&str> = name.segments.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(segs, vec!["rust", "x", "record"]);
+        }
+        other => panic!("expected Path, got {other:?}"),
+    }
+    match &ast.imports[1].spec {
+        juxc_ast::ImportSpec::Items { items, .. } => {
+            assert_eq!(items[0].name.text, "default");
+            assert_eq!(items[1].name.text, "when");
+            assert_eq!(items[1].alias.as_ref().unwrap().text, "w");
+        }
+        other => panic!("expected Items, got {other:?}"),
+    }
+}
+
+/// The FIRST segment is still an ordinary identifier: a path may begin where a
+/// statement may begin, so `import record.X;` must not be read as a path.
+#[test]
+fn a_keyword_may_not_open_a_path() {
+    let (_ast, n) = parse_with_errors("import record.X;");
+    assert!(n >= 1, "a keyword in the leading segment is still an error, got {n}");
+}
+
 /// `import foo.* as Bar;` — wildcard + alias is a shape error. The
 /// parser still produces an ImportDecl (with the wildcard flag set), so
 /// downstream phases can proceed.
