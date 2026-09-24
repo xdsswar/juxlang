@@ -1,0 +1,27 @@
+feed of 30 April 2026, 3 crates
+
+crate      owner    rel  downloads   span latest   state
+---------- ------- ---- ---------- ------ -------- -----
+jux-core   ada        3       1440   102d 0.2.0    fresh
+jux-lsp    grace      2        468    22d 0.1.0    fresh
+jux-fmt    ada        1       2100     0d 1.0.0    stale (151d)
+---------- ------- ---- ---------- ------ -------- -----
+all                   6       4008
+
+yanked: jux-lsp: built against the wrong toolchain
+
+ada     2  jux-core, jux-fmt
+grace   1  jux-lsp
+
+history: 6 releases
+  the feed opens with 2026-01-15 and closes with 2025-11-30
+  the oldest is 2025-11-30, 151 days ago
+
+busiest: jux-fmt 1.0.0 (2025-11-30, 2100 downloads)
+published on a Sun, day 30 of month 11
+
+rejected <document>: the feed is not JSON
+rejected crates: an array was expected
+rejected generated: `the thirtieth` is not a date
+rejected crates[0].name: a string was expected
+rejected crates[0].releases[0].date: `2026-13-40` is not a date

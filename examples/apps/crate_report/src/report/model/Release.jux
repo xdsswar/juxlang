@@ -1,0 +1,25 @@
+// One published version of a crate.
+//
+// `day` is a chrono `NaiveDate` living in a Jux record, and `yanked` is a
+// nullable String: absent for a release that is still good, and carrying the
+// reason for one that was pulled.
+package report.model;
+
+import rust.chrono.NaiveDate;
+
+public record Release(String version, NaiveDate day, long downloads, String? yanked) {
+
+    /** Whether the release was pulled from the registry. */
+    public bool isYanked() {
+        return yanked != null;
+    }
+
+    /** The day, written the way the feed wrote it. */
+    public String isoDay() {
+        return $"${day.format("%Y-%m-%d")}";
+    }
+
+    public String operator string() {
+        return $"${version} (${this.isoDay()}, ${downloads} downloads)";
+    }
+}

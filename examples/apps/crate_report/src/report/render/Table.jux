@@ -1,0 +1,81 @@
+// The report itself: aligned columns, a total line, and the notes under it.
+package report.render;
+
+import rust.chrono.NaiveDate;
+import report.model.{Crate, Release};
+
+public class Table {
+    /** The day the report is written as of, for the staleness column. */
+    private NaiveDate today;
+    /** A crate with no release in this many days is called stale. */
+    private long staleAfter;
+
+    public Table(NaiveDate today, long staleAfter) {
+        this.today = today;
+        this.staleAfter = staleAfter;
+    }
+
+    /** The whole table, including the heading and the total line. */
+    public void print(Vec<Crate> crates) {
+        print($"${pad("crate", 10)} ${pad("owner", 7)} ${padLeft("rel", 4)} "
+            + $"${padLeft("downloads", 10)} ${padLeft("span", 6)} ${pad("latest", 8)} state");
+        print("---------- ------- ---- ---------- ------ -------- -----");
+        var downloads = 0L;
+        var releases = 0;
+        for (var one : crates) {
+            downloads += one.downloads();
+            releases += one.releases.len();
+            final Release? latest = one.latest();
+            print($"${pad(one.name, 10)} ${pad(one.owner, 7)} ${padLeft($"${one.releases.len()}", 4)} "
+                + $"${padLeft($"${one.downloads()}", 10)} ${padLeft($"${one.span()}d", 6)} "
+                + $"${pad(latest == null ? "-" : latest.version, 8)} ${this.state(one)}");
+        }
+        print("---------- ------- ---- ---------- ------ -------- -----");
+        print($"${pad("all", 10)} ${pad("", 7)} ${padLeft($"${releases}", 4)} ${padLeft($"${downloads}", 10)}");
+    }
+
+    /** Whether the crate has been published to recently enough. */
+    private String state(Crate one) {
+        final long idle = one.daysSinceRelease(today);
+        return idle > staleAfter ? $"stale (${idle}d)" : "fresh";
+    }
+
+    /** The pulled releases, with the reason each was pulled. */
+    public void notes(Vec<Crate> crates) {
+        var any = false;
+        for (var one : crates) {
+            // A nullable element type: the reason is absent for a release
+            // that was pulled without one being recorded.
+            final Vec<String?> reasons = one.yankReasons();
+            for (var i = 0; i < reasons.len(); i++) {
+                final String? reason = reasons[i];
+                print($"yanked: ${one.name}: ${reason == null ? "(no reason given)" : reason}");
+                any = true;
+            }
+        }
+        if (!any) {
+            print("yanked: none");
+        }
+    }
+}
+
+/**
+ * Padding as a free function rather than a method: it belongs to nobody, and
+ * `static` on a free function says exactly that.
+ */
+public static String pad(String text, int width) {
+    var out = text;
+    while (out.charLength() < width) {
+        out = out + " ";
+    }
+    return out;
+}
+
+/** The same, against the right edge. */
+public static String padLeft(String text, int width) {
+    var out = text;
+    while (out.charLength() < width) {
+        out = " " + out;
+    }
+    return out;
+}

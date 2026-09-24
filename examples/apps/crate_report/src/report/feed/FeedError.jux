@@ -1,0 +1,15 @@
+// A feed that could not be read, and which member of it went wrong.
+//
+// The path (`crates[1].releases[0].date`) is the only thing that makes a
+// failure in a nested document actionable, so it is part of the message.
+package report.feed;
+
+public class FeedError extends Exception {
+    /** Where in the document the failure is, in dotted-path form. */
+    public String path;
+
+    public FeedError(String path, String why) {
+        super($"${path}: ${why}");
+        this.path = path;
+    }
+}

@@ -1,0 +1,141 @@
+// A release report over a registry feed.
+//
+// The feed is embedded so the program has nothing to find on disk and prints
+// the same thing everywhere. serde_json reads it, chrono dates it, and the
+// report is ordinary Jux over ordinary Jux objects.
+import rust.chrono.NaiveDate;
+import report.feed.{Feed, FeedError};
+import report.model.{Crate, Release, Window};
+import report.render.{Table, pad, padLeft};
+
+/** The registry feed, as a service would hand it over. */
+const String FEED = "{\n"
+    + "  \"generated\": \"2026-04-30\",\n"
+    + "  \"crates\": [\n"
+    + "    {\"name\": \"jux-core\", \"owner\": \"ada\", \"releases\": [\n"
+    + "      {\"version\": \"0.1.0\", \"date\": \"2026-01-15\", \"downloads\": 120},\n"
+    + "      {\"version\": \"0.1.1\", \"date\": \"2026-02-02\", \"downloads\": 340},\n"
+    + "      {\"version\": \"0.2.0\", \"date\": \"2026-04-27\", \"downloads\": 980}\n"
+    + "    ]},\n"
+    + "    {\"name\": \"jux-lsp\", \"owner\": \"grace\", \"releases\": [\n"
+    + "      {\"version\": \"0.0.9\", \"date\": \"2026-03-11\", \"downloads\": 58,\n"
+    + "       \"yanked\": \"built against the wrong toolchain\"},\n"
+    + "      {\"version\": \"0.1.0\", \"date\": \"2026-04-02\", \"downloads\": 410}\n"
+    + "    ]},\n"
+    + "    {\"name\": \"jux-fmt\", \"owner\": \"ada\", \"releases\": [\n"
+    + "      {\"version\": \"1.0.0\", \"date\": \"2025-11-30\", \"downloads\": 2100}\n"
+    + "    ]}\n"
+    + "  ]\n"
+    + "}";
+
+public void main() {
+    try {
+        final var feed = new Feed(FEED);
+        final var today = feed.generated();
+        final Vec<Crate> crates = feed.crates();
+
+        print($"feed of ${today.format("%d %B %Y")}, ${crates.len()} crates");
+        print("");
+
+        new Table(today, 60L).print(crates);
+        print("");
+        new Table(today, 60L).notes(crates);
+        print("");
+
+        byOwner(crates);
+        print("");
+        history(crates, today);
+        print("");
+        busiest(crates);
+    } catch (FeedError broken) {
+        print($"the feed could not be read: ${broken.getMessage()}");
+    }
+
+    // The same reader on five feeds, each wrong in its own way. A failure has
+    // to name the member, or a document five levels deep says nothing.
+    print("");
+    reject("not json at all");
+    reject("{\"generated\": \"2026-04-30\", \"crates\": {}}");
+    reject("{\"generated\": \"the thirtieth\", \"crates\": []}");
+    reject("{\"generated\": \"2026-04-30\", \"crates\": [{\"name\": 7}]}");
+    reject("{\"generated\": \"2026-04-30\", \"crates\": [{\"name\": \"a\", \"owner\": \"b\","
+        + " \"releases\": [{\"version\": \"1\", \"date\": \"2026-13-40\", \"downloads\": 1}]}]}");
+}
+
+/** Crates grouped by who owns them, in name order both ways. */
+void byOwner(Vec<Crate> crates) {
+    var owners = new BTreeMap<String, Vec<String>>();
+    for (var one : crates) {
+        if (!owners.contains_key(one.owner)) {
+            owners.insert(one.owner, new Vec<String>());
+        }
+        owners.get(one.owner)!!.push(one.name);
+    }
+    for (var entry : owners) {
+        final Vec<String> owned = entry.1;
+        owned.sort_unstable();
+        var line = "";
+        for (var name : owned) {
+            line = line.is_empty() ? name : line + ", " + name;
+        }
+        print($"${pad(entry.0, 7)} ${owned.len()}  ${line}");
+    }
+}
+
+/**
+ * The whole registry's publication history, collected into a Jux generic
+ * holding a foreign type: every release day of every crate, in feed order.
+ */
+void history(Vec<Crate> crates, NaiveDate today) {
+    var offered = new Window<NaiveDate>();
+    NaiveDate? oldest = null;
+    for (var one : crates) {
+        for (var release : one.releases) {
+            offered.offer(release.day);
+            // The right of a `||` knows the left ruled null out (§7.10), so
+            // `oldest` is a date here and chrono can subtract it.
+            if (oldest == null || release.day.signed_duration_since(oldest).num_days() < 0) {
+                oldest = release.day;
+            }
+        }
+    }
+    if (offered.isEmpty() || oldest == null) {
+        print("history: nothing published");
+        return;
+    }
+    print($"history: ${offered.count()} releases");
+    print($"  the feed opens with ${offered.first()!!.format("%Y-%m-%d")}"
+        + $" and closes with ${offered.last()!!.format("%Y-%m-%d")}");
+    print($"  the oldest is ${oldest.format("%Y-%m-%d")}, "
+        + $"${today.signed_duration_since(oldest).num_days()} days ago");
+}
+
+/** The single release with the most downloads, found by chaining. */
+void busiest(Vec<Crate> crates) {
+    Crate? where = null;
+    Release? top = null;
+    for (var one : crates) {
+        for (var release : one.releases) {
+            if (top == null || release.downloads > top.downloads) {
+                top = release;
+                where = one;
+            }
+        }
+    }
+    if (top != null && where != null) {
+        print($"busiest: ${where.name} ${top}");
+        print($"published on a ${top.day.weekday()}, day ${top.day.day()} of month ${top.day.month()}");
+    }
+}
+
+/** Reads a feed that should fail, and prints the path that stopped it. */
+void reject(String text) {
+    try {
+        final var feed = new Feed(text);
+        feed.generated();
+        feed.crates();
+        print("a broken feed was read, which is wrong");
+    } catch (FeedError broken) {
+        print($"rejected ${broken.getMessage()}");
+    }
+}

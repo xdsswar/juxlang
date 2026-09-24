@@ -1,0 +1,100 @@
+// Reading the registry feed: JSON in, Jux objects out.
+//
+// serde_json's `Value` is a foreign type, and it is used here exactly as a
+// Jux one: indexed by name, held in a Jux generic (`Vec<Value>`), and passed
+// between methods. Every failure names the path it happened at, because a
+// document five levels deep tells you nothing otherwise.
+package report.feed;
+
+import rust.serde_json.{Value, from_str};
+import rust.chrono.NaiveDate;
+import report.model.{Crate, Release};
+
+public class Feed {
+    /** The whole document, kept so the members can be read more than once. */
+    private Value doc;
+
+    public Feed(String text) throws FeedError {
+        try {
+            this.doc = from_str<Value>(text);
+        } catch (Exception e) {
+            throw new FeedError("<document>", "the feed is not JSON");
+        }
+    }
+
+    /** The day the feed was written. */
+    public NaiveDate generated() throws FeedError {
+        return this.date(doc["generated"], "generated");
+    }
+
+    /**
+     * Every crate in the feed, each with its releases in the order the feed
+     * lists them. A member of the wrong shape stops the read, named.
+     */
+    public Vec<Crate> crates() throws FeedError {
+        final Vec<Value>? listed = doc["crates"].as_array();
+        if (listed == null) {
+            throw new FeedError("crates", "an array was expected");
+        }
+        var out = new Vec<Crate>();
+        var index = 0;
+        for (var entry : listed) {
+            final String at = $"crates[${index}]";
+            var one = new Crate(this.text(entry["name"], $"${at}.name"),
+                                this.text(entry["owner"], $"${at}.owner"));
+            final Vec<Value>? published = entry["releases"].as_array();
+            if (published == null) {
+                throw new FeedError($"${at}.releases", "an array was expected");
+            }
+            var number = 0;
+            for (var release : published) {
+                one.add(this.release(release, $"${at}.releases[${number}]"));
+                number++;
+            }
+            out.push(one);
+            index++;
+        }
+        return out;
+    }
+
+    /** One release object. */
+    private Release release(Value value, String at) throws FeedError {
+        final long downloads = this.count(value["downloads"], $"${at}.downloads");
+        // A member the feed left out reads as JSON null, which is exactly the
+        // absent reason a live release has.
+        final Value pulled = value["yanked"];
+        final String? yanked = pulled.is_null() ? null : this.text(pulled, $"${at}.yanked");
+        return new Release(this.text(value["version"], $"${at}.version"),
+                           this.date(value["date"], $"${at}.date"),
+                           downloads,
+                           yanked);
+    }
+
+    /** A member that has to be a string. */
+    private String text(Value value, String at) throws FeedError {
+        final String? found = value.as_str();
+        if (found == null) {
+            throw new FeedError(at, "a string was expected");
+        }
+        return found;
+    }
+
+    /** A member that has to be a whole number. */
+    private long count(Value value, String at) throws FeedError {
+        final long? found = value.as_i64();
+        if (found == null) {
+            throw new FeedError(at, "a whole number was expected");
+        }
+        return found;
+    }
+
+    /** A member that has to be a date, which chrono decides. */
+    private NaiveDate date(Value value, String at) throws FeedError {
+        final String written = this.text(value, at);
+        try {
+            return NaiveDate.parse_from_str(written, "%Y-%m-%d");
+        } catch (Exception e) {
+            throw new FeedError(at, $"`${written}` is not a date");
+        }
+    }
+}

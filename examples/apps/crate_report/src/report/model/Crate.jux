@@ -1,0 +1,77 @@
+// A crate in the registry, with every release of it in publication order.
+package report.model;
+
+import rust.chrono.NaiveDate;
+
+public class Crate {
+    public String name;
+    public String owner;
+    public Vec<Release> releases = new Vec<Release>();
+
+    public Crate(String name, String owner) {
+        this.name = name;
+        this.owner = owner;
+    }
+
+    public void add(Release release) {
+        releases.push(release);
+    }
+
+    /** Downloads across every release, yanked ones included. */
+    public long downloads() {
+        var total = 0L;
+        for (var release : releases) {
+            total += release.downloads;
+        }
+        return total;
+    }
+
+    /** The newest release, or null for a crate with none. */
+    public Release? latest() {
+        if (releases.len() == 0) {
+            return null;
+        }
+        return releases[releases.len() - 1];
+    }
+
+    /** The oldest release, or null for a crate with none. */
+    public Release? first() {
+        if (releases.len() == 0) {
+            return null;
+        }
+        return releases[0];
+    }
+
+    /**
+     * Days between the first and the last release. Zero for a crate with a
+     * single release, which is the honest answer rather than a missing one.
+     */
+    public long span() {
+        final Release? from = this.first();
+        final Release? to = this.latest();
+        if (from == null || to == null) {
+            return 0L;
+        }
+        return to.day.signed_duration_since(from.day).num_days();
+    }
+
+    /** The reasons its yanked releases were pulled, in release order. */
+    public Vec<String?> yankReasons() {
+        var out = new Vec<String?>();
+        for (var release : releases) {
+            if (release.isYanked()) {
+                out.push(release.yanked);
+            }
+        }
+        return out;
+    }
+
+    /** How long it has been since the last release, as of `today`. */
+    public long daysSinceRelease(NaiveDate today) {
+        final Release? last = this.latest();
+        if (last == null) {
+            return 0L;
+        }
+        return today.signed_duration_since(last.day).num_days();
+    }
+}
