@@ -1,0 +1,38 @@
+// Splitting text with Rust's own `str` methods.
+//
+// `splitn` hands back an iterator whose type the standard-library stub names
+// but does not define, so nothing is known about it (ERRATA E80). A call on
+// such a value is still foreign: `collect<Vec<String>>()` builds a plain Rust
+// `Vec` and the result arrives as a Jux collection, and a `String` slot owns
+// what it is given.
+
+void main() {
+    final String line = "3|1|buy milk|and bread";
+
+    // At most three fields, so the last one keeps its separators.
+    final var parts = line.splitn(3, '|').collect<Vec<String>>();
+    print(parts.len());
+    print(parts[0]);
+    print(parts[2]);
+
+    // Jux's own `split` hands back an array, so it needs no collecting.
+    final var all = line.split('|');
+    print(all.length);
+
+    var total = 0;
+    for (var raw : "10 20 30".split(' ')) {
+        // A `String` slot owns the trimmed text.
+        final String text = raw.trim();
+        total += text.parse<int>();
+    }
+    print(total);
+
+    // Line by line, with a `String` local per line.
+    for (var raw : "alpha\n\nbeta".lines()) {
+        final String trimmed = raw.trim();
+        if (trimmed.is_empty()) {
+            continue;
+        }
+        print(trimmed.to_uppercase());
+    }
+}

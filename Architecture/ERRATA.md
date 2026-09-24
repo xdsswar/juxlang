@@ -1307,6 +1307,69 @@ URL is not served yet; the JSON keeps its `docs_url` field.
 
 ---
 
+## E79. A guard clause that leaves with `break` or `continue`
+
+**Conflict.** LANG-V1 §7.10 narrows a null-tested name past a guard clause
+"only when its branch cannot fall through -- it ends in `return` or
+`throw`", and gives the reason: that is exactly when the code after the `if`
+is unreachable from the null case. A `break` or `continue` meets the same
+reason, but the wording left it out, so the commonest reading loop in the
+language was rejected:
+
+```java
+while (true) {
+    final Command? next = reader.next();
+    if (next == null) {
+        break;
+    }
+    run(next);        // E0410: expected Command, found Command?
+}
+```
+
+**Resolution.** The guard clause counts `break` and `continue` as leaving,
+alongside `return`, `throw` and loops that never end. The narrowing still
+covers only the rest of the enclosing block, which a jump leaves along with
+everything after it. This is separate from missing-return analysis (E0451):
+a `break` does not leave the function, so a body ending in one still needs
+its `return`.
+
+**Spec status:** §7.10 is amended to name `break` and `continue` and shows
+the loop above.
+
+---
+
+## E80. A call on a foreign value whose type the stub never defined
+
+**Conflict.** Bindgen §G.6 has the generated stub describe every foreign
+type a program can reach. It does not always: two types from different Rust
+modules with the same short name (`str`'s `Split` and `io`'s, `str`'s
+`SplitN` and a slice's) collapse into one entry, and the loser is named by
+the methods that return it but never defined. `s.splitn(3, '|')` therefore
+has a type nothing is known about, and the spec says nothing about what may
+be called on such a value.
+
+**Resolution.** The value is still foreign, and is lowered as foreign code:
+
+- A collection type argument is the plain Rust collection, and the result
+  arrives behind a Jux handle, so `collect<Vec<String>>()` works.
+- A zero-argument call with an explicit type argument is typed as that
+  argument. Nothing else could fix the type parameter, and it lets a `var`
+  holding the result read as the collection it is.
+- Items collected into a `Vec<String>` are owned (`String::from`), because
+  every `str` splitter yields borrowed `&str`.
+- A `String` slot owns what such a call hands it: `raw.trim()` is a `&str`
+  in Rust and the slot is an owned `String`.
+
+The real repair is discovery: the stub should carry both types under
+distinct names. Until it does, the rules above keep ordinary text
+processing compiling rather than leaking a rustc error about a type the
+program never wrote.
+
+**Spec status:** §G.6 stands; this records what the compiler does for a
+type it was never given.
+
+---
+
 ## E84. `ref` on a type that is already a reference
 
 **Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.13.2 says `ref` on a

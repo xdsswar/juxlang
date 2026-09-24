@@ -1,0 +1,2 @@
+// Library root for `linalg`. The code lives under `src/linalg/`, and the
+// build picks up every `.jux` beneath `src/`.

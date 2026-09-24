@@ -1,0 +1,26 @@
+// What a group of rows adds up to.
+//
+// A mutable accumulator rather than a record: it is folded over many rows and
+// only then read.
+package report.model;
+
+public class Totals {
+    public int units = 0;
+    public double revenue = 0.0;
+    public int lines = 0;
+
+    /** Folds one row's numbers in. */
+    public void add(int units, double revenue) {
+        this.units += units;
+        this.revenue += revenue;
+        this.lines++;
+    }
+
+    /** Revenue per unit across everything counted so far. */
+    public double averagePrice() {
+        if (units == 0) {
+            return 0.0;
+        }
+        return revenue / units;
+    }
+}

@@ -132,6 +132,14 @@ impl RustEmitter {
             && target_bare.as_deref().is_some_and(|t| {
                 self.lookup_class_by_bare_or_fqn(t).is_some()
                     || self.lookup_interface_by_bare_or_fqn(t).is_some()
+                    // A RECORD is a cast target too: it implements interfaces,
+                    // and a sealed hierarchy of records is the ordinary way to
+                    // write one. Without this, `value as JsonString` fell
+                    // through to the numeric path and emitted a Rust `as`
+                    // between an `Rc<dyn Value>` and a struct (E0605).
+                    || self
+                        .resolve_bare_type_fqn(t)
+                        .is_some_and(|fqn| self.symbols.records.contains_key(&fqn))
             });
         if target_is_user {
             let t = target_bare.unwrap();

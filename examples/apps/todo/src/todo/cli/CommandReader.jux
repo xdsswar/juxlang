@@ -1,0 +1,53 @@
+// Turns the program's arguments into commands, one at a time.
+package todo.cli;
+
+/**
+ * Reads commands from `args`, one at a time. `next()` returns null when the
+ * arguments run out.
+ */
+public class CommandReader {
+    private String[] args;
+    private int at = 0;
+
+    public CommandReader(String[] args) {
+        this.args = args;
+    }
+
+    public Command? next() {
+        if (at >= args.length) {
+            return null;
+        }
+        final String word = args[at];
+        at++;
+        return switch (word) {
+            case "reset" -> new Reset();
+            case "add" -> new Add(this.operand());
+            case "done" -> new Done(this.number());
+            case "undo" -> new Undo(this.number());
+            case "remove" -> new Remove(this.number());
+            case "list" -> new ListAll();
+            case "stats" -> new Stats();
+            default -> new Unknown(word);
+        };
+    }
+
+    /** The argument after a command word, or an empty string at the end. */
+    private String operand() {
+        if (at >= args.length) {
+            return "";
+        }
+        final String value = args[at];
+        at++;
+        return value;
+    }
+
+    /** The argument after a command word, read as a task number. */
+    private int number() {
+        final String text = this.operand();
+        try {
+            return text.parse<int>();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+}

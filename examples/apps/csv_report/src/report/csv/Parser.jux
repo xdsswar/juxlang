@@ -1,0 +1,74 @@
+// Turning text into rows, with the failures a real file has.
+//
+// A CSV reader is mostly error handling: a short line, a number that is not a
+// number, a header that is missing. Each one is reported with the line number
+// it came from, and the caller decides whether to stop or skip.
+package report.csv;
+
+public class Parser {
+    private String text;
+
+    public Parser(String text) {
+        this.text = text;
+    }
+
+    /**
+     * Every data line as a `Row`. The header is checked and skipped; a line
+     * that cannot be read throws, naming the line.
+     */
+    public Vec<Row> rows() throws BadRow {
+        var out = new Vec<Row>();
+        int number = 0;
+        for (var raw : text.lines()) {
+            number++;
+            final String line = raw.trim();
+            if (line.is_empty()) {
+                continue;
+            }
+            final Vec<String> fields = split(line);
+            if (number == 1) {
+                if (fields.len() != 4) {
+                    throw new BadRow(number, "the header needs four columns");
+                }
+                continue;
+            }
+            if (fields.len() != 4) {
+                throw new BadRow(number, $"expected 4 fields, found ${fields.len()}");
+            }
+            out.push(new Row(fields[0], fields[1], number(number, fields[2]), amount(number, fields[3])));
+        }
+        return out;
+    }
+
+    /** The line's fields, separated by commas and trimmed. */
+    private Vec<String> split(String line) {
+        var fields = new Vec<String>();
+        var current = "";
+        for (var c : line.chars()) {
+            if (c == ',') {
+                fields.push(current.trim());
+                current = "";
+            } else {
+                current = current + c;
+            }
+        }
+        fields.push(current.trim());
+        return fields;
+    }
+
+    private int number(int line, String text) throws BadRow {
+        try {
+            return text.parse<int>();
+        } catch (Exception e) {
+            throw new BadRow(line, $"`${text}` is not a whole number");
+        }
+    }
+
+    private double amount(int line, String text) throws BadRow {
+        try {
+            return text.parse<double>();
+        } catch (Exception e) {
+            throw new BadRow(line, $"`${text}` is not an amount");
+        }
+    }
+}

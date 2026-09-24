@@ -1431,6 +1431,7 @@ impl RustEmitter {
                     .join("::");
                 self.w.push_str(&path);
             }
+            Expr::Call(c) if self.emit_untyped_collect_of_strings(c) => {}
             Expr::Call(c) => {
                 // A foreign method that hands back a COLLECTION hands back the
                 // bare container; the slot receiving it is a handle (§6.5.1),
@@ -1653,9 +1654,32 @@ impl RustEmitter {
     /// `T` / `null` branches produces `if cond { Some(...) }
     /// else { None }`.
     pub(crate) fn emit_ternary(&mut self, t: &juxc_ast::TernaryExpr) {
+        // Headed for an interface slot: each arm coerces itself (see
+        // `arm_iface_target`), which also covers a nullable slot's `Some`.
+        if let Some(target) = self.arm_iface_target.take() {
+            let prev = std::mem::replace(&mut self.emitting_nullable_target, false);
+            self.w.push_str("if ");
+            self.emit_expr(&t.condition);
+            self.w.push_str(" { ");
+            let depth = self.expr_narrowed.len();
+            let when_true = self.null_narrowed_locals(&t.condition, true);
+            self.expr_narrowed.extend(when_true);
+            self.emit_expr_coerced_to_iface(&target, &t.then_branch);
+            self.expr_narrowed.truncate(depth);
+            self.w.push_str(" } else { ");
+            let when_false = self.null_narrowed_locals(&t.condition, false);
+            self.expr_narrowed.extend(when_false);
+            self.emit_expr_coerced_to_iface(&target, &t.else_branch);
+            self.expr_narrowed.truncate(depth);
+            self.w.push_str(" }");
+            self.emitting_nullable_target = prev;
+            return;
+        }
         let wrap_each_arm = self.emitting_nullable_target;
         let prev = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
+        // The slot's own numeric type wins over the meet of the arms.
+        let slot_numeric = self.arm_numeric_target.take();
         // **Binary numeric promotion across the arms (Java JLS 15.25).**
         // `cond ? 1 : 2.0` is a `double` in Java and prints `1.0`. Rust has no
         // implicit numeric coercion and both arms of an `if` expression must
@@ -1667,7 +1691,9 @@ impl RustEmitter {
         let same_primitive = self
             .operand_primitive(&t.then_branch)
             .is_some_and(|p| Some(p) == self.operand_primitive(&t.else_branch));
-        let promote = if same_primitive {
+        let promote = if slot_numeric.is_some() {
+            slot_numeric
+        } else if same_primitive {
             None
         } else {
             self.numeric_promote_target(&t.then_branch, &t.else_branch, true)
@@ -2904,6 +2930,12 @@ impl RustEmitter {
             // keeps its parentheses: `*(p as *mut i32)`, not `*p as *mut i32`,
             // which Rust reads as a cast of `*p`.
             Expr::Cast(_) => parent_prec >= UNARY_PREC,
+            // A `? :` and a `switch` value lower to a Rust `if` / `match`,
+            // and Rust does not read either as the operand of a binary
+            // operator: `if d < 0.0 { -d } else { d } < 1e-6` is a type error
+            // about `()`, not a comparison. Parenthesized wherever an
+            // operator is above them.
+            Expr::Ternary(_) | Expr::Switch(_) => parent_prec > 0,
             // Atomic and postfix expressions never need parens — they
             // bind tighter than any binary operator.
             _ => false,
@@ -3088,7 +3120,16 @@ impl RustEmitter {
         // implementer answers with its own address.
         self.w.push_str("impl crate::JuxIdentity for ");
         self.w.push_str(&struct_name);
-        self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } impl ");
+        self.w.push_str(" { fn __jux_identity(&self) -> *const () { self as *const Self as *const () } } ");
+        // The interface trait has a `Display` supertrait (an interface-typed
+        // value prints as its object). An anonymous class has no name of its
+        // own, so it prints the identity form under the interface it
+        // implements, the way a named class without `operator string` does.
+        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str(&struct_name);
+        self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
+        self.w.push_str(target_bare);
+        self.w.push_str("$anon@{:p}\", self as *const Self) } } impl ");
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         // A generic interface is implemented at the arguments written

@@ -1,0 +1,8 @@
+# Two packages: a small linear-algebra library and the program using it.
+#
+#   linalg   vectors and matrices, with operators and a generic contract
+#   lab      the program: solves a system, transforms points, reports
+#
+# `jux run` picks the last member's binary, so `lab` stays last.
+[workspace]
+members = ["linalg", "lab"]

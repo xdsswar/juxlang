@@ -1,0 +1,8 @@
+package todo.store;
+
+/** Thrown for a command that names a task the list does not have. */
+public class NoSuchTask extends RuntimeException {
+    public NoSuchTask(int id) {
+        super($"no task #${id}");
+    }
+}

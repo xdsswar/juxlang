@@ -1,0 +1,10 @@
+// One parsed line of the file.
+package report.csv;
+
+public record Row(String region, String product, int units, double unitPrice) {
+
+    /** What the line is worth. */
+    public double total() {
+        return units * unitPrice;
+    }
+}

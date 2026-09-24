@@ -1,0 +1,7 @@
+# A text adventure: rooms, items, a scripted session read from stdin.
+#
+# The world is data (records), the commands are a sealed set, and the game is
+# a state machine over them.
+[package]
+name = "apps.adventure"
+version = "0.1.0"

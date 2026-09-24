@@ -1,0 +1,2 @@
+array_unknown_method.jux:8:11: [E0413] error: no method `collect` on `String[]`
+array_unknown_method.jux:9:11: [E0413] error: no method `nosuchmethod` on `String[]`

@@ -1,0 +1,20 @@
+list cleared
+added #1: buy milk
+added #2: write the report
+added #3: call the plumber
+done: buy milk
+--- todo ---
+[x]   1  buy milk
+[ ]   2  write the report
+[ ]   3  call the plumber
+done: call the plumber
+reopened: buy milk
+removed: write the report
+added #4: water the plants
+--- todo ---
+[ ]   1  buy milk
+[x]   3  call the plumber
+[ ]   4  water the plants
+1 of 3 done, 2 open
+error: no task #9
+unknown command `frobnicate`

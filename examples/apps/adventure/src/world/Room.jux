@@ -1,0 +1,17 @@
+// A place in the world, and where its exits lead.
+package world;
+
+public record Room(String name, String description, String north, String south, String east, String west) {
+
+    /** Where `direction` leads, or null when there is no exit that way. */
+    public String? exit(String direction) {
+        final String target = switch (direction) {
+            case "north" -> north;
+            case "south" -> south;
+            case "east" -> east;
+            case "west" -> west;
+            default -> "";
+        };
+        return target.is_empty() ? null : target;
+    }
+}

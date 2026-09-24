@@ -2022,9 +2022,31 @@ impl<'a> Parser<'a> {
                     }
                     j
                 });
-                let next_kind = after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
+                // The member's NAME sits past the whole type, suffixes
+                // included: `String? exit(..)`, `int[] cells()`,
+                // `Vec<Row> rows()`. Reading the token right after the type's
+                // identifier saw the `?`, the `[` or the `<` and reported the
+                // member as something a record body cannot hold.
+                let after_full_type: Option<usize> = after_type_skipped.map(|mut j| {
+                    loop {
+                        match self.tokens.get(j).map(|t| &t.kind) {
+                            Some(TokenKind::Question) => j += 1,
+                            Some(TokenKind::LBracket)
+                                if matches!(
+                                    self.tokens.get(j + 1).map(|t| &t.kind),
+                                    Some(TokenKind::RBracket)
+                                ) =>
+                            {
+                                j += 2;
+                            }
+                            _ => break,
+                        }
+                    }
+                    j
+                });
+                let next_kind = after_full_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
                 let after_member_name: Option<&TokenKind> =
-                    after_type_skipped.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
+                    after_full_type.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
                 // An operator whose return type is generic or suffixed
                 // (`Vec<int> operator..(...)`) sits past the WHOLE type.
                 let operator_after_full_type = self.operator_kw_starts_decl(self.scan_type_at(i));

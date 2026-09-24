@@ -1,0 +1,15 @@
+look
+take lamp
+inventory
+go north
+take key
+go south
+go east
+open chest
+use key
+open chest
+inventory
+go west
+score
+dance
+quit

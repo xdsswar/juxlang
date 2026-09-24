@@ -4232,6 +4232,37 @@ impl crate::RustEmitter {
         if self.needs_base_into_upcast(target_ty, expr) {
             return IfaceCoercion::IntoBase;
         }
+        // **A conditional is judged by its ARMS.** `Shape? s = c ? null : new
+        // Square(7.0);` has no type of its own to compare with the slot, so
+        // asking about the whole expression answered "no coercion" and the
+        // `Square` arrived where a `Rc<dyn Shape>` was wanted. Each arm is
+        // coerced on its own at emission (see `arm_iface_target`), so it is
+        // enough that ONE of them needs it.
+        let arms: Option<Vec<&Expr>> = match expr {
+            Expr::Ternary(t) => Some(vec![&t.then_branch, &t.else_branch]),
+            Expr::Switch(sw) => Some(
+                sw.arms
+                    .iter()
+                    .filter_map(|a| match &a.body {
+                        juxc_ast::SwitchBody::Expr(e) => Some(&**e),
+                        juxc_ast::SwitchBody::Block(_) => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        };
+        if let Some(arms) = arms {
+            for arm in arms {
+                let arm_coercion = self.iface_coercion_to(target_ty, arm);
+                if matches!(
+                    arm_coercion,
+                    IfaceCoercion::WrapClass { .. } | IfaceCoercion::UpcastDyn { .. }
+                ) {
+                    return arm_coercion;
+                }
+            }
+            return IfaceCoercion::None;
+        }
         // A nullable dyn slot only coerces a NON-null value being lifted into
         // the `Option`. A source that is *already* `Option`-shaped (`return
         // this.nullableField;`, `Animal? y = maybeAnimal()`) flows through
@@ -4526,6 +4557,20 @@ impl crate::RustEmitter {
         let coercion = self.iface_coercion_to(target_ty, expr);
         if matches!(coercion, IfaceCoercion::None) {
             self.emit_expr(expr);
+            return;
+        }
+        // **A conditional value coerces arm by arm.** `switch (w) { case "c"
+        // -> new Circle(..); case "s" -> new Square(..); }` headed for a
+        // `Shape` has arms of two different Rust types, so wrapping the whole
+        // `match` is a type error before the wrap is ever reached. Each arm
+        // gets the coercion instead (and the `Some` of a nullable slot, which
+        // a `null` arm simply skips).
+        if matches!(expr, Expr::Ternary(_) | Expr::Switch(_))
+            && matches!(coercion, IfaceCoercion::WrapClass { .. } | IfaceCoercion::UpcastDyn { .. })
+        {
+            let prev = self.arm_iface_target.replace(target_ty.clone());
+            self.emit_expr(expr);
+            self.arm_iface_target = prev;
             return;
         }
         // A nullable dyn slot owns its `Some(...)` wrap here so every call site

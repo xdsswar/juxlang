@@ -1559,29 +1559,32 @@ impl<'a> Parser<'a> {
                 // followed by an initializer block) by peeking past `[`.
                 if self.eat(&TokenKind::RBracket) {
                     // `new T[]{a, b, c}` — initializer-list array literal.
-                    self.expect(&TokenKind::LBrace, "'{' to open array initializer");
-                    let mut elements = Vec::new();
-                    if !self.at(&TokenKind::RBrace) {
-                        loop {
-                            let Some(e) = self.parse_expr() else { break };
-                            elements.push(e);
-                            // A trailing comma before `}` is allowed.
-                            if !self.eat(&TokenKind::Comma) || self.at(&TokenKind::RBrace) {
-                                break;
-                            }
-                        }
+                    // More `[]` pairs make it multi-dimensional
+                    // (`new double[][] {{1.0, 0.0}, {0.0, 1.0}}`), where each
+                    // element is an initializer of its own rather than an
+                    // expression. Only the bare `{{…}, {…}}` form used to
+                    // parse, so a matrix built in a `return` did not.
+                    let mut dims = 1;
+                    while self.at(&TokenKind::LBracket)
+                        && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::RBracket))
+                    {
+                        self.advance();
+                        self.advance();
+                        dims += 1;
                     }
-                    let end = self.peek_span();
-                    self.expect(&TokenKind::RBrace, "'}' to close array initializer");
-                    return Some(Expr::NewArrayLit(NewArrayLitExpr {
-                        element_type,
-                        elements,
-                        // `new T[]{…}` always lowers to `vec![…]`.
-                        // Fixed-size literals only come from the bare
-                        // `{…}` initializer form in typed-local RHS.
-                        fixed: false,
-                        span: start.join(end),
-                    }));
+                    // The written type, brackets included, is what the
+                    // initializer parser needs: it peels one dimension per
+                    // level, so any depth works with no case of its own.
+                    let mut array_ty = element_type.clone();
+                    array_ty.array_shape = Some(juxc_ast::ArrayShape {
+                        dims: vec![juxc_ast::ArrayDim::Dynamic; dims],
+                        elem_nullable: elem_nullable,
+                    });
+                    return self.parse_array_initializer_between(
+                        &array_ty,
+                        TokenKind::LBrace,
+                        TokenKind::RBrace,
+                    );
                 }
 
                 let size = self.parse_expr()?;
@@ -1704,6 +1707,7 @@ impl<'a> Parser<'a> {
     /// left to the expression parser, which the §5.9.3 rule disambiguates
     /// later. Speculative: on no match nothing is consumed and no diagnostic
     /// is left behind.
+
     fn try_sizeof_type_operand(&mut self) -> Option<juxc_ast::TypeRef> {
         if matches!(self.peek(), TokenKind::Kw(Keyword::Void))
             && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::RParen))

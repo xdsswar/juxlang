@@ -1,0 +1,10 @@
+// The contract a value needs to be summed by the generic helpers below.
+//
+// An interface may declare an operator (LANG-V1 §7.14.6): every implementor
+// declares `+` itself, and generic code bounded by the interface can write
+// `a + b` on its type parameter.
+package linalg;
+
+public interface Addable<T> {
+    T operator+(T other);
+}

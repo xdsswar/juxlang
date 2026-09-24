@@ -858,7 +858,14 @@ impl RustEmitter {
             } else {
                 self.return_type_primitive()
             };
-            let widen = if !wrap_upcast {
+            // A conditional's arms each convert to the slot (see
+            // `arm_numeric_target`); the whole expression has no cast of its
+            // own then.
+            let arms_convert = matches!(e, Expr::Ternary(_) | Expr::Switch(_));
+            if arms_convert {
+                self.arm_numeric_target = target;
+            }
+            let widen = if !wrap_upcast && !arms_convert {
                 target.and_then(|t| self.numeric_widen_or_arm(e, t))
             } else {
                 None
@@ -2721,11 +2728,17 @@ impl RustEmitter {
         if iter_is_place {
             if element_is_copy {
                 self.w.push('&');
-            } else if !body_moves_var {
+            } else if !body_moves_var && !snapshot {
                 // Borrow-iter: yields `&T`, so `x.method()` / `format!("{}", x)`
-                // / `x == y` all work through auto-deref / `Display` / `PartialEq`.
+                // all work through auto-deref / `Display`.
                 self.w.push('&');
             }
+            // A SNAPSHOT is already a private copy of the sequence, so it is
+            // walked by value and the loop variable is the `T` the Jux program
+            // wrote. Borrowing it yielded `&String`, which compares with
+            // nothing: `for (var held : carried) { if (held == item) }` on a
+            // `Vec<String>` field failed with "can't compare `&String` with
+            // `String`" (rustc E0277).
         }
         if snapshot {
             self.w.push_str("__jux_fe_iter");
@@ -3305,7 +3318,13 @@ impl RustEmitter {
             if wrap_some {
                 self.w.push_str("Some(");
             }
-            if let Some(decl_ty) = iface_target {
+            if self.string_slot_owns_foreign_value(var.ty.as_ref(), init) {
+                // `final String line = raw.trim();` where `raw` came out of an
+                // iterator whose type was never discovered: the Rust value is
+                // a borrowed `&str`, and the slot is an owned `String`.
+                self.emit_expr(init);
+                self.w.push_str(".to_string()");
+            } else if let Some(decl_ty) = iface_target {
                 self.emit_expr_coerced_to_iface(&decl_ty.clone(), init);
             } else {
                 // §5.6: a `new T[N]` flowing into a DYNAMIC array slot
@@ -5642,7 +5661,7 @@ impl RustEmitter {
             .filter(|n| self.nullable_locals.contains(n));
         let guard_narrows = null_name.is_some()
             && if_stmt.else_branch.is_none()
-            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block);
+            && juxc_tycheck::return_check::guard_leaves(&if_stmt.then_block);
         // A condition that is a chain rather than one test
         // (`it != null && it.qty() < 5`, `a == null || b == null`) narrows
         // the same way (§7.10), but cannot be an `if let`: the names it
@@ -5795,7 +5814,7 @@ impl RustEmitter {
         }
         if compound
             && if_stmt.else_branch.is_none()
-            && !juxc_tycheck::return_check::body_can_fall_through(&if_stmt.then_block)
+            && juxc_tycheck::return_check::guard_leaves(&if_stmt.then_block)
         {
             self.shadow_narrowed(&else_narrowed);
         }

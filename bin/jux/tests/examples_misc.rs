@@ -811,3 +811,90 @@ fn enum_auto_helpers() {
         ],
     );
 }
+
+/// §7.10 (ERRATA E79): a guard clause that leaves with `break` or `continue`
+/// narrows the rest of the block, the way one ending in `return` does.
+#[test]
+fn guard_clause_jumps() {
+    common::expect_output(
+        "guard_clause_jumps",
+        "guard-clause-jumps",
+        &["10", "first,third", "HELLO", "(nothing)"],
+    );
+}
+
+/// §O.4.1: an interface-typed value prints as the object it holds -- a
+/// record's components, a class's `operator string`, or the identity form.
+#[test]
+fn interface_value_text() {
+    common::expect_output(
+        "interface_value_text",
+        "interface-value-text",
+        &[
+            "Circle(radius: 2.0)",
+            "area 12.0",
+            "the square",
+            "in text: the square",
+            "true",
+            "true",
+            "42.0",
+            "Circle(radius: 1.0)",
+            "the box",
+        ],
+    );
+}
+
+/// A `? :` or `switch` whose arms are different types, flowing into a slot
+/// typed as the interface they share: each arm converts on its own.
+#[test]
+fn conditional_interface_value() {
+    common::expect_output(
+        "conditional_interface_value",
+        "conditional-interface-value",
+        &[
+            "Circle(r: 1.0)",
+            "Square(s: 2.0)",
+            "Square(s: 4.0)",
+            "true",
+            "Square(s: 6.0)",
+            "Square(s: 7.0)",
+            "Square(s: 9.0)",
+        ],
+    );
+}
+
+/// ERRATA E80: a call on a foreign value whose type the stub never defined.
+/// `splitn(...).collect<Vec<String>>()` builds a plain Rust `Vec` and arrives
+/// as a Jux collection; a `String` slot owns what it is given.
+#[test]
+fn foreign_split_collect() {
+    common::expect_output(
+        "foreign_split_collect",
+        "foreign-split-collect",
+        &["3", "3", "buy milk|and bread", "4", "60", "ALPHA", "BETA"],
+    );
+}
+
+/// §7.6: a record member whose type carries a suffix (`String?`, `int[]`,
+/// `Vec<String>`), a static const beside them, and a component read by its
+/// bare name in a value slot.
+#[test]
+fn record_member_types() {
+    common::expect_output(
+        "record_member_types",
+        "record-member-types",
+        &["study", "true", "4", "h", "2", "room"],
+    );
+}
+
+/// §5.6: `new T[][] { {…}, {…} }`, the explicit-type form of a
+/// multi-dimensional array literal, in a local, a constructor argument and a
+/// `return`.
+#[test]
+fn nd_array_new_literals() {
+    common::expect_output(
+        "nd_array_new_literals",
+        "nd-array-new-literals",
+        &["2", "3", "2", "2", "6", "1.0", "0.0", "2.0", "6"],
+    );
+}

@@ -1,0 +1,9 @@
+# A todo list on the command line, kept in a text file between runs.
+#
+#   jux run -- reset add "buy milk" add "write report" done 1 list
+#
+# Three packages under src/: the task model, the file-backed store, and the
+# command-line parser. The entry point wires them together.
+[package]
+name = "apps.todo"
+version = "0.1.0"

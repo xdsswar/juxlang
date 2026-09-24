@@ -1,0 +1,47 @@
+// A record member whose type carries a suffix: `String?`, `int[]`,
+// `Vec<String>` (JUX-LANG-V1 §7.6).
+//
+// The body's members are read past the WHOLE type. Reading only the type's
+// name saw the `?`, the `[` or the `<` that followed and reported the member
+// as something a record body cannot hold.
+
+record Room(String name, String northExit) {
+
+    /** Where `direction` leads, or null when there is no exit that way. */
+    public String? exit(String direction) {
+        final String target = direction == "north" ? northExit : "";
+        return target.is_empty() ? null : target;
+    }
+
+    /** The name's characters, as an array. */
+    public char[] letters() {
+        var out = new char[name.charLength()];
+        var at = 0;
+        for (var c : name.chars()) {
+            out[at] = c;
+            at++;
+        }
+        return out;
+    }
+
+    /** The same, as a collection. */
+    public Vec<String> parts() {
+        var out = new Vec<String>();
+        out.push(name);
+        out.push(northExit);
+        return out;
+    }
+
+    /** A static field is still allowed beside them. */
+    public static const String KIND = "room";
+}
+
+void main() {
+    final var hall = new Room("hall", "study");
+    print(hall.exit("north"));
+    print(hall.exit("south") == null);
+    print(hall.letters().length);
+    print(hall.letters()[0]);
+    print(hall.parts().len());
+    print(Room.KIND);
+}

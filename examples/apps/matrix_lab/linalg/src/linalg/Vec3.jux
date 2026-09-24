@@ -1,0 +1,69 @@
+// A vector in three dimensions.
+//
+// The operators are the whole surface: `+`, `-`, scaling by a number, the dot
+// product with another vector, equality with hashing, and its text.
+package linalg;
+
+public class Vec3 implements Addable<Vec3> {
+    public double x;
+    public double y;
+    public double z;
+
+    public Vec3(double x, double y, double z) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
+
+    public Vec3 operator+(Vec3 other) {
+        return new Vec3(x + other.x, y + other.y, z + other.z);
+    }
+
+    public Vec3 operator-(Vec3 other) {
+        return new Vec3(x - other.x, y - other.y, z - other.z);
+    }
+
+    /** Scaled by a number. */
+    public Vec3 operator*(double k) {
+        return new Vec3(x * k, y * k, z * k);
+    }
+
+    /** The dot product: the same symbol, picked by the operand's type. */
+    public double operator*(Vec3 other) {
+        return x * other.x + y * other.y + z * other.z;
+    }
+
+    public bool operator==(Vec3 other) {
+        return near(x, other.x) && near(y, other.y) && near(z, other.z);
+    }
+
+    public int operator hash() {
+        return (int) (x * 1000.0) * 31 + (int) (y * 1000.0) * 17 + (int) (z * 1000.0);
+    }
+
+    public String operator string() {
+        return $"(${round(x)}, ${round(y)}, ${round(z)})";
+    }
+
+    /** How long the vector is. */
+    public double length() {
+        return (this * this).sqrt();
+    }
+
+    /** The same direction, length one. */
+    public Vec3 normalized() {
+        final double len = this.length();
+        return len == 0.0 ? new Vec3(0.0, 0.0, 0.0) : this * (1.0 / len);
+    }
+}
+
+/** Two coordinates that agree to six decimal places. */
+bool near(double a, double b) {
+    final double d = a - b;
+    return (d < 0.0 ? -d : d) < 0.000001;
+}
+
+/** A coordinate as it reads in a report. */
+String round(double v) {
+    return v.toFixed(3);
+}

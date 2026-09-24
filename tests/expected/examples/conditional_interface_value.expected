@@ -1,0 +1,7 @@
+Circle(r: 1.0)
+Square(s: 2.0)
+Square(s: 4.0)
+true
+Square(s: 6.0)
+Square(s: 7.0)
+Square(s: 9.0)

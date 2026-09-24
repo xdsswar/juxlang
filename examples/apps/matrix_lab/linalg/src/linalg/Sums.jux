@@ -1,0 +1,19 @@
+// Generic helpers bounded by the operator contract.
+package linalg;
+
+/** Everything in `items` added up, starting from `zero`. */
+public <T extends Addable<T>> T sum(Vec<T> items, T zero) {
+    var total = zero;
+    for (var item : items) {
+        total = total + item;
+    }
+    return total;
+}
+
+/** The mean of `items`, or `zero` when there are none. */
+public Vec3 centroid(Vec<Vec3> points) {
+    if (points.len() == 0) {
+        return new Vec3(0.0, 0.0, 0.0);
+    }
+    return sum(points, new Vec3(0.0, 0.0, 0.0)) * (1.0 / points.len());
+}

@@ -6206,7 +6206,7 @@ impl<'a> Checker<'a> {
                 // for the rest of the enclosing block, which is the scope
                 // this `declare` lands in.
                 if if_stmt.else_branch.is_none()
-                    && !crate::return_check::body_can_fall_through(&if_stmt.then_block)
+                    && crate::return_check::guard_leaves(&if_stmt.then_block)
                 {
                     for (name, ty) in narrow_after {
                         self.env.declare(&name, ty);
@@ -11864,12 +11864,27 @@ impl<'a> Checker<'a> {
                 }
                 // Built-in receivers: short-circuit.
                 if let Ty::Array { .. } = &receiver_ty {
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
                     if BUILTIN_ARRAY_METHODS.contains(&method_name) {
-                        for arg in &c.args {
-                            self.check_expr(arg);
-                        }
                         return;
                     }
+                    // Anything else is not on an array. Reported here rather
+                    // than left to rustc, which answered a question about an
+                    // array the user never wrote (`Ref<'_, Vec<String>>` is
+                    // not an iterator, for `parts.collect<Vec<String>>()`).
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0413_UnresolvedMethod,
+                            format!("no method `{method_name}` on `{receiver_ty}`"),
+                        )
+                        .with_span(c.span)
+                        .with_help(
+                            "an array has `length`, the `List` methods (§6.5.2), and indexing",
+                        ),
+                    );
+                    return;
                 }
                 if let Ty::String = &receiver_ty {
                     for arg in &c.args {

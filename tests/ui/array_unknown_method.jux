@@ -1,0 +1,11 @@
+// A method an array does not have is reported here, not by rustc.
+//
+// `split` hands back an array (§6.5.2), which carries `length`, the `List`
+// methods and indexing. Anything else used to reach the emitted Rust, where
+// the complaint was about a type the program never wrote.
+void main() {
+    final var parts = "a,b".split(',');
+    print(parts.collect<Vec<String>>());
+    print(parts.nosuchmethod());
+    print(parts.length);
+}

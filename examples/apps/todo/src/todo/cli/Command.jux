@@ -1,0 +1,8 @@
+// A command from the command line, as a value.
+//
+// Each command word becomes one of the records in this package, and the
+// sealed interface names them all. That makes the `switch` in main
+// exhaustive: adding a command without handling it is a compile error.
+package todo.cli;
+
+public sealed interface Command permits Reset, Add, Done, Undo, Remove, ListAll, Stats, Unknown {}
