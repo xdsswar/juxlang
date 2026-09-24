@@ -1359,9 +1359,9 @@ impl RustEmitter {
                 self.w.push_str("async {\n");
                 self.w.indent_inc();
                 self.w.emit_indent();
-                self.w.push_str("let __jux_timer = crate::__jux_spawn(async move { std::thread::sleep(");
+                self.w.push_str("let __jux_timer = crate::__jux_delay(");
                 self.emit_time_span(call.args.first());
-                self.w.push_str(") });\n");
+                self.w.push_str(");\n");
                 self.w.emit_indent();
                 self.w
                     .push_str("match futures::future::select(std::pin::pin!(async move { ");
@@ -1493,9 +1493,12 @@ impl RustEmitter {
                             return;
                         }
                         "delay" => {
-                            self.w.push_str("crate::__jux_spawn(async move { std::thread::sleep(");
+                            // A timer the loop WAITS on, not a task that
+                            // sleeps: with one event loop (ERRATA E85) a
+                            // sleeping task would stop every other one.
+                            self.w.push_str("crate::__jux_delay(");
                             self.emit_time_span(call.args.first());
-                            self.w.push_str(") })");
+                            self.w.push(')');
                             self.emitting_format_arg = prev;
                             return;
                         }
@@ -1587,7 +1590,17 @@ impl RustEmitter {
                 self.emitting_format_arg = false;
                 match call.args.first() {
                     Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
-                        juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+                        // The body is inlined into the task's async block, so a
+                        // call to an `async` function there produces a future
+                        // the TASK has to await. Without it the task resolved
+                        // with the future itself, and `print(await t)` reached
+                        // rustc as "no method on impl Future".
+                        juxc_ast::LambdaBody::Expr(e) => {
+                            self.emit_expr(e);
+                            if self.call_produces_future(e) {
+                                self.w.push_str(".await");
+                            }
+                        }
                         juxc_ast::LambdaBody::Block(b) => {
                             // Trailing-expression block: the last
                             // expression statement is the task's
@@ -1605,6 +1618,9 @@ impl RustEmitter {
                             if let Some(tail) = tail {
                                 self.w.emit_indent();
                                 self.emit_expr(tail);
+                                if self.call_produces_future(tail) {
+                                    self.w.push_str(".await");
+                                }
                                 self.w.push('\n');
                             }
                             self.w.indent_dec();
@@ -1668,7 +1684,7 @@ impl RustEmitter {
         // surfaces as a rustc type-mismatch at the emit site.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "block_on" {
-                self.w.push_str("futures::executor::block_on(");
+                self.w.push_str("crate::__jux_block_on(");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 if let Some(arg) = call.args.first() {
@@ -2733,6 +2749,49 @@ impl RustEmitter {
     /// return type, and a user class's own `pop()` (a receiver that is a Jux
     /// class, `this` included) returns what the user wrote; neither is
     /// unwrapped, or the `.unwrap()` lands on a value that is not an `Option`.
+    /// True when `e` is a call to an `async` function or method, so the call
+    /// itself produces a future rather than a value.
+    ///
+    /// `spawn(() -> makeUser("ann"))` inlines the lambda's body into the
+    /// task's own `async` block, and a future produced THERE has to be
+    /// awaited there. Without this the task resolved with the future itself,
+    /// so `await t` handed back a future and `print` of it reached rustc as
+    /// "no method `jux_show` on impl Future", in a program whose Jux source
+    /// says nothing about futures at all.
+    pub(crate) fn call_produces_future(&self, e: &Expr) -> bool {
+        let Expr::Call(c) = e else { return false };
+        let is_async = |rt: &juxc_ast::ReturnType| matches!(rt, juxc_ast::ReturnType::AsyncType(_));
+        match c.callee.as_ref() {
+            // A free function, unless a binding of that name holds the callee.
+            Expr::Path(qn)
+                if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) =>
+            {
+                self.symbols
+                    .lookup_function(&qn.segments[0].text)
+                    .is_some_and(|(_, f)| is_async(&f.return_type))
+            }
+            // A method, on a class name (static) or on a value (instance).
+            Expr::Field(f) => {
+                let class = match f.object.as_ref() {
+                    Expr::Path(qn) => self
+                        .path_resolves_to_class_in_emit(qn)
+                        .or_else(|| self.receiver_class_bare(&f.object)),
+                    other => self.receiver_class_bare(other),
+                };
+                class
+                    .and_then(|bare| {
+                        self.symbols.classes.get(&bare).or_else(|| {
+                            self.resolve_bare_type_fqn(&bare)
+                                .and_then(|fqn| self.symbols.classes.get(&fqn))
+                        })
+                    })
+                    .and_then(|sig| sig.methods.get(f.field.text.as_str()))
+                    .is_some_and(|m| is_async(&m.return_type))
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn pop_needs_intrinsic_unwrap(&self, call: &CallExpr) -> bool {
         let Expr::Field(f) = &*call.callee else { return false };
         if f.field.text != "pop" || !call.args.is_empty() {

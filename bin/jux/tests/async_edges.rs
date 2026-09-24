@@ -68,3 +68,39 @@ fn unawaited_async_and_async_try_mutation_are_jux_level() {
     assert!(stderr.contains("[E0706]"), "missing E0706:\n{stderr}");
     assert!(!stderr.contains("error[E0"), "rustc leak:\n{stderr}");
 }
+
+/// A spawned task carries a CLASS, in and out, in both spellings of `spawn`
+/// (§18.1.3, ERRATA E85).
+///
+/// `spawn` used to put `Send` on the spawned computation, and a class lowers
+/// to `Rc<RefCell<..>>`, which is not `Send`. The whole `Task<T>` surface went
+/// with it, since `spawn` is the only way to obtain a task: the program below
+/// failed at rustc with a message about a type it never wrote.
+#[test]
+fn a_task_carries_a_class() {
+    let jux = env!("CARGO_BIN_EXE_jux");
+    let source = root().join("examples").join("task_carries_a_class.jux");
+    let emit_dir = root().join("target").join("it-task-carries-a-class");
+
+    let output = Command::new(jux)
+        .arg("run")
+        .arg("--emit-dir")
+        .arg(&emit_dir)
+        .arg(&source)
+        .output()
+        .expect("spawn jux");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "jux exited with {:?}\nstderr:\n{stderr}\nstdout:\n{stdout}",
+        output.status.code(),
+    );
+    let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+    assert_eq!(
+        lines.as_slice(),
+        ["ada", "hi bob", "1", "cleo 9 dora", "42", "done"],
+        "unexpected output:\n{stdout}",
+    );
+}

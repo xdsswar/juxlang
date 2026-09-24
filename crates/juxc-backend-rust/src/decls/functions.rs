@@ -791,7 +791,7 @@ impl RustEmitter {
             self.w.indent_inc();
             let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
             self.emit_entry_call(
-                &format!("futures::executor::block_on(__jux_async_main({args}))"),
+                &format!("crate::__jux_block_on(__jux_async_main({args}))"),
                 crate::entry_returns_code(&fn_decl.return_type),
             );
             self.w.indent_dec();

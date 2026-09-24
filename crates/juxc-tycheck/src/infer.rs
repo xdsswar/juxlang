@@ -731,7 +731,14 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // its definition site (the `async T` return type lowers to
         // `T` everywhere outside the emission boundary), so the
         // operand's type is the right answer.
-        Expr::Await(inner, _) => infer_expr(inner, env, symbols),
+        // A `Task<T>` (§18.1.4) is the one future shape Phase 1 does name, so
+        // awaiting one peels it; everything else is already typed by its value.
+        Expr::Await(inner, _) => match infer_expr(inner, env, symbols) {
+            Ty::User { name, generic_args } if name == "Task" && generic_args.len() == 1 => {
+                generic_args.into_iter().next().unwrap_or(Ty::Unknown)
+            }
+            other => other,
+        },
         // `expr!!` asserts non-null: the result type is the operand's
         // type with the nullable layer peeled (conversion table T? -> T).
         // `throw e` as the fallback of `?:` (Â§T.6.2) never produces a value;
@@ -1255,13 +1262,39 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // Top-level function — `helper(x)`.
         Expr::Path(qn) if qn.segments.len() == 1 => {
             let name = &qn.segments[0].text;
-            // `spawn(f)` builtin (§18.1.3) returns a Task handle the
-            // Jux type system doesn't model yet — Unknown keeps the
-            // method calls on it permissive (rustc verifies against
-            // the emitted JuxTask). Checked BEFORE the function
-            // lookup so the rust.std thread-spawn stub's JoinHandle
-            // doesn't capture the name.
-            if name == "spawn" || name == "withTimeout" {
+            // `spawn(f)` builtin (§18.1.3) gives a `Task<T>` over whatever `f`
+            // produces. Checked BEFORE the function lookup so the rust.std
+            // thread-spawn stub's `JoinHandle` doesn't capture the name.
+            //
+            // Carrying `T` is what lets `await t` be typed at all, and with it
+            // everything a value of that type can do: `(await t).name` on a
+            // class used to reach rustc as a field read against the newtype,
+            // because the await had no type and neither did the local it
+            // landed in. `Task` itself is not a Jux class, so method calls on
+            // it go through the builtin short-circuit in `check`.
+            if name == "spawn" {
+                let value = match c.args.first() {
+                    // `spawn(() -> …)`: the task's value is whatever the
+                    // lambda's body produces. A lambda has no type of its own
+                    // in Phase 1, so read the body rather than the lambda.
+                    Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
+                        juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
+                        juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
+                            Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+                            _ => Ty::Void,
+                        },
+                    },
+                    // `spawn(asyncFn(x))` produces what the call produces,
+                    // since Phase 1 types a future by its value type.
+                    Some(other) => match infer_expr(other, env, symbols) {
+                        Ty::Fn { return_type, .. } => *return_type,
+                        t => t,
+                    },
+                    None => Ty::Unknown,
+                };
+                return Ty::User { name: "Task".to_string(), generic_args: vec![value] };
+            }
+            if name == "withTimeout" {
                 return Ty::Unknown;
             }
             // `transmute<A, B>(value)` (Layout-ABI §L.7.4) gives a `B`, unless

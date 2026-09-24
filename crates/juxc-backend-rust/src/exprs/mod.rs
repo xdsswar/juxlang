@@ -2297,7 +2297,7 @@ impl RustEmitter {
         // to completion right there. Without this the body emitted as
         // a plain closure and any `await` inside was rustc E0728.
         if l.is_async {
-            self.w.push_str("futures::executor::block_on(async move ");
+            self.w.push_str("crate::__jux_block_on(async move ");
             match &l.body {
                 juxc_ast::LambdaBody::Expr(e) if prelude.is_empty() => {
                     self.w.push_str("{ ");

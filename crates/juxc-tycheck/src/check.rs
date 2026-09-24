@@ -11255,11 +11255,13 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 }
-                // `spawn(f)` (§18.1.3): the lambda's body runs on a
-                // pool thread — same Send gate as Worker.spawn
-                // (E0702: no wrapper-class captures).
+                // `spawn(f)` (§18.1.3): the lambda's body runs on the ONE
+                // built-in event loop, concurrent with its siblings and not
+                // parallel to them (ERRATA E85), so it may hold and hand back
+                // anything an ordinary value may hold, a class included. No
+                // capture gate: E0702 belongs to `Worker.spawn` (§M.12),
+                // which is a real thread boundary and keeps it.
                 if name == "spawn" {
-                    self.check_spawn_captures(&c.args);
                     // `spawn(asyncFn())` consumes the future (E0705 exempt).
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
@@ -11964,6 +11966,30 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     if bare == "Channel" && matches!(method_name, "send" | "receive" | "close") {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                    // `Task<T>` (§18.1.4) — same builtin treatment: its
+                    // methods live on the emitted JuxTask handle. Naming one
+                    // it does not have is an ordinary Jux error here rather
+                    // than a rustc message about a type the program never
+                    // wrote, which is all a typo used to get.
+                    if bare == "Task" && !self.symbols.classes.contains_key("Task") {
+                        if !matches!(method_name, "cancel" | "blockingGet") {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0413_UnresolvedMethod,
+                                    format!(
+                                        "no method `{method_name}` on `Task` -- a task's own \
+                                         members are `cancel()` and `blockingGet()`; `await task` \
+                                         is what reads its value (§18.1.4)",
+                                    ),
+                                )
+                                .with_span(field.field.span),
+                            );
+                        }
                         for arg in &c.args {
                             self.check_expr(arg);
                         }
