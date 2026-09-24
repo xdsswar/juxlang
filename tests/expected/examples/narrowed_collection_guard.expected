@@ -1,0 +1,8 @@
+warm: 3
+  red
+  orange
+  amber
+cold: 1
+  blue
+mauve: nothing
+cold now holds 2

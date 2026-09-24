@@ -1,0 +1,28 @@
+// `withTimeout` hands the work its own copy of what it captures.
+//
+// A record is a value (§7.6) and a collection is a shared handle (§6.5.1);
+// either way, giving one to a task under a deadline leaves the caller's own
+// binding usable on the next line. The budget is generous on purpose: a
+// program whose output depends on how fast the machine is would print
+// something different every run.
+
+/** A small piece of work with a known answer. */
+record Sample(String name, int steps) {
+
+    public long total() {
+        var acc = 0L;
+        for (var i : 0..steps) {
+            acc += i;
+        }
+        return acc;
+    }
+}
+
+public async void main() {
+    final var sample = new Sample("triangle", 1000);
+    final long value = await withTimeout(5000, async () -> sample.total());
+    print($"${sample.name}: ${value}");
+    // The capture did not take the record away.
+    print($"same again: ${value == sample.total()}");
+    print($"steps: ${sample.steps}");
+}
