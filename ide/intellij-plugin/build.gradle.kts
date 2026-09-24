@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.5</h3>
+            <p>The editor catches up with two compiler waves: <b>ref</b> bindings, and the standard library's slice and string methods.</p>
+            <ul>
+              <li><b>ref bindings are checked as the compiler checks them</b>: a <b>ref</b> return type, <b>ref ref T</b> and a <b>ref</b> generic argument are reported with the compiler's own wording, and a <b>ref</b> on a class, interface, array or collection is a warning with a fix that removes the keyword. A <b>ref</b> on a value type, which is what the feature is for, is never touched.</li>
+              <li><b>A ref binding captured by a Worker.spawn closure</b> is reported: the cell is task-local and cannot cross the thread boundary.</li>
+              <li><b>The library's slice and string methods complete and resolve</b>: <b>sort</b>, <b>sort_by</b>, <b>to_vec</b>, <b>join</b>, <b>binary_search</b> and the rest on a <b>Vec</b>, <b>to_uppercase</b> and friends on a <b>String</b>. An array offers its own members instead of an empty popup.</li>
+              <li><b>A foreign method's bound is checked at the call</b>: <b>people.sort()</b> on a <b>Vec&lt;Person&gt;</b> says <b>Person</b> declares no <b>operator&lt;=&gt;</b>, instead of letting the Rust compiler say it.</li>
+              <li><b>Every built-in type completes</b>, read from the compiler's own alphabet, both <b>String</b> and <b>string</b> included, everywhere a type may be written.</li>
+              <li><b>Better completion order</b>: this file's types first, then this file's package, the built-in types, what the file already imports, the prelude, and last the names that would need an <b>import</b>. A prelude name such as <b>Vec</b> no longer writes one.</li>
+            </ul>
             <h3>0.1.4</h3>
             <p>Imports stop flickering "unresolved": the generated crate stubs parse, keyword paths are accepted, and a stub is never missing while it regenerates.</p>
             <ul>
