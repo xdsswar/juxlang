@@ -474,7 +474,7 @@ Three shapes of a Rust signature need a rule of their own, each discovered from 
 
 - **An iterator walks itself.** A type with an `impl Iterator` gets the `next()` of that impl on its stub, typed from the impl's `type Item = X` binding: `X? next()`. That is the K.5 iteration protocol, so a for-each over `path.components()` binds a `Component`. An item that is itself a `Result<Y, E>` (`read_dir` yields `io::Result<DirEntry>`) makes `next()` a `Y? next() throws E`, and a for-each binds the `Y`, throwing each `Err` like any other `Result` from Rust (G.5.4).
 - **A borrowed view is held owned.** `Path`, `OsStr` and `CStr` are unsized and exist only behind a reference, which Jux has no spelling for. A view's own `ToOwned` impl names its owned form (`type Owned = PathBuf`), rendered `@RustOwnedAs("PathBuf")`. A Jux value of the view is stored as the owned form, which derefs back to every method of the view: `new Path("a/b")` is `Path::new(..).to_owned()`. A method returning a borrowed view (`&str`, `&OsStr`, `&Path`, or an `Option` of one) is owned at the call.
-- **A projection is unknown.** An associated-type projection (`<I as SliceIndex<[T]>>::Output`, `Self::Item`) depends on the call's own arguments, so the stub writes it `I.Output`: a name no stub declares, which the checker reads as an unknown type that takes the declared slot's type (`final int? first = v.get(0);`).
+- **A projection whose value the receiver decides is unknown.** An associated-type projection over `Self` (`Self::Item`, `<Self as Join<Sep>>::Output`) is settled by the receiver, not by the stub, so it is written `I.Output` / `Self.Output`: a name no stub declares, which the checker reads as an unknown type. A projection over the METHOD's own type parameter is a different case, settled by the call's own argument, and §G.6.4.5 resolves it instead. One the binder cannot resolve is reported at the call rather than passed on (§G.6.4.6).
 
 A member whose signature has no Jux spelling at all, such as `Option<()>` (`void?`), is left out of the stub, as `W0307` skips any un-mappable item. Constants carry their `@rust("...")` path like types, so an `import` of one, or of a foreign enum or trait, names the place it really lives.
 
@@ -505,6 +505,39 @@ A comparator lambda into a closure slot that returns `Ordering` may return an `i
 - **How.** The signature is read as rustdoc would write it and pooled under the same shape as `core`'s impls (§G.6.2.2), so `Vec` reaches `sort` through `Deref` exactly as it reaches `first`, and `String` reaches `to_uppercase` as it reaches `trim`. A result written as a trait projection (`join` returns `<Self as Join<Sep>>::Output`) is an unknown type that takes the declared slot's type, like every projection (§G.6.4.2).
 
 No method name is written into bindgen: the attribute, the shape of the impl and the stability attribute decide what is kept. `sort_unstable_by` and the other `core` methods keep coming from rustdoc; a comparator lambda works on both (`(a, b) -> a <=> b`, Operators §O.2.1).
+
+#### G.6.4.5. A Projection Over the Method's Own Type Parameter
+
+§G.6.4.2 leaves an associated-type projection unknown. That is the right reading for `Self::Item`, whose value the receiver decides, and the wrong one for the shape Rust's indexing APIs are written in:
+
+```rust
+impl<T> [T] {
+    pub fn get<I>(&self, index: I) -> Option<&I::Output> where I: SliceIndex<[T]> { ... }
+}
+```
+
+`I` is the METHOD's own type parameter here, and the call's own argument fixes it, so `<I as SliceIndex<[T]>>::Output` is knowable the moment the argument type is. Left unknown, every `v.get(i)` on every `Vec` typed as `<unknown>?` whatever the element was, and a `Vec<string?>` element handed to a `string?` slot reached rustc instead of the checker.
+
+The binder therefore RESOLVES such a projection and fans the method out into one overload per resolvable impl. Everything it needs is discovered from the rustdoc JSON already being ingested; no trait, impl or method name is written into the binder:
+
+- The projection names its trait by rustdoc ID, which is what is read: the trait item's own impl list gives the impls, and each impl's `type Assoc = ...` member gives the binding.
+- The bound the method puts on the parameter (`where I: SliceIndex<Self>`) is matched against each impl's trait arguments, with `Self` standing for the type the impl the method lives in is written for. An impl whose arguments do not match describes a different haystack, `SliceIndex<str>` is not `SliceIndex<[T]>`, and contributes nothing.
+- The match binds the impl's own parameters, and that substitution is applied to the impl's self type, which becomes the Jux parameter type, and to its associated-type binding, which becomes the Jux result.
+- Two overloads never carry the same parameter type. The first impl to claim one keeps it, which is also what collapses a type re-exported under two module paths (`core::ops::Range` and `core::range::Range`) into a single overload.
+
+Three guards keep the fan-out from saying something the stub cannot mean:
+
+- **The parameter type must be one the stub names, and must mean the same type.** An overload is kept only when the head of its parameter type is a Jux primitive or a type this stub declares, AND that declaration is the very Rust type the impl was written for, compared by the real `@rust("...")` path. `rust.std` declares `Range` for `std::collections::btree_map::Range`, so the name does not mean `core::ops::Range` there, and the range overloads are dropped rather than left pointing at the wrong type.
+- **At most four overloads per method.** `SliceIndex` alone has seventeen impls for `[T]`, and fanning all of them across `get`, `get_mut`, `get_unchecked` and `get_unchecked_mut` on the slice, `Vec`, `str` and `String` would add hundreds of declarations to a surface every compile parses. Four covers the element form plus the main slicing forms. The four are chosen by taking one impl per distinct RESULT type first, so the element form is never crowded out by a run of range forms, and by the crate's own impl order after that.
+- **Anything unresolvable stays unresolved.** When the trait item, an impl's associated-type binding or a substituted type is missing from the rustdoc being ingested, that impl contributes no overload; when no impl contributes one, the method keeps the §G.6.4.2 form and its `I.Output` return.
+
+A fanned-out group is an ordinary Jux overload group (§T.3.1), with one difference at the boundary: it emits under ONE Rust name. Rust resolves the impl from the argument type itself, so a foreign group never takes the `name__ovK` suffix a Jux-declared group does.
+
+#### G.6.4.6. An Unresolved Projection Is Reported, Not Guessed
+
+A projection that survives §G.6.4.5 is written `I.Output`, a name no stub declares, and the checker reads it as an unknown type. An unknown type is the compiler's SUPPRESSION value: it fits every slot, so a value of one can be handed to any parameter, field or variable and nothing is said. That is the right reading for a type the checker chose not to compute and the wrong one for a type it could not compute. It let `show(v.get(0))` pass with `show` taking a `string?`, and the mistyped value reached rustc, which is the leak §G.1 exists to prevent.
+
+A call to a foreign method whose declared return type is an unresolved projection over one of the method's own type parameters is therefore `E0469`, reported at the call, naming the method and the projection it could not resolve. The `null` literal keeps its own unknown-inner nullable type and keeps fitting every `T?` slot: `null` is a value the checker knows everything about, and the two cases are not the same one.
 
 ### G.6.5. First-Class `import rust.X`
 

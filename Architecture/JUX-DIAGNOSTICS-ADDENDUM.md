@@ -486,6 +486,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0462`  | `sizeof` of a type with a wildcard (`?`) argument | JUX-LANG-V1 §5.9.4 |
 | `E0463`  | `sizeof(void)` | JUX-LANG-V1 §5.9.4 |
 | `E0468`  | A `T[N]` array cannot be shared with a `T[]` slot here: one local handed to both a `T[]` and a `T[N]` slot, or a fixed-size parameter or field handed to a `T[]` slot | JUX-LANG-V1 §5.5 / ERRATA E42 |
+| `E0469`  | A foreign method whose return type is an associated-type projection the binder could not resolve | Bindgen §G.6.4.6 / ERRATA E80 |
 | `E0470`  | Annotation applied outside its `@Target` set | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter   | Annotations §A.13              |

@@ -1447,6 +1447,52 @@ rejected as before, since the lowered `use` path could not name them.
 
 **Spec status:** §A.2.1 carries the production and §G.4.2 the reasoning.
 
+## E79. A projection over a method's own type parameter is resolved
+
+**Conflict.** Bindgen §G.6.4.2 makes every associated-type projection an
+unknown type, on the reasoning that a projection "depends on the call's own
+arguments". §G.6.1 makes rustdoc JSON the source of truth for a foreign API,
+and rustdoc records exactly what the call's arguments would settle: the
+trait's impls and each impl's `type Assoc = ...` binding. The two cannot both
+hold. Under §G.6.4.2 alone, `Vec::get`, whose Rust return is
+`Option<&<I as SliceIndex<[T]>>::Output>`, surfaced as
+`I.Output? get<I>(I index)`, so `v.get(0)` typed as `<unknown>?` for a
+`Vec<int>`, a `Vec<string>` and a `Vec<string?>` alike, and the element type
+the user asked about never reached the checker.
+
+**Resolution.** A projection whose self type is one of the METHOD's own type
+parameters, bounded by the projection's trait, is resolved from that trait's
+impls, and the method fans out into one overload per resolvable impl: the
+impl's self type becomes the parameter, the impl's associated-type binding
+becomes the result. `Self::Item` and any other projection the receiver
+settles keep the §G.6.4.2 reading. Discovery does all of it, by rustdoc ID,
+and three guards bound it: the parameter type must be a name this stub
+declares for that very Rust type, at most four overloads are kept per method,
+and an impl that cannot be resolved contributes nothing.
+
+**Spec status:** §G.6.4.5 carries the rule, §G.6.4.2 the narrowed one.
+
+## E80. An unresolved projection is reported, not silently accepted
+
+**Conflict.** §G.6.4.2 says an unresolved projection "takes the declared
+slot's type", and §G.1 says a rustc error is always a juxc bug. An unknown
+type is the checker's suppression value, so the first rule is implemented by
+letting the value satisfy every slot -- including a slot it does not fit,
+which is how `show(v.get(0))` with `show(string? st)` and a `Vec<string?>`
+compiled clean in juxc and failed in rustc. The second rule says that outcome
+is never acceptable.
+
+**Resolution.** The two cases are separated at their source rather than in
+the assignability rule. The `null` literal keeps its unknown-inner nullable
+type and keeps fitting every `T?` slot; a call to a foreign method whose
+declared return is an unresolved projection over one of the method's own type
+parameters is `E0469` at the call, naming the method and the projection. The
+suppression reading of an unknown type is untouched everywhere else, since
+narrowing it broadly would turn every other deliberately-unknown type into an
+error.
+
+**Spec status:** §G.6.4.6 and the E0469 catalog row carry the rule.
+
 ---
 
 When you edit any addendum that touches one of the items above,
