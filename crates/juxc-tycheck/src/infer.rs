@@ -734,7 +734,9 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // A `Task<T>` (§18.1.4) is the one future shape Phase 1 does name, so
         // awaiting one peels it; everything else is already typed by its value.
         Expr::Await(inner, _) => match infer_expr(inner, env, symbols) {
-            Ty::User { name, generic_args } if name == "Task" && generic_args.len() == 1 => {
+            Ty::User { name, generic_args }
+                if name == juxc_ast::TASK_SENTINEL && generic_args.len() == 1 =>
+            {
                 generic_args.into_iter().next().unwrap_or(Ty::Unknown)
             }
             other => other,
@@ -1292,7 +1294,10 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     },
                     None => Ty::Unknown,
                 };
-                return Ty::User { name: "Task".to_string(), generic_args: vec![value] };
+                return Ty::User {
+                    name: juxc_ast::TASK_SENTINEL.to_string(),
+                    generic_args: vec![value],
+                };
             }
             if name == "withTimeout" {
                 return Ty::Unknown;

@@ -11574,9 +11574,21 @@ impl<'a> Checker<'a> {
                     // can see. It used to pass, and rustc then reported
                     // "expected value, found struct `Task`" about a struct the
                     // program never wrote.
+                    // `Task` is a name a program may use for a type of its own
+                    // (`examples/apps/todo` has a `todo.model.Task`), so this
+                    // only speaks for the runtime's `Task`, when no declared
+                    // type of any package answers to the name.
+                    let task_is_declared = self
+                        .symbols
+                        .classes
+                        .keys()
+                        .chain(self.symbols.records.keys())
+                        .chain(self.symbols.enums.keys())
+                        .chain(self.symbols.interfaces.keys())
+                        .any(|k| k.rsplit('.').next() == Some("Task"));
                     if qn.segments.len() == 1
                         && qn.segments[0].text == "Task"
-                        && !self.symbols.classes.contains_key("Task")
+                        && !task_is_declared
                         && self.env.lookup("Task").is_none()
                     {
                         self.diagnostics.push(
@@ -12003,7 +12015,7 @@ impl<'a> Checker<'a> {
                     // it does not have is an ordinary Jux error here rather
                     // than a rustc message about a type the program never
                     // wrote, which is all a typo used to get.
-                    if bare == "Task" && !self.symbols.classes.contains_key("Task") {
+                    if name == juxc_ast::TASK_SENTINEL {
                         if !matches!(method_name, "cancel" | "blockingGet") {
                             self.diagnostics.push(
                                 Diagnostic::error(
