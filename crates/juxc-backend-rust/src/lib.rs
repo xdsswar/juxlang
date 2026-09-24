@@ -863,6 +863,17 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// Locals of the body being emitted that are declared `observer<T>`
+    /// (§P.2.4). A property holds its observers WEAKLY (§P.2.3), so the
+    /// binding that names one is its only strong owner, and the emitter's
+    /// move-on-last-use would hand that owner to a call and drop it when the
+    /// call returned. The observer the call just attached would then be a
+    /// dead weak reference, pruned on the next fire: `wire(m, o)` attached
+    /// nothing, fired nothing, and `.observers.size` said `0`, in a program
+    /// that compiled and ran clean. Every read of one therefore shares the
+    /// handle. Computed per body in `emit_fn_body_at`, saved and restored
+    /// around nested bodies.
+    pub(crate) observer_locals: HashSet<String>,
     /// Names of locals that are **captured by a closure AND mutated** in the
     /// current function body, so they lower to an `Rc<RefCell<T>>` shared cell
     /// (the FnMut / mutable-capture case). A closure capturing such a local
@@ -4592,6 +4603,27 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
         w.push_str("        f.write_str(\"observer\")\n");
         w.push_str("    }\n");
+        w.push_str("}\n");
+        // How a NAMED observer is stored (§P.2.3, ERRATA E87). Weak is the
+        // rule, and it works because the name that holds the observer is its
+        // owner: when the owner dies the weak reference dies with it and the
+        // property prunes it. An observer that reaches an attach with NO other
+        // owner has nobody to be kept alive by, so a weak attach would be dead
+        // on arrival: the property is then its owner, and holds it strongly.
+        //
+        // That is the case a lambda written at a CALL makes, which the attach
+        // site cannot see: `wire(m, (old, now) -> ...)` hands `wire` a closure
+        // the caller does not keep, and `wire`'s attach of its own parameter
+        // used to store a weak reference to it. The observer never fired and
+        // `.observers.size` said 0, in a program that compiled and ran clean.
+        // The strong count answers the question the attach site cannot: one
+        // means this reference is the only one there is.
+        w.push_str("pub fn __jux_observer<F: ?Sized>(f: &std::rc::Rc<F>) -> JuxObserver<F> {\n");
+        w.push_str("    if std::rc::Rc::strong_count(f) == 1 {\n");
+        w.push_str("        JuxObserver::Strong(f.clone())\n");
+        w.push_str("    } else {\n");
+        w.push_str("        JuxObserver::Weak(std::rc::Rc::downgrade(f))\n");
+        w.push_str("    }\n");
         w.push_str("}\n\n");
         // Memory-ordering adapter (§S.6.2): maps the Jux stdlib
         // `MemoryOrder` enum onto Rust's `atomic::Ordering` for the
@@ -5495,6 +5527,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             concrete_polybase_locals: HashSet::new(),
             enclosing_record: None,
             ref_locals: HashSet::new(),
+            observer_locals: HashSet::new(),
             forced_cell_locals: HashSet::new(),
             pointer_locals: HashMap::new(),
             captured_locals: HashSet::new(),

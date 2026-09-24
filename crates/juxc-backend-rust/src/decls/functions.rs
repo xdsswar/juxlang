@@ -1339,13 +1339,21 @@ impl RustEmitter {
         let prev_non_final =
             std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
         let prev_concrete_polybase = std::mem::take(&mut self.concrete_polybase_locals);
+        // §P.2.4: which locals of this body hold an `observer<T>`. A property
+        // keeps only a weak reference to an observer (§P.2.3), so moving the
+        // binding that owns one detaches it; every read shares the handle
+        // instead. See `collect_observer_locals`.
+        let prev_observers = std::mem::replace(
+            &mut self.observer_locals,
+            crate::analysis::collect_observer_locals(body),
+        );
         let prev_captures = std::mem::replace(
             &mut self.captures_read_again,
             crate::lastuse::captures_read_again(body, &self.current_fn_params),
         );
         let mut cell_locals =
             crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
-        // §M.13.2 / ERRATA E85: a local or parameter that a `ref` binding
+        // §M.13.2 / ERRATA E86: a local or parameter that a `ref` binding
         // aliases (`int total = 0; ref int acc = total;`) has to BE the shared
         // object, so it is promoted to the very same cell the `ref` holds. It
         // is the identical slot a captured-and-mutated local gets, so one set
@@ -1388,6 +1396,7 @@ impl RustEmitter {
         self.forced_cell_locals = prev_forced;
         self.non_final_uses = prev_non_final;
         self.concrete_polybase_locals = prev_concrete_polybase;
+        self.observer_locals = prev_observers;
         self.captures_read_again = prev_captures;
         self.local_types.pop();
         self.in_lambda_body = prev_lam;

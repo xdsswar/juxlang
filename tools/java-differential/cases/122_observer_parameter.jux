@@ -1,0 +1,48 @@
+// An `observer<T>` may be declared at any scope, a parameter included (§P.2.4),
+// and attaching one through a parameter registers it for real.
+//
+// Before the fix `wire(m, o)` attached nothing at all: the call MOVED the
+// observer out of `main`, so the only strong reference to it died with the
+// callee's frame and the property was left holding a weak reference to a dead
+// closure. The program compiled, ran, printed `size=0` and never fired. The
+// same thing happened to a lambda written in the argument list, which has no
+// owner anywhere.
+//
+// Java has no observable properties, so its twin is a listener list with the
+// same shape. The printed transcript is what the harness compares.
+
+class Meter {
+    public int V { get; set; } = 0;
+}
+
+void wire(Meter m, observer<int> o) {
+    m.V.observers.attach(o);
+}
+
+public void main() {
+    // A named observer: the caller keeps owning it.
+    var named = new Meter();
+    observer<int> watch = (old, now) -> {
+        print("named " + old + " -> " + now);
+    };
+    wire(named, watch);
+    named.V = 3;
+    print("named size " + named.V.observers.size);
+
+    // A lambda written at the call: nobody else owns it.
+    var inline = new Meter();
+    wire(inline, (old, now) -> {
+        print("inline " + old + " -> " + now);
+    });
+    inline.V = 7;
+    print("inline size " + inline.V.observers.size);
+
+    // One observer on two properties.
+    var a = new Meter();
+    var b = new Meter();
+    wire(a, watch);
+    wire(b, watch);
+    a.V = 1;
+    b.V = 2;
+    print("shared sizes " + a.V.observers.size + " " + b.V.observers.size);
+}

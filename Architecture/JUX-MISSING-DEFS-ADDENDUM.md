@@ -1177,7 +1177,7 @@ public void main() {
 - **Initialization.** Initializing a `ref` binding from a VARIABLE of the
   enclosing body, a local or a parameter, ALIASES that variable: the two
   names denote one object, and each sees every write made through the
-  other (ERRATA E85). Initializing from another `ref T` binding aliases
+  other (ERRATA E86). Initializing from another `ref T` binding aliases
   it the same way. Initializing from something that is not a variable, a
   literal, a call result, an arithmetic expression or a `new`, has
   nothing to alias, so it creates a NEW shared object holding that value.
@@ -1208,7 +1208,7 @@ public void main() {
 |------|----------|
 | `ref T x = <plain value>` | `let x = Rc::new(RefCell::new(v));` |
 | `ref T x = <ref binding>` | `let x = y.clone();` (handle share) |
-| `ref T x = <local or param>` | the source is PROMOTED to a cell for the whole body, then `let x = y.clone();` (ERRATA E85) |
+| `ref T x = <local or param>` | the source is PROMOTED to a cell for the whole body, then `let x = y.clone();` (ERRATA E86) |
 | read in value position    | `x.borrow().clone()` (statement-scoped) |
 | `x = v` (store-through)   | `{ let __jux_v = v; *x.borrow_mut() = __jux_v; }` |
 | `ref` field               | field type `Rc<RefCell<T>>`, same rules |

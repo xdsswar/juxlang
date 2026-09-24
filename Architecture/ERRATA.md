@@ -1449,7 +1449,7 @@ rejected as before, since the lowered `use` path could not name them.
 
 ---
 
-## E85. A `ref` binding initialized from a plain local
+## E86. A `ref` binding initialized from a plain local
 
 **Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.13.2 says "Initializing a
 `ref` binding from a plain `T` value creates a NEW shared object holding
@@ -1500,6 +1500,62 @@ reassigned local already uses, so the promoted variable and the `ref`
 binding end up the same kind of slot and an `Rc` clone aliases it.
 
 **Spec status:** §M.13.2 carries the rule and points here.
+
+---
+
+## E87. Who owns an observer that was passed to a function
+
+**Conflict.** `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.2.4 says an
+`observer<T>` may be declared "field, local, parameter", and §P.3.2 says
+`.observers.attach(o)` registers it. §P.2.3 says a property holds its
+observers WEAKLY, because "if the observer's OWNER is dropped, the
+observer silently stops firing". Neither section says who the owner is
+when the observer reached the attach through a parameter, and both
+answers the compiler could give are wrong for the other case:
+
+```jux
+class M { public int V { get; set; } = 0; }
+void wire(M m, observer<int> o) { m.V.observers.attach(o); }
+
+public void main() {
+    var m = new M();
+    observer<int> o = (old, now) -> { print("p " + now); };
+    wire(m, o);
+    m.V = 3;
+    print("size=" + m.V.observers.size);   // said 0
+}
+```
+
+`wire` attached a weak reference to its parameter, which held the only
+strong reference left, because the call MOVED `o` out of `main` at its
+last read. The parameter died with `wire`'s frame and took the
+attachment with it. The program compiled, ran, printed `size=0`, and
+never fired. Writing the lambda in the argument list, or letting `var`
+infer its type, failed the same way.
+
+**Resolution.** Two rules, one at each end.
+
+- **An observer binding is a handle.** Reading one shares it, exactly as
+  reading a class or a collection does; it is never moved out of the
+  binding that names it. A binding declared `observer<T>`, and any
+  argument that fills an `observer<T>` parameter, therefore leaves its
+  owner in place. This is what §P.2.3's weak reference assumes, and the
+  cleanup story it promises only works when it holds.
+- **An observer with no other owner is owned by the property.** Weak
+  stays the rule, and it is right whenever something else holds the
+  observer. When nothing else does, a weak attach would be dead on
+  arrival, so the property holds it strongly instead. The attach site
+  cannot see the difference between `wire(m, o)` and
+  `wire(m, (old, now) -> ...)`, since both arrive as a parameter, so the
+  handle answers for itself: exactly one strong reference means this is
+  the only one there is.
+
+The second rule is what an inline `attach((old, now) -> ...)` already
+did by hand (§P.2.2's examples would attach nothing otherwise). It is
+now the general rule rather than a special case at one syntactic site,
+which is what makes the same lambda work one call deeper.
+
+**Spec status:** §P.2.3 carries both rules.
 
 ---
 

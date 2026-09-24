@@ -642,8 +642,39 @@ fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
     });
 }
 
+/// A bare `observer<T>` type (§P.2): the closure handle a property attaches.
+/// Written without a function shape and without an array shape, so
+/// `observer<int>[]` and `(int) -> void` are not it.
+pub(crate) fn type_ref_is_observer(t: &juxc_ast::TypeRef) -> bool {
+    t.fn_shape.is_none()
+        && t.array_shape.is_none()
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "observer"
+}
+
+/// The locals this body declares `observer<T>` (§P.2.4).
+///
+/// A property holds its observers WEAKLY (§P.2.3), so the binding that names
+/// one is its only strong owner. Move-on-last-use would hand that owner to a
+/// call and drop it when the call returned, which DETACHES the observer the
+/// call just attached: `wire(m, o)` moved `o` into `wire`, `wire` attached a
+/// weak reference to it and returned, `o` died with the frame, and the
+/// property pruned the dead reference on its next fire. The observer never
+/// ran and `.observers.size` reported `0`, in a program that compiled and ran
+/// without a word. Every read of an observer binding therefore shares the
+/// handle instead of moving it.
+pub(crate) fn collect_observer_locals(block: &Block) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for_each_body_var_decl(block, &mut |v| {
+        if v.ty.as_ref().is_some_and(type_ref_is_observer) {
+            out.insert(v.name.text.clone());
+        }
+    });
+    out
+}
+
 /// The locals and parameters that a `ref` binding in this body ALIASES
-/// (§M.13.2, ERRATA E85): the names that appear, bare, as the initializer of a
+/// (§M.13.2, ERRATA E86): the names that appear, bare, as the initializer of a
 /// `ref` declaration.
 ///
 /// `ref int acc = total;` makes `acc` and `total` two names for one object, so
@@ -658,7 +689,7 @@ fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
 /// already a cell and promoting it again would wrap a cell in a cell. `ref`
 /// PARAMETERS are excluded by the caller, which knows them from `ref_locals`.
 /// Only a name this body declares can be promoted: a field's storage is fixed
-/// by its class, so `ref int s = p.counter;` still copies (ERRATA E85).
+/// by its class, so `ref int s = p.counter;` still copies (ERRATA E86).
 pub(crate) fn collect_ref_aliased_locals(
     block: &Block,
     params: &HashSet<String>,

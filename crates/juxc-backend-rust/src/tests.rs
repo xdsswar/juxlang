@@ -6228,7 +6228,7 @@ fn float_literal_edges() {
     assert!(rust.contains("f64::from_bits(1)"), "got: {rust}");
 }
 
-/// §M.13.2 / ERRATA E85: a `ref` initialized from a plain LOCAL aliases that
+/// §M.13.2 / ERRATA E86: a `ref` initialized from a plain LOCAL aliases that
 /// local, so the local is PROMOTED to the very cell the `ref` holds and the
 /// `ref` is an `Rc` clone of it.
 ///
@@ -6264,7 +6264,7 @@ fn ref_binding_from_a_plain_local_promotes_and_aliases_it() {
 }
 
 /// A `ref` initialized from something that is NOT a variable has nothing to
-/// alias, so it still wraps the value in a fresh cell (§M.13.2, ERRATA E85).
+/// alias, so it still wraps the value in a fresh cell (§M.13.2, ERRATA E86).
 /// The promotion must not spread to every `ref` declaration.
 #[test]
 fn ref_binding_from_a_value_still_wraps_a_fresh_cell() {

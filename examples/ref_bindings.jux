@@ -14,7 +14,7 @@ int readOnly(ref int n) {
 }
 
 // A parameter is a variable of this body like any other, so a `ref` taken
-// from it aliases it here (ERRATA E85). The caller is untouched: the
+// from it aliases it here (ERRATA E86). The caller is untouched: the
 // parameter itself was filled with a copy.
 int aliasParam(int seed) {
     ref int r = seed;
@@ -54,7 +54,7 @@ public void main() {
     a = "changed";
     print("copy: " + copy);    // "renamed"
 
-    // A `ref` taken from a plain LOCAL aliases that local (ERRATA E85, and
+    // A `ref` taken from a plain LOCAL aliases that local (ERRATA E86, and
     // the worked example in JUX-POINTERS-REFERENCES-GUIDE §2.2): the local
     // IS the shared object from here on, so a write through either name is
     // seen by both.

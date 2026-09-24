@@ -1,5 +1,5 @@
 // A `ref` binding taken from a plain LOCAL aliases that local (§M.13.2,
-// ERRATA E85, and the worked example in JUX-POINTERS-REFERENCES-GUIDE §2.2).
+// ERRATA E86, and the worked example in JUX-POINTERS-REFERENCES-GUIDE §2.2).
 // The two names are one object from then on, so every write through either is
 // seen by both.
 //
