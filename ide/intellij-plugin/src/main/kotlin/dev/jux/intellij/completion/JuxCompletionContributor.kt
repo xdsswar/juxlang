@@ -66,6 +66,34 @@ class JuxCompletionContributor : CompletionContributor() {
         const val P_TYPE = 50.0
 
         /**
+         * A type in this file's OWN package, declared in another file. §4.4
+         * makes it visible with no `import`, so it is as reachable as a name
+         * written in this very file and ranks directly under one.
+         */
+        const val P_TYPE_PACKAGE = 48.0
+
+        /**
+         * A built-in type name: every primitive of the generated alphabet,
+         * `String` and `string` included. Always in scope, never imported,
+         * but below the names the user wrote themselves.
+         */
+        const val P_TYPE_PRIMITIVE = 47.0
+
+        /**
+         * A type this file already imports. The user committed to that name
+         * once already, so it outranks a same-named type they would have to
+         * import instead.
+         */
+        const val P_TYPE_IMPORTED = 46.0
+
+        /**
+         * A type the auto-prelude binds (`Vec`, `HashMap`, `Option`, the
+         * exception hierarchy): reachable with no `import`, but nothing this
+         * file has chosen.
+         */
+        const val P_TYPE_PRELUDE = 45.5
+
+        /**
          * A type declared in another file of the PROJECT — one the user wrote,
          * so it outranks anything from a library but not what is in front of
          * them.
@@ -84,6 +112,21 @@ class JuxCompletionContributor : CompletionContributor() {
 
         /** Cap on the backward scan in [isTypeOnlyContext] (keeps it O(1)-ish). */
         const val MAX_LOOKBACK = 240
+
+        /**
+         * The methods the checker accepts on ANY array receiver, mirrored from
+         * `BUILTIN_ARRAY_METHODS` in `juxc-tycheck`'s `check.rs`. An array has
+         * no declaration behind it, so this is the only place the editor can
+         * learn them from.
+         */
+        val ARRAY_METHODS: List<String> = listOf(
+            "push", "pop", "clone", "len", "length",
+            "add", "get", "set", "contains", "indexOf", "isEmpty", "size", "first", "last", "reverse",
+            "sort", "clear", "remove", "insert", "join", "map", "filter", "forEach",
+        )
+
+        /** The fields the checker accepts on any array receiver (`BUILTIN_ARRAY_FIELDS`). */
+        val ARRAY_FIELDS: List<String> = listOf("length")
     }
 
     init {
@@ -433,6 +476,31 @@ class JuxCompletionContributor : CompletionContributor() {
         }
         if (!includeTypes) return
 
+        // The BUILT-IN type names, straight from the generated alphabet
+        // (`grammar/jux-tokens.json`, emitted by the compiler's own lexer), so
+        // the editor can never offer a different set from the one juxc
+        // accepts. Both spellings of the string primitive are in it: `String`
+        // and `string` are the same type (grammar §A.1.3), and real code
+        // writes both (`string st = "Some";`).
+        //
+        // Offered wherever a type may be written, which is every position this
+        // walk serves: a local, a parameter, a return type, a field, a generic
+        // argument, a cast target, a `=>` type test, and after `new` (`new
+        // int[8]` is an array creation). They are added AFTER the file's own
+        // declarations, so a type the user wrote with a primitive's name wins
+        // the entry.
+        for (name in JuxKeywords.PRIMITIVES) {
+            if (!seen.add(name)) continue
+            sink(
+                ranked(
+                    LookupElementBuilder.create(name)
+                        .withIcon(AllIcons.Nodes.Type)
+                        .withTypeText("built-in", true),
+                    P_TYPE_PRIMITIVE,
+                ),
+            )
+        }
+
         // Tier 4b/4c: types from OTHER files — the project's own, then its
         // dependencies' and the toolchain's. Auto-import on accept. This is
         // what lets cross-file and library types show up without the LSP;
@@ -469,10 +537,24 @@ class JuxCompletionContributor : CompletionContributor() {
                 }
                 var b = LookupElementBuilder.create(type, name).withIcon(AllIcons.Nodes.Class)
                 if (pkg.isNotEmpty()) b = b.withTailText("  ($pkg)", true)
-                // Import only when it lives in a different, named package. A
-                // type in this file or in this file's package resolves without
-                // one, so offering it would write a redundant `import`.
-                if (pkg.isNotEmpty() && !dev.jux.intellij.completion.JuxAutoImport.needsNoImport(file, type)) {
+                // How far the name is from this file, in the language's own
+                // terms. Each answer is also the tier it ranks in, so the
+                // popup's order and the `import` the item writes are decided
+                // by one reading of the same three facts.
+                val needsNoImport = dev.jux.intellij.completion.JuxAutoImport.needsNoImport(file, type)
+                // A prelude name (`Vec`, `HashMap`, `Option`, the exception
+                // hierarchy) is bound with no declaration and no `import`, so
+                // accepting one must not write an import line for it.
+                val prelude = name in JuxKeywords.BUILTINS
+                val alreadyImported = !needsNoImport && !prelude && pkg.isNotEmpty() &&
+                    (file as? JuxFile)?.let {
+                        dev.jux.intellij.completion.JuxAutoImport.isImported(it, "$pkg.$name", name)
+                    } == true
+                // Import only when the name is not reachable already. A type
+                // in this file, in this file's package, in the prelude, or
+                // already imported resolves without one, so offering an
+                // import would write a redundant line.
+                if (pkg.isNotEmpty() && !needsNoImport && !prelude && !alreadyImported) {
                     b = b.withInsertHandler(
                         dev.jux.intellij.completion.JuxAutoImport.handler("$pkg.$name", name),
                     )
@@ -480,10 +562,48 @@ class JuxCompletionContributor : CompletionContributor() {
                 // A stub declares a foreign API and a dependency is someone
                 // else's code: both rank below the user's own types.
                 val fromLibrary = JuxCompletionRanking.isLibrary(type)
-                add(ranked(b, if (fromLibrary) P_TYPE_LIBRARY else P_TYPE_PROJECT), name)
+                val tier = when {
+                    needsNoImport -> P_TYPE_PACKAGE
+                    alreadyImported -> P_TYPE_IMPORTED
+                    prelude -> P_TYPE_PRELUDE
+                    fromLibrary -> P_TYPE_LIBRARY
+                    else -> P_TYPE_PROJECT
+                }
+                add(ranked(b, tier), name)
             }
         }
+
+        // The auto-prelude's own TYPE names, for the machine whose toolchain
+        // stubs are not installed (or not indexed yet): `Vec`, `HashMap`,
+        // `Option`, `Result` and the exception hierarchy are bound with no
+        // declaration and no `import`, so the popup has to know them even
+        // when there is no `.jux.d` to read them from. A real declaration
+        // found above always wins the entry, because that one navigates.
+        for (name in JuxKeywords.BUILTINS) {
+            if (!namesAType(name) || !seen.add(name)) continue
+            sink(
+                ranked(
+                    LookupElementBuilder.create(name)
+                        .withIcon(AllIcons.Nodes.Class)
+                        .withTypeText("prelude", true),
+                    P_TYPE_PRELUDE,
+                ),
+            )
+        }
     }
+
+    /**
+     * Whether a prelude name denotes a TYPE rather than an intrinsic function.
+     *
+     * The generated `builtins` list mixes the two — `Vec` and `HashMap` sit
+     * next to `print` and `spawn` — and the list carries no kind, so the
+     * spelling decides: prelude types are PascalCase, and the two lower-case
+     * ones are the type-system keywords `any` and `never` (§T.1.2). The
+     * intrinsic functions are deliberately left out of a type position; they
+     * complete from their own stubs where one is installed.
+     */
+    private fun namesAType(name: String): Boolean =
+        name.firstOrNull()?.isUpperCase() == true || name == "any" || name == "never"
 
     /**
      * How near a member of the class the caret is in sits: declared by that
@@ -764,6 +884,15 @@ class JuxCompletionContributor : CompletionContributor() {
         val static = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType) is
             dev.jux.intellij.resolve.JuxType.Static
         if (!static) addNamedOperators(qualifierType, sink)
+        // An ARRAY receiver has no declaration to read members from, so the
+        // walk below would offer nothing at all for `names.sort()`. The
+        // compiler answers an array's members from its own built-in surface,
+        // and so does this.
+        val bareReceiver = dev.jux.intellij.resolve.JuxTypeEngine.stripNullable(qualifierType)
+        if (bareReceiver is dev.jux.intellij.resolve.JuxType.ArrayType) {
+            addArrayMembers(sink)
+            return true
+        }
         val receiverClass = dev.jux.intellij.resolve.JuxTypeEngine.classOf(qualifierType) ?: return true
         val from = PsiTreeUtil.getParentOfType(parameters.position, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)
         val seen = HashSet<String>()
@@ -847,6 +976,54 @@ class JuxCompletionContributor : CompletionContributor() {
             sink(element)
         }
         return true
+    }
+
+    /**
+     * The member surface of an ARRAY receiver (`names.sort()`,
+     * `values.length`).
+     *
+     * An array is a reference type with no declaration behind it (§6.5.2), so
+     * there is no `.jux.d` to read and nothing for the type engine to walk.
+     * The checker answers these from two built-in tables of its own
+     * (`BUILTIN_ARRAY_METHODS` and `BUILTIN_ARRAY_FIELDS` in `juxc-tycheck`),
+     * and the editor has to say the same thing or `arr.` opens an empty popup
+     * over code that compiles. This is a mirror of those tables, not a guess:
+     * a name added there belongs here in the same commit.
+     *
+     * Nothing about a foreign crate is hard-coded by this. A crate's API is
+     * still discovered from its generated stub, and `Vec` keeps getting its
+     * real members that way; an array simply has no crate to discover.
+     */
+    private fun addArrayMembers(sink: (LookupElement) -> Unit) {
+        // `length` is accepted both ways, as a field and as a call. Only the
+        // field form is offered: two entries spelled the same would just be
+        // two lines of the same word in the popup.
+        for (name in ARRAY_METHODS.filter { it !in ARRAY_FIELDS }) {
+            sink(
+                ranked(
+                    LookupElementBuilder.create(name)
+                        .withIcon(AllIcons.Nodes.Method)
+                        .withTailText("()", true)
+                        .withInsertHandler { ctx, _ ->
+                            ctx.document.insertString(ctx.tailOffset, "()")
+                            ctx.editor.caretModel.moveToOffset(ctx.tailOffset - 1)
+                        },
+                    P_MEMBER,
+                    JuxCompletionRanking.Kind.MEMBER,
+                ),
+            )
+        }
+        for (name in ARRAY_FIELDS) {
+            sink(
+                ranked(
+                    LookupElementBuilder.create(name)
+                        .withIcon(AllIcons.Nodes.Field)
+                        .withTypeText("int", true),
+                    P_MEMBER,
+                    JuxCompletionRanking.Kind.MEMBER,
+                ),
+            )
+        }
     }
 
     /**
@@ -1213,6 +1390,10 @@ class JuxCompletionContributor : CompletionContributor() {
         P_MEMBER -> JuxCompletionRanking.Kind.MEMBER
         P_KEYWORD -> JuxCompletionRanking.Kind.KEYWORD
         P_TYPE -> JuxCompletionRanking.Kind.TYPE_FILE
+        P_TYPE_PACKAGE -> JuxCompletionRanking.Kind.TYPE_PACKAGE
+        P_TYPE_PRIMITIVE -> JuxCompletionRanking.Kind.TYPE_PRIMITIVE
+        P_TYPE_IMPORTED -> JuxCompletionRanking.Kind.TYPE_IMPORTED
+        P_TYPE_PRELUDE -> JuxCompletionRanking.Kind.TYPE_PRELUDE
         P_TYPE_PROJECT -> JuxCompletionRanking.Kind.TYPE_PROJECT
         P_TYPE_LIBRARY -> JuxCompletionRanking.Kind.TYPE_LIBRARY
         else -> JuxCompletionRanking.Kind.OTHER

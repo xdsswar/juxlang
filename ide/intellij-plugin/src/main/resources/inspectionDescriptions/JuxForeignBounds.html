@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports a call to a foreign method whose bound on its own type argument is not met (E0446).
+<!-- tooltip end -->
+<p>A generated <code>.jux.d</code> stub carries a foreign method's bounds as
+<code>@RustBounds("T: Ord")</code>. What each Rust trait asks of a Jux type is the operator
+rule the backend follows: <code>Ord</code> and <code>PartialOrd</code> are
+<code>operator&lt;=&gt;</code>, <code>Hash</code> is <code>operator hash</code>.</p>
+<p>So <code>people.sort()</code> on a <code>Vec&lt;Person&gt;</code> is reported when
+<code>Person</code> declares no <code>operator&lt;=&gt;</code>. Declare one, or pass a comparator
+where the method takes one: <code>people.sort_by((a, b) -&gt; a.age &lt;=&gt; b.age)</code>.</p>
+<p>A floating-point element meets <code>PartialOrd</code> but not <code>Ord</code> (NaN compares
+with nothing), and an array or a collection element meets neither: both are shared handles whose
+contents change under them. A type parameter is checked where it is instantiated, so it is never
+reported here.</p>
+</body>
+</html>

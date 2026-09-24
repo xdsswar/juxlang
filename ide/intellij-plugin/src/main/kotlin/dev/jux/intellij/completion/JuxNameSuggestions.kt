@@ -8,6 +8,7 @@ import com.intellij.psi.PsiWhiteSpace
 import com.intellij.psi.PsiComment
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
+import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxNamedElement
@@ -32,11 +33,24 @@ object JuxNameSuggestions {
     /** Declarations whose name follows their type directly. */
     private val NAMED_AFTER_TYPE = setOf(E.LOCAL_VARIABLE, E.FIELD_DECLARATION, E.PARAMETER)
 
-    /** Built-in value types, named by their initial. */
-    private val PRIMITIVES = setOf(
-        "int", "long", "short", "byte", "char", "float", "double", "bool",
-        "uint", "ulong", "ushort", "ubyte", "isize", "usize",
-    )
+    /**
+     * Every built-in type name, read from the generated alphabet rather than
+     * retyped here: `grammar/jux-tokens.json` is emitted from the compiler's
+     * own lexer, so a primitive the language gains is known here in the same
+     * commit. The hand-written copy this replaces had drifted both ways: it
+     * invented `isize`/`usize`, and it had never heard of `i32`, `f64` or the
+     * lower-case `string`, so `string st = "Some";` was not recognised as a
+     * declaration at all and the name column offered the wrong list.
+     */
+    private val PRIMITIVES: Set<String> = JuxKeywords.PRIMITIVES
+
+    /**
+     * The primitives a variable of is named by its INITIAL: `int` gives `i`.
+     * The string primitive is deliberately not one of them, under either
+     * spelling: `String s` reads better as `string`, and `Vec<String>` as
+     * `strings`, which is what the camel-case path already produces.
+     */
+    private val NAMED_BY_INITIAL: Set<String> = PRIMITIVES - setOf("String", "string")
 
     /**
      * True when [position] is the name of a declaration right after its type:
@@ -90,7 +104,7 @@ object JuxNameSuggestions {
             // A container of one element type: named for its elements first.
             elementNames(args[0]).forEach { out.add(plural(it)) }
         }
-        if (base in PRIMITIVES) {
+        if (base in NAMED_BY_INITIAL) {
             out.add(base.take(1))
         } else {
             out.addAll(camelSuffixes(base))
@@ -105,7 +119,7 @@ object JuxNameSuggestions {
      */
     private fun elementNames(text: String): List<String> {
         val bare = text.trim().removeSuffix("?")
-        return if (bare in PRIMITIVES) listOf(bare) else namesFor(bare)
+        return if (bare in NAMED_BY_INITIAL) listOf(bare) else namesFor(bare)
     }
 
     /** `HttpClient` gives `httpClient`, `client`; `HTTPServer` gives `httpServer`, `server`. */
@@ -204,7 +218,7 @@ object JuxNameSuggestions {
         val text = type.text.trim()
         if (text.isEmpty()) return false
         val base = text.substringBefore('<').substringBefore('[').removeSuffix("?").substringAfterLast('.')
-        return base in PRIMITIVES || base == "String" || base.firstOrNull()?.isUpperCase() == true ||
+        return base in PRIMITIVES || base.firstOrNull()?.isUpperCase() == true ||
             text.contains('<') || text.contains('[')
     }
 }

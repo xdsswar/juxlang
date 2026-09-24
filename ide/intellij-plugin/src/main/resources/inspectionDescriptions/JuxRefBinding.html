@@ -1,0 +1,23 @@
+<html>
+<body>
+Reports a <code>ref</code> binding the compiler rejects, and one that adds nothing
+(E0523, E0524, E0526, W0490, E0702).
+<!-- tooltip end -->
+<p><code>ref T</code> is a binding mode, not a type: it gives a value type
+(<code>String</code>, a primitive, a <code>struct</code>, a <code>record</code>, an enum) the
+shared reference semantics a class already has. The expression type of a <code>ref T</code>
+binding stays plain <code>T</code>.</p>
+<ul>
+<li><b>E0523</b>: a <code>ref</code> return type (<code>ref int f()</code>) is deferred
+to a later phase. Return the value, or take a <code>ref</code> parameter and write through it.</li>
+<li><b>E0524</b>: <code>ref ref T</code>: one <code>ref</code> already makes the binding
+shared.</li>
+<li><b>E0526</b>: a <code>ref</code> generic argument (<code>Vec&lt;ref int&gt;</code>):
+a type argument names a type, and <code>ref</code> is a binding mode.</li>
+<li><b>W0490</b>: <code>ref</code> on a class, interface, array or collection, which is
+already a shared reference. Accepted, and means nothing. Quick-fix: remove the keyword.</li>
+<li><b>E0702</b>: a <code>ref</code> binding captured by a <code>Worker.spawn</code>
+closure: the cell is task-local and cannot cross the thread boundary.</li>
+</ul>
+</body>
+</html>
