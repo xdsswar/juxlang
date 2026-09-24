@@ -148,31 +148,53 @@ impl SourceRoots {
         let home = self.root_of(file)?;
         let group = governing_manifest(&home.path);
         let mut files: Vec<PathBuf> = Vec::new();
+        let push = |f: PathBuf, files: &mut Vec<PathBuf>| {
+            if !files.contains(&f) {
+                files.push(f);
+            }
+        };
         for root in &self.roots {
             if governing_manifest(&root.path) != group {
                 continue;
             }
             for f in scan_jux_files(&root.path) {
-                if !files.contains(&f) {
-                    files.push(f);
+                push(f, &mut files);
+            }
+            // The root's OWN package's generated stubs (§G.11.2). A root names
+            // `src/` or `test/`; the `.jux-stubs/` cache sits next to them at
+            // the package root, so scanning the root alone leaves every
+            // `rust.<crate>` type out of the compilation set and each such
+            // import is reported unresolved. In a workspace each member caches
+            // its own stubs, which is why this is asked per root rather than
+            // once for the group.
+            if let Some(pkg) = crate::workspace::nearest_manifest(&root.path, None) {
+                for f in crate::workspace::project_stub_files(&pkg) {
+                    push(f, &mut files);
                 }
+            }
+        }
+        // A workspace root may bind crates of its own, on top of its members'.
+        if let Some(group_root) = &group {
+            for f in crate::workspace::project_stub_files(group_root) {
+                push(f, &mut files);
             }
         }
         Some(files)
     }
 }
 
-/// The directory of the nearest `jux.toml` at or above `dir`, if any: the
-/// project a root belongs to.
+/// The project a root is analysed with: the nearest `jux.toml` at or above
+/// `dir`, widened to an enclosing `[workspace]` root when there is one.
+///
+/// The widening matters as much as the lookup. `analysis::project_scope` has
+/// always widened, this did not, so the same file got a different compilation
+/// set depending on whether the editor had sent its source roots yet: a
+/// workspace member was checked alone, and every import of a sibling package
+/// was reported unresolved. Both now go through
+/// [`crate::workspace::widen_to_workspace`].
 fn governing_manifest(dir: &Path) -> Option<PathBuf> {
-    let mut cur = Some(dir);
-    while let Some(d) = cur {
-        if d.join("jux.toml").is_file() {
-            return Some(d.to_path_buf());
-        }
-        cur = d.parent();
-    }
-    None
+    let package = crate::workspace::nearest_manifest(dir, None)?;
+    Some(crate::workspace::widen_to_workspace(&package, None))
 }
 
 #[cfg(test)]
@@ -268,6 +290,73 @@ mod tests {
         ]);
         let set = roots.compilation_set(&p.join("a/X.jux")).unwrap();
         assert_eq!(set.len(), 2, "{set:?}");
+        let _ = fs::remove_dir_all(&p);
+    }
+
+    /// The generated crate stubs are part of the compilation set.
+    ///
+    /// A root names `src/`; `.jux-stubs/` is its sibling, so scanning the roots
+    /// alone left every `rust.<crate>` declaration out and each such import was
+    /// reported "unresolved import ...: no declaration with that
+    /// fully-qualified name" on a file the CLI compiles. It read as flaky
+    /// because the plugin withholds manifest roots while the IDE indexes, and
+    /// the manifest-scan fallback does pick the stubs up.
+    #[test]
+    fn compilation_set_includes_the_generated_crate_stubs() {
+        let p = temp("stubs");
+        fs::write(p.join("jux.toml"), "[package]\nname = \"p\"\nversion = \"0.1.0\"\n").unwrap();
+        fs::create_dir_all(p.join("src")).unwrap();
+        fs::create_dir_all(p.join(".jux-stubs/rust")).unwrap();
+        fs::write(p.join("src/Main.jux"), "public void main() {}").unwrap();
+        fs::write(p.join(".jux-stubs/rust/demo.jux.d"), "package rust.demo;\n").unwrap();
+        let roots = SourceRoots::new(vec![SourceRoot {
+            path: p.join("src"),
+            kind: RootKind::Sources,
+            origin: RootOrigin::Manifest,
+        }]);
+        let set = roots.compilation_set(&p.join("src/Main.jux")).unwrap();
+        assert!(
+            set.contains(&p.join(".jux-stubs/rust/demo.jux.d")),
+            "the crate stub belongs in the set: {set:?}"
+        );
+        let _ = fs::remove_dir_all(&p);
+    }
+
+    /// A workspace member is analysed with its siblings, and with each
+    /// member's own stub cache.
+    ///
+    /// `analysis::project_scope` has always widened a member to its workspace
+    /// root; this did not, so the answer depended on whether the editor had
+    /// sent its source roots yet.
+    #[test]
+    fn compilation_set_widens_a_member_to_its_workspace() {
+        let p = temp("ws");
+        fs::write(
+            p.join("jux.toml"),
+            "[workspace]\nmembers = [\"app\", \"lib\"]\n",
+        )
+        .unwrap();
+        for member in ["app", "lib"] {
+            fs::create_dir_all(p.join(member).join("src")).unwrap();
+            fs::write(
+                p.join(member).join("jux.toml"),
+                format!("[package]\nname = \"demo.{member}\"\nversion = \"0.1.0\"\n"),
+            )
+            .unwrap();
+            fs::write(p.join(member).join("src/Main.jux"), "").unwrap();
+        }
+        fs::create_dir_all(p.join("lib/.jux-stubs/rust")).unwrap();
+        fs::write(p.join("lib/.jux-stubs/rust/demo.jux.d"), "package rust.demo;\n").unwrap();
+        let roots = SourceRoots::new(vec![
+            SourceRoot { path: p.join("app/src"), kind: RootKind::Sources, origin: RootOrigin::Manifest },
+            SourceRoot { path: p.join("lib/src"), kind: RootKind::Sources, origin: RootOrigin::Manifest },
+        ]);
+        let set = roots.compilation_set(&p.join("app/src/Main.jux")).unwrap();
+        assert!(set.contains(&p.join("lib/src/Main.jux")), "sibling member: {set:?}");
+        assert!(
+            set.contains(&p.join("lib/.jux-stubs/rust/demo.jux.d")),
+            "the sibling's stubs too: {set:?}"
+        );
         let _ = fs::remove_dir_all(&p);
     }
 }

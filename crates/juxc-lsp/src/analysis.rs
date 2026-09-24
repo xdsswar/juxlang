@@ -87,36 +87,10 @@ pub struct Analysis {
 /// The walk never goes above `ide_root`, so a stray `jux.toml` further up the
 /// filesystem cannot pull in unrelated trees.
 fn project_scope(ide_root: &Path, file: Option<&Path>) -> Option<PathBuf> {
-    let file = file?;
-    let mut package: Option<PathBuf> = None;
-    let mut dir = file.parent();
-    while let Some(d) = dir {
-        if d.join("jux.toml").is_file() {
-            package = Some(d.to_path_buf());
-            break;
-        }
-        if d == ide_root {
-            break;
-        }
-        dir = d.parent();
-    }
-    let package = package?;
-
+    let package = crate::workspace::nearest_manifest(file?.parent()?, Some(ide_root))?;
     // A workspace member is compiled with its siblings, so widen to the
     // workspace root when an ancestor declares `[workspace] members`.
-    let mut ancestor = package.parent();
-    while let Some(a) = ancestor {
-        let declares_workspace = juxc_driver::Manifest::load(a)
-            .is_some_and(|m| !m.workspace_members.is_empty());
-        if declares_workspace {
-            return Some(a.to_path_buf());
-        }
-        if a == ide_root {
-            break;
-        }
-        ancestor = a.parent();
-    }
-    Some(package)
+    Some(crate::workspace::widen_to_workspace(&package, Some(ide_root)))
 }
 
 pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
@@ -164,13 +138,31 @@ pub fn analyze_workspace_in(
     // The editor's source roots, when the file sits under one, name the
     // compilation set outright (§I.4).
     let from_roots = open_path.as_deref().and_then(|p| roots.compilation_set(p));
-    let scanned: Vec<PathBuf> = match (from_roots, &scope) {
+    let mut scanned: Vec<PathBuf> = match (from_roots, &scope) {
         (Some(files), _) => files,
         (None, Some(dir)) => scan_jux_files(dir),
         // No manifest governs this file, so it is a program on its own —
         // which is exactly how `juxc <file>` treats it.
         (None, None) => open_path.clone().into_iter().collect(),
     };
+    // Whatever named the set above, the project's generated `.jux.d` stubs
+    // belong in it. They live at `<package>/.jux-stubs/`, a SIBLING of `src/`,
+    // and the editor's source roots name `src/` and `test/` only -- so in roots
+    // mode they were silently absent and every `import rust.<crate>.<Type>;`
+    // came back E0301 "no declaration with that fully-qualified name", on a
+    // file the CLI compiles cleanly. Worse, it looked intermittent: the plugin
+    // withholds manifest roots while the IDE is indexing, so the same file
+    // resolved through the fallback scan below for a few seconds and then went
+    // red. `roots::compilation_set` adds them too; this is the belt to that
+    // pair of braces, so no future change to the root protocol can hide them a
+    // third time.
+    if let Some(dir) = scope.as_deref() {
+        for stub in crate::workspace::project_stub_files(dir) {
+            if !scanned.contains(&stub) {
+                scanned.push(stub);
+            }
+        }
+    }
     for path in scanned {
         if open_path.as_deref() == Some(path.as_path()) {
             sources.push(SourceFile::new(path, rope.to_string()));
@@ -733,6 +725,62 @@ version = \"0.1.0\"
         // Rendered in Jux syntax: the method detail carries the Jux return type.
         let area = members.iter().find(|m| m.name == "area").unwrap();
         assert!(area.kind == crate::intel::MemberKind::Method, "area should be a method");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The same stub resolves when the EDITOR named the compilation set.
+    ///
+    /// The owner's report: `import rust.minifb.Window;` underlined "unresolved
+    /// import", while quick-doc on the same word showed the type's docs out of
+    /// the very stub that was supposedly missing, and it only happened some of
+    /// the time. The cause was here. With `jux.sourceRoots` in play the
+    /// analysed file list came from `SourceRoots::compilation_set`, which
+    /// scanned `src/` and `test/`; `.jux-stubs/` is their sibling, so every
+    /// `rust.<crate>` declaration was absent from the symbol table and
+    /// `check_imports_resolve` reported E0301. The "sometimes" was the IntelliJ
+    /// plugin withholding manifest roots while the project indexed: until they
+    /// arrived, the manifest-scan fallback ran instead and did see the stubs.
+    #[test]
+    fn crate_stubs_resolve_when_the_editor_named_the_compilation_set() {
+        use crate::roots::{RootKind, RootOrigin, SourceRoot};
+        let root = temp_root("stub_with_source_roots");
+        // Project layout as the plugin reports it: sources under `src/`, the
+        // generated stub cache beside it at the package root.
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let stub_dir = root.join(".jux-stubs").join("rust");
+        fs::create_dir_all(&stub_dir).unwrap();
+        fs::write(stub_dir.join("demo.jux.d"), WIDGET_STUB).unwrap();
+        let main = src.join("main.jux");
+        fs::write(&main, WIDGET_MAIN).unwrap();
+
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(WIDGET_MAIN);
+        let roots = crate::roots::SourceRoots::new(vec![SourceRoot {
+            path: src.clone(),
+            kind: RootKind::Sources,
+            origin: RootOrigin::Manifest,
+        }]);
+        let analysis = analyze_workspace_in(
+            &root,
+            &main_uri,
+            &rope,
+            &roots,
+            &HashMap::new(),
+            PositionEncoding::Utf16,
+        );
+
+        let diags = analysis.diagnostics_by_uri.get(&main_uri).cloned().unwrap_or_default();
+        let errors: Vec<&String> = diags
+            .iter()
+            .filter(|d| d.severity == Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR))
+            .map(|d| &d.message)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`import rust.demo.Widget;` must resolve with source roots sent, got: {errors:?}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

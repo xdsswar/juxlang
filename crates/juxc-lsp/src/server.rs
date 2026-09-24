@@ -90,6 +90,10 @@ pub struct Backend {
     /// Whether the client applies file renames inside a workspace edit, which
     /// renaming a type in the file named after it needs.
     file_renames: AtomicBool,
+    /// Package roots [`Backend::ensure_package_stubs`] has already visited.
+    /// Stub generation shells out to `cargo +nightly rustdoc`, so each package
+    /// is attempted once per session rather than on every `textDocument/didOpen`.
+    stubbed_packages: DashMap<PathBuf, ()>,
 }
 
 impl Backend {
@@ -104,6 +108,7 @@ impl Backend {
             encoding: RwLock::new(PositionEncoding::Utf16),
             roots: RwLock::new(SourceRoots::default()),
             file_renames: AtomicBool::new(false),
+            stubbed_packages: DashMap::new(),
         }
     }
 
@@ -165,6 +170,64 @@ impl Backend {
                 .log_message(
                     MessageType::INFO,
                     format!("jux: indexed {} bound-crate stub(s)", report.resolved.len()),
+                )
+                .await;
+        }
+    }
+
+    /// Generate the foreign-crate stubs of the package that governs `uri`,
+    /// rather than of the folder the editor was opened on.
+    ///
+    /// [`Backend::ensure_crate_stubs`] asks `ensure_project_stubs` about the IDE
+    /// root, and that returns immediately when the root has no `jux.toml` of its
+    /// own. Opening a repository that holds many Jux projects side by side
+    /// (`examples/<name>/jux.toml`, and this repo is exactly that shape) meant
+    /// no project ever had its stubs generated from the editor: a bound crate
+    /// autocompleted only if some earlier `jux build` happened to leave a
+    /// `.jux-stubs/` behind, and `import rust.<crate>.<Type>;` was reported
+    /// unresolved otherwise. Resolving the package per opened document fixes
+    /// that without widening what the IDE root means.
+    ///
+    /// Each package is attempted once per session ([`Backend::stubbed_packages`]),
+    /// because generation shells out to `cargo +nightly rustdoc`.
+    async fn ensure_package_stubs(&self, uri: &Url) {
+        let Some(ide_root) = self.workspace.read().ok().and_then(|ws| ws.root.clone()) else {
+            return;
+        };
+        let Ok(path) = uri.to_file_path() else { return };
+        let Some(dir) = path.parent() else { return };
+        // The package's own manifest, NOT the widened workspace root: stubs are
+        // cached per package, and `ensure_project_stubs` walks a workspace's
+        // members itself when handed a workspace root.
+        let Some(package) = crate::workspace::nearest_manifest(dir, Some(&ide_root)) else {
+            return;
+        };
+        if package == ide_root || self.stubbed_packages.contains_key(&package) {
+            return; // already covered by `ensure_crate_stubs`, or already tried
+        }
+        self.stubbed_packages.insert(package.clone(), ());
+        let target = package.clone();
+        let report =
+            match tokio::task::spawn_blocking(move || juxc_driver::ensure_project_stubs(&target))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return, // the blocking task panicked; skip
+            };
+        for w in &report.warnings {
+            self.client
+                .log_message(MessageType::WARNING, format!("jux: {w}"))
+                .await;
+        }
+        if !report.resolved.is_empty() {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "jux: indexed {} bound-crate stub(s) for {}",
+                        report.resolved.len(),
+                        package.display()
+                    ),
                 )
                 .await;
         }
@@ -429,6 +492,11 @@ impl LanguageServer for Backend {
             doc.uri.clone(),
             Document::new(Rope::from_str(&doc.text), doc.version, self.encoding()),
         );
+        // The opened file may be the first one from its package, whose bound
+        // crates have no `.jux-stubs/` yet. Generate them BEFORE the first
+        // analysis, or that analysis reports every `rust.<crate>` import
+        // unresolved and the red marks sit there until the next edit.
+        self.ensure_package_stubs(&doc.uri).await;
         self.refresh(doc.uri).await;
         // A newly opened file may belong to a not-yet-indexed module.
         self.reindex().await;

@@ -91,6 +91,65 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Project boundaries (shared by `analysis.rs` and `roots.rs`)
+// ---------------------------------------------------------------------------
+
+/// The directory of the nearest `jux.toml` at or above `dir`, if any: the
+/// package a file or a source root belongs to. The walk stops at `stop_at`
+/// (the folder the editor was opened on) so a stray manifest further up the
+/// filesystem cannot pull in an unrelated tree.
+pub fn nearest_manifest(dir: &Path, stop_at: Option<&Path>) -> Option<PathBuf> {
+    let mut cur = Some(dir);
+    while let Some(d) = cur {
+        if d.join("jux.toml").is_file() {
+            return Some(d.to_path_buf());
+        }
+        if Some(d) == stop_at {
+            return None;
+        }
+        cur = d.parent();
+    }
+    None
+}
+
+/// Widen `package` to the `[workspace]` root that governs it, when there is
+/// one, so a member is analysed alongside the sibling packages it depends on.
+/// Returns `package` unchanged when no ancestor declares `[workspace] members`.
+///
+/// Both callers that decide a compilation set need this, and they used to spell
+/// it separately: `analysis::project_scope` widened, `roots::governing_manifest`
+/// did not. A workspace member opened with the editor's source roots in play was
+/// therefore checked without its siblings, and every cross-package import went
+/// red once indexing finished and the roots arrived. One helper, one rule.
+pub fn widen_to_workspace(package: &Path, stop_at: Option<&Path>) -> PathBuf {
+    let mut ancestor = package.parent();
+    while let Some(a) = ancestor {
+        let declares_workspace =
+            juxc_driver::Manifest::load(a).is_some_and(|m| !m.workspace_members.is_empty());
+        if declares_workspace {
+            return a.to_path_buf();
+        }
+        if Some(a) == stop_at {
+            break;
+        }
+        ancestor = a.parent();
+    }
+    package.to_path_buf()
+}
+
+/// The generated `.jux.d` stubs of the package rooted at `package_root`, i.e.
+/// everything under its `.jux-stubs/` cache (JUX-BINDGEN §G.11.2). Empty when
+/// the project has no bound Rust crates, or has never been built or opened by
+/// a language server that could generate them.
+///
+/// These files are what make `import rust.<crate>.<Type>;` resolve. They sit
+/// BESIDE `src/`, not inside it, which is why every code path that assembles a
+/// compilation set has to ask for them explicitly.
+pub fn project_stub_files(package_root: &Path) -> Vec<PathBuf> {
+    scan_jux_files(&package_root.join(crate::stubs_dirname()))
+}
+
 /// True for files the workspace analysis should feed to `check_workspace`:
 /// ordinary `.jux` sources AND `.jux.d` declaration stubs (JUX-BINDGEN-ADDENDUM
 /// §G). A stub's `file_name` ends in `.jux.d` (so `Path::extension` is `d`),
