@@ -445,7 +445,10 @@ class JuxCompletionContributor : CompletionContributor() {
         // then (e.g. right after open / a big VCS update), so skip the cross-file
         // walk rather than abort the whole popup; in-file names above still show.
         if (com.intellij.openapi.project.DumbService.isDumb(project)) return
-        val curPkg = dev.jux.intellij.completion.JuxAutoImport.packageOfFile(file)
+        // The EFFECTIVE package: a file with no `package` line still belongs to
+        // the package its location implies, and a sibling there needs no
+        // import. Same rule as `juxc-lsp`'s `auto_import_for`.
+        val curPkg = dev.jux.intellij.completion.JuxAutoImport.effectivePackageOfFile(file)
         // Only the files declaring a name that matches what was typed are read
         // (the name index narrows them), so the popup never walks the project.
         dev.jux.intellij.resolve.JuxTypeIndex.forEachTypeMatching(
@@ -455,7 +458,7 @@ class JuxCompletionContributor : CompletionContributor() {
         ) { type ->
             val name = type.name
             if (name != null && name !in seen) {
-                val pkg = dev.jux.intellij.completion.JuxAutoImport.packageOf(type)
+                val pkg = dev.jux.intellij.completion.JuxAutoImport.effectivePackageOf(type)
                 // §4.4: a no-modifier declaration is "visible within this
                 // package only". Offering one across a package boundary put a
                 // name in the popup that the accepting file has no business
@@ -466,8 +469,10 @@ class JuxCompletionContributor : CompletionContributor() {
                 }
                 var b = LookupElementBuilder.create(type, name).withIcon(AllIcons.Nodes.Class)
                 if (pkg.isNotEmpty()) b = b.withTailText("  ($pkg)", true)
-                // Import only when it lives in a different, named package.
-                if (pkg.isNotEmpty() && pkg != curPkg) {
+                // Import only when it lives in a different, named package. A
+                // type in this file or in this file's package resolves without
+                // one, so offering it would write a redundant `import`.
+                if (pkg.isNotEmpty() && !dev.jux.intellij.completion.JuxAutoImport.needsNoImport(file, type)) {
                     b = b.withInsertHandler(
                         dev.jux.intellij.completion.JuxAutoImport.handler("$pkg.$name", name),
                     )

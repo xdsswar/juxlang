@@ -9,6 +9,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.elementType
+import dev.jux.intellij.JuxPackageResolver
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxTypeDeclaration
@@ -30,6 +31,53 @@ object JuxAutoImport {
     fun packageOfFile(file: PsiFile): String {
         val pkg = file.children.firstOrNull { it.elementType === E.PACKAGE_STATEMENT } ?: return ""
         return PACKAGE_RE.find(pkg.text)?.groupValues?.get(1)?.trim().orEmpty()
+    }
+
+    /**
+     * The package a file's names actually resolve in: its `package …;` when it
+     * declares one, else the package its LOCATION implies.
+     *
+     * A file with no `package` line is not necessarily in the default package:
+     * its package comes from where it sits under its source root
+     * ([JuxPackageResolver.inferPackage]), which is how the compiler and the
+     * language server read it. Used wherever "is this name already visible
+     * without an import?" is decided, so a sibling in the same directory is
+     * never offered an import even when one of the two files omits the line.
+     *
+     * Falls back to `""` (the default package) whenever the layout cannot say,
+     * which is the safe direction here: it can only make the answer "already
+     * visible" more often, never less.
+     */
+    fun effectivePackageOfFile(file: PsiFile): String {
+        val declared = packageOfFile(file)
+        if (declared.isNotEmpty()) return declared
+        val vf = file.originalFile.virtualFile ?: return ""
+        return try {
+            JuxPackageResolver.inferPackage(vf, file.project).orEmpty()
+        } catch (_: Throwable) {
+            // Index not ready, or a file outside every root: "no idea" is "".
+            ""
+        }
+    }
+
+    /** [effectivePackageOfFile] for the file a type is declared in. */
+    fun effectivePackageOf(type: JuxTypeDeclaration): String =
+        type.containingFile?.let { effectivePackageOfFile(it) } ?: ""
+
+    /**
+     * True when [type] needs no `import` in [file]: it is declared in that very
+     * file, or in the file's own package.
+     *
+     * The rule the whole import surface shares, so completion, the "Import
+     * type" fix, the on-the-fly importer and the unused-import analysis cannot
+     * disagree about it. Mirrors `juxc-lsp`'s `auto_import_for`, whose
+     * `same_package_type_is_offered_no_import` test pins the same two cases:
+     * a sibling in the same package, and a class importing itself.
+     */
+    fun needsNoImport(file: PsiFile, type: JuxTypeDeclaration): Boolean {
+        val declaringFile = type.containingFile ?: return true
+        if (declaringFile.originalFile == file.originalFile) return true
+        return effectivePackageOf(type) == effectivePackageOfFile(file)
     }
 
     /**
