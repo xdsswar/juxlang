@@ -14,6 +14,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.AdditionalLibraryRootsListener
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
@@ -166,9 +167,9 @@ class JuxDependencySync(private val project: Project) : Disposable {
         announceRoots()
         val toGenerate = snapshot.foreignDeps.filter { it.stubPath in regenerate }
         // An entry that changed in a way the stub's cache key does not cover
-        // (version, features, edited crate sources): drop the stub so the
-        // toolchain's own "absent means regenerate" rule applies.
-        for (dep in toGenerate) deleteStub(dep)
+        // (version, features, edited crate sources): mark the stub stale so the
+        // toolchain regenerates it, WITHOUT taking it off disk meanwhile.
+        for (dep in toGenerate) invalidateStub(dep)
         val stale = (toGenerate + snapshot.staleForeignDeps()).distinctBy { it.stubPath }
         if (stale.isNotEmpty()) generate(stale)
     }
@@ -215,6 +216,97 @@ class JuxDependencySync(private val project: Project) : Disposable {
     }
 
     // ------------------------------------------------------------ stubs
+
+    /**
+     * Mark a stub stale **without removing it**, so the toolchain regenerates
+     * it while the old declarations stay readable.
+     *
+     * This used to `delete` the `.jux.d` and only then kick off `generate`, a
+     * background `jux check` that is allowed to run for ten minutes. For that
+     * whole window the stub was genuinely absent from disk, so every
+     * `juxc --check` and every LSP analysis in between reported "unresolved
+     * import" on imports that were perfectly fine: the reported flicker where
+     * `import rust.minifb.Window;` is underlined but quick-doc on the same word
+     * resolves the type (the plugin's own index still held the parsed stub).
+     *
+     * Skipping the delete is not an option either: the toolchain's rule is
+     * "absent means regenerate". So we invalidate the stub the way the
+     * toolchain itself decides staleness. `juxc_driver::stubs::
+     * crate_stub_cache_is_fresh` trusts a generated `rust.*` stub only when its
+     * FIRST LINE is exactly the current cache header; rewriting that one line
+     * makes `resolve_crate_stub` fall through to regeneration, and
+     * `write_atomic` then swaps the new file in atomically.
+     *
+     * Meanwhile the body is untouched, and `load_project_stub_sources` reads
+     * every `.jux.d` under `.jux-stubs/` regardless of its header, so the
+     * compiler, the language server and the IDE index all keep seeing the
+     * previous declarations until the replacement lands. Worst case the
+     * declarations are one version out of date for a few minutes, which is
+     * strictly better than having none.
+     *
+     * A stub already carrying our marker is left alone (the rewrite is
+     * idempotent), and a stub we cannot read or rewrite falls back to deleting,
+     * which is the old behaviour and still correct.
+     *
+     * Routed through the VFS when the stub is indexed, exactly as [deleteStub]
+     * is, so the platform sees the new first line at once and a test's
+     * in-memory file system behaves like the disk.
+     */
+    private fun invalidateStub(dep: JuxDependencies.ForeignDep) {
+        val vf = dep.stubFile()
+        if (vf != null) {
+            val app = ApplicationManager.getApplication()
+            var failed = false
+            val rewrite = Runnable {
+                try {
+                    WriteAction.run<Exception> {
+                        if (!vf.isValid) return@run
+                        val marked = markedStale(VfsUtilCore.loadText(vf)) ?: return@run
+                        VfsUtil.saveText(vf, marked)
+                    }
+                } catch (e: Exception) {
+                    LOG.warn("could not invalidate stale stub ${vf.path}; removing it instead", e)
+                    failed = true
+                }
+            }
+            if (app.isDispatchThread) rewrite.run() else app.invokeAndWait(rewrite)
+            if (failed) deleteStub(dep)
+            return
+        }
+        val file = File(dep.stubPath)
+        val marked = try {
+            if (file.isFile) markedStale(file.readText()) else null
+        } catch (e: Exception) {
+            LOG.info("could not read stub ${file.path}", e)
+            null
+        } ?: return
+        try {
+            file.writeText(marked)
+        } catch (e: Exception) {
+            LOG.warn("could not invalidate stale stub ${file.path}; removing it instead", e)
+            deleteStub(dep)
+            return
+        }
+        // Let the platform see the rewritten first line at once.
+        LocalFileSystem.getInstance().refreshIoFiles(listOf(file), true, false, null)
+    }
+
+    /**
+     * [text] with its cache header replaced by [STALE_MARKER], or null when
+     * there is nothing to do: an empty stub, or one already marked.
+     *
+     * A stub with no header line at all (a hand-vendored one) gets the marker
+     * PREPENDED rather than overwriting its first real line, so nothing it
+     * declares is lost.
+     */
+    @org.jetbrains.annotations.VisibleForTesting
+    internal fun markedStale(text: String): String? {
+        if (text.isEmpty()) return null
+        val firstLine = text.lineSequence().firstOrNull().orEmpty()
+        if (firstLine.startsWith(STALE_MARKER)) return null
+        val body = if (firstLine.startsWith(CACHE_HEADER_PREFIX)) text.substringAfter('\n') else text
+        return "$STALE_MARKER\n$body"
+    }
 
     private fun deleteStub(dep: JuxDependencies.ForeignDep) {
         val vf = dep.stubFile()
@@ -270,6 +362,20 @@ class JuxDependencySync(private val project: Project) : Disposable {
 
         /** Coalesce a save's burst of events, and a quick run of edits, into one pass. */
         const val DEBOUNCE_MS = 800
+
+        /**
+         * The start of the cache header the toolchain writes as a generated
+         * stub's first line (`juxc_driver::stubs::crate_cache_header_for`). A
+         * stub is trusted only when that whole line matches the current one.
+         */
+        const val CACHE_HEADER_PREFIX = "// juxc crate stub cache-version"
+
+        /**
+         * The first line we write in its place. It is a comment, so the stub
+         * still parses and keeps serving its declarations, and it can never
+         * equal the toolchain's header, so the stub regenerates.
+         */
+        const val STALE_MARKER = "// juxc crate stub cache-version stale (marked by the Jux IDE plugin)"
 
         fun getInstance(project: Project): JuxDependencySync = project.getService(JuxDependencySync::class.java)
     }

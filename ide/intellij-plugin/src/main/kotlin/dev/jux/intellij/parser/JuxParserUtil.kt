@@ -16,6 +16,27 @@ import dev.jux.intellij.highlight.JuxTokenTypes as T
  * `b.expect(...)` without ceremony.
  */
 
+/**
+ * Set on the builder when the text being parsed is a generated foreign
+ * declaration stub (`*.jux.d`). See [markForeignStub].
+ */
+private val FOREIGN_STUB = com.intellij.openapi.util.Key.create<Boolean>("jux.parse.foreign.stub")
+
+/**
+ * Tag this parse as a **foreign declaration stub** parse.
+ *
+ * Called from [dev.jux.intellij.psi.JUX_FILE] for a `*.jux.d` file, before the
+ * parser runs. A stub is machine-written from a Rust crate, so its name slots
+ * follow the compiler's rule rather than the IDE's stricter recovery rule (see
+ * [consumeDeclName]).
+ */
+fun PsiBuilder.markForeignStub() {
+    putUserData(FOREIGN_STUB, true)
+}
+
+/** True when this parse is over a generated `*.jux.d` declaration stub. */
+fun PsiBuilder.inForeignStub(): Boolean = getUserData(FOREIGN_STUB) == true
+
 /** True if the current token is [type]. */
 fun PsiBuilder.at(type: IElementType): Boolean = tokenType === type
 
@@ -116,6 +137,13 @@ fun PsiBuilder.consumeMemberName(): Boolean {
         advanceLexer()
         return true
     }
+    // `Stdio.null` and friends: in a stub the three literal constants are name
+    // tokens too, exactly as `Parser::parse_member_name` rescues them.
+    if (inForeignStub() && LITERAL_NAME_TOKENS.contains(tokenType)) {
+        remapCurrentToken(T.IDENTIFIER)
+        advanceLexer()
+        return true
+    }
     errorHere("Name expected")
     return false
 }
@@ -147,6 +175,10 @@ val NAMED_OPERATORS: Set<String> = setOf("hash", "string")
  * thing a name slot must NOT swallow: a member left half-written
  * (`public int` then the next member) would otherwise consume `public` as the
  * missing name and cascade red through the rest of the type body.
+ *
+ * This is IDE error recovery for HAND-WRITTEN `.jux`, not a language rule: the
+ * compiler has no such set. A generated `*.jux.d` stub is never half-typed, so
+ * [consumeDeclName] drops the guard there and follows the compiler exactly.
  */
 val NON_NAME_KEYWORDS: TokenSet = TokenSet.create(
     T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW,
@@ -174,14 +206,36 @@ val NON_NAME_KEYWORDS: TokenSet = TokenSet.create(
  * the plugin needs no special case: the PSI finds the name where it always
  * looks, and the annotator colors `record` as the method name it is rather
  * than as a keyword.
+ *
+ * **In a generated `*.jux.d` stub every keyword is accepted**, plus the
+ * `null` / `true` / `false` literal tokens, which is precisely what
+ * `Parser::parse_decl_name` -> `Parser::parse_member_name` does. A stub is
+ * machine-written from a Rust crate, so it really does declare
+ * `public static NonNull? new(T* ptr);` (rust-std.jux.d), `Shader? new(...)`
+ * (tiny_skia) and `Stdio null()`. The [NON_NAME_KEYWORDS] guard exists only to
+ * keep a half-typed member in a hand-written file from cascading red, and a
+ * stub is never half-typed. Keeping the guard there meant the BUNDLED standard
+ * library stub failed to parse in every project, at the first `new`, taking
+ * every declaration after it with it: a second, independent cause of the
+ * "unresolved import" underline that quick-doc then happily resolved.
  */
 fun PsiBuilder.consumeDeclName(message: String): Boolean {
     if (at(T.IDENTIFIER)) {
         advanceLexer()
         return true
     }
+    val stub = inForeignStub()
     val t = tokenType
-    if (t != null && T.KEYWORDS.contains(t) && !NON_NAME_KEYWORDS.contains(t)) {
+    val nameable = t != null && when {
+        T.KEYWORDS.contains(t) -> stub || !NON_NAME_KEYWORDS.contains(t)
+        // `null` / `true` / `false` lex as their own literal tokens, so the
+        // keyword arm misses them. A name slot cannot hold a literal either,
+        // so the compiler rescues them the same way -- `std::process::Stdio
+        // ::null` is a real Rust method the stub has to be able to declare.
+        LITERAL_NAME_TOKENS.contains(t) -> stub
+        else -> false
+    }
+    if (nameable) {
         remapCurrentToken(T.IDENTIFIER)
         advanceLexer()
         return true
@@ -189,6 +243,12 @@ fun PsiBuilder.consumeDeclName(message: String): Boolean {
     errorHere(message)
     return false
 }
+
+/**
+ * The three literal constants (§A.2.9), which lex as their own token kinds and
+ * so are not in `KEYWORDS`. Accepted as names only inside a foreign stub.
+ */
+val LITERAL_NAME_TOKENS: TokenSet = TokenSet.create(T.NULL_LITERAL, T.BOOL_LITERAL)
 
 /** Emit a zero-width error node at the current position without consuming. */
 fun PsiBuilder.errorHere(message: String) {

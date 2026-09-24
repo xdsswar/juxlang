@@ -13,16 +13,40 @@ import dev.jux.intellij.psi.JuxElementTypes as E
  * them uniformly.
  */
 
-/** A dotted name `a.b.c`, wrapped in [E.QUALIFIED_NAME]. */
+/**
+ * A dotted name `a.b.c`, wrapped in [E.QUALIFIED_NAME].
+ *
+ * A segment AFTER a `.` may be spelled with a keyword: the member-position
+ * rule. `import rust.x.record;`, `package demo.type;`, `import rust.foo.drop;`
+ * are all legal, because after the dot the grammar is unambiguous, so nothing
+ * else could start there. Rust crates really do have modules called `type`,
+ * `box` and `match`, and the compiler accepts them here; without this the IDE
+ * red-flagged an import that compiles.
+ *
+ * Each keyword segment is REMAPPED to `IDENTIFIER` before it is consumed, the
+ * same trick [consumeDeclName] uses, so the PSI, the reference contributor and
+ * the annotator all see a plain name and need no special case. The FIRST
+ * segment stays identifier-only: there a keyword would be a different
+ * statement, not a name.
+ *
+ * The lookahead is what keeps `import a.b.*;`, `import a.b.{X, Y as Z};` and a
+ * bare `package a.b;` intact: `*`, `{` and `;` are none of them names, so the
+ * walk stops and the caller handles them.
+ */
 fun PsiBuilder.parseQualifiedName() {
     val m = mark()
     expectOrError(T.IDENTIFIER, "Identifier expected")
-    while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) {
+    while (at(T.DOT) && isPathSegmentToken(lookAhead(1))) {
         advanceLexer() // `.`
-        advanceLexer() // ident
+        if (!at(T.IDENTIFIER)) remapCurrentToken(T.IDENTIFIER)
+        advanceLexer() // segment
     }
     m.done(E.QUALIFIED_NAME)
 }
+
+/** Can [t] spell a path segment after a `.`? An identifier, or any keyword. */
+private fun isPathSegmentToken(t: IElementType?): Boolean =
+    t === T.IDENTIFIER || (t != null && T.KEYWORDS.contains(t))
 
 /**
  * A type reference: a named type (qualified name + optional generics), a

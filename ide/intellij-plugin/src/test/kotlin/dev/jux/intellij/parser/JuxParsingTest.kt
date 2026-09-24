@@ -80,6 +80,73 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertEquals(listOf("record", "type", "default"), methods)
     }
 
+    /**
+     * A path segment after a `.` may be spelled with a keyword, in an `import`
+     * and in a `package` alike: after the dot nothing else could start there,
+     * so the member-position rule applies and the compiler accepts it. Rust
+     * crates really do have modules called `record`, `type` and `drop`, and
+     * the IDE used to red-flag an import of one that compiles.
+     */
+    fun testKeywordSegmentsInImportAndPackagePaths() {
+        val psi = createPsiFile(
+            "Paths.jux",
+            """
+            package demo.type;
+
+            import rust.x.record;
+            import rust.y.drop.*;
+            import rust.z.when.{ Alpha, Beta };
+            import rust.w.box as Unboxed;
+
+            public class Uses {}
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription} @ ${it.textOffset}" },
+            errors.isEmpty(),
+        )
+        // Each keyword segment must reach the PSI as a plain IDENTIFIER, so the
+        // reference contributor and the annotator need no special case.
+        val segments = PsiTreeUtil.collectElementsOfType(psi, PsiElement::class.java)
+            .filter { it.elementType === JuxTokenTypes.IDENTIFIER }
+            .map { it.text }
+        assertTrue("`type` is a package segment: $segments", "type" in segments)
+        assertTrue("`record` is an import segment: $segments", "record" in segments)
+        assertTrue("`drop` is an import segment: $segments", "drop" in segments)
+    }
+
+    /**
+     * The relaxation is a PATH-segment rule only. The first segment and the
+     * `as` alias stay identifiers, exactly as `Parser::parse_import_spec`
+     * keeps them: a keyword there would be a different statement, or a name
+     * the file itself chose and had no reason to spell with a reserved word.
+     */
+    fun testKeywordIsStillRejectedAsFirstSegmentOrAlias() {
+        val alias = createPsiFile("Alias.jux", "import rust.x.record as record;\n")
+        assertTrue(
+            "a keyword alias is still an error",
+            PsiTreeUtil.collectElementsOfType(alias, PsiErrorElement::class.java).isNotEmpty(),
+        )
+    }
+
+    /**
+     * The path walk must stop where the path stops: a `.*` wildcard, a `.{…}`
+     * group and the terminating `;` are not segments, and swallowing one would
+     * lose the statement's shape.
+     */
+    fun testKeywordSegmentsDoNotSwallowImportSuffixes() {
+        val psi = createPsiFile(
+            "Suffix.jux",
+            "import rust.y.drop.*;\nimport rust.z.when.{ A, B };\n",
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java))
+        val imports = PsiTreeUtil.collectElementsOfType(psi, PsiElement::class.java)
+            .filter { it.elementType === JuxElementTypes.IMPORT_STATEMENT }
+            .map { it.text }
+        assertEquals(listOf("import rust.y.drop.*;", "import rust.z.when.{ A, B };"), imports)
+    }
+
     /** Validates the named-declaration PSI that Structure View / navigation use. */
     fun testPsiNamesAndMembers() {
         val psi = createPsiFile(

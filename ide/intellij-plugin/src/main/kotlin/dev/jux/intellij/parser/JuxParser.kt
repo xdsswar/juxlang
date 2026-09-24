@@ -138,6 +138,10 @@ class JuxParser : PsiParser {
         }
         if (b.at(T.AS_KW)) {
             b.advanceLexer()
+            // The alias stays an IDENTIFIER, as `Parser::parse_import_spec`
+            // keeps it: the keyword relaxation is a PATH-segment rule, and the
+            // alias is a name the file itself chooses, so nothing forces it to
+            // be a reserved word.
             b.expectOrError(T.IDENTIFIER, "Import alias expected")
         }
         b.semicolon()

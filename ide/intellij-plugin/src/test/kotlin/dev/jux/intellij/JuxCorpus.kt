@@ -90,4 +90,45 @@ object JuxCorpus {
 
     /** Just the files of [sweep]. */
     fun sweepFiles(examples: File): List<File> = sweep(examples).map { it.file }
+
+    /**
+     * Every generated foreign declaration stub (`*.jux.d`) in the repository.
+     *
+     * Two kinds, and both matter:
+     *
+     *  - `crates/juxc-driver/stubs/rust-std.jux.d`, the standard library stub
+     *    BUNDLED into every toolchain. It is parsed in every project, so one
+     *    unparseable line in it breaks import resolution everywhere.
+     *  - `examples/<project>/.jux-stubs/rust/<crate>.jux.d`, generated per project from the
+     *    crates it binds. Present only on a machine that has built those
+     *    examples, so the caller treats them as a bonus, not a requirement.
+     *
+     * Names are derived from the path (`rust_image.jux.d` and
+     * `tiny_skia.jux.d` both exist under different projects), and the `.jux.d`
+     * suffix is KEPT: it is what puts the parser into foreign-stub mode.
+     */
+    fun stubs(repoRoot: File): List<Entry> {
+        if (!repoRoot.isDirectory) return emptyList()
+        val out = mutableListOf<Entry>()
+        val seen = mutableSetOf<String>()
+        repoRoot.walkTopDown()
+            .onEnter { dir -> dir == repoRoot || dir.name !in STUB_SKIP }
+            .filter { it.isFile && it.name.endsWith(".jux.d") }
+            .sortedBy { it.relativeTo(repoRoot).invariantSeparatorsPath }
+            .forEach { file ->
+                val relative = file.relativeTo(repoRoot).invariantSeparatorsPath
+                val name = relative.removeSuffix(".jux.d").replace('/', '_').replace('.', '_') + ".jux.d"
+                if (seen.add(name)) out += Entry(name, file)
+            }
+        return out
+    }
+
+    /**
+     * Directories the stub walk never enters. `.jux-stubs` is deliberately NOT
+     * here (unlike [SKIP]): generated stubs are exactly what this walk wants.
+     * `target` and `.rust-build` hold cargo output, which on a developer
+     * machine is gigabytes, and `.claude` can hold whole worktree copies of
+     * the repo, whose stubs would just be the same files again.
+     */
+    private val STUB_SKIP = setOf("target", ".rust-build", "build", ".git", ".claude", "node_modules")
 }

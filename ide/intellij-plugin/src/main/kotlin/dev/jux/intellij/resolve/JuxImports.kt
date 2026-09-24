@@ -68,11 +68,13 @@ object JuxImports {
         }
         val candidates = JuxTypeIndex.typesNamed(project, name)
         if (candidates.isEmpty()) return emptyList()
-        val ownPackage = JuxAutoImport.packageOfFile(file)
+        val ownPackage = JuxAutoImport.effectivePackageOfFile(file)
         for (c in candidates) {
-            val pkg = JuxAutoImport.packageOf(c)
-            // Reachable without an import: same package, the root package, or imported.
-            if (pkg == ownPackage || pkg.isEmpty()) return emptyList()
+            val pkg = JuxAutoImport.effectivePackageOf(c)
+            // Reachable without an import: this very file, the same package, or
+            // the root package. `needsNoImport` is the shared rule, so this
+            // agrees with completion and with `juxc-lsp`'s `auto_import_for`.
+            if (pkg.isEmpty() || JuxAutoImport.needsNoImport(file, c)) return emptyList()
             // `jux.std` is prepended to every unit by the compiler: never imported.
             if (pkg == "jux.std" || pkg.startsWith("jux.std.")) return emptyList()
             if (JuxAutoImport.isImported(file, "$pkg.$name", name)) return emptyList()
@@ -82,7 +84,7 @@ object JuxImports {
 
     /** `some.Truck` for a candidate type. */
     fun fqnOf(type: JuxTypeDeclaration): String {
-        val pkg = JuxAutoImport.packageOf(type)
+        val pkg = JuxAutoImport.effectivePackageOf(type)
         return if (pkg.isEmpty()) type.name.orEmpty() else "$pkg.${type.name}"
     }
 }

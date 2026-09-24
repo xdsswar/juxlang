@@ -32,12 +32,57 @@ import dev.jux.intellij.resolve.JuxReference
  */
 class JuxAnnotator : Annotator {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
-        if (element.elementType !== JuxTokenTypes.IDENTIFIER) return
-        val key = colorFor(element) ?: return
+        val key = when {
+            element.elementType === JuxTokenTypes.IDENTIFIER -> colorFor(element)
+            else -> keywordMemberColor(element)
+        } ?: return
         holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
             .range(element)
             .textAttributes(key)
             .create()
+    }
+
+    /**
+     * A reserved word used as a MEMBER NAME, recolored so it reads as the
+     * member it is: `window.default()`, `value.type`, `cfg.box`.
+     *
+     * The lexer is context-free, so [JuxSyntaxHighlighter] paints every
+     * `default` token in keyword color, including the one after a `.`. The
+     * parser already knows better ([dev.jux.intellij.parser.consumeMemberName]
+     * accepts a keyword there, exactly as `Parser::parse_member_name` does),
+     * so the fix belongs in this semantic pass: the keyword-colored token is
+     * overpainted with the member color the equivalent identifier would get.
+     *
+     * Deliberately NOT done by remapping the token to `IDENTIFIER` in the
+     * parser: the member name is the one place a keyword token still carries
+     * useful information for the rest of the plugin (a `.default()` call on a
+     * foreign type is not a Jux `default` modifier, and code that walks the
+     * tree can still tell them apart by token type).
+     *
+     * `x.operator hash()` (§O.2.7) is excluded on its own: there the keyword is
+     * the FIRST of two tokens forming the name, never the last, so the
+     * last-leaf test below already leaves it keyword-colored.
+     */
+    private fun keywordMemberColor(element: PsiElement): TextAttributesKey? {
+        val type = element.elementType ?: return null
+        if (!JuxTokenTypes.KEYWORDS.contains(type)) return null
+        val parent = element.parent ?: return null
+        if (parent.elementType !in MEMBER_ACCESS_PARENTS) return null
+        // The member name is the access node's last significant child; the
+        // receiver and the `.` / `?.` / `::` come before it.
+        if (lastSignificantChild(parent) !== element) return null
+        return if (isCallee(parent)) JuxSyntaxHighlighter.METHOD_CALL else JuxSyntaxHighlighter.FIELD
+    }
+
+    /** The last child of [parent] that is neither whitespace nor a comment. */
+    private fun lastSignificantChild(parent: PsiElement): PsiElement? {
+        var c: PsiElement? = parent.lastChild
+        while (c != null) {
+            val t = c.elementType
+            if (c !is com.intellij.psi.PsiWhiteSpace && (t == null || !JuxTokenTypes.COMMENTS.contains(t))) return c
+            c = c.prevSibling
+        }
+        return null
     }
 
     private fun colorFor(id: PsiElement): TextAttributesKey? {
@@ -283,6 +328,12 @@ class JuxAnnotator : Annotator {
     private companion object {
         val REFERENCE_PARENTS = setOf(
             E.REFERENCE_EXPRESSION,
+            E.FIELD_ACCESS_EXPRESSION,
+            E.METHOD_REF_EXPRESSION,
+        )
+
+        /** Nodes whose trailing name is a member: `a.b`, `a?.b`, `a::b`. */
+        val MEMBER_ACCESS_PARENTS = setOf(
             E.FIELD_ACCESS_EXPRESSION,
             E.METHOD_REF_EXPRESSION,
         )

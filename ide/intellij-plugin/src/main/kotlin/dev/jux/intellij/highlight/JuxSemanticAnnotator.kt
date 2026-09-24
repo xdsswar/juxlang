@@ -100,17 +100,68 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
 
     /**
      * The directory to hand `juxc` so cross-file `import`s resolve: the nearest
-     * ancestor holding a `jux.toml`, else the file's own directory (which still
-     * gets same-package files right).
+     * ancestor holding a `jux.toml`, **widened to an enclosing `[workspace]`
+     * root** when one declares members, else the file's own directory (which
+     * still gets same-package files right).
+     *
+     * Mirrors `project_scope` in `crates/juxc-lsp/src/analysis.rs`. Without the
+     * widening a workspace member was checked alone, so it could not see its
+     * sibling packages or their generated `.jux-stubs/`, and every import of a
+     * sibling (or of a crate bound by the workspace) came back "unresolved
+     * import" -- while quick-doc, which resolves through the plugin's own
+     * index and not through `juxc`, showed the type and its docs. The two
+     * halves disagreeing is exactly the reported symptom.
      */
-    private fun checkRoot(filePath: String): String? {
+    @org.jetbrains.annotations.VisibleForTesting
+    internal fun checkRoot(filePath: String): String? {
         val start = File(filePath).parentFile ?: return null
         var probe: File? = start
+        var pkg: File? = null
         while (probe != null) {
-            if (File(probe, "jux.toml").isFile) return probe.path
+            if (File(probe, MANIFEST).isFile) { pkg = probe; break }
             probe = probe.parentFile
         }
-        return start.path
+        if (pkg == null) return start.path
+
+        // A member is compiled with its siblings, so climb to the workspace
+        // root when an ancestor manifest declares `[workspace] members`.
+        var ancestor = pkg.parentFile
+        while (ancestor != null) {
+            if (declaresWorkspaceMembers(File(ancestor, MANIFEST))) return ancestor.path
+            ancestor = ancestor.parentFile
+        }
+        return pkg.path
+    }
+
+    /**
+     * Does [manifest] declare a `[workspace]` section with a `members` key?
+     *
+     * Deliberately a tolerant line scan rather than a TOML parse: all that
+     * matters is "is this the workspace root above me", and a manifest the
+     * plugin cannot read must degrade to "no", never to an exception on a
+     * highlighting pass. Comments are stripped so a commented-out `members`
+     * does not count, and the scan stops at the next section header so a
+     * `members` key belonging to some other table is not mistaken for the
+     * workspace's.
+     */
+    private fun declaresWorkspaceMembers(manifest: File): Boolean {
+        if (!manifest.isFile) return false
+        val lines = try {
+            manifest.readLines()
+        } catch (_: Throwable) {
+            return false
+        }
+        var inWorkspace = false
+        for (raw in lines) {
+            val line = raw.substringBefore('#').trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("[")) {
+                inWorkspace = line == "[workspace]"
+                continue
+            }
+            if (inWorkspace && line.substringBefore('=').trim() == "members") return true
+        }
+        return false
     }
 
     /** Same file, comparing canonical, case-folded, forward-slashed paths. */
@@ -155,5 +206,8 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
 
     private companion object {
         const val TIMEOUT_MS = 15_000
+
+        /** The manifest that delimits a Jux package (and, at the top, a workspace). */
+        const val MANIFEST = "jux.toml"
     }
 }
