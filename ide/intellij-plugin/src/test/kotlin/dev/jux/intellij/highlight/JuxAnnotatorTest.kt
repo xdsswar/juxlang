@@ -255,6 +255,52 @@ class JuxAnnotatorTest : BasePlatformTestCase() {
         assertContainsElements(keysAt(code, "x", 2), "JUX_INTERPOLATED_VARIABLE")
     }
 
+    /**
+     * A reserved word in MEMBER position is not a keyword: `window.default()`
+     * calls a Rust crate member that happens to collide with a Jux keyword, and
+     * the parser already reads it as a name. The flat lexer cannot know that
+     * (it is context-free, so [JuxSyntaxHighlighter] paints every `default`
+     * token in keyword color), so [JuxAnnotator] overpaints it with the color
+     * the equivalent identifier would get.
+     */
+    fun testKeywordInMemberPositionIsColoredAsTheMember() {
+        val code = """
+            package demo;
+            public class S {
+                public void p(WindowOptions window) {
+                    window.default();
+                    var t = window.type;
+                }
+            }
+        """.trimIndent()
+        // The call `window.default()`.
+        assertContainsElements(keysAt(code, "default", 1), "JUX_METHOD_CALL")
+        assertDoesntContain(keysAt(code, "default", 1), "JUX_KEYWORD")
+        // The read `window.type`.
+        assertContainsElements(keysAt(code, "type", 1), "JUX_FIELD")
+        assertDoesntContain(keysAt(code, "type", 1), "JUX_KEYWORD")
+    }
+
+    /**
+     * The other half of the rule: the raw lexer really does call these tokens
+     * keywords, so the recolor above is load-bearing rather than decorative,
+     * and a keyword in STATEMENT position must keep the keyword color.
+     */
+    fun testKeywordInStatementPositionStaysAKeyword() {
+        val plain = JuxSyntaxHighlighter().getTokenHighlights(JuxTokenTypes.DEFAULT_KW)
+            .map { it.externalName }
+        assertContainsElements(plain, "JUX_KEYWORD")
+
+        val code = """
+            package demo;
+            public interface I {
+                default int size() { return 0; }
+            }
+        """.trimIndent()
+        // Nothing forces a color over a modifier: the lexer's keyword color stands.
+        assertEmpty(keysAt(code, "default", 1))
+    }
+
     fun testRawStringHasNoEscapeColoring() {
         val code = """
             package demo;
