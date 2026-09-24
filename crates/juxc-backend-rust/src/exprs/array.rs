@@ -198,11 +198,13 @@ impl RustEmitter {
         }
     }
 
-    /// Emit `[key]` in whichever of the three shapes the container wants.
+    /// Emit `[key]` in whichever of the four shapes the container wants.
     ///
     /// - A container whose real Rust `Index` impl takes a BORROWED key
     ///   (`map_index`, DISCOVERED from the stub's `@RustIndexRef` marker) gets
     ///   `[&(key)]`.
+    /// - A key that is not a POSITION names a member: a written name is the
+    ///   `&str` it looks like, and one held in a variable is borrowed.
     /// - A bare integer literal indexes directly; Rust infers `usize`.
     /// - Anything else is a Jux `int` (`isize`) and needs the cast.
     ///
@@ -212,6 +214,14 @@ impl RustEmitter {
     /// `("a".to_string()) as usize`.
     pub(crate) fn emit_index_key(&mut self, map_index: bool, key: &Expr) {
         self.w.push('[');
+        // Is the key a POSITION? The `as usize` below exists only because a
+        // Jux `int` is a Rust `isize` and a sequence wants a `usize`, and an
+        // `as` cast only converts between primitives. A key that is not a
+        // number is not a position: `doc["project"]` on a foreign value whose
+        // `Index` takes a NAME (serde_json's `Value` is the everyday case)
+        // emitted `("project".to_string()) as usize`, and the rustc E0605 for
+        // it leaked out as the program's error.
+        let positional = self.index_key_is_positional(key);
         if map_index {
             self.w.push_str("&(");
             let prev = self.emitting_format_arg;
@@ -219,6 +229,23 @@ impl RustEmitter {
             self.emit_expr(key);
             self.emitting_format_arg = prev;
             self.w.push(')');
+        } else if !positional {
+            // A written name is the Rust string literal it looks like:
+            // `doc["project"]`, not a borrowed heap allocation. Every `Index`
+            // impl that takes a name accepts a `&str`.
+            if let Expr::Literal(Literal::String(s)) = key {
+                self.emit_rust_string_literal(s);
+            } else {
+                // A name held in a variable is borrowed rather than moved:
+                // `doc[name]` must leave `name` usable on the next line, and
+                // a `&String` reaches the same impl a `&str` does.
+                self.w.push_str("&(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                self.emit_expr(key);
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+            }
         } else if matches!(key, Expr::Literal(Literal::Int(_))) {
             self.emit_expr(key);
         } else {
@@ -227,6 +254,25 @@ impl RustEmitter {
             self.w.push_str(") as usize");
         }
         self.w.push(']');
+    }
+
+    /// True when `key` indexes by POSITION, which is what the `as usize` cast
+    /// is for.
+    ///
+    /// A numeric or `char` key casts (Java lets `counts[c]` index by a
+    /// character, and `char as usize` is a cast Rust has). A `String` key
+    /// names a member and never casts. An unknown key keeps the cast, which
+    /// is what every index did before names were possible at all.
+    fn index_key_is_positional(&self, key: &Expr) -> bool {
+        match self.expr_types.get(&crate::exprs::expr_span_of(key)) {
+            Some(juxc_tycheck::Ty::Primitive(_)) => true,
+            Some(juxc_tycheck::Ty::String) => false,
+            // A literal carries its own answer even when the checker recorded
+            // no type for the span, which is the case inside an interpolated
+            // string's re-parsed expression.
+            None => !matches!(key, Expr::Literal(Literal::String(_))),
+            _ => true,
+        }
     }
 
     /// True when indexing `array` uses a BORROWED key (`map[&k]`) rather than

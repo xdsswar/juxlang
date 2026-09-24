@@ -141,6 +141,15 @@ pub struct StubType {
     /// annotation so the backend lowers `xs[k]` to `xs[&(k)]` instead
     /// of the sequence form `xs[(k) as usize]`.
     pub index_ref: bool,
+    /// The element type the type's own `Index` impl produces, by name
+    /// (`type Output = Value;` on serde_json's `Value` gives `"Value"`, and
+    /// `type Output = V;` on a map gives the parameter name `"V"`).
+    /// DISCOVERED from the real `Index` impl, never from a name list.
+    /// Rendered as `@RustIndexOutput("…")`, which is how the checker learns
+    /// what `doc["releases"]` IS: without it the index of a foreign type was
+    /// `Unknown`, and the backend, seeing no element type, moved the element
+    /// out of the borrow the Rust `Index` hands back (rustc E0507).
+    pub index_output: Option<String>,
     /// Whether the Rust type implements `Clone` (discovered from its real
     /// trait impls, never from a name list). Rendered as the `@RustClone`
     /// class annotation. The backend needs it to decide whether a field read
@@ -202,6 +211,7 @@ impl StubType {
             doc: None,
             rust_path: None,
             index_ref: false,
+            index_output: None,
             is_clone: false,
             is_collection: false,
             implements: Vec::new(),

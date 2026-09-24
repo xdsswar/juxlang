@@ -1151,6 +1151,15 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             {
                 return ret;
             }
+            // What the type's OWN `Index` impl produces, as bindgen read it
+            // off the real impl (`@RustIndexOutput`). This is what types
+            // `doc["releases"]` on serde_json's `Value`: without it the read
+            // was `Unknown`, and an `Unknown` element told the backend
+            // nothing, so it moved the element out of the borrow Rust's
+            // `Index` returns (rustc E0507, leaked as the program's error).
+            if let Some(ty) = symbols.index_output_ty(name, generic_args) {
+                return ty;
+            }
             // Builtin Rust-std container indexing (no user `operator[]`
             // declared): `Vec<T>`/`VecDeque<T>` index to the element,
             // `HashMap<K,V>`/`BTreeMap<K,V>` to the value. Without this

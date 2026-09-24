@@ -69,6 +69,11 @@ fn render_type(out: &mut String, t: &StubType) {
     if t.index_ref {
         let _ = writeln!(out, "@RustIndexRef");
     }
+    // What indexing the type PRODUCES, from the `Index` impl's own
+    // `type Output` -- the checker needs it to type `doc["releases"]`.
+    if let Some(output) = &t.index_output {
+        let _ = writeln!(out, "@RustIndexOutput(\"{output}\")");
+    }
 
     if t.is_clone {
         let _ = writeln!(out, "@RustClone");
