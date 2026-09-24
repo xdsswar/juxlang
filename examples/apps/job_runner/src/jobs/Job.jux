@@ -1,0 +1,23 @@
+// A unit of work: a name, how much of it there is, and what it costs.
+package jobs;
+
+public record Job(String name, int size, int weight) {
+
+    /** The work itself: a checksum over `size` steps. */
+    public long run() {
+        var acc = 0L;
+        for (var i : 0..size) {
+            acc = (acc + i * 7) % 100003;
+        }
+        return acc;
+    }
+
+    /** Roughly what the job costs to run, for the scheduler's ordering. */
+    public long cost() {
+        return (long) size * weight;
+    }
+
+    public String operator string() {
+        return $"${name}/${size}";
+    }
+}

@@ -1,0 +1,11 @@
+# A job runner: real threads, atomics, a channel, a mutex, and a timeout.
+#
+# Two packages under src/: `jobs` is the workload (the jobs, the plan, the
+# outcomes) and `runner` is what the run added up to. The entry point owns
+# the fan-out, because a worker's closure captures values and not objects.
+#
+# The output is deterministic: results are sorted before they are printed,
+# and every count is a total rather than an order.
+[package]
+name = "apps.job_runner"
+version = "0.1.0"

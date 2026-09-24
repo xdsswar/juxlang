@@ -1,0 +1,68 @@
+// Tests for the part of the runner that has nothing to do with threads.
+//
+// The plan, the bands and the size limit are ordinary functions of the
+// workload, so they are the part worth pinning down: the concurrency above
+// them only decides who runs what, never what the answer is.
+package jobs;
+
+import jux.std.testing.*;
+
+@Test
+void refusesAJobOverTheLimit() {
+    final var work = new Workload(1000);
+    assertThrows<TooBig>(() -> work.add(new Job("huge", 5000, 1)));
+    assertEqual(0, work.size());
+}
+
+@Test
+void takesAJobAtTheLimit() throws TooBig {
+    final var work = new Workload(1000);
+    work.add(new Job("exact", 1000, 1));
+    assertEqual(1, work.size());
+    assertEqual("exact", work.at(0).name);
+}
+
+@Test
+void plansTheExpensiveJobsFirst() throws TooBig {
+    final var work = new Workload(10000);
+    work.add(new Job("cheap", 10, 1));
+    work.add(new Job("dear", 100, 10));
+    work.add(new Job("middling", 50, 2));
+    final Vec<String> plan = work.plan();
+    assertEqual(3, plan.len());
+    assertEqual("dear", plan[0]);
+    assertEqual("middling", plan[1]);
+    assertEqual("cheap", plan[2]);
+}
+
+@Test
+void breaksCostTiesByName() throws TooBig {
+    final var work = new Workload(10000);
+    // Both cost 100, so the name decides and the plan is stable.
+    work.add(new Job("zeta", 100, 1));
+    work.add(new Job("alpha", 50, 2));
+    final Vec<String> plan = work.plan();
+    assertEqual("alpha", plan[0]);
+    assertEqual("zeta", plan[1]);
+}
+
+@Test
+void countsTheSizeBands() throws TooBig {
+    final var work = new Workload(10000);
+    work.add(new Job("a", 100, 1));
+    work.add(new Job("b", 900, 1));
+    work.add(new Job("c", 1500, 1));
+    work.add(new Job("d", 4000, 1));
+    final BTreeMap<String, int> bands = work.bands();
+    assertEqual(3, bands.len());
+    assertEqual(2, bands.get("small")!!);
+    assertEqual(1, bands.get("medium")!!);
+    assertEqual(1, bands.get("large")!!);
+}
+
+@Test
+void theSameJobAlwaysChecksTheSame() {
+    final var job = new Job("steady", 777, 1);
+    assertEqual(job.run(), job.run());
+    assertEqual(777 * 1, (int) job.cost());
+}

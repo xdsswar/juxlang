@@ -1,0 +1,20 @@
+jobs: 4, cost 10000
+plan: alpha -> gamma -> beta -> delta
+  large: 1
+  medium: 2
+  small: 1
+refused: `omega` is 9000 steps, over the limit of 2500
+
+started: 3, finished: 3
+recorded: 4, names alpha,beta,delta,gamma
+alpha matches: true
+beta matches:  true
+gamma matches: true
+epsilon missing: true
+delta is its own: true
+notes: 2
+  ran on the main thread
+  the slow one
+total: 331723, ledger 331723
+collected: alpha,beta,delta,gamma
+epsilon under the deadline: true

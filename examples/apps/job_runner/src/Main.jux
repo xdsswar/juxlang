@@ -1,0 +1,158 @@
+// Running a workload on real threads, gathering the results, and reporting.
+//
+// `Worker.spawn` is a real OS thread; `AtomicInt` is shared across them; a
+// channel carries finished names back to the collector; a `Mutex` guards a
+// running total. Everything printed is a total, a sorted list or a plan, so
+// the output does not depend on the order the threads happen to finish in.
+//
+// The plan, the bands and the ledger are ordinary single-threaded Jux under
+// `jobs/` and `runner/`; only the fan-out lives here, because a worker's
+// closure can capture values but not objects.
+import jux.std.concurrent.AtomicInt;
+import jux.std.concurrent.Mutex;
+import jobs.{Job, Outcome, Workload, TooBig};
+import runner.Ledger;
+
+public async void main() {
+    final var work = new Workload(2500);
+    try {
+        work.add(new Job("alpha", 1000, 3));
+        work.add(new Job("beta", 2000, 1));
+        work.add(new Job("gamma", 1500, 2));
+        work.add(new Job("delta", 500, 4));
+    } catch (TooBig refused) {
+        print($"the workload refused a job it should have taken: ${refused.getMessage()}");
+    }
+
+    print($"jobs: ${work.size()}, cost ${work.cost()}");
+    print($"plan: ${arrow(work.plan())}");
+    for (var band : work.bands()) {
+        print($"  ${band.0}: ${band.1}");
+    }
+
+    // A job the workload will not take at all.
+    try {
+        work.add(new Job("omega", 9000, 1));
+        print("a job over the limit was accepted, which is wrong");
+    } catch (TooBig refused) {
+        print($"refused: ${refused.getMessage()}");
+    }
+    print("");
+
+    // The fan-out. A worker's closure captures VALUES, so each job is pulled
+    // out of the workload first; the object itself could not cross.
+    final Job alpha = work.at(0);
+    final Job beta = work.at(1);
+    final Job gamma = work.at(2);
+    final Job delta = work.at(3);
+
+    // Every worker bumps these, so the counts are facts about the whole run.
+    final var started = new AtomicInt(0);
+    final var finished = new AtomicInt(0);
+
+    final var a = Worker.spawn(() -> {
+        started.fetchAdd(1);
+        final long value = alpha.run();
+        finished.fetchAdd(1);
+        return value;
+    });
+    final var b = Worker.spawn(() -> {
+        started.fetchAdd(1);
+        final long value = beta.run();
+        finished.fetchAdd(1);
+        return value;
+    });
+    final var c = Worker.spawn(() -> {
+        started.fetchAdd(1);
+        final long value = gamma.run();
+        finished.fetchAdd(1);
+        return value;
+    });
+
+    final var ledger = new Ledger();
+    ledger.record(new Outcome(alpha.name, await a, null));
+    ledger.record(new Outcome(beta.name, await b, null));
+    ledger.record(new Outcome(gamma.name, await c, "the slow one"));
+    ledger.record(new Outcome(delta.name, delta.run(), "ran on the main thread"));
+
+    print($"started: ${started.load()}, finished: ${finished.load()}");
+    print($"recorded: ${ledger.count()}, names ${ledger.names()}");
+
+    // The same work, in order, for comparison: threads must not change it.
+    print($"alpha matches: ${ledger.checksumOf(alpha.name) == alpha.run()}");
+    print($"beta matches:  ${ledger.checksumOf(beta.name) == beta.run()}");
+    print($"gamma matches: ${ledger.checksumOf(gamma.name) == gamma.run()}");
+    // A name nothing was recorded for: a `long?` against a `long` asks
+    // whether that value was recorded, and against null whether anything was.
+    print($"epsilon missing: ${ledger.checksumOf("epsilon") == null}");
+    print($"delta is its own: ${ledger.checksumOf(delta.name) == delta.run()}");
+
+    // A nullable element type: most outcomes have no note, and the ones that
+    // do keep it.
+    final Vec<String?> notes = ledger.notes();
+    print($"notes: ${notes.len()}");
+    for (var i = 0; i < notes.len(); i++) {
+        final String? note = notes[i];
+        print($"  ${note == null ? "(none)" : note}");
+    }
+
+    // A mutex over a total every result is added to.
+    final var total = new Mutex<long>(0L);
+    for (var job : work.all()) {
+        final long? recorded = ledger.checksumOf(job.name);
+        if (recorded == null) {
+            continue;
+        }
+        total.lock((running) -> running + recorded);
+    }
+    print($"total: ${total.lock((running) -> running)}, ledger ${ledger.total()}");
+
+    // A channel carrying finished names to the collector below. The channel
+    // holds four, which is every job, so the sends do not wait for a reader.
+    // (A `spawn`ed producer cannot hold a collection across an `await`: a
+    // task may move between threads and a collection handle may not.)
+    final var done = new Channel<String>(4);
+    for (var job : work.all()) {
+        await done.send(job.name);
+    }
+    done.close();
+
+    var collected = new Vec<String>();
+    while (true) {
+        final String? name = await done.receive();
+        if (name == null) {
+            break;
+        }
+        collected.push(name);
+    }
+    collected.sort_unstable();
+    print($"collected: ${commas(collected)}");
+
+    // Work under a deadline. The budget is generous on purpose: a test whose
+    // result depends on how fast the machine is would not be a test.
+    final var last = new Job("epsilon", 800, 1);
+    try {
+        final long value = await withTimeout(5000, async () -> last.run());
+        print($"epsilon under the deadline: ${value == last.run()}");
+    } catch (Exception e) {
+        print("epsilon ran out of time");
+    }
+}
+
+/** Names joined by arrows, as a plan reads. */
+String arrow(Vec<String> names) {
+    var line = "";
+    for (var name : names) {
+        line = line.is_empty() ? name : line + " -> " + name;
+    }
+    return line;
+}
+
+/** Names joined by commas. */
+String commas(Vec<String> names) {
+    var line = "";
+    for (var name : names) {
+        line = line.is_empty() ? name : line + "," + name;
+    }
+    return line;
+}
