@@ -13,7 +13,8 @@ use rustdoc_types::{
 };
 
 use crate::model::{
-    StubAlias, StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubParam, StubType,
+    ProjectionRole, StubAlias, StubConst, StubCtor, StubField, StubFile, StubFn, StubItem,
+    StubParam, StubType,
     StubVariant,
     TypeKind, Vis,
 };
@@ -140,6 +141,7 @@ pub fn generate_merged_with_sources(
 
     collected.sort_by(|a, b| a.0.cmp(&b.0));
     retain_declared_implements(&mut collected);
+    retain_projection_overloads(&mut collected);
     // A plain alias is kept only when it ends somewhere this stub can name: a
     // primitive, or a type (or alias) the stub declares. Anything else would
     // be an alias to nothing.
@@ -383,6 +385,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
     // Deterministic order: by item name.
     collected.sort_by(|a, b| a.0.cmp(&b.0));
     retain_declared_implements(&mut collected);
+    retain_projection_overloads(&mut collected);
 
     StubFile {
         package: package.to_string(),
@@ -419,6 +422,10 @@ pub(crate) type InherentPool = std::collections::HashMap<String, Vec<StubFn>>;
 
 /// Record every inherent impl in `krate` into `pool`.
 fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
+    // The projection fan-out (§G.6.4.5) records the real Rust path of every
+    // named type an overload's parameter mentions, so the late pass can check
+    // that this stub's declaration of that name really is that type.
+    let public = PublicPaths::of(krate);
     for item in krate.index.values() {
         let ItemEnum::Impl(im) = &item.inner else {
             continue;
@@ -447,9 +454,10 @@ fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
             if !has_self_receiver(f) {
                 continue;
             }
-            let mut sf = map_function(krate, mname, f);
-            sf.is_static = false;
-            slot.push(sf);
+            for mut sf in map_function_surface(krate, &public, mname, f, Some(&im.for_)) {
+                sf.is_static = false;
+                slot.push(sf);
+            }
         }
     }
 }
@@ -570,7 +578,7 @@ fn build_handle_alias(
         return None;
     }
     let impls = by_instance.get(&key)?;
-    let (mut ctors, mut methods) = collect_inherent_members(krate, impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, public, impls, name);
     let trait_impls: &[rustdoc_types::Id] =
         traits_by_instance.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
     add_default_ctor(&mut ctors, name, implements_trait(krate, trait_impls, "Default"));
@@ -676,7 +684,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
             // methods through `Deref`.
             ItemEnum::Primitive(prim) if primitive_has_jux_type(&prim.name) => {
                 let class = format!("{}_methods", prim.name);
-                let (ctors, mut methods) = collect_inherent_members(krate, &prim.impls, &class);
+                let (ctors, mut methods) = collect_inherent_members(krate, &public, &prim.impls, &class);
                 // A primitive has no constructor; `from_bits` and friends are
                 // associated functions, called on the type.
                 for c in ctors {
@@ -697,6 +705,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                         doc: None,
                         closure_ref_params: Vec::new(),
                         bounds: Vec::new(),
+                        projection_role: None,
                     });
                 }
                 dedup_methods_by_name(&mut methods);
@@ -857,7 +866,7 @@ fn build_struct(
         StructKind::Tuple(_) | StructKind::Unit => all_public = false,
     }
 
-    let (mut ctors, mut methods) = collect_inherent_members(krate, &s.impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, public, &s.impls, name);
     add_default_ctor(&mut ctors, name, implements_trait(krate, &s.impls, "Default"));
     // Rust's method resolution follows `Deref`, so `Vec<T>` really does have
     // every `[T]` method — and a stub that stops at the inherent impls is
@@ -911,7 +920,7 @@ fn build_enum(
     // does, and a Jux enum can hold methods too (§7.7). Keeping only the
     // variants described `image::DynamicImage` as a bare tag union, so
     // `decoded.width()` was an unknown method on a type that plainly has one.
-    let (mut ctors, mut methods) = collect_inherent_members(krate, &e.impls, name);
+    let (mut ctors, mut methods) = collect_inherent_members(krate, public, &e.impls, name);
     add_default_ctor(&mut ctors, name, implements_trait(krate, &e.impls, "Default"));
     dedup_methods_by_name(&mut methods);
     st.constructors = ctors;
@@ -1005,8 +1014,41 @@ fn build_trait(
 /// has already ordered the impl members, and keeps the most general inherent
 /// definition that rustdoc lists first.
 fn dedup_methods_by_name(methods: &mut Vec<StubFn>) {
+    // A §G.6.4.5 fan-out RESOLVED a name that some other crate of the same
+    // ingest also declares plainly. `core` holds the `SliceIndex` trait item,
+    // so only `core`'s copy of `impl str` can resolve `str::get`; `alloc` and
+    // `std` document the same method with the trait out of reach and surface
+    // the unresolved `I.Output`. Both land in one shape-keyed pool, and
+    // first-wins would keep whichever crate happened to be read first. The
+    // resolved reading is strictly the better description, so it wins outright.
+    let resolved: HashSet<String> = methods
+        .iter()
+        .filter(|m| matches!(m.projection_role, Some(ProjectionRole::Overload { .. })))
+        .map(|m| m.name.clone())
+        .collect();
+    methods.retain(|m| m.projection_role.is_some() || !resolved.contains(&m.name));
+
     let mut seen: HashSet<String> = HashSet::new();
-    methods.retain(|m| seen.insert(m.name.clone()));
+    methods.retain(|m| {
+        let key = match &m.projection_role {
+            // A fan-out group is several declarations of ONE Rust method, told
+            // apart by their parameter types the way any Jux overload group is
+            // (§T.3.1). Keying those on the name alone would keep one arbitrary
+            // member and throw the rest of the group away, which is the whole
+            // point of having fanned it out. They still dedup against each
+            // other, so a method reached twice does not double its group.
+            Some(ProjectionRole::Overload { .. }) => format!(
+                "{}#{}",
+                m.name,
+                m.params.iter().map(|p| p.ty.to_string()).collect::<Vec<_>>().join(","),
+            ),
+            // The fallback shares the plain name's slot, because it IS the
+            // plain declaration: it is kept only until the late pass finds out
+            // whether any overload of the group can be named at all.
+            None | Some(ProjectionRole::Fallback) => m.name.clone(),
+        };
+        seen.insert(key)
+    });
 }
 
 /// Replace every `Self` in a mapped type with the type it stands for.
@@ -1071,6 +1113,7 @@ fn add_default_ctor(ctors: &mut Vec<StubCtor>, type_name: &str, implements_defau
 /// a `self` receiver map to instance methods (§G.5.3).
 fn collect_inherent_members(
     krate: &Crate,
+    public: &PublicPaths,
     impls: &[rustdoc_types::Id],
     type_name: &str,
 ) -> (Vec<StubCtor>, Vec<StubFn>) {
@@ -1119,9 +1162,10 @@ fn collect_inherent_members(
                     throws,
                 });
             } else {
-                let mut sf = map_function(krate, mname, f);
-                sf.is_static = !has_self;
-                methods.push(sf);
+                for mut sf in map_function_surface(krate, public, mname, f, Some(&im.for_)) {
+                    sf.is_static = !has_self;
+                    methods.push(sf);
+                }
             }
         }
     }
@@ -1298,6 +1342,7 @@ pub(crate) fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
         rust_path: None,
         doc: None,
         bounds: type_param_bounds(&f.generics),
+        projection_role: None,
     }
 }
 
@@ -1835,6 +1880,7 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
         doc: None,
         closure_ref_params: Vec::new(),
         bounds: Vec::new(),
+        projection_role: None,
     })
 }
 
@@ -1914,6 +1960,683 @@ fn generic_param_names(g: &Generics) -> Vec<String> {
                 Some(p.name.clone())
             }
             _ => None,
+        })
+        .collect()
+}
+
+// ============================================================================
+// Associated-type projections over a method's own parameter (§G.6.4.5)
+// ============================================================================
+
+/// The most overloads one projection fan-out may contribute to a method.
+///
+/// The fan-out keeps one overload per distinct RESULT type (see
+/// [`settle_projection_group`]), which is already a small number: `SliceIndex`
+/// has seventeen impls for `[T]` and exactly two results, the element and a
+/// sub-slice. The cap is the backstop for a trait whose associated type varies
+/// more widely, so that one method can never multiply a surface every single
+/// compile parses (§G.6.4.5).
+const PROJECTION_FANOUT_CAP: usize = 4;
+
+/// A `<P as Trait<...>>::Assoc` written in a signature, where `P` is one of the
+/// METHOD's own type parameters.
+///
+/// `Vec::get` is `fn get<I>(&self, index: I) -> Option<&I::Output> where I:
+/// SliceIndex<[T]>`: `I` is settled by the argument the call passes, so the
+/// projection is knowable once the argument type is, unlike a `Self::Item` the
+/// receiver settles (§G.6.4.2).
+struct MethodProjection {
+    /// The method type parameter the projection is taken over (`I`).
+    param: String,
+    /// The associated type's name (`Output`).
+    assoc: String,
+    /// The projection's trait, by rustdoc ID. The ID is what is matched, never
+    /// the name: rustdoc writes a projection's `trait_.path` as the empty
+    /// string and carries only the id, and matching on a name would be the
+    /// hardcoded trait list §G.6.1 forbids anyway.
+    trait_id: Id,
+}
+
+/// One impl of the projection's trait, resolved against the method's bound.
+struct ResolvedImpl {
+    /// The impl's self type, substituted: the Jux parameter type.
+    index: JuxType,
+    /// The impl's `type Assoc = ...` binding, substituted: the Jux result.
+    result: JuxType,
+    /// Every named type the parameter mentions, as `(Jux name, real Rust
+    /// path)`. [`settle_projection_group`] checks that the stub's declaration
+    /// of each name really is that Rust type before keeping the overload:
+    /// `rust.std` declares `Range` for `std::collections::btree_map::Range`, so
+    /// an overload taking `core::ops::Range` must not be written `Range` there.
+    param_paths: Vec<(String, String)>,
+    /// How complicated the parameter's shape is, [`jux_shape_rank`]. Several
+    /// impls of one trait often give the same result from different index
+    /// types, and the simplest of those is the one a program can write.
+    param_rank: u8,
+}
+
+/// How complicated a Jux type's shape is, as a tie-break between impls that
+/// resolve to the SAME result (§G.6.4.5).
+///
+/// `SliceIndex<[T]>` gives the element back for `usize`, for the internal
+/// `Last`, and for `Clamp<usize>`. All three say the same thing about the
+/// result, so the one the fan-out keeps should be the one a program would
+/// actually write, and a bare primitive beats a generic wrapper.
+fn jux_shape_rank(t: &JuxType) -> u8 {
+    match t {
+        JuxType::Prim(_) | JuxType::String => 0,
+        JuxType::User { args, .. } if args.is_empty() => 1,
+        JuxType::User { .. } | JuxType::Array { .. } => 2,
+        JuxType::Tuple(_) => 3,
+        _ => 4,
+    }
+}
+
+/// The single projection over one of `f`'s own type parameters, if there is
+/// exactly one.
+///
+/// Exactly one, because the fan-out swaps one parameter for one impl self type:
+/// two projections over two different parameters would need the cross product
+/// of two impl lists, and no surface we ingest asks for that. Several
+/// occurrences of the SAME projection are fine and common, a method that takes
+/// and returns `I::Output` being the usual shape.
+fn method_projection(f: &Function) -> Option<MethodProjection> {
+    let own: HashSet<&str> = f.generics.params.iter().map(|p| p.name.as_str()).collect();
+    let mut found: Option<MethodProjection> = None;
+    let mut single = true;
+    let mut visit = |t: &Type| {
+        let Type::QualifiedPath { name, self_type, trait_, .. } = t else { return };
+        let Type::Generic(owner) = self_type.as_ref() else { return };
+        if !own.contains(owner.as_str()) {
+            return;
+        }
+        let Some(tr) = trait_ else { return };
+        match &found {
+            Some(prev) if prev.param != *owner || prev.assoc != *name => single = false,
+            Some(_) => {}
+            None => {
+                found = Some(MethodProjection {
+                    param: owner.clone(),
+                    assoc: name.clone(),
+                    trait_id: tr.id,
+                })
+            }
+        }
+    };
+    for (_, ty) in &f.sig.inputs {
+        walk_rust_type(ty, &mut visit);
+    }
+    if let Some(out) = &f.sig.output {
+        walk_rust_type(out, &mut visit);
+    }
+    if single { found } else { None }
+}
+
+/// Call `visit` on `t` and on every type nested inside it.
+fn walk_rust_type(t: &Type, visit: &mut impl FnMut(&Type)) {
+    visit(t);
+    match t {
+        Type::ResolvedPath(p) => {
+            for a in path_type_args(&p.args) {
+                walk_rust_type(a, visit);
+            }
+        }
+        Type::Slice(inner)
+        | Type::BorrowedRef { type_: inner, .. }
+        | Type::RawPointer { type_: inner, .. }
+        | Type::Array { type_: inner, .. } => walk_rust_type(inner, visit),
+        Type::Tuple(ts) => ts.iter().for_each(|t| walk_rust_type(t, visit)),
+        Type::QualifiedPath { self_type, .. } => walk_rust_type(self_type, visit),
+        Type::FunctionPointer(fp) => {
+            for (_, t) in &fp.sig.inputs {
+                walk_rust_type(t, visit);
+            }
+            if let Some(o) = &fp.sig.output {
+                walk_rust_type(o, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The TYPE arguments of an angle-bracketed generic list, by reference.
+fn path_type_args(args: &Option<Box<GenericArgs>>) -> Vec<&Type> {
+    match args.as_deref() {
+        Some(GenericArgs::AngleBracketed { args, .. }) => args
+            .iter()
+            .filter_map(|a| match a {
+                GenericArg::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The trait arguments the method's own bound puts on `proj.param`
+/// (`where I: SliceIndex<Self>` gives `[Self]`), with `Self` replaced by the
+/// type the enclosing impl is written for.
+///
+/// `Self` has to be substituted here and not later: the bound is written inside
+/// `impl<T> [T]`, so its `Self` IS `[T]`, and matching that against
+/// `impl<T> SliceIndex<[T]> for usize` is the whole reason the slice's impls
+/// are told apart from `impl SliceIndex<str> for Range<usize>`.
+fn projection_bound_args(
+    f: &Function,
+    proj: &MethodProjection,
+    self_ty: Option<&Type>,
+) -> Option<Vec<Type>> {
+    let take = |bounds: &[GenericBound]| -> Option<Vec<Type>> {
+        for b in bounds {
+            let GenericBound::TraitBound { trait_, .. } = b else { continue };
+            if trait_.id != proj.trait_id {
+                continue;
+            }
+            return Some(
+                path_type_args(&trait_.args)
+                    .into_iter()
+                    .map(|t| substitute_rust_self(t, self_ty))
+                    .collect(),
+            );
+        }
+        None
+    };
+    for p in &f.generics.params {
+        if p.name != proj.param {
+            continue;
+        }
+        if let GenericParamDefKind::Type { bounds, .. } = &p.kind {
+            if let Some(args) = take(bounds) {
+                return Some(args);
+            }
+        }
+    }
+    for wp in &f.generics.where_predicates {
+        let WherePredicate::BoundPredicate { type_: Type::Generic(g), bounds, .. } = wp else {
+            continue;
+        };
+        if g != &proj.param {
+            continue;
+        }
+        if let Some(args) = take(bounds) {
+            return Some(args);
+        }
+    }
+    None
+}
+
+/// Replace every `Self` in a rustdoc type with the type the enclosing impl is
+/// written for. With no `self_ty` the type is returned unchanged, and the match
+/// against an impl's arguments then simply fails, which is the safe direction.
+fn substitute_rust_self(t: &Type, self_ty: Option<&Type>) -> Type {
+    let Some(self_ty) = self_ty else { return t.clone() };
+    let subst: HashMap<String, Type> =
+        HashMap::from([("Self".to_string(), self_ty.clone())]);
+    substitute_rust_type(t, &subst)
+}
+
+/// Apply a type substitution to a rustdoc type.
+fn substitute_rust_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
+    match t {
+        Type::Generic(name) => subst.get(name).cloned().unwrap_or_else(|| t.clone()),
+        Type::ResolvedPath(p) => {
+            let mut p = p.clone();
+            if let Some(GenericArgs::AngleBracketed { args, constraints }) = p.args.as_deref() {
+                let args = args
+                    .iter()
+                    .map(|a| match a {
+                        GenericArg::Type(inner) => {
+                            GenericArg::Type(substitute_rust_type(inner, subst))
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                p.args = Some(Box::new(GenericArgs::AngleBracketed {
+                    args,
+                    constraints: constraints.clone(),
+                }));
+            }
+            Type::ResolvedPath(p)
+        }
+        Type::Slice(inner) => Type::Slice(Box::new(substitute_rust_type(inner, subst))),
+        Type::Array { type_, len } => Type::Array {
+            type_: Box::new(substitute_rust_type(type_, subst)),
+            len: len.clone(),
+        },
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| substitute_rust_type(t, subst)).collect()),
+        Type::BorrowedRef { lifetime, is_mutable, type_ } => Type::BorrowedRef {
+            lifetime: lifetime.clone(),
+            is_mutable: *is_mutable,
+            type_: Box::new(substitute_rust_type(type_, subst)),
+        },
+        Type::RawPointer { is_mutable, type_ } => Type::RawPointer {
+            is_mutable: *is_mutable,
+            type_: Box::new(substitute_rust_type(type_, subst)),
+        },
+        other => other.clone(),
+    }
+}
+
+/// Match an impl's written type (`[T2]`, where `T2` is one of the impl's own
+/// parameters) against the concrete type the method's bound names (`[T]`),
+/// binding the impl's parameters as it goes.
+///
+/// Structural and deliberately strict: anything it cannot line up is `false`,
+/// and that impl then contributes no overload rather than one built on a guess.
+fn unify_rust_type(
+    pattern: &Type,
+    value: &Type,
+    vars: &HashSet<String>,
+    subst: &mut HashMap<String, Type>,
+) -> bool {
+    if let Type::Generic(name) = pattern {
+        if vars.contains(name.as_str()) {
+            // A parameter already bound must bind the same way again:
+            // `Trait<T2, T2>` against `Trait<int, String>` is not a match.
+            return match subst.get(name) {
+                Some(prev) => prev == value,
+                None => {
+                    subst.insert(name.clone(), value.clone());
+                    true
+                }
+            };
+        }
+    }
+    match (pattern, value) {
+        (Type::Generic(a), Type::Generic(b)) => a == b,
+        (Type::Primitive(a), Type::Primitive(b)) => a == b,
+        (Type::Slice(a), Type::Slice(b)) => unify_rust_type(a, b, vars, subst),
+        (Type::Tuple(a), Type::Tuple(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| unify_rust_type(x, y, vars, subst))
+        }
+        (Type::Array { type_: a, len: la }, Type::Array { type_: b, len: lb }) => {
+            la == lb && unify_rust_type(a, b, vars, subst)
+        }
+        (
+            Type::BorrowedRef { is_mutable: ma, type_: a, .. },
+            Type::BorrowedRef { is_mutable: mb, type_: b, .. },
+        ) => ma == mb && unify_rust_type(a, b, vars, subst),
+        (
+            Type::RawPointer { is_mutable: ma, type_: a },
+            Type::RawPointer { is_mutable: mb, type_: b },
+        ) => ma == mb && unify_rust_type(a, b, vars, subst),
+        (Type::ResolvedPath(a), Type::ResolvedPath(b)) => {
+            // The id is the identity. Two modules may publish two DIFFERENT
+            // types under one simple name (`core::ops::Range` and
+            // `core::range::Range` both exist), so the name would not do.
+            if a.id != b.id {
+                return false;
+            }
+            let (pa, pb) = (path_type_args(&a.args), path_type_args(&b.args));
+            pa.len() == pb.len()
+                && pa.iter().zip(pb).all(|(x, y)| unify_rust_type(x, y, vars, subst))
+        }
+        _ => false,
+    }
+}
+
+/// Does `t` still mention a generic the match left unbound, or a projection of
+/// its own?
+///
+/// After substitution the only generics that may remain are the OWNER's
+/// (the `T` of `impl<T> [T]`, which the stub's class declares). One of the
+/// IMPL's parameters surviving means the match did not pin it down, and a
+/// nested projection would only swap one unknown for another.
+fn projection_result_is_incomplete(t: &Type, unbound: &HashSet<String>) -> bool {
+    let mut hit = false;
+    walk_rust_type(t, &mut |x| match x {
+        Type::Generic(name) if unbound.contains(name.as_str()) => hit = true,
+        Type::QualifiedPath { .. } | Type::Infer => hit = true,
+        _ => {}
+    });
+    hit
+}
+
+/// Whether [`map_path`] gives this Rust name a Jux spelling of its own, so the
+/// stub never declares the Rust name and there is nothing to check against.
+fn map_path_has_own_spelling(name: &str) -> bool {
+    map_path_folds(name) || matches!(name, "String" | "HashMap" | "BTreeMap" | "HashSet" | "BTreeSet")
+}
+
+/// Every named type `t` mentions, paired with its real Rust path, for the late
+/// identity check in [`settle_projection_group`]. A name whose path this crate
+/// cannot state is paired with the empty string, which that pass reads as
+/// "unverifiable" and drops.
+fn named_type_paths(
+    krate: &Crate,
+    public: &PublicPaths,
+    t: &Type,
+    out: &mut Vec<(String, String)>,
+) {
+    walk_rust_type(t, &mut |x| {
+        let Type::ResolvedPath(p) = x else { return };
+        let name = last_segment(&p.path);
+        if map_path_has_own_spelling(name) {
+            return;
+        }
+        let path = match krate.index.get(&p.id) {
+            Some(item) => real_rust_path(krate, item, public),
+            None => krate
+                .paths
+                .get(&p.id)
+                .filter(|s| !s.path.is_empty())
+                .map(|s| public_rust_path(&s.path)),
+        };
+        out.push((name.to_string(), path.unwrap_or_default()));
+    });
+}
+
+/// Resolve every impl of `proj`'s trait that the method's own bound admits.
+fn resolve_projection_impls(
+    krate: &Crate,
+    public: &PublicPaths,
+    proj: &MethodProjection,
+    bound_args: &[Type],
+) -> Vec<ResolvedImpl> {
+    let Some(trait_item) = krate.index.get(&proj.trait_id) else {
+        return Vec::new();
+    };
+    let ItemEnum::Trait(tr) = &trait_item.inner else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<ResolvedImpl> = Vec::new();
+    let mut seen_params: HashSet<String> = HashSet::new();
+    for impl_id in &tr.implementations {
+        let Some(item) = krate.index.get(impl_id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() {
+            continue;
+        }
+        let Some(tr_path) = &im.trait_ else { continue };
+        if tr_path.id != proj.trait_id {
+            continue;
+        }
+        // The impl's own parameters are the match's variables; every other name
+        // in it is concrete, or belongs to the method's own scope.
+        let vars: HashSet<String> = im
+            .generics
+            .params
+            .iter()
+            .filter(|p| matches!(p.kind, GenericParamDefKind::Type { .. }))
+            .map(|p| p.name.clone())
+            .collect();
+        let impl_args = path_type_args(&tr_path.args);
+        if impl_args.len() != bound_args.len() {
+            continue;
+        }
+        let mut subst: HashMap<String, Type> = HashMap::new();
+        if !impl_args
+            .iter()
+            .zip(bound_args)
+            .all(|(p, v)| unify_rust_type(p, v, &vars, &mut subst))
+        {
+            continue; // a different haystack: `SliceIndex<str>` under a `[T]` bound
+        }
+        // `type Output = ...;` inside the impl. Its absence means rustdoc did
+        // not record the binding, and the projection stays unresolved.
+        let Some(binding) = im.items.iter().find_map(|aid| {
+            let a = krate.index.get(aid)?;
+            if a.name.as_deref() != Some(proj.assoc.as_str()) {
+                return None;
+            }
+            match &a.inner {
+                ItemEnum::AssocType { type_: Some(t), .. } => Some(t.clone()),
+                _ => None,
+            }
+        }) else {
+            continue;
+        };
+
+        let bound_names: HashSet<String> = subst.keys().cloned().collect();
+        let unbound: HashSet<String> = vars.difference(&bound_names).cloned().collect();
+        let index_ty = substitute_rust_type(&im.for_, &subst);
+        let result_ty = substitute_rust_type(&binding, &subst);
+        if projection_result_is_incomplete(&index_ty, &unbound)
+            || projection_result_is_incomplete(&result_ty, &unbound)
+        {
+            continue;
+        }
+        let index = map_type(&index_ty);
+        let result = map_type(&result_ty);
+        if !index.is_spellable() || !result.is_spellable() {
+            continue;
+        }
+        // One parameter type, one overload: two impls that map to the same Jux
+        // parameter could never be told apart at a call, and a type published
+        // under two module paths is the usual reason two of them collide.
+        if !seen_params.insert(index.to_string()) {
+            continue;
+        }
+        let mut param_paths = Vec::new();
+        named_type_paths(krate, public, &index_ty, &mut param_paths);
+        let param_rank = jux_shape_rank(&index);
+        out.push(ResolvedImpl { index, result, param_paths, param_rank });
+    }
+    out
+}
+
+/// Reduce the resolved impls to one per distinct RESULT type: the one whose
+/// parameter has the simplest shape, the crate's own impl order breaking a tie
+/// (§G.6.4.5).
+///
+/// The fan-out exists to make the RESULT knowable. The seventeen
+/// `SliceIndex<[T]>` impls say only two things: `usize` gives the element back,
+/// every range shape gives a sub-slice. A second parameter shape with the same
+/// result adds surface without adding an answer, so the shapes that agree are
+/// represented by the simplest of them, which is also the one a program would
+/// write: `usize` rather than `core`'s internal `Last` or `Clamp<usize>`.
+///
+/// Reducing HERE and not in the late pass matters: a type is pulled into the
+/// stub when some declaration mentions it (the pool re-export surface,
+/// §G.6.2.1), and an overload that was never going to be kept would pull in an
+/// orphan. `Clamp` reached the stub exactly that way, as an empty class under
+/// `std::index::Clamp`, a Rust path that does not exist.
+fn keep_one_impl_per_result(resolved: Vec<ResolvedImpl>) -> Vec<ResolvedImpl> {
+    let mut results: Vec<String> = Vec::new();
+    for r in &resolved {
+        let key = r.result.to_string();
+        if !results.contains(&key) {
+            results.push(key);
+        }
+    }
+    let mut keep: Vec<usize> = results
+        .iter()
+        .filter_map(|want| {
+            resolved
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| &r.result.to_string() == want)
+                .min_by_key(|(i, r)| (r.param_rank, *i))
+                .map(|(i, _)| i)
+        })
+        .collect();
+    keep.sort_unstable();
+    resolved
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep.binary_search(i).is_ok())
+        .map(|(_, r)| r)
+        .collect()
+}
+
+/// Replace, inside a mapped Jux type, the method's projected parameter with the
+/// impl's self type and the projection with the impl's associated type.
+///
+/// Both are found by the names the ingest itself wrote: [`map_type`] renders
+/// the parameter as `JuxType::Param("I")` and the projection as
+/// `JuxType::Unknown("I.Output")`.
+fn substitute_projection(
+    ty: &JuxType,
+    param: &str,
+    projected: &str,
+    index: &JuxType,
+    result: &JuxType,
+) -> JuxType {
+    let rec = |t: &JuxType| substitute_projection(t, param, projected, index, result);
+    match ty {
+        JuxType::Param(p) if p == param => index.clone(),
+        JuxType::Unknown(name) if name == projected => result.clone(),
+        JuxType::User { name, args } => JuxType::User {
+            name: name.clone(),
+            args: args.iter().map(rec).collect(),
+        },
+        JuxType::Nullable(inner) => JuxType::Nullable(Box::new(rec(inner))),
+        JuxType::RawPtr(inner) => JuxType::RawPtr(Box::new(rec(inner))),
+        JuxType::Array { elem, size } => JuxType::Array {
+            elem: Box::new(rec(elem)),
+            size: *size,
+        },
+        JuxType::Tuple(ts) => JuxType::Tuple(ts.iter().map(rec).collect()),
+        JuxType::Fn { params, ret, is_async } => JuxType::Fn {
+            params: params.iter().map(rec).collect(),
+            ret: Box::new(rec(ret)),
+            is_async: *is_async,
+        },
+        other => other.clone(),
+    }
+}
+
+/// Map one Rust method to the declarations it surfaces as: the ordinary single
+/// one, or a §G.6.4.5 fan-out followed by its fallback.
+///
+/// `self_ty` is the type the enclosing impl is written for, which the method's
+/// own `where I: SliceIndex<Self>` bound needs to be read at all.
+fn map_function_surface(
+    krate: &Crate,
+    public: &PublicPaths,
+    name: &str,
+    f: &Function,
+    self_ty: Option<&Type>,
+) -> Vec<StubFn> {
+    let base = map_function(krate, name, f);
+    let Some(proj) = method_projection(f) else { return vec![base] };
+    let Some(bound_args) = projection_bound_args(f, &proj, self_ty) else {
+        return vec![base];
+    };
+    let resolved = keep_one_impl_per_result(resolve_projection_impls(
+        krate,
+        public,
+        &proj,
+        &bound_args,
+    ));
+    if resolved.is_empty() {
+        return vec![base];
+    }
+
+    let projected = format!("{}.{}", proj.param, proj.assoc);
+    let mut out: Vec<StubFn> = Vec::with_capacity(resolved.len() + 1);
+    for r in &resolved {
+        let mut sf = base.clone();
+        sf.ret = substitute_projection(&sf.ret, &proj.param, &projected, &r.index, &r.result);
+        sf.throws = sf
+            .throws
+            .as_ref()
+            .map(|t| substitute_projection(t, &proj.param, &projected, &r.index, &r.result));
+        for p in &mut sf.params {
+            p.ty = substitute_projection(&p.ty, &proj.param, &projected, &r.index, &r.result);
+        }
+        // The parameter is no longer generic: it IS the impl's self type.
+        sf.generics.retain(|g| g != &proj.param);
+        sf.projection_role = Some(ProjectionRole::Overload {
+            param_paths: r.param_paths.clone(),
+            param_rank: r.param_rank,
+        });
+        out.push(sf);
+    }
+    // The original, kept only if every overload is later dropped as unnameable.
+    let mut fallback = base;
+    fallback.projection_role = Some(ProjectionRole::Fallback);
+    out.push(fallback);
+    out
+}
+
+/// Settle every projection fan-out in the finished stub (§G.6.4.5).
+///
+/// This runs LATE, once the whole stub's declared types are known, because the
+/// guard it applies needs them: an overload survives only when this stub
+/// declares its parameter's type name AND that declaration is the very Rust
+/// type the impl was written for. `rust.std` declares `Range` for
+/// `std::collections::btree_map::Range`, so an overload taking
+/// `core::ops::Range` cannot be written `Range` there, and emitting it anyway
+/// would aim the checker at a two-parameter map view.
+fn retain_projection_overloads(collected: &mut [(String, StubItem)]) {
+    // Declared type name -> its real Rust path. A declaration with no recorded
+    // path cannot be checked against, so it never matches.
+    let declared: HashMap<String, String> = collected
+        .iter()
+        .filter_map(|(n, it)| match it {
+            StubItem::Type(t) => Some((n.clone(), t.rust_path.clone().unwrap_or_default())),
+            _ => None,
+        })
+        .collect();
+
+    for (_, item) in collected.iter_mut() {
+        let StubItem::Type(t) = item else { continue };
+        if t.methods.iter().all(|m| m.projection_role.is_none()) {
+            continue;
+        }
+        let old = std::mem::take(&mut t.methods);
+        let mut settled: HashSet<String> = HashSet::new();
+        let mut out: Vec<StubFn> = Vec::with_capacity(old.len());
+        for m in &old {
+            if m.projection_role.is_none() {
+                out.push(m.clone());
+            } else if settled.insert(m.name.clone()) {
+                // The whole group lands where its first member stood.
+                out.extend(settle_projection_group(&declared, &old, &m.name));
+            }
+        }
+        t.methods = out;
+    }
+}
+
+/// The members of one fan-out group that survive (§G.6.4.5): the overloads
+/// this stub can NAME, capped; or the fallback when it can name none of them.
+///
+/// The group already holds one overload per distinct result
+/// ([`keep_one_impl_per_result`]); what is left to decide is whether the stub
+/// can write each one's parameter type, and that needs the whole stub's
+/// declared set, which only exists once every crate has been ingested.
+fn settle_projection_group(
+    declared: &HashMap<String, String>,
+    methods: &[StubFn],
+    name: &str,
+) -> Vec<StubFn> {
+    let group: Vec<&StubFn> = methods
+        .iter()
+        .filter(|m| m.name == name && m.projection_role.is_some())
+        .collect();
+    let mut chosen: Vec<usize> = Vec::new();
+    for (i, m) in group.iter().enumerate() {
+        let Some(ProjectionRole::Overload { param_paths, .. }) = &m.projection_role else {
+            continue;
+        };
+        // Every named type the parameter mentions must be one this stub
+        // declares FOR THAT VERY RUST TYPE. `rust.std` declares `Range` for
+        // `std::collections::btree_map::Range`, so an overload taking
+        // `core::ops::Range` cannot be written `Range` there.
+        let names_it = param_paths
+            .iter()
+            .all(|(n, p)| !p.is_empty() && declared.get(n).is_some_and(|d| d == p));
+        if names_it && chosen.len() < PROJECTION_FANOUT_CAP {
+            chosen.push(i);
+        }
+    }
+
+    if chosen.is_empty() {
+        return group
+            .into_iter()
+            .filter(|m| matches!(m.projection_role, Some(ProjectionRole::Fallback)))
+            .cloned()
+            .collect();
+    }
+    chosen
+        .into_iter()
+        .map(|i| {
+            let mut m = group[i].clone();
+            m.projection_role = None; // settled; nothing downstream reads it
+            m
         })
         .collect()
 }
@@ -2790,6 +3513,334 @@ mod tests {
         .expect("minimal rustdoc crate parses")
     }
 
+
+    // ------------------------------------------------------------------
+    // §G.6.4.5 — projection over the method's own type parameter
+    // ------------------------------------------------------------------
+
+    /// A bare public item of `crate_id == 0`.
+    fn item(id: u32, name: Option<&str>, inner: ItemEnum) -> Item {
+        Item {
+            id: Id(id),
+            crate_id: 0,
+            name: name.map(str::to_string),
+            span: None,
+            visibility: Visibility::Public,
+            docs: None,
+            links: std::collections::HashMap::new(),
+            attrs: Vec::new(),
+            deprecation: None,
+            inner,
+        }
+    }
+
+    /// A type parameter with no bounds.
+    fn type_param(name: &str) -> rustdoc_types::GenericParamDef {
+        rustdoc_types::GenericParamDef {
+            name: name.to_string(),
+            kind: GenericParamDefKind::Type {
+                bounds: Vec::new(),
+                default: None,
+                is_synthetic: false,
+            },
+        }
+    }
+
+    /// `Name<args>` as a rustdoc path with a known id.
+    fn path_id(name: &str, id: u32, args: Vec<Type>) -> rustdoc_types::Path {
+        let args = if args.is_empty() {
+            None
+        } else {
+            Some(Box::new(GenericArgs::AngleBracketed {
+                args: args.into_iter().map(GenericArg::Type).collect(),
+                constraints: Vec::new(),
+            }))
+        };
+        rustdoc_types::Path { path: name.to_string(), id: Id(id), args }
+    }
+
+    /// A synthetic crate in the shape the bug was found in:
+    ///
+    /// ```text
+    /// pub struct Whole;
+    /// pub trait Idx<Haystack> { type Output; }
+    /// impl<X> Idx<Holder<X>> for usize { type Output = X; }
+    /// impl<X> Idx<Holder<X>> for Whole { type Output = [X]; }
+    /// pub struct Holder<T>;
+    /// impl<T> Holder<T> {
+    ///     pub fn get<I>(&self, index: I) -> Option<&I::Output> where I: Idx<Self>;
+    /// }
+    /// ```
+    ///
+    /// Everything the fan-out needs is in here and nowhere else: no network,
+    /// no toolchain, no cargo.
+    fn projection_crate(with_trait: bool) -> Crate {
+        const HOLDER: u32 = 1;
+        const WHOLE: u32 = 2;
+        const IDX: u32 = 3;
+        const INHERENT: u32 = 10;
+        const IMPL_USIZE: u32 = 11;
+        const IMPL_WHOLE: u32 = 12;
+        const GET: u32 = 20;
+        const OUT_USIZE: u32 = 30;
+        const OUT_WHOLE: u32 = 31;
+
+        let mut krate = empty_crate();
+        let holder_self = Type::ResolvedPath(path_id(
+            "Holder",
+            HOLDER,
+            vec![Type::Generic("T".into())],
+        ));
+
+        // `fn get<I>(&self, index: I) -> Option<&I::Output> where I: Idx<Self>`
+        let projection = Type::QualifiedPath {
+            name: "Output".into(),
+            args: None,
+            self_type: Box::new(Type::Generic("I".into())),
+            // rustdoc writes a projection's trait path as the empty string and
+            // carries only the id, which is exactly what the ingest matches on.
+            trait_: Some(path_id("", IDX, Vec::new())),
+        };
+        let get = Function {
+            sig: rustdoc_types::FunctionSignature {
+                inputs: vec![
+                    (
+                        "self".into(),
+                        Type::BorrowedRef {
+                            lifetime: None,
+                            is_mutable: false,
+                            type_: Box::new(Type::Generic("Self".into())),
+                        },
+                    ),
+                    ("index".into(), Type::Generic("I".into())),
+                ],
+                output: Some(Type::ResolvedPath(path_id(
+                    "Option",
+                    99,
+                    vec![Type::BorrowedRef {
+                        lifetime: None,
+                        is_mutable: false,
+                        type_: Box::new(projection),
+                    }],
+                ))),
+                is_c_variadic: false,
+            },
+            generics: Generics {
+                params: vec![type_param("I")],
+                where_predicates: vec![WherePredicate::BoundPredicate {
+                    type_: Type::Generic("I".into()),
+                    bounds: vec![GenericBound::TraitBound {
+                        trait_: path_id("Idx", IDX, vec![Type::Generic("Self".into())]),
+                        generic_params: Vec::new(),
+                        modifier: rustdoc_types::TraitBoundModifier::None,
+                    }],
+                    generic_params: Vec::new(),
+                }],
+            },
+            header: rustdoc_types::FunctionHeader {
+                is_const: false,
+                is_unsafe: false,
+                is_async: false,
+                abi: rustdoc_types::Abi::Rust,
+            },
+            has_body: true,
+        };
+
+        // One impl of the bound per index type, each naming its own `Output`.
+        let assoc = |id: u32, ty: Type| {
+            item(
+                id,
+                Some("Output"),
+                ItemEnum::AssocType {
+                    generics: Generics { params: Vec::new(), where_predicates: Vec::new() },
+                    bounds: Vec::new(),
+                    type_: Some(ty),
+                },
+            )
+        };
+        let bound_impl = |id: u32, for_: Type, assoc_id: u32| {
+            item(
+                id,
+                None,
+                ItemEnum::Impl(rustdoc_types::Impl {
+                    is_unsafe: false,
+                    generics: Generics {
+                        params: vec![type_param("X")],
+                        where_predicates: Vec::new(),
+                    },
+                    provided_trait_methods: Vec::new(),
+                    trait_: Some(path_id(
+                        "Idx",
+                        IDX,
+                        vec![Type::ResolvedPath(path_id(
+                            "Holder",
+                            HOLDER,
+                            vec![Type::Generic("X".into())],
+                        ))],
+                    )),
+                    for_,
+                    items: vec![Id(assoc_id)],
+                    is_negative: false,
+                    is_synthetic: false,
+                    blanket_impl: None,
+                }),
+            )
+        };
+
+        let items = vec![
+            item(
+                HOLDER,
+                Some("Holder"),
+                ItemEnum::Struct(Struct {
+                    kind: StructKind::Unit,
+                    generics: Generics {
+                        params: vec![type_param("T")],
+                        where_predicates: Vec::new(),
+                    },
+                    impls: vec![Id(INHERENT)],
+                }),
+            ),
+            item(
+                WHOLE,
+                Some("Whole"),
+                ItemEnum::Struct(Struct {
+                    kind: StructKind::Unit,
+                    generics: Generics { params: Vec::new(), where_predicates: Vec::new() },
+                    impls: Vec::new(),
+                }),
+            ),
+            item(
+                INHERENT,
+                None,
+                ItemEnum::Impl(rustdoc_types::Impl {
+                    is_unsafe: false,
+                    generics: Generics {
+                        params: vec![type_param("T")],
+                        where_predicates: Vec::new(),
+                    },
+                    provided_trait_methods: Vec::new(),
+                    trait_: None,
+                    for_: holder_self,
+                    items: vec![Id(GET)],
+                    is_negative: false,
+                    is_synthetic: false,
+                    blanket_impl: None,
+                }),
+            ),
+            item(GET, Some("get"), ItemEnum::Function(get)),
+            bound_impl(IMPL_USIZE, Type::Primitive("usize".into()), OUT_USIZE),
+            bound_impl(
+                IMPL_WHOLE,
+                Type::ResolvedPath(path_id("Whole", WHOLE, Vec::new())),
+                OUT_WHOLE,
+            ),
+            assoc(OUT_USIZE, Type::Generic("X".into())),
+            assoc(OUT_WHOLE, Type::Slice(Box::new(Type::Generic("X".into())))),
+        ];
+        for it in items {
+            krate.index.insert(it.id, it);
+        }
+        if with_trait {
+            let tr = item(
+                IDX,
+                Some("Idx"),
+                ItemEnum::Trait(rustdoc_types::Trait {
+                    is_auto: false,
+                    is_unsafe: false,
+                    is_dyn_compatible: true,
+                    items: Vec::new(),
+                    generics: Generics {
+                        params: vec![type_param("Haystack")],
+                        where_predicates: Vec::new(),
+                    },
+                    bounds: Vec::new(),
+                    implementations: vec![Id(IMPL_USIZE), Id(IMPL_WHOLE)],
+                }),
+            );
+            krate.index.insert(tr.id, tr);
+            krate.paths.insert(
+                Id(IDX),
+                rustdoc_types::ItemSummary {
+                    crate_id: 0,
+                    path: vec!["probe".into(), "Idx".into()],
+                    kind: rustdoc_types::ItemKind::Trait,
+                },
+            );
+        }
+        for (id, name, kind) in [
+            (HOLDER, "Holder", rustdoc_types::ItemKind::Struct),
+            (WHOLE, "Whole", rustdoc_types::ItemKind::Struct),
+        ] {
+            krate.paths.insert(
+                Id(id),
+                rustdoc_types::ItemSummary {
+                    crate_id: 0,
+                    path: vec!["probe".into(), name.into()],
+                    kind,
+                },
+            );
+        }
+        krate
+    }
+
+    /// Every `get` the stub declares, rendered `<ret> get(<params>)`.
+    fn get_signatures(stub: &StubFile) -> Vec<String> {
+        stub.items
+            .iter()
+            .find_map(|i| match i {
+                StubItem::Type(t) if t.name == "Holder" => Some(t),
+                _ => None,
+            })
+            .expect("Holder is emitted")
+            .methods
+            .iter()
+            .filter(|m| m.name == "get")
+            .map(|m| {
+                format!(
+                    "{}{} get({})",
+                    m.ret,
+                    if m.generics.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" <{}>", m.generics.join(", "))
+                    },
+                    m.params
+                        .iter()
+                        .map(|p| p.ty.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            })
+            .collect()
+    }
+
+    /// §G.6.4.5: `fn get<I>(..) -> Option<&I::Output> where I: Idx<Self>` is
+    /// resolved from the bound's own impls and fans out into one overload per
+    /// distinct result: the element for `usize`, the whole slice for `Whole`.
+    ///
+    /// Before this, the projection was `JuxType::Unknown("I.Output")` and every
+    /// `get` on every instantiation typed as `<unknown>?`, which fits any slot
+    /// at all, so a wrong call reached rustc instead of the checker.
+    #[test]
+    fn projection_over_a_method_parameter_fans_out_per_impl() {
+        let stub = generate(&projection_crate(true), "probe");
+        assert_eq!(
+            get_signatures(&stub),
+            vec!["T? get(uint)".to_string(), "T[]? get(Whole)".to_string()],
+        );
+    }
+
+    /// The guard: with the trait item missing from the rustdoc being ingested,
+    /// nothing can be resolved, and the method keeps its §G.6.4.2 form rather
+    /// than losing the declaration or gaining a guessed one.
+    #[test]
+    fn projection_without_its_trait_stays_unresolved() {
+        let stub = generate(&projection_crate(false), "probe");
+        assert_eq!(
+            get_signatures(&stub),
+            vec!["I.Output? <I> get(I)".to_string()],
+        );
+    }
     #[test]
     fn result_return_becomes_throws() {
         let krate = empty_crate();
