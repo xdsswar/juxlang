@@ -1602,6 +1602,57 @@ inside work that runs out of time still does not run.
 
 ---
 
+## E89. A static initializer that depends on itself
+
+**Conflict.** `JUX-SEMANTICS-ADDENDUM.md` §S.4.2 said two things about a
+cycle between static initializers. First, "cycles are detected at compile
+time when `A -> B -> A` is statically determinable", without saying what
+detection then does. Second, "at runtime, the second entry into a
+partially-initialized class returns the current (partial) state, the same
+trap Java has", and "cycles within a single module are linted (`W0530`)".
+
+Neither half described the compiler. `W0530` was reserved and never
+raised, and the runtime half cannot hold for the Phase-1 lowering: a
+static lowers to a `LazyLock`, and re-entering a `LazyLock`'s initializer
+does not return a partial value, it blocks forever. So
+
+```jux
+class A3 { public static int X = A3.X + 1; }
+public void main() { print(A3.X); }
+```
+
+checked clean, built, printed nothing and never exited.
+
+**Resolution.** A cycle in the static-initializer dependency graph that
+the compiler can determine statically is a hard error, **`E0497`**,
+naming the cycle. It is not a warning, and there is no runtime fallback.
+
+The reasoning, recorded because it overrides §S.4.2's own words:
+
+- The partial-state read §S.4.2 offers is a silent wrong answer, and
+  Phase 1 cannot even produce it. An initializer cycle has no value that
+  is right, so there is nothing to warn about and carry on with.
+- A warning would leave the program that provoked it hanging forever with
+  no output, which is worse than any error.
+- The graph is over declarations the compiler already has, so a
+  statically determinable cycle is exactly the case where an error costs
+  the programmer nothing to fix.
+
+**What "statically determinable" covers.** One node per static field that
+has an initializer, and an edge from a field to every static field its
+initializer reads, following the bodies of the static methods the
+initializer calls. A dependency only a runtime value can reveal, such as
+one reached through a virtual call or a function value, stays outside the
+graph and stays §S.4.2's runtime trap.
+
+`W0530` is retired: it was reserved for this check, and this check is an
+error. The number is not reused (§D.5.1).
+
+**Spec status:** §S.4.2 carries the rule, and §D.4 lists `E0497` and
+marks `W0530` retired.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

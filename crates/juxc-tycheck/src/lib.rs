@@ -55,6 +55,7 @@ pub mod java_habits;
 pub(crate) mod pattern_check;
 pub mod assigned;
 pub mod return_check;
+pub mod static_init;
 pub mod symbol_table;
 pub mod ty;
 
@@ -268,6 +269,11 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // table. A diagnostic with no span at all still has nothing to attribute
     // to and correctly stays `None`.
     let symbols = symbol_table::build_workspace(units, &mut tc.diagnostics);
+    // Static-initializer cycles (§S.4.2, ERRATA E87). Whole-program, because
+    // the dependency can cross files: `A.X = B.Y` in one and `B.Y = A.X` in
+    // another. Raised before the per-unit walks so the span attribution below
+    // gives each one its file, which is what the LSP needs to show it.
+    static_init::check_static_init_cycles(units, &symbols, &mut tc.diagnostics);
     for d in &mut tc.diagnostics {
         if d.file.is_none() {
             d.file = d.primary_span.map(|s| s.file as usize);
