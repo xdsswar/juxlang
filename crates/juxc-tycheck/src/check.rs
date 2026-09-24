@@ -11570,6 +11570,33 @@ impl<'a> Checker<'a> {
                         self.in_future_slot = prev_slot;
                         return;
                     }
+                    // Any OTHER name after `Task.` is a mistake the checker
+                    // can see. It used to pass, and rustc then reported
+                    // "expected value, found struct `Task`" about a struct the
+                    // program never wrote.
+                    if qn.segments.len() == 1
+                        && qn.segments[0].text == "Task"
+                        && !self.symbols.classes.contains_key("Task")
+                        && self.env.lookup("Task").is_none()
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0413_UnresolvedMethod,
+                                format!(
+                                    "no static `{method_name}` on `Task` -- the task statics are \
+                                     `all`, `any`, `race`, `allSettled` and `delay` (§18.1.4)",
+                                ),
+                            )
+                            .with_span(field.field.span),
+                        );
+                        let prev_slot = self.in_future_slot;
+                        self.in_future_slot = true;
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        self.in_future_slot = prev_slot;
+                        return;
+                    }
                     // `Stream.of/from/generate` (§18.6.4) — statics on
                     // the emitted JuxStream helper. `generate`'s single
                     // argument must be a zero-parameter lambda (the
