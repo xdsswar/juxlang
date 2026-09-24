@@ -48,10 +48,24 @@ fn normalize(raw: &str, case: &str) -> String {
             continue;
         }
         // `C:/long/path/to/tests/ui/foo.jux:3:15: …` → `foo.jux:3:15: …`
+        //
+        // A DIRECTORY case's inner file is `app.jux`, not `<case>.jux`, so the
+        // per-case needle never matched one and the absolute path survived
+        // into the blessed text. Those two cases then only passed on the
+        // machine that blessed them, and failed in every worktree and every
+        // other checkout. Cutting at `tests/ui/` instead leaves
+        // `<case>/app.jux:5:8: …`, which says the same thing from anywhere.
         let needle = format!("{case}.jux");
+        let after_ui = |sep: &str| {
+            let marker = format!("tests{sep}ui{sep}");
+            line.find(&marker).map(|i| i + marker.len())
+        };
         let cleaned = match line.find(&needle) {
             Some(i) => &line[i..],
-            None => line,
+            None => match after_ui("/").or_else(|| after_ui("\\")) {
+                Some(i) => &line[i..],
+                None => line,
+            },
         };
         out.push_str(cleaned);
         out.push('\n');
