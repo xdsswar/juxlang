@@ -170,6 +170,8 @@ public async UserPage loadPageFast(int id) {
 
 `spawn(f)` schedules `f` on the event loop and returns a `Task<T>` immediately. The lambda passed to `spawn` may itself be async. Awaiting the returned task suspends the caller until the spawned work completes.
 
+**A spawned task is concurrent, not parallel, and carries no `Send` bound.** `spawn` schedules onto the one built-in event loop named in the design stance above, so a task may hold and hand back anything an ordinary value may hold, including a class. Classes lower to `Rc<RefCell<..>>` (`JUX-CLASS-REPRESENTATION-ADDENDUM.md`), which is not `Send`, and requiring `Send` here would make `spawn` unusable with the reference type of the language while leaking Rust's thread model into a surface the stance says it must never reach (ERRATA E85). A thread boundary is a different feature with a different name: `Worker.spawn` (`JUX-MISSING-DEFS-ADDENDUM.md` §M.12) does require `Send`, and rejects what cannot cross with `E0702`.
+
 If a task is dropped without being awaited, it continues to run to completion. Errors in unawaited tasks are reported via the runtime's unhandled-rejection hook (§18.1.8) — the same mechanism Node.js uses for unhandled promise rejections.
 
 #### 18.1.4. The Task Type

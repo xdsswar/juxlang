@@ -1449,6 +1449,48 @@ rejected as before, since the lowered `use` path could not name them.
 
 ---
 
+## E85. `spawn` runs on the event loop, not on a thread pool
+
+**Conflict.** The async addendum's design stance is "One built-in event
+loop, no pinning, no `Send`/`Sync` in user code, no runtime to choose", and
+§18.1.3 makes `spawn` the only way to obtain a `Task<T>`. The backend lowers
+`spawn` onto a work-stealing thread pool instead, emitting
+`pub fn __jux_spawn<T: Send + 'static>(..)` and scheduling through
+`SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, ..)`. Every Jux class
+lowers to `Rc<RefCell<..>>` (CLASS-REPRESENTATION §CR), which is not `Send`,
+so spawning any function that returns or captures a class fails:
+
+```
+error[E0277]: `Rc<RefCell<User_Inner>>` cannot be sent between threads safely
+```
+
+Classes are the reference type of the language, so this takes the whole
+`Task<T>` surface with it: `Task.completed`, `Task.failed`, `Task.yield`,
+`Task.all`, `Task.any`, `isCancelled`, `isResolved`, `map`, `flatMap` and
+`parallel(items, f)` are all unreachable in the shape a program actually
+uses them. The `Send` bound also leaks Rust's thread model into a surface
+the stance says it must never reach.
+
+**Resolution.** The stance governs. `spawn` schedules onto the single
+built-in event loop, and a spawned computation carries NO `Send` bound: a
+task is concurrent with its siblings, not parallel to them, exactly as the
+addendum describes suspension. `Rc<RefCell<..>>` is therefore a legal thing
+for a task to hold and to hand back. A future profile that wants true
+parallelism has to say so and carry its own rule; it cannot be the default
+the stance already fixed. This is separate from `Worker.spawn`
+(MISSING-DEFS §M.12), which IS a thread boundary and keeps its `Send`
+requirement and its E0702 diagnostic.
+
+Two consequences the compiler owes alongside it: the `Task` receiver is
+type-checked like any other (an unknown member is a Jux diagnostic, not a
+leaked `error[E0423]: expected value, found struct `Task``), and `parallel`
+lowers to the `Task.all` composition §18.2 already defines for it.
+
+**Spec status:** the stance in the async addendum head and §18.1.3 stand as
+written; this records that the lowering, not the spec, was wrong.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 
