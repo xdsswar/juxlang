@@ -2222,6 +2222,44 @@ pub(crate) fn field_supports_copy(ty: &juxc_ast::TypeRef) -> bool {
     is_copy_eq_primitive(name) || is_float_primitive(name)
 }
 
+/// Which of the four `#[derive]`-able standard traits the **foreign** types
+/// inside a set of Jux type references all have (ERRATA E97).
+///
+/// Every flag starts `true` and is turned off by a foreign type whose generated
+/// stub does not declare the matching bindgen marker. A Jux type never turns one
+/// off here: a class, record, enum, primitive or type parameter gets whatever
+/// Jux gives it, and the callers' own syntax predicates
+/// ([`field_supports_eq`], [`field_supports_default`], …) decide those. This
+/// answers only the question Jux cannot answer from the syntax: whether
+/// `std::fs::File` is `Clone` (it is not) and whether it is `Debug` (it is).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ForeignDerives {
+    /// The type implements `Clone` (`@RustClone`).
+    pub(crate) clone: bool,
+    /// The type implements `std::fmt::Debug` (`@RustDebug`).
+    pub(crate) debug: bool,
+    /// The type implements `PartialEq` (`@RustPartialEq`).
+    pub(crate) partial_eq: bool,
+    /// The type implements `Default` (`@RustDefault`).
+    pub(crate) default: bool,
+}
+
+impl ForeignDerives {
+    /// The starting point, and the answer for a type that is not foreign at
+    /// all: no foreign type has been seen, so nothing is ruled out.
+    pub(crate) const ALL: Self =
+        Self { clone: true, debug: true, partial_eq: true, default: true };
+
+    /// Keep only what BOTH sides have. An aggregate derives a trait when every
+    /// type it holds has it, so the flags accumulate by conjunction.
+    pub(crate) fn and(&mut self, other: Self) {
+        self.clone &= other.clone;
+        self.debug &= other.debug;
+        self.partial_eq &= other.partial_eq;
+        self.default &= other.default;
+    }
+}
+
 /// True if a field of type `ty` is **Eq**-compatible by its syntax alone.
 /// The older of the two answers: whether a record, struct or enum HASHES is
 /// the shared hash plan's question ([`crate::decls::hashing`]); this one

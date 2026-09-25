@@ -182,6 +182,13 @@ impl RustEmitter {
         // name — satisfying the marker-trait `Debug` supertrait bound
         // without requiring Debug on the stored closure.
         let has_fn_field = class_decl.fields.iter().any(|f| f.ty.as_ref().is_some_and(type_holds_closure));
+        // What the FOREIGN types among the instance fields allow (ERRATA E97).
+        // A field of a Rust type that is not `Clone` (`std::fs::File`) or not
+        // `Debug` takes that trait off the derive list; a `Debug` the struct
+        // cannot derive is written by hand below, so the type still prints.
+        let foreign = self.foreign_derives_of(
+            class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()),
+        );
         // A `@layout(c)` value struct (§L.1.2) gets a C-compatible layout and is
         // `Copy` (its fields are primitives / pointers / other `@layout(c)`
         // structs), giving Jux's "copied on assignment" value semantics.
@@ -223,27 +230,42 @@ impl RustEmitter {
                 self.w.line("#[repr(C)]");
             }
             let plan = struct_hash_plan.unwrap_or_default();
-            let mut derives = vec!["Clone"];
-            if self.struct_is_copy(class_decl) {
+            let mut derives = Vec::new();
+            if foreign.clone {
+                derives.push("Clone");
+            }
+            // `Copy: Clone` and `Eq: PartialEq`, so each of those follows the
+            // trait it depends on off the list rather than leaving rustc to
+            // report the pair (ERRATA E97).
+            if self.struct_is_copy(class_decl) && foreign.clone {
                 derives.push("Copy");
             }
-            if !has_fn_field {
+            if !has_fn_field && foreign.debug {
                 derives.push("Debug");
             }
-            if !declares_equality {
+            if !declares_equality && foreign.partial_eq {
                 derives.push("PartialEq");
             }
-            if plan.derive_eq {
+            if plan.derive_eq && foreign.partial_eq {
                 derives.push("Eq");
             }
             if plan.derive_hash {
                 derives.push("Hash");
             }
-            self.w.line(&format!("#[derive({})]", derives.join(", ")));
-        } else if has_fn_field {
-            self.w.line("#[derive(Clone)]");
+            if !derives.is_empty() {
+                self.w.line(&format!("#[derive({})]", derives.join(", ")));
+            }
         } else {
-            self.w.line("#[derive(Clone, Debug)]");
+            let mut derives = Vec::new();
+            if foreign.clone {
+                derives.push("Clone");
+            }
+            if !has_fn_field && foreign.debug {
+                derives.push("Debug");
+            }
+            if !derives.is_empty() {
+                self.w.line(&format!("#[derive({})]", derives.join(", ")));
+            }
         }
         crate::emit_align_attribute(&mut self.w, &class_decl.annotations);
         // pub struct Name<T, U> { …fields… }
@@ -362,7 +384,13 @@ impl RustEmitter {
         // `dyn Fn()` doesn't implement Debug so `#[derive(Debug)]` would fail.
         // The stub prints the class name so marker-trait `Debug` supertrait
         // bounds are satisfied and `throw` lowering can still format the type.
-        if has_fn_field {
+        //
+        // A field of a FOREIGN type with no `Debug` of its own takes the same
+        // route (ERRATA E97): the derive goes, the trait stays. A class prints
+        // through its own `Display` (`Wrap@0x7ff…`), so the name is all its
+        // `Debug` ever showed anyway, and an interface's `Debug` supertrait,
+        // `throw` formatting and a container of these values keep working.
+        if has_fn_field || !foreign.debug {
             self.w.emit_indent();
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
@@ -882,63 +910,32 @@ impl RustEmitter {
     /// ([`Self::emit_class_decl`]) gates entry on
     /// [`crate::class_decl_uses_wrapper`], so there's no `extends`,
     /// `sealed`, generic, or abstract handling here.
-    /// True when `ty` names a foreign type from a NON-`std` crate
-    /// (`rust.<crate>.*`, crate != `std`). Such a type may not implement `Clone`
-    /// — `minifb::Window` is the canonical example — whereas `rust.std`
-    /// collections (`Vec`, `HashMap`, …) always are. Used to decide whether a
-    /// wrapper's `*_Inner` can `#[derive(Clone)]`.
-    fn type_is_nonstd_foreign(&self, ty: &juxc_ast::TypeRef) -> bool {
-        let qn = &ty.name;
-        let fqn = if qn.segments.len() == 1 {
-            self.resolve_bare_type_fqn(&qn.segments[0].text)
-        } else {
-            Some(
-                qn.segments
-                    .iter()
-                    .map(|s| s.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("."),
+    /// What the FOREIGN types among this class's instance fields, and among
+    /// those of every ancestor it embeds as `__parent`, allow the flattened
+    /// `*_Inner` to `#[derive]` (ERRATA E97).
+    ///
+    /// A Rust type that is not `Clone` (`std::fs::File`, `minifb::Window`)
+    /// takes `Clone` off the inner struct; one that is not `Debug` takes `Debug`
+    /// off, and the inner gets its `Debug` written by hand instead so the
+    /// wrapper newtype's own derived `Debug` still resolves through
+    /// `Rc<RefCell<…>>`. The newtype stays `Clone` either way: it shares the
+    /// instance BY REFERENCE through its `Rc`, which never deep-copies the
+    /// inner value, and `Rc<T>` is `Clone` for every `T`.
+    ///
+    /// This used to ask "is the field's type from a crate other than `std`",
+    /// which assumed every `rust.std` type is `Clone`. `std::fs::File` is not,
+    /// so no class could hold an open file: the answer now comes from the
+    /// type's own stub, uniformly for `std` and for every bound crate.
+    fn wrapper_inner_derives(
+        &self,
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> crate::analysis::ForeignDerives {
+        let own = |emitter: &Self, fields: &[juxc_ast::FieldDecl]| {
+            emitter.foreign_derives_of(
+                fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()),
             )
         };
-        let Some(fqn) = fqn else { return false };
-        let is_external = self
-            .symbols
-            .classes
-            .get(&fqn)
-            .map(|s| s.is_external)
-            .unwrap_or(false)
-            || self
-                .symbols
-                .enums
-                .get(&fqn)
-                .map(|s| s.is_external)
-                .unwrap_or(false);
-        if !is_external {
-            return false;
-        }
-        let segs: Vec<&str> = fqn.split('.').collect();
-        segs.first() == Some(&"rust") && segs.get(1) != Some(&"std")
-    }
-
-    /// True when this class — or any ancestor it embeds as `__parent` — holds a
-    /// non-`std`-foreign instance field. Such a field may not be `Clone`, so the
-    /// flattened `*_Inner` can't `#[derive(Clone)]`. The wrapper newtype stays
-    /// `Clone` regardless (it shares the instance BY REFERENCE through its `Rc`,
-    /// which never deep-copies the inner value), so dropping the inner derive is
-    /// safe for a wrapper class.
-    fn wrapper_inner_blocks_clone(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
-        let own = |fields: &[juxc_ast::FieldDecl]| {
-            fields.iter().any(|f| {
-                !f.is_static
-                    && f.ty
-                        .as_ref()
-                        .map(|t| self.type_is_nonstd_foreign(t))
-                        .unwrap_or(false)
-            })
-        };
-        if own(&class_decl.fields) {
-            return true;
-        }
+        let mut derives = own(self, &class_decl.fields);
         let mut cursor = class_decl.extends.clone();
         let mut depth = 0usize;
         while let Some(p) = cursor {
@@ -951,13 +948,13 @@ impl RustEmitter {
             let Some(pd) = self.lookup_class_ast_by_bare_or_fqn(&bare) else {
                 break;
             };
-            if own(&pd.fields) {
-                return true;
-            }
+            // The parent's fields are flattened into the same inner struct, so
+            // a `File` two levels up costs the derive just as an own field does.
+            derives.and(own(self, &pd.fields));
             cursor = pd.extends.clone();
             depth += 1;
         }
-        false
+        derives
     }
 
     pub(crate) fn emit_wrapper_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
@@ -972,18 +969,22 @@ impl RustEmitter {
         // those classes get a manual name-printing impl after the
         // struct instead.
         let inner_has_fn_field = class_decl.fields.iter().any(|f| f.ty.as_ref().is_some_and(type_holds_closure));
-        // `Clone` is dropped from the inner when a non-`std`-foreign field may
-        // not be `Clone` (e.g. `minifb::Window`). The wrapper newtype still
-        // clones — it shares the instance by reference through its `Rc`, which
-        // never deep-copies the inner — so the inner never needs `Clone` for a
-        // wrapper class. `Debug` is dropped only for fn/observer fields (no
-        // `Debug`), which instead get the manual name-printing impl below.
-        let blocks_clone = self.wrapper_inner_blocks_clone(class_decl);
-        let derive = match (blocks_clone, inner_has_fn_field) {
-            (false, false) => "#[derive(Clone, Debug)]",
-            (false, true) => "#[derive(Clone)]",
-            (true, false) => "#[derive(Debug)]",
-            (true, true) => "",
+        // `Clone` is dropped from the inner when a foreign field's own type has
+        // none (`std::fs::File`, `minifb::Window`), read from that type's stub
+        // rather than guessed from its crate (ERRATA E97). The wrapper newtype
+        // still clones: it shares the instance by reference through its `Rc`,
+        // which never deep-copies the inner, so the inner never needs `Clone`
+        // for a wrapper class. `Debug` is dropped for fn/observer fields (no
+        // `Debug`) and for a foreign type with no `Debug`; both get the manual
+        // name-printing impl below, which is what keeps the NEWTYPE's own
+        // derived `Debug` resolving through `Rc<RefCell<C_Inner>>`.
+        let inner_foreign = self.wrapper_inner_derives(class_decl);
+        let inner_blocks_debug = inner_has_fn_field || !inner_foreign.debug;
+        let derive = match (inner_foreign.clone, inner_blocks_debug) {
+            (true, false) => "#[derive(Clone, Debug)]",
+            (true, true) => "#[derive(Clone)]",
+            (false, false) => "#[derive(Debug)]",
+            (false, true) => "",
         };
         if !derive.is_empty() {
             self.w.line(derive);
@@ -1117,8 +1118,10 @@ impl RustEmitter {
         // Manual Debug stand-in for inner structs holding `Rc<dyn Fn>`
         // (fn-typed / observer fields) — prints the class name so the
         // newtype's derived Debug and the marker trait's `Debug`
-        // supertrait both resolve.
-        if inner_has_fn_field {
+        // supertrait both resolve. An inner holding a foreign value with no
+        // `Debug` of its own gets the same stand-in (ERRATA E97), which is what
+        // lets `class Wrap { File f; }` exist at all.
+        if inner_blocks_debug {
             self.w.emit_indent();
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);

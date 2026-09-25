@@ -100,7 +100,16 @@ impl RustEmitter {
                 hash_plan.manual_hash = true;
             }
         }
-        self.w.line(&record_derive_attribute(record_decl, has_default, hash_plan, manual_eq));
+        // What the FOREIGN component types allow (ERRATA E97). `record
+        // Holder(File f)` used to emit `#[derive(Debug, Clone, PartialEq,
+        // Default)]` over a `std::fs::File`, which has none of `Clone`,
+        // `PartialEq` and `Default`, so three separate rustc errors came out of
+        // a declaration the programmer could not write any other way.
+        let foreign = self.foreign_derives_of(components.iter().copied());
+        let derive_line = record_derive_attribute(record_decl, has_default, hash_plan, manual_eq, foreign);
+        if !derive_line.is_empty() {
+            self.w.line(&derive_line);
+        }
         // `@layout(c) record` (§L.1.2): fields in declaration order at their C
         // offsets. The checker has already held every component to a C
         // `Copy` type, so the derive above includes `Copy`.
@@ -132,6 +141,40 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+
+        // A component of a foreign type with no `Debug` of its own costs the
+        // derive, not the trait (ERRATA E97): the impl is written out here in
+        // the shape the derive would have produced, rendering each component
+        // through the universal show helper. `__jux_show!` prints a value with
+        // neither `Display` nor `Debug` as its type name, so this holds for any
+        // component type and `print(holder)` never stops working.
+        if !foreign.debug {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params_with_clone_bound(&record_decl.generic_params);
+            self.w.push_str(" std::fmt::Debug for ");
+            self.w.push_str(&to_rust_ident(&record_decl.name.text));
+            self.emit_generic_params_as_args(&record_decl.generic_params);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+            self.w.indent_inc();
+            let mut format_string = format!("{} {{{{", to_rust_ident(&record_decl.name.text));
+            let mut args = String::new();
+            for (i, comp) in record_decl.components.iter().enumerate() {
+                let field = to_rust_ident(&comp.name.text);
+                format_string.push_str(if i > 0 { ", " } else { " " });
+                format_string.push_str(&format!("{field}: {{}}"));
+                args.push_str(&format!(", crate::__jux_show!(self.{field})"));
+            }
+            format_string.push_str(" }}");
+            self.w.line(&format!("write!(f, \"{format_string}\"{args})"));
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+        }
 
         // impl[<T: Clone, U: Clone>] Name<T, U> { pub fn new(…) }
         self.w.emit_indent();
@@ -694,8 +737,19 @@ fn record_derive_attribute(
     all_default: bool,
     hash_plan: crate::decls::hashing::HashPlan,
     manual_eq: bool,
+    foreign: crate::analysis::ForeignDerives,
 ) -> String {
-    let mut derives: Vec<&str> = vec!["Debug", "Clone"];
+    let mut derives: Vec<&str> = Vec::new();
+    // `Debug` and `Clone` are a record's birthright (§O.3.1) and go first,
+    // unless a component's own foreign type has neither. A dropped `Debug` is
+    // written by hand at the declaration; a dropped `Clone` cannot be, since
+    // nothing can copy the value the component holds (ERRATA E97).
+    if foreign.debug {
+        derives.push("Debug");
+    }
+    if foreign.clone {
+        derives.push("Clone");
+    }
 
     let has_eq_op = record_decl
         .operators
@@ -713,13 +767,14 @@ fn record_derive_attribute(
     // or delete). The user's override path emits its own `impl
     // PartialEq`; `= delete;` opts out entirely. A record holding a
     // trait-object handle has it written by hand instead (`manual_eq`).
-    if !has_eq_op && !manual_eq {
+    if !has_eq_op && !manual_eq && foreign.partial_eq {
         derives.push("PartialEq");
     }
     // Eq and Hash follow the shared hash plan (§O.3.1): derived when every
     // component hashes natively; a float component is hashed by hand after
     // the declaration instead.
-    if hash_plan.derive_eq {
+    // `Eq: PartialEq`, so it goes wherever `PartialEq` went.
+    if hash_plan.derive_eq && foreign.partial_eq {
         derives.push("Eq");
     }
     if hash_plan.derive_hash {
@@ -728,15 +783,23 @@ fn record_derive_attribute(
     // Copy: always conditional on field types. Deletion doesn't
     // affect Copy — copy semantics are a value-type property, not an
     // operator-level decision.
-    if all_copy {
+    //
+    // `Copy: Clone`, so a component whose foreign type has no `Clone` takes this
+    // off with it rather than leaving rustc to report the pair (ERRATA E97).
+    if all_copy && foreign.clone {
         derives.push("Copy");
     }
     // Default: derived when every component is Default-able. Lets a
     // class storing this record as a field flow through the
     // struct-init shim's `field: Default::default()` fallback when
     // the user didn't supply an explicit field initializer.
-    if all_default {
+    if all_default && foreign.default {
         derives.push("Default");
+    }
+    // Every trait a component's foreign type ruled out can leave the list
+    // empty, and `#[derive()]` is not something anyone would write by hand.
+    if derives.is_empty() {
+        return String::new();
     }
     format!("#[derive({})]", derives.join(", "))
 }

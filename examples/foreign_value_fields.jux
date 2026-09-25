@@ -1,0 +1,93 @@
+// Holding a Rust value that is not `Clone`
+// (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.5.8, ERRATA E97).
+//
+// `std::io::Stdout` is `Debug` and is not `Clone`, exactly like `std::fs::File`,
+// `std::net::TcpStream`, `std::sync::Mutex` and most crate handles: 139 of the
+// 296 types in the `rust.std` surface are in the same position. Holding one used
+// to be impossible in any aggregate. Every Jux class, struct and record lowered
+// to a Rust struct carrying `#[derive(Clone, Debug)]`, and the only question
+// asked before dropping a derive was whether the field's type came from a crate
+// other than `std` -- so a `rust.std` field was assumed to be `Clone`, and rustc
+// refused a derive the program never wrote.
+//
+// What a foreign type can derive is now read from its own generated stub
+// (`@RustClone`, `@RustDebug`, `@RustPartialEq`, `@RustDefault`), so an
+// aggregate derives what the types it holds allow and nothing more. The three
+// positions below are the ones that matter: a class field, a record component,
+// and a collection element.
+
+import rust.std.Stdout;
+import rust.std.Vec;
+import rust.std.stdout;
+
+/**
+ * A class field of a type with no `Clone`. The instance itself still shares by
+ * reference the way every Jux class does: the handle's `Clone` is a refcount
+ * bump on the `Rc`, which never reaches the value inside.
+ */
+class Terminal {
+    private Stdout out;
+    private String label;
+
+    public Terminal(String label) {
+        this.label = label;
+        this.out = stdout();
+    }
+
+    public String label() {
+        return this.label;
+    }
+}
+
+/**
+ * A record component of the same type. A record derives `Debug`, `Clone`,
+ * `PartialEq` and `Default` over its components, and `Stdout` supports only the
+ * first, so the other three come off the derive list instead of failing.
+ */
+record Feed(String name, Stdout sink);
+
+/**
+ * The same type as a collection element (§6.5.1). A `Vec<Stdout>` field keeps
+ * its `Clone`, because a collection is held behind a shared handle whose clone
+ * is a refcount bump, and it asks the element only about the traits that read
+ * through the cell.
+ */
+class Fanout {
+    public Vec<Stdout> sinks;
+
+    public Fanout() {
+        this.sinks = new Vec<Stdout>();
+    }
+
+    public void open() {
+        this.sinks.push(stdout());
+    }
+}
+
+public void main() {
+    var terminal = new Terminal("console");
+    print($"class field: ${terminal.label()}");
+
+    var feed = new Feed("main", stdout());
+    print($"record component: ${feed.name}");
+
+    var fanout = new Fanout();
+    fanout.open();
+    fanout.open();
+    print($"collection elements: ${fanout.sinks.len()}");
+
+    // The aggregate still prints. A class prints through its own `Display`, and
+    // a record through each component rendered by the universal show helper,
+    // which falls back to a value's type name when it has neither `Display` nor
+    // `Debug` -- so one unprintable member never costs the whole value its
+    // output.
+    print($"record name again: ${feed.name}");
+
+    // The helper's bottom tier is reachable from Jux itself: a function value is
+    // an `Rc<dyn Fn(..)>`, which has neither `Display` nor `Debug`, so
+    // interpolating one used to be a rustc error about a trait the program never
+    // named. It now says what the value IS.
+    (int) -> int twice = (int n) -> n * 2;
+    print($"function value: ${twice}");
+    print($"applied: ${twice(21)}");
+}

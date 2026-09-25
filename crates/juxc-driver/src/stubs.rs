@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 43;
+const STD_STUB_CACHE_VERSION: u32 = 44;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -109,7 +109,10 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// 18: a projection over the method's OWN type parameter is resolved and the
 /// method fans out into one overload per impl (Bindgen G.6.4.5), so a cached
 /// stub still saying `I.Output` has to be rebuilt.
-const CRATE_STUB_CACHE_VERSION: u32 = 18;
+/// 19: `@RustDebug`, `@RustPartialEq` and a TYPE-level `@RustDefault` (ERRATA
+/// E97): a stub without them says a type has no `Debug`, and every aggregate
+/// holding one would silently lose its own.
+const CRATE_STUB_CACHE_VERSION: u32 = 19;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -1155,5 +1158,52 @@ mod tests {
             src.contents().contains("package rust.std;"),
             "missing package header"
         );
+    }
+
+    /// The snapshot records what each type can DERIVE, read from its real trait
+    /// impls (Bindgen §G.6.4.7, ERRATA E97).
+    ///
+    /// `std::fs::File` is the case the whole rule exists for: it is `Debug` and
+    /// it is not `Clone`, so its declaration must carry `@RustDebug` and must
+    /// not carry `@RustClone`. Guessing from the crate instead (`rust.std`, so
+    /// assume `Clone`) is what made `class Wrap { File f; }` a rustc error, and
+    /// a snapshot regenerated without the markers would bring that back
+    /// silently: every aggregate holding a std type would lose its own `Debug`.
+    #[test]
+    fn vendored_std_stub_records_what_each_type_can_derive() {
+        let src = vendored_std_stub();
+        let text = src.contents().to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        /// The contiguous annotation block above `public class <name>`.
+        fn markers_of<'a>(lines: &[&'a str], name: &str) -> Vec<&'a str> {
+            let head = format!("public class {name} ");
+            let at = lines
+                .iter()
+                .position(|l| l.starts_with(&head))
+                .unwrap_or_else(|| panic!("vendored rust.std is missing `{head}`"));
+            let mut from = at;
+            while from > 0 && lines[from - 1].starts_with('@') {
+                from -= 1;
+            }
+            lines[from..at].to_vec()
+        }
+        let file = markers_of(&lines, "File");
+        assert!(
+            file.contains(&"@RustDebug"),
+            "`File` is `Debug`, so its stub must say so: {file:?}",
+        );
+        assert!(
+            !file.contains(&"@RustClone"),
+            "`File` is not `Clone`, so its stub must not claim it: {file:?}",
+        );
+        // A type that has all four still says so, or the assertion above would
+        // pass just as well on a snapshot carrying no markers at all.
+        let string = markers_of(&lines, "String");
+        for marker in ["@RustClone", "@RustDebug", "@RustPartialEq", "@RustDefault"] {
+            assert!(
+                string.contains(&marker),
+                "`String` has every one of the four, missing {marker}: {string:?}",
+            );
+        }
     }
 }

@@ -155,6 +155,29 @@ pub struct StubType {
     /// class annotation. The backend needs it to decide whether a field read
     /// can share by cloning rather than moving out.
     pub is_clone: bool,
+    /// Whether the Rust type implements `std::fmt::Debug` (discovered from its
+    /// real trait impls, never from a name list). Rendered as the `@RustDebug`
+    /// class annotation.
+    ///
+    /// The backend needs it for the same reason it needs `is_clone`: a Jux
+    /// aggregate holding a value of this type derives `Debug` only when every
+    /// type it holds has one. `std::fs::File` is `Debug` and `Clone` is what it
+    /// lacks; a crate handle commonly lacks both, and before this was
+    /// discovered the emitted `#[derive(Clone, Debug)]` was a rustc E0277 the
+    /// program had no way to avoid (ERRATA E97).
+    pub is_debug: bool,
+    /// Whether the Rust type implements `PartialEq` (discovered from its real
+    /// trait impls). Rendered as `@RustPartialEq`. A record derives `PartialEq`
+    /// over its components (§O.3.1), so a component whose type has none takes
+    /// it off the derive list rather than failing with rustc E0369.
+    pub is_partial_eq: bool,
+    /// Whether the Rust type implements `Default` (discovered from its real
+    /// trait impls). Rendered as `@RustDefault` on the TYPE, the same marker
+    /// §G.5.4c already puts on the zero-argument constructor that impl produces:
+    /// both say "this type has a `Default`". The type-level one is needed
+    /// because the constructor marker is not emitted when the type already has
+    /// a zero-argument constructor of its own, so its absence says nothing.
+    pub is_default: bool,
     /// Whether the Rust type is a COLLECTION -- it implements `Extend` or
     /// `FromIterator` (discovered from its real trait impls, never from a name
     /// list). Rendered as the `@RustCollection` class annotation, which is what
@@ -213,6 +236,9 @@ impl StubType {
             index_ref: false,
             index_output: None,
             is_clone: false,
+            is_debug: false,
+            is_partial_eq: false,
+            is_default: false,
             is_collection: false,
             implements: Vec::new(),
             owned_as: None,

@@ -1,0 +1,6 @@
+class field: console
+record component: main
+collection elements: 2
+record name again: main
+function value: <fn>
+applied: 42

@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 43
+// juxc rust.std stub cache-version 44
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -9,18 +9,23 @@ public const String ARCH;
 /** An error returned by [`LocalKey::try_with`](struct.LocalKey.html#method.try_with). */
 @rust("std::thread::AccessError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class AccessError implements ToOwned, ToString {
 }
 
 /** An error which can be returned when parsing an IP address or a socket address. */
 @rust("std::net::AddrParseError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class AddrParseError {
 }
 
 /** An iterator over [`Path`] and its ancestors. */
 @rust("std::path::Ancestors")
 @RustClone
+@RustDebug
 public class Ancestors implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public Path? next();
 }
@@ -33,6 +38,7 @@ public enum AncillaryData {
 
 /** The error type which is returned from parsing the type a control message. */
 @rust("std::os::unix::net::AncillaryError")
+@RustDebug
 public enum AncillaryError {
     Unknown
 }
@@ -40,6 +46,9 @@ public enum AncillaryError {
 /** A thread-safe reference-counting pointer. 'Arc' stands for 'Atomically */
 @rust("std::sync::Arc")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Arc<T, A> implements ToOwned, ToString {
     public Arc(T data);
     @RustDefault public Arc();
@@ -71,12 +80,14 @@ public class Arc<T, A> implements ToOwned, ToString {
 
 /** An iterator over the arguments of a process, yielding a [`String`] value for */
 @rust("std::env::Args")
+@RustDebug
 public class Args implements RustIterator {
     @MutSelf public String? next();
 }
 
 /** An iterator over the arguments of a process, yielding an [`OsString`] value */
 @rust("std::env::ArgsOs")
+@RustDebug
 public class ArgsOs implements RustIterator {
     @MutSelf public OsString? next();
 }
@@ -84,6 +95,7 @@ public class ArgsOs implements RustIterator {
 /** This structure represents a safely precompiled version of a format string */
 @rust("std::fmt::Arguments")
 @RustClone
+@RustDebug
 public class Arguments {
     @RustRefOut public String? as_str();
 }
@@ -91,6 +103,7 @@ public class Arguments {
 /** A windowed iterator over a slice in overlapping chunks (`N` elements at a */
 @rust("std::slice::ArrayWindows")
 @RustClone
+@RustDebug
 public class ArrayWindows<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -148,6 +161,8 @@ public interface AsciiExt {
 
 /** A simple wrapper around a type to assert that it is unwind safe. */
 @rust("std::panic::AssertUnwindSafe")
+@RustDebug
+@RustDefault
 public class AssertUnwindSafe<T> {
     @RustDefault public AssertUnwindSafe();
 }
@@ -156,6 +171,9 @@ public class AssertUnwindSafe<T> {
 @rust("std::collections::BTreeMap")
 @RustIndexRef
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class BTreeMap<K, V, A> implements ToOwned {
     public BTreeMap();
@@ -200,6 +218,9 @@ public class BTreeMap<K, V, A> implements ToOwned {
 /** An ordered set based on a B-Tree. */
 @rust("std::collections::BTreeSet")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class BTreeSet<T, A> implements ToOwned {
     public BTreeSet();
@@ -233,6 +254,7 @@ public class BTreeSet<T, A> implements ToOwned {
 
 /** A captured OS thread stack backtrace. */
 @rust("std::backtrace::Backtrace")
+@RustDebug
 public class Backtrace implements ToString {
     public static Backtrace capture();
     public static Backtrace force_capture();
@@ -242,12 +264,15 @@ public class Backtrace implements ToString {
 
 /** The current status of a backtrace, indicating whether it was captured or */
 @rust("std::backtrace::BacktraceStatus")
+@RustDebug
+@RustPartialEq
 public enum BacktraceStatus {
     Unsupported, Disabled, Captured
 }
 
 /** A barrier enables multiple threads to synchronize the beginning */
 @rust("std::sync::Barrier")
+@RustDebug
 public class Barrier {
     public Barrier(uint n);
     public BarrierWaitResult wait();
@@ -255,6 +280,7 @@ public class Barrier {
 
 /** A `BarrierWaitResult` is returned by [`Barrier::wait()`] when all threads */
 @rust("std::sync::BarrierWaitResult")
+@RustDebug
 public class BarrierWaitResult {
     public bool is_leader();
 }
@@ -262,6 +288,8 @@ public class BarrierWaitResult {
 /** A priority queue implemented with a binary heap. */
 @rust("std::collections::BinaryHeap")
 @RustClone
+@RustDebug
+@RustDefault
 @RustCollection
 public class BinaryHeap<T, A> implements ToOwned {
     public BinaryHeap();
@@ -292,6 +320,7 @@ public class BinaryHeap<T, A> implements ToOwned {
 /** A borrowed file descriptor. */
 @rust("std::os::fd::BorrowedFd")
 @RustClone
+@RustDebug
 public class BorrowedFd implements AsFd, AsRawFd, IsTerminal, ToOwned {
     public static unsafe BorrowedFd borrow_raw(RawFd fd);
     public OwnedFd try_clone_to_owned() throws Error;
@@ -300,6 +329,7 @@ public class BorrowedFd implements AsFd, AsRawFd, IsTerminal, ToOwned {
 /** A borrowed handle. */
 @rust("std::os::windows::io::BorrowedHandle")
 @RustClone
+@RustDebug
 public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal, ToOwned {
     public static unsafe BorrowedHandle borrow_raw(RawHandle handle);
     public OwnedHandle try_clone_to_owned() throws Error;
@@ -308,6 +338,7 @@ public class BorrowedHandle implements AsHandle, AsRawHandle, IsTerminal, ToOwne
 /** A borrowed socket. */
 @rust("std::os::windows::io::BorrowedSocket")
 @RustClone
+@RustDebug
 public class BorrowedSocket implements AsRawSocket, AsSocket, ToOwned {
     public static unsafe BorrowedSocket borrow_raw(RawSocket socket);
     public OwnedSocket try_clone_to_owned() throws Error;
@@ -316,6 +347,8 @@ public class BorrowedSocket implements AsRawSocket, AsSocket, ToOwned {
 /** An endpoint of a range of keys. */
 @rust("std::ops::Bound")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum Bound<T> {
     Included(T), Excluded(T), Unbounded;
 
@@ -328,6 +361,9 @@ public enum Bound<T> {
 /** A pointer type that uniquely owns a heap allocation of type `T`. */
 @rust("std::boxed::Box")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Box<T, A> implements RustIterator, ToOwned, ToString {
     public Box(T x);
     @RustDefault public Box();
@@ -365,6 +401,7 @@ public interface BufRead {
 
 /** The `BufReader<R>` struct adds buffering to any reader. */
 @rust("std::io::BufReader")
+@RustDebug
 public class BufReader<R> implements BufRead, Read, Seek {
     public BufReader(R inner);
     public static BufReader<R> with_capacity(uint capacity, R inner);
@@ -379,6 +416,7 @@ public class BufReader<R> implements BufRead, Read, Seek {
 
 /** Wraps a writer and buffers its output. */
 @rust("std::io::BufWriter")
+@RustDebug
 public class BufWriter<W> implements Seek, Write {
     public BufWriter(W inner);
     public static BufWriter<W> with_capacity(uint capacity, W inner);
@@ -392,6 +430,7 @@ public class BufWriter<W> implements Seek, Write {
 
 /** Thread factory, which can be used in order to configure the properties of */
 @rust("std::thread::Builder")
+@RustDebug
 public class Builder {
     public Builder();
     public Builder name(String name);
@@ -403,12 +442,16 @@ public class Builder {
 
 /** An iterator over `u8` values of a reader. */
 @rust("std::io::Bytes")
+@RustDebug
 public class Bytes<R> implements RustIterator {
     @MutSelf public ubyte? next() throws Error;
 }
 
 /** A dynamically-sized view of a C string. */
 @rust("std::ffi::CStr")
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class CStr {
     @RustDefault public CStr();
     @RustRefOut public static unsafe CStr from_ptr(c_char* ptr);
@@ -427,6 +470,9 @@ public class CStr {
 @rust("std::ffi::c_str::CString")
 @RustClone
 @RustDerefs("CStr")
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class CString implements ToOwned {
     public CString(T t) throws NulError;
     @RustDefault public CString();
@@ -453,6 +499,7 @@ public class CString implements ToOwned {
 /** An iterator over the [`char`]s of a string slice, and their positions. */
 @rust("std::str::CharIndices")
 @RustClone
+@RustDebug
 public class CharIndices implements RustIterator {
     @RustRefOut public String as_str();
     public uint offset();
@@ -462,6 +509,7 @@ public class CharIndices implements RustIterator {
 /** An iterator over the [`char`]s of a string slice. */
 @rust("std::str::Chars")
 @RustClone
+@RustDebug
 public class Chars implements RustIterator {
     @RustRefOut public String as_str();
     @MutSelf public char? next();
@@ -469,6 +517,7 @@ public class Chars implements RustIterator {
 
 /** Representation of a running or exited child process. */
 @rust("std::process::Child")
+@RustDebug
 public class Child implements AsHandle, AsRawHandle, ChildExt, IntoRawHandle {
     public ChildStdin? stdin;
     public ChildStdout? stdout;
@@ -489,28 +538,33 @@ public interface ChildExt {
 
 /** A handle to a child process's stderr. */
 @rust("std::process::ChildStderr")
+@RustDebug
 public class ChildStderr implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Read {
 }
 
 /** A handle to a child process's standard input (stdin). */
 @rust("std::process::ChildStdin")
+@RustDebug
 public class ChildStdin implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Write {
 }
 
 /** A handle to a child process's standard output (stdout). */
 @rust("std::process::ChildStdout")
+@RustDebug
 public class ChildStdout implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Read {
 }
 
 /** An iterator over slice in (non-overlapping) chunks separated by a predicate. */
 @rust("std::slice::ChunkBy")
 @RustClone
+@RustDebug
 public class ChunkBy<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
 /** An iterator over slice in (non-overlapping) mutable chunks separated */
 @rust("std::slice::ChunkByMut")
+@RustDebug
 public class ChunkByMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -518,6 +572,7 @@ public class ChunkByMut<T, P> implements RustIterator {
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::Chunks")
 @RustClone
+@RustDebug
 public class Chunks<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -525,6 +580,7 @@ public class Chunks<T> implements RustIterator {
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::ChunksExact")
 @RustClone
+@RustDebug
 public class ChunksExact<T> implements RustIterator {
     @RustRefOut public T[] remainder();
     @MutSelf @RustRefOut public T[]? next();
@@ -532,6 +588,7 @@ public class ChunksExact<T> implements RustIterator {
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::ChunksExactMut")
+@RustDebug
 public class ChunksExactMut<T> implements RustIterator {
     @RustRefOut public T[] into_remainder();
     @MutSelf @RustRefOut public T[]? next();
@@ -539,6 +596,7 @@ public class ChunksExactMut<T> implements RustIterator {
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::ChunksMut")
+@RustDebug
 public class ChunksMut<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -546,6 +604,8 @@ public class ChunksMut<T> implements RustIterator {
 /** An iterator that clones the elements of an underlying iterator. */
 @rust("std::iter::Cloned")
 @RustClone
+@RustDebug
+@RustDefault
 public class Cloned<I> implements RustIterator {
     @RustDefault public Cloned();
     @MutSelf public T? next();
@@ -553,6 +613,7 @@ public class Cloned<I> implements RustIterator {
 
 /** A process builder, providing fine-grained control */
 @rust("std::process::Command")
+@RustDebug
 public class Command implements CommandExt {
     public Command(S program);
     @MutSelf @RustRefOut public Command arg<S>(S arg);
@@ -577,12 +638,14 @@ public class Command implements CommandExt {
 
 /** An iterator over the command arguments. */
 @rust("std::process::CommandArgs")
+@RustDebug
 public class CommandArgs implements RustIterator {
     @MutSelf @RustRefOut public OsStr? next();
 }
 
 /** An iterator over the command environment variables. */
 @rust("std::process::CommandEnvs")
+@RustDebug
 public class CommandEnvs implements RustIterator {
     @MutSelf public (OsStr, OsStr?)? next();
 }
@@ -595,6 +658,7 @@ public interface CommandExt {
 
 /** An iterator over the fully resolved environment variables. */
 @rust("std::process::CommandResolvedEnvs")
+@RustDebug
 public class CommandResolvedEnvs implements RustIterator {
     @MutSelf public (OsString, OsString)? next();
 }
@@ -602,6 +666,8 @@ public class CommandResolvedEnvs implements RustIterator {
 /** A single component of a path. */
 @rust("std::path::Component")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum Component implements ToOwned {
     Prefix(PrefixComponent), RootDir, CurDir, ParentDir, Normal(OsStr);
 
@@ -611,6 +677,8 @@ public enum Component implements ToOwned {
 /** An iterator over the [`Component`]s of a [`Path`]. */
 @rust("std::path::Components")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Components implements RustIterator, ToOwned {
     @RustRefOut public Path as_path();
     @MutSelf public Component? next();
@@ -618,6 +686,8 @@ public class Components implements RustIterator, ToOwned {
 
 /** A Condition Variable */
 @rust("std::sync::Condvar")
+@RustDebug
+@RustDefault
 public class Condvar {
     public Condvar();
     @RustBorrowsSelf public MutexGuard<T> wait<T>(MutexGuard<T> guard) throws PoisonError<T>;
@@ -632,6 +702,8 @@ public class Condvar {
 /** An iterator that copies the elements of an underlying iterator. */
 @rust("std::iter::Copied")
 @RustClone
+@RustDebug
+@RustDefault
 public class Copied<I> implements RustIterator {
     @RustDefault public Copied();
     @MutSelf public T? next();
@@ -640,6 +712,9 @@ public class Copied<I> implements RustIterator {
 /** A clone-on-write smart pointer. */
 @rust("std::borrow::Cow")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public enum Cow<B> implements ToOwned, ToString {
     Borrowed(B), Owned(B.Owned);
 
@@ -650,6 +725,7 @@ public enum Cow<B> implements ToOwned, ToString {
 /** A cursor over a `LinkedList`. */
 @rust("std::collections::Cursor")
 @RustClone
+@RustDebug
 public class Cursor<T, A> implements ToOwned {
     public uint? index();
     @MutSelf public void move_next();
@@ -664,6 +740,7 @@ public class Cursor<T, A> implements ToOwned {
 
 /** A cursor over a `LinkedList` with editing operations. */
 @rust("std::collections::CursorMut")
+@RustDebug
 public class CursorMut<T, A> {
     public uint? index();
     @MutSelf public void move_next();
@@ -694,6 +771,7 @@ public class CursorMut<T, A> {
 /** An iterator that repeats endlessly. */
 @rust("std::iter::Cycle")
 @RustClone
+@RustDebug
 public class Cycle<I> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -710,6 +788,7 @@ public const String DLL_SUFFIX;
 /** An iterator that decodes UTF-16 encoded code points from an iterator of `u16`s. */
 @rust("std::char::DecodeUtf16")
 @RustClone
+@RustDebug
 public class DecodeUtf16<I> implements RustIterator {
     @MutSelf public char? next() throws DecodeUtf16Error;
 }
@@ -717,6 +796,8 @@ public class DecodeUtf16<I> implements RustIterator {
 /** The default [`Hasher`] used by [`RandomState`]. */
 @rust("std::hash::DefaultHasher")
 @RustClone
+@RustDebug
+@RustDefault
 public class DefaultHasher implements ToOwned {
     public DefaultHasher();
 }
@@ -724,12 +805,14 @@ public class DefaultHasher implements ToOwned {
 /** A lazy iterator producing elements in the difference of `BTreeSet`s. */
 @rust("std::collections::btree_set::Difference")
 @RustClone
+@RustDebug
 public class Difference<T, A> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
 }
 
 /** A builder used to create directories in various manners. */
 @rust("std::fs::DirBuilder")
+@RustDebug
 public class DirBuilder implements DirBuilderExt {
     public DirBuilder();
     @MutSelf @RustRefOut public DirBuilder recursive(bool recursive);
@@ -744,6 +827,7 @@ public interface DirBuilderExt {
 
 /** Entries returned by the [`ReadDir`] iterator. */
 @rust("std::fs::DirEntry")
+@RustDebug
 public class DirEntry implements DirEntryExt, DirEntryExt2 {
     public PathBuf path();
     public Metadata metadata() throws Error;
@@ -765,11 +849,13 @@ public interface DirEntryExt2 {
 
 /** Helper struct for safely printing paths with [`format!`] and `{}`. */
 @rust("std::path::Display")
+@RustDebug
 public class Display implements ToString {
 }
 
 /** A draining iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::Drain")
+@RustDebug
 public class Drain<T, A> implements RustIterator {
     @RustRefOut public A allocator();
     @MutSelf public T? next();
@@ -777,6 +863,7 @@ public class Drain<T, A> implements RustIterator {
 
 /** A draining iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::DrainSorted")
+@RustDebug
 public class DrainSorted<T, A> implements RustIterator {
     @RustRefOut public A allocator();
     @MutSelf public T? next();
@@ -785,6 +872,9 @@ public class DrainSorted<T, A> implements RustIterator {
 /** A `Duration` type to represent a span of time, typically used for system */
 @rust("std::time::Duration")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Duration {
     public Duration(ulong secs, u32 nanos);
     @RustDefault public Duration();
@@ -834,6 +924,8 @@ public const String EXE_SUFFIX;
 /** `Empty` ignores any data written via [`Write`], and will always be empty */
 @rust("std::io::Empty")
 @RustClone
+@RustDebug
+@RustDefault
 public class Empty {
     @RustDefault public Empty();
 }
@@ -841,6 +933,7 @@ public class Empty {
 /** An iterator of [`u16`] over the string encoded as UTF-16. */
 @rust("std::str::EncodeUtf16")
 @RustClone
+@RustDebug
 public class EncodeUtf16 implements RustIterator {
     @MutSelf public ushort? next();
 }
@@ -848,12 +941,14 @@ public class EncodeUtf16 implements RustIterator {
 /** Iterator returned by [`OsStrExt::encode_wide`]. */
 @rust("std::os::windows::ffi::EncodeWide")
 @RustClone
+@RustDebug
 public class EncodeWide implements RustIterator, ToOwned {
     @MutSelf public ushort? next();
 }
 
 /** A view into a single entry in a map, which may either be vacant or occupied. */
 @rust("std::collections::btree_map::Entry")
+@RustDebug
 public enum Entry<K, V, A> {
     Vacant(VacantEntry<K, V, A>), Occupied(OccupiedEntry<K, V, A>);
 
@@ -871,6 +966,8 @@ public enum Entry<K, V, A> {
 /** An iterator that yields the current count and the element during iteration. */
 @rust("std::iter::Enumerate")
 @RustClone
+@RustDebug
+@RustDefault
 public class Enumerate<I> implements RustIterator {
     @RustDefault public Enumerate();
     @MutSelf public (uint, I.Item)? next();
@@ -878,6 +975,7 @@ public class Enumerate<I> implements RustIterator {
 
 /** The error type for I/O operations of the [`Read`], [`Write`], [`Seek`], and */
 @rust("std::io::Error")
+@RustDebug
 public class Error implements ToString {
     public Error(ErrorKind kind, E error);
     public static Error other<E>(E error);
@@ -894,6 +992,8 @@ public class Error implements ToString {
 /** A list specifying general categories of I/O error. */
 @rust("std::io::ErrorKind")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum ErrorKind {
     NotFound, PermissionDenied, ConnectionRefused, ConnectionReset, HostUnreachable, NetworkUnreachable, ConnectionAborted, NotConnected, AddrInUse, AddrNotAvailable, NetworkDown, BrokenPipe, AlreadyExists, WouldBlock, NotADirectory, IsADirectory, DirectoryNotEmpty, ReadOnlyFilesystem, FilesystemLoop, StaleNetworkFileHandle, InvalidInput, InvalidData, TimedOut, WriteZero, StorageFull, NotSeekable, QuotaExceeded, FileTooLarge, ResourceBusy, ExecutableFileBusy, Deadlock, CrossesDevices, TooManyLinks, InvalidFilename, ArgumentListTooLong, Interrupted, Unsupported, UnexpectedEof, OutOfMemory, InProgress, Other
 }
@@ -901,6 +1001,7 @@ public enum ErrorKind {
 /** An iterator over the escaped version of a byte slice. */
 @rust("std::slice::EscapeAscii")
 @RustClone
+@RustDebug
 public class EscapeAscii implements RustIterator {
     @MutSelf public ubyte? next();
 }
@@ -908,6 +1009,9 @@ public class EscapeAscii implements RustIterator {
 /** This type represents the status code the current process can return */
 @rust("std::process::ExitCode")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class ExitCode implements ExitCodeExt, Termination, ToOwned {
     @RustDefault public ExitCode();
 }
@@ -915,6 +1019,9 @@ public class ExitCode implements ExitCodeExt, Termination, ToOwned {
 /** Describes the result of a process after it has terminated. */
 @rust("std::process::ExitStatus")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class ExitStatus implements ExitStatusExt, ToOwned, ToString {
     @RustDefault public ExitStatus();
     public bool success();
@@ -934,6 +1041,7 @@ public interface ExitStatusExt {
 
 /** This `struct` is created by the [`extract_if`] method on [`LinkedList`]. */
 @rust("std::collections::ExtractIf")
+@RustDebug
 public class ExtractIf<T, F, A> implements RustIterator {
     @MutSelf public T? next();
 }
@@ -943,6 +1051,7 @@ public const String FAMILY;
 
 /** An object providing access to an open file on the filesystem. */
 @rust("std::fs::File")
+@RustDebug
 public class File implements AsFd, AsHandle, AsRawFd, AsRawHandle, FileExt, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, IsTerminal, Read, Seek, Write {
     public static File open<P>(P path) throws Error;
     public static File create<P>(P path) throws Error;
@@ -979,6 +1088,8 @@ public interface FileExt {
 /** Representation of the various timestamps on a file. */
 @rust("std::fs::FileTimes")
 @RustClone
+@RustDebug
+@RustDefault
 public class FileTimes implements FileTimesExt, ToOwned {
     public FileTimes();
     public FileTimes set_accessed(SystemTime t);
@@ -994,6 +1105,8 @@ public interface FileTimesExt {
 /** A structure representing a type of file with accessors for each file type. */
 @rust("std::fs::FileType")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class FileType implements FileTypeExt, ToOwned {
     public bool is_dir();
     public bool is_file();
@@ -1012,6 +1125,7 @@ public interface FileTypeExt {
 /** An iterator that filters the elements of `iter` with `predicate`. */
 @rust("std::iter::Filter")
 @RustClone
+@RustDebug
 public class Filter<I, P> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -1019,6 +1133,7 @@ public class Filter<I, P> implements RustIterator {
 /** An iterator that uses `f` to both filter and map elements from `iter`. */
 @rust("std::iter::FilterMap")
 @RustClone
+@RustDebug
 public class FilterMap<I, F> implements RustIterator {
     @MutSelf public B? next();
 }
@@ -1026,6 +1141,7 @@ public class FilterMap<I, F> implements RustIterator {
 /** An iterator that maps each element to an iterator, and yields the elements */
 @rust("std::iter::FlatMap")
 @RustClone
+@RustDebug
 public class FlatMap<I, U, F> implements RustIterator {
     @MutSelf public U.Item? next();
 }
@@ -1033,6 +1149,8 @@ public class FlatMap<I, U, F> implements RustIterator {
 /** An iterator that flattens one level of nesting in an iterator of things */
 @rust("std::iter::Flatten")
 @RustClone
+@RustDebug
+@RustDefault
 public class Flatten<I> implements RustIterator {
     @RustDefault public Flatten();
     @MutSelf public U.Item? next();
@@ -1041,6 +1159,8 @@ public class Flatten<I> implements RustIterator {
 /** A classification of floating point numbers. */
 @rust("std::num::FpCategory")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum FpCategory {
     Nan, Infinite, Zero, Subnormal, Normal
 }
@@ -1048,12 +1168,16 @@ public enum FpCategory {
 /** An error indicating that no nul byte was present. */
 @rust("std::ffi::FromBytesUntilNulError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class FromBytesUntilNulError {
 }
 
 /** An error indicating that a nul byte was not in the expected position. */
 @rust("std::ffi::FromBytesWithNulError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum FromBytesWithNulError {
     InteriorNul, NotNulTerminated
 }
@@ -1097,12 +1221,15 @@ public interface FromRawSocket {
 
 /** A possible error value when converting a `String` from a UTF-16 byte slice. */
 @rust("std::string::FromUtf16Error")
+@RustDebug
 public class FromUtf16Error implements ToString {
 }
 
 /** A possible error value when converting a `String` from a UTF-8 byte vector. */
 @rust("std::string::FromUtf8Error")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class FromUtf8Error implements ToOwned, ToString {
     @RustRefOut public ubyte[] as_bytes();
     public Vec<ubyte> into_bytes();
@@ -1112,6 +1239,8 @@ public class FromUtf8Error implements ToOwned, ToString {
 /** An error indicating that a nul byte was not in the expected position. */
 @rust("std::ffi::c_str::FromVecWithNulError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class FromVecWithNulError implements ToOwned, ToString {
     @RustRefOut public ubyte[] as_bytes();
     public Vec<ubyte> into_bytes();
@@ -1120,6 +1249,8 @@ public class FromVecWithNulError implements ToOwned, ToString {
 /** An iterator that yields `None` forever after the underlying iterator */
 @rust("std::iter::Fuse")
 @RustClone
+@RustDebug
+@RustDefault
 public class Fuse<I> implements RustIterator {
     @RustDefault public Fuse();
     @MutSelf public I.Item? next();
@@ -1128,6 +1259,8 @@ public class Fuse<I> implements RustIterator {
 /** The error type returned by [`get_disjoint_mut`][`slice::get_disjoint_mut`]. */
 @rust("std::slice::GetDisjointMutError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum GetDisjointMutError {
     IndexOutOfBounds, OverlappingIndices
 }
@@ -1139,12 +1272,14 @@ public class Handle {
 
 /** FFI type for handles in return values or out parameters, where `INVALID_HANDLE_VALUE` is used */
 @rust("std::os::windows::io::HandleOrInvalid")
+@RustDebug
 public class HandleOrInvalid {
     public static unsafe HandleOrInvalid from_raw_handle(RawHandle handle);
 }
 
 /** FFI type for handles in return values or out parameters, where `NULL` is used */
 @rust("std::os::windows::io::HandleOrNull")
+@RustDebug
 public class HandleOrNull {
     public static unsafe HandleOrNull from_raw_handle(RawHandle handle);
 }
@@ -1153,6 +1288,9 @@ public class HandleOrNull {
 @rust("std::collections::HashMap")
 @RustIndexRef
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class HashMap<K, V, S, A> implements ToOwned {
     public HashMap();
@@ -1194,6 +1332,9 @@ public class HashMap<K, V, S, A> implements ToOwned {
 /** A [hash set] implemented as a `HashMap` where the value is `()`. */
 @rust("std::collections::HashSet")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class HashSet<T, S, A> implements ToOwned {
     public HashSet();
@@ -1230,6 +1371,7 @@ public class HashSet<T, S, A> implements ToOwned {
 
 /** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
 @rust("std::net::Incoming")
+@RustDebug
 public class Incoming implements RustIterator {
     @MutSelf public TcpStream? next() throws Error;
 }
@@ -1237,6 +1379,7 @@ public class Incoming implements RustIterator {
 /** An iterator that calls a function with a reference to each element before */
 @rust("std::iter::Inspect")
 @RustClone
+@RustDebug
 public class Inspect<I, F> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -1244,6 +1387,8 @@ public class Inspect<I, F> implements RustIterator {
 /** A measurement of a monotonically nondecreasing clock. */
 @rust("std::time::Instant")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Instant implements ToOwned {
     public static Instant now();
     public Duration duration_since(Instant earlier);
@@ -1257,6 +1402,8 @@ public class Instant implements ToOwned {
 /** Enum to store the various types of errors that can cause parsing or converting an */
 @rust("std::num::IntErrorKind")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum IntErrorKind {
     Empty, InvalidDigit, PosOverflow, NegOverflow, Zero, NotAPowerOfTwo
 }
@@ -1264,12 +1411,14 @@ public enum IntErrorKind {
 /** A lazy iterator producing elements in the intersection of `BTreeSet`s. */
 @rust("std::collections::btree_set::Intersection")
 @RustClone
+@RustDebug
 public class Intersection<T, A> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
 }
 
 /** An error returned by [`BufWriter::into_inner`] which combines an error that */
 @rust("std::io::IntoInnerError")
+@RustDebug
 public class IntoInnerError<W> implements ToString {
     @RustRefOut public Error error();
     public W into_inner();
@@ -1280,6 +1429,8 @@ public class IntoInnerError<W> implements ToString {
 /** An owning iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::IntoIter")
 @RustClone
+@RustDebug
+@RustDefault
 public class IntoIter<T, A> implements RustIterator, ToOwned {
     @RustDefault public IntoIter();
     @RustRefOut public A allocator();
@@ -1288,6 +1439,7 @@ public class IntoIter<T, A> implements RustIterator, ToOwned {
 
 @rust("std::collections::IntoIterSorted")
 @RustClone
+@RustDebug
 public class IntoIterSorted<T, A> implements RustIterator, ToOwned {
     @RustRefOut public A allocator();
     @MutSelf public T? next();
@@ -1295,6 +1447,8 @@ public class IntoIterSorted<T, A> implements RustIterator, ToOwned {
 
 /** An owning iterator over the keys of a `BTreeMap`. */
 @rust("std::collections::btree_map::IntoKeys")
+@RustDebug
+@RustDefault
 public class IntoKeys<K, V, A> implements RustIterator {
     @RustDefault public IntoKeys();
     @MutSelf public K? next();
@@ -1321,6 +1475,8 @@ public interface IntoRawSocket {
 /** An error indicating invalid UTF-8 when converting a [`CString`] into a [`String`]. */
 @rust("std::ffi::c_str::IntoStringError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class IntoStringError implements ToOwned, ToString {
     public CString into_cstring();
     public Utf8Error utf8_error();
@@ -1328,6 +1484,8 @@ public class IntoStringError implements ToOwned, ToString {
 
 /** An owning iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::IntoValues")
+@RustDebug
+@RustDefault
 public class IntoValues<K, V, A> implements RustIterator {
     @RustDefault public IntoValues();
     @MutSelf public V? next();
@@ -1336,6 +1494,8 @@ public class IntoValues<K, V, A> implements RustIterator {
 /** This is the error type used by [`HandleOrInvalid`] when attempting to */
 @rust("std::os::windows::io::InvalidHandleError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class InvalidHandleError implements ToOwned, ToString {
 }
 
@@ -1343,6 +1503,7 @@ public class InvalidHandleError implements ToOwned, ToString {
 @rust("std::io::IoSlice")
 @RustClone
 @RustDerefs("[]")
+@RustDebug
 public class IoSlice {
     public IoSlice(ubyte[] buf);
     @MutSelf public void advance(uint n);
@@ -1496,6 +1657,7 @@ public class IoSlice {
 /** A buffer type used with `Read::read_vectored`. */
 @rust("std::io::IoSliceMut")
 @RustDerefs("[]")
+@RustDebug
 public class IoSliceMut {
     public IoSliceMut(&mut ubyte[] buf);
     @MutSelf public void advance(uint n);
@@ -1649,6 +1811,8 @@ public class IoSliceMut {
 /** An IP address, either IPv4 or IPv6. */
 @rust("std::net::IpAddr")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum IpAddr {
     V4(Ipv4Addr), V6(Ipv6Addr);
 
@@ -1663,6 +1827,8 @@ public enum IpAddr {
 /** An IPv4 address. */
 @rust("std::net::Ipv4Addr")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Ipv4Addr {
     public Ipv4Addr(ubyte a, ubyte b, ubyte c, ubyte d);
     public u32 to_bits();
@@ -1683,6 +1849,8 @@ public class Ipv4Addr {
 /** An IPv6 address. */
 @rust("std::net::Ipv6Addr")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Ipv6Addr {
     public Ipv6Addr(ushort a, ushort b, ushort c, ushort d, ushort e, ushort f, ushort g, ushort h);
     public u128 to_bits();
@@ -1710,6 +1878,8 @@ public interface IsTerminal {
 /** An iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::Iter")
 @RustClone
+@RustDebug
+@RustDefault
 public class Iter<T> implements RustIterator, ToOwned {
     @RustDefault public Iter();
     @MutSelf @RustRefOut public T? next();
@@ -1717,6 +1887,8 @@ public class Iter<T> implements RustIterator, ToOwned {
 
 /** A mutable iterator over the elements of a `LinkedList`. */
 @rust("std::collections::IterMut")
+@RustDebug
+@RustDefault
 public class IterMut<T> implements RustIterator {
     @RustDefault public IterMut();
     @MutSelf @RustRefOut public T? next();
@@ -1724,6 +1896,7 @@ public class IterMut<T> implements RustIterator {
 
 /** An owned permission to join on a thread (block on its termination). */
 @rust("std::thread::JoinHandle")
+@RustDebug
 public class JoinHandle<T> implements AsHandle, AsRawHandle, IntoRawHandle, JoinHandleExt {
     @RustRefOut public Thread thread();
     public T join() throws Error;
@@ -1739,12 +1912,15 @@ public interface JoinHandleExt {
 
 /** The error type for operations on the `PATH` variable. Possibly returned from */
 @rust("std::env::JoinPathsError")
+@RustDebug
 public class JoinPathsError implements ToString {
 }
 
 /** An iterator over the keys of a `BTreeMap`. */
 @rust("std::collections::btree_map::Keys")
 @RustClone
+@RustDebug
+@RustDefault
 public class Keys<K, V> implements RustIterator, ToOwned {
     @RustDefault public Keys();
     @MutSelf @RustRefOut public K? next();
@@ -1753,6 +1929,8 @@ public class Keys<K, V> implements RustIterator, ToOwned {
 /** Layout of a block of memory. */
 @rust("std::alloc::Layout")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Layout {
     public Layout();
     public static Layout from_size_align(uint size, uint align) throws LayoutError;
@@ -1772,6 +1950,8 @@ public class Layout {
 
 /** A value which is initialized on the first access. */
 @rust("std::sync::LazyLock")
+@RustDebug
+@RustDefault
 public class LazyLock<T, F> {
     public LazyLock(F f);
     @RustDefault public LazyLock();
@@ -1783,6 +1963,7 @@ public class LazyLock<T, F> {
 
 /** Wraps a writer and buffers output to it, flushing whenever a newline */
 @rust("std::io::LineWriter")
+@RustDebug
 public class LineWriter<W> implements Write {
     public LineWriter(W inner);
     public static LineWriter<W> with_capacity(uint capacity, W inner);
@@ -1793,6 +1974,7 @@ public class LineWriter<W> implements Write {
 
 /** An iterator over the lines of an instance of `BufRead`. */
 @rust("std::io::Lines")
+@RustDebug
 public class Lines<B> implements RustIterator {
     @MutSelf public String? next() throws Error;
 }
@@ -1800,6 +1982,7 @@ public class Lines<B> implements RustIterator {
 /** Created with the method [`lines_any`]. */
 @rust("std::str::LinesAny")
 @RustClone
+@RustDebug
 public class LinesAny implements RustIterator {
     @MutSelf @RustRefOut public String? next();
 }
@@ -1807,6 +1990,9 @@ public class LinesAny implements RustIterator {
 /** A doubly-linked list with owned nodes. */
 @rust("std::collections::LinkedList")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class LinkedList<T, A> implements ToOwned {
     public LinkedList();
@@ -1833,6 +2019,7 @@ public class LinkedList<T, A> implements ToOwned {
 
 /** A thread local storage (TLS) key which owns its contents. */
 @rust("std::thread::LocalKey")
+@RustDebug
 public class LocalKey<T> {
     @RustClosureRefs("0") public R with<F, R>((T) -> R f);
     @RustClosureRefs("0") public R try_with<F, R>((T) -> R f) throws AccessError;
@@ -1848,6 +2035,8 @@ public class LocalKey<T> {
 /** A struct containing information about the location of a panic. */
 @rust("std::panic::Location")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Location {
     @RustRefOut public static Location caller();
     @RustRefOut public String file();
@@ -1865,6 +2054,7 @@ public const String MAIN_SEPARATOR_STR;
 /** An iterator that maps the values of `iter` with `f`. */
 @rust("std::iter::Map")
 @RustClone
+@RustDebug
 public class Map<I, F> implements RustIterator {
     @MutSelf public B? next();
 }
@@ -1872,6 +2062,7 @@ public class Map<I, F> implements RustIterator {
 /** An iterator that only accepts elements while `predicate` returns `Some(_)`. */
 @rust("std::iter::MapWhile")
 @RustClone
+@RustDebug
 public class MapWhile<I, P> implements RustIterator {
     @MutSelf public B? next();
 }
@@ -1879,6 +2070,7 @@ public class MapWhile<I, P> implements RustIterator {
 /** Created with the method [`match_indices`]. */
 @rust("std::str::MatchIndices")
 @RustClone
+@RustDebug
 public class MatchIndices<P> implements RustIterator {
     @MutSelf public (uint, String)? next();
 }
@@ -1886,6 +2078,7 @@ public class MatchIndices<P> implements RustIterator {
 /** Created with the method [`matches`]. */
 @rust("std::str::Matches")
 @RustClone
+@RustDebug
 public class Matches<P> implements RustIterator {
     @MutSelf @RustRefOut public String? next();
 }
@@ -1899,6 +2092,7 @@ public class Messages implements RustIterator {
 /** Metadata information about a file. */
 @rust("std::fs::Metadata")
 @RustClone
+@RustDebug
 public class Metadata implements MetadataExt, ToOwned {
     public FileType file_type();
     public bool is_dir();
@@ -1940,6 +2134,8 @@ public interface MetadataExt {
 
 /** A mutual exclusion primitive useful for protecting shared data */
 @rust("std::sync::Mutex")
+@RustDebug
+@RustDefault
 public class Mutex<T> {
     public Mutex(T t);
     @RustDefault public Mutex();
@@ -1953,12 +2149,15 @@ public class Mutex<T> {
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
 @rust("std::sync::MutexGuard")
+@RustDebug
 public class MutexGuard<T> implements ToString {
 }
 
 /** `*mut T` but non-zero and [covariant]. */
 @rust("std::ptr::NonNull")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class NonNull<T> {
     public static NonNull without_provenance(NonZero<uint> addr);
     public static NonNull dangling();
@@ -2016,6 +2215,8 @@ public class NonNull<T> {
 /** A value that is known not to equal zero. */
 @rust("std::num::NonZero")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class NonZero<T> {
     public static NonZero? new(T n);
     public static unsafe NonZero new_unchecked(T n);
@@ -2342,6 +2543,8 @@ public class NonZeroUsize {
 /** An error indicating that an interior nul byte was found. */
 @rust("std::ffi::c_str::NulError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class NulError implements ToOwned, ToString {
     public uint nul_position();
     public Vec<ubyte> into_vec();
@@ -2350,11 +2553,14 @@ public class NulError implements ToOwned, ToString {
 /** This is the error type used by [`HandleOrNull`] when attempting to convert */
 @rust("std::os::windows::io::NullHandleError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class NullHandleError implements ToOwned, ToString {
 }
 
 /** A buffer wrapper of which the internal size is based on the maximum */
 @rust("std::fmt::NumBuffer")
+@RustDebug
 public class NumBuffer<T> {
     public NumBuffer();
 }
@@ -2381,6 +2587,7 @@ public struct OVERLAPPED_0_0 {
 
 /** A view into an occupied entry in a `BTreeMap`. */
 @rust("std::collections::btree_map::OccupiedEntry")
+@RustDebug
 public class OccupiedEntry<K, V, A> {
     @RustRefOut public K key();
     public (K, V) remove_entry();
@@ -2393,6 +2600,7 @@ public class OccupiedEntry<K, V, A> {
 
 /** A low-level synchronization primitive for one-time global execution. */
 @rust("std::sync::Once")
+@RustDebug
 public class Once {
     public Once();
     public void call_once<F>(() -> void f);
@@ -2405,6 +2613,9 @@ public class Once {
 /** A synchronization primitive which can nominally be written to only once. */
 @rust("std::sync::OnceLock")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class OnceLock<T> implements ToOwned {
     public OnceLock();
     @RustRefOut public T? get();
@@ -2418,6 +2629,7 @@ public class OnceLock<T> implements ToOwned {
 
 /** State yielded to [`Once::call_once_force()`]’s closure parameter. The state */
 @rust("std::sync::OnceState")
+@RustDebug
 public class OnceState {
     public bool is_poisoned();
 }
@@ -2425,6 +2637,7 @@ public class OnceState {
 /** Options and flags which can be used to configure how a file is opened. */
 @rust("std::fs::OpenOptions")
 @RustClone
+@RustDebug
 public class OpenOptions implements OpenOptionsExt, OpenOptionsExt2, ToOwned {
     public OpenOptions();
     @MutSelf @RustRefOut public OpenOptions read(bool read);
@@ -2446,6 +2659,8 @@ public interface OpenOptionsExt {
 /** An `Ordering` is the result of a comparison between two values. */
 @rust("std::cmp::Ordering")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum Ordering {
     Less = -1, Equal = 0, Greater = 1;
 
@@ -2464,6 +2679,9 @@ public enum Ordering {
 @rust("std::ffi::os_str::OsStr")
 @RustClone
 @RustOwnedAs("OsString")
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class OsStr implements OsStrExt, ToOwned {
     public OsStr(&S s);
     @RustDefault public OsStr();
@@ -2496,6 +2714,9 @@ public interface OsStrExt {
 /** A type that can represent owned, mutable platform-native strings, but is */
 @rust("std::ffi::os_str::OsString")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 @RustDerefs("OsStr")
 public class OsString implements OsStringExt, ToOwned, Write {
@@ -2544,6 +2765,8 @@ public interface OsStringExt {
 /** The output of a finished process. */
 @rust("std::process::Output")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Output implements ToOwned {
     public ExitStatus status;
     public Vec<ubyte> stdout;
@@ -2552,24 +2775,28 @@ public class Output implements ToOwned {
 
 /** An owned file descriptor. */
 @rust("std::os::fd::OwnedFd")
+@RustDebug
 public class OwnedFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd, IsTerminal {
     public OwnedFd try_clone() throws Error;
 }
 
 /** An owned handle. */
 @rust("std::os::windows::io::OwnedHandle")
+@RustDebug
 public class OwnedHandle implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle, IsTerminal {
     public OwnedHandle try_clone() throws Error;
 }
 
 /** An owned socket. */
 @rust("std::os::windows::io::OwnedSocket")
+@RustDebug
 public class OwnedSocket implements AsRawSocket, AsSocket, FromRawSocket, IntoRawSocket {
     public OwnedSocket try_clone() throws Error;
 }
 
 /** A struct providing information about a panic. */
 @rust("std::panic::PanicHookInfo")
+@RustDebug
 public class PanicHookInfo implements ToString {
     @RustRefOut public Any payload();
     @RustRefOut public String? payload_as_str();
@@ -2579,12 +2806,16 @@ public class PanicHookInfo implements ToString {
 /** An error which can be returned when parsing a float. */
 @rust("std::num::ParseFloatError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class ParseFloatError {
 }
 
 /** An error which can be returned when parsing an integer. */
 @rust("std::num::ParseIntError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class ParseIntError {
     @RustRefOut public IntErrorKind kind();
 }
@@ -2593,6 +2824,8 @@ public class ParseIntError {
 @rust("std::path::Path")
 @RustClone
 @RustOwnedAs("PathBuf")
+@RustDebug
+@RustPartialEq
 public class Path implements ToOwned {
     public Path(&S s);
     @RustRefOut public OsStr as_os_str();
@@ -2635,6 +2868,9 @@ public class Path implements ToOwned {
 /** An owned, mutable path (akin to [`String`]). */
 @rust("std::path::PathBuf")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 @RustDerefs("Path")
 public class PathBuf implements ToOwned {
@@ -2698,6 +2934,7 @@ public class PathBuf implements ToOwned {
 
 /** Structure wrapping a mutable reference to the greatest item on a */
 @rust("std::collections::PeekMut")
+@RustDebug
 public class PeekMut<T, A> {
     @MutSelf public bool refresh();
     public static T pop(PeekMut<T, A> this);
@@ -2706,6 +2943,7 @@ public class PeekMut<T, A> {
 /** An iterator with a `peek()` that returns an optional reference to the next */
 @rust("std::iter::Peekable")
 @RustClone
+@RustDebug
 public class Peekable<I> implements RustIterator {
     @MutSelf @RustRefOut public I.Item? peek();
     @MutSelf @RustRefOut public I.Item? peek_mut();
@@ -2719,6 +2957,8 @@ public class Peekable<I> implements RustIterator {
 /** Representation of the various permissions on a file. */
 @rust("std::fs::Permissions")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Permissions implements PermissionsExt, ToOwned {
     public bool readonly();
     @MutSelf public void set_readonly(bool readonly);
@@ -2734,6 +2974,7 @@ public interface PermissionsExt {
 
 /** This type represents a file descriptor that refers to a process. */
 @rust("std::os::linux::process::PidFd")
+@RustDebug
 public class PidFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
     public void kill() throws Error;
     public ExitStatus wait() throws Error;
@@ -2743,6 +2984,8 @@ public class PidFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
 /** A pointer which pins its pointee in place. */
 @rust("std::pin::Pin")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Pin<Ptr> {
     public Pin(Ptr pointer);
     public static Ptr into_inner(Pin<Ptr> pin);
@@ -2764,12 +3007,14 @@ public class Pin<Ptr> {
 
 /** Read end of an anonymous pipe. */
 @rust("std::io::PipeReader")
+@RustDebug
 public class PipeReader implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Read {
     public PipeReader try_clone() throws Error;
 }
 
 /** Write end of an anonymous pipe. */
 @rust("std::io::PipeWriter")
+@RustDebug
 public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Write {
     public PipeWriter try_clone() throws Error;
 }
@@ -2777,6 +3022,8 @@ public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRaw
 /** Windows path prefixes, e.g., `C:` or `\\server\share`. */
 @rust("std::path::Prefix")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum Prefix implements ToOwned {
     Verbatim(OsStr), VerbatimUNC(OsStr, OsStr), VerbatimDisk(ubyte), DeviceNS(OsStr), UNC(OsStr, OsStr), Disk(ubyte);
 
@@ -2786,6 +3033,8 @@ public enum Prefix implements ToOwned {
 /** A structure wrapping a Windows path prefix as well as its unparsed string */
 @rust("std::path::PrefixComponent")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class PrefixComponent implements ToOwned {
     @RustBorrowsSelf public Prefix kind();
     @RustRefOut public OsStr as_os_str();
@@ -2794,6 +3043,7 @@ public class PrefixComponent implements ToOwned {
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::RChunks")
 @RustClone
+@RustDebug
 public class RChunks<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -2801,6 +3051,7 @@ public class RChunks<T> implements RustIterator {
 /** An iterator over a slice in (non-overlapping) chunks (`chunk_size` elements at a */
 @rust("std::slice::RChunksExact")
 @RustClone
+@RustDebug
 public class RChunksExact<T> implements RustIterator {
     @RustRefOut public T[] remainder();
     @MutSelf @RustRefOut public T[]? next();
@@ -2808,6 +3059,7 @@ public class RChunksExact<T> implements RustIterator {
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::RChunksExactMut")
+@RustDebug
 public class RChunksExactMut<T> implements RustIterator {
     @RustRefOut public T[] into_remainder();
     @MutSelf @RustRefOut public T[]? next();
@@ -2815,6 +3067,7 @@ public class RChunksExactMut<T> implements RustIterator {
 
 /** An iterator over a slice in (non-overlapping) mutable chunks (`chunk_size` */
 @rust("std::slice::RChunksMut")
+@RustDebug
 public class RChunksMut<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -2822,6 +3075,7 @@ public class RChunksMut<T> implements RustIterator {
 /** Created with the method [`rmatch_indices`]. */
 @rust("std::str::RMatchIndices")
 @RustClone
+@RustDebug
 public class RMatchIndices<P> implements RustIterator {
     @MutSelf public (uint, String)? next();
 }
@@ -2829,18 +3083,21 @@ public class RMatchIndices<P> implements RustIterator {
 /** Created with the method [`rmatches`]. */
 @rust("std::str::RMatches")
 @RustClone
+@RustDebug
 public class RMatches<P> implements RustIterator {
     @MutSelf @RustRefOut public String? next();
 }
 
 /** An iterator over the subslices of the vector which are separated */
 @rust("std::slice::RSplitMut")
+@RustDebug
 public class RSplitMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
 /** An iterator over subslices separated by elements that match a */
 @rust("std::slice::RSplitNMut")
+@RustDebug
 public class RSplitNMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -2848,6 +3105,7 @@ public class RSplitNMut<T, P> implements RustIterator {
 /** Created with the method [`rsplit_terminator`]. */
 @rust("std::str::RSplitTerminator")
 @RustClone
+@RustDebug
 public class RSplitTerminator<P> implements RustIterator {
     @RustRefOut public String? remainder();
     @MutSelf @RustRefOut public String? next();
@@ -2856,6 +3114,8 @@ public class RSplitTerminator<P> implements RustIterator {
 /** `RandomState` is the default state for [`HashMap`] types. */
 @rust("std::hash::RandomState")
 @RustClone
+@RustDebug
+@RustDefault
 public class RandomState implements ToOwned {
     public RandomState();
 }
@@ -2863,6 +3123,8 @@ public class RandomState implements ToOwned {
 /** An iterator over a sub-range of entries in a `BTreeMap`. */
 @rust("std::collections::btree_map::Range")
 @RustClone
+@RustDebug
+@RustDefault
 public class Range<K, V> implements RustIterator, ToOwned {
     @RustDefault public Range();
     @MutSelf public (K, V)? next();
@@ -2871,12 +3133,17 @@ public class Range<K, V> implements RustIterator, ToOwned {
 /** An unbounded range (`..`). */
 @rust("std::ops::RangeFull")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class RangeFull {
     @RustDefault public RangeFull();
 }
 
 /** A mutable iterator over a sub-range of entries in a `BTreeMap`. */
 @rust("std::collections::btree_map::RangeMut")
+@RustDebug
+@RustDefault
 public class RangeMut<K, V> implements RustIterator {
     @RustDefault public RangeMut();
     @MutSelf public (K, V)? next();
@@ -2891,6 +3158,9 @@ public type RawSocket = SOCKET;
 /** A single-threaded reference-counting pointer. 'Rc' stands for 'Reference */
 @rust("std::rc::Rc")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Rc<T, A> implements ToOwned, ToString {
     public Rc(T value);
     @RustDefault public Rc();
@@ -2942,6 +3212,7 @@ public interface Read {
 
 /** Iterator over the entries in a directory. */
 @rust("std::fs::ReadDir")
+@RustDebug
 public class ReadDir implements RustIterator {
     @MutSelf public DirEntry? next() throws Error;
 }
@@ -2949,24 +3220,31 @@ public class ReadDir implements RustIterator {
 /** An error returned from the [`recv`] function on a [`Receiver`]. */
 @rust("std::sync::mpsc::RecvError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class RecvError implements ToOwned, ToString {
 }
 
 /** This enumeration is the list of possible errors that made [`recv_timeout`] */
 @rust("std::sync::mpsc::RecvTimeoutError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum RecvTimeoutError implements ToOwned, ToString {
     Timeout, Disconnected
 }
 
 /** A reader which yields one byte over and over and over and over and over and... */
 @rust("std::io::Repeat")
+@RustDebug
 public class Repeat {
 }
 
 /** A double-ended iterator with the direction inverted. */
 @rust("std::iter::Rev")
 @RustClone
+@RustDebug
+@RustDefault
 public class Rev<T> implements RustIterator {
     @RustDefault public Rev();
     @MutSelf public I.Item? next();
@@ -3055,6 +3333,8 @@ public interface RustIterator {
 
 /** A reader-writer lock */
 @rust("std::sync::RwLock")
+@RustDebug
+@RustDefault
 public class RwLock<T> {
     public RwLock(T t);
     @RustDefault public RwLock();
@@ -3070,11 +3350,13 @@ public class RwLock<T> {
 
 /** RAII structure used to release the shared read access of a lock when */
 @rust("std::sync::RwLockReadGuard")
+@RustDebug
 public class RwLockReadGuard<T> implements ToString {
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
 @rust("std::sync::RwLockWriteGuard")
+@RustDebug
 public class RwLockWriteGuard<T> implements ToString {
     public static RwLockReadGuard<T> downgrade(RwLockWriteGuard s);
 }
@@ -3100,6 +3382,9 @@ public const BorrowedFd STDOUT;
 /** Provides intentionally-saturating arithmetic on `T`. */
 @rust("std::num::Saturating")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Saturating<T> {
     @RustDefault public Saturating();
     public u32 count_ones();
@@ -3125,6 +3410,7 @@ public class Saturating<T> {
 /** An iterator to maintain state while iterating another iterator. */
 @rust("std::iter::Scan")
 @RustClone
+@RustDebug
 public class Scan<I, St, F> implements RustIterator {
     @MutSelf public B? next();
 }
@@ -3142,12 +3428,14 @@ public class ScmRights implements RustIterator {
 
 /** A scope to spawn scoped threads in. */
 @rust("std::thread::Scope")
+@RustDebug
 public class Scope {
     @RustBorrowsSelf public ScopedJoinHandle<T> spawn<F, T>(() -> T f);
 }
 
 /** An owned permission to join on a scoped thread (block on its termination). */
 @rust("std::thread::ScopedJoinHandle")
+@RustDebug
 public class ScopedJoinHandle<T> {
     @RustRefOut public Thread thread();
     public T join() throws Error;
@@ -3172,6 +3460,8 @@ public interface Seek {
 /** Enumeration of possible methods to seek within an I/O object. */
 @rust("std::io::SeekFrom")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum SeekFrom implements ToOwned {
     Start(ulong), End(long), Current(long)
 }
@@ -3179,12 +3469,16 @@ public enum SeekFrom implements ToOwned {
 /** An error returned from the [`Sender::send`] or [`SyncSender::send`] */
 @rust("std::sync::mpsc::SendError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class SendError<T> implements ToOwned, ToString {
 }
 
 /** Possible values which can be passed to the [`TcpStream::shutdown`] method. */
 @rust("std::net::Shutdown")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum Shutdown implements ToOwned {
     Read, Write, Both
 }
@@ -3192,6 +3486,8 @@ public enum Shutdown implements ToOwned {
 /** A writer which will move data into the void. */
 @rust("std::io::Sink")
 @RustClone
+@RustDebug
+@RustDefault
 public class Sink {
     @RustDefault public Sink();
 }
@@ -3199,6 +3495,7 @@ public class Sink {
 /** An iterator that skips over `n` elements of `iter`. */
 @rust("std::iter::Skip")
 @RustClone
+@RustDebug
 public class Skip<I> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -3206,6 +3503,7 @@ public class Skip<I> implements RustIterator {
 /** An iterator that rejects elements while `predicate` returns `true`. */
 @rust("std::iter::SkipWhile")
 @RustClone
+@RustDebug
 public class SkipWhile<I, P> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -3217,6 +3515,7 @@ public class Socket {
 /** An address associated with a Unix socket. */
 @rust("std::os::unix::net::SocketAddr")
 @RustClone
+@RustDebug
 public class SocketAddr implements SocketAddrExt, ToOwned {
     public static SocketAddr from_pathname<P>(P path) throws Error;
     public bool is_unnamed();
@@ -3233,6 +3532,8 @@ public interface SocketAddrExt {
 /** An IPv4 socket address. */
 @rust("std::net::SocketAddrV4")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class SocketAddrV4 {
     public SocketAddrV4(Ipv4Addr ip, ushort port);
     @RustRefOut public Ipv4Addr ip();
@@ -3244,6 +3545,8 @@ public class SocketAddrV4 {
 /** An IPv6 socket address. */
 @rust("std::net::SocketAddrV6")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class SocketAddrV6 {
     public SocketAddrV6(Ipv6Addr ip, ushort port, u32 flowinfo, u32 scope_id);
     @RustRefOut public Ipv6Addr ip();
@@ -3258,6 +3561,7 @@ public class SocketAddrV6 {
 
 /** A Unix socket Ancillary data struct. */
 @rust("std::os::unix::net::SocketAncillary")
+@RustDebug
 public class SocketAncillary {
     public SocketAncillary(&mut ubyte[] buffer);
     public uint capacity();
@@ -3277,12 +3581,14 @@ public class SocketCred implements ToOwned {
 
 /** A splicing iterator for `Vec`. */
 @rust("std::vec::Splice")
+@RustDebug
 public class Splice<I, A> implements RustIterator {
     @MutSelf public I.Item? next();
 }
 
 /** An iterator over the contents of an instance of `BufRead` split on a */
 @rust("std::io::Split")
+@RustDebug
 public class Split<B> implements RustIterator {
     @MutSelf public Vec<ubyte>? next() throws Error;
 }
@@ -3290,30 +3596,35 @@ public class Split<B> implements RustIterator {
 /** An iterator over the non-ASCII-whitespace substrings of a string, */
 @rust("std::str::SplitAsciiWhitespace")
 @RustClone
+@RustDebug
 public class SplitAsciiWhitespace implements RustIterator {
     @MutSelf @RustRefOut public String? next();
 }
 
 /** An iterator over the mutable subslices of the vector which are separated */
 @rust("std::slice::SplitInclusiveMut")
+@RustDebug
 public class SplitInclusiveMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
 /** An iterator over the mutable subslices of the vector which are separated */
 @rust("std::slice::SplitMut")
+@RustDebug
 public class SplitMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
 /** An iterator over subslices separated by elements that match a predicate */
 @rust("std::slice::SplitNMut")
+@RustDebug
 public class SplitNMut<T, P> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
 
 /** An iterator that splits an environment variable into paths according to */
 @rust("std::env::SplitPaths")
+@RustDebug
 public class SplitPaths implements RustIterator {
     @MutSelf public PathBuf? next();
 }
@@ -3321,6 +3632,7 @@ public class SplitPaths implements RustIterator {
 /** Created with the method [`split_terminator`]. */
 @rust("std::str::SplitTerminator")
 @RustClone
+@RustDebug
 public class SplitTerminator<P> implements RustIterator {
     @RustRefOut public String? remainder();
     @MutSelf @RustRefOut public String? next();
@@ -3329,23 +3641,27 @@ public class SplitTerminator<P> implements RustIterator {
 /** An iterator over the non-whitespace substrings of a string, */
 @rust("std::str::SplitWhitespace")
 @RustClone
+@RustDebug
 public class SplitWhitespace implements RustIterator {
     @MutSelf @RustRefOut public String? next();
 }
 
 /** A handle to the standard error stream of a process. */
 @rust("std::io::Stderr")
+@RustDebug
 public class Stderr implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, StdioExt, Write {
     public StderrLock lock();
 }
 
 /** A locked reference to the [`Stderr`] handle. */
 @rust("std::io::StderrLock")
+@RustDebug
 public class StderrLock implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, StdioExt, Write {
 }
 
 /** A handle to the standard input stream of a process. */
 @rust("std::io::Stdin")
+@RustDebug
 public class Stdin implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, Read, StdioExt {
     public StdinLock lock();
     public uint read_line(&mut String buf) throws Error;
@@ -3354,11 +3670,13 @@ public class Stdin implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, 
 
 /** A locked reference to the [`Stdin`] handle. */
 @rust("std::io::StdinLock")
+@RustDebug
 public class StdinLock implements AsFd, AsHandle, AsRawFd, AsRawHandle, BufRead, IsTerminal, Read, StdioExt {
 }
 
 /** Describes what to do with a standard I/O stream for a child process when */
 @rust("std::process::Stdio")
+@RustDebug
 public class Stdio implements FromRawFd, FromRawHandle {
     public static Stdio piped();
     public static Stdio inherit();
@@ -3374,18 +3692,21 @@ public interface StdioExt {
 
 /** A handle to the global standard output stream of the current process. */
 @rust("std::io::Stdout")
+@RustDebug
 public class Stdout implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, StdioExt, Write {
     public StdoutLock lock();
 }
 
 /** A locked reference to the [`Stdout`] handle. */
 @rust("std::io::StdoutLock")
+@RustDebug
 public class StdoutLock implements AsFd, AsHandle, AsRawFd, AsRawHandle, IsTerminal, StdioExt, Write {
 }
 
 /** An iterator for stepping iterators by a custom amount. */
 @rust("std::iter::StepBy")
 @RustClone
+@RustDebug
 public class StepBy<I> implements RustIterator {
     @MutSelf public I.Item? next();
 }
@@ -3393,6 +3714,9 @@ public class StepBy<I> implements RustIterator {
 /** A UTF-8–encoded, growable string. */
 @rust("std::string::String")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 @RustDerefs("str")
 public class String implements ToOwned, ToString, Write {
@@ -3516,12 +3840,15 @@ public class String implements ToOwned, ToString, Write {
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
 @rust("std::path::StripPrefixError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class StripPrefixError implements ToOwned, ToString {
 }
 
 /** A lazy iterator producing elements in the symmetric difference of `BTreeSet`s. */
 @rust("std::collections::btree_set::SymmetricDifference")
 @RustClone
+@RustDebug
 public class SymmetricDifference<T> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
 }
@@ -3529,6 +3856,7 @@ public class SymmetricDifference<T> implements RustIterator, ToOwned {
 /** The sending-half of Rust's synchronous [`sync_channel`] type. */
 @rust("std::sync::mpsc::SyncSender")
 @RustClone
+@RustDebug
 public class SyncSender<T> implements ToOwned {
     public void send(T t) throws SendError<T>;
     public void try_send(T t) throws TrySendError<T>;
@@ -3537,6 +3865,8 @@ public class SyncSender<T> implements ToOwned {
 /** The default memory allocator provided by the operating system. */
 @rust("std::alloc::System")
 @RustClone
+@RustDebug
+@RustDefault
 public class System implements ToOwned {
     @RustDefault public System();
 }
@@ -3544,6 +3874,8 @@ public class System implements ToOwned {
 /** The system random number generator. */
 @rust("std::random::SystemRng")
 @RustClone
+@RustDebug
+@RustDefault
 public class SystemRng implements ToOwned {
     @RustDefault public SystemRng();
 }
@@ -3551,6 +3883,8 @@ public class SystemRng implements ToOwned {
 /** A measurement of the system clock, useful for talking to */
 @rust("std::time::SystemTime")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class SystemTime implements ToOwned {
     public static SystemTime now();
     public Duration duration_since(SystemTime earlier) throws SystemTimeError;
@@ -3562,6 +3896,7 @@ public class SystemTime implements ToOwned {
 /** An error returned from the `duration_since` and `elapsed` methods on */
 @rust("std::time::SystemTimeError")
 @RustClone
+@RustDebug
 public class SystemTimeError implements ToOwned, ToString {
     public Duration duration();
 }
@@ -3569,12 +3904,14 @@ public class SystemTimeError implements ToOwned, ToString {
 /** An iterator that only accepts elements while `predicate` returns `true`. */
 @rust("std::iter::TakeWhile")
 @RustClone
+@RustDebug
 public class TakeWhile<I, P> implements RustIterator {
     @MutSelf public I.Item? next();
 }
 
 /** A TCP socket server, listening for connections. */
 @rust("std::net::TcpListener")
+@RustDebug
 public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawFd, FromRawSocket, IntoRawFd, IntoRawSocket {
     public static TcpListener bind<A>(A addr) throws Error;
     public SocketAddr local_addr() throws Error;
@@ -3591,6 +3928,7 @@ public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRa
 
 /** A TCP stream between a local and a remote socket. */
 @rust("std::net::TcpStream")
+@RustDebug
 public class TcpStream implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawFd, FromRawSocket, IntoRawFd, IntoRawSocket, Read, TcpStreamExt, Write {
     public static TcpStream connect<A>(A addr) throws Error;
     public static TcpStream connect_timeout(&SocketAddr addr, Duration timeout) throws Error;
@@ -3630,6 +3968,7 @@ public interface Termination {
 /** A handle to a thread. */
 @rust("std::thread::Thread")
 @RustClone
+@RustDebug
 public class Thread implements ToOwned {
     public void unpark();
     public ThreadId id();
@@ -3639,12 +3978,15 @@ public class Thread implements ToOwned {
 /** A unique identifier for a running thread. */
 @rust("std::thread::ThreadId")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class ThreadId implements ToOwned {
 }
 
 /** Returns an iterator that yields the case-folded equivalent of a `char`. */
 @rust("std::char::ToCasefold")
 @RustClone
+@RustDebug
 public class ToCasefold implements RustIterator {
     @MutSelf public char? next();
 }
@@ -3652,6 +3994,7 @@ public class ToCasefold implements RustIterator {
 /** Returns an iterator that yields the lowercase equivalent of a `char`. */
 @rust("std::char::ToLowercase")
 @RustClone
+@RustDebug
 public class ToLowercase implements RustIterator {
     @MutSelf public char? next();
 }
@@ -3683,6 +4026,7 @@ public interface ToString {
 /** Returns an iterator that yields the uppercase equivalent of a `char`. */
 @rust("std::char::ToUppercase")
 @RustClone
+@RustDebug
 public class ToUppercase implements RustIterator {
     @MutSelf public char? next();
 }
@@ -3690,18 +4034,23 @@ public class ToUppercase implements RustIterator {
 /** An error which can be returned when converting a floating-point value of seconds */
 @rust("std::time::TryFromFloatSecsError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class TryFromFloatSecsError {
 }
 
 /** The error type returned when a checked integral type conversion fails. */
 @rust("std::num::TryFromIntError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class TryFromIntError {
     @RustRefOut public IntErrorKind kind();
 }
 
 /** An enumeration of possible errors which can occur while trying to acquire a lock */
 @rust("std::fs::TryLockError")
+@RustDebug
 public enum TryLockError implements ToString {
     Error(Error), WouldBlock
 }
@@ -3709,6 +4058,8 @@ public enum TryLockError implements ToString {
 /** This enumeration is the list of the possible reasons that [`try_recv`] could */
 @rust("std::sync::mpsc::TryRecvError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum TryRecvError implements ToOwned, ToString {
     Empty, Disconnected
 }
@@ -3716,12 +4067,16 @@ public enum TryRecvError implements ToOwned, ToString {
 /** The error type for `try_reserve` methods. */
 @rust("std::collections::TryReserveError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class TryReserveError implements ToOwned, ToString {
 }
 
 /** This enumeration is the list of the possible error outcomes for the */
 @rust("std::sync::mpsc::TrySendError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum TrySendError<T> implements ToOwned, ToString {
     Full(T), Disconnected(T)
 }
@@ -3731,6 +4086,7 @@ public const SystemTime UNIX_EPOCH;
 
 /** A UDP socket. */
 @rust("std::net::UdpSocket")
+@RustDebug
 public class UdpSocket implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawFd, FromRawSocket, IntoRawFd, IntoRawSocket {
     public static UdpSocket bind<A>(A addr) throws Error;
     public (uint, SocketAddr) recv_from(&mut ubyte[] buf) throws Error;
@@ -3768,12 +4124,14 @@ public class UdpSocket implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawF
 /** A lazy iterator producing elements in the union of `BTreeSet`s. */
 @rust("std::collections::btree_set::Union")
 @RustClone
+@RustDebug
 public class Union<T> implements RustIterator, ToOwned {
     @MutSelf @RustRefOut public T? next();
 }
 
 /** A Unix datagram socket. */
 @rust("std::os::unix::net::UnixDatagram")
+@RustDebug
 public class UnixDatagram implements AsFd, AsRawFd, FromRawFd, IntoRawFd, UnixSocketExt {
     public static UnixDatagram bind<P>(P path) throws Error;
     public static UnixDatagram bind_addr(&SocketAddr socket_addr) throws Error;
@@ -3807,6 +4165,7 @@ public class UnixDatagram implements AsFd, AsRawFd, FromRawFd, IntoRawFd, UnixSo
 
 /** A structure representing a Unix domain socket server. */
 @rust("std::os::unix::net::UnixListener")
+@RustDebug
 public class UnixListener implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
     public static UnixListener bind<P>(P path) throws Error;
     public static UnixListener bind_addr(&SocketAddr socket_addr) throws Error;
@@ -3827,6 +4186,7 @@ public interface UnixSocketExt {
 
 /** A Unix stream socket. */
 @rust("std::os::unix::net::UnixStream")
+@RustDebug
 public class UnixStream implements AsFd, AsRawFd, FromRawFd, IntoRawFd, Read, UnixSocketExt, Write {
     public static UnixStream connect<P>(P path) throws Error;
     public static UnixStream connect_addr(&SocketAddr socket_addr) throws Error;
@@ -3850,6 +4210,7 @@ public class UnixStream implements AsFd, AsRawFd, FromRawFd, IntoRawFd, Read, Un
 /** An iterator used to decode a slice of mostly UTF-8 bytes to string slices */
 @rust("std::str::Utf8Chunks")
 @RustClone
+@RustDebug
 public class Utf8Chunks implements RustIterator {
     @MutSelf public Utf8Chunk? next();
 }
@@ -3857,6 +4218,8 @@ public class Utf8Chunks implements RustIterator {
 /** Errors which can occur when attempting to interpret a sequence of [`u8`] */
 @rust("std::str::Utf8Error")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class Utf8Error {
     public uint valid_up_to();
     public uint? error_len();
@@ -3864,6 +4227,7 @@ public class Utf8Error {
 
 /** A view into a vacant entry in a `BTreeMap`. */
 @rust("std::collections::btree_map::VacantEntry")
+@RustDebug
 public class VacantEntry<K, V, A> {
     @RustRefOut public K key();
     public K into_key();
@@ -3874,6 +4238,8 @@ public class VacantEntry<K, V, A> {
 /** An iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::Values")
 @RustClone
+@RustDebug
+@RustDefault
 public class Values<K, V> implements RustIterator, ToOwned {
     @RustDefault public Values();
     @MutSelf @RustRefOut public V? next();
@@ -3881,6 +4247,8 @@ public class Values<K, V> implements RustIterator, ToOwned {
 
 /** A mutable iterator over the values of a `BTreeMap`. */
 @rust("std::collections::btree_map::ValuesMut")
+@RustDebug
+@RustDefault
 public class ValuesMut<K, V> implements RustIterator {
     @RustDefault public ValuesMut();
     @MutSelf @RustRefOut public V? next();
@@ -3889,18 +4257,22 @@ public class ValuesMut<K, V> implements RustIterator {
 /** The error type for operations interacting with environment variables. */
 @rust("std::env::VarError")
 @RustClone
+@RustDebug
+@RustPartialEq
 public enum VarError implements ToOwned, ToString {
     NotPresent, NotUnicode(OsString)
 }
 
 /** An iterator over a snapshot of the environment variables of this process. */
 @rust("std::env::Vars")
+@RustDebug
 public class Vars implements RustIterator {
     @MutSelf public (String, String)? next();
 }
 
 /** An iterator over a snapshot of the environment variables of this process. */
 @rust("std::env::VarsOs")
+@RustDebug
 public class VarsOs implements RustIterator {
     @MutSelf public (OsString, OsString)? next();
 }
@@ -3908,6 +4280,9 @@ public class VarsOs implements RustIterator {
 /** A contiguous growable array type, written as `Vec<T>`, short for 'vector'. */
 @rust("std::vec::Vec")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 @RustDerefs("[]")
 public class Vec<T, A> implements ToOwned {
@@ -4103,6 +4478,9 @@ public class Vec<T, A> implements ToOwned {
 /** A double-ended queue implemented with a growable ring buffer. */
 @rust("std::collections::VecDeque")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 @RustCollection
 public class VecDeque<T, A> implements ToOwned {
     public VecDeque();
@@ -4164,6 +4542,8 @@ public class VecDeque<T, A> implements ToOwned {
 /** A type indicating whether a timed wait on a condition variable returned */
 @rust("std::sync::WaitTimeoutResult")
 @RustClone
+@RustDebug
+@RustPartialEq
 public class WaitTimeoutResult implements ToOwned {
     public bool timed_out();
 }
@@ -4178,6 +4558,7 @@ public interface Wake {
 /** A `Waker` is a handle for waking up a task by notifying its executor that it */
 @rust("std::task::Waker")
 @RustClone
+@RustDebug
 public class Waker {
     public Waker(Object* data, &RawWakerVTable vtable);
     public void wake();
@@ -4192,6 +4573,8 @@ public class Waker {
 /** `Weak` is a version of [`Rc`] that holds a non-owning reference to the */
 @rust("std::rc::Weak")
 @RustClone
+@RustDebug
+@RustDefault
 public class Weak<T, A> implements ToOwned {
     public Weak();
     public static unsafe Weak from_raw(T* ptr);
@@ -4206,6 +4589,7 @@ public class Weak<T, A> implements ToOwned {
 /** An iterator over overlapping subslices of length `size`. */
 @rust("std::slice::Windows")
 @RustClone
+@RustDebug
 public class Windows<T> implements RustIterator {
     @MutSelf @RustRefOut public T[]? next();
 }
@@ -4213,6 +4597,9 @@ public class Windows<T> implements RustIterator {
 /** Provides intentionally-wrapped arithmetic on `T`. */
 @rust("std::num::Wrapping")
 @RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
 public class Wrapping<T> {
     @RustDefault public Wrapping();
     public Wrapping reverse_bits();
@@ -4239,6 +4626,7 @@ public interface Write {
 
 /** Error returned for the buffered data from `BufWriter::into_parts`, when the underlying */
 @rust("std::io::WriterPanicked")
+@RustDebug
 public class WriterPanicked implements ToString {
     public Vec<ubyte> into_inner();
 }
@@ -4246,6 +4634,7 @@ public class WriterPanicked implements ToString {
 /** An iterator that produces directory paths from XDG environment configuration. */
 @rust("std::os::unix::xdg::XdgDirsIter")
 @RustClone
+@RustDebug
 public class XdgDirsIter implements RustIterator, ToOwned {
     @MutSelf public PathBuf? next();
 }
@@ -4253,6 +4642,7 @@ public class XdgDirsIter implements RustIterator, ToOwned {
 /** An iterator that iterates two other iterators simultaneously. */
 @rust("std::iter::Zip")
 @RustClone
+@RustDebug
 public class Zip<A, B> implements RustIterator {
     @MutSelf public (A.Item, B.Item)? next();
 }
@@ -4305,6 +4695,7 @@ public class bool_methods {
 
 /** Equivalent to C's `void` type when used as a [pointer]. */
 @rust("std::ffi::c_void")
+@RustDebug
 public enum c_void {
     // (variants not represented)
 }

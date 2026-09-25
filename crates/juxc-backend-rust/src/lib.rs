@@ -4174,18 +4174,20 @@ impl RustEmitter {
         // nested), we let the Rust compiler decide via autoref-based
         // specialization (the well-known "spez" trick):
         //
-        //   `(&&JuxShow(&value)).jux_show()` resolves to the `Display` impl when
-        //   `value: Display` (that impl is written for `&&JuxShow<T>`, so it
-        //   matches the outer `&&` at the first probe step), and otherwise — when
+        //   `(&&&JuxShow(&value)).jux_show()` resolves to the `Display` impl when
+        //   `value: Display` (that impl is written for `&&&JuxShow<T>`, so it
+        //   matches the outer `&&&` at the first probe step); otherwise, when
         //   `T: Display` does not hold so that conditional impl simply does NOT
         //   exist — method resolution autoderefs one step to the `Debug` impl
-        //   written for `&JuxShow<T>`. Gating by IMPL EXISTENCE (not a bound on a
-        //   single impl) is what lets the fallback kick in: a missing impl is
+        //   written for `&&JuxShow<T>`, and one step further to the TYPE-NAME
+        //   impl written for `&JuxShow<T>`, which has no bound at all and so
+        //   always matches. Gating by IMPL EXISTENCE (not a bound on a
+        //   single impl) is what lets each fallback kick in: a missing impl is
         //   "no candidate", which continues resolution, whereas a present-but-
-        //   unsatisfied impl would hard-error. Both receivers are references, so
+        //   unsatisfied impl would hard-error. Every receiver is a reference, so
         //   nothing is moved out of the temporary `JuxShow` wrapper.
         //
-        // Both paths return a `String`, so the `{}` placeholders the emit sites
+        // Every path returns a `String`, so the `{}` placeholders the emit sites
         // push stay unchanged. Nullable values are handled at the call site by
         // matching the `Option` and rendering `None` as `"null"`. The
         // `__jux_show!` macro brings both traits into method scope locally, so
@@ -4194,7 +4196,7 @@ impl RustEmitter {
         // don't warn.
         w.push_str("pub struct JuxShow<T>(pub T);\n");
         w.push_str("pub trait JuxShowViaDisplay { fn jux_show(self) -> String; }\n");
-        w.push_str("impl<T: std::fmt::Display> JuxShowViaDisplay for &&JuxShow<T> {\n");
+        w.push_str("impl<T: std::fmt::Display> JuxShowViaDisplay for &&&JuxShow<T> {\n");
         w.push_str("    fn jux_show(self) -> String { jux_display_text(&self.0) }\n");
         w.push_str("}\n");
         // A float reaching the `Display` tier is one whose type the emitter
@@ -4215,9 +4217,39 @@ impl RustEmitter {
             "}\n",
         ));
         w.push_str("pub trait JuxShowViaDebug { fn jux_show(self) -> String; }\n");
-        w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &JuxShow<T> {\n");
+        w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &&JuxShow<T> {\n");
         w.push_str("    fn jux_show(self) -> String { jux_debug_text(&self.0) }\n");
         w.push_str("}\n");
+        // The BOTTOM tier (ERRATA E97): a value whose type has neither
+        // `Display` nor `Debug` prints as its own type name, `<File>`.
+        //
+        // Rust's own standard library has such types (`std::fs::File` is
+        // `Debug` but many crate handles are not) and Jux holds them in class
+        // fields, record components and collections. Without this tier the
+        // aggregate holding one could not be printed at all, which made the
+        // whole value unusable for the sake of one member nobody wanted to see.
+        // Naming the type says as much as there is to say about a value that
+        // cannot describe itself, and leaves everything around it printable.
+        w.push_str("pub trait JuxShowViaTypeName { fn jux_show(self) -> String; }\n");
+        w.push_str("impl<T> JuxShowViaTypeName for &JuxShow<T> {\n");
+        w.push_str("    fn jux_show(self) -> String { jux_type_label::<T>() }\n");
+        w.push_str("}\n");
+        w.push_str(concat!(
+            "/// The label `__jux_show!` prints for a value that has neither\n",
+            "/// `Display` nor `Debug`: its type's own name, in angle brackets.\n",
+            "pub fn jux_type_label<T: ?Sized>() -> String {\n",
+            "    let full = std::any::type_name::<T>().trim_start_matches('&');\n",
+            "    // A Jux function value is an `Rc<dyn Fn(..)>`, and neither half of\n",
+            "    // that is a name the program wrote. `fn` is what it is.\n",
+            "    if full.contains(\"dyn \") && full.contains(\"Fn(\") {\n",
+            "        String::from(\"<fn>\")\n",
+            "    } else {\n",
+            "        let head = full.split('<').next().unwrap_or(full);\n",
+            "        let short = head.rsplit(\"::\").next().unwrap_or(head);\n",
+            "        format!(\"<{}>\", if short.is_empty() { full } else { short })\n",
+            "    }\n",
+            "}\n",
+        ));
         // A value reaching the `Debug` tier inside GENERIC code (a class's
         // `K` holding a `String`) is a type the emitter could not see, and
         // `Debug` quotes a string or a char: `"c"`, `'x'`. A `String`, `str`
@@ -4263,8 +4295,10 @@ fn jux_unescape_debug(inner: &str) -> String {
         w.push_str("macro_rules! __jux_show {\n");
         w.push_str("    ($v:expr) => {{\n");
         w.push_str("        #[allow(unused_imports)]\n");
-        w.push_str("        use $crate::{JuxShowViaDisplay as _, JuxShowViaDebug as _};\n");
-        w.push_str("        (&&$crate::JuxShow(&$v)).jux_show()\n");
+        w.push_str(
+            "        use $crate::{JuxShowViaDisplay as _, JuxShowViaDebug as _, JuxShowViaTypeName as _};\n",
+        );
+        w.push_str("        (&&&$crate::JuxShow(&$v)).jux_show()\n");
         w.push_str("    }};\n");
         w.push_str("}\n\n");
         // The handle a class whose instances CROSS A WORKER BOUNDARY lowers to

@@ -1934,6 +1934,89 @@ spelling.
 
 ---
 
+## E97. A Rust type that is not `Clone + Debug` could not be held at all
+
+**Conflict.** §G.3 and the whole `rust.<crate>` design say the Rust standard
+library IS the Jux standard library: a program stores what it opens, and the
+types it stores are Rust's. Nothing in the addenda says a foreign type must
+implement any particular trait to be held by a class field or a record
+component.
+
+In practice it had to implement two. Every Jux aggregate lowered to a struct
+carrying `#[derive(Clone, Debug)]` (a record also `PartialEq` and `Default`),
+and the only question asked before dropping a derive was whether the field's
+type came from a crate OTHER than `std`, on the assumption that every
+`rust.std` type is `Clone`. 139 of the 296 types in the std stub are not,
+`std::fs::File` and `std::net::TcpStream` among them, so:
+
+```jux
+import rust.std.File;
+class Wrap {
+    public File f;
+    public Wrap(File f) { this.f = f; }
+}
+```
+
+```text
+error[E0277]: the trait bound `File: Clone` is not satisfied
+1150 | #[derive(Clone, Debug)]
+     |          ----- in this derive macro expansion
+```
+
+A `record Holder(File f)` got three of those at once (`Clone`, `PartialEq`,
+`Default`). There was no way to write the declaration differently, and no
+diagnostic: the rustc error named a derive the program never wrote. "Rust is the
+standard library" was not true of any type you would actually want to hold onto.
+
+**Resolution.** What a foreign type can derive is DISCOVERED and recorded, like
+every other fact about a foreign type. bindgen reads `Clone`, `Debug`,
+`PartialEq` and `Default` off the type's real impl list and stamps
+`@RustClone`, `@RustDebug`, `@RustPartialEq`, `@RustDefault` on its stub
+declaration (Bindgen §G.6.4.7). An aggregate derives each trait only when every
+type it holds carries the matching marker, recursing into generic arguments and
+exempting the two positions whose lowering does not ask (a shared array or
+collection handle for `Clone`/`Default`, a `T?` for `Default`). The test is now
+the same for `std` and for every bound crate, and it names no type.
+
+**A dropped `Debug` is a dropped derive, not a dropped trait.** Printing must
+not depend on one member: an interface's trait carries a `std::fmt::Debug`
+supertrait, `throw` formats its payload, and a container of the values prints
+through `Debug`. So the impl is written out instead: the name for a class
+(which prints through its own `Display` anyway, so nothing is lost), and the
+derive's own shape for a record with each component rendered through the
+universal show helper.
+
+That helper gains a **bottom tier**: a value whose type has neither `Display`
+nor `Debug` prints as its own type name in angle brackets, `<TcpStream>`. This
+is the choice worth justifying, and it was taken over a placeholder invented at
+each emit site for two reasons. It is ONE rule in one place, so an aggregate, a
+collection, an interpolation and a generic all render such a value the same way.
+And it makes the helper total: `__jux_show!` now renders every Rust value there
+is, which is what the "one Display-or-Debug helper" design was for. The
+alternative, keeping `Debug` mandatory and reporting a diagnostic, would have
+been a rule the language does not need, since naming the type says everything
+there is to say about a value that cannot describe itself. One piece of
+fallout is worth naming: a Jux FUNCTION value lowers to an `Rc<dyn Fn(..)>`
+with neither trait, so interpolating a lambda now prints `<fn>` where it used
+to be a rustc error about a trait the program never wrote.
+
+**Known boundary: a Jux generic's type argument.** A generic Jux declaration
+lowers its parameters with a `Clone + std::fmt::Debug + 'static` bound, since
+reads of a generic-typed member auto-`clone()` and the declaration's marker
+trait carries a `Debug` supertrait. A type without `Clone` cannot be that
+argument, so `Cell<File>` over `class Cell<T> { public T value; }` still does
+not compile while `Vec<File>` does. Removing that bound is a separate change
+and not a small one: the core library's own `Iterable.reduce<U>` calls
+`initial.clone()` in its body, so the bound is load-bearing well beyond the
+aggregate rule this entry settles. Until then the limit stands as written.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.6.4.7 carries the markers and
+their discovery; `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.5.8 carries the
+aggregate rule, what a dropped derive costs, the printing rule and the generic
+boundary.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 
