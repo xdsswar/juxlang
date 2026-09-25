@@ -2854,13 +2854,20 @@ impl RustEmitter {
     /// hardcoded name list below is only the fallback for stub caches
     /// generated before the marker existed.
     pub(crate) fn external_method_mutates_receiver(&self, type_name: &str, method: &str) -> bool {
-        let class = self.symbols.classes.get(type_name).or_else(|| {
-            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
-        });
+        // `type_name` may already be an FQN, and when it is, the FQN is what
+        // has to be resolved: `resolve_bare_class_fqn` understands both, while
+        // its last segment alone found a user class of the same bare name --
+        // `rust.std.Vec` measured as `Vec` beside a program's own `class Vec`,
+        // which has no `push` and so no `@MutSelf` (ERRATA E102).
+        let class = self
+            .symbols
+            .classes
+            .get(type_name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(type_name));
         // The method may come from a trait the type implements or is reached
         // by (Bindgen G.6.4.3), whose marker says the same thing.
         let via_trait = self
-            .resolve_bare_class_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+            .resolve_bare_class_fqn(type_name)
             .and_then(|fqn| self.external_type_method(&fqn, method));
         if let Some(m) = class.and_then(|c| c.methods.get(method)).or(via_trait) {
             if m.annotations.iter().any(annotation_is_mut_self) {
@@ -3101,7 +3108,12 @@ impl super::super::RustEmitter {
         if let Some(m) = fqn.as_deref().and_then(|f| self.external_type_method(f, method)) {
             return Some(m);
         }
-        self.lookup_class_by_bare_or_fqn(bare).and_then(|c| c.methods.get(method))
+        // Resolved from the written name, with the last segment only as the
+        // retry: a bare `Vec` beside a program's own `class Vec` found THAT
+        // class and reported the foreign method missing (ERRATA E102).
+        self.lookup_class_by_bare_or_fqn(type_name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(bare))
+            .and_then(|c| c.methods.get(method))
     }
 
     /// Whether foreign parameter `idx` is typed by one of the METHOD's own type

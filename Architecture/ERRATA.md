@@ -2413,6 +2413,64 @@ rule; `JUX-LANG-V1.md` §7.5 carries the prose.
 
 ---
 
+## E102. An aliased or qualified library type is not shadowed by a user class
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.1 settled that a program may
+declare a type with a name the standard library also uses (ERRATA E96), and
+pointed at the alias import and the fully-qualified name as the way to reach the
+library's type from the same unit. What it did not say is that a decision made
+about a type has to be made about THAT type. The compiler resolved the name
+correctly and then asked every following question of the name's last segment, so
+a program's own root-package `class Vec` answered for `rust.std.Vec`:
+
+```java
+import rust.std.Vec as RVec;
+class Vec { public int mine = 1; }
+public void main() {
+    Vec a = new Vec();
+    RVec<int> b = new RVec<int>();
+    b.push(5);
+    print($"alias: ${a.mine} ${b.len()}");
+}
+```
+
+```text
+error[E0599]: no method named `push` found for struct `Rc<JuxCell<std::vec::Vec<isize>>>`
+error[E0599]: no method named `len` found for struct `Rc<JuxCell<std::vec::Vec<isize>>>`
+```
+
+The two halves of one decision disagreed. The SLOT was decided from the name the
+author wrote, `RVec`, which is not a user type, so it took the §6.5.1 shared
+handle. The member CALL was decided from the resolved name's last segment,
+`Vec`, which is a user type, so it declined the handle and emitted `push` with
+no `.borrow_mut()` guard. Removing the `class Vec` line made the same program
+compile, which is the shape of a shadow test being asked the wrong question.
+
+Beside a user class the qualified form worked only because BOTH halves declined
+the handle, so the disagreement cancelled: `rust.std.Vec<int>` was measured as
+`Vec` in type position too. Two wrongs, and no way to tell from the outside.
+
+**Resolution.** §M.16.6. A resolved name keeps its package for every later
+question, and the shadow test is a question about a simple name: an alias import
+and a qualified name both say which type is meant, so a same-named user
+declaration does not shadow either. Concretely:
+
+- a genuinely bare name still resolves to the user's class, in the root package
+  and in a named one;
+- a user class in a NAMED package does not make the library type of the same
+  last segment look like a user type, and does not stop being a user type
+  itself;
+- a nested type is keyed `Outer__Inner` and written `Outer.Inner`, so the
+  nested-type shadow test stays a question about a simple name; a
+  package-qualified name is never a nested one.
+
+This is a representation and routing rule, not a new restriction: no name is
+reserved, and nothing tells an author to rename (§M.16.1).
+
+**Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.6 carries the rule.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

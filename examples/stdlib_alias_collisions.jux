@@ -1,0 +1,115 @@
+/**
+ * Reaching the library's type past a user class of the same name (§M.16.6,
+ * ERRATA E102).
+ *
+ * ERRATA E96 settled that a program may declare `class Vec` or `class HashMap`,
+ * and pointed at the two ways to name the library's type from the same unit: an
+ * alias import, and the fully-qualified name. Both are Java's answer, and both
+ * have to behave exactly as they do with no collision in sight.
+ *
+ * They did not. Resolving the name was right and everything after it was wrong:
+ * the compiler dropped the package and asked each following question of the
+ * last segment, so this file's own `class Vec` answered for `rust.std.Vec`. A
+ * slot declared `RVec<int>` carried the §6.5.1 shared handle, because the slot
+ * was decided from the name the author wrote, while `b.push(5)` on it was
+ * emitted as a call on the handle itself, because the member call was decided
+ * from the resolved name's last segment. rustc said `E0599`, "no method named
+ * `push` found for struct `Rc<JuxCell<std::vec::Vec<isize>>>`", and deleting the
+ * `class Vec` line made the same program compile.
+ *
+ * The qualified form beside a user class only LOOKED right: both halves
+ * declined the handle, so the disagreement cancelled and nothing showed. That
+ * is why this file uses both spellings for every shape.
+ */
+
+import rust.std.Vec as RVec;
+import rust.std.HashMap as RMap;
+import rust.std.Duration as RDuration;
+
+/** Shadows the prelude's growable list, and is an ordinary class. */
+class Vec {
+    public int mine = 1;
+
+    public int doubled() {
+        return this.mine * 2;
+    }
+}
+
+/** Shadows the prelude's map. */
+class HashMap {
+    public String label = "mine";
+}
+
+/** Shadows a foreign type that is NOT a collection, so takes no handle. */
+class Duration {
+    public int seconds = 3;
+}
+
+/** A class holding an aliased list in a FIELD, reached through the handle. */
+class Bucket {
+    public RVec<int> items = new RVec<int>();
+
+    public void add(int v) {
+        this.items.push(v);
+    }
+
+    public int count() {
+        return (int) this.items.len();
+    }
+}
+
+/** The aliased list crossing a call boundary, still one shared list. */
+void fill(RVec<int> into) {
+    into.push(7);
+    into.push(8);
+}
+
+public void main() {
+    // The user's own types mean the user's own types.
+    Vec mineList = new Vec();
+    HashMap mineMap = new HashMap();
+    Duration mineDur = new Duration();
+    print($"user: ${mineList.mine} ${mineList.doubled()} ${mineMap.label} ${mineDur.seconds}");
+
+    // The ALIAS reaches the library's growable list, handle and all.
+    RVec<int> aliased = new RVec<int>();
+    aliased.push(5);
+    aliased.push(6);
+    print($"alias: ${(int) aliased.len()}");
+
+    // The FULLY-QUALIFIED name reaches the same type in the same unit, and
+    // indexing it reaches through the same guard.
+    rust.std.Vec<int> qualified = new rust.std.Vec<int>();
+    qualified.push(9);
+    qualified.push(10);
+    print($"qualified: ${(int) qualified.len()} ${qualified[0]} ${qualified[1]}");
+
+    // §6.5.1: a collection is a reference. Two names, one list.
+    RVec<int> shared = aliased;
+    shared.push(1);
+    print($"shared: ${(int) aliased.len()} ${(int) shared.len()}");
+
+    // Across a call boundary, and inside a field of a class.
+    fill(aliased);
+    print($"passed: ${(int) aliased.len()}");
+    Bucket b = new Bucket();
+    b.add(2);
+    b.add(3);
+    print($"field: ${b.count()}");
+
+    // The handle routing is about collections generally, not about `Vec`.
+    RMap<String, int> map = new RMap<String, int>();
+    map.insert("one", 1);
+    map.insert("two", 2);
+    print($"map: ${(int) map.len()}");
+
+    rust.std.HashMap<String, int> qmap = new rust.std.HashMap<String, int>();
+    qmap.insert("three", 3);
+    print($"qmap: ${(int) qmap.len()} ${qmap.get("three") ?? 0}");
+
+    // A foreign type that is NOT a collection takes no handle, and is reached
+    // past its shadow the same two ways.
+    RDuration d = RDuration.from_secs(7);
+    rust.std.Duration qd = rust.std.Duration.from_secs(11);
+    print($"foreign: ${(int) d.as_secs()} ${(int) qd.as_secs()}");
+}
