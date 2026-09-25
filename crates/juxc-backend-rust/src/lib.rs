@@ -1134,8 +1134,8 @@ struct RustEmitter {
     /// Box methods take `&mut self` when they mutate (inline-style), field
     /// access is direct `.0` (Box derefs), and `===` is `std::ptr::eq`.
     pub(crate) box_classes: std::collections::HashSet<String>,
-    /// Bare names of **polymorphic base classes** (non-sealed, non-final
-    /// classes extended by ≥1 subclass, generic or not — see
+    /// Bare names of **polymorphic base classes** (non-final classes
+    /// extended by ≥1 subclass, sealed or not, generic or not — see
     /// [`compute_polymorphic_base_classes`]). A value slot of one of these
     /// types lowers to `Rc<dyn <Name>Kind>` for Stage-2 virtual dispatch, the
     /// `<Name>Kind` trait is populated with the base's virtual methods, and an
@@ -1510,11 +1510,11 @@ struct RustEmitter {
 /// Phase A scope (per the class-representation addendum): only
 /// **simple** classes take the wrapper path. A class is simple when
 /// it has no `extends`, no `sealed permits`, no generic parameters,
-/// and isn't `abstract`. Inheritance, sealed enums, and generics keep
-/// the existing emission for now — those are follow-up passes. The
-/// stdlib-intrinsic skip and the sealed-enum branch in
-/// `emit_class_decl` run *before* this gate, so a class reaching it
-/// is already known to be a normal struct-shaped declaration.
+/// and isn't `abstract`. Inheritance and generics keep the existing
+/// emission for now — those are follow-up passes. The stdlib-intrinsic
+/// skip in `emit_class_decl` runs *before* this gate, so a class
+/// reaching it is already known to be a normal struct-shaped
+/// declaration.
 ///
 /// **Superseded** by [`compute_wrapper_classes`] for the actual
 /// emission gate (which now also admits non-sealed `extends`
@@ -1572,18 +1572,18 @@ pub(crate) fn has_layout_c(annotations: &[juxc_ast::Annotation]) -> bool {
 /// Phase A (§CR.4.1 / §CR.5.1) — two families of class take the
 /// shared-mutation wrapper shape:
 ///
-///   1. **Leaf simple classes** — no `extends`, `sealed`, generics,
-///      or `abstract` (the original Phase-A set).
-///   2. **Non-sealed `extends` hierarchies** — every class in a
-///      connected inheritance component lowers to the wrapper shape so
-///      inherited fields/methods + shared mutation work (§CR.3.5 rolls
-///      the whole chain up to one representation). Abstract parents are
+///   1. **Leaf simple classes** — no `extends`, generics, or `abstract`
+///      (the original Phase-A set).
+///   2. **`extends` hierarchies** — every class in a connected
+///      inheritance component lowers to the wrapper shape so inherited
+///      fields/methods + shared mutation work (§CR.3.5 rolls the whole
+///      chain up to one representation). Abstract parents are
 ///      *included* here (they're still real structs in the chain),
-///      unlike the leaf rule which excludes `abstract`.
+///      unlike the leaf rule which excludes `abstract`. A `sealed` base
+///      is included too: sealing closes the subclass set and leaves the
+///      representation alone (ERRATA E101).
 ///
 /// A connected hierarchy is wrapped **only if every class in it** is:
-///   - non-sealed and not a subclass-of-sealed (sealed parents lower
-///     as Rust enums; their subclasses are variants),
 ///   - non-generic (generic-class lowering is out of scope),
 ///   - not an intrinsic stdlib class (those suppress struct emission),
 ///   - **not an exception type** — any class whose `extends` chain
@@ -1690,17 +1690,14 @@ pub(crate) fn compute_wrapper_classes(
         false
     };
 
-    // Wrappable in isolation: declared where we can see it, not a sealed class
-    // that becomes an enum, not a C-layout value struct, not intrinsic, and
-    // not a variant of a sealed parent.
+    // Wrappable in isolation: declared where we can see it, not a C-layout
+    // value struct, not intrinsic, and its `extends` target visible.
+    //
+    // `sealed` is not a disqualifier. A sealed class takes the shared handle
+    // like every other class (ERRATA E101); only the deleted enum lowering ever
+    // made one unwrappable, because there the variant WAS the representation.
     let decl_ok = |fqn: &str| -> bool {
         let Some(d) = decls.get(fqn) else { return false };
-        // Only a sealed class that actually becomes an ENUM is unwrappable —
-        // the variant IS the representation. A sealed class with state keeps
-        // the ordinary wrapper and needs it for dispatch.
-        if crate::decls::classes::sealed_decl_lowers_to_enum(d.cd) {
-            return false;
-        }
         // Every `struct` is a VALUE type (ERRATA E20), `@layout(c)` ones with a
         // C layout on top (§L.1.2): never behind the shared handle.
         if d.cd.is_struct {
@@ -1713,9 +1710,7 @@ pub(crate) fn compute_wrapper_classes(
             None => true,
             // An `extends` target we cannot see is treated as unsafe.
             Some(None) => false,
-            Some(Some(p)) => decls
-                .get(p)
-                .is_some_and(|pd| !crate::decls::classes::sealed_decl_lowers_to_enum(pd.cd)),
+            Some(Some(p)) => decls.contains_key(p),
         }
     };
 
@@ -2484,9 +2479,8 @@ pub(crate) fn compute_wrapped_set(
     // Node? peer; }`, or mutual A↔B) MUST stay wrapped regardless of
     // aliasing: the inline demotion would emit an infinite-size struct
     // (rustc E0072); the wrapper's `Rc` is the indirection that breaks the
-    // cycle. A component that isn't wrap-eligible (sealed / exception /
-    // generic …) is dropped by the `eligible` intersection here — sealed
-    // dispatches through `&self` match arms, and genuine conflicts are
+    // cycle. A component that isn't wrap-eligible (exception / generic …) is
+    // dropped by the `eligible` intersection here, and genuine conflicts are
     // rejected at tycheck.
     eligible
         .iter()
@@ -2646,7 +2640,7 @@ pub(crate) fn compute_class_reps(
     symbols: &SymbolTable,
     unit_offset: usize,
 ) -> HashMap<String, ClassRep> {
-    // Wrap-eligibility gate: classes excluded here (sealed / generic-excluded /
+    // Wrap-eligibility gate: classes excluded here (generic-excluded /
     // intrinsic / exception …) stay on their legacy plain-struct path and never
     // appear in the rep map. Keyed by FQN, like the map this returns.
     let eligible = compute_wrapper_classes(units, symbols, unit_offset);
@@ -3254,9 +3248,8 @@ pub(crate) fn compute_recursive_field_classes(
 /// compile (§CR.3.5 hierarchy uniformity).
 ///
 /// Returns the raw (un-intersected) closure; [`compute_wrapped_set`]
-/// intersects it with the wrap-eligible set, so a sealed/exception component
-/// is excluded here and handled on its own path (sealed `&self` match
-/// dispatch) or diagnosed at tycheck.
+/// intersects it with the wrap-eligible set, so an exception component is
+/// excluded here and handled on its own path or diagnosed at tycheck.
 fn compute_interface_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
     // Direct `extends` parent (bare) per class, plus the inverse children
     // adjacency, and the seed list of classes that implement an interface.
@@ -3467,14 +3460,15 @@ pub(crate) fn compute_bound_position_classes(
 }
 
 /// Bare names of every **polymorphic base class** — a class that is extended
-/// by ≥1 other class and is itself non-sealed and non-final.
+/// by ≥1 other class and is itself non-final.
 ///
 /// Stage-2 virtual dispatch lowers a polymorphic base's value slots to
 /// `Rc<dyn <Name>Kind>`: a base-typed reference can hold any subclass instance
-/// and dispatches dynamically through the populated `<Name>Kind` trait. The
-/// two exclusions each have their own path: a **sealed** base uses enum + match
-/// dispatch (already works), and a **final** base can't be extended (so it's
-/// never a base).
+/// and dispatches dynamically through the populated `<Name>Kind` trait. The one
+/// exclusion is a **final** base, which can't be extended, so it is never a
+/// base. A **sealed** base is included: sealing closes the subclass set without
+/// changing the representation (ERRATA E101), and leaving it out is what gave a
+/// sealed hierarchy value semantics.
 ///
 /// A **generic** base is included: its `Kind` trait carries the class's own type
 /// params (`trait ContainerKind<T>: Debug { fn get(&self) -> T; }`) and its value
@@ -3484,19 +3478,15 @@ pub(crate) fn compute_bound_position_classes(
 pub(crate) fn compute_polymorphic_base_classes(
     units: &[juxc_ast::CompilationUnit],
 ) -> HashSet<String> {
-    // `candidate` = classes eligible to be a base (non-sealed / non-final /
-    // non-generic). `extended` = bare names that appear as some class's
-    // `extends` target. A polymorphic base is the intersection.
+    // `candidate` = classes eligible to be a base (non-final). `extended` =
+    // bare names that appear as some class's `extends` target. A polymorphic
+    // base is the intersection.
     let mut candidate: HashSet<String> = HashSet::new();
     let mut extended: HashSet<String> = HashSet::new();
     for unit in units {
         for item in &unit.items {
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                // Sealed excludes only when it truly becomes an enum; a
-                // sealed base WITH state keeps `Rc<dyn …Kind>` and must be a
-                // candidate, or its `Kind` trait carries no methods and a call
-                // through a parent-typed reference hits the abstract stub.
-                if !crate::decls::classes::sealed_decl_lowers_to_enum(cd) && !cd.is_final {
+                if !cd.is_final {
                     candidate.insert(cd.name.text.clone());
                 }
                 if let Some(parent) = cd
@@ -3534,7 +3524,7 @@ pub(crate) fn compute_polymorphic_base_class_fqns(
         for item in &unit.items {
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
                 // Same candidacy rule as the bare-name form.
-                if !crate::decls::classes::sealed_decl_lowers_to_enum(cd) && !cd.is_final {
+                if !cd.is_final {
                     candidate.insert(if pkg.is_empty() {
                         cd.name.text.clone()
                     } else {
@@ -7574,7 +7564,12 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     "            eprintln!(\"panic: {__jux_s}\");\n",
                     "        }\n",
                     "    }));\n",
-                    "    if let Err(__jux_p) = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(__jux_user_main)) {\n",
+                    // Rust's own `Err`, spelled in full: a user class may be
+                    // NAMED `Err` (`examples/stress_upcast.jux` declares one),
+                    // and a tuple struct of that name in scope shadows the
+                    // prelude variant, so a bare `Err(..)` pattern here stopped
+                    // compiling (rustc E0308).
+                    "    if let ::std::result::Result::Err(__jux_p) = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(__jux_user_main)) {\n",
                 ));
                 for fqn in &throwable_fqns {
                     let path = match backend_fqn::fqn_package(fqn) {

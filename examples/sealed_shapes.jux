@@ -7,10 +7,29 @@
 //
 // `final class Frozen` similarly forbids any subclass — adding
 // `class Sub extends Frozen` would fire E0420_FinalClassExtended.
+//
+// Sealing closes the subclass set. It does NOT change what an object is:
+// a sealed base is a reference type like every other class (§CR.5.6,
+// ERRATA E101), so the rest of this file holds subclass instances through
+// a `Shape`-typed local, alias, parameter, collection element, field and
+// return value, and a mutating `@Override` runs through all of them.
 
 sealed class Shape permits Circle, Square {
     public String describe() {
         return "a shape";
+    }
+
+    // The base's own version does nothing. `Circle` and `Square` override it
+    // and MUTATE, which per §7.4.2 makes every call through a `Shape` an
+    // exclusive borrow.
+    public void grow() { }
+
+    public String name() {
+        return "shape";
+    }
+
+    public int size() {
+        return 0;
     }
 }
 
@@ -19,6 +38,9 @@ class Circle extends Shape {
     public Circle(int radius) {
         this.radius = radius;
     }
+    @Override public void grow() { radius = radius + 1; }
+    @Override public String name() { return "circle"; }
+    @Override public int size() { return radius; }
 }
 
 class Square extends Shape {
@@ -26,6 +48,36 @@ class Square extends Shape {
     public Square(int side) {
         this.side = side;
     }
+    @Override public void grow() { side = side * 2; }
+    @Override public String name() { return "square"; }
+    @Override public int size() { return side; }
+}
+
+// A `Shape`-typed FIELD, and a `Shape`-typed return.
+class Canvas {
+    public Shape shape;
+    public Canvas(Shape shape) {
+        this.shape = shape;
+    }
+    public Shape current() {
+        return this.shape;
+    }
+}
+
+// A `Shape`-typed PARAMETER whose method mutates, the shape of §7.4.2's
+// worked example.
+void growTwice(Shape s) {
+    s.grow();
+    s.grow();
+}
+
+// A `switch` over the sealed base needs no `default`: the two permitted
+// subclasses cover it, and leaving one out is E0440.
+String label(Shape s) {
+    return switch (s) {
+        case Circle c -> $"a circle of ${c.radius}";
+        case Square q -> $"a square of ${q.side}";
+    };
 }
 
 public void main() {
@@ -33,4 +85,32 @@ public void main() {
     var s = new Square(3);
     print($"circle radius=${c.radius}, ${c.describe()}");
     print($"square side=${s.side}, ${s.describe()}");
+
+    // A base-typed local holds a subclass and dispatches to its override.
+    Shape one = new Circle(2);
+    one.grow();
+    print($"local ${one.name()} size=${one.size()}");
+
+    // Two names, one object: the alias sees the growth and so does `one`.
+    Shape alias = one;
+    alias.grow();
+    print($"alias size=${one.size()}");
+
+    // Through a base-typed parameter.
+    growTwice(one);
+    print($"param size=${one.size()}");
+
+    // As collection elements.
+    Vec<Shape> shapes = new Vec<Shape>();
+    shapes.push(new Circle(1));
+    shapes.push(new Square(4));
+    for (Shape each : shapes) {
+        each.grow();
+        print($"element ${each.name()} size=${each.size()} is ${label(each)}");
+    }
+
+    // As a field, read back through a `Shape`-returning method.
+    var canvas = new Canvas(new Square(10));
+    canvas.shape.grow();
+    print($"field ${canvas.current().name()} size=${canvas.current().size()}");
 }

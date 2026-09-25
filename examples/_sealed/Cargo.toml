@@ -5,10 +5,18 @@ edition = "2021"
 publish = false
 
 [dependencies]
-futures = "0.3"
+futures = { version = "0.3", features = ["thread-pool"] }
 
 [[bin]]
 name = "sealed_shapes"
 path = "src/main.rs"
 
 [workspace]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = false
+

@@ -307,6 +307,14 @@ fn rust_std_collections() {
     );
 }
 
+/// A sealed hierarchy through every slot a class reference can occupy.
+///
+/// The first two lines are the example's original assertion. The rest are the
+/// surface it never touched: a base-typed local, an alias of it, a base-typed
+/// parameter whose method mutates, collection elements, a field and a
+/// `Shape`-returning method, plus an exhaustive `switch` with no `default`.
+/// Every one of them failed to compile while a stateless sealed base lowered to
+/// a Rust enum (ERRATA E101).
 #[test]
 fn sealed_shapes() {
     common::expect_output(
@@ -315,6 +323,61 @@ fn sealed_shapes() {
         &[
             "circle radius=5, a shape",
             "square side=3, a shape",
+            "local circle size=3",
+            "alias size=4",
+            "param size=6",
+            "element circle size=2 is a circle of 2",
+            "element square size=8 is a square of 8",
+            "field square size=20",
+        ],
+    );
+}
+
+/// Every shape a positional pattern over a sealed subclass can take: a literal
+/// part, a `_` part, a `String` part compared by value, or-alternatives that
+/// bind the same names, and a `when` guard that reads what the arm bound. The
+/// parts are field reads on the matched handle now, not an enum's struct
+/// pattern (ERRATA E101).
+#[test]
+fn sealed_subclass_patterns() {
+    common::expect_output(
+        "sealed_subclass_patterns",
+        "sealed-subclass-patterns",
+        &[
+            "red, no wait",
+            "urgent red 30",
+            "red 15 (calm)",
+            "yellow 5",
+            "green 25 + arrow",
+            "green 25",
+            "30",
+            "5",
+            "20",
+            "long red",
+            "short red",
+            "not red",
+        ],
+    );
+}
+
+/// `JUX-LANG-V1.md` §15's capstone program, whose `sealed abstract class Animal
+/// permits Dog, Cat, Bird` is held in a `Vec<Animal>`. The expected lines are
+/// the ones the spec prints beside it.
+#[test]
+fn sealed_zoo() {
+    common::expect_output(
+        "sealed_zoo",
+        "sealed-zoo",
+        &[
+            "I am Rex, age 3",
+            "Rex says woof",
+            "Rex knows 2 tricks",
+            "I am Whiskers, age 0",
+            "Whiskers says meow",
+            "I am Tweety, age 1",
+            "Tweety sings",
+            "Zoo has 3 animals",
+            "Rex is 3",
         ],
     );
 }

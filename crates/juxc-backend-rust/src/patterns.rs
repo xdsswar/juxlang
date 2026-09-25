@@ -9,6 +9,12 @@ use crate::analysis::pattern_has_parens;
 use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
+/// The name a sealed hierarchy's subclass HANDLE is bound to inside a pattern
+/// arm, before the arm's own parts are read out of it. One name for every such
+/// arm is enough: the binding never escapes the arm, and an arm never matches
+/// two subclasses at once.
+const SEALED_PATTERN_HANDLE: &str = "__jux_variant";
+
 impl RustEmitter {
     /// Lower a `switch` expression to a Rust `match`. The same node
     /// covers both expression-form (`var y = switch(…) {…}`) and
@@ -144,6 +150,13 @@ impl RustEmitter {
             // matched value, and the pattern its `Some` takes apart: the binder
             // of `case Circle c`, or the struct pattern of `case Circle(var r)`
             // over an interface the record implements (LANG-V1 §7.5).
+            // A positional pattern over a sealed hierarchy's SUBCLASS fills
+            // these: the `let`s that bind its parts out of the matched handle,
+            // and the comparisons a literal part contributes to the guard.
+            // Both are empty for every other pattern shape.
+            let mut sealed_class_lets: Vec<String> = Vec::new();
+            let mut sealed_class_compares = String::new();
+            let mut sealed_class_pattern = false;
             let runtime_type_test = match (&arm.pattern, &dyn_scrutinee) {
                 (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, _) if any_scrutinee => {
                     let target = crate::analysis::synth_iface_type_ref(&type_name.text, type_name.span);
@@ -164,6 +177,26 @@ impl RustEmitter {
                     let destructure = self.w.split_off_from(mark);
                     Some((format!("__jux_subject.__jux_as_{bare}()"), destructure))
                 }
+                // A positional pattern over a sealed hierarchy's SUBCLASS
+                // (`case Red(var s)`). A sealed base is `Rc<dyn …Kind>` like
+                // any other polymorphic base (ERRATA E101), so `Red` is a
+                // shared handle and not a Rust enum variant: there is no
+                // struct pattern that reaches its fields. The arm tests the
+                // runtime type, binds the handle, and reads each positional
+                // part out of it as a field.
+                (juxc_ast::Pattern::EnumVariant { args, .. }, Some(_))
+                    if self.sealed_subclass_pattern(&arm.pattern).is_some() =>
+                {
+                    let sub = self.sealed_subclass_pattern(&arm.pattern).unwrap_or_default();
+                    let (lets, compares) = self.sealed_subclass_pattern_parts(&sub, args);
+                    sealed_class_lets = lets;
+                    sealed_class_compares = compares;
+                    sealed_class_pattern = true;
+                    Some((
+                        format!("__jux_subject.__jux_as_{sub}()"),
+                        SEALED_PATTERN_HANDLE.to_string(),
+                    ))
+                }
                 _ => None,
             };
             // `case Circle(var r) | Ring(var r, _)` over a trait object: one
@@ -179,8 +212,13 @@ impl RustEmitter {
             // Whether the runtime test's `Some(..)` can fail on its own: a
             // record pattern with a literal inside (`Circle(0.0)`) can, a bare
             // binder cannot.
+            // A sealed-class pattern carries its whole refutability in
+            // `sealed_class_compares`: the parts are read AFTER the match, so
+            // with no literal part among them the test is a plain `is_some()`
+            // and the emitted guard needs no binding it would not use.
             let refutable_inner = matches!(&arm.pattern, juxc_ast::Pattern::EnumVariant { .. })
-                && runtime_type_test.is_some();
+                && runtime_type_test.is_some()
+                && (!sealed_class_pattern || !sealed_class_compares.is_empty());
             if runtime_type_test.is_some() || !or_type_tests.is_empty() {
                 self.w.push_str("ref __jux_subject");
             } else if scrut_nullable.is_some() {
@@ -226,7 +264,10 @@ impl RustEmitter {
                 // in a `match` of its own. A string nested in a record pattern
                 // compares inside that `match`, where its binder exists.
                 self.w.push_str(" if ");
-                let mut inner_guards = String::new();
+                // A literal part of a sealed-class pattern (`case Red(30)`) is
+                // a test rather than a binding, so it leads the guard the same
+                // way a string nested in a record pattern does.
+                let mut inner_guards = sealed_class_compares.clone();
                 for (b, lit) in &string_guards {
                     if !inner_guards.is_empty() {
                         inner_guards.push_str(" && ");
@@ -243,7 +284,21 @@ impl RustEmitter {
                             self.w.push_str(&format!(" if {inner_guards}"));
                         }
                         self.w.push_str(" => ");
+                        // A sealed-class pattern binds nothing in the pattern
+                        // itself: its parts are read out of the handle. A guard
+                        // reads them by name (`case Red(var s) when s > 20`), so
+                        // they are bound here as well as in the arm body.
+                        if !sealed_class_lets.is_empty() {
+                            self.w.push_str("{ ");
+                            for bind in &sealed_class_lets {
+                                self.w.push_str(bind);
+                                self.w.push(' ');
+                            }
+                        }
                         self.emit_expr(guard);
+                        if !sealed_class_lets.is_empty() {
+                            self.w.push_str(" }");
+                        }
                         self.w.push_str(", _ => false }");
                     }
                     (None, true, false) => self.w.push_str(&format!("{getter}.is_some()")),
@@ -313,6 +368,12 @@ impl RustEmitter {
                             self.w.push_str(bind);
                             self.w.push(' ');
                         }
+                        // These read fields out of the handle the downcast
+                        // just bound, so they follow it.
+                        for bind in &sealed_class_lets {
+                            self.w.push_str(bind);
+                            self.w.push(' ');
+                        }
                         // The value binds to a local before the block ends.
                         // As the block's tail expression it kept a borrow of
                         // a binder alive past the binder itself
@@ -369,6 +430,13 @@ impl RustEmitter {
                         self.w.push_str(bind);
                         self.w.push('\n');
                     }
+                    // These read fields out of the handle the downcast just
+                    // bound, so they follow it.
+                    for bind in &sealed_class_lets {
+                        self.w.push_str("        ");
+                        self.w.push_str(bind);
+                        self.w.push('\n');
+                    }
                     // Statements inside a block-bodied arm sit at the
                     // arm-depth + 1 (two levels of 4-space prefix from
                     // the surrounding `match`). We emit the indent
@@ -406,7 +474,10 @@ impl RustEmitter {
         let tests_runtime_type = dyn_scrutinee.as_ref().is_some_and(|source| {
             s.arms.iter().any(|arm| match &arm.pattern {
                 juxc_ast::Pattern::TypeBind { type_name, .. } => &type_name.text != source,
-                juxc_ast::Pattern::EnumVariant { span, .. } => self.symbols.record_patterns.contains_key(span),
+                juxc_ast::Pattern::EnumVariant { span, .. } => {
+                    self.symbols.record_patterns.contains_key(span)
+                        || self.sealed_subclass_pattern(&arm.pattern).is_some()
+                }
                 juxc_ast::Pattern::Or(alts, _) => alts.iter().all(|alt| self.is_runtime_type_alt(alt, source)),
                 _ => false,
             })
@@ -505,13 +576,149 @@ impl RustEmitter {
 
     /// Whether `alt`, one alternative of an or-pattern over a trait object
     /// whose static type is `source`, asks for a runtime type: a type pattern
-    /// naming another type (`Circle c`), or a record pattern (`Circle(var r)`).
+    /// naming another type (`Circle c`), a record pattern (`Circle(var r)`), or
+    /// a sealed hierarchy's subclass pattern (`Red(var s)`).
     fn is_runtime_type_alt(&self, alt: &juxc_ast::Pattern, source: &str) -> bool {
         match alt {
             juxc_ast::Pattern::TypeBind { type_name, .. } => type_name.text != source,
-            juxc_ast::Pattern::EnumVariant { span, .. } => self.symbols.record_patterns.contains_key(span),
+            juxc_ast::Pattern::EnumVariant { span, .. } => {
+                self.symbols.record_patterns.contains_key(span)
+                    || self.sealed_subclass_pattern(alt).is_some()
+            }
             _ => false,
         }
+    }
+
+    /// The permitted subclass a positional `case Sub(part, …)` pattern names,
+    /// when `Sub` is a CLASS of a sealed hierarchy rather than a record or an
+    /// enum variant; `None` for every other pattern.
+    ///
+    /// A sealed base carries no representation of its own: it lowers to
+    /// `Rc<dyn …Kind>` exactly as any other polymorphic base does (ERRATA
+    /// E101), which is what gives a sealed hierarchy shared-reference
+    /// semantics and lets a mutating override run through a base-typed slot.
+    /// The price is that `Sub` is a shared handle and not a Rust enum variant,
+    /// so no struct pattern reaches its fields; the parts are read out of the
+    /// handle instead, by [`Self::sealed_subclass_pattern_parts`].
+    fn sealed_subclass_pattern(&self, p: &juxc_ast::Pattern) -> Option<String> {
+        let juxc_ast::Pattern::EnumVariant { path, span, .. } = p else {
+            return None;
+        };
+        // A record behind the same base destructures through its struct
+        // pattern, and a dotted path names an enum variant; neither is this.
+        if self.symbols.record_patterns.contains_key(span) || path.segments.len() != 1 {
+            return None;
+        }
+        let sub = path.segments[0].text.as_str();
+        let parent_fqn = self.lookup_class_by_bare_or_fqn(sub)?.extends_fqn.clone()?;
+        let parent_bare = parent_fqn.rsplit('.').next().unwrap_or(&parent_fqn).to_string();
+        self.lookup_class_by_bare_or_fqn(&parent_bare)
+            .filter(|parent| parent.is_sealed)
+            .map(|_| sub.to_string())
+    }
+
+    /// The `let` bindings and the guard comparisons a positional sealed-class
+    /// pattern needs, once the runtime test has bound the subclass handle to
+    /// [`SEALED_PATTERN_HANDLE`].
+    ///
+    /// Part `i` names instance field `i` in declaration order, the mapping the
+    /// pattern has always used, so `case Green(var s, var arrow)` becomes
+    /// `let s = <handle>.seconds; let arrow = <handle>.arrow;`. A literal part
+    /// (`case Red(30)`) is a test and not a binding, so it becomes a
+    /// comparison for the arm's guard. Static fields are not instance state
+    /// and take no position.
+    fn sealed_subclass_pattern_parts(
+        &mut self,
+        sub: &str,
+        args: &[juxc_ast::Pattern],
+    ) -> (Vec<String>, String) {
+        let field_names: Vec<String> = self
+            .class_asts
+            .get(sub)
+            .map(|ast| {
+                ast.fields
+                    .iter()
+                    .filter(|f| !f.is_static)
+                    .map(|f| f.name.text.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut lets: Vec<String> = Vec::new();
+        let mut compares = String::new();
+        for (i, arg) in args.iter().enumerate() {
+            let Some(field) = field_names.get(i).cloned() else { continue };
+            match arg {
+                // `_` says the part does not matter, so it needs no read.
+                juxc_ast::Pattern::Wildcard(_) => {}
+                // `var s`, and the spelled-out `int s` of §A.3's
+                // `binding-pattern`. The written type is the field's own, so it
+                // adds nothing to the binding and both forms read the same.
+                juxc_ast::Pattern::Bind(name)
+                | juxc_ast::Pattern::TypeBind { binder: name, .. } => {
+                    let read = self.sealed_subclass_field_read(sub, &field, name.span);
+                    lets.push(format!("let {} = {read};", to_rust_ident(&name.text)));
+                }
+                juxc_ast::Pattern::Literal(lit, span) => {
+                    let read = self.sealed_subclass_field_read(sub, &field, *span);
+                    let mark = self.w.len();
+                    // A `String` field's read is owned, and `String == &str`
+                    // compares by value, so the literal stays borrowed.
+                    match lit {
+                        Literal::String(s) => self.emit_rust_string_literal(s),
+                        _ => self.emit_literal(lit),
+                    }
+                    let text = self.w.split_off_from(mark);
+                    if !compares.is_empty() {
+                        compares.push_str(" && ");
+                    }
+                    compares.push_str(&format!("{read} == {text}"));
+                }
+                // A nested shape inside a class part has no meaning the
+                // grammar defines (§A.3 gives destructuring to records and
+                // tuples), so there is nothing to bind.
+                _ => {}
+            }
+        }
+        (lets, compares)
+    }
+
+    /// One field read on the sealed-subclass handle a pattern arm bound,
+    /// produced by the ordinary field-access emitter so it reaches through
+    /// `Rc<RefCell<…>>` and clones a non-`Copy` field exactly as written
+    /// source would.
+    ///
+    /// The handle's type has to be in scope for that to work: the field
+    /// emitter resolves a bare receiver name through `local_types` first, so
+    /// the synthetic name is registered there for the length of the emission
+    /// and taken back out afterwards.
+    fn sealed_subclass_field_read(
+        &mut self,
+        sub: &str,
+        field: &str,
+        span: juxc_source::Span,
+    ) -> String {
+        let object = juxc_ast::Expr::Path(juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident { text: SEALED_PATTERN_HANDLE.to_string(), span }],
+            span,
+        });
+        let access = juxc_ast::FieldExpr {
+            object: Box::new(object),
+            field: juxc_ast::Ident { text: field.to_string(), span },
+            safe: false,
+            span,
+        };
+        let mut scope: std::collections::HashMap<String, juxc_tycheck::Ty> =
+            std::collections::HashMap::new();
+        scope.insert(
+            SEALED_PATTERN_HANDLE.to_string(),
+            juxc_tycheck::Ty::User { name: sub.to_string(), generic_args: Vec::new() },
+        );
+        self.local_types.push(scope);
+        let mark = self.w.len();
+        self.emit_field(&access);
+        let text = self.w.split_off_from(mark);
+        self.local_types.pop();
+        text
     }
 
     /// One runtime type test per or-pattern alternative over a trait object,
@@ -526,8 +733,23 @@ impl RustEmitter {
                     destructure: to_rust_ident(&binder.text),
                     compares: String::new(),
                     refutable: false,
+                    binds: Vec::new(),
                 }),
                 juxc_ast::Pattern::EnumVariant { span, args, .. } => {
+                    // A sealed hierarchy's subclass is a shared handle rather
+                    // than a record, so its parts are field reads on the
+                    // handle this alternative binds, not a struct pattern.
+                    if let Some(sub) = self.sealed_subclass_pattern(alt) {
+                        let (binds, compares) = self.sealed_subclass_pattern_parts(&sub, args);
+                        tests.push(RuntimeTypeAlt {
+                            getter: format!("__jux_subject.__jux_as_{sub}()"),
+                            destructure: SEALED_PATTERN_HANDLE.to_string(),
+                            compares,
+                            refutable: false,
+                            binds,
+                        });
+                        continue;
+                    }
                     let fqn = self.symbols.record_patterns[span].clone();
                     let bare = fqn.rsplit('.').next().unwrap_or(&fqn).to_string();
                     let mark = self.w.len();
@@ -550,6 +772,7 @@ impl RustEmitter {
                         destructure,
                         compares,
                         refutable: args.iter().any(pattern_can_fail),
+                        binds: Vec::new(),
                     });
                 }
                 _ => {}
@@ -595,7 +818,20 @@ impl RustEmitter {
                 self.w.push_str(&format!(" if {}", t.compares));
             }
             self.w.push_str(" => ");
+            // A sealed-class alternative binds nothing in the pattern: its
+            // parts come out of the handle first, so the guard sees the same
+            // names a record alternative's pattern would have bound.
+            if !t.binds.is_empty() {
+                self.w.push_str("{ ");
+                for bind in &t.binds {
+                    self.w.push_str(bind);
+                    self.w.push(' ');
+                }
+            }
             self.emit_expr(guard);
+            if !t.binds.is_empty() {
+                self.w.push_str(" }");
+            }
             self.w.push_str(", _ => ");
         }
         self.w.push_str("false");
@@ -902,36 +1138,19 @@ impl RustEmitter {
                     self.emit_literal(end);
                 }
             }
-            juxc_ast::Pattern::TypeBind { type_name, binder, .. } => {
-                // `case Type ident ->` — shorthand for
-                // `case Type(var ident) ->`. We rewrite into the
-                // same shape the sealed-subclass EnumVariant path
-                // handles below, but bind the WHOLE variant value
-                // rather than destructuring fields. Output shape:
-                // `Sealed::Type(ident)` so the user can call
-                // `ident.method(...)` directly on the subclass.
-                let parent_fqn = self
-                    .lookup_class_by_bare_or_fqn(&type_name.text)
-                    .and_then(|sub| sub.extends_fqn.clone())
-                    .unwrap_or_default();
-                let parent_bare = parent_fqn
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or(parent_fqn.as_str())
-                    .to_string();
-                if parent_bare.is_empty() {
-                    // No sealed parent — emit as a bare bind.
-                    // (Rust will fail to type-check; the diagnostic
-                    // points at the source.)
-                    self.w.push_str(&to_rust_ident(&binder.text));
-                } else {
-                    self.w.push_str(&parent_bare);
-                    self.w.push_str("::");
-                    self.w.push_str(&to_rust_ident(&type_name.text));
-                    self.w.push('(');
-                    self.w.push_str(&to_rust_ident(&binder.text));
-                    self.w.push(')');
-                }
+            juxc_ast::Pattern::TypeBind { binder, .. } => {
+                // `case Type ident ->` is a RUNTIME TYPE TEST, and Rust has no
+                // pattern for one: `emit_switch` lowers it to a `__jux_as_<T>`
+                // hook in the arm's guard, which is where the interesting work
+                // happens. Reaching here means the scrutinee's type was not
+                // resolved as a trait object, and the honest thing left is the
+                // plain binding, whose type error points at the source.
+                //
+                // This used to emit `Sealed::Type(ident)` for a subclass of a
+                // sealed class, back when such a parent was a Rust enum; a
+                // sealed base is now a base like any other (ERRATA E101), so
+                // that spelling names nothing.
+                self.w.push_str(&to_rust_ident(&binder.text));
             }
             // `(p, q)` is Rust's own tuple pattern.
             juxc_ast::Pattern::Tuple(elements, _) => {
@@ -996,124 +1215,23 @@ impl RustEmitter {
                 self.pattern_depth -= 1;
             }
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
-                // Three shapes to handle:
+                // Two shapes reach here:
                 //
-                // 1. **Enum variant** (`Color.Red`, `Token.Number(_)`)
-                //    — rewrite `.` to `::`. The match scrutinee's
-                //    type is an enum.
+                // 1. **Enum variant** (`Color.Red`, `Token.Number(_)`) —
+                //    rewrite `.` to `::`. The scrutinee's type is an enum.
                 //
-                // 2. **Sealed-class subclass pattern** (`Red(var s)`
-                //    inside a `switch (light) { … }` where `Light`
-                //    is `sealed permits Red, Yellow, Green`). The
-                //    pattern path is the bare subclass name; the
-                //    lowered match is on a Rust enum
-                //    `Light::Red(Red { seconds: s, .. })`. We need
-                //    to (a) prepend the sealed parent's name, and
-                //    (b) translate positional pattern args to the
-                //    subclass struct's named-field pattern.
+                // 2. **Single bare name** (`Red` without parens, inside an
+                //    enum-variant context) — kept as-is; falls into shape 1.
                 //
-                // 3. **Single bare name** (`Red` without parens,
-                //    inside an enum-variant context) — kept as-is;
-                //    falls into shape 1.
+                // A sealed hierarchy's SUBCLASS pattern (`Red(var s)`) does not
+                // come through here. It used to, when a sealed parent was a Rust
+                // enum and the pattern could be spelled
+                // `Light::Red(Red { seconds: s, .. })`; a sealed base is a base
+                // like any other now (ERRATA E101), so the arm tests the runtime
+                // type and reads the parts out of the matched handle instead
+                // (`emit_switch`'s `sealed_subclass_pattern`).
                 //
-                // Detection: single-segment path AND the bare name
-                // resolves to a class whose parent is sealed.
-                let is_single_subclass = path.segments.len() == 1
-                    && self
-                        .lookup_class_by_bare_or_fqn(&path.segments[0].text)
-                        .and_then(|sub| sub.extends_fqn.clone())
-                        .and_then(|fqn| {
-                            // Look up the parent class; check sealed.
-                            // Use the last FQN segment as the bare
-                            // name for our lookup helper.
-                            let bare = fqn
-                                .rsplit('.')
-                                .next()
-                                .unwrap_or(&fqn)
-                                .to_string();
-                            self.lookup_class_by_bare_or_fqn(&bare)
-                                .map(|p| p.is_sealed)
-                        })
-                        .unwrap_or(false);
-                if is_single_subclass {
-                    // Sealed-subclass shape — emit
-                    // `Sealed::Sub(Sub { f0: arg0, f1: arg1, .. })`.
-                    let sub_name = &path.segments[0].text;
-                    let sub_class = self
-                        .lookup_class_by_bare_or_fqn(sub_name)
-                        .cloned();
-                    let parent_fqn = sub_class
-                        .as_ref()
-                        .and_then(|c| c.extends_fqn.clone())
-                        .unwrap_or_default();
-                    let parent_bare = parent_fqn
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or(parent_fqn.as_str())
-                        .to_string();
-                    // Field-name lookup: positional pattern arg i
-                    // maps to subclass field i in declaration order
-                    // (static fields filtered out — they aren't
-                    // instance state, can't appear in a struct
-                    // pattern).
-                    let field_names: Vec<String> = self
-                        .class_asts
-                        .get(sub_name.as_str())
-                        .map(|ast| {
-                            ast.fields
-                                .iter()
-                                .filter(|f| !f.is_static)
-                                .map(|f| f.name.text.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    self.w.push_str(&parent_bare);
-                    self.w.push_str("::");
-                    self.w.push_str(sub_name);
-                    self.w.push('(');
-                    if args.is_empty() {
-                        // Unit-style subclass pattern — empty
-                        // struct. Use `..` to match any contents
-                        // even if Rust later requires it; for an
-                        // empty struct this just lowers to `Sub`.
-                        self.w.push_str(sub_name);
-                        self.w.push_str(" { .. }");
-                    } else {
-                        self.w.push_str(sub_name);
-                        self.w.push_str(" { ");
-                        for (i, sub) in args.iter().enumerate() {
-                            if i > 0 {
-                                self.w.push_str(", ");
-                            }
-                            // Field-name : pattern. We need the
-                            // sub-pattern's text rendered — recurse
-                            // through `emit_pattern`. The field name
-                            // comes from the i-th non-static field;
-                            // out-of-range positions get a synthetic
-                            // `__pos{i}` so the error message points
-                            // at the right shape.
-                            let fname = field_names
-                                .get(i)
-                                .cloned()
-                                .unwrap_or_else(|| format!("__pos{i}"));
-                            self.w.push_str(&fname);
-                            self.w.push_str(": ");
-                            self.pattern_depth += 1;
-                            self.emit_pattern(sub);
-                            self.pattern_depth -= 1;
-                        }
-                        // `..` rest pattern in case the subclass
-                        // has more fields than the pattern listed
-                        // (Java would let the user destructure
-                        // only the prefix they care about; Rust's
-                        // struct patterns require exhaustiveness
-                        // unless `..` is present).
-                        self.w.push_str(", .. }");
-                    }
-                    self.w.push(')');
-                    return;
-                }
-                // Shape 1 / 3: rewrite `.` to `::` verbatim. A bare
+                // Shape 1 / 2: rewrite `.` to `::` verbatim. A bare
                 // single-segment variant (Java-style `case Pending ->`, no
                 // `Enum.` prefix) is qualified with the switch's enum so Rust
                 // matches the variant instead of treating it as a catch-all
@@ -1210,6 +1328,10 @@ struct RuntimeTypeAlt {
     /// Whether the destructure can fail on its own, a literal or range inside
     /// it (`Circle(0.0)`); a plain binder or `_` cannot.
     refutable: bool,
+    /// For a sealed hierarchy's subclass alternative, the `let`s that read its
+    /// parts out of the handle `destructure` bound. A record alternative binds
+    /// its parts in the pattern itself and leaves this empty.
+    binds: Vec<String>,
 }
 
 /// Whether a sub-pattern can fail to match a value of its own type: a literal
@@ -1245,7 +1367,18 @@ fn or_type_test_let(tests: &[RuntimeTypeAlt], binders: &[(String, juxc_tycheck::
         if !t.compares.is_empty() {
             text.push_str(&format!(" if {}", t.compares));
         }
-        text.push_str(&format!(" => {value}, _ => "));
+        if t.binds.is_empty() {
+            text.push_str(&format!(" => {value}, _ => "));
+        } else {
+            // A sealed-class alternative reads its parts out of the handle,
+            // then hands back the same value shape a record's pattern binds.
+            text.push_str(" => { ");
+            for bind in &t.binds {
+                text.push_str(bind);
+                text.push(' ');
+            }
+            text.push_str(&format!("{value} }}, _ => "));
+        }
     }
     text.push_str("unreachable!()");
     for _ in tests {

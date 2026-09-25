@@ -488,6 +488,24 @@ pub(crate) fn resolve_class_name(
             return Some(cand);
         }
     }
+    // A NON-CLASS type of this name, in the unit's own package or brought in by
+    // one of its imports, shadows any same-named class elsewhere. Inside
+    // `package jux.std.result` the bare `Result` is that package's enum, and the
+    // searches below would otherwise walk past it and land on a user's
+    // `class Result` in the default package: `examples/stress_upcast.jux`
+    // declares one, and its `Rc<dyn ResultKind>` lowering then leaked into the
+    // stdlib's own `Result<R, E>` return types (rustc E0405).
+    let names_a_non_class = |fqn: &str| {
+        symbols.enums.contains_key(fqn)
+            || symbols.records.contains_key(fqn)
+            || symbols.interfaces.contains_key(fqn)
+    };
+    if !pkg.is_empty() && names_a_non_class(&format!("{pkg}.{name}")) {
+        return None;
+    }
+    if ctx.is_some_and(|c| c.unqualified.get(name).is_some_and(|f| names_a_non_class(f))) {
+        return None;
+    }
     if symbols.classes.contains_key(name) {
         return Some(name.to_string());
     }

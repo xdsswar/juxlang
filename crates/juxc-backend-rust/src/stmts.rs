@@ -3406,10 +3406,11 @@ impl RustEmitter {
                 {
                     self.w.push_str(".clone()");
                 }
-                // **Sealed upcast.** A sealed parent lowers to an enum, so a
-                // subclass initializer has to be wrapped in the matching
-                // variant — `Suit s = new Black();` becomes
-                // `Suit::from(Black::new())`. The return and argument paths
+                // **Base-class upcast.** A subclass initializer in a
+                // base-typed local is converted to the base's own shape:
+                // `Suit s = new Black();` becomes `Black::new().into()`, which
+                // for a polymorphic base is the identity-preserving
+                // `Rc<dyn SuitKind>` conversion. The return and argument paths
                 // already did this; a local declaration did not, so the most
                 // ordinary use of a sealed hierarchy failed to compile.
                 if !wrap_some

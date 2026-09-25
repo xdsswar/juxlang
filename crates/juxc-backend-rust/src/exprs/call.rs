@@ -2707,11 +2707,10 @@ impl RustEmitter {
         // Per-arg nullable-wrap when the callee's declared
         // parameter type is `T?` and the value isn't already
         // `Option<T>`-shaped.
-        // Per-arg sealed-upcast wrap when the param is a sealed
-        // parent and the arg is one of its permitted subclasses:
-        // emit `arg.into()` so the auto-`From<Sub> for Sealed`
-        // impl from `emit_sealed_enum` lifts the subclass into
-        // the matching variant.
+        // Per-arg upcast wrap when the param's type is a base class and the arg
+        // is one of its subclasses: `arg.into()`, which for a polymorphic base
+        // is the identity-preserving `Rc<dyn …Kind>` conversion (ERRATA E101
+        // retired the sealed-enum variant wrap this used to mean).
         let prev = self.emitting_format_arg;
         self.emitting_format_arg = false;
         // Recursive enum-variant construction: a self-referential payload slot
