@@ -2637,6 +2637,23 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
+                    // The stored function's parameter is a slot like any other,
+                    // so an argument converts into it. A `(Animal) -> String`
+                    // field over a polymorphic base holds an
+                    // `Rc<dyn Fn(Rc<dyn AnimalKind>) -> String>`, and
+                    // `this.fmt(new Dog())` was handing it a bare `Dog`
+                    // (rustc E0308) -- the ordinary shape of a strategy or
+                    // event-handler object.
+                    let slot = self.callee_param_type(&call.callee, i);
+                    if let Some(pty) = &slot {
+                        if !matches!(
+                            self.iface_coercion_to(pty, arg),
+                            crate::analysis::IfaceCoercion::None,
+                        ) {
+                            self.emit_expr_coerced_to_iface(pty, arg);
+                            continue;
+                        }
+                    }
                     self.emit_expr(arg);
                     // The closure takes its arguments by value, so a place
                     // read again after the call passes a copy (a record, a

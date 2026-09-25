@@ -1934,6 +1934,66 @@ spelling.
 
 ---
 
+## E98. A function type over a polymorphic class had no stated lowering
+
+**Conflict.** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.3.6 makes a function type an
+ordinary type: `A` is assignable to `B` when `A` is "a function type compatible
+with `B`'s function type (contravariant in parameters, covariant in return)".
+Nothing there or in `JUX-INHERITANCE-BORROW-ADDENDUM.md` §6.9.6 said how a
+function type's parameter and result slots relate to the `Rc<dyn <Name>Kind>`
+handle a polymorphic base-typed slot lowers to. The two halves were lowered by
+different rules, and the seam showed as raw rustc errors in a program the spec
+declares legal:
+
+```jux
+class Animal { public int w = 1; }
+class Dog extends Animal { }
+void use((Animal) -> int f) { print(f(new Animal())); }
+public void main() { use((Animal a) -> a.w); }
+```
+
+| piece | lowered as | wanted |
+|---|---|---|
+| the parameter `f` | `Rc<dyn Fn(Rc<dyn AnimalKind>) -> isize>` | (correct) |
+| the lambda's `Animal a` | `move |a: Animal|` | `move |a: Rc<dyn AnimalKind>|` |
+| the argument `new Animal()` | `Animal::new()` | `Rc::new(Animal::new()) as Rc<dyn AnimalKind>` |
+
+`rustc` reported `E0631` for the first mismatch and `E0308` for the second.
+Deleting `class Dog` made the identical program compile, because with no
+subclass `Animal` is no longer a polymorphic base and both sides agree again on
+the concrete struct. That is what made this worth an entry rather than a bug
+report: the failure appears when a SECOND class is added, in a file that need
+not mention the callback, and it took every callback, visitor, strategy and
+event-handler API over a class hierarchy out of the language.
+
+**Resolution.** A function type's parameter and result slots are value slots,
+so a polymorphic base named in either is the `Rc<dyn <Name>Kind>` handle,
+exactly as the same class named anywhere else is. Three conversions follow from
+that one rule, and the implementation performs all three:
+
+- **A lambda's written parameter type is the slot's type.** `(Animal a) -> a.w`
+  declares `a` as the handle. A parameter type the program wrote and one it left
+  to be inferred lower to the same closure, which is the property that was
+  missing: the inferred form already worked.
+- **An argument passed through a function VALUE converts into the function
+  type's parameter**, the way an argument to a declared method does. This holds
+  for every holder of the value: a local, a parameter, a field, and a call that
+  returns a function. The checker records a function-typed callee's type at the
+  callee's own span so one lookup serves them all.
+- **A lambda result converts into the function type's result slot**, which the
+  existing return-upcast path already did.
+
+The handle is not an implementation convenience here. A `(Animal) -> String`
+callback is called with a `Dog` and has to reach `Dog`'s override, so lowering
+the slot to the concrete struct would slice the subclass away at the call and
+silently run the base body.
+
+**Spec status:** `JUX-INHERITANCE-BORROW-ADDENDUM.md` §6.9.6 carries the rule
+and its three consequences, beside the `Kind`-trait block it belongs to.
+`examples/fn_type_polymorphic_callbacks.jux` is the gated program.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

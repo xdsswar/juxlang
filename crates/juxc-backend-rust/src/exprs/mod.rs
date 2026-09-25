@@ -2785,7 +2785,21 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(&p.name.text));
             if let Some(t) = &p.ty {
                 self.w.push_str(": ");
-                self.emit_type_as_rust(t);
+                // A closure parameter is a VALUE slot. A parameter typed by an
+                // interface or by a polymorphic base class is therefore the
+                // `Rc<dyn ...>` handle that the function TYPE's own slot emits,
+                // not the bare struct or bare trait name.
+                //
+                // The motivating case: `void use((Animal) -> int f)` lowers to
+                // `Rc<dyn Fn(Rc<dyn AnimalKind>) -> isize>` the moment one
+                // subclass of `Animal` exists, so `use((Animal a) -> a.w)` came
+                // out as `move |a: Animal|` and rustc rejected the whole closure
+                // (E0631, "type mismatch in closure arguments"). Deleting the
+                // subclass made the identical program compile. That took every
+                // callback, visitor, strategy and event-handler API over a
+                // polymorphic class out of the language, while §T.3.6 says the
+                // program is legal: the lambda's parameter type IS the slot's.
+                self.emit_value_type_as_rust(t);
             }
         }
         self.w.push_str("| ");

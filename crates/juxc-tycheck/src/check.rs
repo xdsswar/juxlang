@@ -11159,6 +11159,30 @@ impl<'a> Checker<'a> {
             self.check_fn_pointer_call(c, &params, &param_ptr_depths);
             return;
         }
+        // A call THROUGH a function VALUE (a lambda, a method reference or a
+        // function name held in a local, a parameter or a field, §7.9): record
+        // the callee's function type at the callee's own span, the same way
+        // `check_fn_pointer_call` records a pointer callee's.
+        //
+        // The backend converts each argument to the function type's parameter
+        // (`Animal` into `Rc<dyn AnimalKind>` once `Animal` has a subclass), and
+        // it finds that type by this record. A fn-typed LOCAL was covered by the
+        // backend's own `local_types` map, but a fn-typed PARAMETER was not (that
+        // map holds only class- and generic-typed params), so
+        // `void use((Animal) -> int f) { print(f(new Animal())); }` handed a
+        // concrete `Animal` to an `Rc<dyn AnimalKind>` slot and leaked rustc
+        // E0308. Recording the type here fixes free functions and methods at
+        // once, since neither has anything else in common for the backend to key
+        // off.
+        {
+            let callee_ty = infer_expr(&c.callee, &self.env, self.symbols);
+            if matches!(callee_ty, Ty::Fn { .. }) {
+                let callee_span = expr_span(&c.callee);
+                if callee_span != Span::DUMMY {
+                    self.expr_types.insert(callee_span, callee_ty);
+                }
+            }
+        }
         // §P.4.2/§P.4.3 — `target.X.bind(source.Y)` /
         // `bindBidirectional`: both ends must be properties of the
         // SAME declared type (E0974). Checked here so the mismatch

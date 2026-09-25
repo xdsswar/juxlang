@@ -4004,6 +4004,24 @@ impl crate::RustEmitter {
         callee: &juxc_ast::Expr,
         arg_idx: usize,
     ) -> Option<juxc_ast::TypeRef> {
+        // A call THROUGH a function VALUE, whatever holds it (§7.9). The checker
+        // records the callee's function type at the callee's own span, so one
+        // lookup covers a local, a parameter, a FIELD (`this.fmt(new Dog())`)
+        // and a call that returns a function. The argument then converts to the
+        // function type's own parameter, exactly as a named callee's would: a
+        // `(Animal) -> String` whose `Animal` is a polymorphic base takes an
+        // `Rc<dyn AnimalKind>`, so a fresh `new Dog()` has to be wrapped.
+        //
+        // Without this a field-held callback (the ordinary shape of an
+        // event-handler or strategy object) leaked rustc E0308 at the call.
+        if let Some(juxc_tycheck::Ty::Fn { params, .. }) = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(callee))
+            .cloned()
+            .map(crate::exprs::field::strip_nullable)
+        {
+            return params.get(arg_idx).and_then(crate::analysis::ty_to_type_ref);
+        }
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
                 // A call THROUGH a function value held in a local or a
