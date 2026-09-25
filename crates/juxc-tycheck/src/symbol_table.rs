@@ -4137,45 +4137,24 @@ fn class_provides_method(table: &SymbolTable, class_name: &str, method_name: &st
     false
 }
 
-/// Whether a sealed class is lowered to a **Rust enum** of its permitted
-/// subclasses, rather than to the polymorphic-base representation.
-///
-/// The enum form gives a sealed hierarchy exhaustive `match` dispatch and
-/// carries a subclass's identity through a parent-typed slot. What it has no
-/// room for is the PARENT's own state: a variant wraps the subclass struct, and
-/// a subclass of an enum-lowered parent has no `__parent` field, so an
-/// inherited field would live nowhere. A sealed base that declares a field or a
-/// static initializer therefore keeps the ordinary polymorphic-base lowering,
-/// which already handles inherited fields, statics and virtual dispatch.
-///
-/// `sealed` still restricts who may extend either way — that is E0422, and has
-/// nothing to do with the representation.
-///
-/// This lives here, beside the signature it reads, because BOTH crates decide
-/// on it: tycheck to know which classes are polymorphic bases, and the backend
-/// to choose an emission for the parent, each subclass, each constructor and
-/// each upcast. Every one of those has to give the same answer or the emitted
-/// crate does not compile.
-pub fn sealed_lowers_to_enum(sig: &ClassSig) -> bool {
-    sig.is_sealed && !sig.permits.is_empty() && sig.fields.is_empty() && !sig.has_static_init
-}
-
-/// Bare names of every **polymorphic base class** — a non-sealed, non-final,
-/// non-generic class extended by ≥1 other class. Mirrors the backend's
+/// Bare names of every **polymorphic base class** — a non-final, non-generic
+/// class extended by ≥1 other class. Mirrors the backend's
 /// `compute_polymorphic_base_classes`: these are the classes whose value slots
 /// lower to `Rc<dyn <Name>Kind>` for Stage-2 virtual dispatch. Keyed on bare
 /// (last-segment) names to match the backend's wrapper/dispatch gates.
+///
+/// `sealed` does not exclude a class here. A sealed base is a base like any
+/// other (§CR.5.6, ERRATA E101): sealing closes the subclass SET, which is what
+/// makes a `switch` over the base exhaustive and the §7.4.2 mutation union
+/// exact, and says nothing about the representation. An earlier draft lowered a
+/// stateless sealed base to a Rust enum and left it out of this set, which is
+/// how a sealed hierarchy came to have value semantics.
 pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::HashSet<String> {
     let mut candidate: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut extended: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (fqn, sig) in &table.classes {
         let bare = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
-        // A sealed class is excluded only when it actually becomes an ENUM.
-        // A sealed base WITH state keeps the `Rc<dyn …Kind>` representation and
-        // must be listed here, or its `Kind` trait is emitted with no methods
-        // and a call through a parent-typed reference reaches the abstract
-        // `unimplemented!()` stub instead of the override.
-        if !sealed_lowers_to_enum(sig) && !sig.is_final && sig.generic_params.is_empty() {
+        if !sig.is_final && sig.generic_params.is_empty() {
             candidate.insert(bare);
         }
         let parent_bare = sig

@@ -1,0 +1,76 @@
+// Positional patterns over a sealed hierarchy's SUBCLASSES (Grammar §A.3,
+// ERRATA E101).
+//
+// `case Red(var s, var n)` tests the runtime type and binds part `i` to `Red`'s
+// `i`-th instance field in declaration order. A `_` part says the field does not
+// matter, and a LITERAL part is a test on that field rather than a binding, so
+// the arms after it pick up the rest. `case Red r` is the same test written
+// without taking the object apart.
+//
+// A sealed base is `Rc<dyn LightKind>` like any other polymorphic base, so none
+// of this is enum-variant matching: the arm binds the subclass handle and reads
+// the parts out of it.
+
+sealed class Light permits Red, Yellow, Green {}
+
+final class Red extends Light {
+    public int seconds;
+    public String note;
+    public Red(int s, String note) { this.seconds = s; this.note = note; }
+}
+
+final class Yellow extends Light {
+    public int seconds;
+    public String note;
+    public Yellow(int s, String note) { this.seconds = s; this.note = note; }
+}
+
+final class Green extends Light {
+    public int seconds;
+    public bool arrow;
+    public Green(int s, bool arrow) { this.seconds = s; this.arrow = arrow; }
+}
+
+String describe(Light l) {
+    return switch (l) {
+        case Red(0, _)            -> "red, no wait";
+        case Red(var s, "urgent") -> $"urgent red ${s}";
+        case Red(var s, var n)    -> $"red ${s} (${n})";
+        case Yellow(var s, _)     -> $"yellow ${s}";
+        case Green(var s, true)   -> $"green ${s} + arrow";
+        case Green(var s, _)      -> $"green ${s}";
+    };
+}
+
+// Alternatives that bind the same names (§A.3), over subclasses of a sealed
+// class rather than records.
+int seconds(Light l) {
+    return switch (l) {
+        case Red(var s, _) | Yellow(var s, _) -> s;
+        case Green(var s, _) -> s * 10;
+    };
+}
+
+// A `when` guard reads the parts its arm bound.
+String big(Light l) {
+    return switch (l) {
+        case Red(var s, _) when s > 20 -> "long red";
+        case Red(var s, _) -> "short red";
+        default -> "not red";
+    };
+}
+
+public void main() {
+    print(describe(new Red(0, "x")));
+    print(describe(new Red(30, "urgent")));
+    print(describe(new Red(15, "calm")));
+    print(describe(new Yellow(5, "y")));
+    print(describe(new Green(25, true)));
+    print(describe(new Green(25, false)));
+    print(seconds(new Red(30, "a")));
+    print(seconds(new Yellow(5, "b")));
+    print(seconds(new Green(2, false)));
+    print(big(new Red(30, "a")));
+    print(big(new Red(3, "a")));
+    print(big(new Green(1, false)));
+}

@@ -425,42 +425,32 @@ impl RustEmitter {
 
         self.w.line("let mut __self = Self {");
         self.w.indent_inc();
-        // Emit the `__parent` slot first when the class has a non-sealed
-        // parent, exactly like `emit_simple_ctor_body` does. Without this,
-        // the `__parent` field is missing from the struct literal and rustc
-        // emits E0063 (e.g. an Exception subclass with a complex ctor body).
-        let parent_is_sealed = class_decl
-            .extends
-            .as_ref()
-            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
-            // The parent is a variant-carrying enum only when it actually
-            // lowered to one; `is_sealed` alone let a stateful sealed parent
-            // emit an ordinary struct while its subclasses skipped `__parent`.
-            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
+        // Emit the `__parent` slot first, exactly like `emit_simple_ctor_body`
+        // does. Without this, the `__parent` field is missing from the struct
+        // literal and rustc emits E0063 (e.g. an Exception subclass with a
+        // complex ctor body). A sealed parent is no exception: it embeds like
+        // any other base (ERRATA E101).
         if let Some(parent_ty) = &class_decl.extends {
-            if !parent_is_sealed {
-                let super_args = extract_super_args(ctor);
-                self.w.emit_indent();
-                self.w.push_str("__parent: ");
-                self.emit_parent_ctor_base_path(parent_ty);
-                let parent_bare = parent_ty
-                    .name
-                    .segments
-                    .last()
-                    .map(|s| s.text.clone())
-                    .unwrap_or_default();
-                let n_super = super_args.as_ref().map_or(0, |a| a.len());
-                let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
-                self.w.push_str("::new");
-                self.w.push_str(&sfx);
-                self.w.push('(');
-                if let Some(args) = super_args {
-                    let parent_ty_clone = parent_ty.clone();
-                    self.emit_super_call_args(&parent_ty_clone, &args);
-                }
-                self.w.push_str("),\n");
+            let super_args = extract_super_args(ctor);
+            self.w.emit_indent();
+            self.w.push_str("__parent: ");
+            self.emit_parent_ctor_base_path(parent_ty);
+            let parent_bare = parent_ty
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            let n_super = super_args.as_ref().map_or(0, |a| a.len());
+            let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+            self.w.push_str("::new");
+            self.w.push_str(&sfx);
+            self.w.push('(');
+            if let Some(args) = super_args {
+                let parent_ty_clone = parent_ty.clone();
+                self.emit_super_call_args(&parent_ty_clone, &args);
             }
+            self.w.push_str("),\n");
         }
         for field in &class_decl.fields {
             if field.is_static {
@@ -693,62 +683,50 @@ impl RustEmitter {
             self.w.line("Self {");
         }
         self.w.indent_inc();
-        // Sealed-parent skip: subclasses-of-sealed lower without a
-        // `__parent` field (they ARE the parent enum's variant);
-        // suppress the `__parent: Parent::new(...)` init line for
-        // those.
-        let parent_is_sealed = class_decl
-            .extends
-            .as_ref()
-            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
-            // The parent is a variant-carrying enum only when it actually
-            // lowered to one; `is_sealed` alone let a stateful sealed parent
-            // emit an ordinary struct while its subclasses skipped `__parent`.
-            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
+        // Every parent gets its `__parent: Parent::new(...)` init line, a
+        // sealed one included: sealing closes the subclass set and leaves the
+        // representation alone (ERRATA E101).
         // Inherited parent — emit the `__parent` slot first, before
         // the class's own fields, matching the struct declaration's
         // field order.
         if let Some(parent_ty) = &class_decl.extends {
-            if !parent_is_sealed {
-                self.w.emit_indent();
-                self.w.push_str("__parent: ");
-                // Emit only the parent's path here, not the full `<...>`
-                // instantiation. The `__parent` field declaration already
-                // pins the parent's generic args, so Rust infers them at
-                // the call site — and `Parent<int>::new(...)` is invalid
-                // Rust syntax anyway (would need the turbofish form
-                // `Parent::<int>::new`). The helper crate-roots a
-                // cross-package parent (`extends Exception` →
-                // `crate::jux::std::exceptions::Exception`).
-                self.emit_parent_ctor_base_path(parent_ty);
-                let parent_bare = parent_ty
-                    .name
-                    .segments
-                    .last()
-                    .map(|s| s.text.clone())
-                    .unwrap_or_default();
-                let n_super = simple.super_args.as_ref().map_or(0, |a| a.len());
-                let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
-                self.w.push_str("::new");
-                self.w.push_str(&sfx);
-                self.w.push('(');
-                // If the constructor wrote `super(args);`, lift those args
-                // here. If it didn't, Phase 1 calls `Parent::new()` with
-                // no arguments — fine for parameterless parents, breaks
-                // (with a clear Rust error) when the parent's ctor needs
-                // arguments and the user forgot to write `super(...)`.
-                if let Some(args) = &simple.super_args {
-                    // Clone to release the borrow on `simple` before the
-                    // emit calls (which need `&mut self`).
-                    let args = args.clone();
-                    let parent_ty_clone = parent_ty.clone();
-                    // Use the helper so non-null args for a nullable
-                    // parent-ctor parameter are wrapped in `Some(…)`.
-                    self.emit_super_call_args(&parent_ty_clone, &args);
-                }
-                self.w.push_str("),\n");
+            self.w.emit_indent();
+            self.w.push_str("__parent: ");
+            // Emit only the parent's path here, not the full `<...>`
+            // instantiation. The `__parent` field declaration already
+            // pins the parent's generic args, so Rust infers them at
+            // the call site — and `Parent<int>::new(...)` is invalid
+            // Rust syntax anyway (would need the turbofish form
+            // `Parent::<int>::new`). The helper crate-roots a
+            // cross-package parent (`extends Exception` →
+            // `crate::jux::std::exceptions::Exception`).
+            self.emit_parent_ctor_base_path(parent_ty);
+            let parent_bare = parent_ty
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            let n_super = simple.super_args.as_ref().map_or(0, |a| a.len());
+            let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+            self.w.push_str("::new");
+            self.w.push_str(&sfx);
+            self.w.push('(');
+            // If the constructor wrote `super(args);`, lift those args
+            // here. If it didn't, Phase 1 calls `Parent::new()` with
+            // no arguments — fine for parameterless parents, breaks
+            // (with a clear Rust error) when the parent's ctor needs
+            // arguments and the user forgot to write `super(...)`.
+            if let Some(args) = &simple.super_args {
+                // Clone to release the borrow on `simple` before the
+                // emit calls (which need `&mut self`).
+                let args = args.clone();
+                let parent_ty_clone = parent_ty.clone();
+                // Use the helper so non-null args for a nullable
+                // parent-ctor parameter are wrapped in `Some(…)`.
+                self.emit_super_call_args(&parent_ty_clone, &args);
             }
+            self.w.push_str("),\n");
         }
         for field in &class_decl.fields {
             // Static fields aren't instance state — skip them
@@ -2039,33 +2017,21 @@ impl RustEmitter {
             self.w.line("Self {");
         }
         self.w.indent_inc();
-        // Sealed-parent skip: subclasses of sealed have no
-        // `__parent` slot to initialize.
-        let parent_is_sealed = class_decl
-            .extends
-            .as_ref()
-            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
-            // The parent is a variant-carrying enum only when it actually
-            // lowered to one; `is_sealed` alone let a stateful sealed parent
-            // emit an ordinary struct while its subclasses skipped `__parent`.
-            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
+        // A sealed parent has a `__parent` slot like any other (ERRATA E101).
         // Inherited parent — invoke the parent's zero-arg constructor.
         // For parents whose ctor takes arguments, the user MUST declare
         // an explicit constructor with `super(args);`; the synthetic
         // path is only valid for trivially-defaulted hierarchies.
         if let Some(parent_ty) = &class_decl.extends {
-            if !parent_is_sealed {
-                self.w.emit_indent();
-                self.w.push_str("__parent: ");
-                // Same rule as the explicit-ctor path: emit the parent's
-                // bare identifier and let Rust infer the generic args
-                // from the `__parent` field's declared type.
-                if let Some(seg) = parent_ty.name.segments.first() {
-                    self.w.push_str(&to_rust_ident(&seg.text));
-                }
-                self.w.push_str("::new(),\n");
+            self.w.emit_indent();
+            self.w.push_str("__parent: ");
+            // Same rule as the explicit-ctor path: emit the parent's
+            // bare identifier and let Rust infer the generic args
+            // from the `__parent` field's declared type.
+            if let Some(seg) = parent_ty.name.segments.first() {
+                self.w.push_str(&to_rust_ident(&seg.text));
             }
+            self.w.push_str("::new(),\n");
         }
         for field in &class_decl.fields {
             if field.is_static {

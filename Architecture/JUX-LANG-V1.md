@@ -2177,6 +2177,10 @@ public String describe(Shape s) {
 
 The compiler verifies exhaustiveness for sealed types — no `default` clause needed when all cases are covered.
 
+**A sealed CLASS hierarchy matches the same way, and its objects are still references.** `sealed class Shape permits Circle, Square` closes the subclass set; it does not change what a `Shape` is. A `Shape`-typed local, parameter, field, return value or collection element holds a subclass instance, two names for one object are one object, and a mutating `@Override` runs through any of them, exactly as for a base class nobody sealed (`ERRATA.md` E101, `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.5.6). What sealing buys is the exhaustiveness above and the exact mutation union of §7.4.2, both of which the compiler works out before it emits anything.
+
+A permitted subclass may also be taken apart positionally, the way a record is: `case Circle(var r)` tests the runtime type and binds part `i` to the subclass's `i`-th instance field in declaration order, `_` skips a part, and a literal part (`case Circle(0.0)`) is a test on that field rather than a binding. `case Circle c` is the same runtime-type test written without taking the object apart.
+
 **Switch uses `->` only — no fallthrough.** Every case body is self-contained; no `break` is needed. Cases may also bundle multiple patterns or use blocks for multi-statement bodies:
 
 ```java

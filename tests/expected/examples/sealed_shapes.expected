@@ -1,2 +1,8 @@
 circle radius=5, a shape
 square side=3, a shape
+local circle size=3
+alias size=4
+param size=6
+element circle size=2 is a circle of 2
+element square size=8 is a square of 8
+field square size=20

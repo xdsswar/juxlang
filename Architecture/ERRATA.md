@@ -2353,6 +2353,66 @@ rule, the producer-read rule and the `? super` `Display` rule.
 
 ---
 
+## E101. A sealed class hierarchy is a reference hierarchy, not an enum
+
+**Conflict.** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.5.6 says `sealed` does
+not affect the representation: it "is about inheritance, not memory layout".
+One cell of the Java-fidelity table in §CR.4.1 said the opposite,
+"sealed→enum for closed hierarchies", and the compiler followed the cell. A
+sealed base that declared no field and no static initializer became a Rust
+`enum` of its permitted subclasses, and under that lowering the subclasses were
+plain structs rather than the shared handles every other class gets.
+
+That is not a spelling detail. It gives one class hierarchy VALUE semantics
+while every other has reference semantics, and the foundational commitment of
+this addendum (§CR.4.1) is that a Jux class is a shared mutable reference the
+way a Java object is. What it cost:
+
+| program | before |
+|---|---|
+| `Shape a = new Circle(); Shape b = a; b.grow();` | `a` did not see the change |
+| `shapes.push(new Circle())` into a `Vec<Shape>` | rustc `E0308`, "try wrapping the expression in `Shape::Circle`" |
+| a mutating `@Override` reached through a `Shape` | rustc `E0596`: the `&self` match dispatcher cannot call a `&mut self` override |
+
+`JUX-LANG-V1.md` §7.4.2's worked example is a sealed `Shape` whose
+`AnimatedRectangle.render()` mutates and is called through a `Shape`-typed
+parameter, and §15's capstone holds a `sealed abstract class Animal` in a
+`Vec<Animal>`; those are rows two and three of that table. A sealed base that
+declared even one field already escaped the enum lowering and worked, which is
+why the gap survived this long: `examples/sealed_shapes.jux` only ever touched
+concrete locals.
+
+**Resolution.** §CR.5.6 is canonical and the table cell was wrong. A sealed
+class lowers exactly as any other polymorphic base class does, `Rc<dyn
+<Name>Kind>` per §CR.5.1, whether or not it carries state. `sealed` contributes
+closed-set knowledge to the FRONT END only:
+
+- exhaustiveness of a `switch` over the base, which needs no `default` when the
+  arms cover every permitted subclass (`E0440` otherwise, §T.5.5), and
+- the exact mutation union of §7.4.2, because only a permitted subclass can
+  contribute an override.
+
+Neither is a fact about layout, so neither earns a distinct representation. The
+enum lowering, its variant-wrapping upcasts and its match-dispatch wrappers are
+removed rather than left unreachable.
+
+**What a `case` pattern over a sealed hierarchy means.** §A.3 says a
+`Name(part, …)` pattern is a record pattern or an enum pattern according to what
+`Name` resolves to, and a sealed subclass is neither; the form was nonetheless
+accepted, because under the enum lowering it fell out of Rust's own match for
+free. It keeps working and is now written down: over a sealed hierarchy,
+`case Sub(part, …)` tests the runtime type and binds part `i` to `Sub`'s `i`-th
+INSTANCE field in declaration order, `_` skips a part, and a literal part is a
+test on that field rather than a binding. `case Sub s` and `case Sub(var x)`
+remain two spellings of the same runtime-type test, as §7.5 already has them
+for records.
+
+**Spec status:** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.4.1's table and
+§CR.5.6 now agree; `JUX-GRAMMAR-ADDENDUM.md` §A.3 carries the subclass-pattern
+rule; `JUX-LANG-V1.md` §7.5 carries the prose.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

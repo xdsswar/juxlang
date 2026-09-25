@@ -383,7 +383,7 @@ The shared-mutation model sits inside a coherent Java-on-Rust mapping:
 | Uniform refs + shared mutation | `Rc<RefCell>` / `Arc<Mutex>`, statement-scoped borrows | this addendum |
 | Escape-analysis "fast tier" | selector demotes to Inline / `Box` when not aliased | §CR.3 |
 | GC of cycles | `Weak` back-edges now (documented leak on uncollected cycles); arena or trial-deletion collector later | §CR.5.5, future |
-| Dynamic dispatch / inheritance | `dyn Trait` behind `Arc<dyn>`; `Deref` to `__parent`; sealed→enum for closed hierarchies | §CR.5.1–5.2 |
+| Dynamic dispatch / inheritance | `dyn Trait` behind `Arc<dyn>`; `Deref` to `__parent`; a sealed base is a base like any other (§CR.5.6) | §CR.5.1–5.2 |
 | Reflection | compile-time type-descriptor table + registry (future) | future |
 | `null` | `T?` → `Option<T>`, non-null by default | `JUX-LANG-V1.md` §5.3 |
 | Exceptions | `Result<T,E>` + `?`-propagation; `throws` → error type | exceptions addendum |
@@ -449,6 +449,24 @@ weak ref crosses threads, Rc otherwise.
 inheritance, not memory layout. `sealed interface I permits A, B`
 fixes the set of possible types behind a `dyn I`, but the dispatch
 mechanism is the same and the rep still rolls up to Arc.
+
+**A sealed CLASS is a base class like any other (NORMATIVE, ERRATA
+E101).** `sealed class Shape permits Circle, Square` lowers to the
+polymorphic-base shape of §CR.5.1, `Rc<dyn ShapeKind>` for every
+`Shape`-typed slot, whether or not the base declares state. A sealed
+hierarchy therefore has the same shared-reference semantics as every
+other class hierarchy (§CR.4.1): two `Shape`-typed names for one
+object are one object, a `Shape` sits in a `Vec<Shape>` or a field, and
+a mutating `@Override` runs through a `Shape`-typed parameter.
+
+What `sealed` buys is knowledge, not a layout. The closed permits set
+lets the FRONT END prove a `switch` over the base exhaustive without a
+`default` (§T.5.5) and take the mutation union of §7.4.2 over exactly
+the permitted subclasses. Both are compile-time facts, so neither
+changes what the object is at run time. An earlier draft lowered a
+stateless sealed base to a Rust `enum` of its permitted subclasses;
+that gave the hierarchy value semantics, which contradicted §CR.4.1
+and this section, and it is gone.
 
 ### §CR.5.7. Static fields
 

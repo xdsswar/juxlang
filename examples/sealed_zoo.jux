@@ -1,0 +1,112 @@
+// JUX-LANG-V1 §15's capstone program, run.
+//
+// A `sealed abstract class Animal permits Dog, Cat, Bird` held in a
+// `Vec<Animal>`, an interface with a default method, constructors with default
+// and named arguments, `=>` narrowing to the one subclass that is `Trainable`,
+// and a nullable `HashMap` lookup narrowed by a `null` check.
+//
+// The sealed base is a reference type like any other class (ERRATA E101), which
+// is what lets `zoo` hold subclass instances and dispatch `speak()` to each
+// one's override.
+
+sealed abstract class Animal permits Dog, Cat, Bird {
+    protected String name;
+    protected int age;
+
+    public Animal(String name, int age = 0) {
+        this.name = name;
+        this.age = age;
+    }
+
+    public abstract void speak();
+
+    public void introduce() {
+        print("I am " + name + ", age " + age);
+    }
+
+    public String getName() { return name; }
+    public int getAge() { return age; }
+}
+
+interface Trainable {
+    void learn(String command);
+
+    default void learnAll(Vec<String> commands) {
+        for (var cmd : commands) {
+            learn(cmd);
+        }
+    }
+}
+
+final class Dog extends Animal implements Trainable {
+    private Vec<String> tricks;
+
+    public Dog(String name, int age = 0) {
+        super(name, age);
+        this.tricks = new Vec<String>();
+    }
+
+    @Override
+    public void speak() {
+        print(name + " says woof");
+    }
+
+    @Override
+    public void learn(String command) {
+        tricks.push(command);
+    }
+
+    public int trickCount() { return tricks.len(); }
+}
+
+final class Cat extends Animal {
+    public Cat(String name, int age = 0) {
+        super(name, age);
+    }
+
+    @Override
+    public void speak() {
+        print(name + " says meow");
+    }
+}
+
+final class Bird extends Animal {
+    public Bird(String name, int age = 0) {
+        super(name, age);
+    }
+
+    @Override
+    public void speak() {
+        print(name + " sings");
+    }
+}
+
+public void main() {
+    var zoo = new Vec<Animal>();
+    var ages = new HashMap<String, int>();
+    zoo.push(new Dog("Rex", age: 3));
+    zoo.push(new Cat("Whiskers"));
+    zoo.push(new Bird("Tweety", age: 1));
+
+    for (var animal : zoo) {
+        animal.introduce();
+        animal.speak();
+        ages.insert(animal.getName(), animal.getAge());
+
+        // Only Dogs are Trainable: teach Rex some tricks.
+        if (animal => Dog d) {
+            var commands = new Vec<String>();
+            commands.push("sit");
+            commands.push("roll over");
+            d.learnAll(commands);
+            print($"${d.getName()} knows ${d.trickCount()} tricks");
+        }
+    }
+
+    print("Zoo has " + zoo.len() + " animals");
+
+    var rexAge = ages.get("Rex");        // int? : null when the key is missing
+    if (rexAge != null) {
+        print($"Rex is ${rexAge}");
+    }
+}

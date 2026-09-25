@@ -4248,9 +4248,9 @@ impl crate::RustEmitter {
         if self.is_poly_base_class(target_bare) {
             return false;
         }
-        let Some(parent_class) = self.lookup_class_by_bare_or_fqn(target_bare) else {
+        if self.lookup_class_by_bare_or_fqn(target_bare).is_none() {
             return false;
-        };
+        }
         let arg_span = crate::exprs::expr_span_of(expr);
         let Some(arg_ty) = self.expr_types.get(&arg_span) else {
             return false;
@@ -4261,12 +4261,6 @@ impl crate::RustEmitter {
         };
         if arg_bare == target_bare {
             return false;
-        }
-        // Sealed parent: arg must be in the explicit `permits`
-        // list. The `From<Sub> for Sealed` impl wraps the
-        // subclass into the matching enum variant.
-        if crate::decls::classes::sealed_lowers_to_enum(parent_class) {
-            return parent_class.permits.iter().any(|p| p.as_str() == arg_bare);
         }
         // Non-sealed open parent: the auto-emitted
         // `From<Sub> for Parent` impl (see `emit_class_decl`)
@@ -4592,15 +4586,10 @@ impl crate::RustEmitter {
         {
             return false;
         }
-        // A *sealed* target lowers to an enum with its own permit-based `From` +
-        // coercion path — skip. A target that isn't a known user class (the
-        // built-in `Exception` base, an external stub) is fine: the slicing
-        // `From<Sub> for Parent` was still generated on the subclass side.
-        if let Some(c) = self.lookup_class_by_bare_or_fqn(target_bare) {
-            if crate::decls::classes::sealed_lowers_to_enum(c) {
-                return false;
-            }
-        }
+        // A sealed target is an ordinary base class now (ERRATA E101), so it
+        // takes the same slicing `From<Sub> for Parent` path as any other. A
+        // target that isn't a known user class (the built-in `Exception` base,
+        // an external stub) is fine for the same reason.
         // The argument's static class must DIRECTLY extend the target class.
         // Resolve via `receiver_class_bare` so a local-variable argument (whose
         // type lives in `local_types`, not `expr_types`) is handled too.

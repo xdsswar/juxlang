@@ -762,6 +762,7 @@ pattern           = literal-pattern
                   | tuple-pattern
                   | record-pattern
                   | enum-pattern
+                  | subclass-pattern
                   | range-pattern
                   | or-pattern
 
@@ -780,6 +781,12 @@ tuple-pattern     = '(' pattern ( ',' pattern )+ ')'
 record-pattern    = qualified-name '(' nested-pattern-list? ')'
 
 enum-pattern      = qualified-name '(' nested-pattern-list? ')'    -- same shape as record
+
+subclass-pattern  = identifier '(' nested-pattern-list? ')'   -- same shape again; the
+                                                              -- name is a permitted subclass
+                                                              -- of a sealed class, and the
+                                                              -- parts are its instance
+                                                              -- fields in order (E101)
 
 nested-pattern-list = pattern ( ',' pattern )*
 
@@ -828,7 +835,14 @@ String classify(int a, int b) {
 
 - `record-pattern` and `enum-pattern` share one shape, so which one a
   `Name(...)` is follows from what `Name` resolves to: a record type makes it a
-  record pattern, an enum variant an enum pattern.
+  record pattern, an enum variant an enum pattern, and a **permitted subclass
+  of a sealed class** a subclass pattern (ERRATA E101). The third form is a
+  runtime type test like `case Sub s`, and it binds part `i` to `Sub`'s `i`-th
+  INSTANCE field in declaration order: `case Green(var s, var arrow)` over a
+  `sealed class Light permits Red, Yellow, Green` binds `Green`'s first two
+  fields. `_` skips a part, and a literal part is a test on that field rather
+  than a binding, so `case Red(30)` matches only a `Red` whose first field is
+  30. Static fields are not instance state and take no position.
 - A tuple pattern needs as many sub-patterns as the tuple has elements, and a
   record pattern one per component. A pattern that cannot match the value at
   all, because it has the wrong number of parts or names a different type, is

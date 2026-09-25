@@ -76,56 +76,22 @@ impl RustEmitter {
                 return;
             }
         }
-        // **Sealed-class lowering.** A `sealed class Light permits
-        // Red, Yellow, Green {}` becomes a Rust enum whose variants
-        // wrap each permitted subclass struct:
+        // **A sealed class has no lowering of its own** (ERRATA E101, §CR.5.6).
+        // It is a base class, and it takes the same `Rc<dyn <Name>Kind>` shape
+        // every other polymorphic base takes, so the branches below decide it
+        // with no reference to `sealed` at all.
         //
-        // ```rust
-        // pub enum Light { Red(Red), Yellow(Yellow), Green(Green) }
-        // impl From<Red> for Light { ... }
-        // ```
-        //
-        // The subclass declarations themselves still emit as
-        // normal structs, but with `__parent: Light` *omitted* —
-        // they ARE the variant, they don't contain one. This is
-        // what makes Java upcasting actually work: `new Red(30)`
-        // followed by `.into()` produces `Light::Red(Red{..})`
-        // which carries the subclass's identity through any slot
-        // typed as `Light`.
-        //
-        // Any sealed class with a non-empty permits list lowers
-        // as a Rust enum so upcasting actually carries the
-        // subclass's identity through function boundaries. When
-        // the sealed parent has its own methods, the enum's
-        // inherent impl block emits a match-dispatching wrapper
-        // for each method — `Shape::describe(&self)` becomes
-        // `match self { Shape::Circle(c) => c.describe(), … }`,
-        // and each subclass picks up the inherited body through
-        // the existing method-inlining pass.
-        // …but ONLY when the sealed parent carries no state of its own.
-        //
-        // The enum form has no place to keep the parent's fields: a variant
-        // wraps the SUBCLASS struct, and a subclass of a sealed parent skips
-        // the `__parent` field precisely because it is a variant (see the
-        // `parent_is_sealed` check below). So a sealed base with a field, an
-        // init block or a static block emitted Rust that did not compile —
-        // `no field 'id' on type '&Circle'`, and a call to a `__static_init`
-        // the enum never had. Every sealed base in the corpus is stateless,
-        // which is why the shape went unnoticed.
-        //
-        // A stateful one falls back to the ordinary polymorphic-base lowering
-        // (`Rc<dyn ShapeKind>`), which already handles inherited fields,
-        // statics and static blocks. `sealed` still restricts who may extend —
-        // that is a tycheck rule (E0422) and is unaffected by the choice of
-        // representation. What is given up is enum-shaped exhaustive matching
-        // for that hierarchy, which is a fair trade against not compiling.
-        let lowers_to_enum = self
-            .lookup_class_by_bare_or_fqn(&class_decl.name.text)
-            .is_some_and(sealed_lowers_to_enum);
-        if lowers_to_enum {
-            self.emit_sealed_enum(class_decl);
-            return;
-        }
+        // An earlier draft turned a sealed base with no state into a Rust enum
+        // of its permitted subclasses, each variant wrapping the subclass
+        // struct. That made the whole hierarchy a VALUE hierarchy, which
+        // contradicts the foundational commitment that a class is a shared
+        // reference (§CR.4.1): two `Shape`-typed names for one object stopped
+        // being one object, a subclass would not go into a `Vec<Shape>`
+        // (rustc E0308) and the enum's `&self` match dispatcher could not
+        // reach a `&mut self` override (rustc E0596). `sealed` still restricts
+        // who may extend (E0422) and still makes a `switch` over the base
+        // exhaustive without a `default` (E0440); both are front-end facts and
+        // neither needs a representation of its own.
         // (Migrated to Writer indent-aware API)
         // Track the enclosing class so `Expr::Path` emission can
         // rewrite a bare reference to a static field (`a` inside
@@ -160,10 +126,10 @@ impl RustEmitter {
         // semantics: every alias of an instance shares one
         // `Rc<RefCell<C_Inner>>`, and a mutation through any handle is
         // visible through all of them. The set is computed globally by
-        // `compute_wrapper_classes`, which already excludes sealed /
-        // generic / exception / intrinsic classes and rolls each
-        // non-sealed `extends` hierarchy up as a unit — so member ship
-        // is the only gate needed here. Both leaf simple classes AND
+        // `compute_wrapper_classes`, which already excludes generic /
+        // exception / intrinsic classes and rolls each `extends`
+        // hierarchy up as a unit — so membership is the only gate
+        // needed here. Both leaf simple classes AND
         // hierarchy members (incl. abstract parents) flow into
         // `emit_wrapper_class_decl`, which branches on `extends`.
         if self.is_wrapper_class(&class_decl.name.text) {
@@ -286,37 +252,25 @@ impl RustEmitter {
         // (emitted below), so `child.parent_field` and inherited
         // method calls Just Work. Always emit `__parent` first so the
         // struct layout is consistent across the hierarchy.
-        // Sealed-parent detection: when the parent is a sealed
-        // class, this class IS one of the parent enum's variants
-        // — there's no struct to embed. Skip the `__parent` field
-        // and the Deref impls (those are only meaningful for the
-        // value-class hierarchy).
-        // Only a parent that ACTUALLY lowered to an enum makes this class one
-        // of its variants. Asking `is_sealed` alone was the same drift in
-        // reverse: a subclass of a stateful sealed parent skipped `__parent`
-        // while the parent had emitted an ordinary struct, so the inherited
-        // fields existed nowhere.
-        let parent_is_sealed = class_decl
-            .extends
-            .as_ref()
-            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
-            .is_some_and(sealed_lowers_to_enum);
+        // A sealed parent needs no special case here: it emits an ordinary
+        // struct like any other base (ERRATA E101), so `__parent` embeds the
+        // same way. The enum lowering used to make a subclass BE a variant and
+        // skip this field, which is why a stateful sealed base once emitted
+        // inherited fields that existed nowhere.
+        //
         // Rust drops fields in declaration order; §S.5.2 asks for the
         // reverse, parent last. Where that is observable (see
         // `fields_drop_in_reverse`) the struct lists them the other way.
         let reverse = self.fields_drop_in_reverse(class_decl);
         let emit_parent = |this: &mut Self| {
             if let Some(parent_ty) = &class_decl.extends {
-                if !parent_is_sealed {
-                    this.w.emit_indent();
-                    // `pub` so cross-package consumers can reach the
-                    // slice — catch-clause upcasts (`(*payload).__parent`)
-                    // run in the CATCHING package, not the declaring one.
-                    this.w.push_str("pub __parent: ");
-                    this.emit_type_as_rust(parent_ty);
-                    this.w.push_str(",\n");
-                }
+                this.w.emit_indent();
+                // `pub` so cross-package consumers can reach the
+                // slice — catch-clause upcasts (`(*payload).__parent`)
+                // run in the CATCHING package, not the declaring one.
+                this.w.push_str("pub __parent: ");
+                this.emit_type_as_rust(parent_ty);
+                this.w.push_str(",\n");
             }
         };
         if !reverse {
@@ -433,54 +387,49 @@ impl RustEmitter {
         }
         self.w.newline();
 
-        // Auto-`From<Sub> for Parent` for **non-sealed open
-        // hierarchies**. Extracts the parent slice from the
-        // subclass via `__parent`, giving the user a working
-        // `void greet(Animal a) { } ;  greet(new Dog(...))` shape
-        // at the cost of dropping the subclass's identity at the
-        // upcast boundary. Phase-1 limitation: methods overridden
-        // in the subclass DO NOT fire after upcasting through
-        // this conversion — Java's virtual dispatch through value
-        // types isn't expressible without dyn dispatch, which is
-        // a larger refactor (each class's marker trait would have
-        // to carry method signatures).
+        // Auto-`From<Sub> for Parent` for an **open value hierarchy**. Extracts
+        // the parent slice from the subclass via `__parent`, giving the user a
+        // working `void greet(Animal a) { } ;  greet(new Dog(...))` shape at the
+        // cost of dropping the subclass's identity at the upcast boundary.
+        // Phase-1 limitation: methods overridden in the subclass DO NOT fire
+        // after upcasting through this conversion — Java's virtual dispatch
+        // through value types isn't expressible without dyn dispatch.
         //
-        // **Recommended idiom for full polymorphism: declare the
-        // parent `sealed` and list permits.** That path uses the
-        // enum lowering and preserves subclass identity.
+        // **For full polymorphism the parent must be a polymorphic base**, which
+        // it is whenever some class extends it: a `Parent`-typed slot is then
+        // `Rc<dyn ParentKind>` and the upcast preserves identity. `sealed` is
+        // not what buys that (ERRATA E101); being extended is.
         if let Some(parent_ty) = &class_decl.extends {
-            if !parent_is_sealed {
-                if let Some(parent_bare) = parent_ty
-                    .name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                {
-                    // Skip the slicing upcast for a **polymorphic base**: a
-                    // `Parent`-typed slot is now `Rc<dyn ParentKind>`, and the
-                    // upcast wraps (`Rc::new(child) as Rc<dyn ParentKind>`,
-                    // identity-preserving) instead of extracting `__parent`.
-                    if !self.is_poly_base_class(parent_bare) {
-                        self.w.emit_indent();
-                        // Generic classes need `impl<T: Clone + Debug>` before
-                        // `From<Child<T>>` — otherwise `T` is out of scope (E0412).
-                        self.w.push_str("impl");
-                        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-                        self.w.push_str(" From<");
-                        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-                        self.emit_generic_params_as_args(&class_decl.generic_params);
-                        self.w.push_str("> for ");
-                        // Route through the type emitter (NOT the bare
-                        // name) so a cross-package parent gets its
-                        // `crate::…` rooting — `extends Exception`
-                        // reaches `crate::jux::std::exceptions::
-                        // Exception`, same as the Deref target below.
-                        self.emit_type_as_rust(parent_ty);
-                        self.w.push_str(" { fn from(v: ");
-                        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-                        self.emit_generic_params_as_args(&class_decl.generic_params);
-                        self.w.push_str(") -> Self { v.__parent } }\n");
-                    }
+            if let Some(parent_bare) = parent_ty
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.as_str())
+            {
+                // Skip the slicing upcast for a **polymorphic base**: a
+                // `Parent`-typed slot is `Rc<dyn ParentKind>`, and the upcast
+                // wraps (`Rc::new(child) as Rc<dyn ParentKind>`,
+                // identity-preserving) instead of extracting `__parent`.
+                if !self.is_poly_base_class(parent_bare) {
+                    self.w.emit_indent();
+                    // Generic classes need `impl<T: Clone + Debug>` before
+                    // `From<Child<T>>` — otherwise `T` is out of scope (E0412).
+                    self.w.push_str("impl");
+                    self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                    self.w.push_str(" From<");
+                    self.w.push_str(&to_rust_ident(&class_decl.name.text));
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
+                    self.w.push_str("> for ");
+                    // Route through the type emitter (NOT the bare
+                    // name) so a cross-package parent gets its
+                    // `crate::…` rooting — `extends Exception`
+                    // reaches `crate::jux::std::exceptions::
+                    // Exception`, same as the Deref target below.
+                    self.emit_type_as_rust(parent_ty);
+                    self.w.push_str(" { fn from(v: ");
+                    self.w.push_str(&to_rust_ident(&class_decl.name.text));
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
+                    self.w.push_str(") -> Self { v.__parent } }\n");
                 }
             }
         }
@@ -489,14 +438,9 @@ impl RustEmitter {
         // `child.method()` finds methods on the parent transparently,
         // `child.parent_field = x` works via DerefMut, etc.
         //
-        // Skipped when the parent is `sealed` — those parents lower
-        // as Rust enums, not structs, and the subclass is just one
-        // of the variants. There's nothing to deref *to*.
+        // A sealed parent takes this path too: it is a struct like any other
+        // base (ERRATA E101), so there IS something to deref to.
         if let Some(parent_ty) = &class_decl.extends {
-            if parent_is_sealed {
-                // Sealed parent: no struct, no Deref impl.
-                // Continue past this block.
-            } else {
             // impl Deref for Child { type Target = Parent; … }
             // Use emit_generic_params_with_clone_bound so generic children like
             // `Child<T>` get `impl<T: Clone + Debug>` — plain `impl<T>` fails
@@ -530,7 +474,6 @@ impl RustEmitter {
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();
-            } // end else (parent_is_sealed)
         }
 
         // impl[<T: Clone, U: Clone>] Name<T, U> { …members… }
@@ -909,7 +852,7 @@ impl RustEmitter {
     /// Phase A only handles simple classes — the caller
     /// ([`Self::emit_class_decl`]) gates entry on
     /// [`crate::class_decl_uses_wrapper`], so there's no `extends`,
-    /// `sealed`, generic, or abstract handling here.
+    /// generic, or abstract handling here.
     /// What the FOREIGN types among this class's instance fields, and among
     /// those of every ancestor it embeds as `__parent`, allow the flattened
     /// `*_Inner` to `#[derive]` (ERRATA E97).
@@ -1338,8 +1281,9 @@ impl RustEmitter {
         // later mutations through the child don't reflect into the
         // upcast copy and vice-versa). That's the same Phase-1
         // limitation the legacy path documents; the identity-preserving
-        // route is a `sealed` parent. We only emit this when the parent
-        // is itself a wrapper class (the only shape `__parent` embeds).
+        // route is a POLYMORPHIC base, which the guard below defers to.
+        // We only emit this when the parent is itself a wrapper class
+        // (the only shape `__parent` embeds).
         if let Some(parent_ty) = &class_decl.extends {
             if let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.as_str()) {
                 // A polymorphic base uses `Rc<dyn ParentKind>` dispatch — the
@@ -5803,7 +5747,12 @@ impl RustEmitter {
         // The initializer's exception is caught here rather than left to
         // unwind through `Once`, which would poison it and leave the busy flag
         // set, so the next use would silently see a half-initialized class.
-        self.w.line("if let Err(__jux_p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {");
+        // Rust's own `Err`, spelled in full: a user class NAMED `Err` puts a
+        // tuple struct of that name in scope, which shadows the prelude variant
+        // and made a bare `Err(..)` pattern here stop compiling.
+        self.w.line(
+            "if let ::std::result::Result::Err(__jux_p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {",
+        );
         self.w.indent_inc();
         // Static context: no `this`. Collect mutated locals so reassignments
         // inside the block promote to `let mut`.
@@ -6850,263 +6799,6 @@ impl RustEmitter {
         }
         self.w.indent_dec();
     }
-
-    /// Emit a sealed-class declaration as a Rust enum whose variants
-    /// wrap each permitted subclass struct. The subclass declarations
-    /// themselves still emit as structs (via `emit_class_decl`) but
-    /// skip the `__parent` embedding so they aren't recursively-
-    /// shaped.
-    ///
-    /// Output shape for `sealed class Light permits Red, Yellow, Green {}`:
-    ///
-    /// ```text
-    /// #[derive(Clone, Debug)]
-    /// pub enum Light {
-    ///     Red(Red),
-    ///     Yellow(Yellow),
-    ///     Green(Green),
-    /// }
-    /// impl From<Red> for Light { fn from(v: Red) -> Self { Self::Red(v) } }
-    /// impl From<Yellow> for Light { fn from(v: Yellow) -> Self { Self::Yellow(v) } }
-    /// impl From<Green> for Light { fn from(v: Green) -> Self { Self::Green(v) } }
-    /// ```
-    ///
-    /// The auto-`From` impls make `.into()` at upcast sites (return
-    /// statements, function-call args, typed-let initializers) wrap
-    /// the subclass into the variant transparently.
-    ///
-    /// Phase-1 limitation: only sealed classes with an empty body
-    /// (no fields, methods, or constructors of their own) take this
-    /// path. Sealed classes with bodies fall back to the regular
-    /// struct emission so existing tests still build; adding
-    /// match-dispatch wrappers for sealed-class methods is a
-    /// follow-up.
-    pub(crate) fn emit_sealed_enum(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        // `#[derive(Clone, Debug)]` mirrors the class-struct shape
-        // so the enum participates in the same auto-Clone/Debug
-        // rules existing code paths rely on (throw-payload
-        // rendering, format-arg JuxOpt wrapping, etc.).
-        self.w.line("#[derive(Clone, Debug)]");
-        self.w.emit_indent();
-        self.emit_visibility(class_decl.visibility);
-        self.w.push_str("enum ");
-        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-        self.emit_generic_params(&class_decl.generic_params);
-        self.w.push_str(" {\n");
-        self.w.indent_inc();
-        for permitted in &class_decl.permits {
-            self.w.emit_indent();
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push('(');
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push_str("),\n");
-        }
-        self.w.indent_dec();
-        self.w.line("}");
-        self.w.newline();
-        // From<Sub> for Sealed — drives `.into()` at every upcast
-        // site. Rust's blanket `From<T> for T` covers identity
-        // conversions, so call sites can emit `.into()`
-        // unconditionally without breaking same-type passing.
-        for permitted in &class_decl.permits {
-            self.w.emit_indent();
-            self.w.push_str("impl From<");
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push_str("> for ");
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.emit_generic_params_as_args(&class_decl.generic_params);
-            self.w.push_str(" { fn from(v: ");
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push_str(") -> Self { Self::");
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push_str("(v) } }\n");
-        }
-        // Marker trait `<Name>Kind` — emitted to match the
-        // value-class lowering's contract. Subclasses still emit
-        // `impl LightKind for Red {}` from `emit_class_marker_trait`'s
-        // ancestor-walk, so the trait must exist for those impls
-        // to compile. The trait is empty (no methods), so it
-        // costs nothing at runtime.
-        self.w.emit_indent();
-        self.emit_visibility(class_decl.visibility);
-        self.w.push_str("trait ");
-        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-        self.w.push_str("Kind {}\n");
-        // The enum itself satisfies its own marker — keeps the
-        // bound `T: LightKind` usable with a value of type Light.
-        self.w.emit_indent();
-        self.w.push_str("impl ");
-        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-        self.w.push_str("Kind for ");
-        self.w.push_str(&to_rust_ident(&class_decl.name.text));
-        self.emit_generic_params_as_args(&class_decl.generic_params);
-        self.w.push_str(" {}\n");
-        self.w.newline();
-        // **Static fields (§CR static-field rule).** A sealed class can
-        // still declare statics — `public static int allocated = 0;` on
-        // `Shape`. The value-class path emits these too; the sealed
-        // (enum) lowering must mirror it or a bare-name access
-        // (`allocated = allocated + 1` inside the constructor, which
-        // lowers to `Shape_allocated`) dangles with no definition
-        // (E0425). Two shapes, same as the value-class path:
-        //
-        //   - `static final` → an associated `const` on the enum's
-        //     inherent impl (`Shape::CONST`).
-        //   - non-`final static` (mutable) → a module-scope
-        //     `LazyLock<Mutex<T>>` named `<Class>_<field>`, which the
-        //     bare-name rewrite and `emit_assign` already target.
-        let has_final_static = class_decl
-            .fields
-            .iter()
-            .any(|f| f.is_static && f.is_final);
-        if has_final_static {
-            self.w.emit_indent();
-            self.w.push_str("impl");
-            self.emit_generic_params(&class_decl.generic_params);
-            self.w.push(' ');
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.emit_generic_params_as_args(&class_decl.generic_params);
-            self.w.push_str(" {\n");
-            for field in &class_decl.fields {
-                if field.is_static
-                    && field.is_final
-                    && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
-                {
-                    self.emit_static_field(field);
-                }
-            }
-            self.w.line("}");
-            self.w.newline();
-        }
-        // Mutable statics at module scope. A generic sealed class can't
-        // have a static field mentioning its own type params (Java's
-        // rule), so the value-class guard isn't needed here — sealed
-        // statics are always concretely typed.
-        for field in &class_decl.fields {
-            // `final`+`!Send` payloads route here too (thread_local form).
-            let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
-            if field.is_static && (!field.is_final || final_needs_tl) {
-                self.emit_mutable_static_field(&class_decl.name.text, field);
-            }
-        }
-        // Match-dispatching impl block for the sealed parent's
-        // own instance methods. Each method emits as
-        //   `fn name(&self, args) -> R { match self { Shape::Circle(c)
-        //      => c.name(args), Shape::Square(s) => s.name(args), … } }`
-        // Subclasses pick up the inherited method body through
-        // the existing virtual-dispatch inlining pass, so the
-        // `c.name(args)` resolves to the inherited (or overridden)
-        // body on each variant.
-        //
-        // Static methods don't participate in dispatch — they
-        // stay on the parent enum as inherent associated fns.
-        // Constructor on the sealed parent doesn't make sense
-        // (you can't construct an "abstract" enum directly), so
-        // those are skipped.
-        if !class_decl.methods.is_empty() {
-            self.w.emit_indent();
-            self.w.push_str("impl");
-            self.emit_generic_params(&class_decl.generic_params);
-            self.w.push(' ');
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.emit_generic_params_as_args(&class_decl.generic_params);
-            self.w.push_str(" {\n");
-            self.w.indent_inc();
-            for method in &class_decl.methods {
-                self.emit_sealed_method_dispatch(class_decl, method);
-            }
-            self.w.indent_dec();
-            self.w.line("}");
-            self.w.newline();
-        }
-    }
-
-    /// Emit a single sealed-class method as a match-dispatching
-    /// wrapper on the enum. Each variant delegates to the
-    /// matching subclass's inherent method of the same name.
-    fn emit_sealed_method_dispatch(
-        &mut self,
-        class_decl: &juxc_ast::ClassDecl,
-        method: &juxc_ast::FnDecl,
-    ) {
-        // Static methods on a sealed parent stay as plain
-        // associated fns — no dispatch needed.
-        let is_static = method
-            .modifiers
-            .iter()
-            .any(|m| matches!(m, juxc_ast::FnModifier::Static));
-        if is_static {
-            // Static methods on a sealed class don't need
-            // dispatch. Fall back to the regular method emit so
-            // callers can still reach `Shape::staticHelper(...)`.
-            self.emit_method(method);
-            return;
-        }
-        self.w.emit_indent();
-        self.emit_visibility(method.visibility);
-        // Match async — sealed-method dispatch on `async T`
-        // methods just forwards through `.await` on each arm.
-        if matches!(method.return_type, ReturnType::AsyncType(_)) {
-            self.w.push_str("async fn ");
-        } else {
-            self.w.push_str("fn ");
-        }
-        self.w.push_str(&to_rust_ident(&method.name.text));
-        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
-        self.w.push_str("(&self");
-        for param in &method.params {
-            self.w.push_str(", ");
-            self.w.push_str(&to_rust_ident(&param.name.text));
-            self.w.push_str(": ");
-            self.emit_value_type_as_rust(&param.ty);
-        }
-        self.w.push(')');
-        match &method.return_type {
-            ReturnType::Void => {}
-            ReturnType::Type(t) => {
-                self.w.push_str(" -> ");
-                self.emit_return_type_as_rust(t);
-            }
-            ReturnType::AsyncType(t) => {
-                self.w.push_str(" -> ");
-                self.emit_return_type_as_rust(t);
-            }
-        }
-        self.w.push_str(" {\n");
-        self.w.indent_inc();
-        self.w.emit_indent();
-        self.w.push_str("match self {\n");
-        self.w.indent_inc();
-        for permitted in &class_decl.permits {
-            self.w.emit_indent();
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.w.push_str("::");
-            self.w.push_str(&to_rust_ident(&permitted.text));
-            self.w.push_str("(__variant) => __variant.");
-            self.w.push_str(&to_rust_ident(&method.name.text));
-        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
-            self.w.push('(');
-            for (i, param) in method.params.iter().enumerate() {
-                if i > 0 {
-                    self.w.push_str(", ");
-                }
-                self.w.push_str(&to_rust_ident(&param.name.text));
-            }
-            self.w.push(')');
-            // Async dispatch needs `.await` on each arm so the
-            // outer `async fn` produces the value type, not a
-            // Future-of-future.
-            if matches!(method.return_type, ReturnType::AsyncType(_)) {
-                self.w.push_str(".await");
-            }
-            self.w.push_str(",\n");
-        }
-        self.w.indent_dec();
-        self.w.line("}");
-        self.w.indent_dec();
-        self.w.line("}");
-    }
 }
 
 /// Walk `ty` and substitute any name in `subst` with its
@@ -7317,50 +7009,16 @@ pub(crate) fn substitute_type_ref(
 }
 
 /// Whether a sealed class is lowered to a **Rust enum** of its permitted
-/// subclasses, rather than to the ordinary polymorphic-base representation.
+/// subclasses. Always `false`, and the language has no other answer.
 ///
-/// The enum form gives a sealed hierarchy exhaustive `match` dispatch and
-/// carries a subclass's identity through a parent-typed slot. What it has no
-/// room for is the PARENT's own state: a variant wraps the subclass struct,
-/// and a subclass of an enum-lowered parent deliberately has no `__parent`
-/// field, so an inherited field would live nowhere. A sealed base that
-/// declares a field, a property or a static initializer therefore falls back
-/// to `Rc<dyn …Kind>`, which already handles all three.
+/// A sealed base is a base class like any other: it takes the `Rc<dyn …Kind>`
+/// polymorphic-base representation whether or not it has state, because a Jux
+/// class is a shared reference (§CR.4.1, §CR.5.6, ERRATA E101). The enum form
+/// this predicate once selected gave a stateless sealed hierarchy VALUE
+/// semantics, so an alias did not see a mutation, a subclass would not go into
+/// a `Vec<Base>`, and the enum's `&self` match dispatcher could not reach a
+/// `&mut self` override. All of that lowering is deleted.
 ///
-/// `sealed` still restricts who may extend either way — that is a tycheck rule
-/// (E0422) and has nothing to do with the representation.
-///
-/// This must be the single answer to the question: the parent decides how to
-/// emit itself and every subclass decides whether it is a variant, and if the
-/// two disagree the emitted crate does not compile.
-pub(crate) use juxc_tycheck::symbol_table::sealed_lowers_to_enum;
-
-/// [`sealed_lowers_to_enum`] asked of the AST declaration, for the passes that
-/// run before a [`juxc_tycheck::symbol_table::ClassSig`] is in hand.
-///
-/// A property lowers to a field, so it counts as state here exactly as it does
-/// in the signature.
-pub(crate) fn sealed_decl_lowers_to_enum(cd: &juxc_ast::ClassDecl) -> bool {
-    sealed_enum_rule(
-        cd.is_sealed,
-        !cd.permits.is_empty(),
-        !(cd.fields.is_empty() && cd.properties.is_empty()),
-        !cd.static_init_blocks.is_empty(),
-    )
-}
-
-/// The rule [`sealed_lowers_to_enum`] applies, spelled over the four facts that
-/// decide it, so the AST view above cannot answer differently from the
-/// signature view in tycheck.
-fn sealed_enum_rule(
-    is_sealed: bool,
-    has_permits: bool,
-    has_fields: bool,
-    has_static_init: bool,
-) -> bool {
-    is_sealed && has_permits && !has_fields && !has_static_init
-}
-
 /// The package part of a fully-qualified name -- everything before the last
 /// dot, or the empty string for a bare name.
 fn package_of(fqn: &str) -> String {
