@@ -237,15 +237,13 @@ class JuxParser : PsiParser {
         return true
     }
 
-    private fun parseAnnotations(b: PsiBuilder) {
-        while (b.at(T.AT)) {
-            val m = b.mark()
-            b.advanceLexer() // `@`
-            parseQualifiedName(b)
-            if (b.at(T.LPAREN)) consumeParenBalanced(b)
-            m.done(E.ANNOTATION)
-        }
-    }
+    /**
+     * The annotation prefix. Delegates to the shared [PsiBuilder.parseAnnotations]
+     * in JuxTypes, which the STATEMENT parser also calls for an annotated local
+     * (§A.3.1, ERRATA E104) — one implementation, so a parameter's and a
+     * member's prefix can never drift apart.
+     */
+    private fun parseAnnotations(b: PsiBuilder) = b.parseAnnotations()
 
     /** Which marker keywords appeared in a modifier run — `static` (static vs
      * instance init block) and `native` (a §L.7 foreign-function block). */

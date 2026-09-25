@@ -58,6 +58,8 @@ fun PsiBuilder.parseStatement() {
         T.UNSAFE_KW -> { val m = mark(); advanceLexer(); parseBlock(); m.done(E.UNSAFE_STATEMENT) }
         T.SEMICOLON -> { val m = mark(); advanceLexer(); m.done(E.EMPTY_STATEMENT) }
         T.VAR_KW, T.FINAL_KW, T.CONST_KW -> parseLocalVariable()
+        // `@Scratch(why = "sum") var total = 0;` — see [parseAnnotatedStatement].
+        T.AT -> parseAnnotatedStatement()
         // `ref Type name = …;` (reference local) — token exists only once the
         // compiler reserves `ref`; see JUX_REF_KW.
         else -> if (atRefKw()) parseLocalVariable() else parseLabeledOrExprOrLocal()
@@ -217,8 +219,18 @@ private fun PsiBuilder.parseForInit() {
     while (at(T.COMMA)) { advanceLexer(); parseExpression() }
 }
 
-private fun PsiBuilder.parseLocalVariable() {
-    val m = mark()
+/**
+ * `(final|const|ref)* (var | Type) name (= expr)? ;`, plus the destructuring
+ * forms.
+ *
+ * [m] is the node's OPENING marker. It is a parameter so that
+ * [parseAnnotatedStatement] can hand in a marker that already covers the `@…`
+ * prefix: the annotations then land inside the LOCAL_VARIABLE node, which is
+ * where the formatter's "annotations align with the declaration they precede"
+ * rule ([dev.jux.intellij.format.JuxIndentRules]) and every `children.filter {
+ * it.elementType === ANNOTATION }` reader already look.
+ */
+private fun PsiBuilder.parseLocalVariable(m: PsiBuilder.Marker = mark()) {
     while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
     val isVar = at(T.VAR_KW)
     if (isVar) advanceLexer() else parseType()
@@ -235,6 +247,48 @@ private fun PsiBuilder.parseLocalVariable() {
     if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     m.done(E.LOCAL_VARIABLE)
+}
+
+/**
+ * A statement that carries an annotation prefix (§A.3.1, ERRATA E104):
+ * `@Scratch(why = "readability") var label = …;`, `@Audited String out = "";`.
+ *
+ * LOCAL_VARIABLE is the only statement-level target §A.3 lists, so a
+ * declaration swallows the prefix into its own node (see [parseLocalVariable])
+ * instead of leaving it beside it, and an annotated local is shaped like every
+ * other annotated declaration in the tree.
+ *
+ * Anything else after the prefix is a WRONG TARGET, not a syntax error, and the
+ * compiler is the one that says so. Underlining it here would paint the rest of
+ * the block red over a diagnostic juxc already gives precisely, so the
+ * annotations are left as leading siblings and the statement parses on.
+ *
+ * Note what this deliberately does NOT reach: a lambda parameter is not a
+ * `param` (Grammar §A.2.9 is `lambda-param = type? identifier`), so
+ * `(@Audited int a) -> a` is still refused — [parseLambdaParameters] has no
+ * annotation slot and must not grow one.
+ */
+private fun PsiBuilder.parseAnnotatedStatement() {
+    val head = mark()
+    parseAnnotations()
+    // `var` / `final` / `const` / `ref` can only begin a declaration.
+    if (at(T.VAR_KW) || at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) {
+        parseLocalVariable(head)
+        return
+    }
+    // A typed local, `@Audited String out = "";`, told apart from an expression
+    // statement by the same speculative parse [parseLabeledOrExprOrLocal] uses.
+    // Rolling `probe` back leaves `head` untouched: it was opened first.
+    val probe = mark()
+    if (tryLocalVarTail()) {
+        probe.drop()
+        head.done(E.LOCAL_VARIABLE)
+        return
+    }
+    probe.rollbackTo()
+    head.drop()
+    // The prefix is consumed, so `@` cannot be current again: no recursion.
+    parseStatement()
 }
 
 /** `Pt(` or `geo.Pt(`: a record pattern's type name, then its components. */
