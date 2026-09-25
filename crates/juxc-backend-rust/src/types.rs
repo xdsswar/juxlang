@@ -170,12 +170,23 @@ impl RustEmitter {
     /// own file, or one that imports it): there the bare name is that enum,
     /// so `T?` spells out Rust's `std::option::Option`.
     pub(crate) fn nullable_option_path(&self) -> &'static str {
-        let shadowed = self
+        let ctx = self
             .current_unit_idx
-            .and_then(|i| self.symbols.units.get(i))
-            .and_then(|ctx| ctx.unqualified.get("Option"))
+            .and_then(|i| self.symbols.units.get(i));
+        let by_name_map = ctx
+            .and_then(|c| c.unqualified.get("Option"))
             .is_some_and(|fqn| !fqn.starts_with("rust."));
-        if shadowed {
+        // A ROOT-package declaration is keyed by its BARE name, and the per-unit
+        // name map is built from package-qualified FQNs, so it never saw one.
+        // `enum Option { A, B }` in a single-file program therefore left every
+        // `T?` in that file spelled `Option<...>`, which named the program's own
+        // enum: the synthesized `fromName` helper became
+        // `fn fromName(name: String) -> Option<Option>` and rustc rejected it
+        // with E0107, an error about generated code the author cannot see
+        // (§M.16, ERRATA E96). Two hash lookups, so the ordinary case pays
+        // nothing.
+        let root_unit = ctx.map_or(true, |c| c.package.is_empty());
+        if by_name_map || (root_unit && self.symbols.is_type_name("Option")) {
             "std::option::Option<"
         } else {
             "Option<"
@@ -299,13 +310,27 @@ impl RustEmitter {
             && !self.names_a_type_param(&ty.name.segments[0].text)
         {
             let probe = juxc_ast::Expr::Path(ty.name.clone());
+            // **A name that names a TYPE is a type, never a constant.** The
+            // const-value substitution is keyed on the name alone, so a program
+            // that declared `const int Exception = 3;` rewrote the TYPE `Exception`
+            // to `3` everywhere it appeared, including inside `jux.std.exceptions`:
+            // `pub fn addSuppressed(&mut self, e: 3)` and `pub __parent: 3,`, which
+            // rustfmt could not even parse. The test is deferred behind the const
+            // lookups so the common case (a bare type name that no constant shares)
+            // pays nothing for it.
+            let is_a_type_name = || {
+                self.resolve_bare_type_fqn(&ty.name.segments[0].text).is_some()
+            };
             if let Some(v) = self.try_const_int(&probe) {
-                self.w.push_str(&v.to_string());
-                return;
-            }
-            if let Some(b) = self.try_const_bool(&probe) {
-                self.w.push_str(if b { "true" } else { "false" });
-                return;
+                if !is_a_type_name() {
+                    self.w.push_str(&v.to_string());
+                    return;
+                }
+            } else if let Some(b) = self.try_const_bool(&probe) {
+                if !is_a_type_name() {
+                    self.w.push_str(if b { "true" } else { "false" });
+                    return;
+                }
             }
         }
         // Nullable types `T?` lower to Rust's `Option<T>`. We peel

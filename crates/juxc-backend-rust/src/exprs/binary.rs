@@ -1732,7 +1732,7 @@ impl RustEmitter {
                     .and_then(|ctx| ctx.unqualified.get(name))
                     .and_then(|fqn| self.symbols.functions.get(fqn));
                 via_unit
-                    .or_else(|| self.symbols.lookup_function(name).map(|(_, f)| f))
+                    .or_else(|| self.lookup_function_here(name).map(|(_, f)| f))
                     .map(|f| depth_of(&f.return_type))
                     .unwrap_or(0)
             }

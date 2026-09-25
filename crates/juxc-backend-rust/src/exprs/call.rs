@@ -266,8 +266,7 @@ impl RustEmitter {
         let mut owner: Option<String> = None;
         let ret = match &*call.callee {
             Expr::Path(qn) if qn.segments.len() == 1 => self
-                .symbols
-                .lookup_function(&qn.segments[0].text)
+                .lookup_function_here(&qn.segments[0].text)
                 .filter(|(k, _)| k.starts_with("rust."))
                 .map(|(_, sig)| sig.return_type.clone()),
             Expr::Field(f) => {
@@ -364,8 +363,7 @@ impl RustEmitter {
         }
         let declared_in_jux = match &*call.callee {
             Expr::Path(qn) if qn.segments.len() == 1 => self
-                .symbols
-                .lookup_function(&qn.segments[0].text)
+                .lookup_function_here(&qn.segments[0].text)
                 .is_some_and(|(k, _)| {
                     !(k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp."))
                 }),
@@ -586,7 +584,7 @@ impl RustEmitter {
             // imported foreign fn keyed by its full `rust.<crate>.<fn>` path.
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let bare = qn.segments[0].text.as_str();
-                if let Some((_, sig)) = self.symbols.lookup_function(bare) {
+                if let Some((_, sig)) = self.lookup_function_here(bare) {
                     return sig.is_foreign_result;
                 }
                 // Fallback: match by last segment. A USER (non-foreign) function
@@ -2808,8 +2806,7 @@ impl RustEmitter {
             Expr::Path(qn)
                 if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) =>
             {
-                self.symbols
-                    .lookup_function(&qn.segments[0].text)
+                self.lookup_function_here(&qn.segments[0].text)
                     .is_some_and(|(_, f)| is_async(&f.return_type))
             }
             // A method, on a class name (static) or on a value (instance).

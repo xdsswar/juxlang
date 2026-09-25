@@ -310,8 +310,27 @@ impl SymbolTable {
         prefer_pkg: &str,
         visible: &dyn Fn(&str) -> bool,
     ) -> Option<String> {
-        let matches_last =
-            |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name) && visible(fqn);
+        // **The library realm never binds a user name** (§M.16.1, ERRATA E96).
+        // A unit of `jux.std.*` or of a generated `rust.*` stub resolves its own
+        // bare names against the library realm only. Without the gate the
+        // cross-package fallback (B) below preferred a NON-external class, which
+        // is exactly the user's own: a program that declared `class T` made
+        // `jux.std.collections.Iterable`'s `(T) -> R` parameter mean that class,
+        // and the whole program
+        //
+        //     class T { public int v = 1; }
+        //     public void main() { print(new T().v); }
+        //
+        // produced 60 `E0416`s, every one of them inside a `jux.std` file the
+        // author cannot open. `class String` produced 81, `class Exception` 8.
+        // No name is reserved; the collision is resolved per unit instead.
+        let here_is_library = is_library_realm_package(prefer_pkg);
+        let realm_ok = |fqn: &str| {
+            !here_is_library || is_library_realm_package(fqn_package(fqn).unwrap_or(""))
+        };
+        let matches_last = |fqn: &str| {
+            fqn.rsplit('.').next().is_some_and(|seg| seg == name) && visible(fqn) && realm_ok(fqn)
+        };
         // (A) Same-package match wins. A package can't declare two types of one
         //     name (E0400), so at most one of these fires — category order only
         //     disambiguates the (impossible-within-a-package) tie.
@@ -1020,6 +1039,57 @@ impl SymbolTable {
         }
         let suffix = format!(".{name}");
         let mut hits = self.functions.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((k, f)), None) => Some((k.as_str(), f)),
+            _ => None,
+        }
+    }
+
+    /// [`Self::lookup_function`] resolved **from a package** (§M.16): the
+    /// referring unit's own package first, then a unique bare-name match that
+    /// the library realm gates.
+    ///
+    /// The context-free version answers with the same function in every unit,
+    /// and that is what turned a program's own declaration into a bug report
+    /// against the standard library. `void pred(String? s)` in the user's file
+    /// was the unique `pred` in the workspace, so `pred(x!!)` inside
+    /// `jux.std.collections.Iterator.any` -- a call to that method's OWN `pred`
+    /// parameter -- looked up the user's function, saw a nullable parameter, and
+    /// wrapped its argument in `Some(...)`. The build then failed with rustc
+    /// E0308 inside a `jux.std` file, for a function the program never called.
+    ///
+    /// `prefer_pkg` is the dotted package of the unit that WROTE the call
+    /// (empty for the root package).
+    pub fn lookup_function_in<'a>(
+        &'a self,
+        name: &str,
+        prefer_pkg: &str,
+    ) -> Option<(&'a str, &'a FunctionSig)> {
+        if name.contains('.') {
+            return self
+                .functions
+                .get_key_value(name)
+                .map(|(k, f)| (k.as_str(), f));
+        }
+        // (A) The referring unit's own package. A root-package unit keys its
+        //     functions by the bare name, so that spelling IS the same-package
+        //     key there.
+        let own = if prefer_pkg.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefer_pkg}.{name}")
+        };
+        if let Some((k, f)) = self.functions.get_key_value(&own) {
+            return Some((k.as_str(), f));
+        }
+        // (B) A unique match anywhere else, minus whatever the realm hides.
+        let here_is_library = is_library_realm_package(prefer_pkg);
+        let suffix = format!(".{name}");
+        let mut hits = self.functions.iter().filter(|(k, _)| {
+            (k.as_str() == name || k.ends_with(&suffix))
+                && (!here_is_library
+                    || is_library_realm_package(fqn_package(k).unwrap_or("")))
+        });
         match (hits.next(), hits.next()) {
             (Some((k, f)), None) => Some((k.as_str(), f)),
             _ => None,
@@ -2739,6 +2809,28 @@ fn marker_strings(annotations: &[juxc_ast::Annotation], name: &str) -> Vec<Strin
         .collect()
 }
 
+/// Whether `pkg` belongs to the **library realm** (§M.16.1): the embedded
+/// standard library (`jux.std` and everything under it, plus the `jux.meta`
+/// annotation surface) or a generated foreign-crate stub package (`rust.*`).
+///
+/// The realm decides what a unit's bare names may bind to. A library unit sees
+/// the realm only, so a program is free to declare `class T`, `class String` or
+/// `class Exception` without the standard library's own sources picking those up
+/// (ERRATA E96). A USER unit is not restricted the other way round: reaching
+/// `Throwable` or `Vec` with no `import` is the prelude, and that stays.
+///
+/// The realm is named exactly, not by prefix guesswork: the embedded tree
+/// declares `jux.std.*` and the annotation surface declares `jux.meta`, so a
+/// bare `package jux;` in a user's file is NOT a library package (§M.16.3), and
+/// neither is `juxtapose.core`.
+pub fn is_library_realm_package(pkg: &str) -> bool {
+    pkg == "jux.std"
+        || pkg.starts_with("jux.std.")
+        || pkg == "jux.meta"
+        || pkg == "rust"
+        || pkg.starts_with("rust.")
+}
+
 /// The bound crate's package a foreign name belongs to: `rust.chrono` for
 /// `rust.chrono.NaiveDate`. `None` for anything outside `rust.`.
 fn crate_package_of(fqn: &str) -> Option<&str> {
@@ -3639,10 +3731,16 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
         // `Collection` owes `Iterable`'s methods too; checking only the
         // directly-written list let the inherited ones through to rustc,
         // which reported them against a trait the source never names.
-        let iface_closure = interface_closure(table, &class.implements);
-        for iface_name in &iface_closure {
+        // The package the class was DECLARED in is what its `implements` names
+        // mean (§M.16). Resolving them by a global bare-name scan let a user
+        // `interface Iterable` answer for `jux.std.collections.LazyIterable
+        // implements Iterable`, and the program was told the STANDARD LIBRARY
+        // had an unimplemented method (E0429) it plainly implements.
+        let here = declaring_package(table, class_name);
+        let iface_closure = interface_closure(table, &class.implements, &here);
+        for (iface_name, iface_fqn) in &iface_closure {
             let iface_name = iface_name.as_str();
-            let Some(iface) = resolve_interface(table, iface_name) else {
+            let Some(iface) = table.interfaces.get(iface_fqn) else {
                 continue;
             };
             for (m_name, m_sig) in &iface.methods {
@@ -3805,38 +3903,59 @@ fn field_meets_property_contract(
 /// the same fallback [`SymbolTable::lookup_method`] uses. Without this, the
 /// completeness checks silently skip cross-package interfaces and the error
 /// leaks to rustc as `E0046`.
-/// Every interface a class transitively implements, by the name each was
-/// WRITTEN with (bare or qualified, whichever the source used -- both resolve
-/// through [`resolve_interface`]).
+/// Every interface a class transitively implements, as
+/// `(name as written, resolved FQN)`.
 ///
 /// Breadth-first over each interface's own `extends` clause, guarded against
 /// cycles and re-visits, and depth-capped like the class-chain walks. The
 /// directly-implemented interfaces come first, so a diagnostic naming the
 /// first offender names the one the reader wrote.
-fn interface_closure(table: &SymbolTable, implements: &[TypeRef]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+///
+/// `from_pkg` is the package of the unit that wrote the `implements` clause,
+/// and each interface's OWN `extends` list is then resolved in that
+/// interface's package (§M.16). The written name is carried alongside the FQN
+/// only so a diagnostic can echo what the author typed.
+fn interface_closure(
+    table: &SymbolTable,
+    implements: &[TypeRef],
+    from_pkg: &str,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut queue: std::collections::VecDeque<String> = implements
+    let mut queue: std::collections::VecDeque<(String, String)> = implements
         .iter()
-        .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+        .filter_map(|t| {
+            t.name
+                .segments
+                .last()
+                .map(|s| (s.text.clone(), from_pkg.to_string()))
+        })
         .collect();
-    for n in &queue {
+    for (n, _) in &queue {
         seen.insert(n.clone());
     }
     let mut steps = 0usize;
-    while let Some(name) = queue.pop_front() {
+    while let Some((name, in_pkg)) = queue.pop_front() {
         steps += 1;
         if steps > 256 {
             break;
         }
-        out.push(name.clone());
-        let Some(iface) = resolve_interface(table, &name) else {
+        let Some(key) = resolve_interface_key_in(table, &name, &in_pkg) else {
+            // Unresolved: keep the written name so the obligation is still
+            // reported against something the reader recognizes.
+            out.push((name.clone(), name.clone()));
+            continue;
+        };
+        let key = key.clone();
+        out.push((name.clone(), key.clone()));
+        let iface_pkg = fqn_package(&key).unwrap_or("").to_string();
+        let Some(iface) = table.interfaces.get(&key) else {
             continue;
         };
         for parent in iface.extends.clone() {
             let Some(seg) = parent.name.segments.last() else { continue };
             if seen.insert(seg.text.clone()) {
-                queue.push_back(seg.text.clone());
+                queue.push_back((seg.text.clone(), iface_pkg.clone()));
             }
         }
     }
@@ -3846,9 +3965,15 @@ fn interface_closure(table: &SymbolTable, implements: &[TypeRef]) -> Vec<String>
 /// Whether any interface in the closure carries a DEFAULT method of this
 /// name, which satisfies the obligation for every interface that declares it
 /// abstract.
-fn closure_provides_default(table: &SymbolTable, closure: &[String], method: &str) -> bool {
-    closure.iter().any(|n| {
-        resolve_interface(table, n)
+fn closure_provides_default(
+    table: &SymbolTable,
+    closure: &[(String, String)],
+    method: &str,
+) -> bool {
+    closure.iter().any(|(_, fqn)| {
+        table
+            .interfaces
+            .get(fqn)
             .and_then(|i| i.methods.get(method))
             .is_some_and(|m| !m.is_abstract && !m.is_static)
     })
@@ -3865,6 +3990,66 @@ pub(crate) fn resolve_interface<'a>(
         let last = key.rsplit('.').next().unwrap_or(key.as_str());
         (last == written_name).then_some(iface)
     })
+}
+
+/// The package of the unit that declared `fqn`, or `""` when nothing records
+/// one. Used to resolve names the declaration WROTE in the scope it wrote them.
+fn declaring_package(table: &SymbolTable, fqn: &str) -> String {
+    table
+        .decl_unit
+        .get(fqn)
+        .and_then(|&u| table.units.get(u))
+        .map(|ctx| ctx.package.join("."))
+        .unwrap_or_default()
+}
+
+/// The FQN key of the interface `written_name` means **in package `pkg`**
+/// (§M.16): that package first, then an exact key, then a last-segment scan
+/// that the library realm gates.
+///
+/// The context-free scan this replaces took the first last-segment match in
+/// `HashMap` order. With a user `interface Iterable` beside
+/// `jux.std.collections.Iterable`, that made the standard library's own
+/// `LazyIterable implements Iterable` owe the USER's method, and the program's
+/// only error was `E0429` against a `jux.std` class (ERRATA E96).
+pub(crate) fn resolve_interface_key_in<'a>(
+    table: &'a SymbolTable,
+    written_name: &str,
+    pkg: &str,
+) -> Option<&'a String> {
+    let bare = written_name.rsplit('.').next().unwrap_or(written_name);
+    // A name written in full is that name.
+    if written_name.contains('.') {
+        if let Some((k, _)) = table.interfaces.get_key_value(written_name) {
+            return Some(k);
+        }
+    }
+    // (A) The referring package's own.
+    if !pkg.is_empty() {
+        if let Some((k, _)) = table.interfaces.get_key_value(&format!("{pkg}.{bare}")) {
+            return Some(k);
+        }
+    }
+    let here_is_library = is_library_realm_package(pkg);
+    let realm_ok =
+        |k: &str| !here_is_library || is_library_realm_package(fqn_package(k).unwrap_or(""));
+    // (B) An exact key, which for a bare name is a ROOT-package declaration.
+    if let Some((k, _)) = table
+        .interfaces
+        .get_key_value(bare)
+        .filter(|(k, _)| realm_ok(k))
+    {
+        return Some(k);
+    }
+    // (C) A last-segment match elsewhere. `min()` rather than `find()` so the
+    //     answer does not depend on `HashMap` iteration order.
+    table
+        .interfaces
+        .keys()
+        .filter(|k| {
+            k.rsplit('.').next().unwrap_or(k.as_str()) == bare && realm_ok(k)
+        })
+        .min()
 }
 
 /// Why an interface can't (yet) back a **dynamically-dispatched value type**
@@ -4164,11 +4349,16 @@ fn check_diamond_default_conflicts(table: &SymbolTable, diagnostics: &mut Vec<Di
         // method) pairs.
         use std::collections::BTreeMap;
         let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let here = declaring_package(table, class_name);
         for iface_ty in &class.implements {
             let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
                 continue;
             };
-            let Some(iface) = resolve_interface(table, iface_name) else {
+            // Same rule as the completeness check: an `implements` name means
+            // what it means in the package that wrote it (§M.16).
+            let Some(iface) = resolve_interface_key_in(table, iface_name, &here)
+                .and_then(|k| table.interfaces.get(k))
+            else {
                 continue;
             };
             for (m_name, m_sig) in &iface.methods {

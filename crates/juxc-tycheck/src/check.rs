@@ -3558,7 +3558,37 @@ impl<'a> Checker<'a> {
             return;
         }
         let bare = &name.segments[0].text;
-        let Some((fqn, sig)) = self.symbols.resolve_class(bare) else {
+        // A generic parameter is not a type declaration, so nothing about
+        // visibility applies to it. The name-keyed `resolve_class` below does not
+        // know that: with a user `class T` in the program, every `T` inside
+        // `jux.std.collections.Iterable<T>`'s own signatures resolved to that
+        // class and reported E0416 against a file the author cannot open
+        // (§M.16, ERRATA E96).
+        if self.env.generic_params.contains(bare.as_str()) {
+            return;
+        }
+        // Resolve the bare name the way the unit that WROTE it resolves it:
+        // its own imports first, then its package, then the realm-gated
+        // package-preferring scan (§M.16). `resolve_class`'s unique-suffix scan
+        // is package-blind, so `Vec` inside `jux.std.meta` found the user's root
+        // package `class Vec` and `String` inside `jux.std.exceptions` found
+        // theirs. Which names blew up then depended on whether some OTHER package
+        // happened to declare the same one (two hits made the scan ambiguous and
+        // silently gave up), so `class Vec` failed in the root package and passed
+        // in `package app;`. That is not a rule anyone could learn.
+        let resolved = self
+            .env
+            .unqualified
+            .get(bare.as_str())
+            .cloned()
+            .or_else(|| {
+                self.symbols
+                    .find_visible_fqn_by_bare_in(bare, &self.env.current_package.join("."))
+            });
+        let Some((fqn, sig)) = resolved
+            .as_deref()
+            .and_then(|f| self.symbols.classes.get_key_value(f))
+        else {
             return;
         };
         if !matches!(sig.visibility, juxc_ast::Visibility::Package) {
@@ -10060,7 +10090,11 @@ impl<'a> Checker<'a> {
                     .unqualified
                     .get(name)
                     .and_then(|fqn| self.symbols.functions.get(fqn).map(|f| (fqn.clone(), f)))
-                    .or_else(|| self.symbols.lookup_function(name).map(|(k, f)| (k.to_string(), f)));
+                    .or_else(|| {
+                        self.symbols
+                            .lookup_function_in(name, &self.env.current_package.join("."))
+                            .map(|(k, f)| (k.to_string(), f))
+                    });
                 let Some((fqn, function)) = function else {
                     if is_method {
                         self.diagnostics.push(not_fitting(

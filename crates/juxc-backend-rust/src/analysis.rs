@@ -2610,7 +2610,7 @@ impl crate::RustEmitter {
                 // type tells us the result's shape.
                 if let juxc_ast::Expr::Path(qn) = &*c.callee {
                     if qn.segments.len() == 1 {
-                        if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
+                        if let Some((_, f)) = self.lookup_function_here(&qn.segments[0].text) {
                             return matches!(
                                 &f.return_type,
                                 juxc_ast::ReturnType::Type(t) if t.nullable
@@ -2700,7 +2700,7 @@ impl crate::RustEmitter {
         // free function is not consulted (see `bare_name_is_binding`).
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) {
-                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
+                if let Some((_, f)) = self.lookup_function_here(&qn.segments[0].text) {
                     return f
                         .params
                         .get(arg_idx)
@@ -2822,8 +2822,7 @@ impl crate::RustEmitter {
             if qn.segments.len() == 1 && !self.bare_name_is_binding(&qn.segments[0].text) {
                 let name = qn.segments[0].text.as_str();
                 let f_sig = self
-                    .symbols
-                    .lookup_function(name)
+                    .lookup_function_here(name)
                     .map(|(_, f)| f)
                     .or_else(|| {
                         // A bare name that's AMBIGUOUS only because a
@@ -4102,7 +4101,7 @@ impl crate::RustEmitter {
                         return member.params.get(arg_idx).map(|p| p.ty.clone());
                     }
                 }
-                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
+                if let Some((_, f)) = self.lookup_function_here(&qn.segments[0].text) {
                     return f.params.get(arg_idx).map(|p| p.ty.clone());
                 }
             }
@@ -4881,7 +4880,7 @@ impl crate::RustEmitter {
         // Free function: `f<…>(…)`.
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
-                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
+                if let Some((_, f)) = self.lookup_function_here(&qn.segments[0].text) {
                     return Some(pack(&f.params, &f.generic_params));
                 }
             }

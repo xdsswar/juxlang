@@ -1388,7 +1388,11 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     .map(|a| infer_expr(a, env, symbols))
                     .unwrap_or(Ty::Unknown);
             }
-            if let Some((fqn, only)) = symbols.lookup_function(name) {
+            // Resolved in the unit that WROTE the call, so a library unit's own
+            // `f(…)` never picks up a user function of that name (§M.16).
+            if let Some((fqn, only)) =
+                symbols.lookup_function_in(name, &env.current_package.join("."))
+            {
                 // `assertThrows<E>(f)` returns what it caught, typed as `E`
                 // (§TS.3). The library function itself is not generic.
                 if fqn == TYPED_ASSERT_THROWS_FQN && c.explicit_generic_args.len() == 1 {
@@ -2707,7 +2711,11 @@ pub(crate) fn pointer_base_is_void(e: &Expr, env: &TypeEnv, symbols: &SymbolTabl
                 env.unqualified
                     .get(name)
                     .and_then(|fqn| symbols.functions.get(fqn))
-                    .or_else(|| symbols.lookup_function(name).map(|(_, f)| f))
+                    .or_else(|| {
+                        symbols
+                            .lookup_function_in(name, &env.current_package.join("."))
+                            .map(|(_, f)| f)
+                    })
                     .is_some_and(|f| returns_void(&f.return_type))
             }
             Expr::Field(f) => class_of(&f.object)
@@ -2791,7 +2799,11 @@ pub(crate) fn pointer_depth(e: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> u
                 env.unqualified
                     .get(name)
                     .and_then(|fqn| symbols.functions.get(fqn))
-                    .or_else(|| symbols.lookup_function(name).map(|(_, f)| f))
+                    .or_else(|| {
+                        symbols
+                            .lookup_function_in(name, &env.current_package.join("."))
+                            .map(|(_, f)| f)
+                    })
                     .map(|f| depth_of(&f.return_type))
                     .unwrap_or(0)
             }

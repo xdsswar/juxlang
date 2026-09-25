@@ -588,6 +588,12 @@ impl RustEmitter {
         // `fromName` / `fromNameStrict` / `fromOrdinal` (§7.7.3): the reverse
         // of `name()` and `ordinal()`, `None` on a miss. Payload-free enums
         // only, like `values()`.
+        //
+        // Each of the three returns a NULLABLE enum and spells the `Option`
+        // itself rather than going through `emit_type_as_rust`, so it needs the
+        // same disambiguation: in a program that declares its own type named
+        // `Option`, a bare `Option<...>` here named THAT one and rustc reported
+        // E0107 against generated code the author cannot see (§M.16, ERRATA E96).
         let self_ty = if enum_decl.generic_params.is_empty() {
             bare.clone()
         } else {
@@ -597,7 +603,10 @@ impl RustEmitter {
         };
         let unit = |v: &juxc_ast::EnumVariant| format!("{bare}::{}", to_rust_ident(&v.name.text));
         if payload_free && !declared.contains("fromNameStrict") {
-            self.w.line(&format!("pub fn fromNameStrict(name: String) -> Option<{self_ty}> {{"));
+            self.w.line(&format!(
+                "pub fn fromNameStrict(name: String) -> {opt}{self_ty}> {{",
+                opt = self.nullable_option_path(),
+            ));
             self.w.indent_inc();
             self.w.line("match name.as_str() {");
             self.w.indent_inc();
@@ -625,7 +634,10 @@ impl RustEmitter {
                 })
                 .collect();
             let collides = folded.len() < enum_decl.variants.len();
-            self.w.line(&format!("pub fn fromName(name: String) -> Option<{self_ty}> {{"));
+            self.w.line(&format!(
+                "pub fn fromName(name: String) -> {opt}{self_ty}> {{",
+                opt = self.nullable_option_path(),
+            ));
             self.w.indent_inc();
             if collides {
                 self.w.line("match name.as_str() {");
@@ -649,7 +661,10 @@ impl RustEmitter {
             self.w.line("}");
         }
         if payload_free && !declared.contains("fromOrdinal") {
-            self.w.line(&format!("pub fn fromOrdinal(ordinal: isize) -> Option<{self_ty}> {{"));
+            self.w.line(&format!(
+                "pub fn fromOrdinal(ordinal: isize) -> {opt}{self_ty}> {{",
+                opt = self.nullable_option_path(),
+            ));
             self.w.indent_inc();
             self.w.line("match ordinal {");
             self.w.indent_inc();

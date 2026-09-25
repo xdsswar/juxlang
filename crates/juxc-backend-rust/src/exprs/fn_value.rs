@@ -56,10 +56,16 @@ impl RustEmitter {
             .and_then(|ctx| ctx.unqualified.get(name))
             .and_then(|fqn| self.symbols.functions.get(fqn))
             .or_else(|| {
-                self.symbols.lookup_function(name).and_then(|(fqn, f)| {
-                    let home = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
-                    package.as_deref().map_or(true, |p| p == home).then_some(f)
-                })
+                // Package-aware by construction here: `package` below already
+                // holds this unit's own. Spelled through `self.symbols` rather
+                // than the `self` helper so the closure keeps its field-precise
+                // borrow (`lambda_bare_target` is taken mutably further down).
+                self.symbols
+                    .lookup_function_in(name, package.as_deref().unwrap_or_default())
+                    .and_then(|(fqn, f)| {
+                        let home = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
+                        package.as_deref().map_or(true, |p| p == home).then_some(f)
+                    })
             });
         let Some(sig) = sig else {
             return false;
