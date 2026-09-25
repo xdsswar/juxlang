@@ -1,0 +1,5 @@
+class App {
+    @entry static void launch() { print("launch"); }
+}
+
+public void main() { print("main"); }

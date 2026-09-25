@@ -415,11 +415,11 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
-| `E0320`  | Entry file has both top-level statements and a `main` function | Entry Points §E.6     |
-| `E0321`  | Multiple functions carry `@entry` in the same binary *(reserved)* | Entry Points §E.6   |
-| `E0322`  | `@entry(convention = ...)` unsupported on current target *(reserved)* | Entry Points §E.6 |
+| `E0320`  | Two entry points in one binary: both implicit forms, or an `@entry` beside a `main` | Entry Points §E.6 |
+| `E0321`  | Multiple functions carry `@entry` in the same binary  | Entry Points §E.6              |
+| `E0322`  | `@entry(convention = ...)` unsupported on current target | Entry Points §E.6           |
 | `E0323`  | `main`'s signature does not match any accepted form  | Entry Points §E.6              |
-| `E0324`  | `@entry` function's signature incompatible with its symbol's ABI *(reserved)* | Entry Points §E.6 |
+| `E0324`  | `@entry` cannot select this declaration as the entry point (signature, or not a free function) | Entry Points §E.6 |
 | `E0325`  | `freestanding = true` but no `@entry` function declared *(reserved)* | Entry Points §E.6 |
 | `E0326`  | A class member named `main` with an entry-shaped signature is not `static` | Entry Points §E.1.2.2 |
 | `E0305`  | Identifier is a Rust keyword and cannot be lowered    | Bindgen §G.2                   |

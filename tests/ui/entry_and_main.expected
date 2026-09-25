@@ -1,0 +1,1 @@
+entry_and_main.jux:1:15: [E0320] error: two entry points in one binary: `@entry` on `launch`, and free function `main`

@@ -347,6 +347,15 @@ impl RustEmitter {
         let is_args_main = fn_decl.name.text == "main"
             && !is_async_main
             && (!fn_decl.params.is_empty() || crate::entry_returns_code(&fn_decl.return_type));
+        // **`@entry`** (§E.2, ERRATA E105): the entry point selected by
+        // annotation rather than by the name `main`. Nothing is renamed here,
+        // and that is the whole difference: the args / exit-code forms force a
+        // `main` to be renamed because Rust's `fn main` can take no parameter
+        // and return no integer, while `@entry public int my_start()` already
+        // emits as `fn my_start() -> isize`. All it needs is an entry point that
+        // calls it, emitted at the bottom of this function for a single-unit
+        // build and by `emit_workspace_main_shim` for a workspace one.
+        let is_entry_fn = crate::fn_has_entry_annotation(fn_decl);
         // In-scope params for wildcard substitution = this function's own
         // generics plus any enclosing (`current_type_params`).
         let mut in_scope = self.current_type_params.clone();
@@ -393,6 +402,25 @@ impl RustEmitter {
             }
         }
 
+        // `@entry(symbol = "...")` (§E.2.1): an ADDITIONAL linker-visible name
+        // for the entry function, published exactly the way
+        // `@export(name = "...")` publishes one. No `extern "C"` goes with it:
+        // the accepted `@entry` signatures are Jux-shaped (a `String[]` lowers
+        // to a handle, which has no C ABI), so the function keeps the Rust ABI
+        // and stays callable from Jux under its own name. In hosted mode the CRT
+        // still starts the process through the emitted `fn main`, which calls
+        // this function, so the symbol sits BESIDE that entry rather than
+        // replacing it -- replacing the CRT's entry is freestanding mode (§E.3).
+        let entry_symbol = crate::entry_symbol_name(fn_decl);
+        if let Some(sym) = &entry_symbol {
+            self.w.emit_indent();
+            if sym == &fn_decl.name.text {
+                self.w.push_str("#[no_mangle]\n");
+            } else {
+                self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
+            }
+        }
+
         self.w.emit_indent();
         // When the compilation unit is wrapped in `pub mod a::b::…`,
         // user-declared visibility on top-level functions becomes
@@ -410,6 +438,14 @@ impl RustEmitter {
             // and the appended wrapper; make it `pub` so the wrapper (and other
             // units) reach it regardless of module nesting.
             self.w.push_str("pub ");
+        } else if is_entry_fn && !self.symbols.package.is_empty() {
+            // The crate-root `fn main` shim calls a packaged entry by path, so
+            // the function has to be visible from the root whatever its Jux
+            // visibility says -- an `@entry` needs no `public` to be the entry
+            // (§E.2), just as a free `main` needs none (§E.1.2.2). Jux-side
+            // visibility was already enforced by tycheck, so widening here only
+            // affects the generated crate's internals.
+            self.w.push_str("pub(crate) ");
         } else if !self.symbols.package.is_empty() {
             // §TS.1 tests/hooks are ordinary functions with NO visibility
             // requirement, but the synthesized test runner is `fn main()`
@@ -809,6 +845,35 @@ impl RustEmitter {
                 &format!("__jux_args_main({args})"),
                 crate::entry_returns_code(&fn_decl.return_type),
             );
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+        }
+        // Same-level entry shim for an `@entry` function at the crate root
+        // (§E.2), mirroring the two `main` shims above: the single-unit path
+        // emits it here and the workspace path emits it in
+        // `emit_workspace_main_shim`, never both. Skipped in test mode, where
+        // the synthetic test runner is `fn main` and a second one would not
+        // compile, and skipped when the annotated function IS called `main`,
+        // which is already an entry point by name.
+        if is_entry_fn
+            && fn_decl.name.text != "main"
+            && self.symbols.package.is_empty()
+            && !self.workspace_mode
+            && !self.test_mode
+        {
+            self.w.line("fn main() {");
+            self.w.indent_inc();
+            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            let call = format!("{}({args})", to_rust_ident(&fn_decl.name.text));
+            // An `async` entry runs under the futures executor, like an
+            // `async main`; an `int` one hands its result to `process::exit`.
+            let call = if matches!(fn_decl.return_type, ReturnType::AsyncType(_)) {
+                format!("crate::__jux_block_on({call})")
+            } else {
+                call
+            };
+            self.emit_entry_call(&call, crate::entry_returns_code(&fn_decl.return_type));
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();

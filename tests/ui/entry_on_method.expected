@@ -1,0 +1,1 @@
+entry_on_method.jux:2:5: [E0324] error: `@entry` marks a top-level function, so it has no effect on `launch`

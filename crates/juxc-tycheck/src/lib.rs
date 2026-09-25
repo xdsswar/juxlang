@@ -274,6 +274,13 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // another. Raised before the per-unit walks so the span attribution below
     // gives each one its file, which is what the LSP needs to show it.
     static_init::check_static_init_cycles(units, &symbols, &mut tc.diagnostics);
+    // `@entry` (Entry Points §E.2, ERRATA E105). Whole-program, because "one
+    // entry per emitted binary" is a statement about the binary and not about a
+    // file: a second `@entry` in another unit leaves the same two candidates and
+    // no way to choose. Raised here, ahead of the attribution loop below, so
+    // each one gets the file its span came from (the LSP drops a diagnostic
+    // that names no file).
+    check_entry_annotations(units, &mut tc.diagnostics);
     for d in &mut tc.diagnostics {
         if d.file.is_none() {
             d.file = d.primary_span.map(|s| s.file as usize);
@@ -376,6 +383,224 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
 /// we expand the milestone surface.
 struct TypeChecker {
     diagnostics: Vec<Diagnostic>,
+}
+
+/// The `@entry` annotation on a declaration, if it carries one.
+///
+/// Annotation names are case-insensitive (LANG-V1 §3.6), and only the last
+/// segment is matched, so a qualified spelling works like every other built-in.
+fn entry_annotation(annotations: &[juxc_ast::Annotation]) -> Option<&juxc_ast::Annotation> {
+    annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .is_some_and(|s| s.text.eq_ignore_ascii_case("entry"))
+    })
+}
+
+/// The value a named annotation argument was given, plus its text when that
+/// value is a string literal. `None` when the argument is absent.
+fn annotation_named_arg<'a>(
+    ann: &'a juxc_ast::Annotation,
+    want: &str,
+) -> Option<Option<&'a str>> {
+    ann.args.iter().find_map(|arg| match arg {
+        juxc_ast::AnnotationArg::Named { name, value } if name.text.eq_ignore_ascii_case(want) => {
+            Some(match value {
+                juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) => Some(s.as_str()),
+                _ => None,
+            })
+        }
+        _ => None,
+    })
+}
+
+/// Whole-program `@entry` rules (`JUX-ENTRY-POINTS-ADDENDUM.md` §E.2,
+/// ERRATA E105).
+///
+/// Four rules, each about the binary rather than about one file:
+///
+/// - **`E0324` placement.** `@entry` marks a free function. On a method it used
+///   to be silently nothing, which is the one way an entry point goes missing
+///   with no diagnostic at all: the program compiled, emitted no entry, and
+///   died inside rustc with `E0601`.
+/// - **`E0324` signature.** The accepted shapes are exactly §E.1.2's set for
+///   `main`, because `@entry` selects the same entry point by another means: the
+///   runtime has the same `String[]` to hand it and the same exit code to take
+///   back.
+/// - **`E0321`.** One `@entry` per emitted binary. §E.2.3's paired symbols need
+///   a crate type this milestone does not emit, so a second one is an error
+///   whatever symbol it asks for.
+/// - **`E0320`.** An `@entry` and a `main` entry in one binary are alternatives,
+///   not a precedence. Letting `@entry` win quietly would leave a `main` that
+///   compiles, reads as the program's start, and never runs.
+///
+/// Plus `E0322` for `convention = "..."`: see §E.2.2 and
+/// [`code::Code::E0322_EntryConventionUnsupported`] for why a convention the
+/// backend cannot emit is refused instead of warned about.
+///
+/// External `.jux.d` stub units are skipped: they contribute signatures for
+/// linking and declare nothing this binary runs.
+pub fn check_entry_annotations(units: &[CompilationUnit], diagnostics: &mut Vec<Diagnostic>) {
+    // Every `@entry` free function, in declaration order across the units.
+    let mut entries: Vec<(&FnDecl, &juxc_ast::Annotation)> = Vec::new();
+    // Every entry point selected by the NAME `main` (§E.1.2), described the way
+    // the `E0320` message wants to name it.
+    let mut implicit: Vec<(String, Span)> = Vec::new();
+
+    for unit in units {
+        if unit.is_external {
+            continue;
+        }
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Function(f) => {
+                    if let Some(ann) = entry_annotation(&f.annotations) {
+                        entries.push((f, ann));
+                    } else if f.name.text == "main" && is_entry_shaped(f) {
+                        implicit.push(("free function `main`".to_string(), f.span));
+                    }
+                }
+                TopLevelDecl::Class(c) => {
+                    for m in &c.methods {
+                        if let Some(ann) = entry_annotation(&m.annotations) {
+                            diagnostics.push(entry_placement_error(ann, &m.name.text));
+                        } else if m.name.text == "main"
+                            && is_entry_shaped(m)
+                            && m.modifiers.iter().any(|md| matches!(md, FnModifier::Static))
+                        {
+                            implicit.push((format!("`{}.main`", c.name.text), m.span));
+                        }
+                    }
+                }
+                // A record / enum / interface method is as unable to select an
+                // entry point as a class method is, and an ignored `@entry`
+                // there fails the same silent way.
+                TopLevelDecl::Record(r) => {
+                    for m in &r.methods {
+                        if let Some(ann) = entry_annotation(&m.annotations) {
+                            diagnostics.push(entry_placement_error(ann, &m.name.text));
+                        }
+                    }
+                }
+                TopLevelDecl::Enum(e) => {
+                    for m in &e.methods {
+                        if let Some(ann) = entry_annotation(&m.annotations) {
+                            diagnostics.push(entry_placement_error(ann, &m.name.text));
+                        }
+                    }
+                }
+                TopLevelDecl::Interface(i) => {
+                    for m in &i.methods {
+                        if let Some(ann) = entry_annotation(&m.annotations) {
+                            diagnostics.push(entry_placement_error(ann, &m.name.text));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for (f, ann) in &entries {
+        // E0324: the signature. The message names the function, because an
+        // `@entry` function is not named `main` and a file may hold several
+        // candidates a reader would otherwise have to guess between.
+        if !is_entry_shaped(f) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0324_EntryNotEntryShaped,
+                    format!(
+                        "`@entry` function `{}` does not have an entry-point signature",
+                        f.name.text,
+                    ),
+                )
+                .with_span(f.span)
+                .with_help(
+                    "accepted forms: `void f()`, `void f(String[] args)`, `int f()`, \
+                     `int f(String[] args)`, each optionally `async`",
+                ),
+            );
+        }
+        // E0322: a calling convention the backend cannot emit (§E.2.2).
+        if let Some(literal) = annotation_named_arg(ann, "convention") {
+            match literal {
+                Some(name) if name.eq_ignore_ascii_case("c") => {}
+                Some(name) => diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0322_EntryConventionUnsupported,
+                        format!("calling convention `{name}` is not supported on any target yet"),
+                    )
+                    .with_span(ann.span)
+                    .with_help(
+                        "remove `convention` (the C convention is used), or use `@export` for a \
+                         C-callable wrapper",
+                    ),
+                ),
+                None => diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0322_EntryConventionUnsupported,
+                        "`@entry(convention = ...)` takes a string naming a calling convention",
+                    )
+                    .with_span(ann.span)
+                    .with_help("the only supported value is `\"c\"`, which is the default"),
+                ),
+            }
+        }
+    }
+
+    // E0321: the second and any later `@entry`, each against its own span, so a
+    // program with three of them says so twice instead of once.
+    if let Some((first, _)) = entries.first() {
+        for (f, _) in entries.iter().skip(1) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0321_DuplicateEntryAnnotation,
+                    format!(
+                        "a binary may carry one `@entry`, and `{}` already has it",
+                        first.name.text,
+                    ),
+                )
+                .with_span(f.span)
+                .with_help(format!(
+                    "remove `@entry` from `{}`, or from `{}`",
+                    f.name.text, first.name.text,
+                )),
+            );
+        }
+    }
+
+    // E0320: an `@entry` and a `main` entry in one binary.
+    if let (Some((f, _)), Some((what, _))) = (entries.first(), implicit.first()) {
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0320_AmbiguousEntryPoint,
+                format!(
+                    "two entry points in one binary: `@entry` on `{}`, and {what}",
+                    f.name.text,
+                ),
+            )
+            .with_span(f.span)
+            .with_help(format!(
+                "`@entry` replaces the `main` rule rather than overriding it -- rename `{}`, or \
+                 drop its `@entry` and let `main` be the entry",
+                f.name.text,
+            )),
+        );
+    }
+}
+
+/// `E0324` for an `@entry` written somewhere it cannot select an entry point.
+fn entry_placement_error(ann: &juxc_ast::Annotation, member: &str) -> Diagnostic {
+    Diagnostic::error(
+        code::Code::E0324_EntryNotEntryShaped,
+        format!("`@entry` marks a top-level function, so it has no effect on `{member}`"),
+    )
+    .with_span(ann.span)
+    .with_help(
+        "move the body into a top-level function and put `@entry` on that, or name the method \
+         `main` and make it `static` (§E.1.2.2)",
+    )
 }
 
 impl TypeChecker {
@@ -649,6 +874,77 @@ public void main() { }",
                 );
             }
         }
+    }
+
+    /// Codes raised for a source, in order, for the `@entry` cases below.
+    fn codes(src: &str) -> Vec<&'static str> {
+        workspace_diagnostics(src)
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect()
+    }
+
+    /// A well-shaped `@entry` is accepted on its own: it IS the entry point, so
+    /// the absence of a `main` is not a mistake (§E.2).
+    #[test]
+    fn entry_annotation_replaces_main() {
+        assert_eq!(codes("@entry public int launch() { return 0; }"), Vec::<&str>::new());
+        assert_eq!(codes("@entry public void launch(String[] args) { }"), Vec::<&str>::new());
+        assert_eq!(codes("@entry public async void launch() { }"), Vec::<&str>::new());
+    }
+
+    /// One `@entry` per emitted binary (§E.2 / §E.2.3): the second is E0321.
+    #[test]
+    fn two_entry_annotations_are_e0321() {
+        assert_eq!(
+            codes("@entry public void a() { } @entry public void b() { }"),
+            vec!["E0321"],
+        );
+    }
+
+    /// An `@entry` and a `main` in one binary are alternatives, not a
+    /// precedence (§E.2): E0320, so the `main` that would never run cannot be
+    /// mistaken for the program's start.
+    #[test]
+    fn entry_annotation_beside_main_is_e0320() {
+        assert_eq!(codes("@entry public void a() { } public void main() { }"), vec!["E0320"]);
+    }
+
+    /// The accepted `@entry` signatures are exactly §E.1.2's set for `main`, so
+    /// the C-style `(int argc, String[] argv)` pair the addendum's first draft
+    /// showed is E0324 until freestanding mode can hand it a real argv.
+    #[test]
+    fn entry_annotation_signature_is_checked() {
+        assert_eq!(
+            codes("@entry public int launch(int argc, String[] argv) { return argc; }"),
+            vec!["E0324"],
+        );
+        assert_eq!(codes("@entry public String launch() { return \"\"; }"), vec!["E0324"]);
+    }
+
+    /// `@entry` on a method selects nothing, and used to do so silently (§E.2).
+    #[test]
+    fn entry_annotation_on_a_method_is_e0324() {
+        assert_eq!(
+            codes("class App { @entry static void go() { } } public void main() { }"),
+            vec!["E0324"],
+        );
+    }
+
+    /// `convention = "..."` is refused while the backend emits no convention
+    /// attribute (§E.2.2), because the alternative is a binary the loader calls
+    /// with the wrong stack discipline and no diagnostic anywhere.
+    #[test]
+    fn entry_annotation_convention_is_e0322() {
+        assert_eq!(
+            codes("@entry(convention = \"stdcall\") public int go() { return 1; }"),
+            vec!["E0322"],
+        );
+        // The default is accepted, since it is what the backend emits.
+        assert_eq!(
+            codes("@entry(convention = \"c\") public int go() { return 1; }"),
+            Vec::<&str>::new(),
+        );
     }
 
     /// `void main()` is the canonical entry form.

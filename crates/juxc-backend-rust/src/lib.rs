@@ -3681,6 +3681,51 @@ pub(crate) fn entry_returns_code(rt: &juxc_ast::ReturnType) -> bool {
     }
 }
 
+/// Does this function carry `@entry` (Entry Points §E.2, ERRATA E105)?
+///
+/// `@entry` selects the entry point by annotation instead of by the name
+/// `main`, so every decision the backend used to make from the name (the async
+/// wrapper, the `String[] args` marshalling, the exit code) is made from this
+/// instead. Annotation names are case-insensitive (LANG-V1 §3.6) and only the
+/// last segment is matched, like every other built-in.
+pub(crate) fn fn_has_entry_annotation(fn_decl: &juxc_ast::FnDecl) -> bool {
+    entry_annotation(fn_decl).is_some()
+}
+
+/// The `@entry` annotation itself, for the code that reads its arguments.
+pub(crate) fn entry_annotation(fn_decl: &juxc_ast::FnDecl) -> Option<&juxc_ast::Annotation> {
+    fn_decl.annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .is_some_and(|s| s.text.eq_ignore_ascii_case("entry"))
+    })
+}
+
+/// The linker symbol `@entry(symbol = "...")` asks for (§E.2.1), or `None` when
+/// the function is not an `@entry` or asked for no symbol.
+///
+/// A plain `@entry` needs no symbol of its own: the emitted `fn main` shim is
+/// what the CRT starts, and the annotated function is called from it. A
+/// requested symbol is an ADDITIONAL linker-visible name for the same code,
+/// published the way `@export(name = "...")` publishes one, so the Jux name
+/// stays callable from Jux (§E.2.1).
+pub(crate) fn entry_symbol_name(fn_decl: &juxc_ast::FnDecl) -> Option<String> {
+    let ann = entry_annotation(fn_decl)?;
+    for arg in &ann.args {
+        if let juxc_ast::AnnotationArg::Named { name, value } = arg {
+            if name.text.eq_ignore_ascii_case("symbol") {
+                if let juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) = value {
+                    if !s.is_empty() {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Collect the bare names used as **cast / type-test targets** — the `T` in a
 /// `(T) e` / `e as T` cast or (later) an `e => T` type-test — anywhere in the
 /// program. "Finish polymorphism" emits a runtime-type `__jux_as_<T>` downcast
@@ -6317,6 +6362,13 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
     ///   for the first occurrence anyway so partially-erroring
     ///   builds still produce SOMETHING valid.
     pub(crate) fn emit_workspace_main_shim(&mut self, units: &[CompilationUnit]) {
+        // **`@entry` first** (§E.2, ERRATA E105). An annotated function IS the
+        // entry point whatever it is called, so the name-driven search below
+        // never gets to run: `@entry` and a `main` in one binary is E0320, and
+        // tycheck has already refused that program.
+        if self.emit_annotated_entry_shim(units) {
+            return;
+        }
         // Every unit that declares a free `main`. For a clean compile there's
         // exactly one (a second is E0400); a `[[bin]] main = "…"` key lets a
         // multi-`main` project pick which one is THE entry.
@@ -6428,6 +6480,75 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             self.w.indent_dec();
             self.w.line("}");
         }
+    }
+
+    /// Emit the crate-root `fn main()` shim for an `@entry` function
+    /// (Entry Points §E.2, ERRATA E105), and say whether there was one.
+    ///
+    /// The annotated function keeps its own Jux name in the emitted Rust, which
+    /// is why this is simpler than the `main` path: a `main` that takes `args`
+    /// or returns an exit code has to be RENAMED (`__jux_args_main`) because
+    /// Rust's `fn main` can be neither, while `@entry public int my_start()`
+    /// already emits as `fn my_start() -> isize` and only needs an entry that
+    /// calls it. So the same three wrapper rules apply, keyed on the annotation
+    /// rather than on the name:
+    ///
+    /// - `async` runs under the futures executor;
+    /// - one `String[] args` parameter is fed `std::env::args().skip(1)`;
+    /// - an `int` return becomes the process exit code.
+    ///
+    /// External `.jux.d` stub units are skipped: they declare signatures the
+    /// real crate provides and have no body to call.
+    fn emit_annotated_entry_shim(&mut self, units: &[CompilationUnit]) -> bool {
+        // The first `@entry` free function in the workspace. A second one is
+        // E0321, so "first" is the only one for any program that type-checked.
+        let found = units
+            .iter()
+            .filter(|u| !u.is_external)
+            .find_map(|unit| {
+                unit.items.iter().find_map(|item| match item {
+                    TopLevelDecl::Function(f) if fn_has_entry_annotation(f) => Some((unit, f)),
+                    _ => None,
+                })
+            });
+        let Some((unit, entry)) = found else { return false };
+        // `@entry` on a function that is ALREADY called `main` selects the same
+        // function the name rule selects, so the name-driven path below owns it:
+        // it knows that a `void main()` at the crate root needs no shim at all
+        // (it is Rust's entry in place) and that an args / int one was renamed to
+        // `__jux_args_main`. Emitting from here instead produced a second
+        // `fn main` calling the first, which is a duplicate symbol.
+        if entry.name.text == "main" {
+            return false;
+        }
+
+        let pkg: Vec<&str> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
+            .unwrap_or_default();
+        // A packaged function lives in `pub mod a::b`; a package-less one sits
+        // at the crate root beside this shim, where the bare name resolves.
+        let mut path = juxc_lex::join_rust_path(&pkg);
+        if !path.is_empty() {
+            path.push_str("::");
+        }
+        path.push_str(&juxc_lex::to_rust_ident(&entry.name.text));
+
+        let args_expr = if entry.params.is_empty() { "" } else { ENTRY_ARGS_EXPR };
+        let call = format!("{path}({args_expr})");
+        let call = if matches!(entry.return_type, juxc_ast::ReturnType::AsyncType(_)) {
+            format!("crate::__jux_block_on({call})")
+        } else {
+            call
+        };
+        self.w.newline();
+        self.w.line("fn main() {");
+        self.w.indent_inc();
+        self.emit_entry_call(&call, entry_returns_code(&entry.return_type));
+        self.w.indent_dec();
+        self.w.line("}");
+        true
     }
 
     /// Emit the `fn main()` shim that drives a class `static main` entry point

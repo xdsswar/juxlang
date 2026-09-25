@@ -1,0 +1,3 @@
+@entry public int launch() { return 0; }
+
+@entry public int alsoLaunch() { return 0; }

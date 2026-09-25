@@ -2471,6 +2471,71 @@ reserved, and nothing tells an author to rename (§M.16.1).
 
 ---
 
+## E105. `@entry` was a documented annotation with no implementation
+
+**Conflict.** `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2 has specified `@entry` since
+the addendum was written: it marks a function as the program's entry regardless
+of its name, one per binary, with `symbol` and `convention` arguments and four
+diagnostics of its own (`E0321`, `E0322`, `E0324`, `E0325`). None of it existed.
+The name appeared in exactly one place in the compiler, the built-in annotation
+allow-list that keeps `W0241` quiet, so the annotation parsed, landed in
+`FnDecl.annotations`, and was read by nothing. Entry selection was by the NAME
+`main` alone, in the backend, in five places.
+
+The result was not a missing feature but a rustc leak, which is the failure mode
+this compiler is least allowed:
+
+```java
+@entry public int my_start() { return 0; }
+```
+
+```text
+error[E0601]: `main` function not found in crate `repro`
+```
+
+The program was accepted by every juxc phase, emitted a crate with no entry
+point at all, and died inside `cargo build` pointing at a line of generated
+Rust. Three of the four diagnostics §E.6 allocates for `@entry` were not even
+declared in `juxc-diagnostics`.
+
+§E.2 was also silent or over-promising in four places that an implementation has
+to answer:
+
+- the worked example's signature, `(int argc, String[] argv)`, is a C-ABI entry
+  shape the hosted runtime cannot hand arguments to;
+- nothing said what happens when one binary contains both a `main` and an
+  `@entry` function;
+- nothing said where `@entry` may be written, so on a class method it was
+  silently nothing;
+- `convention` and the paired-entry sets of §E.2.3 describe code generation this
+  milestone does not have.
+
+**Resolution.** §E.2. `@entry` selects the entry point, and the name `main` is
+the default only when no `@entry` exists in the binary. Concretely:
+
+- the accepted signatures are exactly §E.1.2's set for `main` (`void`/`int`,
+  no parameters or one `String[]`/`String...`, optionally `async`, optionally
+  `throws`), and the async / args / exit-code entry wrappers that used to key on
+  the name key on the selection instead;
+- any other signature, and `@entry` on anything but a free function, is `E0324`;
+- both an `@entry` and a `main` entry in one binary is `E0320`, not a silent
+  precedence, so the `main` that would never run cannot be mistaken for the
+  program's start;
+- a second `@entry` in the binary, in any file, is `E0321`;
+- `@entry(symbol = "...")` publishes the symbol through the same mechanism
+  `@export(name = "...")` uses, as an additional linker-visible name beside the
+  hosted entry, never a rename;
+- `@entry(convention = "...")` is `E0322` unless it names `c`, because the
+  compiler emits no convention attribute and a silently wrong ABI is not a
+  diagnostic anyone gets to see;
+- `E0325` (`freestanding = true` with no `@entry`) stays unimplemented with the
+  rest of §E.3, and §E.6 now records which codes are live.
+
+**Spec status:** `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2, §E.2.1, §E.2.2, §E.2.3
+and §E.6 carry the rules.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

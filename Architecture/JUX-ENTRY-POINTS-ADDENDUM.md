@@ -99,12 +99,42 @@ When the platform requires a non-default entry symbol or calling convention, use
 
 ```java
 @entry
-public int my_program_start(int argc, String[] argv) {
+public int my_program_start(String[] args) {
     return 0;
 }
 ```
 
-The annotation marks this function as the program's entry regardless of its name. Exactly **one** function per binary may carry `@entry` — duplicate `@entry` declarations are `E0321`.
+The annotation marks this function as the program's entry regardless of its name. Exactly **one** function per binary may carry `@entry`; duplicate `@entry` declarations are `E0321`.
+
+**Accepted signatures.** `@entry` selects the same entry point by a different
+means, so it accepts exactly the signatures §E.1.2 accepts for `main`, with the
+same freedom to add a `throws` clause:
+
+```java
+void f()        void f(String[] args)        void f(String... args)
+int  f()        int  f(String[] args)        int  f(String... args)
+async void f()                               async int f()
+```
+
+The `args` parameter carries the program arguments and excludes the program
+name, exactly as `main`'s does; an `int` return is the process exit code; an
+`async` entry is driven to completion and then exits. Any other signature is
+`E0324`, including the C-style `(int argc, String[] argv)` pair: argv
+marshalling is the runtime's job, and it hands the entry a `String[]` however
+the platform spelled argv. A C-ABI entry that receives `argc` and `argv`
+itself is a freestanding shape and arrives with §E.3.
+
+**Where `@entry` may be written.** On a top-level (free) function. A `static`
+method reaches entry-point status through the §E.1.2.2 `main` rule instead, and
+`@entry` on a method is `E0324` rather than silently nothing: an annotation the
+compiler ignores is exactly how an entry point goes missing with no diagnostic.
+
+**`@entry` and `main` in one binary.** The two are alternatives, not a
+precedence. A binary carrying both an `@entry` function and a `main` entry (free
+or class `static`) is `E0320`, the same ambiguity §E.1.3 raises for two implicit
+entries. The alternative ruling, that the explicit `@entry` quietly wins, was
+rejected: the `main` would still compile, would still read as the program's
+start to anyone opening the file, and would never run.
 
 ### E.2.1. Custom Symbol Name
 
@@ -116,6 +146,19 @@ public void custom_start() {
 ```
 
 The linker exposes the function under the given symbol. The Jux name (`custom_start`) remains usable inside the program; the exported symbol (`_start`) is what the loader resolves.
+
+**Lowering.** The symbol is published by the same mechanism `@export(name =
+"...")` uses: the unmangled Jux name when the requested symbol equals it, an
+explicit export name otherwise. The function keeps its Jux signature and stays
+callable under its Jux name, so the symbol is an *additional* linker-visible
+name for the same code, never a rename.
+
+In hosted mode the C runtime still starts the process and the compiler still
+emits the platform's own entry, which calls the `@entry` function. A requested
+symbol is therefore an alias beside that entry, not a replacement for it;
+replacing the CRT's entry is freestanding mode (§E.3), and a hosted build that
+asks for a symbol the CRT already defines is left to the linker to complain
+about.
 
 ### E.2.2. Calling Convention
 
@@ -129,6 +172,14 @@ public int dllMain(void* hinstDLL, uint reason, void* reserved) {
 ```
 
 Recognized conventions: `c` (default), `stdcall`, `fastcall`, `sysv`, `win64`, `aapcs`. Targets that don't support a convention reject it with `E0322`.
+
+**Not implemented in this milestone.** The compiler emits no convention
+attribute, so no target supports a non-default convention yet and
+`convention = "..."` is rejected with `E0322` unless it names `c`. A rejection
+rather than a warning, deliberately: accepting the argument and emitting the C
+convention anyway would hand the loader a function it calls with the wrong
+register and stack discipline, and a wrong ABI is not a diagnostic anybody ever
+reads. Per-target validation, and the conventions themselves, arrive with §E.3.
 
 ### E.2.3. Multiple Entry Points (Module-style binaries)
 
@@ -148,6 +199,14 @@ public void kernelExit() {
 ```
 
 The constraint is "one entry per emitted binary symbol," not "one `@entry` per program." For a kernel-module crate type, the compiler permits the documented set of paired entries; for a normal executable, only one is permitted.
+
+**Not implemented in this milestone.** Every crate type the compiler emits
+today is a single-entry executable, so a second `@entry` is `E0321` whatever
+symbols it asks for. The paired sets (`init_module` with `cleanup_module`,
+`DllMain`) arrive with the freestanding and module crate types in §E.3. The
+`E0321` check spans every unit compiled into one binary, not just the entry
+file, because the second `@entry` is as fatal in another file as in the same
+one.
 
 ---
 
@@ -243,13 +302,18 @@ Each `path` must contain exactly one entry (per §E.1.3 / §E.2).
 
 | Code  | Condition                                                                    |
 |-------|------------------------------------------------------------------------------|
-| `E0320` | Entry file contains both top-level statements and a `main` function        |
+| `E0320` | Two entry points in one binary: both implicit forms in the entry file, or an `@entry` function beside a `main` (§E.2) |
 | `E0321` | Multiple functions carry `@entry` in the same binary                       |
 | `E0322` | `@entry(convention = "...")` is unsupported on the current target          |
 | `E0323` | `main`'s signature does not match any accepted form (§E.1.2)               |
-| `E0324` | `@entry` function's signature is incompatible with its `symbol`'s ABI      |
+| `E0324` | `@entry` cannot select the declaration it is written on: a signature outside §E.1.2's set, or anything that is not a free function |
 | `E0325` | `freestanding = true` but no `@entry` function is declared                 |
 | `E0326` | A class member named `main` with an entry-shaped signature is not `static` (§E.1.2.2) |
+
+**Implementation status.** `E0320` (both forms in one binary, as well as the
+§E.1.3 double-implicit case), `E0321`, `E0322` (as the blanket rejection of
+§E.2.2), `E0323`, `E0324` and `E0326` are raised today. `E0325` needs
+`freestanding = true` to mean something, so it arrives with §E.3.
 
 A varargs parameter that is not the last parameter of its function is rejected
 with **`E0212`** (a general declaration-syntax error, allocated in

@@ -136,6 +136,35 @@ pub enum Code {
     /// `void main()`, `void main(String[])`, `int main()`, and
     /// `int main(String[])`, each optionally with a `throws` clause.
     E0323_MainSignatureMismatch,
+    /// E0321 — More than one function in the binary carries `@entry`.
+    ///
+    /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2 exactly one function per
+    /// emitted binary may carry the annotation, and §E.2.3's paired entry
+    /// symbols (`init_module` / `cleanup_module`, `DllMain`) need a crate type
+    /// this milestone does not emit. The check spans every unit compiled into
+    /// the binary, because a second `@entry` in another file leaves the same
+    /// two candidates and no way to choose.
+    E0321_DuplicateEntryAnnotation,
+    /// E0322 — `@entry(convention = "...")` names a convention the target does
+    /// not support.
+    ///
+    /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2.2 that is the code for a
+    /// convention a target rejects. The compiler emits no convention attribute
+    /// yet, so today every convention but `c` lands here. Rejecting beats
+    /// warning and emitting the C convention anyway: the loader would call the
+    /// function with the wrong register and stack discipline, which no
+    /// diagnostic ever reports.
+    E0322_EntryConventionUnsupported,
+    /// E0324 — A declaration carrying `@entry` cannot serve as the entry point.
+    ///
+    /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2 the accepted signatures are
+    /// exactly §E.1.2's set for `main`, and the annotation belongs on a free
+    /// function. A signature outside the set (the C-style
+    /// `(int argc, String[] argv)` pair included) and an `@entry` on a class
+    /// method both land here, rather than being ignored: an annotation the
+    /// compiler drops is how a program ends up with no entry point and no
+    /// diagnostic saying so.
+    E0324_EntryNotEntryShaped,
 
     // ---- Type checking (E0400–E0499) ----
     /// E0400 — A top-level name (class, record, enum, interface, or
@@ -1121,7 +1150,10 @@ impl Code {
             Code::E0305_RustKeywordIdentifier    => "E0305",
             Code::E0308_ModuleDependencyCycle    => "E0308",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
+            Code::E0321_DuplicateEntryAnnotation => "E0321",
+            Code::E0322_EntryConventionUnsupported => "E0322",
             Code::E0323_MainSignatureMismatch    => "E0323",
+            Code::E0324_EntryNotEntryShaped      => "E0324",
             Code::E0326_ClassMainNotStatic       => "E0326",
             Code::E0400_DuplicateDeclaration     => "E0400",
             Code::E0401_DuplicateField           => "E0401",
