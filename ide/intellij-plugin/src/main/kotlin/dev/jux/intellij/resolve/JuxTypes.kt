@@ -829,10 +829,28 @@ object JuxTypeEngine {
      * enclosing declaration, a type in this file, an imported type, a type in
      * the same package, then any type of that name in the project or its
      * libraries. [qualifier] is a written package path (`some.Truck`).
+     *
+     * A QUALIFIED name is never shadowed by a same-named user class
+     * (§M.16.6, ERRATA E102): writing `rust.std.Vec<int>` says which type is
+     * meant, so a program's own root-package `class Vec` must not answer for
+     * it. That is the whole shape of E102, where the compiler decided the SLOT
+     * from the written name and the member CALL from the resolved name's last
+     * segment, and the two halves disagreed. So when a qualifier is written and
+     * nothing in that package matches, the answer is "unresolved" rather than
+     * whatever a bare lookup of the last segment would find.
+     *
+     * The one qualifier that is not a package is a nested type's outer
+     * (`Outer.Inner`, §M.9): E102 keeps the nested-type shadow test a question
+     * about a simple name, so a qualifier naming a TYPE in scope hands the
+     * lookup back to the bare ladder, which finds the nested declaration.
      */
     fun resolveTypeName(context: PsiElement, name: String, qualifier: String? = null): PsiElement? {
         if (qualifier != null) {
             findTypeByFqn(context, qualifier, name)?.let { return it }
+            // `Outer.Inner` / `Outer.Mid.Inner`: the head names a type, not a
+            // package, so the bare ladder below is the right one to ask.
+            val outerName = qualifier.substringAfterLast('.')
+            if (JuxTypeIndex.findType(context, outerName) == null) return null
         } else {
             var scope: PsiElement? = context.parent
             while (scope != null && scope !is PsiFile) {
