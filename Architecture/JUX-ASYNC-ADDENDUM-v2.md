@@ -625,7 +625,8 @@ stream is a one-shot sequence.
 #### 18.6.3. `for await`
 
 ```text
-for-each-stmt = 'for' 'await'? '(' ('var' | type) ident ':' expression ')' block
+for-each-stmt = 'for' 'await'? '(' ('final' | 'const')? ('var' | type) ident
+                ':' expression ')' block
 ```
 
 `for await (var x : stream)` consumes a stream to exhaustion:

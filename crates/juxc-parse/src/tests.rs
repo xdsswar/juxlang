@@ -1252,6 +1252,67 @@ fn for_each_typed_form_parses() {
     assert_eq!(ty.name.segments[0].text, "int");
 }
 
+/// All four header shapes of §A.2.8 parse, with and without the
+/// `binding-modifier` the production grew in ERRATA E95. Before that, a TYPE in
+/// the header was fine and `final` was not: `for (final String? note : notes)`
+/// died on E0200 `expected identifier`, which is a Java habit the language had
+/// no reason to reject.
+#[test]
+fn for_each_final_binder_parses_in_every_header_shape() {
+    // (source, expects a declared type, expects `final`)
+    let cases = [
+        ("for (String? n : notes) { print(n); }", true, false),
+        ("for (var n : notes) { print(n); }", false, false),
+        ("for (final var n : notes) { print(n); }", false, true),
+        ("for (final String? n : notes) { print(n); }", true, true),
+        // `const` is a synonym of `final` wherever it appears (§A.2.2), so the
+        // binder has to take either spelling.
+        ("for (const var n : notes) { print(n); }", false, true),
+        ("for (const String? n : notes) { print(n); }", true, true),
+    ];
+    for (header, typed, is_final) in cases {
+        let ast = parse_clean(&format!("public void main() {{ {header} }}"));
+        let body = body_of(&ast.items[0]);
+        let Stmt::ForEach(f) = &body.statements[0] else {
+            panic!("expected ForEach for `{header}`, got {:?}", body.statements[0]);
+        };
+        assert_eq!(f.var_type.is_some(), typed, "var_type for `{header}`");
+        assert_eq!(f.is_final, is_final, "is_final for `{header}`");
+        assert_eq!(f.var_name.text, "n", "binder name for `{header}`");
+    }
+}
+
+/// `for await` takes the modifier in the same position (§18.6.3): the async
+/// header has the same shape, so a fix that reached only the sync form would
+/// leave half the gap open.
+#[test]
+fn for_await_final_binder_parses() {
+    let ast = parse_clean(
+        "public async void main() { for await (final int n : nums()) { print(n); } }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::ForEach(f) = &body.statements[0] else { panic!() };
+    assert!(f.is_await, "`for await` should set is_await");
+    assert!(f.is_final, "`final` binder should set is_final");
+    assert_eq!(f.var_type.as_ref().expect("typed").name.segments[0].text, "int");
+}
+
+/// The disambiguation still works: a C-style header whose init is `final` is
+/// not a for-each. The scan looks for a top-level `;` before a top-level `:`,
+/// and the modifier must not move that boundary.
+#[test]
+fn final_c_style_for_is_still_c_style() {
+    let ast = parse_clean(
+        "public void main() { for (final int i = 0; i < 3; i++) { print(i); } }",
+    );
+    let body = body_of(&ast.items[0]);
+    assert!(
+        matches!(body.statements[0], Stmt::ForC(_)),
+        "expected ForC, got {:?}",
+        body.statements[0],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Suffixed integer literals + typed locals (§A.1.4, §A.2.8)
 // ---------------------------------------------------------------------------

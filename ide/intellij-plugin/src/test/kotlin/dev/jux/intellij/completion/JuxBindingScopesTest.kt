@@ -36,6 +36,27 @@ class JuxBindingScopesTest : BasePlatformTestCase() {
         assertTrue("the loop variable is in scope in its body: $o", o.contains("item"))
     }
 
+    /**
+     * A `final` for-each binder is still a declaration (§A.2.8, ERRATA E95):
+     * the modifier sits inside the LOCAL_VARIABLE node, so the loop variable is
+     * completed, resolved and renamed exactly as the bare form is. Starting the
+     * node at the type instead, and leaving `final` outside it, would lose all
+     * four.
+     */
+    fun testFinalForEachVariableIsInScope() {
+        val o = offered(
+            """
+            void main() {
+                Vec<String?> notes = new Vec<String?>();
+                for (final String? note : notes) {
+                    print(<caret>);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertTrue("a final loop variable is in scope in its body: $o", o.contains("note"))
+    }
+
     fun testCForInitVariableIsInScope() {
         val o = offered(
             """

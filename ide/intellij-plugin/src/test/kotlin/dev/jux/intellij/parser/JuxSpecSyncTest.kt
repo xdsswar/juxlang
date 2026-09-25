@@ -40,4 +40,30 @@ class JuxSpecSyncTest : BasePlatformTestCase() {
 
     // Interface method without a body or explicit visibility (§7.4.3 public by default).
     fun testInterfaceMethod() { assertParses("package d; public interface I { String name(); }") }
+
+    // The for-each binder's `binding-modifier` (§A.2.8, ERRATA E95). All four
+    // header shapes must read as valid, because the compiler now accepts all
+    // four: a file that compiles must not be underlined as broken. The two
+    // `final` rows are the ones that were a compiler parse error before, and the
+    // two plain rows are here so a regression in either direction is visible.
+    private fun forEach(header: String) =
+        assertParses("package d; public class A { public void f() { $header { print(1); } } }")
+
+    fun testForEachTypedBinder() { forEach("for (String? note : notes)") }
+    fun testForEachVarBinder() { forEach("for (var note : notes)") }
+    fun testForEachFinalVarBinder() { forEach("for (final var note : notes)") }
+    fun testForEachFinalTypedBinder() { forEach("for (final String? note : notes)") }
+
+    // `const` is a synonym of `final` wherever it appears (§A.2.2).
+    fun testForEachConstVarBinder() { forEach("for (const var note : notes)") }
+    fun testForEachConstTypedBinder() { forEach("for (const String note : notes)") }
+
+    // `for await` has the same header shape (§18.6.3), so it takes the modifier
+    // in the same position.
+    fun testForAwaitFinalBinder() { forEach("for await (final int n : stream)") }
+    fun testForAwaitFinalTypedBinder() { forEach("for await (final String? s : stream)") }
+
+    // The disambiguation the modifier could have broken: a C-style header whose
+    // init is `final` is still a C-style `for`, not a for-each.
+    fun testFinalCStyleForStillParses() { forEach("for (final int i = 0; i < 3; i++)") }
 }

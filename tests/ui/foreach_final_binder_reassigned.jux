@@ -1,0 +1,26 @@
+// A `final` for-each binder is an ordinary `final` binding (ERRATA E95), so
+// writing to it inside the body is the SAME E0464 an ordinary `final` local
+// gets, in both spellings of the modifier and both header shapes.
+//
+// The plain binders at the end are the control: without the modifier the loop
+// variable stays reassignable, which is what it always was.
+
+public void main() {
+    for (final int n : 0..3) {
+        n = 9;
+    }
+    for (const int c : 0..3) {
+        c += 1;
+    }
+    for (final var v : 0..3) {
+        v = 9;
+    }
+    for (int plain : 0..3) {
+        plain = 9;
+        print(plain);
+    }
+    for (var loose : 0..3) {
+        loose += 1;
+        print(loose);
+    }
+}

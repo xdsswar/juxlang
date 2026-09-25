@@ -2644,10 +2644,18 @@ impl<'a> Checker<'a> {
             Stmt::While(w) => self.walk_block_final_reassign(&w.body, finals),
             Stmt::DoWhile(d) => self.walk_block_final_reassign(&d.body, finals),
             Stmt::ForEach(fe) => {
-                // The loop variable is a fresh, non-final binding scoped to the
-                // body; it shadows any same-named outer final.
+                // The loop variable is a fresh binding scoped to the body, and it
+                // shadows any same-named outer final. Whether it is itself final is
+                // what the header said: `for (final String? note : notes)` (§A.2.8,
+                // ERRATA E95) makes `note` a `final` binding, so `note = …` in the
+                // body is E0464 like any other final reassignment; a bare binder
+                // stays reassignable and un-finals the outer name.
                 let mut inner = finals.clone();
-                inner.remove(&fe.var_name.text);
+                if fe.is_final {
+                    inner.insert(fe.var_name.text.clone());
+                } else {
+                    inner.remove(&fe.var_name.text);
+                }
                 self.walk_block_final_reassign(&fe.body, &inner);
             }
             Stmt::ForC(fc) => {
@@ -15465,6 +15473,42 @@ mod tests {
     fn final_local_reassign_is_e0464() {
         let d = run("public void f() { final int y = 1; y = 2; }");
         assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// A `final` for-each binder is an ordinary `final` binding: reassigning it
+    /// in the body is the SAME E0464, not a code of its own (ERRATA E95). The
+    /// modifier has to be enforced and not merely parsed, or accepting it would
+    /// be worse than the E0200 it replaced.
+    #[test]
+    fn final_for_each_binder_reassign_is_e0464() {
+        let d = run("public void f() { for (final int n : 0..3) { n = 9; } }");
+        assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+        let compound = run("public void f() { for (final int n : 0..3) { n += 1; } }");
+        assert!(has(&compound, code::Code::E0464_FinalBindingReassigned), "{compound:?}");
+        let spelled_const = run("public void f() { for (const int n : 0..3) { n = 9; } }");
+        assert!(
+            has(&spelled_const, code::Code::E0464_FinalBindingReassigned),
+            "{spelled_const:?}",
+        );
+    }
+
+    /// A bare for-each binder stays reassignable, and still un-finals an outer
+    /// `final` of the same name by shadowing it.
+    #[test]
+    fn plain_for_each_binder_reassign_is_ok() {
+        let d = run("public void f() { for (int n : 0..3) { n = 9; } }");
+        assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+        let shadow = run(
+            "public void f() { final int n = 1; for (int n : 0..3) { n = 9; } }",
+        );
+        assert!(!has(&shadow, code::Code::E0464_FinalBindingReassigned), "{shadow:?}");
+    }
+
+    /// Reading a `final` binder is the whole point of writing one.
+    #[test]
+    fn final_for_each_binder_read_is_ok() {
+        let d = run("public void f() { var t = 0; for (final int n : 0..3) { t += n; } }");
+        assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
     }
 
     // ---- E0465: final/const FIELD reassignment (§5.6) ------------------------
