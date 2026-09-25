@@ -776,8 +776,8 @@ object JuxTypeEngine {
             name in JuxKeywords.PRIMITIVES -> JuxType.Primitive(name)
             else -> {
                 val args = node.findChildByType(E.TYPE_ARGUMENT_LIST)?.psi?.children
-                    ?.filter { it.elementType === E.TYPE_REFERENCE }
-                    ?.map { typeOfTypeReference(it) }
+                    ?.filter { it.elementType === E.TYPE_REFERENCE || it.elementType === E.WILDCARD_TYPE }
+                    ?.map { if (it.elementType === E.WILDCARD_TYPE) typeOfWildcard(it) else typeOfTypeReference(it) }
                     ?: emptyList()
                 when (val target = resolveTypeName(ref, name, qualifier(ref))) {
                     is JuxTypeParameter -> JuxType.TypeVar(target, boundOf(target))
@@ -796,6 +796,42 @@ object JuxTypeEngine {
             suffix = suffix.treeNext
         }
         return type
+    }
+
+    /**
+     * What a wildcard type argument READS as (`JUX-TYPE-SYSTEM-ADDENDUM.md`
+     * §T.4.8, ERRATA E100).
+     *
+     * A producer is read as its bound: `Vec<? extends Animal>` lifts to a
+     * synthetic parameter bounded by `Animal`'s marker trait, and that marker
+     * carries `Animal`'s whole member surface (its public instance methods and,
+     * for a non-generic class, a field accessor pair spanning the `extends`
+     * chain). So `for (var a : xs) { a.nm; a.describe(); }` over such a `Vec`
+     * resolves both members against `Animal`, and `a.describe().length()` is
+     * the String method it looks like rather than an unknown receiver. Before
+     * this, a `WILDCARD_TYPE` argument was simply dropped from the argument
+     * list, so `Vec<? extends Animal>` measured as a `Vec` of NOTHING: the
+     * for-each binder came out `Unknown` and every member through it went
+     * unresolved, which cost completion, go-to and parameter info on the one
+     * shape ERRATA E100 exists to make work.
+     *
+     * A consumer (`? super Dog`) and a bare `?` stay [JuxType.Unknown], and
+     * deliberately: PECS says a consumer may be written and not read, so there
+     * is no member surface to resolve against and peeling it would invent one.
+     * `Unknown` is what keeps the editor silent there instead of confident.
+     */
+    private fun typeOfWildcard(wildcard: PsiElement): JuxType {
+        var sawExtends = false
+        var c = wildcard.node.firstChildNode
+        while (c != null) {
+            when {
+                c.elementType === T.EXTENDS_KW -> sawExtends = true
+                c.elementType === T.SUPER_KW -> return JuxType.Unknown
+                c.elementType === E.TYPE_REFERENCE && sawExtends -> return typeOfTypeReference(c.psi)
+            }
+            c = c.treeNext
+        }
+        return JuxType.Unknown
     }
 
     private fun qualifier(ref: PsiElement): String? {
