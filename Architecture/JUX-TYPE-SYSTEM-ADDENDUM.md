@@ -161,7 +161,9 @@ The analysis follows inheritance and nesting: a bound needed by a method inherit
 
 **A value reached through `!!` counts as a use**, as does a payload read from a nullable (`T?`) field or component. `"has " + this.value!!` formats `T`, whatever the slot's own nullability says.
 
-**A type argument must satisfy the bounds its parameter acquired.** Every Jux type can: `Clone` and `Debug` are universal, and every class, record and enum has a string form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1) — including a generic one, and including the `dyn` handle a polymorphic base becomes. That last part is what makes an inferred bound safe to add at all: a rule the compiler applies on the user's behalf must never make a legal type argument illegal.
+**A type argument must satisfy the bounds its parameter acquired.** Nearly every Jux type does: `Clone` and `Debug` are universal, and every class, record and enum has a string form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1), a generic one and the `dyn` handle a polymorphic base becomes included. That is what makes an inferred bound safe to add at all: a rule the compiler applies on the user's behalf must never make a legal type argument illegal.
+
+**Two bounds in the table above do not hold to that, and `ERRATA.md` E99 is the authority on both.** A nullable argument (`Box<int?>`) does not satisfy the `Display` row, which is an OPEN defect: the program is legal and does not compile. A `double` argument does not satisfy the `Eq + Hash` row, but there the program is genuinely illegal (`double` is not a key at all, `JUX-OPERATORS-ADDENDUM.md` §O.3.1), so the type ARGUMENT is reported as **`E0933`**, in the same words the literal `HashMap<double, int>` gets. A type parameter is assumed hashable where it is declared, and the instantiation is what gets checked.
 
 ## §T.3 — Overload Resolution
 

@@ -1028,6 +1028,14 @@ pub enum Code {
     /// function value, an array, a collection) leaves the whole type without
     /// one; a floating-point value hashes as a component but is not a key by
     /// itself. The message names the component, which is what has to change.
+    ///
+    /// It also fires at a TYPE ARGUMENT. A type parameter is assumed hashable
+    /// where it is declared, because the lowering bounds it
+    /// (`JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1), so the instantiation is what
+    /// gets checked: `Store<double>` over a `class Store<K>` holding a
+    /// `HashMap<K, int>` is the same error as the literal `HashMap<double, int>`
+    /// one indirection away, and used to leak rustc's `f64: Eq` instead
+    /// (`ERRATA.md` E99).
     E0933_KeyHasNoHash,
     /// E0935 — Call to a `delete`d operator. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.3.4, a record/struct/enum can
