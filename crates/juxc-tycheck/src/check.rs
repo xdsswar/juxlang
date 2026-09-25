@@ -1944,6 +1944,60 @@ impl<'a> Checker<'a> {
         Some(ty_from_ref(elem_ref, &self.env, self.symbols))
     }
 
+    /// The element type of a `parallel(items, f)` fan-out (§18.1.4, ERRATA
+    /// E94), and the one place a first argument that cannot be iterated at all
+    /// is reported.
+    ///
+    /// The shapes are the ones a for-each recognizes: an array, a stub
+    /// collection carrying its element as its one generic argument, a user
+    /// iterable that declares the §K.5 protocol. A map is left `Unknown` rather
+    /// than typed by its KEY, which is what its first generic argument is.
+    fn parallel_items_element_ty(&mut self, items: &Expr, call_span: Span) -> Ty {
+        let items_ty = infer_expr(items, &self.env, self.symbols);
+        // §O.7.3's rule, at the other call in the language that iterates: a
+        // number or a `bool` is not an `Iterable<T>`, and `parallel(3, f)`
+        // reached rustc as "`isize` is not an iterator".
+        if matches!(items_ty, Ty::Primitive(_)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0941_ConstraintNotSatisfied,
+                    format!(
+                        "`parallel(items, f)` fans out over an `Iterable<T>`, and {items_ty} is \
+                         not one (§18.1.4)",
+                    ),
+                )
+                .with_span(match expr_span(items) {
+                    s if s == Span::DUMMY => call_span,
+                    s => s,
+                })
+                .with_help(
+                    "pass an array or a collection; `parallel(a, b, c)` is the form whose \
+                     arguments are futures",
+                ),
+            );
+            return Ty::Unknown;
+        }
+        match &items_ty {
+            Ty::Array { element, .. } => (**element).clone(),
+            Ty::User { name, generic_args } => {
+                // A stub collection (`rust.std.Vec<int>`) carries its element
+                // as its one generic argument. A user iterable declares the
+                // protocol instead, and its own `T` need not be the element:
+                // `class Lines implements Iterable<char>` has neither.
+                let by_protocol = (!self.declaring_type_is_external(name))
+                    .then(|| self.iterable_element_type(name))
+                    .flatten();
+                by_protocol
+                    .or_else(|| match generic_args.as_slice() {
+                        [only] => Some(only.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or(Ty::Unknown)
+            }
+            _ => Ty::Unknown,
+        }
+    }
+
     /// Validate one `expr?` site (§X.4.1):
     ///
     /// - `Result<T, E>` operand → the enclosing function must return
@@ -11350,10 +11404,27 @@ impl<'a> Checker<'a> {
                             self.check_time_span_arg(span, c.span);
                         }
                     }
+                    // `parallel(items, f)` (§18.1.4, ERRATA E94) calls `f` on
+                    // each element, so the element type IS `f`'s parameter
+                    // type: `ids` being a `Vec<int>` makes `id -> id * 2` an
+                    // `int` lambda. Written into the same slot channel a typed
+                    // parameter uses, so the body types by the same route.
+                    let fan_out_element =
+                        match (juxc_ast::parallel_fan_out_fn(c), c.args.first()) {
+                            (Some(_), Some(items)) => {
+                                Some(self.parallel_items_element_ty(items, c.span))
+                            }
+                            _ => None,
+                        };
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
-                    for arg in &c.args {
+                    for (i, arg) in c.args.iter().enumerate() {
+                        if i == 1 {
+                            self.lambda_slot_params =
+                                fan_out_element.clone().map(|element| vec![element]);
+                        }
                         self.check_expr(arg);
+                        self.lambda_slot_params = None;
                     }
                     self.in_future_slot = prev_slot;
                     return;

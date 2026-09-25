@@ -1806,6 +1806,82 @@ marks `W0530` retired.
 
 ---
 
+## E94. `parallel`, and how its two forms are told apart
+
+**Conflict.** The async addendum §18.1.4 defines exactly one `parallel`:
+"`parallel(items, f)` is equivalent to
+`Task.all(items.map(it -> spawn(() -> f(it))))`", with a worked example that
+fans a `Vec<int>` out over an async function. The compiler implemented a
+different call entirely, `parallel(a, b, c)` over futures, lowering it to
+`async move { futures::join!(a, b, c) }` and resolving with a tuple. That form
+is in no addendum, and the example corpus depends on it
+(`examples/stress_async_parallel.jux`, `examples/stress_async.jux`,
+`examples/stress_async_advanced.jux`, `examples/stress_async_concurrency.jux`).
+
+So the one form the spec DID define was the one that did not work. The
+arguments of the fan-out form were lowered as if they were futures:
+
+```jux
+var out = await parallel(ids, id -> twice(id));
+```
+
+```
+async move { futures::join!(ids, std::rc::Rc::new(move |id| twice(id))) }.await
+error[E0277]: `Rc<JuxCell<Vec<isize>>>` is not a future
+```
+
+A collection is not a future and a lambda is not a future, so the program
+could not be written at all, and what it got back named types it never wrote
+(§G.1: a rustc error is a juxc bug).
+
+**Resolution.** Both forms exist, and the SHAPE of the call decides which one
+is meant, never the types of the arguments:
+
+- **Fan-out** is exactly two arguments whose second is written as a
+  one-parameter lambda or as a method reference. Neither spelling can be a
+  future, so no legal join call can be read as a fan-out. A first argument that
+  cannot be iterated at all is `E0941`, the rule §O.7.3 already puts on a
+  for-each.
+- **Join** is everything else: every argument is a future or a task, and the
+  result is their tuple.
+
+A bare function NAME in the second position stays the join form. A name may
+hold a task, so `parallel(first, second)` is ambiguous on its face, and the
+tie goes to the form that has always had that shape. `x -> f(x)` and `Type::f`
+are the two ways to say the other thing.
+
+Fan-out lowers to the composition §18.1.4 already gives it, with the two
+details a collection's reference-type representation (§6.5.1, §6.5.2) forces:
+
+- The collection HANDLE leaves expression position. The elements are
+  snapshotted out of the cell before the work starts, the way a for-each over a
+  handle already snapshots, so the borrow does not span the fan-out and the
+  caller keeps its handle.
+- The joined `Vec` goes back INTO a handle. `parallel` hands back an ordinary
+  Jux collection of `f`'s results, in the order the items were iterated, so
+  everything a `Vec<R>` can do it can do. A plain Rust `Vec` answers reads, and
+  even a `push`, for as long as it stays in the one binding it was assigned to;
+  what it cannot do is be a second name for the same collection, which §6.5.1
+  says every Jux collection is.
+
+An empty `items` resolves with an empty collection, having run nothing.
+
+`Task.all` and `Task.allSettled` had the second half of the same defect and are
+fixed with it: each resolved with a plain Rust `Vec`, so reads worked and
+`var b = a;` on the result reached rustc as
+`error[E0382]: borrow of moved value` -- a move where every other Jux collection
+aliases. Both now hand back a collection handle, and the checker types them
+`Task<Vec<..>>` so the uses of one are emitted for what it is.
+
+Per E87 this is concurrency: every task shares the one event loop, so the
+fan-out overlaps waiting rather than computation, whatever the name suggests.
+`Worker.spawn` (§18.2) remains the thread boundary.
+
+**Spec status:** §18.1.4 of JUX-ASYNC-ADDENDUM-v2, and the same paragraph in
+JUX-LANG-V1 §10.1.4, carry the rule.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

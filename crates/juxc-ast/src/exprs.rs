@@ -818,6 +818,38 @@ pub struct CallExpr {
     pub span: Span,
 }
 
+/// The `f` of a fan-out `parallel(items, f)` (JUX-ASYNC-ADDENDUM-v2 §18.1.4,
+/// ERRATA E94), or `None` when the call is the join form
+/// `parallel(a, b, c, ...)` over futures.
+///
+/// Which form a call is gets decided by its SHAPE, never by the types of its
+/// arguments: `f` is written as a one-parameter lambda (`id -> load(id)`) or as
+/// a method reference (`Loader::load`), and neither of those can be a future,
+/// so no legal join call can be read as a fan-out. A bare NAME stays the join
+/// form, because a name may hold a task and `parallel(first, second)` then says
+/// nothing about which form was meant.
+///
+/// Lives here, on the AST, because three passes ask the same question and had
+/// better get the same answer: the checker types the lambda's parameter from
+/// the collection, inference gives the call its `Task<Vec<R>>`, and the backend
+/// emits one of two completely different lowerings.
+pub fn parallel_fan_out_fn(call: &CallExpr) -> Option<&Expr> {
+    let Expr::Path(qn) = call.callee.as_ref() else {
+        return None;
+    };
+    if qn.segments.len() != 1 || qn.segments[0].text != "parallel" {
+        return None;
+    }
+    let [_, f] = call.args.as_slice() else {
+        return None;
+    };
+    match f {
+        Expr::Lambda(l) if l.params.len() == 1 => Some(f),
+        Expr::MethodRef(_) => Some(f),
+        _ => None,
+    }
+}
+
 /// The condition of an `assert(cond)` / `assert(cond, message)` call
 /// statement (Semantics §S.7.2), or `None`. Past the statement the condition
 /// is known to hold, so a null test in it narrows (Type system §T.6.2).
