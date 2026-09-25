@@ -49,6 +49,30 @@ private fun isPathSegmentToken(t: IElementType?): Boolean =
     t === T.IDENTIFIER || (t != null && T.KEYWORDS.contains(t))
 
 /**
+ * The annotation prefix: `@Name`, `@a.b.Name`, `@Name(args)`, repeated, one
+ * [E.ANNOTATION] node each.
+ *
+ * ONE function for every position §A.3 gives a target: a type, a member, a
+ * record component, a PARAMETER and a LOCAL_VARIABLE (§A.3.1, ERRATA E104). A
+ * second copy is how an editor ends up accepting `@Route` on a method while
+ * underlining the identical `@PathParam` on the parameter beside it, so the
+ * statement parser reuses this rather than growing its own.
+ *
+ * The argument list is consumed as a balanced `( … )` run: its interior is
+ * named arguments and constant expressions the formatter must not reflow, which
+ * is why [dev.jux.intellij.format.JuxBlock] treats an ANNOTATION as opaque.
+ */
+fun PsiBuilder.parseAnnotations() {
+    while (at(T.AT)) {
+        val m = mark()
+        advanceLexer() // `@`
+        parseQualifiedName()
+        if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN)
+        m.done(E.ANNOTATION)
+    }
+}
+
+/**
  * A type reference: a named type (qualified name + optional generics), a
  * tuple/function type `( … ) -> T`, or `void`, followed by `[]` / `?` / `*`
  * suffixes.
