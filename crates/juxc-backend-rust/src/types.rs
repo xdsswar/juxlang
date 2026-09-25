@@ -1103,6 +1103,22 @@ impl RustEmitter {
             .cloned()
     }
 
+    /// True when a bound's type argument names a **Jux class** — one declared
+    /// in Jux source, not a foreign (`@rust`) type and not an interface.
+    ///
+    /// Used to decide whether a `? super B` lift may add a `Display` bound; see
+    /// the `From<B>` branch of [`Self::emit_bound_type`].
+    fn bound_arg_is_jux_class(&self, ty: &juxc_ast::TypeRef) -> bool {
+        if ty.array_shape.is_some() || ty.ptr_depth > 0 || ty.fn_shape.is_some() {
+            return false;
+        }
+        let Some(head) = ty.name.segments.last() else {
+            return false;
+        };
+        self.lookup_class_by_bare_or_fqn(&head.text)
+            .is_some_and(|c| !c.is_external)
+    }
+
     pub(crate) fn emit_bound_type(&mut self, ty: &juxc_ast::TypeRef) {
         // A bound whose HEAD names a Jux **class** lowers to that class's
         // marker trait `<Name>Kind` — a struct can't itself be a trait bound.
@@ -1128,6 +1144,25 @@ impl RustEmitter {
                 self.w.push_str("From<");
                 self.emit_type_as_rust(&arg);
                 self.w.push('>');
+                // **A `? super B` value still has to PRINT as itself** (ERRATA
+                // E100). `From<B>` says what the callee may write and nothing
+                // about what the element is, so `print(v[0])` over a
+                // `Vec<? super Dog>` had neither `Display` nor a class to
+                // consult and `__jux_show!` fell through to the derived
+                // `Debug`: `Animal(RefCell { value: Animal_Inner { nm: "a" } })`
+                // where the same value in a plain `Vec<Animal>` printed
+                // `Animal@0x…`. A wrong answer, not an error.
+                //
+                // When `B` is a Jux class the bound can say the one thing that
+                // is true of every element the caller may supply: `B` and every
+                // ancestor of `B` is a Jux class, and every Jux class emits an
+                // identity `Display` (§O.4.1). So the bound rejects no caller it
+                // accepted before, and the renderer picks `Display`. A foreign
+                // or interface bound gets nothing added — `Vec` is not
+                // `Display`, and inventing the bound would reject the caller.
+                if self.bound_arg_is_jux_class(&arg) {
+                    self.w.push_str(" + std::fmt::Display");
+                }
                 return;
             }
         }

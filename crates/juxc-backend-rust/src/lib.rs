@@ -3413,15 +3413,23 @@ pub(crate) fn unused_class_type_params(class_decl: &juxc_ast::ClassDecl) -> Vec<
 
 /// Bare names of every **class that appears as the head of a generic bound**
 /// across the whole program — `<V extends Container<? extends K>>` contributes
-/// `Container`. Scans every generic-param list reachable in the units: class /
-/// interface / function decls, and each class/interface method's own type
-/// params (a method like `<R extends K>` only names params, never a class, but
-/// scanning them is cheap and future-proof).
+/// `Container`. Two sources, because a bound reaches the emitter two ways:
 ///
-/// These classes get a method-carrying generic marker trait (see
+/// - every generic-param list reachable in the units (class / interface /
+///   record decls, top-level functions, and each method's own type params — a
+///   method like `<R extends K>` only names params, never a class, but scanning
+///   them is cheap and future-proof);
+/// - every **producer wildcard** in a signature type. `void f(Vec<? extends
+///   Animal> xs)` is lifted to `fn f<__W0: AnimalKind>(…)`, so `Animal` is in
+///   bound position without appearing in any generic-param list. Missing that
+///   is what made a read through the bound depend on whether some OTHER class
+///   extended `Animal` (ERRATA E100).
+///
+/// These classes get a member-carrying marker trait (see
 /// [`RustEmitter::bound_position_classes`] and `emit_class_marker_trait`):
 /// a bounded param `V: ContainerKind<K>` must be able to call the class's
-/// public instance methods, which an empty marker can't express.
+/// public instance methods and read its fields, which an empty marker can't
+/// express.
 pub(crate) fn compute_bound_position_classes(
     units: &[juxc_ast::CompilationUnit],
 ) -> HashSet<String> {
@@ -3441,23 +3449,74 @@ pub(crate) fn compute_bound_position_classes(
             }
         }
     }
+    // A **WILDCARD** over a class is a bound too, and one the source never
+    // spells as a type param: `void f(Vec<? extends Animal> xs)` is lifted by
+    // the backend into `fn f<__W0: AnimalKind>(…)`, so `Animal` is in bound
+    // position without appearing in any `generic_params` list. Missing that is
+    // why `it.nm2()` through a `Vec<? extends Animal>` resolved only when some
+    // OTHER class happened to extend `Animal` (ERRATA E100). Only a producer
+    // (`? extends`) counts: a consumer lifts to `From<B>`, not to a marker.
+    fn scan_wildcard_bounds(ty: &juxc_ast::TypeRef, out: &mut HashSet<String>) {
+        for arg in &ty.generic_args {
+            match arg {
+                juxc_ast::GenericArg::Type(t) => scan_wildcard_bounds(t, out),
+                juxc_ast::GenericArg::Wildcard(w) => {
+                    if let Some(juxc_ast::WildcardBound::Extends(t)) = &w.bound {
+                        if let Some(seg) = t.name.segments.last() {
+                            out.insert(seg.text.clone());
+                        }
+                        scan_wildcard_bounds(t, out);
+                    }
+                }
+            }
+        }
+    }
+    // Every type a signature mentions: the positions the wildcard lift runs on.
+    fn scan_signature(f: &juxc_ast::FnDecl, out: &mut HashSet<String>) {
+        scan_params(&f.generic_params, out);
+        for p in &f.params {
+            scan_wildcard_bounds(&p.ty, out);
+        }
+        match &f.return_type {
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => {
+                scan_wildcard_bounds(t, out)
+            }
+            juxc_ast::ReturnType::Void => {}
+        }
+    }
     for unit in units {
         for item in &unit.items {
             match item {
                 juxc_ast::TopLevelDecl::Class(cd) => {
                     scan_params(&cd.generic_params, &mut out);
                     for m in &cd.methods {
-                        scan_params(&m.generic_params, &mut out);
+                        scan_signature(m, &mut out);
+                    }
+                    for c in &cd.constructors {
+                        for p in &c.params {
+                            scan_wildcard_bounds(&p.ty, &mut out);
+                        }
                     }
                 }
                 juxc_ast::TopLevelDecl::Interface(id) => {
                     scan_params(&id.generic_params, &mut out);
                     for m in &id.methods {
-                        scan_params(&m.generic_params, &mut out);
+                        scan_signature(m, &mut out);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Record(rd) => {
+                    scan_params(&rd.generic_params, &mut out);
+                    for m in &rd.methods {
+                        scan_signature(m, &mut out);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Enum(ed) => {
+                    for m in &ed.methods {
+                        scan_signature(m, &mut out);
                     }
                 }
                 juxc_ast::TopLevelDecl::Function(f) => {
-                    scan_params(&f.generic_params, &mut out);
+                    scan_signature(f, &mut out);
                 }
                 _ => {}
             }

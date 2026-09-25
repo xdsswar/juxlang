@@ -3213,7 +3213,7 @@ impl RustEmitter {
     /// The bare name of `class_bare`'s direct `extends` parent, if any.
     /// Prefers tycheck's resolved `extends_fqn` (cross-package safe), falling
     /// back to the source `extends` clause's last segment.
-    fn direct_parent_bare(&self, class_bare: &str) -> Option<String> {
+    pub(crate) fn direct_parent_bare(&self, class_bare: &str) -> Option<String> {
         let s = self.lookup_class_by_bare_or_fqn(class_bare)?;
         s.extends_fqn
             .as_deref()
@@ -3842,6 +3842,150 @@ impl RustEmitter {
         out
     }
 
+    /// Every non-private instance field readable on `class_bare`, its own
+    /// first and then each ancestor's, paired with the number of `__parent`
+    /// hops that reaches it.
+    ///
+    /// This is the accessor surface a **bound-position** class's marker trait
+    /// declares (ERRATA E100). It spans the whole `extends` chain because that
+    /// trait stands alone: `<Name>Kind` for a class outside any polymorphic
+    /// hierarchy has no parent marker as a supertrait, so an inherited field
+    /// read through the bound would have nowhere to resolve. A subclass field of
+    /// the same name shadows the ancestor's, matching direct field access.
+    fn class_chain_accessor_fields(
+        &self,
+        class_bare: &str,
+    ) -> Vec<(String, juxc_ast::TypeRef, usize)> {
+        let mut out: Vec<(String, juxc_ast::TypeRef, usize)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut cursor = Some(class_bare.to_string());
+        let mut depth = 0usize;
+        while let Some(owner) = cursor {
+            if depth > 64 {
+                break;
+            }
+            for (name, ty) in self.class_accessor_fields(&owner) {
+                if seen.insert(name.clone()) {
+                    out.push((name, ty, depth));
+                }
+            }
+            cursor = self.direct_parent_bare(&owner);
+            depth += 1;
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Every method a value whose bound names class `class_bare` can CALL --
+    /// the surface that class's marker trait has to declare (ERRATA E100).
+    ///
+    /// Unlike [`Self::class_introduced_virtual_methods`] this does NOT subtract
+    /// the parent's overload group. A bound-position marker is self-contained
+    /// (see [`Self::class_chain_accessor_fields`]), so an inherited method has
+    /// to appear here too or a call through the bound resolves against nothing.
+    /// The inherited-method inlining pass leaves a body for it in this class's
+    /// own inherent impl, so the delegating call still lands.
+    ///
+    /// Filtered to the surface a trait can carry: public, non-static,
+    /// non-abstract, and with no type parameters of its own. A generic method
+    /// would make the trait non-dyn-compatible, and `<Name>Kind` is also the
+    /// erasure a storage-position wildcard uses (`Box<dyn AnimalKind>`), so
+    /// staying dyn-compatible is not optional.
+    fn class_bound_visible_methods(&self, class_bare: &str) -> Vec<(String, MethodSig)> {
+        let class_key = self
+            .resolve_bare_class_fqn(class_bare)
+            .unwrap_or_else(|| class_bare.to_string());
+        // Method NAMES from the whole chain: a `ClassSig`'s own maps hold what
+        // the class declares, so an inherited name would otherwise never be
+        // asked about.
+        let mut names: Vec<String> = Vec::new();
+        let mut cursor = Some(class_bare.to_string());
+        let mut depth = 0usize;
+        while let Some(c) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let Some(sig) = self.lookup_class_by_bare_or_fqn(&c) else {
+                break;
+            };
+            names.extend(sig.methods.keys().cloned());
+            names.extend(sig.method_overloads.keys().cloned());
+            cursor = self.direct_parent_bare(&c);
+            depth += 1;
+        }
+        names.sort();
+        names.dedup();
+        let mut out: Vec<(String, MethodSig)> = Vec::new();
+        for name in names {
+            // The merged group is what this class effectively has, overrides
+            // resolved; member `k` emits under the same `__ovK` name a call
+            // site uses.
+            let merged = self.symbols.merged_method_overloads(&class_key, &name);
+            for (k, m) in merged.iter().enumerate() {
+                if m.is_static
+                    || m.is_abstract
+                    || !matches!(m.visibility, juxc_ast::Visibility::Public)
+                    || !m.generic_params.is_empty()
+                {
+                    continue;
+                }
+                let emitted = if k == 0 {
+                    name.clone()
+                } else {
+                    format!("{name}__ov{k}")
+                };
+                out.push((emitted, m.clone()));
+            }
+        }
+        out
+    }
+
+    /// True when class `bare` carries the **bound-position member surface** on
+    /// its marker trait (§T.4.8, ERRATA E100).
+    ///
+    /// One predicate, consulted by the marker synthesis in this file AND by the
+    /// field-read rewrite in `exprs/field.rs`: if the two ever disagreed, a read
+    /// through a bound would name a `__get_<f>` nothing declared.
+    ///
+    /// The conditions, each with the shape it excludes:
+    ///
+    /// - **in bound position**, which is the whole reason to populate a marker;
+    /// - **not dispatch-relevant**: a polymorphic base and its subclasses carry
+    ///   the same surface by the `dyn` route, on a different trait shape;
+    /// - **not abstract**: the delegating bodies call inherent methods, and an
+    ///   abstract class has none to call;
+    /// - **no type parameters**: a generic class in bound position takes the
+    ///   element-parameterized synthesizer instead (`ContainerKind<T>`);
+    /// - **nothing extends it**: a `sealed` base with subclasses is not a
+    ///   polymorphic base, yet each child emits
+    ///   `impl <Parent>Kind for <Child> {}` with no bodies, so a populated
+    ///   parent trait there would leave required methods unimplemented.
+    pub(crate) fn carries_bound_position_members(&self, bare: &str) -> bool {
+        self.bound_position_classes.contains(bare)
+            && !self.is_dispatch_relevant_class(bare)
+            && self
+                .lookup_class_ast_by_bare_or_fqn(bare)
+                .is_some_and(|cd| !cd.is_abstract && cd.generic_params.is_empty())
+            && !self.class_is_extended(bare)
+    }
+
+    /// True when some other class in the program extends `class_bare`.
+    ///
+    /// Deliberately weaker than [`Self::is_poly_base_class`], which also
+    /// requires the class to be a legal `dyn` base (non-sealed, non-final). A
+    /// SEALED class with subclasses is extended and is not a polymorphic base,
+    /// and that is precisely the shape a bound-position marker must not
+    /// populate: each child emits `impl <Parent>Kind for <Child> {}` with no
+    /// bodies, so required methods on the parent's trait would go
+    /// unimplemented.
+    fn class_is_extended(&self, class_bare: &str) -> bool {
+        self.symbols
+            .classes
+            .keys()
+            .filter(|k| crate::backend_fqn::fqn_bare(k) != class_bare)
+            .any(|k| self.direct_parent_bare(k).as_deref() == Some(class_bare))
+    }
+
     /// Number of `__parent` hops from class `impl_class` up to `owner` (where
     /// the accessed field is declared). 0 when they're the same class.
     fn field_depth_from(&self, impl_class: &str, owner: &str) -> usize {
@@ -3863,18 +4007,35 @@ impl RustEmitter {
     /// Emit the `__get_<f>` / `__set_<f>` accessor *signatures* (required trait
     /// methods) for `owner_bare`'s own public/protected fields.
     fn emit_accessor_trait_sigs(&mut self, owner_bare: &str) {
-        for (name, ty) in self.class_accessor_fields(owner_bare) {
+        let fields: Vec<(String, juxc_ast::TypeRef, usize)> = self
+            .class_accessor_fields(owner_bare)
+            .into_iter()
+            .map(|(n, t)| (n, t, 0))
+            .collect();
+        self.emit_accessor_trait_sigs_at(&fields);
+    }
+
+    /// [`Self::emit_accessor_trait_sigs`] over a field list gathered with each
+    /// field's `__parent` hop count already worked out.
+    ///
+    /// A bound-position class's marker trait is self-contained (ERRATA E100):
+    /// nothing makes it a subtrait of its parent's marker, so it declares the
+    /// accessors for the whole `extends` chain and the depths differ per field.
+    /// The signatures do not mention the depth; the bodies
+    /// ([`Self::emit_accessor_impl_methods_at`]) do.
+    fn emit_accessor_trait_sigs_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)]) {
+        for (name, ty, _) in fields {
             self.w.emit_indent();
             self.w.push_str("fn __get_");
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self) -> ");
-            self.emit_value_type_as_rust(&ty);
+            self.emit_value_type_as_rust(ty);
             self.w.push_str(";\n");
             self.w.emit_indent();
             self.w.push_str("fn __set_");
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self, __v: ");
-            self.emit_value_type_as_rust(&ty);
+            self.emit_value_type_as_rust(ty);
             self.w.push_str(");\n");
         }
     }
@@ -3884,32 +4045,44 @@ impl RustEmitter {
     /// through `self.0.borrow()[.__parent…]` at the right inheritance depth.
     fn emit_accessor_impl_methods(&mut self, owner_bare: &str, impl_class_bare: &str) {
         let depth = self.field_depth_from(impl_class_bare, owner_bare);
-        for (name, ty) in self.class_accessor_fields(owner_bare) {
+        let fields: Vec<(String, juxc_ast::TypeRef, usize)> = self
+            .class_accessor_fields(owner_bare)
+            .into_iter()
+            .map(|(n, t)| (n, t, depth))
+            .collect();
+        self.emit_accessor_impl_methods_at(&fields);
+    }
+
+    /// [`Self::emit_accessor_impl_methods`] over a field list carrying its own
+    /// per-field `__parent` hop count -- the bound-position chain form (ERRATA
+    /// E100), where one impl block covers fields declared at several levels.
+    fn emit_accessor_impl_methods_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)]) {
+        for (name, ty, depth) in fields {
             // getter — clone out of the borrow guard before it drops.
             self.w.emit_indent();
             self.w.push_str("fn __get_");
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self) -> ");
-            self.emit_value_type_as_rust(&ty);
+            self.emit_value_type_as_rust(ty);
             self.w.push_str(" { self.0.borrow()");
-            for _ in 0..depth {
+            for _ in 0..*depth {
                 self.w.push_str(".__parent");
             }
             self.w.push('.');
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(".clone() }\n");
             // setter — scoped `borrow_mut()` write.
             self.w.emit_indent();
             self.w.push_str("fn __set_");
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self, __v: ");
-            self.emit_value_type_as_rust(&ty);
+            self.emit_value_type_as_rust(ty);
             self.w.push_str(") { self.0.borrow_mut()");
-            for _ in 0..depth {
+            for _ in 0..*depth {
                 self.w.push_str(".__parent");
             }
             self.w.push('.');
-            self.w.push_str(&to_rust_ident(&name));
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(" = __v; }\n");
         }
     }
@@ -4083,9 +4256,41 @@ impl RustEmitter {
         // observer-helper signatures on the trait, so `.observers`
         // operations dispatch through a base-typed reference too.
         let has_observer_sigs = c_is_poly && self.class_has_kind_observer_props(&class_bare);
+        // **A class in BOUND position carries its member surface too** (§T.4.8,
+        // ERRATA E100). `Vec<? extends Animal>` lifts the parameter to
+        // `fn f<__W0: AnimalKind>(…)`, so `it.nm2()` and `it.nm` can only
+        // resolve if `AnimalKind` itself declares them. A polymorphic base
+        // already does that through `own_methods` / `accessor_fields` above,
+        // which is why one and the same program worked as soon as some class
+        // extended `Animal` and broke again when none did: an `Animal` with no
+        // subclass got an EMPTY marker, and the two reads reached rustc as
+        // E0599 and E0609. Generic-ness is not part of the test -- a GENERIC
+        // bound-position class took the dedicated synthesizer at the top of this
+        // function, and every other one lands here.
+        //
+        // Restricted to a class NOTHING extends. A sealed base with subclasses
+        // is not a polymorphic base, yet its children emit
+        // `impl <Parent>Kind for <Child> {}` with no bodies, so populating the
+        // parent's trait there would leave required methods unimplemented.
+        let bound_pos = self.carries_bound_position_members(&class_bare);
+        let bound_methods = if bound_pos {
+            self.class_bound_visible_methods(&class_bare)
+        } else {
+            Vec::new()
+        };
+        // The accessor BODIES read `self.0.borrow()…`, so they only make sense
+        // for a class that uses the shared-handle representation. A class on the
+        // legacy plain-struct path reads its fields directly and needs none.
+        let bound_accessors = if bound_pos && self.is_refcell_class(&class_bare) {
+            self.class_chain_accessor_fields(&class_bare)
+        } else {
+            Vec::new()
+        };
         if own_methods.is_empty()
             && hook_targets.is_empty()
             && accessor_fields.is_empty()
+            && bound_methods.is_empty()
+            && bound_accessors.is_empty()
             && !has_observer_sigs
         {
             self.w.push_str(" {}\n");
@@ -4101,6 +4306,13 @@ impl RustEmitter {
             if !accessor_fields.is_empty() {
                 self.emit_accessor_trait_sigs(&class_bare);
             }
+            // The bound-position surface. Disjoint from the two lists above by
+            // construction: those are gated on `c_is_poly`, this one on
+            // `!relevant`.
+            for (name, sig) in &bound_methods {
+                self.emit_kind_trait_method_sig(name, sig);
+            }
+            self.emit_accessor_trait_sigs_at(&bound_accessors);
             if has_observer_sigs {
                 self.emit_observer_trait_sigs(&class_bare);
             }
@@ -4182,6 +4394,8 @@ impl RustEmitter {
             if own_methods.is_empty()
                 && self_hooks.is_empty()
                 && accessor_fields.is_empty()
+                && bound_methods.is_empty()
+                && bound_accessors.is_empty()
                 && !has_observer_sigs
             {
                 self.w.push_str(" {}\n");
@@ -4197,6 +4411,13 @@ impl RustEmitter {
                 if !accessor_fields.is_empty() {
                     self.emit_accessor_impl_methods(&class_bare, &class_bare);
                 }
+                // The bodies behind the bound-position signatures above. Each
+                // accessor reads at its own `__parent` depth, so this one impl
+                // block covers the whole `extends` chain.
+                for (name, sig) in &bound_methods {
+                    self.emit_kind_delegating_method(&class_bare, name, sig);
+                }
+                self.emit_accessor_impl_methods_at(&bound_accessors);
                 if has_observer_sigs {
                     self.emit_observer_impl_methods(&class_bare, &class_bare);
                 }

@@ -47,12 +47,13 @@ class Bag<T> {
 }
 
 // Param-position covariant wildcard — accepts a Bag of ANY Animal
-// subtype. Phase-1 caveat: a wildcard-typed value is PASS-THROUGH
-// only; reading `xs.head.name` *through* the bound needs an
-// accessor-trait layer that lands in a later pass, so we don't reach
-// into it here.
+// subtype, and READS through the bound. `xs.head` is typed by the
+// wildcard, so `.name` resolves on `Animal`'s marker trait through the
+// `__get_name()` accessor that trait carries (§T.4.8, ERRATA E100).
+// That accessor layer used to be a later pass; it has landed, and
+// `examples/wildcard_bound_members.jux` covers every shape of it.
 public void describe(Bag<? extends Animal> xs) {
-    print("got a bag of animals");
+    print($"got a bag holding ${xs.head.name}");
 }
 
 public void main() {

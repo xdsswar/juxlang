@@ -435,15 +435,29 @@ Rust allows it, with three rewrites where it does not:
 
 - **Bounds.** An interface bound emits as a Rust trait bound verbatim, generic or
   not (`K: Id + Named + Comparable<K>`). A **class** bound emits as that class's
-  marker trait `<Name>Kind`; when the bounded value's members are used, the marker
-  trait is **generic and carries those methods** so they resolve
-  (`V: ContainerKind<K>` where `trait ContainerKind<T> { fn peek(&self) -> T; }`).
-  A bound that names an in-scope type param (`<R extends K>`) expands to that
-  param's own bounds, since Rust has no `R: K` form.
+  marker trait `<Name>Kind`, and that trait **carries the class's member surface**
+  so members reached through the bound resolve: every public instance method
+  (`V: ContainerKind<K>` where `trait ContainerKind<T> { fn peek(&self) -> T; }`),
+  and for a class with no type parameters a `__get_<f>` / `__set_<f>` accessor
+  pair for every non-private instance field, its own and its ancestors'.
+  Generic-ness does not decide whether the METHODS are carried: a class with no
+  type parameters and no subclass carries the same method surface, and a generic
+  one additionally parameterizes the trait by its own params. It does scope the
+  FIELD accessors, whose bodies read the field through the shared handle at a
+  fixed `__parent` depth. A bound that names an in-scope type param
+  (`<R extends K>`) expands to that param's own bounds, since Rust has no `R: K`
+  form.
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard
   whose bound names an in-scope type param substitutes that param directly
   (`List<? extends E>` becomes `List<E>`, `Sink<? super K>` becomes `Sink<K>`).
+  A **producer is read as its bound**: member resolution on a `? extends B` value
+  runs against `B`, so `xs.head.name` and `a.describe().length()` are typed by
+  `B`'s declaration. A **consumer** is not read that way (PECS: it may be
+  written), but it is still printable, so a `? super B` over a Jux class carries
+  a `Display` bound alongside its `From<B>`: every type the caller may supply is
+  `B` or an ancestor of `B`, and every Jux class emits an identity `Display`
+  (`JUX-OPERATORS-ADDENDUM.md` §O.4.1).
 - **Erasure helpers.** A type param used only in method signatures (never a field)
   gets a `PhantomData` field so Rust's "unused parameter" rule is satisfied. A
   class that `implements` an interface also receives the impls of every interface

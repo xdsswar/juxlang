@@ -1,0 +1,13 @@
+dogs through ? extends Animal:
+  Rex -> dog Rex
+  Ada -> dog Ada
+animals through ? extends Animal:
+  Generic -> animal Generic
+rocks through ? extends Rock:
+  granite (12kg) -> rock:granite
+  basalt (7kg) -> rock:basalt
+total dog name length: 14
+total animal name length: 14
+consumer vs concrete:
+  super: Animal(Generic)
+  plain: Animal(Generic)

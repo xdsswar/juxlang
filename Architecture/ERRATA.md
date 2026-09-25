@@ -2246,6 +2246,113 @@ corrected to point here. `tests/ui/generic_hash_key_arg.jux` pins the `E0933`.
 
 ---
 
+## E100. Members reached through a wildcard over a CLASS bound
+
+**Conflict.** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.8 says a class bound emits as
+that class's marker trait `<Name>Kind`, and that "when the bounded value's
+members are used, the marker trait ... carries those methods so they resolve".
+Its worked example is a GENERIC class (`V: ContainerKind<K>`), and the
+implementation read the generic-ness as part of the rule: only a class with type
+parameters got a member-carrying marker. §T.4.8 also said nothing about FIELDS,
+and nothing at all about what a value reached through a wildcard formats as.
+
+An INTERFACE bound was never affected: an interface already is a Rust trait, so
+every member reached through it resolves. Over a CLASS bound these five
+programs, all of them accepted by §T.4.6 and §T.4.8 on paper, came out like
+this:
+
+| program | before |
+|---|---|
+| `Vec<? extends Animal>`, read `it.nm`, `Animal` HAS a subclass | `error[E0609]: no field 'nm' on type '__W0'` |
+| the same, call `it.nm2()`, `Animal` HAS a subclass | worked |
+| `Vec<? extends Animal>`, read `it.nm` and call `it.nm2()`, `Animal` has NO subclass | `E0609` **and** `error[E0599]: no method named 'nm2' found for type parameter '__W0'` |
+| `n += a.nm2().length()` | `error[E0214]` from emitted `a.nm2().len() as isize()`, which is not Rust |
+| `Vec<? super Dog>`, `print(v[0])` | printed `Animal(RefCell { value: Animal_Inner { nm: "a" } })` where a plain `Vec<Animal>` printed `Animal@0x…` |
+
+The second row is the one that gives the shape of the defect away. Whether a
+field read through `? extends Animal` compiled depended on whether some OTHER
+class in the program extended `Animal`, which is nothing the reading code can
+see. And the last row is a silent wrong answer: no diagnostic, no leak, just a
+handle's derived `Debug` where the value's own string form belonged.
+
+**Resolution.** Four rules, each of them about the same thing: a bound names a
+class, so the surface reachable through it is that class's surface.
+
+1. **A class bound's marker trait carries the class's member surface, and
+   generic-ness is not part of the METHOD test.** `<Name>Kind` declares every
+   public, non-static, non-abstract instance method that carries no type
+   parameters of its own. Methods with their own type parameters stay off it,
+   since `<Name>Kind` is also the erasure a storage-position wildcard uses
+   (`Box<dyn AnimalKind>`) and a generic method would cost that.
+
+   Two shapes were already covered and keep their own path: a **polymorphic
+   base** carries its virtual surface on the same trait for `dyn` dispatch, and
+   a **generic** class in bound position parameterizes the trait by its own
+   params. What this adds is the plain case, a class with no type parameters and
+   no subclass, which had an empty marker.
+
+   A class with no type parameters also gets a `__get_<f>` / `__set_<f>`
+   accessor pair for every non-private instance field, spanning the whole
+   `extends` chain: such a trait stands alone, nothing makes it a subtrait of
+   the parent's marker, so an inherited field read through the bound would have
+   nowhere else to resolve. Accessors are scoped this way for a reason, not by
+   oversight. Their bodies read the field through the shared handle at a fixed
+   `__parent` depth, which needs the class to use that representation at all,
+   and a GENERIC class's inherited field types are written in its parent's
+   type-parameter vocabulary, which the bound surface does not substitute
+   through. So reading a field through `? extends Container<int>` is still
+   unsupported; calling a method through it is not.
+
+   The one class none of this applies to is a base that is extended but is not a
+   polymorphic base (a `sealed` one): its subclasses emit
+   `impl <Parent>Kind for <Child> {}` with no bodies, so a populated parent
+   trait there would leave required methods unimplemented.
+
+2. **A producer is READ as its bound.** Member resolution on a
+   `? extends B` value runs against `B`, so `a.nm2()` is typed by `B`'s
+   declaration and `a.nm2().length()` is the String method it looks like.
+   Without this the chain typed as unknown, and an unknown receiver is what
+   sent row four into the array-`length` intrinsic. A **consumer**
+   (`? super B`) is deliberately not peeled: PECS says it may be written and
+   not read, so there is no member surface to resolve against, and peeling it
+   would invent one.
+
+3. **`length` is the array and collection FIELD form, never a method name.**
+   `xs.length` is a field (`JUX-LANG-V1.md` §6.5.2) and `s.length()` is a String
+   method (`JUX-CORE-LIB-ADDENDUM.md` §S.3.2); both spellings were already in
+   the spec and the implementation conflated them, so the field intrinsic
+   claimed any `length()` whose receiver type it could not resolve and wrote
+   `.len() as isize`, after which the enclosing call appended `()`. The
+   intrinsic now declines callee position, and a `length()` there is an ordinary
+   method call.
+
+4. **A `? super B` over a Jux class carries `Display`.** The lift's `From<B>`
+   bound says what the callee may WRITE and nothing about what the element is,
+   which is why the universal renderer had no `Display` to pick and fell back
+   to `Debug`. When `B` is a Jux class the bound can state the one thing true of
+   every element a caller may supply: `B` and every ancestor of `B` is a Jux
+   class, and every Jux class emits an identity `Display`
+   (`JUX-OPERATORS-ADDENDUM.md` §O.4.1). So the added bound rejects no caller
+   that was accepted before, and `print(v[0])` reads exactly as it does over a
+   concrete `Vec<Animal>`. A foreign or interface bound gets nothing added: a
+   `Vec` is not `Display`, and inventing the bound there would reject the
+   caller.
+
+One consequence worth stating, because it is what makes rule 1 reachable at
+all: a **wildcard** over a class puts that class in bound position even though
+the source never spells it as a type parameter. `void f(Vec<? extends Animal>)`
+is lifted to `fn f<__W0: AnimalKind>(…)`, so the set of bound-position classes
+is read from signature types as well as from `generic-params` lists.
+
+`examples/wildcard_bound_members.jux` covers all five rows of the table above,
+and `examples/wildcards.jux` now reads `xs.head.name` through the bound instead
+of documenting the inability to.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.8 carries the bound-surface
+rule, the producer-read rule and the `? super` `Display` rule.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

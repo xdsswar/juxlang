@@ -1,0 +1,111 @@
+// Members reached THROUGH a bounded wildcard (§T.4.8, ERRATA E100).
+//
+// A `? extends B` parameter lifts to a synthetic generic bounded by `B`'s
+// marker trait, so a field read and a method call through it both resolve on
+// that trait. `examples/wildcards.jux` covers passing such a container around;
+// this one covers reaching inside it, which is where four separate things used
+// to go wrong:
+//
+//   * a field read through `? extends Animal`, where `Animal` HAS a subclass,
+//     so its marker is the polymorphic-base one that already carried the
+//     accessor -- the read simply never routed to it;
+//   * the same field read and method call through `? extends Rock`, where
+//     nothing extends `Rock`, so its marker trait was EMPTY and had neither;
+//   * a chained call whose String result is used arithmetically, which the
+//     array `length` intrinsic used to claim as a `length()` method;
+//   * `? super Dog` printing, which has to read exactly as a plain
+//     `Vec<Animal>` printing the same value, and rendered a raw `RefCell`
+//     debug dump instead.
+
+class Animal {
+    public String nm;
+    public Animal(String nm) { this.nm = nm; }
+    public String describe() { return "animal " + this.nm; }
+    // A stable string form, so the `? super` rows below pin readable text
+    // rather than a heap address. The property under test is that the value
+    // renders through `Display` at all: without it the wildcard element fell
+    // back to the derived `Debug` and printed the whole handle.
+    public String operator string() { return $"Animal(${nm})"; }
+}
+
+class Dog extends Animal {
+    public Dog(String nm) { super(nm); }
+    @Override
+    public String describe() { return "dog " + this.nm; }
+}
+
+// Nothing extends this one. That is the whole point: a class with no subclass
+// is not a polymorphic base, so before ERRATA E100 its `RockKind` marker was
+// empty and both reads below were rustc errors (E0609 and E0599).
+class Rock {
+    public String label;
+    public int weight;
+    public Rock(String label, int weight) {
+        this.label = label;
+        this.weight = weight;
+    }
+    public String tag() { return "rock:" + this.label; }
+}
+
+// Producer over a class that HAS a subclass: field read and virtual call.
+public void reportAnimals(Vec<? extends Animal> xs) {
+    for (var a : xs) {
+        print($"  ${a.nm} -> ${a.describe()}");
+    }
+}
+
+// Producer over a class with NO subclass: field reads and a method call.
+public void reportRocks(Vec<? extends Rock> xs) {
+    for (var r : xs) {
+        print($"  ${r.label} (${r.weight}kg) -> ${r.tag()}");
+    }
+}
+
+// A chained call through the bound whose result is used arithmetically. The
+// receiver of `.length()` is the METHOD result, so its type has to survive the
+// wildcard for the String surface to apply.
+public int totalNameLength(Vec<? extends Animal> xs) {
+    int n = 0;
+    for (var a : xs) {
+        n += a.describe().length();
+    }
+    return n;
+}
+
+// Consumer: the callee may WRITE a Dog into it, and may still print what is
+// already there. Both spellings below have to render the same way.
+public void showFirstConsumer(Vec<? super Dog> v) {
+    print($"  super: ${v[0]}");
+}
+
+public void showFirstConcrete(Vec<Animal> v) {
+    print($"  plain: ${v[0]}");
+}
+
+public void main() {
+    Vec<Dog> dogs = new Vec<Dog>();
+    dogs.push(new Dog("Rex"));
+    dogs.push(new Dog("Ada"));
+
+    Vec<Animal> animals = new Vec<Animal>();
+    animals.push(new Animal("Generic"));
+
+    Vec<Rock> rocks = new Vec<Rock>();
+    rocks.push(new Rock("granite", 12));
+    rocks.push(new Rock("basalt", 7));
+
+    print("dogs through ? extends Animal:");
+    reportAnimals(dogs);
+    print("animals through ? extends Animal:");
+    reportAnimals(animals);
+
+    print("rocks through ? extends Rock:");
+    reportRocks(rocks);
+
+    print($"total dog name length: ${totalNameLength(dogs)}");
+    print($"total animal name length: ${totalNameLength(animals)}");
+
+    print("consumer vs concrete:");
+    showFirstConsumer(animals);
+    showFirstConcrete(animals);
+}
