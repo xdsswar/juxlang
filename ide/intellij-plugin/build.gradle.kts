@@ -85,6 +85,14 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.6</h3>
+            <p>A rebuild against a compiler that changed a great deal underneath. The editor itself is unchanged since 0.1.5; this release exists so the plugin you install matches the toolchain you build with.</p>
+            <ul>
+              <li><b>Built against the compiler that now lets you name a class anything</b>: <b>T</b>, <b>String</b>, <b>Vec</b>, <b>Exception</b>, <b>Err</b> and <b>Result</b> are ordinary type names, and the library type is still reachable beside one through an <b>import ... as</b> alias or its full name.</li>
+              <li><b>Built against the sealed-class change</b>: a sealed hierarchy is a reference hierarchy now, so a subclass goes into a <b>Vec&lt;Base&gt;</b> and a mutating override works through a base-typed name.</li>
+              <li><b>Built against the multi-binary project rule</b>: a package with <b>[lib]</b> and several <b>[[bin]]</b> targets, with entries under <b>src/bin/</b>, is a valid project.</li>
+              <li>Known gap, being worked on now: the editor does not yet know the new positional subclass pattern (<b>case Circle(r)</b> over a sealed class), nor the members a wildcard over a class bound now reaches. The compiler accepts both; the editor may still mark them.</li>
+            </ul>
             <h3>0.1.5</h3>
             <p>The editor catches up with two compiler waves: <b>ref</b> bindings, and the standard library's slice and string methods.</p>
             <ul>
