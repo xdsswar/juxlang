@@ -282,8 +282,18 @@ impl RustEmitter {
                 // Instance `value.method(...)`: resolve the receiver's type.
                 let by_value = || match self.receiver_ty_of(&f.object) {
                     Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        // The RESOLVED name first. Both resolvers understand an
+                        // FQN, and the last segment on its own found the wrong
+                        // type when two of them end the same way: measured as
+                        // `Vec`, a `rust.std.Vec` receiver resolved to the
+                        // program's own `class Vec`, which declares none of the
+                        // library's methods, so the method's return type came
+                        // back unknown (ERRATA E102). The bare retry stays for a
+                        // name the tables hold no key for.
                         let bare = name.rsplit('.').next().unwrap_or(&name);
-                        self.resolve_bare_class_fqn(bare)
+                        self.resolve_bare_class_fqn(&name)
+                            .or_else(|| self.resolve_bare_type_fqn(&name))
+                            .or_else(|| self.resolve_bare_class_fqn(bare))
                             .or_else(|| self.resolve_bare_type_fqn(bare))
                     }
                     _ => None,

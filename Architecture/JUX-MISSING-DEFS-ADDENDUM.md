@@ -1532,6 +1532,48 @@ carries. A program's own `interface Iterable` is not the one
 
 ---
 
+### M.16.6. A resolved name keeps its package, and shadowing is about a simple name
+
+Resolving a name is not the end of it. Every later question the compiler asks
+about the type is asked of the type the name RESOLVED to, never of the last
+segment of that name: whether the type is a reference type carrying the §6.5.1
+shared handle, which guard a member call on it takes, whether a method mutates
+its receiver. Two types may end with the same segment, and when they do, an
+answer about one is not an answer about the other.
+
+Shadowing is the other half of the same rule. §M.16.1 gives a declaration in the
+unit precedence over a prelude type of the same name, and that is a question
+about a SIMPLE name. Both an alias import and a qualified name say which type is
+meant, so neither is shadowed:
+
+```java
+import rust.std.Vec as RVec;
+
+class Vec { public int mine = 1; }     // the program's own type
+
+public void main() {
+    Vec a = new Vec();                 // this one
+    RVec<int> b = new RVec<int>();     // the library's growable list
+    rust.std.Vec<int> c = new rust.std.Vec<int>();   // also the library's
+    b.push(5);
+    c.push(6);
+    print($"${a.mine} ${b.len()} ${c.len()}");
+}
+```
+
+An alias and a fully-qualified name are exactly how Java lets an author reach
+past a shadowing declaration, and they are the answer §M.16.1 points to when a
+program wants both types in one unit. They have to keep working, and they have
+to work the same way a name with no collision in sight does.
+
+The two halves have to agree, or the emitted code contradicts itself: a slot
+declared `RVec<int>` carried the §6.5.1 handle, because the slot was decided
+from the written name, while `b.push(5)` on it was emitted as a call on the
+handle itself, because the member call was decided from the last segment of the
+resolved one. (ERRATA E102)
+
+---
+
 ## Summary
 
 This addendum closes every dangling reference and acknowledged inconsistency identified in the gap analysis:

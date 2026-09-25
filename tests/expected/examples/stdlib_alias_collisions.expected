@@ -1,0 +1,9 @@
+user: 1 2 mine 3
+alias: 2
+qualified: 2 9 10
+shared: 3 3
+passed: 5
+field: 2
+map: 2
+qmap: 1 3
+foreign: 7 11

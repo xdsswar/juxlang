@@ -149,10 +149,16 @@ impl RustEmitter {
     pub(crate) fn external_owned_form(&self, bare_or_fqn: &str) -> Option<String> {
         use juxc_ast::{AnnotationArg, Expr, Literal};
         let bare = bare_or_fqn.rsplit('.').next().unwrap_or(bare_or_fqn);
-        if self.bare_name_is_user_type(bare) {
+        // By the written or resolved name, not by its last segment: a
+        // qualified foreign type is not shadowed by a user class that merely
+        // ends the same way (ERRATA E102).
+        if self.name_is_user_type(bare_or_fqn) {
             return None;
         }
-        let sig = self.lookup_class_by_bare_or_fqn(bare).filter(|c| c.is_external)?;
+        let sig = self
+            .lookup_class_by_bare_or_fqn(bare_or_fqn)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(bare))
+            .filter(|c| c.is_external)?;
         sig.annotations.iter().find_map(|a| {
             let is_marker = a.name.segments.len() == 1
                 && a.name.segments[0].text.eq_ignore_ascii_case("rustownedas");
@@ -181,11 +187,29 @@ impl RustEmitter {
         let Some(bare) = name.segments.last().map(|s| s.text.as_str()) else {
             return false;
         };
+        // A path the author QUALIFIED is asked about whole, so the slot and the
+        // member calls on it reach the same decision. `rust.std.Vec<int> b`
+        // beside a program's own `class Vec` had its last segment measured
+        // here, so the slot held a plain `Vec` while the checked type
+        // (`rust.std.Vec`) made every `b.push(..)` take a handle's
+        // `.borrow_mut()` guard: rustc E0599 (ERRATA E102).
+        //
+        // Only a path `symbols` actually keys as a type counts as qualified. A
+        // NESTED type is written `Outer.Inner` but keyed `Outer__Inner`, so it
+        // is not one, and it keeps the bare route -- which is the route that
+        // recognizes it, through `enclosing_nested_type`.
+        if name.segments.len() > 1 {
+            let dotted =
+                name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            if self.symbols.classes.contains_key(&dotted)
+                || self.symbols.enums.contains_key(&dotted)
+            {
+                return self.collection_name_is_handle(&dotted);
+            }
+        }
         self.collection_name_is_handle(bare)
     }
 
-    /// [`Self::collection_is_handle`] keyed by a bare or dotted type NAME,
-    /// for the paths that have a checked `Ty` rather than a written path.
     /// The fully-qualified name of the class being emitted: its bare name in
     /// the current unit's package.
     pub(crate) fn enclosing_class_fqn(&self) -> Option<String> {
@@ -202,6 +226,9 @@ impl RustEmitter {
         })
     }
 
+    /// [`Self::collection_is_handle`] keyed by a type NAME, bare or
+    /// package-qualified, for the paths that hold a checked `Ty` rather than a
+    /// written path.
     pub(crate) fn collection_name_is_handle(&self, name: &str) -> bool {
         let bare = name.rsplit('.').next().unwrap_or(name);
         // **Worker-shared class (JUX-ASYNC-ADDENDUM §18.2).** Its instances
@@ -227,14 +254,36 @@ impl RustEmitter {
             return false;
         }
         // A type the PROGRAM declares shadows a foreign one of the same name
-        // (JLS 6.4.1), and so does a nested type of the enclosing class. Both
-        // checks are the ones `emit_type_as_rust` already makes before taking
-        // the external branch, and they belong here for the same reason: the
+        // (JLS 6.4.1). This check is one `emit_type_as_rust` already makes
+        // before taking the external branch, and it belongs here for the same
+        // reason: the two have to agree or the emitted crate contradicts
+        // itself.
+        //
+        // Asked with the name the checker RESOLVED to, not with its last
+        // segment. `import rust.std.Vec as RVec;` reaches the backend as the
+        // FQN `rust.std.Vec` (the checker expands the alias before emission),
+        // and collapsing that to `Vec` let a program's own root-package
+        // `class Vec` answer "the program declares this". The growable list
+        // then lost its §6.5.1 handle routing while its declared slot kept it,
+        // so `b.push(5)` was emitted straight onto the
+        // `Rc<JuxCell<Vec<isize>>>` with no `.borrow_mut()` guard: rustc
+        // E0599, "no method named `push`". A shadow test only means something
+        // when both sides name the SAME type (ERRATA E102).
+        if self.name_is_user_type(name) {
+            return false;
+        }
+        // A nested type of the enclosing class shadows a foreign name too: the
         // std surface has a `Cursor`, an `Entry` and a `Range`, so a program
         // that declares its own nested `Cursor` had its `new Cursor()` wrapped
-        // in a collection handle while the declared slot stayed a plain
-        // struct, and the two disagreed.
-        if self.bare_name_is_user_type(bare) || self.enclosing_nested_type(bare).is_some() {
+        // in a collection handle while the declared slot stayed a plain struct,
+        // and the two disagreed.
+        //
+        // That shadow is a question about a SIMPLE name only. A nested type is
+        // keyed `Outer__Inner`, never `pkg.Inner`, so a package-qualified name
+        // can never be one, and measuring `rust.std.Vec` against the enclosing
+        // class's members would decline the handle for exactly the reason
+        // above.
+        if !name.contains('.') && self.enclosing_nested_type(bare).is_some() {
             return false;
         }
         // `String` is a LANGUAGE type, not a library one: §5 gives Jux a
@@ -247,7 +296,13 @@ impl RustEmitter {
         if bare == "String" {
             return false;
         }
-        let Some(sig) = self.lookup_class_by_bare_or_fqn(bare) else {
+        // Resolved from the WRITTEN name first, so a qualified one reaches its
+        // own class; the bare retry covers a spelling `symbols.classes` has no
+        // key for, where the last segment is all there is to go on.
+        let Some(sig) = self
+            .lookup_class_by_bare_or_fqn(name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(bare))
+        else {
             return false;
         };
         if !sig.is_external {
@@ -402,12 +457,52 @@ impl RustEmitter {
         if !self.collection_name_is_handle(&name) {
             return None;
         }
-        let bare = name.rsplit('.').next().unwrap_or(&name);
-        Some(if self.external_method_mutates_receiver(bare, method) {
+        // The FQN, not its last segment: `@MutSelf` has to be read off the
+        // FOREIGN method. Under `import rust.std.Vec as RVec;` beside a user
+        // `class Vec`, a bare `Vec` resolved to the user's class, which has no
+        // `push`, and the receiver took `.borrow()` where `push` needs
+        // `.borrow_mut()`.
+        Some(if self.external_method_mutates_receiver(&name, method) {
             ".borrow_mut()"
         } else {
             ".borrow()"
         })
+    }
+
+    /// Whether `name` -- bare as the author wrote it, or the FQN the checker
+    /// resolved it to -- names a type this PROGRAM declares.
+    ///
+    /// The FQN-honouring front door to [`Self::bare_name_is_user_type`], which
+    /// can only answer for a simple name. Every "does the program shadow this
+    /// foreign type?" test belongs here, because a qualified name has an exact
+    /// answer and collapsing it to its last segment throws that answer away:
+    /// with a root-package `class Vec` in the file, `rust.std.Vec` measured as
+    /// `Vec` came back "user type" and the growable list stopped being a
+    /// §6.5.1 handle at its member calls while staying one at its slot
+    /// (ERRATA E102).
+    pub(crate) fn name_is_user_type(&self, name: &str) -> bool {
+        if !name.contains('.') {
+            return self.bare_name_is_user_type(name);
+        }
+        // Qualified: answer for THIS type. A `rust.std` / crate stub entry is
+        // `is_external`, a declaration in one of the program's own packages is
+        // not, and that is the whole question.
+        if let Some(sig) = self.symbols.classes.get(name) {
+            return !sig.is_external;
+        }
+        if let Some(sig) = self.symbols.enums.get(name) {
+            return !sig.is_external;
+        }
+        if self.symbols.records.contains_key(name) {
+            return true;
+        }
+        if let Some(sig) = self.symbols.interfaces.get(name) {
+            return !sig.is_external;
+        }
+        // Qualified but not a key anywhere: an inner or synthesized spelling
+        // the tables do not hold. The last segment is then all there is, which
+        // is what this function's whole history was.
+        self.bare_name_is_user_type(name.rsplit('.').next().unwrap_or(name))
     }
 
     /// Whether `bare` names a type this program declares, rather than one it
@@ -417,6 +512,9 @@ impl RustEmitter {
     /// is the shape a single-file program and the whole example corpus take.
     /// The `is_external` flag distinguishes a real declaration from a generated
     /// `.jux.d` stub entry that happens to sit at the top level.
+    ///
+    /// Bare only. A caller holding a name that MAY carry a package asks
+    /// [`Self::name_is_user_type`] instead.
     pub(crate) fn bare_name_is_user_type(&self, bare: &str) -> bool {
         // A type the current unit's PACKAGE declares is keyed by its FQN
         // (`dash.Layout`), so the bare key alone missed it: a wildcard
