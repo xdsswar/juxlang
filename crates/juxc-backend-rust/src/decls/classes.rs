@@ -6980,6 +6980,7 @@ fn substitute_fn_signature(
             name: p.name.clone(),
             ty: substitute_type_ref(&p.ty, &effective),
             is_final: p.is_final,
+            final_kw: juxc_ast::FinalKw::None,
             is_ref: p.is_ref,
             is_mut_ref: p.is_mut_ref,
             default: p.default.clone(),

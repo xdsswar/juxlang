@@ -134,18 +134,26 @@ impl<'a> Parser<'a> {
         // (when followed by `var`) or `parse_typed_local` (when
         // followed by a type name).
         if self.at_kw(Keyword::Final) || self.at_kw(Keyword::Const) {
+            // Which synonym was written travels with the flag: A.2.2 says a
+            // diagnostic echoes the spelling the programmer used, and E0464
+            // cannot do that from a bool.
+            let kw = if self.at_kw(Keyword::Const) {
+                juxc_ast::FinalKw::Const
+            } else {
+                juxc_ast::FinalKw::Final
+            };
             self.advance(); // 'final' | 'const'
             if self.at_kw(Keyword::Var) {
                 if self.at_record_destructure() {
-                    return self.parse_var_record_destructure(true);
+                    return self.parse_var_record_destructure(kw);
                 }
-                return self.parse_var_decl_with(true).map(Stmt::VarDecl);
+                return self.parse_var_decl_with(kw).map(Stmt::VarDecl);
             }
             // Otherwise the declaration must take the typed form
             // `Type name [= init];`. We unconditionally dispatch
             // because no other statement form may follow a leading
             // `final`/`const` keyword.
-            return self.parse_typed_local_with(true).map(Stmt::VarDecl);
+            return self.parse_typed_local_with(kw).map(Stmt::VarDecl);
         }
         // `ref` local declaration (§M.13): `ref Type name = init;` — a
         // SHARED reference to a value-typed object. `ref var` is not a
@@ -168,7 +176,7 @@ impl<'a> Parser<'a> {
                     .with_span(span),
                 );
             }
-            let mut vd = self.parse_typed_local_with(false)?;
+            let mut vd = self.parse_typed_local_with(juxc_ast::FinalKw::None)?;
             vd.is_ref = true;
             return Some(Stmt::VarDecl(vd));
         }
@@ -213,7 +221,7 @@ impl<'a> Parser<'a> {
                 return self.parse_var_tuple_destructure();
             }
             if self.at_record_destructure() {
-                return self.parse_var_record_destructure(false);
+                return self.parse_var_record_destructure(juxc_ast::FinalKw::None);
             }
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
@@ -617,6 +625,13 @@ impl<'a> Parser<'a> {
         // `for (final String? note : notes)` died on E0200 `expected identifier`,
         // which forced the weaker `var` spelling. `const` is a synonym of `final`
         // wherever it appears (§A.2.2), so both spellings are taken here.
+        let final_kw = if self.at_kw(Keyword::Const) {
+            juxc_ast::FinalKw::Const
+        } else if self.at_kw(Keyword::Final) {
+            juxc_ast::FinalKw::Final
+        } else {
+            juxc_ast::FinalKw::None
+        };
         let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
 
         // `var IDENT :` (inferred) or `TYPE IDENT :` (explicit type).
@@ -636,6 +651,7 @@ impl<'a> Parser<'a> {
         Some(ForEachStmt {
             is_await,
             is_final,
+            final_kw,
             var_type,
             var_name,
             iter,
@@ -891,7 +907,7 @@ impl<'a> Parser<'a> {
     /// `var name = expr ;` — the inferred-type local-decl form per §A.2.8.
     /// Equivalent to [`Self::parse_var_decl_with`] with `is_final = false`.
     pub(crate) fn parse_var_decl(&mut self) -> Option<VarDecl> {
-        self.parse_var_decl_with(false)
+        self.parse_var_decl_with(juxc_ast::FinalKw::None)
     }
 
     /// `var '(' ident (',' ident)+ ')' '=' expr ';'` — tuple
@@ -936,7 +952,8 @@ impl<'a> Parser<'a> {
     ///
     /// Each temporary is checked like a top-level one, so a component that
     /// is not always that record (a supertype, a nullable) is E0271 there.
-    fn parse_var_record_destructure(&mut self, is_final: bool) -> Option<Stmt> {
+    fn parse_var_record_destructure(&mut self, final_kw: juxc_ast::FinalKw) -> Option<Stmt> {
+        let is_final = final_kw.is_final();
         let start = self.peek_span();
         self.advance(); // 'var'
         let record = self.parse_type_ref()?;
@@ -948,12 +965,13 @@ impl<'a> Parser<'a> {
 
         let tmp_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, parts.len());
         self.tuple_tmp_counter += 1;
-        self.queue_record_part_reads(&tmp_name, start, &parts, is_final);
+        self.queue_record_part_reads(&tmp_name, start, &parts, is_final, final_kw);
         Some(Stmt::VarDecl(VarDecl {
             name: juxc_ast::Ident { text: tmp_name, span: start },
             ty: Some(record),
             init,
             is_final: true,
+            final_kw,
             is_ref: false,
             init_error: false,
             span,
@@ -1012,6 +1030,7 @@ impl<'a> Parser<'a> {
         tmp_span: juxc_source::Span,
         parts: &[RecordPatternPart],
         is_final: bool,
+        final_kw: juxc_ast::FinalKw,
     ) {
         for (i, part) in parts.iter().enumerate() {
             // The component READ gets the binder's (or the nested pattern's)
@@ -1037,6 +1056,7 @@ impl<'a> Parser<'a> {
                     ty: None,
                     init: Some(read),
                     is_final,
+                    final_kw,
                     is_ref: false,
                     init_error: false,
                     span: binder.span,
@@ -1049,11 +1069,12 @@ impl<'a> Parser<'a> {
                         ty: Some(record.clone()),
                         init: Some(read),
                         is_final: true,
+                        final_kw,
                         is_ref: false,
                         init_error: false,
                         span: record.span,
                     }));
-                    self.queue_record_part_reads(&inner_name, record.span, inner, is_final);
+                    self.queue_record_part_reads(&inner_name, record.span, inner, is_final, final_kw);
                 }
             }
         }
@@ -1128,6 +1149,7 @@ impl<'a> Parser<'a> {
                 ty: None,
                 init: Some(elem_init),
                 is_final: false,
+                final_kw: juxc_ast::FinalKw::None,
                 is_ref: false,
                 init_error: false,
                 span: binder.span,
@@ -1138,6 +1160,7 @@ impl<'a> Parser<'a> {
             ty: None,
             init,
             is_final: false,
+            final_kw: juxc_ast::FinalKw::None,
             is_ref: false,
             init_error: false,
             span,
@@ -1150,7 +1173,8 @@ impl<'a> Parser<'a> {
     /// `final` or `const` modifier. The span on the returned
     /// [`VarDecl`] starts at the `var` token regardless — the
     /// modifier's span is folded in by the dispatcher when needed.
-    pub(crate) fn parse_var_decl_with(&mut self, is_final: bool) -> Option<VarDecl> {
+    pub(crate) fn parse_var_decl_with(&mut self, final_kw: juxc_ast::FinalKw) -> Option<VarDecl> {
+        let is_final = final_kw.is_final();
         let start = self.peek_span();
         self.advance(); // 'var'
         let name = self.parse_ident()?;
@@ -1187,6 +1211,7 @@ impl<'a> Parser<'a> {
             ty: None,
             init,
             is_final,
+            final_kw,
             is_ref: false,
             init_error: false,
             span: start.join(end),
@@ -1515,13 +1540,14 @@ impl<'a> Parser<'a> {
     /// array dimensions, which we delegate to [`Self::parse_type_ref`].
     /// Equivalent to [`Self::parse_typed_local_with`] with `is_final = false`.
     pub(crate) fn parse_typed_local(&mut self) -> Option<VarDecl> {
-        self.parse_typed_local_with(false)
+        self.parse_typed_local_with(juxc_ast::FinalKw::None)
     }
 
     /// Underlying parser for `[final|const] Type name [= expr] ;`.
     /// `is_final` reflects whether the caller already consumed a
     /// `final`/`const` modifier.
-    pub(crate) fn parse_typed_local_with(&mut self, is_final: bool) -> Option<VarDecl> {
+    pub(crate) fn parse_typed_local_with(&mut self, final_kw: juxc_ast::FinalKw) -> Option<VarDecl> {
+        let is_final = final_kw.is_final();
         let ty_start = self.peek_span();
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
@@ -1565,6 +1591,7 @@ impl<'a> Parser<'a> {
             ty: Some(ty),
             init,
             is_final,
+            final_kw,
             is_ref: false,
             init_error,
             span: ty_start.join(end),
@@ -1719,6 +1746,7 @@ impl<'a> Parser<'a> {
             is_await: false,
             // A synthesized loop, so there is no user modifier to carry.
             is_final: false,
+            final_kw: juxc_ast::FinalKw::None,
             var_type: None,
             var_name: binder,
             iter: value,

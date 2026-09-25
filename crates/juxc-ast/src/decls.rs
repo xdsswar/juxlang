@@ -1004,6 +1004,9 @@ pub struct Param {
     /// typically forwarded straight into a field, where the binding mode is the
     /// field's, not the parameter's).
     pub is_final: bool,
+    /// Which of the two synonyms the parameter was written with, so a
+    /// diagnostic can name the one the programmer used (grammar A.2.2).
+    pub final_kw: crate::FinalKw,
     /// `true` when the parameter was a Rust borrow (`&T`) in a bindgen-generated
     /// `.jux.d` stub — the leading `&` marker (§G.9.2). The declared type drops
     /// the `&` (§G.3.4); this flag tells codegen to re-attach the call-site

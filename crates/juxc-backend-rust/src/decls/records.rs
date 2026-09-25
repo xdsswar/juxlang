@@ -192,6 +192,7 @@ impl RustEmitter {
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_final: false,
+                    final_kw: juxc_ast::FinalKw::None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,

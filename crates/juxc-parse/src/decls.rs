@@ -3296,6 +3296,16 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         // Optional `final` (or its synonym `const`) binding mode.
         let final_span = self.peek_span();
+        // A.2.2 has the compiler echo the spelling the programmer wrote, so
+        // the keyword travels with the flag: a `const` parameter must not be
+        // told to drop `final`.
+        let mut final_kw = if self.at_kw(Keyword::Const) {
+            juxc_ast::FinalKw::Const
+        } else if self.at_kw(Keyword::Final) {
+            juxc_ast::FinalKw::Final
+        } else {
+            juxc_ast::FinalKw::None
+        };
         let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
         if is_final && !allow_final {
             self.diagnostics.push(
@@ -3351,8 +3361,12 @@ impl<'a> Parser<'a> {
             self.advance(); // `out`
             let mut f = is_final;
             loop {
-                if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                if self.at_kw(Keyword::Const) && self.eat_kw(Keyword::Const) {
                     f = true;
+                    final_kw = juxc_ast::FinalKw::Const;
+                } else if self.eat_kw(Keyword::Final) {
+                    f = true;
+                    final_kw = juxc_ast::FinalKw::Final;
                 } else if self.eat_kw(Keyword::Ref) {
                     is_shared_ref = true;
                 } else if self.eat_kw(Keyword::Weak) {
@@ -3455,6 +3469,7 @@ impl<'a> Parser<'a> {
             name,
             ty,
             is_final,
+            final_kw,
             is_ref,
             is_mut_ref,
             default,

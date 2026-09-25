@@ -1,3 +1,3 @@
 foreach_final_binder_reassigned.jux:10:9: [E0464] error: cannot reassign `n`: it is a `final` binding and is immutable (§M.14.2). Drop `final`, or bind a new local.
-foreach_final_binder_reassigned.jux:13:9: [E0464] error: cannot reassign `c`: it is a `final` binding and is immutable (§M.14.2). Drop `final`, or bind a new local.
+foreach_final_binder_reassigned.jux:13:9: [E0464] error: cannot reassign `c`: it is a `const` binding and is immutable (§M.14.2). Drop `const`, or bind a new local.
 foreach_final_binder_reassigned.jux:16:9: [E0464] error: cannot reassign `v`: it is a `final` binding and is immutable (§M.14.2). Drop `final`, or bind a new local.

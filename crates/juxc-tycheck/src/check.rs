@@ -2562,10 +2562,10 @@ impl<'a> Checker<'a> {
         // `ref`/`weak` bindings are excluded: on those, `x = v` is a
         // store-through / handle operation (§M.13.2), not a binding
         // reassignment, so `final ref` / `final weak` never trip E0464.
-        let finals: std::collections::HashSet<String> = params
+        let finals: std::collections::HashMap<String, juxc_ast::FinalKw> = params
             .iter()
             .filter(|p| p.is_final && !p.is_shared_ref && !p.is_weak)
-            .map(|p| p.name.text.clone())
+            .map(|p| (p.name.text.clone(), p.final_kw))
             .collect();
         // A body with no `final` params can still declare `final` locals, so we
         // always walk — the walker accumulates locals as it descends.
@@ -2579,7 +2579,7 @@ impl<'a> Checker<'a> {
     fn walk_block_final_reassign(
         &mut self,
         block: &juxc_ast::Block,
-        incoming: &std::collections::HashSet<String>,
+        incoming: &std::collections::HashMap<String, juxc_ast::FinalKw>,
     ) {
         let mut finals = incoming.clone();
         for stmt in &block.statements {
@@ -2593,7 +2593,7 @@ impl<'a> Checker<'a> {
     fn walk_stmt_final_reassign(
         &mut self,
         stmt: &Stmt,
-        finals: &mut std::collections::HashSet<String>,
+        finals: &mut std::collections::HashMap<String, juxc_ast::FinalKw>,
     ) {
         match stmt {
             // A local declaration (re)binds its name in this scope: a `final`
@@ -2601,7 +2601,7 @@ impl<'a> Checker<'a> {
             // local, whose `=` stores through (§M.13.2) — un-finals the name.
             Stmt::VarDecl(v) => {
                 if v.is_final && !v.is_ref {
-                    finals.insert(v.name.text.clone());
+                    finals.insert(v.name.text.clone(), v.final_kw);
                 } else {
                     finals.remove(&v.name.text);
                 }
@@ -2610,14 +2610,19 @@ impl<'a> Checker<'a> {
             // currently a final binding.
             Stmt::Assign(a) => {
                 if let Expr::Path(qn) = &a.target {
-                    if qn.segments.len() == 1 && finals.contains(&qn.segments[0].text) {
+                    let bare = qn.segments.first().filter(|_| qn.segments.len() == 1);
+                    if let Some(kw) = bare.and_then(|s| finals.get(&s.text)) {
                         let name = &qn.segments[0].text;
+                        // A.2.2: echo the spelling the programmer wrote. Telling
+                        // someone who wrote `const` to drop `final` is correct
+                        // advice under a word they never used.
+                        let word = kw.word();
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0464_FinalBindingReassigned,
                                 format!(
-                                    "cannot reassign `{name}`: it is a `final` binding and is \
-                                     immutable (§M.14.2). Drop `final`, or bind a new local.",
+                                    "cannot reassign `{name}`: it is a `{word}` binding and is \
+                                     immutable (§M.14.2). Drop `{word}`, or bind a new local.",
                                 ),
                             )
                             .with_span(a.span),
@@ -2652,7 +2657,7 @@ impl<'a> Checker<'a> {
                 // stays reassignable and un-finals the outer name.
                 let mut inner = finals.clone();
                 if fe.is_final {
-                    inner.insert(fe.var_name.text.clone());
+                    inner.insert(fe.var_name.text.clone(), fe.final_kw);
                 } else {
                     inner.remove(&fe.var_name.text);
                 }
@@ -5169,6 +5174,7 @@ impl<'a> Checker<'a> {
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_final: false,
+                    final_kw: juxc_ast::FinalKw::None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,

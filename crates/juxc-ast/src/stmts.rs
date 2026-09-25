@@ -175,6 +175,42 @@ pub struct CatchClause {
     pub span: Span,
 }
 
+/// Which non-reassignability keyword a binding actually carried.
+///
+/// `final` and `const` are synonyms (grammar A.2.2), so which one a
+/// binding IS does not depend on the spelling. Which one the programmer
+/// WROTE does matter, because A.2.2 also says the compiler echoes the
+/// spelling back in diagnostics, and E0464 used to answer a `const`
+/// binding with "Drop `final`": correct advice under a word the
+/// programmer never used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FinalKw {
+    /// No modifier: the binding may be reassigned.
+    #[default]
+    None,
+    /// Written `final`.
+    Final,
+    /// Written `const`, which means exactly what `final` means.
+    Const,
+}
+
+impl FinalKw {
+    /// True for either spelling: the binding cannot be reassigned.
+    pub fn is_final(self) -> bool {
+        !matches!(self, FinalKw::None)
+    }
+
+    /// The keyword to name in a diagnostic: the one that was written.
+    /// `None` answers `final`, since there is no written word to echo and
+    /// `final` is the spelling the specification leads with.
+    pub fn word(self) -> &'static str {
+        match self {
+            FinalKw::Const => "const",
+            _ => "final",
+        }
+    }
+}
+
 /// A `var` local-variable declaration. Per §A.2.8:
 /// ```text
 /// local-decl = ( 'var' | binding-immut 'var' | type | binding-immut type ) identifier
@@ -202,6 +238,10 @@ pub struct VarDecl {
     /// parses identically to `final` — the compile-time-constant
     /// distinction is deferred until we need it.
     pub is_final: bool,
+    /// WHICH of the two synonyms was written, for diagnostics that name
+    /// it. [`Self::is_final`] says whether the binding is final;
+    /// this says what to call it when telling the programmer so.
+    pub final_kw: FinalKw,
     /// `ref` binding mode (§M.13) — the local holds a SHARED reference
     /// to a value-typed object (`Rc<RefCell<T>>`): aliases see each
     /// other's writes, assignment stores through.
@@ -327,6 +367,8 @@ pub struct ForEachStmt {
     /// either way, so the flag says nothing about the iteration itself, only
     /// that the body promised to read the element and not rebind it.
     pub is_final: bool,
+    /// Which synonym the header wrote, for the diagnostic that names it.
+    pub final_kw: FinalKw,
     /// Optional declared type of the loop variable. `None` for the
     /// inference-form `var i : …`.
     pub var_type: Option<TypeRef>,
