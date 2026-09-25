@@ -1,0 +1,30 @@
+// `@entry`: the entry point chosen by annotation instead of by the name `main`
+// (Entry Points §E.2, ERRATA E105).
+//
+// A program written for a platform that names its own entry, or one whose
+// author simply wants the first function to be called `launch`, marks it
+// `@entry`. The annotation replaces the `main` rule rather than overriding it:
+// a binary carrying both an `@entry` and a `main` is `E0320`, and a second
+// `@entry` is `E0321`.
+//
+// Everything `main` gets, an `@entry` function gets, because the runtime is
+// handing the same things to the same shape of function: the command line
+// without the program name, and an `int` return taken as the process exit code.
+// `@entry(symbol = "...")` additionally publishes the function to the linker
+// under that name, beside the entry the C runtime starts.
+
+/** Where the work of this example lives, called like any other function. */
+int summarize(String[] args) {
+    print($"arguments: ${args.length}");
+    return args.length;
+}
+
+@entry(symbol = "jux_demo_start")
+public int launch(String[] args) {
+    print("launch: the entry point is not called main");
+    var extra = summarize(args);
+    // Calling the entry point by its Jux name is ordinary too: the annotation
+    // publishes a symbol and selects the entry, it does not reserve the name.
+    print($"exiting with ${extra}");
+    return extra;
+}

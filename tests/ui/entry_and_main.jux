@@ -1,0 +1,3 @@
+@entry public void launch() { print("launch"); }
+
+public void main() { print("main"); }

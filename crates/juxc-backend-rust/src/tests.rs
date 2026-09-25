@@ -5755,6 +5755,92 @@ fn extern_string_and_out_combine() {
     assert!(rust.contains("::core::ptr::addr_of_mut!(__o1)"), "out arg: {rust}");
 }
 
+/// `@entry` selects the entry point by annotation, not by the name `main`
+/// (Entry Points §E.2, ERRATA E105). The annotated function keeps its own name
+/// and the shim calls it, which is why nothing is renamed here: `fn main` cannot
+/// return an integer, but `fn launch` can.
+///
+/// Before this, the annotation was parsed, kept on the `FnDecl`, and read by
+/// nothing: the crate came out with no entry point at all and the build died in
+/// rustc with `E0601`, pointing at a line of generated Rust.
+#[test]
+fn entry_annotation_selects_the_entry_point() {
+    let rust = emit("@entry public int launch() { return 3; }");
+    assert!(rust.contains("fn launch() -> isize"), "the Jux name is kept: {rust}");
+    assert!(
+        rust.contains("std::process::exit(launch() as i32);"),
+        "the shim exits with the entry's code: {rust}"
+    );
+    assert!(!rust.contains("__jux_args_main"), "nothing to rename: {rust}");
+}
+
+/// A `void` `@entry` is a plain call, and an `int` one an exit code, exactly as
+/// the equivalently-shaped `main` is (§E.1.3).
+#[test]
+fn entry_annotation_void_form_is_a_plain_call() {
+    let rust = emit(r#"@entry public void launch() { print("hi"); }"#);
+    assert!(rust.contains("fn launch()"), "the Jux name is kept: {rust}");
+    assert!(rust.contains("\n    launch();\n"), "the shim calls it: {rust}");
+    // A void entry returns nothing to exit WITH. (The prelude's own
+    // uncaught-exception reporter exits with 101, so the needle has to name the
+    // call rather than just `process::exit`.)
+    assert!(
+        !rust.contains("std::process::exit(launch()"),
+        "a void entry exits normally: {rust}"
+    );
+}
+
+/// An `@entry` taking `String[] args` is fed the command line without the
+/// program name, like `main(String[] args)` (§E.1.3).
+#[test]
+fn entry_annotation_args_form_gets_the_command_line() {
+    let rust = emit("@entry public void launch(String[] args) { }");
+    assert!(
+        rust.contains("launch(crate::jux_arr(std::env::args().skip(1)"),
+        "the shim marshals argv: {rust}"
+    );
+}
+
+/// An `async` `@entry` runs under the futures executor, like an `async main`
+/// (§E.1.3). Its own emission stays an `async fn`; only the shim is sync,
+/// because Rust's entry point must be.
+#[test]
+fn entry_annotation_async_form_blocks_on_the_future() {
+    let rust = emit("@entry public async void launch() { }");
+    assert!(rust.contains("async fn launch()"), "the entry stays async: {rust}");
+    assert!(
+        rust.contains("crate::__jux_block_on(launch());"),
+        "the shim drives it: {rust}"
+    );
+    assert!(!rust.contains("__jux_async_main"), "nothing to rename: {rust}");
+}
+
+/// `@entry(symbol = "...")` publishes an additional linker name for the entry
+/// (§E.2.1), through the same `#[export_name]` mechanism `@export(name = "...")`
+/// uses. The Rust fn keeps its Jux name, so calls from Jux still resolve, and
+/// the shim that the C runtime starts is still emitted beside it.
+#[test]
+fn entry_annotation_symbol_is_exported() {
+    let rust = emit(r#"@entry(symbol = "_start_jux") public void launch() { }"#);
+    assert!(
+        rust.contains("#[export_name = \"_start_jux\"]"),
+        "the requested symbol is published: {rust}"
+    );
+    assert!(rust.contains("fn launch()"), "the Jux name is kept: {rust}");
+    assert!(rust.contains("\n    launch();\n"), "the hosted entry still calls it: {rust}");
+}
+
+/// The regression that matters most: an ordinary `main` program is emitted
+/// exactly as before, because every example in the corpus has one.
+#[test]
+fn plain_main_is_unchanged_by_the_entry_annotation_path() {
+    let rust = emit(r#"public void main() { print("hi"); }"#);
+    assert!(rust.contains("fn main()"), "main is still the entry: {rust}");
+    // One `fn main` and no shim around it: the `@entry` path must not add a
+    // second entry point to a program that never used the annotation.
+    assert_eq!(rust.matches("fn main(").count(), 1, "exactly one entry: {rust}");
+}
+
 /// `@export` gives a free function C linkage: `#[no_mangle] pub extern "C" fn`
 /// for the plain form, and `#[export_name = "…"]` (keeping the Jux name on the
 /// Rust fn, so internal calls still resolve) for `@export(name = "…")`.

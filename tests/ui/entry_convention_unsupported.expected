@@ -1,0 +1,1 @@
+entry_convention_unsupported.jux:1:1: [E0322] error: calling convention `stdcall` is not supported on any target yet

@@ -1,0 +1,3 @@
+@entry public int launch(int argc, String[] argv) {
+    return argc;
+}

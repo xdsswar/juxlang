@@ -1,0 +1,1 @@
+duplicate_entry_annotation.jux:3:15: [E0321] error: a binary may carry one `@entry`, and `launch` already has it

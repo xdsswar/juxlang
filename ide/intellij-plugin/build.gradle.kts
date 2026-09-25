@@ -85,6 +85,15 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.7</h3>
+            <p>The editor follows the compiler again. 0.1.6 flagged code that compiles; this fixes the cause rather than the symptoms.</p>
+            <ul>
+              <li><b>A name is resolved in the file that wrote it.</b> A bare type name no longer finds a same-named class in an unrelated file, so declaring your own <b>Iterable</b>, <b>T</b>, <b>String</b> or <b>Vec</b> stops making other files look broken. The standard library resolves its own names against itself, which is what lets you take those names at all.</li>
+              <li><b>An aliased or fully-qualified type is never shadowed</b>: <b>import rust.std.Vec as RVec;</b> beside your own <b>class Vec</b> resolves to the library type, as it does in the compiler.</li>
+              <li><b>The positional subclass pattern is understood</b>: <b>case Circle(r)</b> over a sealed class binds <b>r</b> to the subclass field it names, so a guard that reads it is typed.</li>
+              <li><b>Members through a wildcard bound resolve</b>: a wildcard argument used to be dropped entirely, so <b>Vec&lt;? extends Animal&gt;</b> held nothing and every member through it was unresolved.</li>
+              <li><b>A src/bin entry file needs no package declaration</b>, matching the multi-binary project rule. A helper beside it still does.</li>
+            </ul>
             <h3>0.1.6</h3>
             <p>A rebuild against a compiler that changed a great deal underneath. The editor itself is unchanged since 0.1.5; this release exists so the plugin you install matches the toolchain you build with.</p>
             <ul>

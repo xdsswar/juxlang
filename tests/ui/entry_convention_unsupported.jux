@@ -1,0 +1,4 @@
+@entry(symbol = "DllMain", convention = "stdcall")
+public int dllMain() {
+    return 1;
+}
