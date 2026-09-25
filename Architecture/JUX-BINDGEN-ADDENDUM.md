@@ -466,7 +466,7 @@ Three restrictions, each because the stub could not write the result otherwise:
 - the trait must carry no generic PARAMETERS, since `implements Extend` would need a type argument rustdoc records per-impl and the clause has nowhere to put;
 - the impl must be written for the type in its own plain generic form, the same restriction G.6.6 makes and for the same reason.
 
-`Clone`, `Index` and the collection traits stay outside this, read through their own markers (`@RustClone`, `@RustIndexRef`, `@RustCollection`): Jux gives those language meaning rather than a method surface. In std the rule leaves 66 traits over 46 types, `std::io`'s among them.
+`Clone`, `Debug`, `PartialEq`, `Default`, `Index` and the collection traits stay outside this, read through their own markers (`@RustClone`, `@RustDebug`, `@RustPartialEq`, `@RustDefault`, `@RustIndexRef`, `@RustCollection`; §G.6.4.7): Jux gives those language meaning rather than a method surface. In std the rule leaves 66 traits over 46 types, `std::io`'s among them.
 
 #### G.6.4.2. Iterators, Views and Projections
 
@@ -547,6 +547,23 @@ A fanned-out group is an ordinary Jux overload group (§T.3.1), with one differe
 A projection that survives §G.6.4.5 is written `I.Output`, a name no stub declares, and the checker reads it as an unknown type. An unknown type is the compiler's SUPPRESSION value: it fits every slot, so a value of one can be handed to any parameter, field or variable and nothing is said. That is the right reading for a type the checker chose not to compute and the wrong one for a type it could not compute. It let `show(v.get(0))` pass with `show` taking a `string?`, and the mistyped value reached rustc, which is the leak §G.1 exists to prevent.
 
 A call to a foreign method whose declared return type is an unresolved projection over one of the method's own type parameters is therefore `E0469`, reported at the call, naming the method and the projection it could not resolve. The `null` literal keeps its own unknown-inner nullable type and keeps fitting every `T?` slot: `null` is a value the checker knows everything about, and the two cases are not the same one.
+
+#### G.6.4.7. What a Type Can Derive
+
+A Jux aggregate holding a foreign value derives what that value's type allows and nothing more (§CR.5.8), so the stub records the four `#[derive]`-able standard traits as class-level markers, each read off the type's real impl list:
+
+| marker | the type implements |
+|---|---|
+| `@RustClone` | `Clone` |
+| `@RustDebug` | `std::fmt::Debug` |
+| `@RustPartialEq` | `PartialEq` |
+| `@RustDefault` | `Default` |
+
+`@RustDefault` on a TYPE is the same fact §G.5.4c puts on the zero-argument constructor that impl produces; the type-level marker exists because the constructor marker is suppressed when the type already has a zero-argument constructor of its own, so its absence says nothing.
+
+These four are read from the impl list rather than surfaced as `implements` clauses for the reason §G.6.4.1 gives: in Jux they are language meaning, not a method surface. In std the markers land on 157 `Clone`, 259 `Debug`, 78 `PartialEq` and 54 `Default` types, and `std::fs::File` carries `@RustDebug` alone, which is the whole point. Asking the crate the type came from instead ("a `rust.std` type is `Clone`") was wrong for `File`, `TcpStream`, `Mutex`, `Stdout` and 135 more, and no Jux class could hold any of them.
+
+A marker records that the impl EXISTS, not what it requires. `Vec<T>` is `Clone` when `T` is and `Rc<T>` is `Clone` always, and the stub says the same thing about both; the consumer therefore asks the generic arguments too (§CR.5.8), which costs a derive on an `Rc<NotClone>` and never claims one that is not there.
 
 ### G.6.5. First-Class `import rust.X`
 

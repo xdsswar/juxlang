@@ -557,6 +557,71 @@ before the LHS lock is taken for the `+=` write.
 
 ---
 
+### §CR.5.8. Holding a Foreign Value That Is Not `Clone` or `Debug`
+
+A Jux aggregate (a class, a value struct, a record) lowers to a Rust struct,
+and that struct carries the derives its own semantics need: `Clone` because a
+Jux value is copied wherever it is read again, `Debug` because an interface's
+trait carries a `std::fmt::Debug` supertrait and `throw` formats its payload,
+`PartialEq` and `Default` because a record gets `==` and a starting value
+(§O.3.1, §5.5).
+
+A **foreign** type it holds may have none of those. `std::fs::File` is `Debug`
+and is not `Clone`; `std::net::TcpStream`, `std::sync::Mutex`, `Stdout`, a
+`BufReader` and most crate handles are neither. Which ones is not a guess: it is
+read from the type's own `.jux.d` stub, where bindgen records it from the real
+trait impls (`@RustClone`, `@RustDebug`, `@RustPartialEq`, `@RustDefault`;
+Bindgen §G.6.4.7).
+
+**The rule.** An aggregate derives each of the four traits only when every type
+it holds has it. A type it holds is a field's or component's declared type and,
+recursively, that type's generic arguments: a `Vec<File>` field is only as
+`Clone` as `File` is. Two positions are exempt, because their lowering does not
+ask what they hold: a shared handle (an array, §6.5.2, or a collection, §6.5.1)
+clones by bumping a refcount and defaults to an empty one, and a `T?` defaults to
+`null` whatever `T` is.
+
+**What this costs, precisely.** The aggregate can still be declared,
+constructed, stored, passed, printed and mutated. What it loses is the trait it
+could not derive:
+
+| dropped | what is out of reach |
+|---|---|
+| `Clone`  | copying the aggregate itself: nothing can copy the value it holds, so nothing can copy it either. A CLASS is unaffected in practice: it is a reference type, and its handle's `Clone` is a refcount bump on the `Rc`, which is `Clone` for every payload. |
+| `PartialEq` | `==` between two of them, unless the type declares `operator==`. |
+| `Default` | a starting value, so `new R[n]` over it and an uninitialized field of it. The CHECKER does not see this yet: `member_has_default` answers `true` for any foreign type, because it predates the markers, so such a program is reported by rustc rather than by juxc. That is a leak under §G.1 and a bug to fix, not a rule. |
+| `Debug`  | nothing. See below. |
+
+**Printing always works.** A dropped `Debug` is a dropped DERIVE, never a
+dropped trait: the compiler writes the impl out instead.
+
+- A **class** gets the name-printing impl it already gets for a class holding a
+  closure (`write!(f, "Wrap")`). Nothing is lost: a class prints through its own
+  `Display` (`Wrap@0x7ff6c1a0`), so its `Debug` never showed more than the name.
+- A **record** gets the shape the derive would have produced, with each component
+  rendered through the universal show helper: `Holder { f: <File> }`.
+- The **universal show helper** has a bottom tier for a value that has neither
+  `Display` nor `Debug`: it prints the value's own type name in angle brackets,
+  `<TcpStream>`. Naming the type says as much as there is to say about a value
+  that cannot describe itself, and it means no value is ever unprintable, so one
+  member nobody wanted to see never costs the whole aggregate its output.
+  A Jux FUNCTION value is reachable through the same tier, since it lowers to an
+  `Rc<dyn Fn(..)>` with neither trait, and it prints `<fn>`: interpolating a
+  lambda used to be a rustc error naming a trait the program never wrote.
+
+**Where the rule stops: a Jux generic's type argument.** A generic Jux
+declaration lowers its type parameters with a `Clone + std::fmt::Debug + 'static`
+bound, because reads of a generic-typed member auto-`clone()` and the
+declaration's marker trait carries a `Debug` supertrait. A foreign type without
+`Clone` therefore cannot be that argument: `Cell<File>` over
+`class Cell<T> { public T value; }` does not compile. That bound is not a
+property of the aggregate rule above, and removing it is a separate change:
+`Iterable.reduce<U>` in the core library needs `U: Clone` in its own body, so
+`Vec<File>` works (`Vec` is foreign and carries its own impls) while a Jux
+generic over `File` does not. Recorded as a known boundary in ERRATA E97.
+
+---
+
 ## §CR.6 — Rust Lowering Rules
 
 For each representation, the backend's emitted Rust shape:

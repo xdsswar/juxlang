@@ -2824,6 +2824,100 @@ impl super::super::RustEmitter {
             .is_some_and(|(_, e)| e.annotations.iter().any(annotation_is_rust_clone))
     }
 
+    /// Which `#[derive]`-able standard traits the foreign types in `tys` all
+    /// have (ERRATA E97). `tys` is every type the aggregate HOLDS: a class's
+    /// instance fields, a record's components.
+    ///
+    /// This is the question `#[derive(Clone, Debug)]` on the emitted struct
+    /// really asks. It used to be approximated by "is the field's type from a
+    /// crate other than `std`", which assumed every `rust.std` type is
+    /// `Clone` - and `std::fs::File`, `std::net::TcpStream` and most of
+    /// `std::io` are not, so a class could not hold a file at all.
+    pub(crate) fn foreign_derives_of<'a>(
+        &self,
+        tys: impl Iterator<Item = &'a juxc_ast::TypeRef>,
+    ) -> crate::analysis::ForeignDerives {
+        let mut acc = crate::analysis::ForeignDerives::ALL;
+        for ty in tys {
+            acc.and(self.foreign_derives_of_type(ty));
+        }
+        acc
+    }
+
+    /// [`Self::foreign_derives_of`] for a single written type.
+    pub(crate) fn foreign_derives_of_type(
+        &self,
+        ty: &juxc_ast::TypeRef,
+    ) -> crate::analysis::ForeignDerives {
+        // A raw pointer is a machine address (§L.7): it is `Copy` whatever it
+        // points at, and the pointee's traits never reach the aggregate.
+        if ty.ptr_depth > 0 {
+            return crate::analysis::ForeignDerives::ALL;
+        }
+        let head = ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        let mut derives = self.foreign_marker_derives(head);
+        // A generic argument is part of the stored type: `Vec<File>` is only as
+        // `Clone` as `File` is, which is how a foreign value reaches an
+        // aggregate without ever being named as a field type of its own.
+        //
+        // Deliberately conservative: a container whose own `Clone` impl is
+        // UNCONDITIONAL (`impl<T> Clone for Rc<T>`) is treated like one whose
+        // impl is bounded (`impl<T: Clone> Clone for Vec<T>`), because the
+        // marker records that the impl exists and not what it requires. The
+        // cost is a derive we could have kept; the opposite error would be a
+        // rustc failure the program cannot avoid, so the bias is deliberate.
+        for arg in &ty.generic_args {
+            if let Some(inner) = arg.as_type() {
+                derives.and(self.foreign_derives_of_type(inner));
+            }
+        }
+        // A Jux array (§6.5.2) and a §6.5.1 collection are held behind a shared
+        // handle. Cloning one bumps a refcount and defaulting one makes an empty
+        // one, so neither question reaches the element; `Debug` and `PartialEq`
+        // still read through the cell and do.
+        if ty.array_shape.is_some() || self.collection_name_is_handle(head) {
+            derives.clone = true;
+            derives.default = true;
+        }
+        // `T?` is an `Option<T>`, whose default is `None` for every `T`.
+        if ty.nullable {
+            derives.default = true;
+        }
+        derives
+    }
+
+    /// The four markers the generated stub carries for the foreign type named
+    /// `bare`, or [`crate::analysis::ForeignDerives::ALL`] when the name is not
+    /// a foreign type at all (a Jux class, a record, a primitive, a type
+    /// parameter) or names a type no stub described.
+    fn foreign_marker_derives(&self, bare: &str) -> crate::analysis::ForeignDerives {
+        // A type the PROGRAM declares shadows a foreign one of the same name
+        // (JLS 6.4.1), and answers for itself.
+        if self.bare_name_is_user_type(bare) {
+            return crate::analysis::ForeignDerives::ALL;
+        }
+        let annotations = match self.lookup_class_by_bare_or_fqn(bare).filter(|c| c.is_external) {
+            Some(sig) => &sig.annotations,
+            None => match self.symbols.lookup_enum(bare).filter(|(_, e)| e.is_external) {
+                Some((_, e)) => &e.annotations,
+                // Not foreign, or foreign and never described: say nothing
+                // rather than guess, which is what the old crate-name test did.
+                None => return crate::analysis::ForeignDerives::ALL,
+            },
+        };
+        let declares = |marker: &str| {
+            annotations.iter().any(|a| {
+                a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case(marker)
+            })
+        };
+        crate::analysis::ForeignDerives {
+            clone: declares("rustclone"),
+            debug: declares("rustdebug"),
+            partial_eq: declares("rustpartialeq"),
+            default: declares("rustdefault"),
+        }
+    }
+
     pub(crate) fn external_method_sig(
         &self,
         type_name: &str,

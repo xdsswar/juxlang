@@ -78,6 +78,20 @@ fn render_type(out: &mut String, t: &StubType) {
     if t.is_clone {
         let _ = writeln!(out, "@RustClone");
     }
+    // The other three `#[derive]`-able facts a Jux aggregate needs about a type
+    // it holds (ERRATA E97). They are read off the type's real trait impls next
+    // to `Clone`, for the same reason: a class field, a record component or a
+    // generic argument of this type decides what the enclosing aggregate can
+    // derive, and guessing from the crate name got `std::fs::File` wrong.
+    if t.is_debug {
+        let _ = writeln!(out, "@RustDebug");
+    }
+    if t.is_partial_eq {
+        let _ = writeln!(out, "@RustPartialEq");
+    }
+    if t.is_default {
+        let _ = writeln!(out, "@RustDefault");
+    }
 
     // Collection marker (`Extend` / `FromIterator` impls) -- drives the 6.5.1
     // shared-handle lowering.
@@ -341,6 +355,37 @@ mod tests {
             ty,
             by_ref: false,
             by_mut_ref: false,
+        }
+    }
+
+    /// Each of the four derive facts renders as its own class-level marker, in
+    /// the canonical order, and only when the type really has it (§G.6.4.7,
+    /// ERRATA E97). `Clone` had a marker; `Debug`, `PartialEq` and `Default`
+    /// did not, so an aggregate holding a `std::fs::File` had no way to learn
+    /// that it may derive `Debug` and may not derive `Clone`.
+    #[test]
+    fn renders_the_four_derive_markers_in_order() {
+        let mut all = StubType::new(TypeKind::Class, "Whole");
+        all.is_clone = true;
+        all.is_debug = true;
+        all.is_partial_eq = true;
+        all.is_default = true;
+        let mut out = String::new();
+        render_type(&mut out, &all);
+        let at = |m: &str| out.find(m).unwrap_or_else(|| panic!("missing {m} in:\n{out}"));
+        assert!(at("@RustClone") < at("@RustDebug"));
+        assert!(at("@RustDebug") < at("@RustPartialEq"));
+        assert!(at("@RustPartialEq") < at("@RustDefault"));
+        assert!(at("@RustDefault") < at("class Whole"));
+
+        // `std::fs::File`'s combination: `Debug` and nothing else.
+        let mut file = StubType::new(TypeKind::Class, "File");
+        file.is_debug = true;
+        let mut out = String::new();
+        render_type(&mut out, &file);
+        assert!(out.contains("@RustDebug"), "stub:\n{out}");
+        for absent in ["@RustClone", "@RustPartialEq", "@RustDefault"] {
+            assert!(!out.contains(absent), "{absent} must not appear in:\n{out}");
         }
     }
 

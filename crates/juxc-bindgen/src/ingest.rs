@@ -592,6 +592,9 @@ fn build_handle_alias(
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item, public);
     st.is_clone = implements_trait(krate, trait_impls, "Clone");
+    st.is_debug = implements_trait(krate, trait_impls, "Debug");
+    st.is_partial_eq = implements_trait(krate, trait_impls, "PartialEq");
+    st.is_default = implements_trait(krate, trait_impls, "Default");
     Some(st)
 }
 
@@ -897,6 +900,11 @@ fn build_struct(
     st.index_ref = has_ref_index_impl(krate, &s.impls);
     st.index_output = index_output_name(krate, &s.impls);
     st.is_clone = implements_trait(krate, &s.impls, "Clone");
+    // The rest of the derive facts an aggregate holding this type needs
+    // (ERRATA E97), each read off the real impl list next to `Clone`.
+    st.is_debug = implements_trait(krate, &s.impls, "Debug");
+    st.is_partial_eq = implements_trait(krate, &s.impls, "PartialEq");
+    st.is_default = implements_trait(krate, &s.impls, "Default");
     st.owned_as = owned_counterpart(krate, &s.impls, name);
     st.derefs_to = deref_target(krate, &s.impls).as_ref().and_then(shape_name);
     st.is_collection = implements_collection_trait(krate, item.id, &s.impls);
@@ -917,6 +925,11 @@ fn build_enum(
     st.rust_path = real_rust_path(krate, item, public);
     st.implements = implemented_trait_names(krate, item.id, &e.impls);
     st.is_clone = implements_trait(krate, &e.impls, "Clone");
+    // A foreign ENUM is held by an aggregate exactly as a struct is, so it
+    // answers the same three questions (ERRATA E97).
+    st.is_debug = implements_trait(krate, &e.impls, "Debug");
+    st.is_partial_eq = implements_trait(krate, &e.impls, "PartialEq");
+    st.is_default = implements_trait(krate, &e.impls, "Default");
     // An enum is indexable as readily as a struct: serde_json's `Value` is
     // an enum, and `doc["releases"]` is how anyone reads one. Asking these
     // two questions only of structs left every such read untyped.

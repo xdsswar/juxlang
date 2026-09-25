@@ -928,3 +928,29 @@ fn foreach_final_binder() {
         ],
     );
 }
+
+/// A Rust value that is not `Clone` held in a class field, a record component
+/// and a collection element (§CR.5.8, ERRATA E97).
+///
+/// `std::io::Stdout` is `Debug` and not `Clone`, which is the position 139 of
+/// the 296 types in the `rust.std` surface are in, `File`, `TcpStream` and
+/// `Mutex` included. None of them could be held by any aggregate: the emitted
+/// struct carried `#[derive(Clone, Debug)]`, and rustc refused a derive the
+/// program never wrote. What the output proves is modest on purpose, since the
+/// values are handles nobody wants to read, so the labels and the count are
+/// what is left and they are only printable if the whole file compiles.
+#[test]
+fn foreign_value_fields() {
+    common::expect_output(
+        "foreign_value_fields",
+        "foreign-value-fields",
+        &[
+            "class field: console",
+            "record component: main",
+            "collection elements: 2",
+            "record name again: main",
+            "function value: <fn>",
+            "applied: 42",
+        ],
+    );
+}
