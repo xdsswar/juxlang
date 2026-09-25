@@ -1,0 +1,61 @@
+// `parallel(items, f)` (JUX-ASYNC-ADDENDUM-v2 §18.1.4): fan one task out per
+// element, await all of them, and get back an ordinary Jux collection of the
+// results, in the order the items were iterated.
+//
+// The OTHER `parallel` is the join form over futures, `parallel(a, b, c)`, which
+// resolves with a tuple; `examples/stress_async_parallel.jux` is that one. Which
+// form a call is gets decided by its shape, never by the types of its arguments:
+// a fan-out's second argument is written as a one-parameter lambda or as a
+// method reference, and neither of those can be a future (ERRATA E94).
+//
+// "Parallel" here means concurrency. Every task shares the one built-in event
+// loop (§18.1.3), so a fan-out overlaps waiting rather than computation;
+// `Worker.spawn` (§18.2) is the thread boundary.
+
+class Loader {
+    // An `async` static, passed below as `Loader::load` rather than wrapped in a
+    // lambda that would only forward its argument.
+    public static async String load(int id) {
+        return $"page-${id}";
+    }
+}
+
+async int twice(int n) {
+    print($"  twice(${n})");
+    return n * 2;
+}
+
+public async void main() {
+    var ids = new Vec<int>();
+    ids.push(1);
+    ids.push(2);
+    ids.push(3);
+
+    // The shorthand §18.1.4 defines, and the shape most fan-outs have.
+    var doubled = await parallel(ids, id -> twice(id));
+    print(doubled);
+
+    // What it resolves with is a collection like any other, so it answers
+    // everything a `Vec<int>` answers.
+    print(doubled.len());
+    print(doubled[2]);
+    doubled.push(8);
+    print(doubled);
+
+    // The collection that was fanned OUT is still the caller's, unchanged.
+    print(ids.len());
+
+    // `f` may be a reference to an async function instead of a lambda.
+    var pages = await parallel(ids, Loader::load);
+    print(pages);
+
+    // Nothing to fan out resolves with nothing in it, having run nothing.
+    var empty = new Vec<int>();
+    var none = await parallel(empty, id -> twice(id));
+    print(none.len());
+    print(none);
+
+    // `f` need not be async: a plain one still runs as a task of its own.
+    var thirds = await parallel(ids, n -> n * 3);
+    print(thirds);
+}

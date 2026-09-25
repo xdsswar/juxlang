@@ -16,6 +16,14 @@ public void main() {
     }
     print(total);
 
+    // What `all` resolves with is an ordinary Jux collection (§6.5.1), so a
+    // second name for it is the SAME collection, not a copy of it. This used to
+    // be a plain Rust `Vec`: the assignment MOVED it, and reading `values`
+    // afterwards reached rustc as `borrow of moved value`.
+    var alias = values;
+    alias.push(40);
+    print(values.len());
+
     var fast = spawn(() -> 7);
     var slow = spawn(async () -> {
         await Task.delay(200);

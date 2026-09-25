@@ -208,6 +208,8 @@ public static <T> Task<Vec<Result<T, Exception>>>       Task.allSettled(Vec<Task
 
 `Task.all(tasks)` resolves when every task resolves; rejects on the first failure. `Task.race` resolves with the first to settle. `Task.any` resolves with the first success and rejects only if all fail. Same semantics as the matching `Promise.*` calls in JavaScript.
 
+The `Vec` that `all` and `allSettled` resolve with is an ordinary Jux collection (§6.5.1), like any other: a second name for one is the same collection, and it can be added to.
+
 Two points the JavaScript names leave open are fixed here. When every task given to `Task.any` fails, it re-throws the failure of the **last** task to settle, unchanged, so a `catch` sees an ordinary exception rather than an aggregate. `Task.allSettled` never fails on account of its tasks: each settles to `Result.Ok(value)` or to `Result.Err(exception)` holding what that task threw, in the order the tasks were given. Only an exception is a settlement; a panic that is not one propagates as it would anywhere else.
 
 A common pattern — fan out, await all — gets a built-in shorthand:
@@ -221,6 +223,30 @@ public async Vec<UserPage> loadAll(Vec<int> ids) {
 ```
 
 `parallel(items, f)` is equivalent to `Task.all(items.map(it -> spawn(() -> f(it))))` and handles the common case of "do this thing for every item in parallel."
+
+Two forms share the name, and the SHAPE of the call decides which one a call is,
+not the types of its arguments:
+
+- **Fan-out**, `parallel(items, f)`: exactly two arguments, the second written
+  as a one-parameter lambda (`id -> loadPage(id)`) or as a method reference
+  (`Loader::load`). `items` is any collection or array; one that cannot be
+  iterated at all, a number say, is `E0941` at the call, the same rule §O.7.3
+  puts on a for-each. The call produces a
+  `Task<Vec<R>>` over `f`'s result type, holding one element per item in the
+  order `items` iterated, and what it resolves with is an ordinary Jux
+  collection (§6.5.1), not a view of `items`. An empty `items` resolves with an
+  empty collection, having run nothing. `f` need not be `async`: a plain `f`
+  still runs as a task of its own.
+- **Join**, `parallel(a, b, c, ...)`: every argument is a future or a task, and
+  the call resolves with the tuple `(A, B, C, ...)` once all of them have.
+
+A bare function NAME is not a spelling of `f`. `parallel(first, second)` with
+two names is the join form, because a name may hold a task and nothing in the
+call would say which form was meant. Write `x -> f(x)` or `Type::f` instead.
+
+The name says "parallel" and delivers concurrency: the tasks share the one
+built-in event loop (§18.1.3, ERRATA E87), so a fan-out overlaps waiting, not
+computation. `Worker.spawn` (§18.2) is the thread boundary.
 
 #### 18.1.5. Async Methods on Classes and Interfaces
 

@@ -59,7 +59,7 @@ pub use desugar::{
 pub use exprs::{
     assert_condition, AnonymousBody, BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
     IncDecExpr, IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
-    MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
+    parallel_fan_out_fn, MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     TernaryExpr, TypeTestExpr, UnaryExpr, UnaryOp,
 };
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};

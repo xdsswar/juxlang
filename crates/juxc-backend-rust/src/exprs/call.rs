@@ -1438,9 +1438,14 @@ impl RustEmitter {
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
                     match f.field.text.as_str() {
+                        // The joined `Vec` goes into a collection HANDLE: what
+                        // `all` resolves with is an ordinary Jux collection
+                        // (§6.5.1), and a plain Rust `Vec` was MOVED where
+                        // every other Jux collection aliases (`var b = a;`
+                        // reached rustc as E0382).
                         "all" => {
                             self.w.push_str(
-                                "crate::__jux_spawn(async move { futures::future::join_all(vec![",
+                                "crate::__jux_spawn(async move { crate::jux_arr(futures::future::join_all(vec![",
                             );
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
@@ -1448,7 +1453,7 @@ impl RustEmitter {
                                 }
                                 self.emit_expr(arg);
                             }
-                            self.w.push_str("]).await })");
+                            self.w.push_str("]).await) })");
                             self.emitting_format_arg = prev;
                             return;
                         }
@@ -1499,7 +1504,9 @@ impl RustEmitter {
                         "allSettled" => {
                             self.w.push_str("crate::__jux_spawn(async move { ");
                             self.emit_exception_of_payload_closure();
-                            self.w.push_str("futures::future::join_all(vec![");
+                            // The same handle `all` gets, for the same
+                            // reason: the settled results are a collection.
+                            self.w.push_str("crate::jux_arr(futures::future::join_all(vec![");
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
                                     self.w.push_str(", ");
@@ -1511,7 +1518,7 @@ impl RustEmitter {
                                  .into_iter().map(|__jux_r| match __jux_r { \
                                  Ok(__jux_v) => crate::jux::std::result::Result::Ok(__jux_v), \
                                  Err(__jux_p) => crate::jux::std::result::Result::Err(__jux_exception_of(__jux_p)) }) \
-                                 .collect::<Vec<_>>() })",
+                                 .collect::<Vec<_>>()) })",
                             );
                             self.emitting_format_arg = prev;
                             return;
@@ -1558,9 +1565,17 @@ impl RustEmitter {
                 // locals rebind (primitives are Copy; body-local
                 // names aren't in scope here).
                 let rebinds = self.task_capture_rebinds(call.args.first());
-                if rebinds.is_empty() {
-                    self.w.push_str("crate::__jux_spawn(async move { ");
-                } else {
+                // **`this` in a task body shares the handle too.** The task
+                // outlives the method call and `self` there is a borrow, so
+                // `spawn(() -> this.factor)` inside a method was
+                // `error[E0521]: borrowed data escapes outside of method`. A
+                // wrapper class is an `Rc` handle: binding a clone in the
+                // wrapper block and moving THAT into the task gives the task the
+                // same object with an owned capture, which is what Java's `this`
+                // capture means (and the rule `emit_lambda` already follows).
+                let capture_this = self.task_arg_captures_this(call.args.first());
+                let wrapper = !rebinds.is_empty() || capture_this;
+                if wrapper {
                     self.w.push_str("crate::__jux_spawn({ ");
                     for name in &rebinds {
                         self.w.push_str("let ");
@@ -1569,8 +1584,21 @@ impl RustEmitter {
                         self.w.push_str(&to_rust_ident(name));
                         self.w.push_str(".clone(); ");
                     }
+                    if capture_this {
+                        let outer = self.this_alias.as_deref().unwrap_or("self").to_string();
+                        self.w.push_str("let __jux_this = ");
+                        self.w.push_str(&outer);
+                        self.w.push_str(".clone(); ");
+                    }
                     self.w.push_str("async move { ");
+                } else {
+                    self.w.push_str("crate::__jux_spawn(async move { ");
                 }
+                let prev_this = if capture_this {
+                    self.this_alias.replace("__jux_this".to_string())
+                } else {
+                    self.this_alias.clone()
+                };
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 match call.args.first() {
@@ -1621,11 +1649,14 @@ impl RustEmitter {
                     None => {}
                 }
                 self.emitting_format_arg = prev;
-                if rebinds.is_empty() {
-                    self.w.push_str(" })");
-                } else {
+                if capture_this {
+                    self.this_alias = prev_this;
+                }
+                if wrapper {
                     // close: async block, wrapper block, call paren.
                     self.w.push_str(" } })");
+                } else {
+                    self.w.push_str(" })");
                 }
                 return;
             }
@@ -1644,8 +1675,17 @@ impl RustEmitter {
         // expressions by value (matches Rust's default for async
         // blocks and keeps lifetimes happy when the Future is
         // shuttled across `block_on`).
+        //
+        // The OTHER form, `parallel(items, f)`, is the one §18.1.4 spells out,
+        // and it is a different call entirely: see `emit_parallel_fan_out`.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "parallel" {
+                if let (Some(items), Some(f)) =
+                    (call.args.first(), juxc_ast::parallel_fan_out_fn(call))
+                {
+                    self.emit_parallel_fan_out(items, f);
+                    return;
+                }
                 self.w.push_str("async move { futures::join!(");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
@@ -6341,6 +6381,297 @@ impl RustEmitter {
             }
         }
         self.emitting_format_arg = prev;
+    }
+
+    /// `parallel(items, f)` (§18.1.4, ERRATA E94): one task per element, joined,
+    /// resolving with an ordinary Jux collection of the results.
+    ///
+    /// This is the composition §18.1.4 defines for it,
+    /// `Task.all(items.map(it -> spawn(() -> f(it))))`, written out for the
+    /// representation a collection actually has (§6.5.1):
+    ///
+    /// ```ignore
+    /// crate::__jux_spawn({
+    ///     let __jux_items = ids.borrow().clone();
+    ///     async move {
+    ///         crate::jux_arr(
+    ///             futures::future::join_all(
+    ///                 __jux_items.into_iter().map(move |id| {
+    ///                     crate::__jux_spawn(async move { twice(id).await })
+    ///                 }),
+    ///             )
+    ///             .await,
+    ///         )
+    ///     }
+    /// })
+    /// ```
+    ///
+    /// Three things that shape is carrying, each with the case that forced it:
+    ///
+    /// - **The handle leaves expression position.** The old lowering handed
+    ///   `ids` straight to `futures::join!` and got
+    ///   `error[E0277]: Rc<JuxCell<Vec<isize>>> is not a future`, so the one
+    ///   form the spec defines was the one that could not be written. The
+    ///   elements are snapshotted out of the cell up front, the way a for-each
+    ///   over a handle already does, which also means the read guard is gone
+    ///   before any task runs and the caller keeps its handle.
+    /// - **The joined `Vec` goes back INTO a handle.** The checker types this
+    ///   call's value as a `Vec<R>`, and every other `Vec` in the program is an
+    ///   `Rc<JuxCell<..>>`; a bare Rust `Vec` would answer `len()` and then
+    ///   fail on a `push` the emitter had already routed through `borrow_mut`.
+    /// - **One `spawn` per element, on the one event loop.** `spawn` carries no
+    ///   `Send` bound (ERRATA E87), so an element task may hold and hand back a
+    ///   class, which is the reference type of the language.
+    pub(crate) fn emit_parallel_fan_out(&mut self, items: &Expr, f: &Expr) {
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        // A collection is a reference type, so the sequence lives inside the
+        // cell; an expression that is NOT a handle (a foreign call's `Vec`, a
+        // range) is already the sequence and is iterated as it stands.
+        let handle = self.expr_is_collection_handle(items);
+        // The captures of `f` are rebound twice: once out here, so the fanning
+        // task does not swallow the caller's binding, and once per element, so
+        // the N element tasks do not each try to move the same one.
+        let rebinds = self.task_capture_rebinds(Some(f));
+        // `this` reached from `f` shares the handle, for the reason `spawn` does
+        // it: the element tasks outlive the method call, and a borrowed `&self`
+        // inside one is `error[E0521]: borrowed data escapes outside of method`.
+        let capture_this = self.task_arg_captures_this(Some(f));
+        // The element binding is the lambda's own parameter where there is one,
+        // so the body reads as written. A method reference has no parameter to
+        // borrow a name from.
+        let (binding, lambda) = match f {
+            Expr::Lambda(l) => (to_rust_ident(&l.params[0].name.text), Some(l)),
+            _ => ("__jux_item".to_string(), None),
+        };
+        self.w.push_str("crate::__jux_spawn({\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let __jux_items = ");
+        self.emit_expr(items);
+        // A handle's own `.clone()` only bumps the refcount, so reach through
+        // the cell for the sequence itself. The guard is a temporary in a `let`
+        // initializer, so it drops at the semicolon.
+        self.w
+            .push_str(if handle { ".borrow().clone();\n" } else { ";\n" });
+        for name in &rebinds {
+            let n = to_rust_ident(name);
+            self.w.line(&format!("let {n} = {n}.clone();"));
+        }
+        if capture_this {
+            let outer = self.this_alias.as_deref().unwrap_or("self").to_string();
+            self.w.line(&format!("let __jux_this = {outer}.clone();"));
+        }
+        // A method reference lowers to a closure value, so it is built ONCE
+        // rather than per element, and each element task gets a clone of it.
+        if lambda.is_none() {
+            self.w.emit_indent();
+            self.w.push_str("let __jux_f = ");
+            self.emit_expr(f);
+            self.w.push_str(";\n");
+        }
+        self.w.line("async move {");
+        self.w.indent_inc();
+        self.w.line("crate::jux_arr(");
+        self.w.indent_inc();
+        self.w.line("futures::future::join_all(__jux_items.into_iter().map(");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("move |");
+        self.w.push_str(&binding);
+        self.w.push_str("| ");
+        // The per-element clones need statements, so the closure takes a block
+        // body only when there is something to put in it.
+        let per_element = !rebinds.is_empty() || capture_this || lambda.is_none();
+        if per_element {
+            self.w.push_str("{\n");
+            self.w.indent_inc();
+            for name in &rebinds {
+                let n = to_rust_ident(name);
+                self.w.line(&format!("let {n} = {n}.clone();"));
+            }
+            if capture_this {
+                self.w.line("let __jux_this = __jux_this.clone();");
+            }
+            if lambda.is_none() {
+                self.w.line("let __jux_f = __jux_f.clone();");
+            }
+            self.w.emit_indent();
+        }
+        self.w.push_str("crate::__jux_spawn(async move { ");
+        // The element's type is in scope for the body, the way a lambda's
+        // parameter type is: string interpolation reads a bare name's type from
+        // here, and a `double` element printed without it loses its `.0`.
+        let mut scope = std::collections::HashMap::new();
+        if let Some(element) = self.parallel_element_ty(items) {
+            scope.insert(binding.clone(), element);
+        }
+        self.local_types.push(scope);
+        // A lambda PARAM shadows an outer `ref` / FnMut-cell local of the same
+        // name, exactly as it does in `emit_lambda`: inside the body the name
+        // is the element, not a cell to `borrow()`.
+        let shadowed = self.ref_locals.remove(&binding);
+        let prev_this = if capture_this {
+            self.this_alias.replace("__jux_this".to_string())
+        } else {
+            self.this_alias.clone()
+        };
+        match lambda {
+            Some(l) => self.emit_parallel_element_body(&l.body),
+            None => {
+                self.w.push_str("__jux_f(");
+                self.w.push_str(&binding);
+                self.w.push(')');
+                // An `async` function called through a reference hands back a
+                // future, and the task's value is what the future resolves to.
+                if self.method_ref_is_async(f) {
+                    self.w.push_str(".await");
+                }
+            }
+        }
+        if capture_this {
+            self.this_alias = prev_this;
+        }
+        if shadowed {
+            self.ref_locals.insert(binding.clone());
+        }
+        self.local_types.pop();
+        self.w.push_str(" })");
+        if per_element {
+            self.w.push('\n');
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push('}');
+        }
+        self.w.push('\n');
+        self.w.indent_dec();
+        self.w.line("))");
+        self.w.line(".await,");
+        self.w.indent_dec();
+        self.w.line(")");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("})");
+        self.emitting_format_arg = prev;
+    }
+
+    /// The body of one element task: `f(it)` as the user wrote it.
+    ///
+    /// An `async` call there produces a future the TASK has to await, the same
+    /// rule `spawn` follows: without it the task resolved with the future
+    /// itself and `join_all` handed back a `Vec` of futures.
+    fn emit_parallel_element_body(&mut self, body: &juxc_ast::LambdaBody) {
+        match body {
+            juxc_ast::LambdaBody::Expr(e) => {
+                self.emit_expr(e);
+                if self.call_produces_future(e) {
+                    self.w.push_str(".await");
+                }
+            }
+            // Trailing-expression block: the last expression statement is the
+            // element's value, emitted without a semicolon.
+            juxc_ast::LambdaBody::Block(b) => {
+                let (stmts, tail) = match b.statements.split_last() {
+                    Some((juxc_ast::Stmt::Expr(t), rest)) => (rest, Some(t)),
+                    _ => (&b.statements[..], None),
+                };
+                self.w.push('\n');
+                self.w.indent_inc();
+                for stmt in stmts {
+                    self.w.emit_indent();
+                    self.emit_stmt(stmt);
+                }
+                if let Some(tail) = tail {
+                    self.w.emit_indent();
+                    self.emit_expr(tail);
+                    if self.call_produces_future(tail) {
+                        self.w.push_str(".await");
+                    }
+                    self.w.push('\n');
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+            }
+        }
+    }
+
+    /// The element type of a `parallel` fan-out's collection, when the checker
+    /// knows it: a `Vec<int>` fans out over `int`s, an `int[]` the same.
+    ///
+    /// A map is deliberately not answered here. Its `generic_args` are two, and
+    /// guessing the first would type the element as the KEY.
+    fn parallel_element_ty(&self, items: &Expr) -> Option<juxc_tycheck::Ty> {
+        match self.narrowed_receiver_ty_of(items)? {
+            juxc_tycheck::Ty::Array { element, .. } => Some(*element),
+            juxc_tycheck::Ty::User { generic_args, .. } => match generic_args.as_slice() {
+                [only] => Some(only.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether the method a `Type::member` reference names is `async`.
+    ///
+    /// Resolved the same way [`Self::call_produces_future`] resolves a method
+    /// call: the receiver's class or interface, then the member. A reference
+    /// the tables do not know is treated as not `async`, which is what a
+    /// non-async `f` needs anyway.
+    fn method_ref_is_async(&self, f: &Expr) -> bool {
+        let Expr::MethodRef(m) = f else { return false };
+        let Some(receiver) = m.receiver.segments.last().map(|s| s.text.as_str()) else {
+            return false;
+        };
+        let class = self
+            .symbols
+            .classes
+            .get(receiver)
+            .or_else(|| {
+                self.resolve_bare_type_fqn(receiver)
+                    .and_then(|fqn| self.symbols.classes.get(&fqn))
+            })
+            .and_then(|c| c.methods.get(m.member.text.as_str()));
+        let iface = self
+            .symbols
+            .interfaces
+            .get(receiver)
+            .or_else(|| {
+                self.resolve_bare_type_fqn(receiver)
+                    .and_then(|fqn| self.symbols.interfaces.get(&fqn))
+            })
+            .and_then(|i| i.methods.get(m.member.text.as_str()));
+        class
+            .map(|mi| &mi.return_type)
+            .or_else(|| iface.map(|mi| &mi.return_type))
+            .is_some_and(|rt| matches!(rt, juxc_ast::ReturnType::AsyncType(_)))
+    }
+
+    /// Whether a task argument reaches `this`, and so needs the enclosing
+    /// object's handle cloned in before the `async move` block.
+    ///
+    /// A lambda answers through the same walk `emit_lambda` uses, so the two
+    /// agree about the implicit form (`factor` for `this.factor`). A task
+    /// spawned from a bare expression (`spawn(this.produce(5))`) is walked for
+    /// the word itself; there is no lambda there to ask.
+    pub(crate) fn task_arg_captures_this(&self, arg: Option<&Expr>) -> bool {
+        match arg {
+            Some(Expr::Lambda(l)) => self.lambda_captures_this(l),
+            Some(other) => {
+                if !self.emitting_wrapper_class {
+                    return false;
+                }
+                let mut found = false;
+                crate::worker::walk_expr(other, &mut |inner| {
+                    if matches!(inner, Expr::This(_)) {
+                        found = true;
+                    }
+                });
+                found
+            }
+            None => false,
+        }
     }
 
     /// The in-scope locals a task argument CAPTURES and which therefore have

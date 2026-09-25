@@ -1216,6 +1216,27 @@ pub fn named_operator_call_type(c: &CallExpr) -> Option<Ty> {
     }
 }
 
+/// `Task<Vec<element>>` -- what the three §18.1.4 calls that fan out over a
+/// collection resolve with (`parallel(items, f)`, `Task.all`, `Task.allSettled`).
+///
+/// The `Vec` is named the way the program's own `new Vec<int>()` is named,
+/// through the unit's import map (the `rust.std` prelude puts `Vec` there): a
+/// bare `Vec` and `rust.std.Vec` are the same declaration, but only the resolved
+/// spelling matches what a declared slot, or a for-each over the result,
+/// compares against.
+fn task_of_vec(element: Ty, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let vec = env
+        .unqualified
+        .get("Vec")
+        .filter(|fqn| symbols.classes.contains_key(*fqn))
+        .cloned()
+        .unwrap_or_else(|| "Vec".to_string());
+    Ty::User {
+        name: juxc_ast::TASK_SENTINEL.to_string(),
+        generic_args: vec![Ty::User { name: vec, generic_args: vec![element] }],
+    }
+}
+
 fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // §O.2.7: `x.operator hash()` is an `int` and `x.operator string()` a
     // `String`, for every receiver -- a user type's own operator, or the one
@@ -1311,6 +1332,44 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if name == "withTimeout" {
                 return Ty::Unknown;
             }
+            // `parallel(items, f)` (§18.1.4, ERRATA E94) resolves with one
+            // result per item, so its value is a `Task<Vec<R>>` over what `f`
+            // produces. The type is what makes the result an ordinary Jux
+            // collection: `Vec<R>` is a reference-type handle (§6.5.1), and
+            // without saying so the backend emitted the handle and every use of
+            // it went looking for a plain `Vec`.
+            //
+            // `R` is read off the lambda's body, the way `spawn`'s is: a lambda
+            // has no type of its own in Phase 1. The §18.1.4 shape
+            // `it -> f(it)` therefore types exactly, while a body that computes
+            // from the element (`n -> n * 2`) lands on `Unknown`, since the
+            // parameter is not bound in the env inference runs in. `Unknown`
+            // fits every slot, so that costs precision, not correctness.
+            //
+            // Guarded on the name being the builtin and not a program's own
+            // declaration, the way `transmute` is: a user function named
+            // `parallel` is still that user's function.
+            if name == "parallel"
+                && symbols.lookup_function(name).is_none()
+                && env.lookup(name).is_none()
+            {
+                if let Some(f) = juxc_ast::parallel_fan_out_fn(c) {
+                    let element = match f {
+                        Expr::Lambda(l) => match &l.body {
+                            juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
+                            juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
+                                Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+                                _ => Ty::Void,
+                            },
+                        },
+                        // A method reference has no `Ty` in Phase 1 (see
+                        // `Expr::MethodRef` below), so the results are an
+                        // unknown element type rather than a wrong one.
+                        _ => Ty::Unknown,
+                    };
+                    return task_of_vec(element, env, symbols);
+                }
+            }
             // `transmute<A, B>(value)` (Layout-ABI §L.7.4) gives a `B`, unless
             // the program declares its own `transmute`.
             if name == "transmute" && symbols.lookup_function(name).is_none() && env.lookup(name).is_none() {
@@ -1401,6 +1460,52 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // Method call — `obj.method(args)`.
         Expr::Field(field) => {
             let method_name = field.field.text.as_str();
+            // `Task.all(..)` / `Task.allSettled(..)` (§18.1.4) resolve with one
+            // element per task, so each is a `Task<Vec<..>>`. The type is what
+            // makes the result an ordinary Jux collection: a `Vec` is a
+            // reference-type handle (§6.5.1), and while these calls were
+            // untyped, `var b = a;` on what one handed back reached rustc as
+            // `error[E0382]: borrow of moved value` -- a plain Rust `Vec` had
+            // been moved where every other Jux collection would have aliased.
+            //
+            // `allSettled`'s element is a `Result<T, Exception>`, which Phase 1
+            // has no way to name from here, so it stays unknown; the collection
+            // around it is the part that had to be said.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Task"
+                    && matches!(method_name, "all" | "allSettled")
+                    && !symbols.classes.contains_key("Task")
+                    && env.lookup("Task").is_none()
+                {
+                    let element = match method_name {
+                        "all" => match c.args.first().map(|a| infer_expr(a, env, symbols)) {
+                            Some(Ty::User { name, generic_args })
+                                if name == juxc_ast::TASK_SENTINEL && generic_args.len() == 1 =>
+                            {
+                                generic_args.into_iter().next().unwrap_or(Ty::Unknown)
+                            }
+                            Some(other) => other,
+                            None => Ty::Unknown,
+                        },
+                        _ => Ty::Unknown,
+                    };
+                    return task_of_vec(element, env, symbols);
+                }
+            }
+            // `task.blockingGet()` (§18.1.4) reads a task's value from sync
+            // code, so it has the type the task carries. Left untyped, the
+            // `Vec` handle `Task.all(..).blockingGet()` answers with was
+            // iterated as though it were a plain sequence.
+            if method_name == "blockingGet" && c.args.is_empty() {
+                if let Ty::User { name, generic_args } =
+                    infer_expr(&field.object, env, symbols)
+                {
+                    if name == juxc_ast::TASK_SENTINEL && generic_args.len() == 1 {
+                        return generic_args.into_iter().next().unwrap_or(Ty::Unknown);
+                    }
+                }
+            }
             // `ClassName.staticMethod(args)` — receiver is a type
             // name, not a value. Resolve the static method
             // directly off the class's signature and return its
