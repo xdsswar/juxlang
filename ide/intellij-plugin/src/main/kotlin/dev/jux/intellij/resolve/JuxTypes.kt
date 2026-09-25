@@ -681,6 +681,9 @@ object JuxTypeEngine {
      *  - `x => Dog d`: `d` is a `Dog`;
      *  - `case Circle(var r)` / `var Pt(a, b) = p`: the record component the
      *    binder sits in the place of;
+     *  - `case Red(var s, var n)` over a sealed hierarchy: the permitted
+     *    subclass's instance FIELD the binder sits in the place of (§A.3,
+     *    ERRATA E101);
      *  - `case var v`: the switch subject.
      */
     private fun binderType(local: PsiElement): JuxType? {
@@ -737,13 +740,49 @@ object JuxTypeEngine {
         return name
     }
 
-    /** The type of component [index] of the record named [recordName], seen from [context]. */
-    private fun componentType(context: PsiElement, recordName: String, index: Int): JuxType? {
+    /**
+     * The type of part [index] of a positional pattern headed by [headName],
+     * seen from [context].
+     *
+     * `Name(part, …)` is one shape with three meanings, and which one it has
+     * follows from what `Name` resolves to (`JUX-GRAMMAR-ADDENDUM.md` §A.3):
+     * a record type makes it a record pattern, an enum variant an enum pattern,
+     * and a permitted subclass of a sealed class a SUBCLASS pattern
+     * (ERRATA E101). The first and the third both bind by position, so both are
+     * answered here:
+     *
+     *  - a record binds part `i` to component `i` of its header;
+     *  - a class binds part `i` to its `i`-th INSTANCE field in declaration
+     *    order. Static fields are not instance state and take no position, so
+     *    they are skipped rather than counted -- counting them would shift every
+     *    binder after the first `static` and silently mistype it.
+     *
+     * Before ERRATA E101 a sealed base lowered to a Rust enum and the form fell
+     * out of Rust's own match for free, so nothing ever wrote down what the
+     * parts meant. Now `sealed class Light permits Red, Yellow, Green` is an
+     * ordinary reference hierarchy, `case Red(var s, var n)` is a runtime type
+     * test that reads the parts out of the handle, and the editor has to know
+     * that `s` is `Red`'s first field or `case Red(var s, _) when s > 20` types
+     * its guard against nothing.
+     */
+    private fun componentType(context: PsiElement, headName: String, index: Int): JuxType? {
         if (index < 0) return null
-        val record = resolveTypeName(context, recordName) as? JuxTypeDeclaration ?: return null
-        val component = JuxHierarchy.recordComponents(record).getOrNull(index) ?: return null
-        return declaredType(component)
+        val decl = resolveTypeName(context, headName) as? JuxTypeDeclaration ?: return null
+        JuxHierarchy.recordComponents(decl).getOrNull(index)?.let { return declaredType(it) }
+        return instanceFields(decl).getOrNull(index)?.let { declaredType(it) }
     }
+
+    /**
+     * A type's own non-static instance fields, in declaration order: the
+     * positional surface of a subclass pattern (§A.3, ERRATA E101).
+     *
+     * Only the type's OWN fields. E101 binds part `i` to the named subclass's
+     * `i`-th instance field, and an inherited field belongs to the parent's
+     * positional surface rather than this one.
+     */
+    private fun instanceFields(decl: JuxTypeDeclaration): List<PsiElement> =
+        JuxHierarchy.directChildren(decl, E.FIELD_DECLARATION)
+            .filter { field -> field.node.findChildByType(E.MODIFIER_LIST)?.psi?.text?.contains("static") != true }
 
     // ------------------------------------------------------------ type refs
 
@@ -776,8 +815,8 @@ object JuxTypeEngine {
             name in JuxKeywords.PRIMITIVES -> JuxType.Primitive(name)
             else -> {
                 val args = node.findChildByType(E.TYPE_ARGUMENT_LIST)?.psi?.children
-                    ?.filter { it.elementType === E.TYPE_REFERENCE }
-                    ?.map { typeOfTypeReference(it) }
+                    ?.filter { it.elementType === E.TYPE_REFERENCE || it.elementType === E.WILDCARD_TYPE }
+                    ?.map { if (it.elementType === E.WILDCARD_TYPE) typeOfWildcard(it) else typeOfTypeReference(it) }
                     ?: emptyList()
                 when (val target = resolveTypeName(ref, name, qualifier(ref))) {
                     is JuxTypeParameter -> JuxType.TypeVar(target, boundOf(target))
@@ -796,6 +835,42 @@ object JuxTypeEngine {
             suffix = suffix.treeNext
         }
         return type
+    }
+
+    /**
+     * What a wildcard type argument READS as (`JUX-TYPE-SYSTEM-ADDENDUM.md`
+     * §T.4.8, ERRATA E100).
+     *
+     * A producer is read as its bound: `Vec<? extends Animal>` lifts to a
+     * synthetic parameter bounded by `Animal`'s marker trait, and that marker
+     * carries `Animal`'s whole member surface (its public instance methods and,
+     * for a non-generic class, a field accessor pair spanning the `extends`
+     * chain). So `for (var a : xs) { a.nm; a.describe(); }` over such a `Vec`
+     * resolves both members against `Animal`, and `a.describe().length()` is
+     * the String method it looks like rather than an unknown receiver. Before
+     * this, a `WILDCARD_TYPE` argument was simply dropped from the argument
+     * list, so `Vec<? extends Animal>` measured as a `Vec` of NOTHING: the
+     * for-each binder came out `Unknown` and every member through it went
+     * unresolved, which cost completion, go-to and parameter info on the one
+     * shape ERRATA E100 exists to make work.
+     *
+     * A consumer (`? super Dog`) and a bare `?` stay [JuxType.Unknown], and
+     * deliberately: PECS says a consumer may be written and not read, so there
+     * is no member surface to resolve against and peeling it would invent one.
+     * `Unknown` is what keeps the editor silent there instead of confident.
+     */
+    private fun typeOfWildcard(wildcard: PsiElement): JuxType {
+        var sawExtends = false
+        var c = wildcard.node.firstChildNode
+        while (c != null) {
+            when {
+                c.elementType === T.EXTENDS_KW -> sawExtends = true
+                c.elementType === T.SUPER_KW -> return JuxType.Unknown
+                c.elementType === E.TYPE_REFERENCE && sawExtends -> return typeOfTypeReference(c.psi)
+            }
+            c = c.treeNext
+        }
+        return JuxType.Unknown
     }
 
     private fun qualifier(ref: PsiElement): String? {
@@ -829,10 +904,28 @@ object JuxTypeEngine {
      * enclosing declaration, a type in this file, an imported type, a type in
      * the same package, then any type of that name in the project or its
      * libraries. [qualifier] is a written package path (`some.Truck`).
+     *
+     * A QUALIFIED name is never shadowed by a same-named user class
+     * (§M.16.6, ERRATA E102): writing `rust.std.Vec<int>` says which type is
+     * meant, so a program's own root-package `class Vec` must not answer for
+     * it. That is the whole shape of E102, where the compiler decided the SLOT
+     * from the written name and the member CALL from the resolved name's last
+     * segment, and the two halves disagreed. So when a qualifier is written and
+     * nothing in that package matches, the answer is "unresolved" rather than
+     * whatever a bare lookup of the last segment would find.
+     *
+     * The one qualifier that is not a package is a nested type's outer
+     * (`Outer.Inner`, §M.9): E102 keeps the nested-type shadow test a question
+     * about a simple name, so a qualifier naming a TYPE in scope hands the
+     * lookup back to the bare ladder, which finds the nested declaration.
      */
     fun resolveTypeName(context: PsiElement, name: String, qualifier: String? = null): PsiElement? {
         if (qualifier != null) {
             findTypeByFqn(context, qualifier, name)?.let { return it }
+            // `Outer.Inner` / `Outer.Mid.Inner`: the head names a type, not a
+            // package, so the bare ladder below is the right one to ask.
+            val outerName = qualifier.substringAfterLast('.')
+            if (JuxTypeIndex.findType(context, outerName) == null) return null
         } else {
             var scope: PsiElement? = context.parent
             while (scope != null && scope !is PsiFile) {

@@ -90,6 +90,64 @@ class JuxPackageMismatchInspectionTest : BasePlatformTestCase() {
         assertEmpty(problems())
     }
 
+    /**
+     * §B.15.2's canonical multi-binary project: a `[lib]` plus several
+     * `[[bin]]`, with the extra entries under `src/bin/`.
+     */
+    private fun multiBinaryProject() {
+        myFixture.addFileToProject(
+            "multi/jux.toml",
+            """
+            [package]
+            name = "multi"
+
+            [lib]
+            name = "multi"
+
+            [[bin]]
+            name = "server"
+            path = "src/bin/server.jux"
+
+            [[bin]]
+            name = "migrator"
+            path = "src/bin/migrator.jux"
+            """.trimIndent() + "\n",
+        )
+        myFixture.addFileToProject("multi/src/lib.jux", "public class Shared {}\n")
+    }
+
+    fun testABinEntryFileNeedsNoPackage() {
+        // ERRATA E103: a `[[bin]] path` entry file is a program's entry point,
+        // not a member of the package tree, so `src/bin/server.jux` owes no
+        // `package bin;`. The compiler used to demand it (`E0301`) on the shape
+        // §B.15.2 documents as ordinary; the editor must not ask either.
+        multiBinaryProject()
+        open("multi/src/bin/server.jux", "void main() { print(1); }\n")
+        assertEmpty(problems())
+    }
+
+    fun testAnOrdinarySourceBesideAnEntryStillDeclaresItsPackage() {
+        // The exemption is per FILE, not per directory (E103), so a helper class
+        // sitting beside an entry in `src/bin/` is an ordinary source.
+        multiBinaryProject()
+        open("multi/src/bin/Helper.jux", "public class Helper {}\n")
+        assertEquals(
+            listOf("Missing package declaration: this file's location puts it in `bin`"),
+            problems(),
+        )
+    }
+
+    fun testAnEntryFilesDeclaredPackageIsStillChecked() {
+        // Only the REQUIREMENT is lifted (E103): a package the entry file does
+        // declare is still checked against its directory.
+        multiBinaryProject()
+        open("multi/src/bin/server.jux", "package <caret>wrong;\n\nvoid main() {}\n")
+        assertEquals(
+            listOf("Package name `wrong` does not correspond to the file location. Expected `bin`"),
+            problems(),
+        )
+    }
+
     fun testFilesWithoutAnAuthoritativeRootAreQuiet() {
         // The light fixture's plain source root: a guess, never enforced.
         open("loose/com/acme/Loose.jux", "package somewhere.else;\n\npublic class Loose {}\n")

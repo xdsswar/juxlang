@@ -17,6 +17,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import dev.jux.intellij.JuxFileType
 import dev.jux.intellij.completion.JuxAutoImport
 import dev.jux.intellij.editor.JuxImportSupport
+import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxTypeDeclaration
 
@@ -203,57 +204,128 @@ object JuxTypeIndex {
     }
 
     /**
-     * The type named [name] **as seen from [context]** — its own file first,
-     * then the rest of the project.
+     * The type named [name] **as seen from [context]**: the §M.16 resolution
+     * ladder, as far as the IDE can walk it.
      *
-     * This is the overload nearly every caller wants. A Jux file is compiled
-     * against its own imports, so the same bare name legitimately names
-     * different types in different files: `examples/` alone has `Tagged` as an
-     * interface in one file and as a class in two others. The project-wide
-     * lookup returns whichever the platform happened to index first, so an
-     * inspection could read a file's own `interface Tagged`, resolve the name
-     * to an unrelated `class Tagged`, and report a confident error about code
-     * that is correct ("Class 'Base' cannot implement 'Tagged' because it is a
-     * class"). Every inspection, gutter and completion built on name
-     * resolution inherited that.
+     * This is the overload nearly every caller wants. A single-segment name is
+     * resolved in the compilation UNIT that wrote it and nowhere else
+     * (`JUX-MISSING-DEFS-ADDENDUM.md` §M.16, ERRATA E96), by this ladder:
      *
-     * Preferring the enclosing file makes the single-file case exact and leaves
-     * genuinely cross-file resolution — the workspace shape, where names do not
-     * collide — on the project walk. Package-aware resolution across files is
-     * the LSP's job; this is the IDE-side approximation.
+     *  1. a generic parameter in scope (the caller's rung: see
+     *     [JuxTypeEngine.resolveTypeName], which tries type parameters before
+     *     it gets here);
+     *  2. a declaration the unit itself makes, or one an `import` in the unit
+     *     binds, or one the unit's own package makes;
+     *  3. a nested type of the enclosing type (§M.9);
+     *  4. the implicit prelude: `jux.std.*` and `rust.std`.
+     *
+     * A name that reaches none of those rungs is unresolved, and the honest
+     * `null` matters: the inspections built on this layer stay silent on a name
+     * they cannot resolve, so silence is what a name the unit never named has
+     * to produce. Returning "some type of that name, from somewhere" instead is
+     * what made the plugin paint red on correct code. `examples/` alone has
+     * `Tagged` as an interface in one file and a class in two others, and
+     * `examples/stdlib_name_collisions.jux` legally declares its own
+     * `interface Iterable { String describe(); }` -- which the project-wide
+     * lookup handed to `class Span implements Iterable<int>` in
+     * `examples/iterable_combinators.jux`, an unrelated file, so E0429 demanded
+     * `describe()` from a class that owes nothing of the kind.
+     *
+     * Two rules from §M.16 shape the walk below, and both are about the same
+     * thing, that resolution is a question the ASKING unit gets to answer:
+     *
+     *  - **§M.16.1, the library realm.** `jux.std.*` and the generated `rust.*`
+     *    stubs form a realm that never binds a bare name to a user
+     *    declaration. It is what lets a program declare `class T`,
+     *    `class String`, `class Vec`, `class Exception` or `interface Iterable`
+     *    at all: inside the user's unit the name means the user's type, and
+     *    inside `jux.std.collections.Iterable` the name `Iterator` still means
+     *    `jux.std.collections.Iterator`. The two never meet.
+     *  - **A prelude name is shadowed by the unit, not by the workspace.** The
+     *    IDE holds every file of every program in one project -- the corpus
+     *    tests put 300-odd independent single-file programs in one source root,
+     *    and a source root full of samples is a shape real users have too -- so
+     *    a sibling in the DEFAULT package is not evidence of the same unit the
+     *    way a sibling in a NAMED package is. Over a name the prelude also
+     *    spells, an unnamed-package sibling therefore does not shadow the
+     *    prelude. This is the one place the IDE is deliberately narrower than
+     *    the compiler's rung 2, and it is narrower in the safe direction: the
+     *    cost is a missing diagnostic on a program that redeclares a standard
+     *    library name in the default package and uses it from a second file,
+     *    and the alternative cost is red on code that compiles.
      */
     fun findType(context: PsiElement, name: String): JuxTypeDeclaration? {
         val file = context.containingFile
             ?: return findType(context.project, name)
 
-        // 1. The file's own declarations. A name declared here means here.
+        // Rung 2, first half: the unit itself. A name declared here means here.
         for (decl in typesIn(file)) {
             if (decl.name == name) return decl
         }
 
+        // §M.16.1: a unit of the library realm resolves against the realm only,
+        // so a program's own `class T` is invisible from inside `jux.std`.
+        val hereIsLibrary = isLibraryRealmPackage(JuxAutoImport.packageOfFile(file))
         val candidates = candidateTypes(context.project, name)
-        if (candidates.size == 1) return candidates.first()
+            .let { all -> if (hereIsLibrary) all.filter { isLibraryRealmPackage(JuxAutoImport.packageOf(it)) } else all }
         if (candidates.isEmpty()) return null
 
-        // 2. An explicit import decides between same-named types. Two
-        //    `Animal`s in one project is not a mistake, and the file already
-        //    says which one it means -- reading `import poll.lib.Animal;` is
-        //    the difference between a correct answer and a coin toss.
+        // Rung 2, second half: an explicit import decides between same-named
+        // types. Two `Animal`s in one project is not a mistake, and the file
+        // already says which one it means -- reading `import poll.lib.Animal;`
+        // is the difference between a correct answer and a coin toss.
         val importedPackage = importedPackageFor(file, name)
         if (importedPackage != null) {
             candidates.firstOrNull { JuxAutoImport.packageOf(it) == importedPackage }
                 ?.let { return it }
         }
 
-        // 3. A sibling in the same package needs no import, so it wins next.
+        // Rung 2, third half: a sibling in the same NAMED package needs no
+        // import, so it wins next. The default package is deliberately left
+        // out here and handled at the bottom: see the KDoc above for why a
+        // package-less sibling is not evidence of the same unit.
         val ownPackage = JuxAutoImport.packageOfFile(file)
-        candidates.firstOrNull { JuxAutoImport.packageOf(it) == ownPackage }
+        if (ownPackage.isNotEmpty()) {
+            candidates.firstOrNull { JuxAutoImport.packageOf(it) == ownPackage }
+                ?.let { return it }
+        }
+
+        // Rung 4: the prelude. Reached when the unit neither declared nor
+        // imported the name and its own named package does not have it.
+        candidates.firstOrNull { isLibraryRealmPackage(JuxAutoImport.packageOf(it)) }
             ?.let { return it }
 
-        // 4. Nothing distinguishes them: any answer is a guess, so give the
-        //    first and let the caller be as wrong as the source is ambiguous.
+        // Still a prelude NAME, with no prelude source indexed to point at:
+        // the bundled `jux.std` tree is a plugin resource and the `rust.*`
+        // stubs depend on what the machine has built, so either can be absent
+        // while the name still means the prelude's type. The answer is then
+        // "unresolved", never a stranger's class of the same name -- which is
+        // exactly the `Iterable` mix-up this method's KDoc describes.
+        if (name in JuxKeywords.BUILTINS) return null
+
+        // Last resort: a same-named type elsewhere in the workspace, default
+        // package included. A plain user name that only one other file
+        // declares is the ordinary cross-file case, and resolving it is the
+        // whole point of a project-wide index.
+        candidates.firstOrNull { JuxAutoImport.packageOf(it) == ownPackage }
+            ?.let { return it }
         return candidates.first()
     }
+
+    /**
+     * Whether [pkg] is a **library realm** package (§M.16.1): the embedded
+     * standard library (`jux.std` and below, plus the `jux.meta` annotation
+     * surface) or a generated foreign-crate stub package (`rust.*`).
+     *
+     * Named exactly, not by prefix guesswork, and for the same reason the
+     * compiler's `is_library_realm_package` is: a user's own `package jux;` is
+     * legal and is NOT a library package (§M.16.3), and neither is
+     * `juxtapose.core`.
+     */
+    fun isLibraryRealmPackage(pkg: String): Boolean =
+        pkg == "jux.std" || pkg.startsWith("jux.std.") ||
+            pkg == "jux.meta" ||
+            pkg == "rust" || pkg.startsWith("rust.")
 
     /** Every type named [name] in the project and its libraries. */
     fun typesNamed(project: Project, name: String): List<JuxTypeDeclaration> = candidateTypes(project, name)

@@ -3,6 +3,7 @@ package dev.jux.intellij
 import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ModuleRootManager
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VfsUtilCore
@@ -89,6 +90,94 @@ object JuxPackageResolver {
         val pkg = packageUnder(root.dir, dir) ?: return null
         if (!root.tests) return listOf(pkg)
         return listOf(pkg, if (pkg.isEmpty()) "test" else "$pkg.test")
+    }
+
+    /**
+     * Whether [file] is an **entry file a `[[bin]] path` names**, and so not a
+     * member of the package tree at all (§B.1.1, ERRATA E103).
+     *
+     * The canonical multi-binary project of §B.15.2 puts additional entries
+     * under `src/bin/`:
+     *
+     * ```
+     * src/
+     * ├── lib.jux                 # shared code
+     * ├── main.jux                # primary binary
+     * └── bin/
+     *     ├── server.jux          # additional binary
+     *     └── migrator.jux        # additional binary
+     * ```
+     *
+     * §B.1.1's derivation read those as members of a package `bin`, so the
+     * compiler demanded `package bin;` from both of them (`E0301`) -- a package
+     * name no `import` could ever usefully name, because the `[[bin]] path` key
+     * is how the file is found. E103 lifted the requirement: an entry file is a
+     * program's entry point, and may be package-less wherever it sits under
+     * `src/`. So the editor must not ask for the line either.
+     *
+     * Only the requirement is lifted, which is why this answers one question
+     * and not two. A package the file DOES declare is still checked against its
+     * directory, and the exemption is per FILE rather than per directory: an
+     * ordinary source sitting beside an entry in `src/bin/` still declares
+     * `package bin;`. The dotted form `[[bin]] main = "xss.it.Main"` states the
+     * entry's package in the manifest, so a file named that way is not exempt
+     * either, and only a `path` key is read here.
+     */
+    fun isBinEntryFile(file: VirtualFile, project: Project): Boolean {
+        if (file.isDirectory) return false
+        val manifestDir = manifestDirFor(file, project) ?: return false
+        val manifest = manifestDir.findChild(MANIFEST)?.takeIf { !it.isDirectory } ?: return false
+        // An open, edited manifest is read from its document so the answer
+        // follows the keystroke that added the `[[bin]]`; otherwise from disk.
+        // `getCachedDocument` never CREATES one, which keeps this off the cost
+        // of loading a document per daemon pass.
+        val text = try {
+            FileDocumentManager.getInstance().getCachedDocument(manifest)?.text
+                ?: VfsUtilCore.loadText(manifest)
+        } catch (_: Throwable) {
+            // An unreadable or binary manifest says nothing; the ordinary rule
+            // applies. Never let a manifest read take the daemon pass down.
+            return false
+        }
+        return binEntryPaths(text).any { manifestDir.findFileByRelativePath(it) == file }
+    }
+
+    /**
+     * The `path` value of every `[[bin]]` table in a manifest, as written.
+     *
+     * Line-level and regex-based, like [dev.jux.intellij.toml.JuxTomlModel]:
+     * `jux.toml` is read as plain text when the TOML plugin is absent, so the
+     * editor cannot depend on a TOML PSI being there.
+     */
+    fun binEntryPaths(manifestText: String): List<String> {
+        val lines = manifestText.lines()
+        val header = Regex("""^\s*\[\[\s*bin\s*]]\s*$""")
+        val pathKey = Regex("""^\s*path\s*=\s*"([^"]*)"""")
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < lines.size) {
+            if (!header.matches(lines[i].substringBefore('#'))) { i++; continue }
+            var j = i + 1
+            while (j < lines.size && !lines[j].substringBefore('#').trim().startsWith("[")) {
+                pathKey.find(lines[j].substringBefore('#'))?.let { out.add(it.groupValues[1]) }
+                j++
+            }
+            i = j
+        }
+        return out
+    }
+
+    /** The directory of the nearest `jux.toml` above [file], inside the project. */
+    private fun manifestDirFor(file: VirtualFile, project: Project): VirtualFile? {
+        val index = ProjectFileIndex.getInstance(project)
+        var current: VirtualFile? = directoryOf(file)
+        var hops = 0
+        while (current != null && hops < MAX_DEPTH && index.isInContent(current)) {
+            if (current.findChild(MANIFEST)?.isDirectory == false) return current
+            current = current.parent
+            hops++
+        }
+        return null
     }
 
     /** The package root holding [file] (a file or a directory), by the rules above. */

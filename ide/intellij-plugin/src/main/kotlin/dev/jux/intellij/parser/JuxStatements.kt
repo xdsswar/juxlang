@@ -450,10 +450,19 @@ private fun PsiBuilder.parseSwitchCase() {
  * find their usages like any local. Sub-patterns are PATTERN nodes of their
  * own, which is what lets a `var` binder find the record component it binds.
  * A pattern's head name (`Circle`, `Color.Red`, a bare `Sat`) stays plain
- * tokens: it may name a type or an enum variant of the subject, which only
- * the subject's type decides.
+ * tokens: it may name a type, an enum variant of the subject, or a permitted
+ * subclass of a sealed base (ERRATA E101), which only the subject's type
+ * decides.
+ *
+ * [nested] says this pattern is a PART of a `(…)` list, where §A.3 admits one
+ * spelling the top level does not: a lone `identifier` is a binding
+ * ("in tuple/record only"), so `case Circle(r)` binds `r` the way
+ * `case Circle(var r)` does. It is gated on the part starting lower-case,
+ * because an upper-case part is the one thing it must not swallow -- an enum
+ * constant used as a test, `case Pair(RED, var n)`, where turning `RED` into a
+ * binder would shadow the constant and match everything.
  */
-private fun PsiBuilder.parsePattern() {
+private fun PsiBuilder.parsePattern(nested: Boolean = false) {
     val m = mark()
     while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
     // `var name`: a binder.
@@ -466,6 +475,16 @@ private fun PsiBuilder.parsePattern() {
         return
     }
     if (at(T.VAR_KW)) advanceLexer()
+    // A lone lower-case part of a `(…)` list: `case Circle(r)`, `case (x, y)`.
+    if (nested && at(T.IDENTIFIER) && tokenText?.firstOrNull()?.isLowerCase() == true &&
+        (lookAhead(1) === T.COMMA || lookAhead(1) === T.RPAREN)
+    ) {
+        val binder = mark()
+        advanceLexer()
+        binder.done(E.LOCAL_VARIABLE)
+        m.done(E.PATTERN)
+        return
+    }
     // `Dog d`: a type test with a binder. The type is a real type reference.
     if (at(T.IDENTIFIER) && lookAhead(1) === T.IDENTIFIER) {
         val binder = mark()
@@ -517,7 +536,7 @@ private fun PsiBuilder.parseSubPatterns() {
     advanceLexer() // `(`
     while (!eof() && !at(T.RPAREN)) {
         val before = currentOffset
-        parsePattern()
+        parsePattern(nested = true)
         if (at(T.COMMA)) advanceLexer()
         else if (currentOffset == before || at(T.ARROW) || at(T.LBRACE) || at(T.SEMICOLON)) break
     }

@@ -66,4 +66,28 @@ class JuxSpecSyncTest : BasePlatformTestCase() {
     // The disambiguation the modifier could have broken: a C-style header whose
     // init is `final` is still a C-style `for`, not a for-each.
     fun testFinalCStyleForStillParses() { forEach("for (final int i = 0; i < 3; i++)") }
+
+    /**
+     * Parsing the modifier is not enough: `final` has to land ON the binder's
+     * declaration, because that is where [dev.jux.intellij.inspections.JuxAccess.modifiers]
+     * reads it from. Left outside the [dev.jux.intellij.psi.JuxElementTypes.LOCAL_VARIABLE]
+     * mark it would be a stray keyword, and every feature that asks whether a
+     * binding is final (the reassignment check, the "may be final" hint, the
+     * documentation popup) would read the for-each binder as mutable.
+     */
+    fun testTheForEachModifierSitsOnTheBinder() {
+        myFixture.configureByText(
+            "binder.jux",
+            "package d; public class A { public void f() { for (final String? note : notes) { print(note); } } }",
+        )
+        val binder = PsiTreeUtil.collectElementsOfType(
+            myFixture.file,
+            dev.jux.intellij.psi.JuxLocalVariable::class.java,
+        ).firstOrNull { it.name == "note" }
+        assertNotNull("the for-each binder is a local variable declaration", binder)
+        assertTrue(
+            "`final` is part of the binder's declaration",
+            "final" in dev.jux.intellij.inspections.JuxAccess.modifiers(binder!!),
+        )
+    }
 }

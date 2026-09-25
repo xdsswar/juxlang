@@ -28,7 +28,9 @@ import dev.jux.intellij.psi.JuxFile
  * a `jux.toml` project ([JuxPackageResolver.expectedPackages]). A loose file,
  * or one under a root the plugin merely guessed, takes its package from its
  * declaration and is left alone. A test file may also add `.test` to its
- * production package, the §B.1.2 convention.
+ * production package, the §B.1.2 convention, and an entry file a `[[bin]] path`
+ * names is exempt from the requirement entirely (ERRATA E103): `src/bin/server.jux`
+ * is a program's entry point rather than a member of a package `bin`.
  *
  * Fixes, as Java offers them:
  *  - **Set package name to `expected`**: rewrite (or remove) the `package` line.
@@ -49,6 +51,14 @@ class JuxPackageMismatchInspection : LocalInspectionTool() {
         if (declared in accepted) return null
 
         val problem = when {
+            // An entry file a `[[bin]] path` names is not a member of the
+            // package tree (§B.1.1, ERRATA E103), so `src/bin/server.jux` owes
+            // no `package bin;` -- a name no `import` could usefully reach,
+            // since the manifest key is how the file is found. Only the
+            // REQUIREMENT is lifted: a package the file does declare falls
+            // through to the mismatch branch below and is still checked against
+            // its directory.
+            statement == null && JuxPackageResolver.isBinEntryFile(vFile, file.project) -> return null
             statement == null -> manager.createProblemDescriptor(
                 firstSignificant(file) ?: return null,
                 "Missing package declaration: this file's location puts it in `$expected`",
