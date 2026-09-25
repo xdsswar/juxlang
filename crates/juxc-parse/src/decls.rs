@@ -3289,11 +3289,21 @@ impl<'a> Parser<'a> {
     }
 
     /// Per §A.2.4 `param = annotation* param-mode? type identifier ('=' expression)?`.
-    /// Supports the `final` / `const` binding mode (`param-mode`); annotations and
-    /// `out` / defaults are still future work. `allow_final` is `false` for
-    /// constructor parameters, where a `final` mode is a diagnostic.
+    /// Supports the annotation prefix, the `final` / `const` binding mode
+    /// (`param-mode`), `out`, `ref` / `weak`, varargs and defaults.
+    /// `allow_final` is `false` for constructor parameters, where a `final` mode
+    /// is a diagnostic.
     pub(crate) fn parse_param(&mut self, allow_final: bool) -> Option<Param> {
         let start = self.peek_span();
+        // Annotations come FIRST, ahead of every binding mode (A.2.4, and
+        // JUX-ANNOTATIONS-ADDENDUM A.3.1). They are read with the same helper
+        // every other annotated position uses, so `@Note("p")`, a stack of
+        // several, and named arguments all behave here exactly as they do on a
+        // method. Before this, `void f(@Note("p") int x)` aborted the parameter
+        // list at the `@` and recovery landed in the parser for an `annotation`
+        // DECLARATION's parameters, so the author was told "expected '(' after an
+        // annotation parameter name" about a construct they never wrote.
+        let annotations = self.parse_annotations();
         // Optional `final` (or its synonym `const`) binding mode.
         let final_span = self.peek_span();
         // A.2.2 has the compiler echo the spelling the programmer wrote, so
@@ -3466,6 +3476,7 @@ impl<'a> Parser<'a> {
             );
         }
         Some(Param {
+            annotations,
             name,
             ty,
             is_final,

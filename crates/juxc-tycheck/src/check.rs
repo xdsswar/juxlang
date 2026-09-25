@@ -4193,7 +4193,10 @@ impl<'a> Checker<'a> {
         self.checking_external_unit = unit.is_external;
         for item in &unit.items {
             match item {
-                TopLevelDecl::Function(f) => self.check_applied_annotations(&f.annotations, "METHOD"),
+                TopLevelDecl::Function(f) => {
+                    self.check_applied_annotations(&f.annotations, "METHOD");
+                    self.check_callable_annotations(&f.params, f.body.as_ref());
+                }
                 TopLevelDecl::Annotation(a) => {
                     self.check_applied_annotations(&a.annotations, "ANNOTATION")
                 }
@@ -4201,37 +4204,123 @@ impl<'a> Checker<'a> {
                     self.check_applied_annotations(&c.annotations, "TYPE");
                     for m in &c.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
+                        self.check_callable_annotations(&m.params, m.body.as_ref());
                     }
                     for f in &c.fields {
                         self.check_applied_annotations(&f.annotations, "FIELD");
                     }
                     for p in &c.properties {
                         self.check_applied_annotations(&p.annotations, "FIELD");
+                        // A property accessor has no parameter list of its own
+                        // the author writes, but its block body holds locals.
+                        if let Some(g) = &p.getter {
+                            self.check_accessor_annotations(&g.body);
+                        }
+                        if let Some(s) = &p.setter {
+                            self.check_accessor_annotations(&s.body);
+                        }
                     }
                     for k in &c.constructors {
                         self.check_applied_annotations(&k.annotations, "CONSTRUCTOR");
+                        self.check_callable_annotations(&k.params, Some(&k.body));
+                    }
+                    for o in &c.operators {
+                        self.check_callable_annotations(&o.params, o.body.as_ref());
+                    }
+                    for b in &c.init_blocks {
+                        self.check_local_annotations(b);
                     }
                 }
                 TopLevelDecl::Record(r) => {
                     self.check_applied_annotations(&r.annotations, "TYPE");
                     for m in &r.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
+                        self.check_callable_annotations(&m.params, m.body.as_ref());
+                    }
+                    for k in r.compact_ctor.iter().chain(r.constructors.iter()) {
+                        self.check_callable_annotations(&k.params, Some(&k.body));
+                    }
+                    for o in &r.operators {
+                        self.check_callable_annotations(&o.params, o.body.as_ref());
                     }
                 }
                 TopLevelDecl::Enum(e) => {
                     self.check_applied_annotations(&e.annotations, "TYPE");
                     for m in &e.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
+                        self.check_callable_annotations(&m.params, m.body.as_ref());
+                    }
+                    for k in &e.constructors {
+                        self.check_callable_annotations(&k.params, Some(&k.body));
+                    }
+                    for o in &e.operators {
+                        self.check_callable_annotations(&o.params, o.body.as_ref());
                     }
                 }
                 TopLevelDecl::Interface(i) => {
                     self.check_applied_annotations(&i.annotations, "TYPE");
                     for m in &i.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
+                        // An abstract interface method has no body, and its
+                        // parameters are still annotatable (A.3.1).
+                        self.check_callable_annotations(&m.params, m.body.as_ref());
+                    }
+                    for o in &i.operators {
+                        self.check_callable_annotations(&o.params, o.body.as_ref());
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// One callable's `PARAMETER` annotations, plus the `LOCAL_VARIABLE`
+    /// annotations of every declaration in its body (A.3.1).
+    ///
+    /// Split out because every parameter list in the language reaches it:
+    /// functions, methods, constructors, operators and interface methods. Before
+    /// A.3.1 neither position parsed at all, so neither was ever checked, and an
+    /// annotation that parsed and was then dropped would be worse than the parse
+    /// error it replaced: the code would read as if it were doing something.
+    fn check_callable_annotations(
+        &mut self,
+        params: &[juxc_ast::Param],
+        body: Option<&juxc_ast::Block>,
+    ) {
+        for p in params {
+            self.check_applied_annotations(&p.annotations, "PARAMETER");
+        }
+        if let Some(b) = body {
+            self.check_local_annotations(b);
+        }
+    }
+
+    /// The `LOCAL_VARIABLE` annotations in an accessor body.
+    fn check_accessor_annotations(&mut self, body: &juxc_ast::AccessorBody) {
+        if let juxc_ast::AccessorBody::Block(b) = body {
+            self.check_local_annotations(b);
+        }
+    }
+
+    /// Every annotated local declaration in `body`, however deeply nested.
+    ///
+    /// The shared structural walk is used rather than a hand-written descent so
+    /// that a local inside a loop, a `try`, a switch arm, a lambda body or an
+    /// anonymous class's method is reached too: an annotation the checker never
+    /// visited is an annotation silently ignored. The lists are cloned out of
+    /// the walk because the visitor hands each node out for the duration of the
+    /// callback only, and reporting needs `&mut self`.
+    fn check_local_annotations(&mut self, body: &juxc_ast::Block) {
+        let mut lists: Vec<Vec<juxc_ast::Annotation>> = Vec::new();
+        juxc_ast::visit::for_each_node(body, &mut |node| {
+            if let juxc_ast::visit::Node::Stmt(juxc_ast::Stmt::VarDecl(v)) = node {
+                if !v.annotations.is_empty() {
+                    lists.push(v.annotations.clone());
+                }
+            }
+        });
+        for list in &lists {
+            self.check_applied_annotations(list, "LOCAL_VARIABLE");
         }
     }
 
@@ -4331,6 +4420,34 @@ impl<'a> Checker<'a> {
     fn check_applied_annotations(&mut self, annotations: &[juxc_ast::Annotation], kind: &str) {
         let mut seen: Vec<(String, bool)> = Vec::new();
         for a in annotations {
+            // `@cfg` on a parameter or a local is E0470 (A.3.1). It is singled
+            // out because it is the one built-in whose silent loss would change
+            // what the program MEANS: a `@cfg` that parsed and was then dropped
+            // would read as if it were selecting code. Conditional compilation
+            // inside a body is the `if cfg(...)` statement, and a parameter
+            // cannot be compiled out of a signature its callers already wrote.
+            if matches!(kind, "PARAMETER" | "LOCAL_VARIABLE")
+                && a.name.segments.len() == 1
+                && a.name.segments[0].text.eq_ignore_ascii_case("cfg")
+            {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0470_AnnotationTargetMismatch,
+                        format!(
+                            "`@cfg` cannot be applied to a {} (A.3.1)",
+                            target_kind_noun(kind),
+                        ),
+                    )
+                    .with_span(a.span)
+                    .with_help(if kind == "PARAMETER" {
+                        "a parameter is part of a signature the callers already wrote; \
+                         put the `@cfg` on the whole declaration instead"
+                    } else {
+                        "compile a statement in or out with `if cfg(...) { ... }`"
+                    }),
+                );
+                continue;
+            }
             let Some(sig) = self.applied_annotation_sig(&a.name) else {
                 self.check_builtin_or_unknown_annotation(a);
                 continue;
@@ -5255,6 +5372,7 @@ impl<'a> Checker<'a> {
                 .components
                 .iter()
                 .map(|c| juxc_ast::Param {
+                    annotations: Vec::new(),
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_final: false,

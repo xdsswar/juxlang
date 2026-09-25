@@ -1,0 +1,2 @@
+annotation_target_parameter_and_local.jux:7:13: [E0470] error: `@Loggable` cannot be applied to a parameter -- its `@Target` allows METHOD (§A.3)
+annotation_target_parameter_and_local.jux:8:5: [E0470] error: `@Bind` cannot be applied to a local variable -- its `@Target` allows PARAMETER (§A.3)

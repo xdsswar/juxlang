@@ -63,6 +63,38 @@ fn annotations_registry() {
     );
 }
 
+/// Annotations on PARAMETERS and LOCALS (A.3.1), the two targets that sit
+/// inside a function body.
+///
+/// A.3 listed both from the start and every framework pattern in A.11
+/// annotates a parameter, but neither position parsed: the parameter list
+/// aborted at the `@` and the author was shown a message about an `annotation`
+/// declaration's own parameters (ERRATA E104). The example walks the whole
+/// surface -- a constructor parameter, an interface method's parameter, a
+/// stack of several on one parameter, a varargs parameter, both local forms,
+/// and a local inside a lambda.
+///
+/// The last three lines are the part worth pinning. A RUNTIME-retention
+/// annotation on a METHOD gets a registry row; the same retention on a
+/// parameter gets none, because a A.8 row is keyed by class / method / field /
+/// function. Both are checked at compile time and neither costs the finished
+/// program anything.
+#[test]
+fn annotations_param_local() {
+    common::expect_output(
+        "annotations_param_local",
+        "annotations-param-local",
+        &[
+            "user/7",
+            "ababab",
+            "parts=2",
+            "routes recorded: 1",
+            "path params recorded: 0",
+            "not blanks recorded: 0",
+        ],
+    );
+}
+
 #[test]
 fn bounded_generic() {
     common::expect_output(

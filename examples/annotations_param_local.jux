@@ -1,0 +1,101 @@
+// Annotations on parameters and locals (JUX-ANNOTATIONS-ADDENDUM §A.3.1).
+//
+// §A.3 has always listed PARAMETER and LOCAL_VARIABLE among the eight target
+// kinds, and every framework pattern in §A.11 annotates a parameter: that is
+// how a router says which path segment fills an argument, and how an injector
+// says where a dependency goes. Neither position used to parse, and the
+// failure did not say so (ERRATA E104).
+//
+// An annotation emits no code, so the output here is ordinary. What the file
+// proves is that the whole surface compiles: the prefix goes ahead of every
+// binding mode, several may be stacked, named arguments and defaults behave as
+// they do anywhere else, and the target check is real.
+
+import jux.meta.Registry;
+
+/// A parameter annotation with a default, the validation shape.
+@Target(PARAMETER)
+@Retention(RUNTIME)
+public annotation NotBlank {
+    String message() default "must not be blank";
+}
+
+/// A parameter annotation whose value is required, the routing shape.
+@Target(PARAMETER)
+@Retention(RUNTIME)
+public annotation PathParam {
+    String value();
+}
+
+/// A local-only annotation: a note to a later reader, or to a lint.
+@Target(LOCAL_VARIABLE)
+public annotation Scratch {
+    String why() default "temporary";
+}
+
+/// One annotation, both of the in-body targets.
+@Target(PARAMETER, LOCAL_VARIABLE)
+public annotation Audited { }
+
+/// A method annotation, for the registry contrast at the bottom.
+@Target(METHOD)
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+}
+
+interface Handler {
+    // An abstract method has no body and its parameters are still annotatable.
+    String handle(@PathParam("id") int id);
+}
+
+class UserController implements Handler {
+
+    private String prefix;
+
+    // A constructor parameter takes annotations too. They come FIRST, ahead of
+    // any binding mode, which is why `@Audited final` reads in that order.
+    UserController(@Audited @NotBlank(message = "prefix is required") String prefix) {
+        this.prefix = prefix;
+    }
+
+    @Override
+    @Route(path = "/users/{id}")
+    public String handle(@PathParam("id") final int id) {
+        // A local declaration is the one statement §A.3 has a target for.
+        @Scratch(why = "readability") var label = this.prefix + "/" + id;
+        return label;
+    }
+
+    // Several annotations on one parameter, and the typed local form.
+    public String repeat(@NotBlank @Audited String who, @PathParam("n") int times) {
+        @Audited String out = "";
+        for (int i = 0; i < times; i++) {
+            out = out + who;
+        }
+        return out;
+    }
+}
+
+// A free function, a varargs parameter, and a local inside a lambda.
+void report(@Audited String tag, @NotBlank String... parts) {
+    var describe = () -> {
+        @Scratch var n = parts.length;
+        return tag + "=" + n;
+    };
+    print(describe());
+}
+
+public void main() {
+    var c = new UserController("user");
+    print(c.handle(7));
+    print(c.repeat("ab", 3));
+    report("parts", "x", "y");
+
+    // The §A.8 registry is keyed by class / method / field / function, so a
+    // parameter and a local have no row there: both are checked at compile
+    // time and cost the finished program nothing, even at RUNTIME retention.
+    print("routes recorded: " + Registry.annotated("Route").len());
+    print("path params recorded: " + Registry.annotated("PathParam").len());
+    print("not blanks recorded: " + Registry.annotated("NotBlank").len());
+}

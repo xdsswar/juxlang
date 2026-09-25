@@ -92,6 +92,62 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_stmt_inner(&mut self) -> Option<Stmt> {
+        // **Annotations in statement position** (grammar A.2.8
+        // `statement = ... | annotation+ statement`). They apply to the statement
+        // that follows, and JUX-ANNOTATIONS-ADDENDUM A.3 gives exactly one
+        // statement-level target, `LOCAL_VARIABLE`, so that statement has to be a
+        // local declaration. `@Scratch var buf = ...;` used to die the same way a
+        // parameter annotation did, in the parser for an `annotation`
+        // DECLARATION's parameters (see A.3.1 and ERRATA E104).
+        if self.at(&TokenKind::At) {
+            let start = self.peek_span();
+            // `parse_annotations` always consumes at least the `@` it is sitting
+            // on, so the recursive `parse_stmt_inner` below cannot loop here even
+            // when the annotation itself fails to parse.
+            let annotations = self.parse_annotations();
+            // Where the statement behind the annotations did not parse, the
+            // target question is unanswerable and the answer would be wrong:
+            // `(@Tag int a) -> a + 1` is an annotation inside a LAMBDA's
+            // parentheses, which A.2.9 does not admit, and the fragments it
+            // leaves behind reach here looking like an expression statement.
+            // Telling the author about statement targets there would point at
+            // the wrong construct, so E0470 is held back whenever reading the
+            // statement reported anything of its own.
+            let errors_before = self.diagnostics.len();
+            let stmt = self.parse_stmt_inner()?;
+            let statement_read_cleanly = self.diagnostics.len() == errors_before;
+            return match stmt {
+                Stmt::VarDecl(mut decl) => {
+                    decl.annotations = annotations;
+                    // The span has to reach back over the annotations, or a
+                    // later diagnostic about the declaration underlines only
+                    // half of what the author wrote.
+                    decl.span = start.join(decl.span);
+                    Some(Stmt::VarDecl(decl))
+                }
+                other => {
+                    // E0470 rather than a parse error: the shape is grammatical,
+                    // it is the TARGET that does not exist. Recording the
+                    // annotations on, say, an expression statement and then
+                    // ignoring them would read as if they did something.
+                    if !annotations.is_empty() && statement_read_cleanly {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0470_AnnotationTargetMismatch,
+                                format!(
+                                    "an annotation here applies to {}, which has no \
+                                     annotation target -- the only annotated statement is a \
+                                     local variable declaration, `LOCAL_VARIABLE` (A.3)",
+                                    stmt_kind_noun(&other),
+                                ),
+                            )
+                            .with_span(start.join(self.last_consumed_span())),
+                        );
+                    }
+                    Some(other)
+                }
+            };
+        }
         // **A type declared inside a function body** (E0993, M.9.2). Reported
         // once, with the alternatives, and the whole declaration is skipped so
         // the rest of the body still parses. Left to the expression parser it
@@ -967,6 +1023,7 @@ impl<'a> Parser<'a> {
         self.tuple_tmp_counter += 1;
         self.queue_record_part_reads(&tmp_name, start, &parts, is_final, final_kw);
         Some(Stmt::VarDecl(VarDecl {
+            annotations: Vec::new(),
             name: juxc_ast::Ident { text: tmp_name, span: start },
             ty: Some(record),
             init,
@@ -1052,6 +1109,7 @@ impl<'a> Parser<'a> {
             });
             match part {
                 RecordPatternPart::Bind(binder) => self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                    annotations: Vec::new(),
                     name: binder.clone(),
                     ty: None,
                     init: Some(read),
@@ -1065,6 +1123,7 @@ impl<'a> Parser<'a> {
                     let inner_name = juxc_ast::record_destructure_temp(self.tuple_tmp_counter, inner.len());
                     self.tuple_tmp_counter += 1;
                     self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                        annotations: Vec::new(),
                         name: juxc_ast::Ident { text: inner_name.clone(), span: record.span },
                         ty: Some(record.clone()),
                         init: Some(read),
@@ -1145,6 +1204,7 @@ impl<'a> Parser<'a> {
                 span: binder.span,
             });
             self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                annotations: Vec::new(),
                 name: binder.clone(),
                 ty: None,
                 init: Some(elem_init),
@@ -1156,6 +1216,7 @@ impl<'a> Parser<'a> {
             }));
         }
         Some(Stmt::VarDecl(VarDecl {
+            annotations: Vec::new(),
             name: tmp_ident,
             ty: None,
             init,
@@ -1207,6 +1268,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after `var` declaration");
         let end = self.last_consumed_span();
         Some(VarDecl {
+            annotations: Vec::new(),
             name,
             ty: None,
             init,
@@ -1587,6 +1649,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
         Some(VarDecl {
+            annotations: Vec::new(),
             name,
             ty: Some(ty),
             init,
@@ -1902,4 +1965,31 @@ enum RecordPatternPart {
     Bind(juxc_ast::Ident),
     /// `Pt(a, b)`: the component is a record, taken apart in turn.
     Nested(juxc_ast::TypeRef, Vec<RecordPatternPart>),
+}
+
+/// What to call a statement in a diagnostic, for the E0470 that rejects an
+/// annotation written in front of something that is not a local declaration
+/// (JUX-ANNOTATIONS-ADDENDUM A.3.1). Naming the kind is the difference between
+/// "that is not annotatable" and a message the author can act on. Each noun
+/// carries its own article, so one format string reads correctly for all of
+/// them ("an expression statement" beside "a block").
+fn stmt_kind_noun(stmt: &Stmt) -> &'static str {
+    match stmt {
+        Stmt::VarDecl(_) => "a local variable declaration",
+        Stmt::Expr(_) => "an expression statement",
+        Stmt::Assign(_) => "an assignment",
+        Stmt::Return(..) => "a `return`",
+        Stmt::Yield(..) => "a `yield`",
+        Stmt::Throw(..) => "a `throw`",
+        Stmt::Break(..) => "a `break`",
+        Stmt::Continue(..) => "a `continue`",
+        Stmt::If(_) | Stmt::IfCfg(_) => "an `if`",
+        Stmt::While(_) | Stmt::DoWhile(_) => "a `while` loop",
+        Stmt::ForEach(_) | Stmt::ForC(_) => "a `for` loop",
+        Stmt::Try(_) => "a `try`",
+        Stmt::Unsafe(_) => "an `unsafe` block",
+        Stmt::Block(_) => "a block",
+        Stmt::Labeled { .. } => "a labeled statement",
+        Stmt::SuperCall(..) => "a `super` call",
+    }
 }

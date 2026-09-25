@@ -222,6 +222,13 @@ impl FinalKw {
 /// them. A leading `final` or `const` modifier sets [`Self::is_final`].
 #[derive(Debug, Clone)]
 pub struct VarDecl {
+    /// Annotations written in front of the declaration (grammar A.2.8
+    /// `statement = ... | annotation+ statement`). A local declaration is the
+    /// one statement A.3 has a target for, `LOCAL_VARIABLE`
+    /// (JUX-ANNOTATIONS-ADDENDUM A.3.1); annotations in front of any other
+    /// statement are rejected at the parse site, so they never reach an AST
+    /// node that would quietly drop them.
+    pub annotations: Vec<crate::Annotation>,
     /// Variable name.
     pub name: Ident,
     /// Optional declared type. `None` means the type is inferred from

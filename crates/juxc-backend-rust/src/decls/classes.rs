@@ -6893,6 +6893,7 @@ fn substitute_fn_signature(
         .params
         .iter()
         .map(|p| juxc_ast::Param {
+            annotations: Vec::new(),
             name: p.name.clone(),
             ty: substitute_type_ref(&p.ty, &effective),
             is_final: p.is_final,
