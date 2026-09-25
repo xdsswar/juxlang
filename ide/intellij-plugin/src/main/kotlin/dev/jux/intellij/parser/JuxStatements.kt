@@ -166,6 +166,15 @@ private fun PsiBuilder.parseForStatement() {
  * [E.LOCAL_VARIABLE] node: without one it could not be completed, navigated to,
  * renamed, or counted as used — the loop variable you just wrote never appeared
  * in the popup.
+ *
+ * The leading `final` / `const` is the header's `binding-modifier`
+ * (JUX-GRAMMAR-ADDENDUM §A.2.8, ERRATA E95): `for (final String? note : notes)`
+ * compiles, so the editor must not underline it. The modifier is consumed INSIDE
+ * the [E.LOCAL_VARIABLE] mark, which is what keeps `final` on the declaration
+ * where [dev.jux.intellij.inspections.JuxAccess.modifiers] reads it from, rather
+ * than leaving it outside as a stray keyword. `ref` is tolerated in the same
+ * position for recovery only: the production has no slot for it, and the
+ * compiler rejects it.
  */
 private fun PsiBuilder.tryForEachHeader(): Boolean {
     val v = mark()

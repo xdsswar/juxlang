@@ -518,10 +518,11 @@ incdec            = ( '++' | '--' ) lvalue          -- prefix
 -- `++`/`--` surface is ALSO a value-producing operator in EXPRESSION
 -- position — see `incdec-expr` in §A.2.9 and the value semantics in §A.6.
 
-for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
-                    statement
-for-await-stmt    = 'for' 'await' '(' ( 'var' | type ) identifier
+for-each-stmt     = 'for' '(' binding-modifier? ( 'var' | type ) identifier
                     ':' expression ')' statement
+for-await-stmt    = 'for' 'await' '(' binding-modifier? ( 'var' | type )
+                    identifier ':' expression ')' statement
+binding-modifier  = 'final' | 'const'                  -- synonyms, §A.2.2
 
 break-stmt        = 'break' identifier? ';'
 continue-stmt    = 'continue' identifier? ';'
@@ -544,6 +545,8 @@ empty-stmt        = ';'
 A `try` statement must have at least one `catch` or one `finally` (`E0240`). Bare `try { ... }` is a parse error.
 
 `break <label>` and `continue <label>` target the innermost enclosing labeled statement whose label matches; the labeled statement must be a loop or a block (`E0241`).
+
+The **for-each binder takes an optional `final`** (or its synonym `const`, §A.2.2), so `for (final String? note : notes)` and `for (final var note : notes)` are both legal. On the loop variable the modifier means what it means on any other binding: the name cannot be reassigned. The binder is a fresh binding on every turn either way, so `final` changes nothing about the iteration; it records that the body only reads the element. Assigning to a `final` for-each binder inside the body is `E0464`, the same error an ordinary `final` local gets (§M.14.2). Without the modifier the binder stays reassignable, as it always was, and `for await` takes the modifier in the same position.
 
 ### A.2.9. Expressions
 

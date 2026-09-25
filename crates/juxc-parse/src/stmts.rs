@@ -610,6 +610,15 @@ impl<'a> Parser<'a> {
         let is_await = self.eat_kw(Keyword::Await);
         self.expect(&TokenKind::LParen, "'(' after `for`");
 
+        // An optional `final` / `const` before the binder (§A.2.8
+        // `binding-modifier`, ERRATA E95). Java accepts
+        // `for (final String s : list)` and Jux is Java-shaped, so the habit has
+        // to work; before this the production had no slot for a modifier and
+        // `for (final String? note : notes)` died on E0200 `expected identifier`,
+        // which forced the weaker `var` spelling. `const` is a synonym of `final`
+        // wherever it appears (§A.2.2), so both spellings are taken here.
+        let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
+
         // `var IDENT :` (inferred) or `TYPE IDENT :` (explicit type).
         let var_type = if self.eat_kw(Keyword::Var) {
             None
@@ -624,7 +633,15 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen, "')' after for-each header");
         let body = self.parse_block_or_stmt();
         let end = self.last_consumed_span();
-        Some(ForEachStmt { is_await, var_type, var_name, iter, body, span: start.join(end) })
+        Some(ForEachStmt {
+            is_await,
+            is_final,
+            var_type,
+            var_name,
+            iter,
+            body,
+            span: start.join(end),
+        })
     }
 
     /// Lookahead: is the `for (...)` header the C-style three-clause form
@@ -1700,6 +1717,8 @@ impl<'a> Parser<'a> {
         let element = Expr::Path(juxc_ast::QualifiedName { segments: vec![binder.clone()], span });
         Some(Stmt::ForEach(juxc_ast::ForEachStmt {
             is_await: false,
+            // A synthesized loop, so there is no user modifier to carry.
+            is_final: false,
             var_type: None,
             var_name: binder,
             iter: value,

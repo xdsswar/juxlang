@@ -318,6 +318,15 @@ pub struct ForEachStmt {
     /// awaited `next()` call. Only legal inside an async context
     /// (E0703); the iterable must be a stream (E0704).
     pub is_await: bool,
+    /// True when the header carried `final` (or its synonym `const`) before
+    /// the `var`-or-type, as in `for (final String? note : notes)`.
+    ///
+    /// The modifier is not decoration: it makes the loop variable a `final`
+    /// binding, so assigning to it inside the body is E0464, exactly as for a
+    /// `final` local (§M.14.2). The binder is a fresh binding on every turn
+    /// either way, so the flag says nothing about the iteration itself, only
+    /// that the body promised to read the element and not rebind it.
+    pub is_final: bool,
     /// Optional declared type of the loop variable. `None` for the
     /// inference-form `var i : …`.
     pub var_type: Option<TypeRef>,

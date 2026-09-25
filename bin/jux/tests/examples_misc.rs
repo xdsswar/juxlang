@@ -898,3 +898,33 @@ fn nd_array_new_literals() {
         &["2", "3", "2", "2", "6", "1.0", "0.0", "2.0", "6"],
     );
 }
+
+/// §A.2.8 / ERRATA E95: a `final` (or `const`) for-each binder, over a
+/// nullable element type and a plain one.
+///
+/// What this pins is the four header shapes together, because only two of them
+/// used to work: a declared type was fine, and the same header behind `final`
+/// was `[E0200] error: expected identifier`. The `kept 2` line is the `final`
+/// binder being READ per turn, which is the whole reason to write the modifier.
+#[test]
+fn foreach_final_binder() {
+    common::expect_output(
+        "foreach_final_binder",
+        "foreach-final-binder",
+        &[
+            "plain shipped",
+            "plain <none>",
+            "plain packed",
+            "var shipped",
+            "var <none>",
+            "var packed",
+            "kept 2",
+            "final shipped",
+            "final <none>",
+            "final packed",
+            "name ada",
+            "name grace",
+            "total 10",
+        ],
+    );
+}

@@ -1806,6 +1806,58 @@ marks `W0530` retired.
 
 ---
 
+## E95. The for-each binder could not be `final`
+
+**Conflict.** `JUX-GRAMMAR-ADDENDUM.md` §A.2.8 wrote the enhanced `for` as
+
+```text
+for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
+                    statement
+```
+
+with no slot for a modifier, and the parser matched the production exactly.
+So a TYPE in the header was fine and `final` was not:
+
+| header | before |
+|---|---|
+| `for (String? note : notes)` | accepted |
+| `for (var note : notes)` | accepted |
+| `for (final var note : notes)` | `[E0200] error: expected identifier` |
+| `for (final String? note : notes)` | `[E0200] error: expected identifier` |
+
+Java accepts `for (final String s : list)`, and §A.2.2 already makes `final`
+and `const` synonyms on any binding, a loop variable included. The omission
+was therefore not a decision about the language: nothing in the addenda says
+the for-each binder is the one binding that may not be `final`. It was a gap
+in one production, and what it cost was a Java habit that reads correctly and
+means something. Writing `for (final String? note : notes)` over a
+`Vec<String?>` had to be downgraded to `var`, which says less.
+
+**Resolution.** Both productions take an optional `binding-modifier`
+(`final` | `const`) before the `var`-or-type, and the modifier carries its
+ordinary meaning: the loop variable may not be reassigned inside the body.
+The diagnostic for a reassignment is **`E0464`**, the existing `final`-binding
+error (§M.14.2), and not a new code. Reusing it is the point: a `final`
+for-each binder is an ordinary `final` binding, and nobody should have to
+learn a second error number to be told the same thing.
+
+Two consequences worth stating, because a modifier that parsed and meant
+nothing would be worse than the parse error it replaces:
+
+- **The modifier is enforced, not merely parsed.** The checker's `final` walker
+  seeds the loop body's scope with the binder when it is `final`, where before
+  it always removed the name. An unmodified binder still shadows, and so
+  un-finals, an outer `final` of the same name.
+- **Nothing about the iteration changes.** The binder is a fresh binding on
+  every turn with or without the modifier, so `final` adds a promise about the
+  body and no cost to the loop.
+
+**Spec status:** `JUX-GRAMMAR-ADDENDUM.md` §A.2.8 carries both productions and
+the prose; `JUX-ASYNC-ADDENDUM-v2.md` §18.6.3 carries the `for await`
+spelling.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

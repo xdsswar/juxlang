@@ -1,0 +1,69 @@
+// A `final` for-each binder (JUX-GRAMMAR-ADDENDUM §A.2.8, ERRATA E95).
+//
+// The header's `binding-modifier` slot is new. Before it existed, a TYPE in a
+// for-each header was fine and the Java habit `for (final String s : list)`
+// was not: it died on `[E0200] error: expected identifier`, so a loop that
+// only reads its element had to be written `for (var s : list)`, which says
+// less than the author meant. The four shapes this walks through are the four
+// that must all work:
+//
+//   for (String? note : notes)        -- declared nullable type
+//   for (var note : notes)            -- inferred
+//   for (final var note : notes)      -- inferred, not rebindable
+//   for (final String? note : notes)  -- declared, not rebindable
+//
+// `const` is the same modifier under its other name (§A.2.2), so it appears
+// here too. The modifier is not decoration: writing to a `final` binder inside
+// the body is E0464, the same error an ordinary `final` local gets, which
+// `tests/ui/foreach_final_binder_reassigned.jux` pins.
+
+import rust.std.*;
+
+public void main() {
+    var notes = new Vec<String?>();
+    notes.push("shipped");
+    notes.push(null);
+    notes.push("packed");
+
+    // Shape 1: a declared nullable element type, no modifier.
+    for (String? note : notes) {
+        print("plain " + (note ?: "<none>"));
+    }
+
+    // Shape 2: inferred, no modifier.
+    for (var note : notes) {
+        print("var " + (note ?: "<none>"));
+    }
+
+    // Shape 3: inferred and final. The binder is a fresh binding per turn
+    // either way, so `final` costs the loop nothing; it records that the body
+    // only reads the element.
+    var kept = 0;
+    for (final var note : notes) {
+        if (note != null) {
+            kept += 1;
+        }
+    }
+    print("kept " + kept);
+
+    // Shape 4: the case that motivated the change, a nullable type behind
+    // `final`, over a `Vec<String?>`.
+    for (final String? note : notes) {
+        print("final " + (note ?: "<none>"));
+    }
+
+    // The `const` spelling of the same modifier, over a non-nullable element
+    // type and a range.
+    var names = new Vec<String>();
+    names.push("ada");
+    names.push("grace");
+    for (const String name : names) {
+        print("name " + name);
+    }
+
+    var total = 0;
+    for (const var n : 1..=4) {
+        total += n;
+    }
+    print("total " + total);
+}
