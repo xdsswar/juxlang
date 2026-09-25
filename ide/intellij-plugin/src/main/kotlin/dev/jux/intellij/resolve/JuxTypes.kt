@@ -681,6 +681,9 @@ object JuxTypeEngine {
      *  - `x => Dog d`: `d` is a `Dog`;
      *  - `case Circle(var r)` / `var Pt(a, b) = p`: the record component the
      *    binder sits in the place of;
+     *  - `case Red(var s, var n)` over a sealed hierarchy: the permitted
+     *    subclass's instance FIELD the binder sits in the place of (§A.3,
+     *    ERRATA E101);
      *  - `case var v`: the switch subject.
      */
     private fun binderType(local: PsiElement): JuxType? {
@@ -737,13 +740,49 @@ object JuxTypeEngine {
         return name
     }
 
-    /** The type of component [index] of the record named [recordName], seen from [context]. */
-    private fun componentType(context: PsiElement, recordName: String, index: Int): JuxType? {
+    /**
+     * The type of part [index] of a positional pattern headed by [headName],
+     * seen from [context].
+     *
+     * `Name(part, …)` is one shape with three meanings, and which one it has
+     * follows from what `Name` resolves to (`JUX-GRAMMAR-ADDENDUM.md` §A.3):
+     * a record type makes it a record pattern, an enum variant an enum pattern,
+     * and a permitted subclass of a sealed class a SUBCLASS pattern
+     * (ERRATA E101). The first and the third both bind by position, so both are
+     * answered here:
+     *
+     *  - a record binds part `i` to component `i` of its header;
+     *  - a class binds part `i` to its `i`-th INSTANCE field in declaration
+     *    order. Static fields are not instance state and take no position, so
+     *    they are skipped rather than counted -- counting them would shift every
+     *    binder after the first `static` and silently mistype it.
+     *
+     * Before ERRATA E101 a sealed base lowered to a Rust enum and the form fell
+     * out of Rust's own match for free, so nothing ever wrote down what the
+     * parts meant. Now `sealed class Light permits Red, Yellow, Green` is an
+     * ordinary reference hierarchy, `case Red(var s, var n)` is a runtime type
+     * test that reads the parts out of the handle, and the editor has to know
+     * that `s` is `Red`'s first field or `case Red(var s, _) when s > 20` types
+     * its guard against nothing.
+     */
+    private fun componentType(context: PsiElement, headName: String, index: Int): JuxType? {
         if (index < 0) return null
-        val record = resolveTypeName(context, recordName) as? JuxTypeDeclaration ?: return null
-        val component = JuxHierarchy.recordComponents(record).getOrNull(index) ?: return null
-        return declaredType(component)
+        val decl = resolveTypeName(context, headName) as? JuxTypeDeclaration ?: return null
+        JuxHierarchy.recordComponents(decl).getOrNull(index)?.let { return declaredType(it) }
+        return instanceFields(decl).getOrNull(index)?.let { declaredType(it) }
     }
+
+    /**
+     * A type's own non-static instance fields, in declaration order: the
+     * positional surface of a subclass pattern (§A.3, ERRATA E101).
+     *
+     * Only the type's OWN fields. E101 binds part `i` to the named subclass's
+     * `i`-th instance field, and an inherited field belongs to the parent's
+     * positional surface rather than this one.
+     */
+    private fun instanceFields(decl: JuxTypeDeclaration): List<PsiElement> =
+        JuxHierarchy.directChildren(decl, E.FIELD_DECLARATION)
+            .filter { field -> field.node.findChildByType(E.MODIFIER_LIST)?.psi?.text?.contains("static") != true }
 
     // ------------------------------------------------------------ type refs
 
