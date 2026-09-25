@@ -1538,10 +1538,12 @@ fn cmd_test(
     // `rust.serde_json` could be run but not tested (E0301/E0417 on every
     // import of it).
     sources.extend(juxc_driver::project::resolve_and_load_stub_sources(&manifest));
-    let src_dir = cwd.join("src");
-    if src_dir.exists() {
-        sources.extend(collect_project_sources(&src_dir)?);
-    }
+    // The package's `src/` code. Every `[[bin]]` entry file but the primary one
+    // is left out: the runner generates its own entry, and a package with
+    // several binaries would otherwise put each one's top-level `main` in the
+    // single test crate (E0400), so §B.15.2's canonical shape could be built and
+    // run but not tested.
+    sources.extend(juxc_driver::project::load_test_sources(&manifest)?);
     let test_dir = cwd.join("test");
     if test_dir.exists() {
         sources.extend(collect_project_sources(&test_dir)?);

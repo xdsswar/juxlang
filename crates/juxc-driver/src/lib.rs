@@ -463,7 +463,7 @@ where
     // Enforce the source-layout rule (§B.1): a file's `package` must match its
     // path under `src/`. Catching a stale layout here turns what would be a
     // cryptic post-codegen `rustc` E0432 into a precise Jux E0301.
-    diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    diagnostics.extend(package_check::check_package_paths(&units, &sources, cfg.bin_entries()));
     // §3.1: one public type per file, named like the file.
     diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
 
@@ -556,7 +556,7 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
-    diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    diagnostics.extend(package_check::check_package_paths(&units, &sources, cfg.bin_entries()));
     // §3.1: one public type per file, named like the file.
     diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
@@ -698,7 +698,7 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
 
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise
     // E0301 in the editor too, pointing at the offending `package` line.
-    diagnostics.extend(package_check::check_package_paths(&units, &sources));
+    diagnostics.extend(package_check::check_package_paths(&units, &sources, cfg.bin_entries()));
     // §3.1: one public type per file, named like the file.
     diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
 

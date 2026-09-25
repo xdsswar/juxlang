@@ -163,6 +163,37 @@ pub fn analyze_workspace_in(
             }
         }
     }
+    // The project's own manifest: it names the compilation set's entry points
+    // just below, and decides the language facts the analysis runs under
+    // further down.
+    let manifest = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root));
+
+    // A package's `[[bin]]` entry files are separate PROGRAMS, and at most one
+    // of them belongs in a compilation set: each declares a top-level `main`,
+    // so §B.15.2's canonical tree analysed as one set reported `src/main.jux`
+    // and `src/bin/server.jux` as "`main` is declared more than once at the top
+    // level" (E0400) on a project `jux build` builds target by target. This is
+    // the same shape as the sibling-programs bug this module already guards
+    // against: a set the editor chose, not one the author wrote.
+    //
+    // Keep the entry the author has OPEN, since that is the file being
+    // diagnosed, and otherwise the first declared one (the primary binary), so
+    // editing shared code keeps checking the program it belongs to.
+    if let Some(bins) = manifest.as_ref().map(|m| &m.bins) {
+        let open_is_entry = |p: &Path| open_path.as_deref() == Some(p);
+        let keep: Option<&Path> = bins
+            .iter()
+            .map(|b| b.path.as_path())
+            .find(|p| open_is_entry(p))
+            .or_else(|| bins.first().map(|b| b.path.as_path()));
+        scanned.retain(|path| {
+            // Compare by components so a `/`-vs-`\` spelling difference between
+            // the manifest's path and the scan's cannot defeat the match.
+            let is_entry = |p: &Path| p.components().eq(path.components());
+            keep.is_some_and(is_entry) || !bins.iter().any(|b| is_entry(&b.path))
+        });
+    }
+
     for path in scanned {
         if open_path.as_deref() == Some(path.as_path()) {
             sources.push(SourceFile::new(path, rope.to_string()));
@@ -188,8 +219,9 @@ pub fn analyze_workspace_in(
     // `[build] profile` (e.g. `jux-core` rejects `async`, E0701) and its
     // features, so code behind a default feature is checked and code behind
     // an off one is left out, as the build does.
-    let facts = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root))
-        .map(|m| juxc_driver::project::cfg_facts_for(&m, false))
+    let facts = manifest
+        .as_ref()
+        .map(|m| juxc_driver::project::cfg_facts_for(m, false))
         .unwrap_or_default();
     analyze_sources(uri, rope, sources, &facts, enc)
 }
@@ -421,6 +453,38 @@ mod tests {
             .values()
             .any(|ds| ds.iter().any(|d| d.message.contains("more than once")));
         assert!(any, "two `main`s in ONE project is a real duplicate and must be reported");
+    }
+
+    /// The canonical multi-binary project (§B.15.2) is one package with several
+    /// PROGRAMS in it. `jux build` compiles each `[[bin]]` with the shared code
+    /// and without the other entries, so the editor must too: analysing them
+    /// together reported `src/main.jux` and `src/bin/server.jux` as "`main` is
+    /// declared more than once", and §B.1.1's directory rule asked the entry in
+    /// `src/bin/` for a `package bin;` no `import` would ever name.
+    #[test]
+    fn the_entries_of_a_multi_bin_project_do_not_collide() {
+        let root = temp_root("multi_bin");
+        fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"com.example.myapp\"\nversion = \"0.1.0\"\n\n\
+             [[bin]]\nname = \"myapp\"\npath = \"src/main.jux\"\n\n\
+             [[bin]]\nname = \"myapp-server\"\npath = \"src/bin/server.jux\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("src").join("bin")).unwrap();
+        fs::write(root.join("src").join("main.jux"), "public void main() { print(1); }").unwrap();
+        let server = root.join("src").join("bin").join("server.jux");
+        let text = "public void main() { print(2); }";
+        fs::write(&server, text).unwrap();
+
+        let uri = Url::from_file_path(&server).unwrap();
+        let analysis = analyze_workspace(&root, &uri, &Rope::from_str(text));
+
+        let here = analysis.diagnostics_by_uri.get(&uri).cloned().unwrap_or_default();
+        assert!(
+            here.is_empty(),
+            "a declared `[[bin]]` entry is its own program and compiles cleanly: {here:?}",
+        );
     }
 
     fn temp_root(tag: &str) -> PathBuf {
