@@ -2017,6 +2017,164 @@ boundary.
 
 ---
 
+## E98. A function type over a polymorphic class had no stated lowering
+
+**Conflict.** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.3.6 makes a function type an
+ordinary type: `A` is assignable to `B` when `A` is "a function type compatible
+with `B`'s function type (contravariant in parameters, covariant in return)".
+Nothing there or in `JUX-INHERITANCE-BORROW-ADDENDUM.md` §6.9.6 said how a
+function type's parameter and result slots relate to the `Rc<dyn <Name>Kind>`
+handle a polymorphic base-typed slot lowers to. The two halves were lowered by
+different rules, and the seam showed as raw rustc errors in a program the spec
+declares legal:
+
+```jux
+class Animal { public int w = 1; }
+class Dog extends Animal { }
+void use((Animal) -> int f) { print(f(new Animal())); }
+public void main() { use((Animal a) -> a.w); }
+```
+
+| piece | lowered as | wanted |
+|---|---|---|
+| the parameter `f` | `Rc<dyn Fn(Rc<dyn AnimalKind>) -> isize>` | (correct) |
+| the lambda's `Animal a` | `move \|a: Animal\|` | `move \|a: Rc<dyn AnimalKind>\|` |
+| the argument `new Animal()` | `Animal::new()` | `Rc::new(Animal::new()) as Rc<dyn AnimalKind>` |
+
+`rustc` reported `E0631` for the first mismatch and `E0308` for the second.
+Deleting `class Dog` made the identical program compile, because with no
+subclass `Animal` is no longer a polymorphic base and both sides agree again on
+the concrete struct. That is what made this worth an entry rather than a bug
+report: the failure appears when a SECOND class is added, in a file that need
+not mention the callback, and it took every callback, visitor, strategy and
+event-handler API over a class hierarchy out of the language.
+
+**Resolution.** A function type's parameter and result slots are value slots,
+so a polymorphic base named in either is the `Rc<dyn <Name>Kind>` handle,
+exactly as the same class named anywhere else is. Three conversions follow from
+that one rule, and the implementation performs all three:
+
+- **A lambda's written parameter type is the slot's type.** `(Animal a) -> a.w`
+  declares `a` as the handle. A parameter type the program wrote and one it left
+  to be inferred lower to the same closure, which is the property that was
+  missing: the inferred form already worked.
+- **An argument passed through a function VALUE converts into the function
+  type's parameter**, the way an argument to a declared method does. This holds
+  for every holder of the value: a local, a parameter, a field, and a call that
+  returns a function. The checker records a function-typed callee's type at the
+  callee's own span so one lookup serves them all.
+- **A lambda result converts into the function type's result slot**, which the
+  existing return-upcast path already did.
+
+The handle is not an implementation convenience here. A `(Animal) -> String`
+callback is called with a `Dog` and has to reach `Dog`'s override, so lowering
+the slot to the concrete struct would slice the subclass away at the call and
+silently run the base body.
+
+**Spec status:** `JUX-INHERITANCE-BORROW-ADDENDUM.md` §6.9.6 carries the rule
+and its three consequences, beside the `Kind`-trait block it belongs to.
+`examples/fn_type_polymorphic_callbacks.jux` is the gated program.
+
+---
+
+## E99. "Every Jux type can satisfy the added bounds" is not true
+
+**Conflict.** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1 lists the bounds the lowering
+adds to a type parameter from how the parameter is used, and closes with a
+promise about the whole table:
+
+> **A type argument must satisfy the bounds its parameter acquired.** Every Jux
+> type can [...] a rule the compiler applies on the user's behalf must never
+> make a legal type argument illegal.
+
+Two rows break the promise, and they break it for opposite reasons. Both used to
+leak a raw rustc error out of a program whose Jux text says nothing about Rust
+traits.
+
+**1. `Eq + Hash`, for a key that is not a key.** A parameter used as a
+`HashMap` / `HashSet` key acquires `Eq + Hash`:
+
+```jux
+class Store<K> {
+    public HashMap<K, int> m = new HashMap<K, int>();
+}
+public void main() { Store<double> s = new Store<double>(); }
+```
+
+gave, on `Store::<f64>::new`,
+
+```text
+error[E0599]: the associated function or constant `new` exists for struct
+`Store<f64>`, but its trait bounds were not satisfied
+note: the following trait bounds were not satisfied:
+      `f64: Eq`
+      `f64: Hash`
+```
+
+while the literal
+`HashMap<double, int>` one line away gave a clean `E0933`. Here §T.2.1's promise
+is not the thing that is wrong: `double` cannot be a `HashMap` key at all
+(`JUX-OPERATORS-ADDENDUM.md` §O.3.1), so `Store<double>` is an illegal PROGRAM
+and the bound is reporting a real error, in the wrong language.
+
+**Resolution (1).** The rule the hash analysis already states, "a type
+parameter is assumed hashable where it is declared, and the instantiation is
+what gets checked", is now actually checked. A written
+instantiation of a user generic whose parameter the declaration uses as a
+`HashMap` / `HashSet` key reports **`E0933`** at the type ARGUMENT, in the same
+words the literal container gets, naming the class and the parameter. The set of
+parameters checked is the same set the lowering turns into the bound (a
+parameter named, bare, as argument 0 of a hashed container anywhere in the
+declaration's own field, property, constructor-parameter, method-parameter and
+return types), because a bound the backend adds that the checker does not know
+about is a leak by construction.
+
+**2. `Display`, for a nullable argument. OPEN.** A parameter whose values reach
+a format position acquires `Display`, so
+
+```jux
+class Box<T> { public T v; public Box(T v) { this.v = v; } public String show() { return "" + v; } }
+public void main() { Box<int?> b = new Box<int?>(null); print(b.show()); }
+```
+
+still gives
+
+```text
+error[E0599]: the associated function or constant `new` exists for struct
+`Box<std::option::Option<isize>>`, but its trait bounds were not satisfied
+note: trait bound `std::option::Option<isize>: std::fmt::Display` was not satisfied
+```
+
+`int?` is a legal Jux type and a legal type argument, so this is the promise
+being broken outright. It is recorded here as OPEN rather than resolved,
+because the obvious fix does not work:
+
+- The bound cannot simply be dropped. The universal renderer
+  (`crate::__jux_show!`) picks `Display` or `Debug` by autoref specialization,
+  and that choice is made ONCE, in the generic body, against the parameter's
+  declared bounds. Inside `class Wrap<T>` with only `T: Debug` in scope it
+  therefore takes the `Debug` arm for every instantiation, including the ones
+  whose argument does have a string form, so `Wrap<Cell<String>>` prints
+  `wrap(Cell { value: "in" })` instead of `wrap(Cell(value: in))`. The bound is
+  what makes the renderer resolve per instantiation, which is what
+  `examples/generic_declarations_print.jux` gates.
+- `Option` is a foreign type, so the emitted crate cannot give it a `Display`
+  impl (Rust's orphan rule), and a local trait with a blanket impl over
+  `Display` plus an impl for `Option<T>` does not cohere either.
+
+What would close it is making `Debug` canonical for Jux values, so that the
+renderer's `Debug` arm produces the same text `Display` would: a hand-written
+`Debug` on every class, record and enum that prints the type's string form
+(§O.7.1), after which a formatted parameter needs nothing beyond the universal
+`Debug` and the `Display` row can go. Until then, §T.2.1's closing paragraph
+overstates what the table guarantees, and this entry is what a reader should
+trust.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1's closing paragraph is
+corrected to point here. `tests/ui/generic_hash_key_arg.jux` pins the `E0933`.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

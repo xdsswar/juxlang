@@ -1,0 +1,14 @@
+// E0933 at a type ARGUMENT: `Store` uses `K` as a `HashMap` key, so `double`
+// cannot be the `K` of a `Store`. The literal `HashMap<double, int>` has always
+// been an error (O.3.1); this is the same program one indirection away, and it
+// used to reach rustc as "`f64: Eq` / `f64: Hash` not satisfied".
+class Store<K> {
+    public HashMap<K, int> m = new HashMap<K, int>();
+
+    public void put(K k, int v) { m.insert(k, v); }
+}
+
+public void main() {
+    Store<double> s = new Store<double>();
+    s.put(1.5, 2);
+}

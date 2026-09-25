@@ -1,0 +1,74 @@
+// Callbacks over a polymorphic class hierarchy (JUX-TYPE-SYSTEM-ADDENDUM
+// §T.3.6). A function type whose parameter or result names a class that has at
+// least one subclass is the shape every visitor, strategy and event-handler API
+// in the language is written in, and it has to work in all four places a
+// function value can live: a parameter, a field, a local, and the result of a
+// lambda.
+//
+// The hierarchy is deliberately three deep and virtual, so a callback that
+// receives an `Animal` must reach the SUBCLASS body, not the base one.
+
+class Animal {
+    public int w = 1;
+    public String kind() { return "animal"; }
+}
+
+class Dog extends Animal {
+    @Override public String kind() { return "dog"; }
+}
+
+class Cat extends Animal {
+    @Override public String kind() { return "cat"; }
+}
+
+interface Named { public String name(); }
+
+class Tagged implements Named {
+    public String name() { return "tagged"; }
+}
+
+// A callback that CONSUMES the polymorphic base. Each argument is a different
+// concrete class, and dispatch must reach its own `kind()`.
+void describe((Animal) -> String f) {
+    print(f(new Animal()));
+    print(f(new Dog()));
+    print(f(new Cat()));
+}
+
+// A callback that PRODUCES the polymorphic base: the lambda's body hands back a
+// concrete subclass, which converts into the result slot.
+void produce((int) -> Animal make) {
+    Animal a = make(1);
+    print(a.kind());
+}
+
+// The same over an INTERFACE-typed parameter, which is the other dynamic slot.
+void greet((Named) -> String g) {
+    print(g(new Tagged()));
+}
+
+// A function value stored in a FIELD: a strategy object, called back with a
+// freshly constructed subclass.
+class Registry {
+    public (Animal) -> String fmt;
+
+    public Registry((Animal) -> String fmt) { this.fmt = fmt; }
+
+    public void show() { print(this.fmt(new Dog())); }
+}
+
+public void main() {
+    // A lambda whose parameter type is written out, and one that leaves it to
+    // be inferred from the slot. Both must lower to the same closure shape.
+    describe((Animal a) -> a.kind());
+    describe(a -> a.kind() + "/" + a.w);
+
+    produce((int n) -> n > 0 ? new Dog() : new Cat());
+    greet((Named n) -> n.name());
+
+    Registry r = new Registry((Animal a) -> "fmt:" + a.kind());
+    r.show();
+
+    (Animal) -> String local = (Animal a) -> "local:" + a.kind();
+    print(local(new Cat()));
+}

@@ -244,6 +244,30 @@ Each subclass implements its ancestors' traits with the type arguments its
 >    body recurses forever — which Rust reports as a lint, not an error. Emitted
 >    crates therefore also carry `#![deny(unconditional_recursion)]`, turning any
 >    future instance of this mistake into a compile-time juxc bug report.
+>
+> **A FUNCTION TYPE over a polymorphic base names the handle, in both
+> directions.** A base-typed slot is `Rc<dyn <Name>Kind>` wherever it appears,
+> and a function type's parameter and result slots are slots like any other. So
+> `(Animal) -> int` lowers to `Rc<dyn Fn(Rc<dyn AnimalKind>) -> isize>` and
+> `(int) -> Animal` to `Rc<dyn Fn(isize) -> Rc<dyn AnimalKind>>`, for every
+> holder of the value: a parameter, a field, a local, a collection element, and
+> a result. Three consequences follow, and all three are what make a callback
+> over a class hierarchy work at all (`JUX-TYPE-SYSTEM-ADDENDUM.md` §T.3.6,
+> `ERRATA.md` E98):
+>
+> - A lambda written into such a slot declares its parameter as the HANDLE, so
+>   `(Animal a) -> a.w` becomes `move |a: Rc<dyn AnimalKind>| a.__get_w()`. A
+>   parameter type the program wrote out and one it left to be inferred lower to
+>   the same closure.
+> - An argument passed THROUGH the function value converts into the handle, the
+>   way an argument to a declared method does: `f(new Dog())` is
+>   `f(Rc::new(Dog::new()) as Rc<dyn AnimalKind>)`.
+> - A lambda body that produces a concrete subclass converts into the result
+>   slot on the way out.
+>
+> The polymorphism is the point. A `(Animal) -> String` callback is called with
+> a `Dog` and must reach `Dog`'s override, so the concrete struct is not an
+> option for the slot: it would slice the subclass away at the call.
 
 ### 6.9.7. Sealed Hierarchies Give Exact Analysis
 
