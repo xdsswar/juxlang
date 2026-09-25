@@ -1,0 +1,67 @@
+class Animal {
+    public String nm;
+    public Animal(String nm) { this.nm = nm; }
+    public String describe() { return "animal " + this.nm; }
+    public String operator string() { return "Animal(" + this.nm + ")"; }
+}
+class Dog extends Animal {
+    public Dog(String nm) { super(nm); }
+    @Override
+    public String describe() { return "dog " + this.nm; }
+}
+// No subclass: the marker trait its bound lowers to has to carry the members
+// anyway, which is what the Java side gets for free.
+class Rock {
+    public String label;
+    public int weight;
+    public Rock(String label, int weight) { this.label = label; this.weight = weight; }
+    public String tag() { return "rock:" + this.label; }
+}
+
+public void reportAnimals(Vec<? extends Animal> xs) {
+    for (var a : xs) {
+        print(a.nm + " -> " + a.describe());
+    }
+}
+
+public void reportRocks(Vec<? extends Rock> xs) {
+    for (var r : xs) {
+        print(r.label + " " + r.weight + " -> " + r.tag());
+    }
+}
+
+public int totalNameLength(Vec<? extends Animal> xs) {
+    int n = 0;
+    for (var a : xs) {
+        n += a.describe().length();
+    }
+    return n;
+}
+
+public void showFirstConsumer(Vec<? super Dog> v) {
+    print("super " + v[0]);
+}
+
+public void showFirstConcrete(Vec<Animal> v) {
+    print("plain " + v[0]);
+}
+
+public void main() {
+    Vec<Dog> dogs = new Vec<Dog>();
+    dogs.push(new Dog("Rex"));
+    dogs.push(new Dog("Ada"));
+
+    Vec<Animal> animals = new Vec<Animal>();
+    animals.push(new Animal("Generic"));
+
+    Vec<Rock> rocks = new Vec<Rock>();
+    rocks.push(new Rock("granite", 12));
+
+    reportAnimals(dogs);
+    reportAnimals(animals);
+    reportRocks(rocks);
+    print(totalNameLength(dogs));
+    print(totalNameLength(animals));
+    showFirstConsumer(animals);
+    showFirstConcrete(animals);
+}

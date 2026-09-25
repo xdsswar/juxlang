@@ -43,7 +43,7 @@ use crate::symbol_table::{FunctionSig, MethodSig, ParamSig, SymbolTable};
 use crate::ty::{
     compose_extends_substitution, explicit_generic_arg_map, infer_generic_args, lower_member_type,
     primitive_from_name, substitute, substitute_via_inference, ty_from_ref, ArrayKind, Primitive,
-    Ty,
+    Ty, Wildcard,
 };
 
 // ============================================================================
@@ -941,9 +941,26 @@ fn is_undiscovered(ty: &Ty, symbols: &SymbolTable) -> bool {
     }
 }
 
+/// The type member resolution runs against for a receiver expression.
+///
+/// Two peels, both of them about reaching the type that actually declares the
+/// member:
+///
+/// - a `?.` reaches THROUGH the null, so `s?.length()` resolves on `String`;
+/// - a **producer wildcard is READ as its bound** (PECS, §T.4.8 / ERRATA E100).
+///   A `Vec<? extends Animal>` element is an `Animal` as far as reading it goes,
+///   so `a.nm2()` is typed by `Animal`'s declaration. Without the peel nothing
+///   resolved and the whole chain typed as `Unknown`, which is how
+///   `n += a.nm2().length()` reached the backend with no receiver type and came
+///   out as the array `length` intrinsic: `a.nm2().len() as isize()`.
+///
+/// A CONSUMER wildcard (`? super B`) is left alone on purpose. It may be
+/// written and not read, so there is no member surface to resolve against, and
+/// peeling it to `B` would invent one.
 fn peel_safe_receiver(safe: bool, ty: Ty) -> Ty {
     match ty {
         Ty::Nullable(inner) if safe => *inner,
+        Ty::Wildcard(Wildcard::Extends(bound)) => *bound,
         other => other,
     }
 }

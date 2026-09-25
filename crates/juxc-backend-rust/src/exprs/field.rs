@@ -226,6 +226,36 @@ impl RustEmitter {
                 }
             }
         }
+        // **Field READ through a WILDCARD or a BOUNDED type parameter** →
+        // accessor call (§T.4.8, ERRATA E100).
+        //
+        // `void f(Vec<? extends Animal> xs)` lifts to
+        // `fn f<__W0: AnimalKind + …>(xs: JuxArr<Vec<__W0>>)`, so the element is
+        // a TYPE PARAMETER. A type parameter has no struct fields at all, and
+        // the block above cannot see that: `receiver_class_bare` answers from a
+        // `Ty::User` and a wildcard element is a `Ty::Wildcard`. So `it.nm`
+        // emitted as a plain `it.nm` and rustc answered
+        // `E0609: no field 'nm' on type '__W0'` — even where the accessor it
+        // needed was already sitting on `AnimalKind`. The same applies to a
+        // declared `<T extends Animal>`, whose values are a `Ty::Param`.
+        if !is_call_callee
+            && !self.emitting_lvalue
+            && !matches!(&*f.object, Expr::This(_))
+            && self.receiver_class_bare(&f.object).is_none()
+        {
+            if let Some(bare) = self.receiver_bound_class_bare(&f.object) {
+                if self.bound_field_accessor_ok(&bare, &f.field.text) {
+                    self.emit_expr(&f.object);
+                    self.w.push_str(".__get_");
+                    self.w.push_str(&to_rust_ident(&f.field.text));
+                    if let Some(sfx) = &method_suffix {
+                        self.w.push_str(sfx);
+                    }
+                    self.w.push_str("()");
+                    return;
+                }
+            }
+        }
         // §G.9.2: a member access on an **external** (`rust.std` / crate)
         // receiver uses the foreign symbol's REAL Rust name. Bindgen surfaces
         // Rust names verbatim (§G.4), so the Jux spelling already IS the Rust
@@ -391,7 +421,17 @@ impl RustEmitter {
         // The intrinsic belongs to arrays. A class or record that declares
         // its own `length()` method is called like any other method; the
         // intrinsic used to take it over and emit `w.len() as isize()`.
+        //
+        // `length` is a FIELD on an array or collection (`xs.length`), so the
+        // intrinsic never fires in CALLEE position. `s.length()` on a String is
+        // a method and `emit_string_stdlib_method` owns it; a `length()` on any
+        // other receiver is an ordinary call. Without the callee guard the
+        // intrinsic claimed `a.nm2().length()` whenever the receiver's type was
+        // unresolved, wrote `.len() as isize`, and the enclosing call then
+        // appended `()` — `a.nm2().len() as isize()`, which is rustc E0214 and
+        // not Rust anyone would write (ERRATA E100).
         if f.field.text == "length"
+            && !is_call_callee
             && !self.receiver_declares_member(&f.object, "length")
             && !self.receiver_declares_method(&f.object, "length")
         {
@@ -1485,6 +1525,98 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::User { name, .. }) => Some(self.lift_nested_class_name(name)),
             _ => None,
         }
+    }
+
+    /// The class a receiver is BOUNDED by, when the receiver's own type is not
+    /// a class at all: a producer wildcard (`? extends Animal`) or a type
+    /// parameter with a class bound (`<T extends Animal>`).
+    ///
+    /// This is the receiver shape a member read has to reach through the marker
+    /// trait for (§T.4.8, ERRATA E100). A consumer wildcard (`? super B`) is
+    /// deliberately NOT included: PECS says a consumer may be written and not
+    /// read, so there is no member surface to reach through it.
+    pub(crate) fn receiver_bound_class_bare(&self, recv: &Expr) -> Option<String> {
+        // The class a bound's head names, or `None` when the head is an
+        // interface, a type param or a foreign type.
+        let class_of_bound =
+            |head: &str| -> Option<String> { self.lookup_class_by_bare_or_fqn(head).map(|_| head.to_string()) };
+        match self.expr_types.get(&expr_span_of(recv))? {
+            Ty::Wildcard(juxc_tycheck::ty::Wildcard::Extends(bound)) => match bound.as_ref() {
+                Ty::User { name, .. } => class_of_bound(name.rsplit('.').next().unwrap_or(name)),
+                _ => None,
+            },
+            // A declared `<T extends Animal>`: the bound is in scope from the
+            // enclosing declaration, which is where `type_param_bounds` comes
+            // from. The FIRST class among the bounds wins -- an intersection
+            // bound names at most one class (§T.4.6).
+            Ty::Param(p) => self.type_param_bounds.get(p).and_then(|bounds| {
+                bounds.iter().find_map(|t| {
+                    if t.array_shape.is_some() {
+                        return None;
+                    }
+                    class_of_bound(&t.name.segments.last()?.text)
+                })
+            }),
+            _ => None,
+        }
+    }
+
+    /// True when a `__get_<field>` accessor resolves on a value bounded by
+    /// `<bare>Kind` (ERRATA E100).
+    ///
+    /// Two shapes put one there, and this has to agree with both gates in
+    /// `decls/classes.rs` or the emitted call names a method that does not
+    /// exist:
+    ///
+    /// - a **bound-position class outside any polymorphic hierarchy** declares
+    ///   the accessors for its whole `extends` chain on its own trait, when it
+    ///   uses the shared-handle representation the accessor bodies read through
+    ///   (see `carries_bound_position_members`);
+    /// - a **polymorphic base** declares the accessors for the fields IT
+    ///   declares, and a subclass's `<Sub>Kind` reaches them as a supertrait.
+    ///
+    /// Anything else (a leaf subclass's own field, a generic class's marker)
+    /// keeps direct field access, which is what the non-`dyn` representation
+    /// wants anyway.
+    pub(crate) fn bound_field_accessor_ok(&self, bare: &str, field: &str) -> bool {
+        let Some(owner) = self.accessor_field_owner(bare, field) else {
+            return false;
+        };
+        if self.carries_bound_position_members(bare) && self.is_refcell_class(bare) {
+            return true;
+        }
+        self.is_poly_base_class(&owner)
+    }
+
+    /// The nearest class at or above `bare` that declares `field` as a
+    /// non-private instance field -- the one whose `Kind` trait would carry its
+    /// accessor. `None` when no such field exists on the chain (a private
+    /// field, a static, or a method name).
+    fn accessor_field_owner(&self, bare: &str, field: &str) -> Option<String> {
+        let mut cursor = Some(bare.to_string());
+        let mut depth = 0usize;
+        while let Some(c) = cursor {
+            if depth > 64 {
+                return None;
+            }
+            let declares = self
+                .lookup_class_ast_by_bare_or_fqn(&c)
+                .map(|cd| {
+                    cd.fields.iter().any(|fd| {
+                        fd.name.text == field
+                            && !fd.is_static
+                            && !matches!(fd.visibility, juxc_ast::Visibility::Private)
+                            && fd.ty.is_some()
+                    })
+                })
+                .unwrap_or(false);
+            if declares {
+                return Some(c);
+            }
+            cursor = self.direct_parent_bare(&c);
+            depth += 1;
+        }
+        None
     }
 
     /// The bare class name of a resolved type, with a BARE nested-type name
