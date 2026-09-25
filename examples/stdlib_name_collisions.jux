@@ -1,0 +1,151 @@
+/**
+ * Names the standard library also uses are ordinary names (§M.16, ERRATA E96).
+ *
+ * Java lets a program declare a class called `String`, `T` or `Exception`, and
+ * Jux is a Java-shaped language, so it does too. Every declaration below
+ * collides with something `jux.std` or the `rust.std` prelude spells, and every
+ * one of them means the program's own type inside this file.
+ *
+ * This whole program used to detonate. `class T` alone produced 60 errors,
+ * every one of them pointing inside a `jux.std` source file the author cannot
+ * open, because bare-name resolution was a workspace-wide index rather than a
+ * per-unit question: the standard library's own `(T) -> R` parameters found
+ * this `T`. `class String` produced 81, `class Vec` 10, `class Exception` 8.
+ * The free function `pred` below did not even have to be CALLED: declaring a
+ * nullable-parameter function of that name re-shaped the arguments of
+ * `jux.std.collections.Iterator.any`'s own `pred` parameter.
+ */
+
+/** A one-letter name the standard library uses for its type parameters. */
+class T {
+    public int v;
+
+    public T(int v) {
+        this.v = v;
+    }
+}
+
+/** So are `R` and `U`. */
+class R {
+    public String label;
+
+    public R(String label) {
+        this.label = label;
+    }
+}
+
+class U {
+    public int n;
+
+    public U(int n) {
+        this.n = n;
+    }
+}
+
+/** A name the `rust.std` prelude owns. */
+class Vec {
+    public int size;
+
+    public Vec(int size) {
+        this.size = size;
+    }
+}
+
+/** Names `jux.std.collections` owns, one of them an interface. */
+interface Iterable {
+    String describe();
+}
+
+class Iterator implements Iterable {
+    public int steps;
+
+    public Iterator(int steps) {
+        this.steps = steps;
+    }
+
+    public String describe() {
+        return "iterator over " + this.steps;
+    }
+}
+
+class Map {
+    public int entries;
+
+    public Map(int entries) {
+        this.entries = entries;
+    }
+}
+
+class List {
+    public int items;
+
+    public List(int items) {
+        this.items = items;
+    }
+}
+
+/** A name the exception hierarchy owns, on a class that is not an exception. */
+class Exception {
+    public int code;
+
+    public Exception(int code) {
+        this.code = code;
+    }
+}
+
+/**
+ * Names `jux.std.option` and `jux.std.result` own, one an enum and one a record.
+ * The enum is the sharper case: the synthesized `fromName` helpers return a
+ * NULLABLE enum, and a bare `Option<...>` in the emitted Rust named THIS enum,
+ * so a one-line program failed with rustc E0107 about code it never wrote.
+ */
+enum Option { First, Second }
+
+record Result(int code) { }
+
+/** A constant named like `jux.std.exceptions.Throwable`. */
+const int Throwable = 41;
+
+/**
+ * A free function whose name matches a lambda parameter inside `jux.std`, with
+ * a NULLABLE parameter, which is what made the standard library's own calls
+ * wrap their arguments and fail to compile.
+ */
+void pred(String? s) {
+    print("pred saw null: " + (s == null));
+}
+
+/** And one whose name matches a `jux.std.testing` assertion. */
+void assertTrue(int n) {
+    print("user assertTrue " + n);
+}
+
+public void main() {
+    print(new T(7).v);
+    print(new R("label").label);
+    print(new U(3).n);
+    print(new Vec(12).size);
+    Iterable it = new Iterator(4);
+    print(it.describe());
+    print(new Map(2).entries);
+    print(new List(5).items);
+    print(new Exception(404).code);
+    print(Throwable + 1);
+    print(Option.First);
+    print(Option.Second.name());
+    print(new Result(9).code);
+    // A nullable in the same unit: `T?` lowers through Rust's own `Option`,
+    // which the enum above shadows by name.
+    String? note = null;
+    print(note == null);
+    pred(null);
+    assertTrue(9);
+
+    // The standard library still means its own types here: this `Vec` is the
+    // program's class, while the prelude's growable list is reached under its
+    // own package name.
+    rust.std.Vec<int> real = new rust.std.Vec<int>();
+    real.push(1);
+    real.push(2);
+    print(real.len());
+}

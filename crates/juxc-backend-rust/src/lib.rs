@@ -6115,7 +6115,21 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // `pub mod` scope. The explicit glob also shadows Rust's prelude
             // (so a Jux `Iterator` wins over `std::iter::Iterator`).
             self.w
-                .push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
+                .push_str("#[allow(unused_imports)]\nuse super::*;\n");
+            // **Pin `std` back to the crate** (§M.16.3). The glob above reaches
+            // every sibling MODULE too, so a Jux package named `jux` (legal: nothing
+            // reserves the segment) sits beside the emitted `jux::std` tree and the
+            // glob shadowed Rust's own `std` for the whole file. Every
+            // `std::rc::Rc` the emitter writes then failed with
+            // `E0433 cannot find \`rc\` in \`std\``. An explicit import beats a glob,
+            // so one line restores it; where nothing shadows `std` it is a no-op.
+            self.w.push_str(
+                "// `use super::*` can glob in a sibling module named `std`. An explicit\n",
+            );
+            self.w.push_str(
+                "// import beats a glob, so `std::` below still means Rust's own std.\n",
+            );
+            self.w.push_str("#[allow(unused_imports)]\nuse ::std as std;\n\n");
             if !self.workspace_mode {
                 self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
                     unit,

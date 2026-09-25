@@ -1934,6 +1934,77 @@ spelling.
 
 ---
 
+## E96. A user type may be named `T`, `String` or `Exception`
+
+**Conflict.** Two rules in the spec pull against each other and neither one
+said which wins. `JUX-LANG.md` §4.4 scopes a package-private type to its own
+package, and the addenda describe an implicit prelude that makes `jux.std.*`
+and `rust.std` reachable from any unit without an `import`. Nothing said how a
+bare single-segment name is resolved when more than one package declares it,
+and nothing said what the STANDARD LIBRARY's own units see.
+
+Read one way, the prelude is a workspace-wide bare-name index, and a program
+that declares `class T` has added `T` to it. That reading is what shipped, and
+it is not survivable. This whole program
+
+```java
+class T { public int v = 1; }
+public void main() { print(new T().v); }
+```
+
+produced 60 errors, every one of them pointing inside a `jux.std` source file
+the author cannot open, beginning with `E0416 cannot use package-private type
+T from jux.std.collections`. `class String` produced 81, `class Vec` 10,
+`class Exception` 8. `class Foo` and `class K` were fine, so the failure did
+not even read as a rule: it read as the compiler breaking on some names and
+not others.
+
+**Resolution.** Bare-name resolution is **unit-scoped**, and `jux.std.*` plus
+the generated `rust.*` stub packages form a **library realm** that never
+resolves a bare name to a user declaration. The ladder and the realm rule are
+written out in `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.
+
+Five consequences, stated because the alternative reading of each one is what
+the compiler used to do:
+
+- **No name is reserved.** Java lets a program declare `String`, `T`,
+  `Iterator` or `Exception`, Jux is a Java-shaped language, and a diagnostic
+  that told the author to rename would be the wrong answer to a question the
+  compiler should never have asked. The collision is resolved per unit, not
+  forbidden.
+- **A parameter beats a top-level function of the same name, in every body
+  kind.** Default interface method bodies did not record their parameters, so
+  a program's own `void pred(String? s)` re-shaped the arguments of
+  `jux.std.collections.Iterator.any`'s `pred` parameter and took the build
+  down inside the standard library, without the program ever calling `pred`.
+  §M.16.2.
+- **An `implements` name means what it means in the package that WROTE it.** A
+  user `interface Iterable` used to answer for
+  `jux.std.collections.LazyIterable implements Iterable`, so the program was
+  told the standard library had an unimplemented method (`E0429`), and with
+  that silenced the emitter wrote an empty trait impl and rustc said the same
+  thing again (`E0046`).
+- **A name that names a TYPE is a type, never a constant.** `const int
+  Exception = 3;` rewrote the type `Exception` to `3` wherever it appeared,
+  including `pub fn addSuppressed(&mut self, e: 3)` inside `jux.std.exceptions`,
+  which rustfmt could not even parse. A constant substitutes for a name only
+  when no type of that name is in scope.
+- **`package jux;` is legal.** The emitted Rust nests a Jux package as a Rust
+  module, so a package named `jux` lands beside the emitted `jux::std` tree;
+  the emitter now pins `std` back to the crate in every module it writes so
+  `std::rc::Rc` still means Rust's. §M.16.3.
+
+Visibility is unchanged for user code: a package-private type in one user
+package is still `E0416` from another (§4.4). What changed is that a user
+package is no longer a candidate at all when the unit doing the resolving
+belongs to the standard library.
+
+**Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16 carries the resolution
+ladder, the library realm, the parameter-shadowing rule and the `package jux;`
+note.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

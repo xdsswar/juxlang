@@ -433,6 +433,19 @@ impl RustEmitter {
                 return true;
             }
         }
+        // Past this point the only keys left to try are BARE ones, and a bare
+        // key is a ROOT-package declaration: the user's program. A unit of
+        // `jux.std.*` or of a `rust.*` stub does not see it (§M.16.1, ERRATA E96).
+        // A program that declared `class Vec` made `Vec<String>` inside
+        // `jux.std.meta.AnnotatedItem` answer "user type" here, so the emitter
+        // skipped the stub's real Rust path and spelled it
+        // `crate::rust::std::Vec`, a module the generated crate has no such
+        // thing as. A library unit's own types were already matched by the
+        // same-package branch above; anything else it names is spelled by the
+        // ordinary `crate::`-rooted fallback, which needs no answer from here.
+        if juxc_tycheck::symbol_table::is_library_realm_package(&pkg) {
+            return false;
+        }
         if let Some(sig) = self.symbols.classes.get(bare) {
             return !sig.is_external;
         }

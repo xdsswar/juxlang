@@ -272,14 +272,49 @@ impl RustEmitter {
     }
 
     pub(crate) fn interface_ast_by_bare(&self, bare: &str) -> Option<&juxc_ast::InterfaceDecl> {
-        if let Some(d) = self.interface_asts.get(bare) {
-            return Some(d);
+        // **Resolve in the unit being emitted first** (§M.16). `interface_asts` is
+        // keyed by FQN, and a ROOT-package interface is keyed by its bare name, so
+        // the exact `get(bare)` used to come first and handed
+        // `jux.std.collections.LazyIterable`'s `implements Iterable` a USER
+        // interface that happened to be spelled `Iterable`. LazyIterable then got
+        // an EMPTY `impl Iterable<T> for LazyIterable<T> {}`, and rustc reported
+        // E0046 against a standard-library file (ERRATA E96).
+        //
+        // Two map probes, no scan: this runs once per signature type of every
+        // emitted method, so the package-preferring FQN search is too expensive
+        // to put in front of it.
+        let ctx = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i));
+        if let Some(fqn) = ctx.and_then(|c| c.unqualified.get(bare)) {
+            if let Some(d) = self.interface_asts.get(fqn) {
+                return Some(d);
+            }
         }
+        let pkg = self.current_package_path();
+        if !pkg.is_empty() {
+            if let Some(d) = self.interface_asts.get(&format!("{pkg}.{bare}")) {
+                return Some(d);
+            }
+        }
+        // A bare key is a ROOT-package declaration, which a library unit does not
+        // see (§M.16.1).
+        if !juxc_tycheck::symbol_table::is_library_realm_package(&pkg) {
+            if let Some(d) = self.interface_asts.get(bare) {
+                return Some(d);
+            }
+        }
+        // The last resort keeps the realm gate: a library unit must not pick a
+        // user package's interface here either.
+        let here_is_library = juxc_tycheck::symbol_table::is_library_realm_package(&pkg);
         let suffix = format!(".{bare}");
-        let mut hits = self
-            .interface_asts
-            .iter()
-            .filter(|(k, _)| k.ends_with(&suffix));
+        let mut hits = self.interface_asts.iter().filter(|(k, _)| {
+            k.ends_with(&suffix)
+                && (!here_is_library
+                    || juxc_tycheck::symbol_table::is_library_realm_package(
+                        k.rsplit_once('.').map(|(p, _)| p).unwrap_or(""),
+                    ))
+        });
         match (hits.next(), hits.next()) {
             (Some((_, d)), None) => Some(d),
             _ => None,
@@ -497,6 +532,20 @@ impl RustEmitter {
                 // emits correctly.
                 let prev_alias = self.this_alias.take();
                 self.this_alias = Some("self".to_string());
+                // **A parameter shadows a top-level declaration of the same
+                // name** (§M.16.2, ERRATA E96). Every other body kind records its
+                // parameters here; a default interface method was the one that did
+                // not, and the shadow set is what tells `callee_param_is_nullable`
+                // that `pred(x!!)` inside `Iterator.any` calls the method's OWN
+                // `pred` parameter. Without it a program that merely DECLARED
+                // `void pred(String? s)` made those calls wrap their argument in
+                // `Some(...)`, and the build failed with rustc E0308 inside
+                // `jux.std\collections/Iterator.jux` -- a file the author cannot
+                // open, for a function the program never called.
+                let prev_params = std::mem::replace(
+                    &mut self.current_fn_params,
+                    method.params.iter().map(|p| p.name.text.clone()).collect(),
+                );
                 // `this` handed on as a value is the interface value an
                 // `Rc<dyn Iface>` slot takes: an owned handle to this object,
                 // made once (`Self` is a class handle, so the clone shares).
@@ -518,6 +567,7 @@ impl RustEmitter {
                 self.current_return_type = saved_return;
                 self.enclosing_interface = prev_iface;
                 self.this_alias = prev_alias;
+                self.current_fn_params = prev_params;
                 if is_async {
                     self.w.indent_dec();
                     self.w.emit_indent();

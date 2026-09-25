@@ -1445,6 +1445,93 @@ public void g<T>(T val) {
 
 ---
 
+## §M.16. Bare-name resolution is unit-scoped, and the standard library has its own realm
+
+A single-segment name in a type or call position is resolved **in the compilation
+unit that wrote it**, and nowhere else. The ladder, in order:
+
+1. a generic parameter in scope (the enclosing type's, then the member's);
+2. a declaration the unit's own package makes, the unit itself included, or one
+   a single-type or wildcard `import` in the unit binds;
+3. a nested type of the enclosing type (§M.9);
+4. the implicit prelude: `jux.std.*` and `rust.std` (`JUX-BINDGEN-ADDENDUM.md`
+   §G.6.5 scopes the foreign half to `rust.std`).
+
+A name that reaches none of those rungs is `E0417`, not a silent match somewhere
+else in the workspace.
+
+### M.16.1. The standard library does not import your program
+
+`jux.std.*` and the generated foreign-crate stub packages (`rust.*`) form the
+**library realm**. A unit in that realm resolves its bare names against the
+library realm only. It never binds one to a declaration in a user package, at
+any rung, including the cross-package fallback of rung 4.
+
+This is the rule that lets a program declare a type of its own with a name the
+standard library also uses. `class T`, `class String`, `class Exception`,
+`class Iterator`, `class Vec` are all ordinary declarations: Java permits every
+one of them, and Jux is a Java-shaped language, so a diagnostic that told the
+author to pick a different name would be the wrong answer. Inside the user's
+unit the name means the user's type; inside `jux.std.collections.Iterable` the
+name `Iterator` still means `jux.std.collections.Iterator`. The two never meet.
+
+The same rule holds for functions and constants: a program's free function
+`pred`, `f` or `assertTrue` is that program's, and a call written inside
+`jux.std` reaches the library's own parameter or declaration of that name.
+
+```java
+class T { public int v = 1; }          // fine: `T` is a class here
+void pred(String? s) { ... }           // fine: jux.std's own `pred` params are untouched
+
+public void main() { print(new T().v); }
+```
+
+### M.16.2. A parameter shadows a same-named top-level declaration
+
+Inside any body (a free function, a static or instance method, **or a default
+interface method**), a parameter or local named `f` is what `f(…)` calls. A
+top-level function of that name says nothing about the call, and in particular
+nothing about its parameters' nullability or reference modes. Default interface
+method bodies were the one body kind that did not record its parameters, so a
+program's own `void pred(String? s)` re-shaped the arguments of
+`Iterator.any`'s `pred` parameter and failed the build inside the standard
+library.
+
+### M.16.3. A user package may be named `jux`
+
+`package jux;` is a legal package declaration. Nothing about the standard
+library's own names reserves the segment, and `jux` on its own is not one of the
+packages the library declares, so a unit in it is an ordinary user unit.
+(`package jux.std;` parses and compiles too, but it JOINS the library realm by
+§M.16.1, and a unit there sees no other user package by bare name. Naming a
+package that is the standard library's is asking for the standard library's
+rules.)
+
+Because the emitted Rust nests a Jux package as a Rust module, a Jux package
+named `jux` becomes a module that sits beside the emitted `jux::std` tree, and a
+glob-import of the parent would otherwise shadow the real Rust `std`. The
+emitter pins `std` back to the crate in every module it writes, so the generated
+code means Rust's `std` wherever it writes `std::`.
+
+### M.16.4. A name that names a type is a type, not a constant
+
+A const-generic argument is written as a bare name in a type-argument slot
+(`Ring<float, SIZE>`, §T.11), so a bare name in a type position is read as a
+constant when a `const` of that name is in scope. It is read that way only when
+NO type of that name is in scope. `const int Exception = 3;` is a legal
+declaration, and it does not turn the type `Exception` into the number 3.
+
+### M.16.5. An `implements` name is resolved where it was written
+
+The interface a class's `implements` clause names is resolved in the package of
+the unit that declared the CLASS, never by a workspace-wide scan for a matching
+simple name. This decides both halves of the same question: which abstract
+methods the class owes (`E0429`) and which methods the emitted trait impl
+carries. A program's own `interface Iterable` is not the one
+`jux.std.collections.LazyIterable` implements.
+
+---
+
 ## Summary
 
 This addendum closes every dangling reference and acknowledged inconsistency identified in the gap analysis:
@@ -1465,6 +1552,7 @@ This addendum closes every dangling reference and acknowledged inconsistency ide
 | `ref` bindings                                | §M.13   | Shared references to value types (`Rc<RefCell>`) |
 | Parameter modifiers (final/weak/defaults/combos) | §M.14 | `final` semantics, `weak` parameters, default ordering, combination matrix |
 | Nullable type parameters                      | §M.15   | Nullable primitives valid; nested `T?` nests (no flatten); bare-`T` `== null` is constant |
+| Bare-name resolution / library realm          | §M.16   | Unit-scoped ladder; `jux.std` never binds a user name; a parameter shadows a top-level function |
 | `spawn` keyword/function                      | §M.12.1 | Library function only                       |
 | Cross-module class extension                   | §M.12.2 | Java-style: extendable by default, `final`/`const` opts out |
 | Static thread safety per profile              | §M.12.3 | Per-profile rule                            |

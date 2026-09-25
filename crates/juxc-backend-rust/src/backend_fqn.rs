@@ -241,6 +241,19 @@ impl crate::RustEmitter {
             .unwrap_or_else(|| self.symbols.package.join("."))
     }
 
+    /// The free function a bare callee name means **in the unit being emitted**
+    /// (§M.16). Always prefer this over `SymbolTable::lookup_function`, whose
+    /// context-free answer let a user's own `void pred(String? s)` re-shape the
+    /// arguments of `jux.std.collections.Iterator.any`'s `pred` parameter and
+    /// fail the build inside the standard library (ERRATA E96).
+    pub(crate) fn lookup_function_here(
+        &self,
+        name: &str,
+    ) -> Option<(&str, &juxc_tycheck::symbol_table::FunctionSig)> {
+        self.symbols
+            .lookup_function_in(name, &self.current_package_path())
+    }
+
     /// The FQN a bare TYPE name -- class, record, enum, interface or alias --
     /// means in the unit being emitted: an import or alias of it, then the
     /// unit's own package, then the table's package-preferring scan.
@@ -361,9 +374,20 @@ impl crate::RustEmitter {
         &self,
         name: &str,
     ) -> Option<(&str, &juxc_tycheck::symbol_table::InterfaceSig)> {
-        if let Some((k, i)) = self.symbols.interfaces.get_key_value(name) {
-            return Some((k.as_str(), i));
+        // A name written in full is that name.
+        if name.contains('.') {
+            if let Some((k, i)) = self.symbols.interfaces.get_key_value(name) {
+                return Some((k.as_str(), i));
+            }
         }
+        // **The unit being emitted resolves the name first** (§M.16): its imports
+        // and its own package. An exact key lookup used to come ahead of this,
+        // and for a bare name an exact key is a ROOT-package declaration, so a
+        // user `interface Iterable` answered for
+        // `jux.std.collections.LazyIterable implements Iterable`. LazyIterable
+        // then got an EMPTY trait impl (the user's interface declares methods it
+        // does not have), and rustc reported E0046 against a standard-library
+        // file (ERRATA E96).
         if let Some(idx) = self.current_unit_idx {
             if let Some(ctx) = self.symbols.units.get(idx) {
                 if let Some(fqn) = ctx.unqualified.get(name) {
@@ -379,10 +403,26 @@ impl crate::RustEmitter {
                 }
             }
         }
+        let pkg = self.current_package_path();
+        let here_is_library = juxc_tycheck::symbol_table::is_library_realm_package(&pkg);
+        let realm_ok = |k: &str| {
+            !here_is_library
+                || juxc_tycheck::symbol_table::is_library_realm_package(
+                    k.rsplit_once('.').map(|(p, _)| p).unwrap_or(""),
+                )
+        };
+        if let Some((k, i)) = self
+            .symbols
+            .interfaces
+            .get_key_value(name)
+            .filter(|(k, _)| realm_ok(k))
+        {
+            return Some((k.as_str(), i));
+        }
         self.symbols
             .interfaces
             .iter()
-            .filter(|(k, _)| fqn_bare(k) == name)
+            .filter(|(k, _)| fqn_bare(k) == name && realm_ok(k))
             .min_by(|a, b| a.0.cmp(b.0))
             .map(|(k, i)| (k.as_str(), i))
     }
