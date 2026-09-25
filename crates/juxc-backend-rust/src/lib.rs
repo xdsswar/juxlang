@@ -4242,11 +4242,12 @@ impl RustEmitter {
             "    // A Jux function value is an `Rc<dyn Fn(..)>`, and neither half of\n",
             "    // that is a name the program wrote. `fn` is what it is.\n",
             "    if full.contains(\"dyn \") && full.contains(\"Fn(\") {\n",
-            "        return String::from(\"<fn>\");\n",
+            "        String::from(\"<fn>\")\n",
+            "    } else {\n",
+            "        let head = full.split('<').next().unwrap_or(full);\n",
+            "        let short = head.rsplit(\"::\").next().unwrap_or(head);\n",
+            "        format!(\"<{}>\", if short.is_empty() { full } else { short })\n",
             "    }\n",
-            "    let head = full.split('<').next().unwrap_or(full);\n",
-            "    let short = head.rsplit(\"::\").next().unwrap_or(head);\n",
-            "    format!(\"<{}>\", if short.is_empty() { full } else { short })\n",
             "}\n",
         ));
         // A value reaching the `Debug` tier inside GENERIC code (a class's
