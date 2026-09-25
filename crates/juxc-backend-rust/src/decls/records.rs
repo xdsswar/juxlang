@@ -232,6 +232,7 @@ impl RustEmitter {
                 .components
                 .iter()
                 .map(|c| juxc_ast::Param {
+                    annotations: Vec::new(),
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_final: false,

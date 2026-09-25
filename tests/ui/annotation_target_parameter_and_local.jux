@@ -1,0 +1,12 @@
+@Target(METHOD)
+public annotation Loggable { }
+
+@Target(PARAMETER)
+public annotation Bind { }
+
+void handle(@Loggable int id) {
+    @Bind var copy = id;
+    print(copy);
+}
+
+public void main() { handle(1); }

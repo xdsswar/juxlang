@@ -2540,6 +2540,66 @@ rule and §B.15.2 the per-target source lists.
 
 ---
 
+## E104. Annotations on parameters and locals: two targets with no parser
+
+**Conflict.** `JUX-ANNOTATIONS-ADDENDUM.md` §A.3 lists `PARAMETER`
+("Function/method parameters") and `LOCAL_VARIABLE` ("Local variable
+declarations") among the eight `@Target` kinds, and §A.12 makes an
+out-of-target application `E0470`. `JUX-GRAMMAR-ADDENDUM.md` §A.2.4 spells the
+parameter production with annotations in it
+(`param = annotation* param-mode? type identifier ('=' expression)?`), and
+§A.2.8 admits `annotation+ statement`. Every one of §A.11's three framework
+patterns (routing, injection, ORM) annotates a parameter.
+
+The parser implemented neither position, and the failure did not say so:
+
+```java
+annotation Note { String value(); }
+void f(@Note("p") int x) { print(x); }
+public void main() { f(1); }
+```
+
+```text
+error[E0200]: expected identifier
+error[E0200]: expected ')' to close parameter list
+error[E0200]: expected '{' to start block
+error[E0200]: expected expression
+error[E0411]: `f` expects at most 0 arguments, got 1
+```
+
+Not one of those five names an annotation. The parameter list stopped because
+`@` cannot begin a type, the cascade then tore the function in two at its own
+`{`, and the last line is an arity complaint about a function whose only
+parameter the compiler had already thrown away. An author reading that has no
+way to learn that the `@` was the problem.
+
+A second, quieter gap: §A.2.8's `annotation+ statement` admits an annotation
+before ANY statement, while §A.3 names only the local declaration. Nothing said
+what `@Note("x") print(1);` meant.
+
+**Resolution.** §A.3.1. A parameter's annotations precede its binding mode and
+carry the target `PARAMETER`, in every parameter list (function, method,
+constructor, operator, interface method). In statement position the annotations
+apply to the statement that follows, and because `LOCAL_VARIABLE` is §A.3's only
+statement-level target, that statement must be a local variable declaration;
+anything else is `E0470` naming the statement kind. A lambda parameter takes no
+annotation, because §A.2.9 spells `lambda-param = type? identifier`.
+
+`@cfg` is excluded from both positions and is `E0470` there: statement-level
+conditional compilation is `if cfg(...)`, and a parameter cannot be compiled out
+of a signature its callers already wrote. Stated explicitly because a `@cfg`
+that parsed and was then dropped would read as if it were selecting code, which
+is worse than the parse error it replaced.
+
+Both targets are validated (`E0470`, `E0472`, `E0473`, `E0474`) and neither is
+recorded in the §A.8.0 registry, whose `kind()` is one of `class`, `method`,
+`field`, `function`. A parameter or local has no row, so a `RUNTIME`-retention
+annotation there is checked but not reachable from `jux.meta.Registry`.
+
+**Spec status:** `JUX-ANNOTATIONS-ADDENDUM.md` §A.3.1 carries the rule.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

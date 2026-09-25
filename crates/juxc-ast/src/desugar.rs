@@ -184,6 +184,7 @@ fn desugar_interface(iface: &mut InterfaceDecl) {
                 name: ident(&setter_method_name(&prop.name.text), span),
                 generic_params: Vec::new(),
                 params: vec![Param {
+                    annotations: Vec::new(),
                     name: ident("value", span),
                     ty: prop.ty.clone(),
                     is_final: false,
@@ -252,6 +253,7 @@ fn synth_value_struct_ctor(class: &mut ClassDecl) {
     let mut stmts = Vec::with_capacity(fields.len());
     for (name, ty, fspan) in fields {
         params.push(Param {
+            annotations: Vec::new(),
             name: name.clone(),
             ty,
             is_final: false,
@@ -519,6 +521,7 @@ fn lower_one_property(
         };
         let vis = setter.visibility.unwrap_or(prop.visibility);
         let value_param = Param {
+            annotations: Vec::new(),
             name: ident("value", span),
             ty: prop.ty.clone(),
             is_final: false,

@@ -148,6 +148,7 @@ impl RustEmitter {
                 .iter()
                 .zip(&param_refs)
                 .map(|(p, ty)| juxc_ast::Param {
+                    annotations: Vec::new(),
                     name: p.name.clone(),
                     ty: p.ty.clone().unwrap_or_else(|| ty.clone()),
                     is_final: false,

@@ -1,0 +1,8 @@
+@Target(LOCAL_VARIABLE)
+public annotation Scratch { }
+
+public void main() {
+    @Scratch print("hi");
+    @cfg(debug) var n = 1;
+    print(n);
+}

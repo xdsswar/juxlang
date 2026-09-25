@@ -2090,6 +2090,7 @@ impl RustEmitter {
                     c.params
                         .iter()
                         .map(|p| juxc_ast::Param {
+                            annotations: Vec::new(),
                             name: juxc_ast::Ident {
                                 text: p.name.clone(),
                                 span: m.span,
@@ -3474,6 +3475,7 @@ impl RustEmitter {
             .iter()
             .zip(&l.params)
             .map(|(ps, lp)| juxc_ast::Param {
+                annotations: Vec::new(),
                 name: lp.name.clone(),
                 ty: crate::decls::classes::substitute_type_ref(&ps.ty, &subst),
                 is_final: false,

@@ -108,6 +108,66 @@ public annotation Loggable { }
 
 Applying an annotation outside its declared target set is `E0470` (`annotation target mismatch`).
 
+### A.3.1. Where a `PARAMETER` or `LOCAL_VARIABLE` annotation is written
+
+The two targets that sit inside a function body, rather than on a declaration of
+their own, need their positions pinned down.
+
+**On a parameter.** A parameter's annotations come first, before any binding
+mode, as `JUX-GRAMMAR-ADDENDUM.md` §A.2.4 spells it
+(`param = annotation* param-mode? type identifier ('=' expression)?`) and as
+§A.2.4's `variadic-param` repeats. Several may be written, and the target kind is
+`PARAMETER` wherever the parameter list is: a function, a method, a constructor,
+an operator, or an interface method.
+
+```java
+@Target(PARAMETER)
+public annotation Body { }
+
+public User createUser(@Body final CreateUserRequest req) { ... }
+```
+
+A lambda parameter is NOT a `param`: §A.2.9 spells it `lambda-param = type?
+identifier`, with no annotation, because a lambda has no declaration a framework
+could look up. Because a lambda's parentheses look like a parameter list until
+the `->` arrives, an annotation written there leaves fragments that reach the
+statement rule: the `E0470` below is therefore withheld whenever reading the
+statement reported a diagnostic of its own, so the author is not told about
+statement targets when what they wrote was a lambda.
+
+**On a local variable.** In statement position an annotation applies to the
+statement that follows, per §A.2.8 `statement = ... | annotation+ statement`.
+§A.3 gives exactly one statement-level target, `LOCAL_VARIABLE`, so the statement
+must be a local variable declaration (either the `var` form or the typed one).
+An annotation on any other statement is `E0470`, naming the statement kind: an
+annotation that applied to a `print(x);` would have nothing to be recorded
+against and nothing to validate.
+
+```java
+@Target(LOCAL_VARIABLE)
+public annotation Scratch { }
+
+public void run() {
+    @Scratch var buffer = new Vec<int>();
+}
+```
+
+**`@cfg` is not one of these.** Conditional compilation of a statement is the
+statement form `if cfg(...)` (`JUX-LANG-V1.md` §11.5), not an annotation, and a
+parameter cannot be compiled out of a signature the callers already wrote. So
+`@cfg` on a parameter or on a local declaration is `E0470`. This is stated
+because the alternative is the worst outcome available: a `@cfg` that parses and
+is then dropped would read as if it were selecting code.
+
+**Retention.** Both targets are validated at compile time (`E0470`, `E0472`,
+`E0473`, `E0474`). Neither is recorded in the §A.8.0 registry: a registry row is
+keyed by `kind()` from `class`, `method`, `field`, `function`, and a parameter or
+a local is not one of those. A `RUNTIME`-retention annotation on a parameter is
+therefore checked but not reachable from `jux.meta.Registry`; the framework
+patterns in §A.11 that bind parameters do so with an annotation processor (§A.9).
+Extending the registry to parameters (`kind() == "parameter"`, `owner()` the
+function, `target()` the parameter name) is a later pass.
+
 ---
 
 ## §A.4 — Retention

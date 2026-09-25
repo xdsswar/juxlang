@@ -1,0 +1,2 @@
+annotation_on_non_declaration_statement.jux:5:5: [E0470] error: an annotation here applies to an expression statement, which has no annotation target -- the only annotated statement is a local variable declaration, `LOCAL_VARIABLE` (A.3)
+annotation_on_non_declaration_statement.jux:6:5: [E0470] error: `@cfg` cannot be applied to a local variable (A.3.1)

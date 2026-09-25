@@ -993,6 +993,12 @@ pub enum ReturnType {
 /// One formal parameter.
 #[derive(Debug, Clone)]
 pub struct Param {
+    /// Annotations written on the parameter, before any binding mode
+    /// (grammar A.2.4 `param = annotation* param-mode? type identifier ...`).
+    /// The target kind is `PARAMETER` (JUX-ANNOTATIONS-ADDENDUM A.3 / A.3.1),
+    /// which is what `@Body CreateUserRequest req` in the framework patterns of
+    /// A.11 needs: without this the whole parameter list aborted at the `@`.
+    pub annotations: Vec<Annotation>,
     /// Parameter name.
     pub name: Ident,
     /// Declared type.
