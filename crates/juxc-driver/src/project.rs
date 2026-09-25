@@ -303,12 +303,9 @@ pub fn build_example(
 
     let mut sources = dep_sources.to_vec();
     sources.extend(resolve_and_load_stub_sources(manifest));
-    let entries: Vec<&Path> = manifest.bins.iter().map(|b| b.path.as_path()).collect();
-    sources.extend(
-        load_src_tree(&manifest.project_root.join("src"))?
-            .into_iter()
-            .filter(|s| !entries.iter().any(|e| same_path(s.path(), e))),
-    );
+    // The example brings its own `main`, so none of the package's `[[bin]]`
+    // entry files may come with the shared code (E0400).
+    sources.extend(load_src_tree_without_entries(manifest, None)?);
     for file in &example.files {
         let text = std::fs::read_to_string(file)
             .with_context(|| format!("reading {}", file.display()))?;
@@ -501,7 +498,20 @@ pub fn cfg_facts_for_packages(
         }
     }
     packages.values().fold(crate::cfg::CfgFacts::new(release, profile), |facts, (m, requested, defaults)| {
-        facts.with_package_features(m.project_root.clone(), m.enabled_features(requested, *defaults))
+        facts
+            .with_package_features(m.project_root.clone(), m.enabled_features(requested, *defaults))
+            // Each package's `[[bin]] path = "…"` entry files travel with the
+            // build facts so §B.1.1's package check can tell an entry point
+            // apart from a member of the package tree (`src/bin/server.jux` is
+            // not `package bin;`). Only the `path` form: the dotted `main =
+            // "xss.it.Main"` form states the entry's package itself, so that
+            // file must declare it and stays under the rule.
+            .with_bin_entries(
+                m.bins
+                    .iter()
+                    .filter(|b| b.entry.is_none())
+                    .map(|b| b.path.clone()),
+            )
     })
 }
 
@@ -760,9 +770,18 @@ fn check_module_cycles(root: &Manifest, members: &BTreeMap<String, Manifest>) ->
 }
 
 /// Load the `.jux` sources for a `[lib]` target: every `.jux` under the
-/// package's `src/` directory (the library exposes its whole package tree).
+/// package's `src/` directory EXCEPT the `[[bin]]` entry files.
+///
+/// The library is the package's shared code, and a binary's entry file is not
+/// part of it: each entry declares its own top-level `main`, so a `[lib]` plus
+/// two `[[bin]]` package — the canonical §B.15.2 tree of `src/lib.jux` +
+/// `src/main.jux` + `src/bin/server.jux` + `src/bin/migrator.jux` — used to
+/// compile the whole tree into one library crate and report every entry as
+/// E0400, "`main` is declared more than once at the top level". The lib target
+/// is built unconditionally, so that made the commonest multi-target project
+/// shape fail before any binary was even reached.
 fn load_lib_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> {
-    load_src_tree(&manifest.project_root.join("src"))
+    load_src_tree_without_entries(manifest, None)
 }
 
 /// Load the `.jux` sources for a `[[bin]]` target. A binary needs its own
@@ -772,19 +791,47 @@ fn load_lib_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> {
 /// would be a duplicate-`main` error (E0400). This bin's own entry is kept, as
 /// is every non-entry source (the shared package code).
 fn load_bin_sources(manifest: &Manifest, entry: &Path) -> Result<Vec<SourceFile>> {
-    // The sibling bins' entry files to drop. Compare by path *components* so a
-    // `/`-vs-`\` separator mismatch (manifest `join("src/main.jux")` vs the
-    // walker's `join("src").join("main.jux")`) doesn't defeat the filter.
-    let others: Vec<&Path> = manifest
+    load_src_tree_without_entries(manifest, Some(entry))
+}
+
+/// The sources `jux test` compiles from a package: its `src/` tree with every
+/// `[[bin]]` entry file dropped EXCEPT the first one.
+///
+/// A test crate generates its own entry point, so the binaries' entries are not
+/// wanted, and more than one of them is E0400: §B.15.2's canonical shape could
+/// be built and run but not tested. The primary binary's entry is kept because a
+/// single-`[[bin]]` package has always compiled its `main.jux` into the test
+/// crate, and a `@Test` may call a free function declared there.
+pub fn load_test_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> {
+    load_src_tree_without_entries(manifest, manifest.bins.first().map(|b| b.path.as_path()))
+}
+
+/// The package's `src/` tree with every declared `[[bin]]` entry file dropped,
+/// except `keep` when one is named.
+///
+/// One place decides what "the package's shared code" is, because every kind of
+/// target needs the same answer and each used to spell it out for itself: the
+/// `[lib]` target keeps no entry ([`load_lib_sources`]), a `[[bin]]` target its
+/// own ([`load_bin_sources`]), an `examples/` program none ([`build_example`],
+/// which brings its own `main`) and a test crate the primary one
+/// ([`load_test_sources`]). Getting it wrong in any of them is the same E0400.
+fn load_src_tree_without_entries(
+    manifest: &Manifest,
+    keep: Option<&Path>,
+) -> Result<Vec<SourceFile>> {
+    // The entry files to drop. Compare by path *components* so a `/`-vs-`\`
+    // separator mismatch (manifest `join("src/main.jux")` vs the walker's
+    // `join("src").join("main.jux")`) doesn't defeat the filter.
+    let drop: Vec<&Path> = manifest
         .bins
         .iter()
         .map(|b| b.path.as_path())
-        .filter(|p| !same_path(p, entry))
+        .filter(|p| keep.map_or(true, |k| !same_path(p, k)))
         .collect();
     let all = load_src_tree(&manifest.project_root.join("src"))?;
     Ok(all
         .into_iter()
-        .filter(|s| !others.iter().any(|o| same_path(s.path(), o)))
+        .filter(|s| !drop.iter().any(|o| same_path(s.path(), o)))
         .collect())
 }
 
@@ -942,19 +989,77 @@ fn sanitize(name: &str) -> String {
     default_target_name(name)
 }
 
-/// Fold one compile result's diagnostics/sources into the package
-/// accumulators (keeping the first non-empty source list — every target of
-/// a package shares the same stdlib-prefixed shape, so the first wins for
-/// diagnostic indexing).
+/// Fold one compile result's diagnostics and sources into the package
+/// accumulators, translating the result's file indices onto the accumulated
+/// source list.
+///
+/// A diagnostic names its file by INDEX into the source list of the compile
+/// that produced it, and a package's targets do not compile the same list: the
+/// `[lib]` target drops every `[[bin]]` entry file and each binary drops the
+/// other binaries' (see [`load_src_tree_without_entries`]), which shifts every
+/// file after the first entry. Keeping only the first target's list, as this
+/// used to, therefore printed a later target's diagnostic against whatever file
+/// happened to sit at that index: in a `[lib]` + three `[[bin]]` package a type
+/// error on line 5 of `src/bin/server.jux` was reported at
+/// `src/com/example/myapp/Greeter.jux:6`, sending the reader to a file with
+/// nothing wrong in it.
+///
+/// So the accumulated list is the union of the targets' lists, keyed by path,
+/// and each diagnostic is re-tagged as it is folded in. A diagnostic every
+/// target produces (an error in the shared library code) is then identical in
+/// all of them, and is reported once rather than once per target.
 fn record(
     result: &crate::CompileResult,
     diags: &mut Vec<Diagnostic>,
     sources: &mut Vec<SourceFile>,
 ) {
-    diags.extend(result.diagnostics.iter().cloned());
-    if sources.is_empty() {
-        *sources = result.sources.clone();
+    // This compile's index -> the accumulated list's index, appending files
+    // this is the first target to compile.
+    let remap: Vec<usize> = result
+        .sources
+        .iter()
+        .map(|src| match sources.iter().position(|s| s.path() == src.path()) {
+            Some(i) => i,
+            None => {
+                sources.push(src.clone());
+                sources.len() - 1
+            }
+        })
+        .collect();
+    for diag in &result.diagnostics {
+        let mut diag = diag.clone();
+        // The diagnostic's own file tag, which decides the path printed and the
+        // text its line/column are resolved against.
+        if let Some(file) = diag.file {
+            diag.file = remap.get(file).copied();
+        }
+        // Spans carry a file id of their own, which the renderer uses to place a
+        // secondary label in another file; it has to be translated the same way.
+        for span in diag
+            .primary_span
+            .iter_mut()
+            .chain(diag.labels.iter_mut().map(|l| &mut l.span))
+        {
+            if let Some(&to) = remap.get(span.file as usize) {
+                span.file = to as u32;
+            }
+        }
+        if !diags.iter().any(|d| same_diagnostic(d, &diag)) {
+            diags.push(diag);
+        }
     }
+}
+
+/// Whether two diagnostics are the same report, for the one-per-package
+/// de-duplication in [`record`]. Compared on what a reader sees: the code, the
+/// severity, the message, and the file and span it points at.
+fn same_diagnostic(a: &Diagnostic, b: &Diagnostic) -> bool {
+    a.code == b.code
+        && a.severity == b.severity
+        && a.message == b.message
+        && a.file == b.file
+        && a.primary_span.map(|s| (s.file, s.start, s.end))
+            == b.primary_span.map(|s| (s.file, s.start, s.end))
 }
 
 #[cfg(test)]
@@ -1003,6 +1108,80 @@ mod tests {
             !names.contains(&"beta.jux".to_string()),
             "sibling bin entry excluded: {names:?}",
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The `[lib]` target of the same package must drop EVERY bin entry: the
+    /// library is the shared code, and it is built unconditionally, so leaving
+    /// the entries in it reported each of them as E0400 (§B.15.2's canonical
+    /// `[lib]` + two `[[bin]]` tree did not build at all).
+    #[test]
+    fn load_lib_sources_excludes_every_bin_entry() {
+        let root =
+            std::env::temp_dir().join(format!("juxc-lib-sources-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src").join("bin")).unwrap();
+        std::fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"com.example.multi\"\n\n\
+             [lib]\nname = \"multi\"\n\n\
+             [[bin]]\nname = \"app\"\npath = \"src/main.jux\"\n\n\
+             [[bin]]\nname = \"server\"\npath = \"src/bin/server.jux\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src").join("lib.jux"), "// library root\n").unwrap();
+        std::fs::write(root.join("src").join("main.jux"), "public void main(){}").unwrap();
+        std::fs::write(root.join("src").join("bin").join("server.jux"), "public void main(){}")
+            .unwrap();
+        std::fs::write(root.join("src").join("shared.jux"), "public int helper(){ return 1; }")
+            .unwrap();
+
+        let m = Manifest::load(&root).expect("manifest loads");
+        let names: Vec<String> = load_lib_sources(&m)
+            .unwrap()
+            .iter()
+            .map(|s| s.path().file_name().and_then(|n| n.to_str()).unwrap_or("").to_string())
+            .collect();
+        assert!(names.contains(&"lib.jux".to_string()), "library root kept: {names:?}");
+        assert!(names.contains(&"shared.jux".to_string()), "shared source kept: {names:?}");
+        assert!(!names.contains(&"main.jux".to_string()), "bin entry excluded: {names:?}");
+        assert!(!names.contains(&"server.jux".to_string()), "bin entry excluded: {names:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The build facts carry the `[[bin]] path = \"…\"` entry files so §B.1.1's
+    /// package check can excuse them (`src/bin/server.jux` is not
+    /// `package bin;`). The dotted `main = \"xss.it.Main\"` form is NOT carried:
+    /// that key states the entry's package, so the file must declare it.
+    #[test]
+    fn cfg_facts_carry_path_bin_entries_but_not_dotted_ones() {
+        let root =
+            std::env::temp_dir().join(format!("juxc-entry-facts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src").join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("src").join("xss").join("it")).unwrap();
+        std::fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"com.example.multi\"\n\n\
+             [[bin]]\nname = \"server\"\npath = \"src/bin/server.jux\"\n\n\
+             [[bin]]\nname = \"named\"\nmain = \"xss.it.Main\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src").join("bin").join("server.jux"), "public void main(){}")
+            .unwrap();
+        std::fs::write(
+            root.join("src").join("xss").join("it").join("Main.jux"),
+            "package xss.it;\npublic void main(){}",
+        )
+        .unwrap();
+
+        let m = Manifest::load(&root).expect("manifest loads");
+        let entries = cfg_facts_for(&m, false);
+        let entries = entries.bin_entries();
+        assert_eq!(entries.len(), 1, "only the `path` form is carried: {entries:?}");
+        assert!(entries[0].ends_with("server.jux"), "{entries:?}");
 
         let _ = std::fs::remove_dir_all(&root);
     }

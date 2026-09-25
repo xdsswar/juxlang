@@ -80,6 +80,13 @@ Rules:
 | `src/a/b/` | absent | `E0301` — missing required `package a.b;` |
 | `src/a/b/` | `package a.b;` | OK |
 | `src/a/b/` | `package a.x;` (mismatch) | `E0301` — *expected `a.b`* |
+| `src/bin/` (a `[[bin]] path` entry file) | absent | OK: an entry point is not a package member |
+| `src/bin/` (a `[[bin]] path` entry file) | `package bin;` | OK: it matches the directory |
+| `src/xss/it/` (a `[[bin]] main = "xss.it.Main"` entry) | absent | `E0301`: the manifest named the package |
+
+**`[[bin]]` entry files.** The last three rows are the one exception to the derivation, and §B.15.2 is why: an entry file located by `[[bin]] path = "…"` (§B.2.2) is a program's entry point rather than a member of the package's type tree. The manifest says where it is, so nothing needs a package to find it, and it may be package-less wherever it sits under `src/`. That is what makes §B.15.2's `src/bin/server.jux` legal as written instead of being told to declare `package bin;`, a package no `import` would ever name.
+
+Only the *requirement* is lifted. A package an entry file does declare still has to match its directory, because a file that opts into a package is a member of it and nothing else would notice the two disagreeing. The exemption is also per file, not per directory: an ordinary source that happens to sit beside an entry in `src/bin/` is package code and declares `package bin;` like any other file there. And the dotted form, `[[bin]] main = "xss.it.Main"`, states the entry's package in the manifest itself, so that file must declare `package xss.it;` and the rows above apply to it unchanged.
 
 The diagnostic points at the offending `package` line (or the file head for a missing declaration) and names the expected package. This is what turns the classic failure — a file in `…/other/` declaring `package xss.it;` while a consumer writes `import xss.it.other.Other;` — from a cryptic emitted-Rust `E0432` into a precise Jux error. Files **not** under a `src/` root (a loose `juxc foo.jux`, the auto-loaded `jux.std`, `.jux.d` stubs) are unconstrained: their package comes from the declaration alone.
 
@@ -1328,6 +1335,20 @@ path = "src/bin/migrator.jux"
 ```
 
 Each binary may import from `src/lib.jux`. Build all with `jux build`; run a specific one with `jux run --bin myapp-server`. Each `path` must contain exactly one entry point per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.3 / §E.2.
+
+Each target compiles the package's shared code plus at most one entry file, since an entry file declares a top-level `main`:
+
+| target | sources |
+|---|---|
+| `[lib]` | every `.jux` under `src/` EXCEPT all `[[bin]]` entry files |
+| `[[bin]] X` | the same, plus X's own entry file |
+| `examples/<name>` | the same, plus the example's files (which bring their own `main`) |
+
+A target that saw more than one entry would report each of them as `E0400`, "`main` is declared more than once at the top level". The `[lib]` target is built whenever no single `--bin` was selected, so this is not an error a binary-only build could avoid.
+
+The entry files in `src/bin/` are package-less, per the `[[bin]]` rows of §B.1.1's table: the manifest locates them, so their directory is not a package name.
+
+A diagnostic names the file it belongs to whichever target produced it. The targets of one package do not compile the same source list, so `jux build` and `jux check` translate each target's file indices onto one list for the package before reporting, and a diagnostic every target produces (an error in the shared code) is reported once rather than once per target.
 
 ### B.15.3. Examples Directory
 

@@ -56,6 +56,25 @@ pub struct CfgFacts {
     /// The enabled features of each package, by the package's root directory.
     /// A file takes the set of the deepest root that contains it.
     features: Vec<(PathBuf, BTreeSet<String>)>,
+    /// Every `[[bin]] path = "…"` entry file of every package in this build
+    /// (§B.2.2). A file named here is a program's entry point rather than a
+    /// member of the package's type tree, so §B.1.1's "a file below `src/` must
+    /// declare its directory's package" does not apply to it: without this,
+    /// §B.15.2's canonical `src/bin/server.jux` was told to declare
+    /// `package bin;` (E0301).
+    ///
+    /// It rides along with the other build facts because those are already
+    /// computed from the manifest and threaded into every path that needs them
+    /// — `build_package`, `juxc`, and the language server, which each pass
+    /// their `CfgFacts` straight through to the front end. A second parameter
+    /// would have had to be added to all three, and the editor (which only
+    /// loads `cfg_facts_for`) would have kept reporting E0301 on a file the CLI
+    /// compiles cleanly.
+    ///
+    /// The dotted form, `[[bin]] main = "xss.it.Main"`, is deliberately NOT
+    /// listed: that key states the entry's package, so the file must declare it
+    /// and the §B.1.1 rule is what checks the two agree.
+    bin_entries: Vec<PathBuf>,
 }
 
 impl Default for CfgFacts {
@@ -90,6 +109,7 @@ impl CfgFacts {
             release: false,
             profile: juxc_tycheck::Profile::Full,
             features: Vec::new(),
+            bin_entries: Vec::new(),
         }
     }
 
@@ -161,6 +181,7 @@ impl CfgFacts {
             release: false,
             profile: juxc_tycheck::Profile::Full,
             features: Vec::new(),
+            bin_entries: Vec::new(),
         }
     }
 
@@ -174,6 +195,18 @@ impl CfgFacts {
     pub fn with_package_features(mut self, root: PathBuf, features: BTreeSet<String>) -> Self {
         self.features.push((root, features));
         self
+    }
+
+    /// Record `paths` as `[[bin]]` entry files of a package in this build (see
+    /// the [`CfgFacts::bin_entries`] field).
+    pub fn with_bin_entries<I: IntoIterator<Item = PathBuf>>(mut self, paths: I) -> Self {
+        self.bin_entries.extend(paths);
+        self
+    }
+
+    /// The `[[bin]]` entry files of this build, for §B.1.1's package check.
+    pub fn bin_entries(&self) -> &[PathBuf] {
+        &self.bin_entries
     }
 
     /// The features enabled for the file at `path`.

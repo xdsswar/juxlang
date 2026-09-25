@@ -2471,6 +2471,75 @@ reserved, and nothing tells an author to rename (§M.16.1).
 
 ---
 
+## E103. A `[[bin]]` entry file is not a member of the package tree
+
+**Conflict.** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.15.2 draws the canonical
+multi-binary project and §B.1.1 derives a file's package from its directory
+under `src/`. Read together they contradict each other, and the shape §B.15.2
+documents as ordinary did not build at all:
+
+```
+src/
+├── lib.jux                     # shared code
+├── main.jux                    # primary binary
+└── bin/
+    ├── server.jux              # additional binary
+    └── migrator.jux            # additional binary
+```
+
+```text
+src/bin/server.jux:1:1: [E0301] error: missing `package` declaration: this file
+  is in `bin`, so it must declare `package bin;`
+src/bin/migrator.jux:1:1: [E0301] error: missing `package` declaration: this
+  file is in `bin`, so it must declare `package bin;`
+src/main.jux:3:8: [E0400] error: `main` is declared more than once at the top level
+src/bin/server.jux:3:8: [E0400] error: `main` is declared more than once at the
+  top level
+```
+
+Two independent causes, both from the same unstated assumption: that every `.jux`
+file under `src/` is a member of the package tree.
+
+The `E0400` pair is the `[lib]` target, which compiled the whole `src/` tree
+with no entry filter and so put all three `main`s in one library crate. §B.15.2
+said nothing about what each target compiles, and the lib target is built
+whenever no single `--bin` was selected, so the failure came before any binary
+was reached. Each `[[bin]]` target already excluded its siblings' entry files,
+which is the same rule the lib target needed.
+
+The `E0301` pair is §B.1.1's derivation applied to a file whose location the
+manifest already states. Nothing imports `bin.Server`: the `[[bin]] path` key is
+how that file is found, and `package bin;` would be a package name no `import`
+could ever usefully name. §B.1.1's own justification for the rule, that a public
+type must be findable from its name, does not reach an entry point.
+
+**Resolution.** §B.1.1. A `[[bin]] path = "…"` entry file is a program's entry
+point, not a member of the package's type tree, and may be package-less wherever
+it sits under `src/`. Only the requirement is lifted: a package it does declare
+is still checked against its directory, the exemption is per file rather than per
+directory (an ordinary source beside an entry in `src/bin/` still declares
+`package bin;`), and the dotted form `[[bin]] main = "xss.it.Main"` states the
+entry's package in the manifest, so that file must declare it.
+
+§B.15.2. A target compiles the package's shared code plus at most one entry
+file: the `[lib]` target excludes every `[[bin]]` entry, a binary excludes the
+other binaries', and an example excludes all of them and brings its own `main`.
+More than one entry in one target is `E0400`, which is the rule two `main`s in a
+single binary's own source still meet.
+
+One consequence had to be settled to make the fixed shape usable: because the
+targets of a package do not compile the same source list, a diagnostic's file
+index means nothing outside the target that produced it, and a type error on line
+5 of `src/bin/server.jux` was printed against `src/com/example/myapp/Greeter.jux`
+line 6. A package's build now translates each target's indices onto one list
+before reporting, and reports a diagnostic every target produces (an error in the
+shared code) once rather than once per target.
+
+**Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.1.1 carries the entry-file
+rule and §B.15.2 the per-target source lists.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

@@ -23,6 +23,14 @@
 //! sources, and `.jux.d` declaration stubs have no `src/` ancestor (or are
 //! flagged external) and are skipped — their package identity comes from their
 //! declaration alone.
+//!
+//! One more kind of file is not a member of the package tree: a `[[bin]]`
+//! entry point located by `path` (§B.2.2). §B.15.2's canonical multi-binary
+//! tree puts them in `src/bin/`, so deriving a package from the directory told
+//! `src/bin/server.jux` to declare `package bin;` and the shape did not build.
+//! The manifest already says where such a file is, so it needs no package to be
+//! found, and it MAY be package-less wherever it sits (see
+//! [`check_package_paths`] for what still holds).
 
 use std::path::Path;
 
@@ -36,7 +44,20 @@ use juxc_source::{SourceFile, Span};
 /// `units[i]` must correspond to `sources[i]` (the driver builds them in
 /// lock-step), so the unit's index is also its `sources` index and its
 /// diagnostic `file` tag.
-pub fn check_package_paths(units: &[CompilationUnit], sources: &[SourceFile]) -> Vec<Diagnostic> {
+///
+/// `bin_entries` are the build's `[[bin]] path = "…"` entry files (from
+/// [`crate::CfgFacts::bin_entries`]). Such a file is a program's entry point,
+/// not a member of the package tree, so it is excused from having to declare
+/// the package its directory implies — `src/bin/server.jux` of §B.15.2 is
+/// package-less, not `package bin;`. Only that one requirement is lifted: a
+/// `package` line the entry file DOES write is still checked against its
+/// directory, because an entry that opts into a package is a member of it and
+/// nothing else would notice the two disagreeing.
+pub fn check_package_paths(
+    units: &[CompilationUnit],
+    sources: &[SourceFile],
+    bin_entries: &[std::path::PathBuf],
+) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for (idx, (unit, source)) in units.iter().zip(sources.iter()).enumerate() {
         // Stubs are trusted, signature-only views — never validated.
@@ -52,7 +73,7 @@ pub fn check_package_paths(units: &[CompilationUnit], sources: &[SourceFile]) ->
         match unit.package.as_ref() {
             // No `package` declaration.
             None => {
-                if !expected.is_empty() {
+                if !expected.is_empty() && !is_bin_entry(source.path(), bin_entries) {
                     // A sub-directory file must declare its package.
                     out.push(
                         Diagnostic::error(
@@ -141,6 +162,16 @@ fn expected_package(path: &Path) -> Option<Vec<String>> {
     // Segments between `src` and the file name are the package path.
     let segments = &comps[src_idx + 1..comps.len() - 1];
     Some(segments.iter().map(|s| s.to_string()).collect())
+}
+
+/// True when `path` is one of the build's `[[bin]]` entry files.
+///
+/// Paths are compared by normalized [`Path::components`] so a `/`-vs-`\`
+/// separator difference cannot defeat the match: the manifest builds its entry
+/// path with `join("src/bin/server.jux")` while the source walker arrives at
+/// the same file as `join("src").join("bin").join("server.jux")`.
+fn is_bin_entry(path: &Path, bin_entries: &[std::path::PathBuf]) -> bool {
+    bin_entries.iter().any(|e| e.components().eq(path.components()))
 }
 
 /// A display form of the package's relative directory: `xss/it/other`.
@@ -280,5 +311,67 @@ mod tests {
     fn deepest_src_root_wins() {
         let p = PathBuf::from("/a/src/outer/src/pkg/File.jux");
         assert_eq!(expected_package(&p), Some(vec!["pkg".into()]));
+    }
+
+    /// One parsed unit for `path`, as the driver would hand it over.
+    fn unit_at(path: &str, src: &str) -> (CompilationUnit, SourceFile) {
+        let file = SourceFile::new(PathBuf::from(path), src.to_string());
+        let unit = juxc_parse::parse(&juxc_lex::lex(&file).tokens).ast;
+        (unit, file)
+    }
+
+    /// §B.15.2's `src/bin/server.jux` is a declared `[[bin]]` entry, so it is a
+    /// program's entry point and not a member of a package called `bin`. Before
+    /// the entry list was threaded in, the canonical multi-binary tree was told
+    /// to write `package bin;` and would not build.
+    #[test]
+    fn a_declared_bin_entry_may_be_package_less() {
+        let entry = PathBuf::from("/p/src/bin/server.jux");
+        let (unit, source) = unit_at("/p/src/bin/server.jux", "public void main(){}");
+        let units = [unit];
+        let sources = [source];
+
+        // Not a declared entry: the §B.1.1 rule applies as it always did.
+        let diags = check_package_paths(&units, &sources, &[]);
+        assert_eq!(diags.len(), 1, "an ordinary file below `src/` needs its package");
+        assert!(diags[0].message.contains("package bin;"), "{}", diags[0].message);
+
+        // Declared as a bin entry: no package required.
+        assert!(check_package_paths(&units, &sources, &[entry]).is_empty());
+    }
+
+    /// Only the requirement is lifted. An entry file that DOES declare a
+    /// package has opted into it, so the declaration is still checked against
+    /// the directory -- nothing else would notice the two disagreeing.
+    #[test]
+    fn a_bin_entry_with_a_mismatched_package_is_still_an_error() {
+        let entry = PathBuf::from("/p/src/bin/server.jux");
+        let (unit, source) =
+            unit_at("/p/src/bin/server.jux", "package other;\npublic void main(){}");
+        let diags = check_package_paths(&[unit], &[source], &[entry]);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("expected `bin`"), "{}", diags[0].message);
+    }
+
+    /// The exemption is per file, not per directory: a second file sitting
+    /// beside an entry in `src/bin/` is ordinary package code.
+    #[test]
+    fn a_non_entry_beside_an_entry_still_needs_its_package() {
+        let entry = PathBuf::from("/p/src/bin/server.jux");
+        let (unit, source) =
+            unit_at("/p/src/bin/Helper.jux", "public class Helper { public int two(){ return 2; } }");
+        let diags = check_package_paths(&[unit], &[source], &[entry]);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("package bin;"), "{}", diags[0].message);
+    }
+
+    /// A separator difference must not defeat the match: the manifest builds
+    /// its entry path from the TOML string `"src/bin/server.jux"` while the
+    /// source walker arrives at the same file segment by segment.
+    #[test]
+    fn entry_paths_match_across_separator_spellings() {
+        let entry = PathBuf::from("/p").join("src/bin/server.jux");
+        let walked = PathBuf::from("/p").join("src").join("bin").join("server.jux");
+        assert!(is_bin_entry(&walked, &[entry]));
     }
 }
