@@ -1223,7 +1223,11 @@ impl RustEmitter {
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }
-        self.w.push_str(") -> Self {\n");
+        self.w.push_str(") -> Self");
+        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(ctor.span)) {
+            self.w.push_str(&clause);
+        }
+        self.w.push_str(" {\n");
         self.w.indent_inc();
         self.emit_static_init_trigger();
         self.w.emit_indent();
@@ -1424,6 +1428,9 @@ impl RustEmitter {
         // `C_Inner { … }` literal in the body needs no turbofish — Rust
         // infers the args from the field initializers.
         self.emit_generic_params_as_args(&class_decl.generic_params);
+        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(ctor.span)) {
+            self.w.push_str(&clause);
+        }
         self.w.push_str(" {\n");
         self.w.indent_inc();
 
@@ -1853,6 +1860,12 @@ impl RustEmitter {
         // Thread generic params onto the inner return type, same as the
         // explicit-ctor path (`pub fn new_inner() -> Box_Inner<T>`).
         self.emit_generic_params_as_args(&class_decl.generic_params);
+        // A relaxed class's synthesized constructor asks for every relaxed
+        // parameter's `Clone + Debug` (gap 2): its field defaults are not
+        // analysed member by member.
+        let relaxed_where =
+            self.relaxed_class.as_ref().map(|r| r.where_clause(class_decl.span)).unwrap_or_default();
+        self.w.push_str(&relaxed_where);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // A class with `init { }` blocks binds the inner to `let mut __self`
@@ -1957,7 +1970,7 @@ impl RustEmitter {
         // Thin public `new()` → wrap `new_inner()`. §CR.4.1: `RefCell` only for
         // the interior-mutable rep; the read-only-shared `Rc` rep drops it.
         self.w.indent_inc();
-        self.w.line("pub fn new() -> Self {");
+        self.w.line(&format!("pub fn new() -> Self{relaxed_where} {{"));
         self.w.indent_inc();
         self.emit_static_init_trigger();
         let wrapped = if self.sync_classes.contains(&class_decl.name.text) {

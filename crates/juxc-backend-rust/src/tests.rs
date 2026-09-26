@@ -1719,9 +1719,10 @@ fn interface_bound_lowers_to_trait_bound_directly() {
         public void main() {}
         "#,
     );
-    // Interface bound flows verbatim through the impl bound list.
+    // Interface bound flows verbatim through the impl bound list. `T` is only
+    // stored, so it carries no `Clone + Debug` (gap 2, ERRATA E1XX-PHASE3).
     assert!(
-        rust.contains("impl<T: Drawable + Clone + std::fmt::Debug + 'static> Wrapper<T> {"),
+        rust.contains("impl<T: Drawable + 'static> Wrapper<T> {"),
         "bound: {rust}",
     );
 }
@@ -1753,7 +1754,7 @@ fn class_bound_uses_marker_trait_kind() {
     assert!(rust.contains("impl AnimalKind for Animal {}"), "marker impl: {rust}");
     // The bound on Carrier uses AnimalKind, not Animal directly.
     assert!(
-        rust.contains("impl<T: AnimalKind + Clone + std::fmt::Debug + 'static> Carrier<T> {"),
+        rust.contains("impl<T: AnimalKind + 'static> Carrier<T> {"),
         "marker bound: {rust}",
     );
 }
@@ -1779,7 +1780,7 @@ fn multi_bound_with_class_and_interface_combines() {
         "#,
     );
     assert!(
-        rust.contains("impl<T: AnimalKind + Greeter + Clone + std::fmt::Debug + 'static> Holder<T> {"),
+        rust.contains("impl<T: AnimalKind + Greeter + 'static> Holder<T> {"),
         "combined bound: {rust}",
     );
     // Transitive marker impl — Polite implements AnimalKind because
@@ -2117,21 +2118,28 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
     // Uniform wrapper shape for a generic class: an inner `Box_Inner<T>`
-    // field struct behind `Rc<RefCell<…>>`. Both the inner struct and the
-    // newtype carry the `Clone + Debug` bound (the `#[derive]` needs it, and
-    // a generic field of a bounded type propagates the bound).
+    // field struct behind `Rc<RefCell<…>>`. `T` is only stored by the
+    // declaration, so the headers carry `'static` alone and the `Clone +
+    // Debug` moves to the one member that reads a `T` by value (gap 2,
+    // ERRATA E1XX-PHASE3).
+    assert!(rust.contains("pub struct Box_Inner<T: 'static> {"), "inner struct header: {rust}");
     assert!(
-        rust.contains("pub struct Box_Inner<T: Clone + std::fmt::Debug + 'static> {"),
-        "inner struct header carries the Clone+Debug bound: {rust}",
+        rust.contains("pub struct Box<T: 'static>(pub std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        "Rc<RefCell> newtype: {rust}",
     );
     assert!(
-        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
-        "Rc<RefCell> newtype carries the bound: {rust}",
+        rust.contains("impl<T: 'static> Clone for Box<T> { fn clone(&self) -> Self { Self(self.0.clone()) } }"),
+        "hand-written handle Clone: {rust}",
     );
     assert!(rust.contains("value: T,"), "generic field: {rust}");
-    // The inherent impl carries the `T: Clone + Debug` bound.
-    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Box<T> {"), "impl bound: {rust}");
+    assert!(rust.contains("impl<T: 'static> Box<T> {"), "impl bound: {rust}");
+    // The constructor moves `value` into the literal: no bound.
     assert!(rust.contains("pub fn new(value: T) -> Self {"), "new: {rust}");
+    // `get` returns a copy of a `T`, so it states the bound itself.
+    assert!(
+        rust.contains("pub fn get(&self) -> T where T: Clone + std::fmt::Debug {"),
+        "get's where clause: {rust}",
+    );
     // Inner literal uses field shorthand (`Box_Inner { value }`).
     assert!(rust.contains("Box_Inner { value }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("value: value"), "no longhand: {rust}");
@@ -2164,10 +2172,10 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     );
     // Newtype + inner are the wrapper shape (shared cell).
     assert!(
-        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
+        rust.contains("pub struct Holder<T: 'static>(pub std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
         "newtype: {rust}",
     );
-    // `var y = x` aliases through the newtype's derived Clone — the
+    // `var y = x` aliases through the newtype's `Clone` — the
     // `.clone()` bumps the shared `Rc` refcount (it does NOT deep-copy
     // the cell), so both names point at one `RefCell`. (`y` is promoted
     // to `let mut` because `y.set(...)` calls a mutating method.)
@@ -6424,4 +6432,79 @@ fn bare_interp_of_an_inferred_double_keeps_its_point() {
 fn bare_interp_of_an_inferred_int_stays_plain() {
     let rust = emit(r#"public void main() { var n = 5; print($"$n"); }"#);
     assert!(rust.contains(r#"println!("{}", n)"#), "got: {rust}");
+}
+
+/// Gap 2 (ERRATA E1XX-PHASE3): a parameter the class only STORES carries
+/// `'static` alone, and `Clone + Debug` moves to the members that read one by
+/// value, per parameter. `Pair<File, int>` can then be built and asked for its
+/// `int`, while `getFirst()` states the bound it needs.
+#[test]
+fn stored_only_param_moves_clone_bound_to_the_members_that_read_it() {
+    let rust = emit(
+        r#"
+        public class Pair<A, B> {
+            public A first;
+            public B second;
+            private int hits = 0;
+            public Pair(A first, B second) {
+                this.first = first;
+                this.second = second;
+            }
+            public A getFirst() { return first; }
+            public B getSecond() { return second; }
+            public int count() { return hits; }
+        }
+        public void main() {
+            var p = new Pair<int, String>(1, "x");
+            var q = p;
+            print(q.getSecond());
+            print(p.count());
+        }
+        "#,
+    );
+    assert!(rust.contains("pub struct Pair_Inner<A: 'static, B: 'static> {"), "inner: {rust}");
+    assert!(rust.contains("impl<A: 'static, B: 'static> Pair<A, B> {"), "impl header: {rust}");
+    let handle = rust.find("pub struct Pair<").expect("handle struct");
+    assert!(!rust[handle.saturating_sub(24)..handle].contains("derive"), "no derived handle Clone: {rust}");
+    assert!(rust.contains("impl<A: 'static, B: 'static> Clone for Pair<A, B>"), "handle Clone: {rust}");
+    // The identity impls print and compare the handle's address.
+    assert!(rust.contains("impl<A: 'static, B: 'static> std::fmt::Display for Pair<A, B>"), "Display: {rust}");
+    // The constructor moves both into the literal.
+    assert!(rust.contains("pub fn new(first: A, second: B) -> Self {"), "new: {rust}");
+    // Each getter names exactly the parameter it copies.
+    assert!(rust.contains("pub fn getFirst(&self) -> A where A: Clone + std::fmt::Debug {"), "getFirst: {rust}");
+    assert!(rust.contains("pub fn getSecond(&self) -> B where B: Clone + std::fmt::Debug {"), "getSecond: {rust}");
+    // A member that touches neither states nothing.
+    assert!(rust.contains("pub fn count(&self) -> isize {"), "count: {rust}");
+}
+
+/// Gap 2, the other half: a parameter that reaches a type whose own
+/// declaration asks for `Clone` (here a collection field) stays on the
+/// baseline, as does a class the relaxation does not cover.
+#[test]
+fn cloned_or_forwarded_param_keeps_the_baseline() {
+    let rust = emit(
+        r#"
+        public interface Named { String name(); }
+        public class Bag<T> {
+            private List<T> items = new List<T>();
+            public Bag() {}
+            public void add(T t) { items.add(t); }
+        }
+        public class Tag<T> implements Named {
+            private T v;
+            public Tag(T v) { this.v = v; }
+            public String name() { return "tag"; }
+        }
+        public void main() {
+            var b = new Bag<int>();
+            b.add(1);
+            var t = new Tag<int>(2);
+            print(t.name());
+        }
+        "#,
+    );
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Bag<T> {"), "Bag: {rust}");
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Tag<T> {"), "Tag: {rust}");
+    assert!(!rust.contains(" where T: Clone + std::fmt::Debug"), "no member clauses: {rust}");
 }

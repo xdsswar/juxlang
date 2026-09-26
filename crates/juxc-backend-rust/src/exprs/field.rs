@@ -1008,9 +1008,15 @@ impl RustEmitter {
         // callee reads `obj.label` and `emit_call` appends `(...)`.
         let callee_is_method =
             is_call_callee && self.field_names_method_on_receiver(&f.object, &f.field.text);
+        // A foreign receiver with no `Clone` (`c.file.metadata()`, gap 2) is
+        // used in place: it cannot be copied out of the guard, and the
+        // foreign method it receives runs no Jux code that could find the
+        // object borrowed.
+        let uncloneable_receiver = is_method_receiver && self.span_is_uncloneable_foreign(f.span);
         let wrapper_borrow_clone = wrapper_depth.is_some()
             && !self.emitting_lvalue
             && !in_borrow_context
+            && !uncloneable_receiver
             && self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
         // S7: a plain (non-wrapper-borrow) field read serving as a
         // method-call receiver place must stay clone-free — the call
@@ -1018,7 +1024,7 @@ impl RustEmitter {
         // would silently discard `&mut self` mutations. The
         // wrapper-borrow clone is NOT suppressed: cloning out of the
         // statement-scoped `Ref` guard is mandatory there.
-        let receiver_place_read = is_method_receiver && wrapper_depth.is_none();
+        let receiver_place_read = (is_method_receiver && wrapper_depth.is_none()) || uncloneable_receiver;
         if !callee_is_method
             && (wrapper_borrow_clone
                 || (!self.emitting_lvalue

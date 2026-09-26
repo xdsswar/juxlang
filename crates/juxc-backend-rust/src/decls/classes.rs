@@ -881,6 +881,13 @@ impl RustEmitter {
     pub(crate) fn emit_wrapper_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
         let name = &class_decl.name.text;
         let inner = format!("{name}_Inner");
+        // Gap 2: the parameters whose `Clone + Debug` moves from this class's
+        // headers to the members that need it (`decls::clone_bounds`).
+        let relaxed: Vec<String> = match self.resolve_bare_class_fqn(name) {
+            Some(fqn) => self.relaxed_class_params(&fqn),
+            None => Vec::new(),
+        };
+        let relaxed_set: HashSet<String> = relaxed.iter().cloned().collect();
 
         // ---- C_Inner: the instance fields ----
         // Debug joins Clone so the newtype's derived Debug resolves
@@ -927,7 +934,9 @@ impl RustEmitter {
         // when its params do). Non-generic classes emit no `<…>` at all.
         self.w.push_str("pub struct ");
         self.w.push_str(&inner);
+        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        self.relaxed_header_params.clear();
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // **Inheritance embed (§CR.3.5 / §CR.5.1).** When this wrapper
@@ -1045,7 +1054,9 @@ impl RustEmitter {
         if inner_blocks_debug {
             self.w.emit_indent();
             self.w.push_str("impl");
+            self.relaxed_header_params = relaxed_set.clone();
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            self.relaxed_header_params.clear();
             self.w.push_str(" std::fmt::Debug for ");
             self.w.push_str(&inner);
             self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -1084,12 +1095,19 @@ impl RustEmitter {
         // string form (§O.7.1, ERRATA E107), written out beside its `Display`.
         // The derived one printed the machinery -- `C(RefCell { value: C_Inner
         // { v: 1 } })` -- which is what a `Vec<C>` used to show.
-        self.w.line("#[derive(Clone)]");
+        // A relaxed class writes its `Clone` by hand: the derive would bound
+        // it on `T: Clone`, and cloning the handle is an `Rc` bump that asks
+        // nothing of `T`.
+        if relaxed.is_empty() {
+            self.w.line("#[derive(Clone)]");
+        }
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
         self.w.push_str(&to_rust_ident(name));
+        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        self.relaxed_header_params.clear();
         // The newtype's single field carries the SAME visibility as the struct.
         // A `public` class is consumed from OTHER crates (a workspace path
         // dependency), and every lowered field/method access reaches the handle
@@ -1101,6 +1119,17 @@ impl RustEmitter {
         self.w.push_str(&inner);
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(close);
+        if !relaxed.is_empty() {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.relaxed_header_params = relaxed_set.clone();
+            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            self.relaxed_header_params.clear();
+            self.w.push_str(" Clone for ");
+            self.w.push_str(&to_rust_ident(name));
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" { fn clone(&self) -> Self { Self(self.0.clone()) } }\n");
+        }
         self.w.newline();
 
         // ---- impl[<T: Clone>] C<T> { … } ----
@@ -1116,11 +1145,18 @@ impl RustEmitter {
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.collect_equality_bound_params(class_decl);
+        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_bounds(&class_decl.generic_params, &defaulted);
+        self.relaxed_header_params.clear();
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(name));
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
+        let prev_relaxed = self.relaxed_class.take();
+        if !relaxed.is_empty() {
+            let member_needs = self.relaxed_member_needs(class_decl, &relaxed);
+            self.relaxed_class = Some(crate::decls::clone_bounds::RelaxedClass { params: relaxed.clone(), member_needs });
+        }
 
         // Static `final` fields → `pub const` associated items, same
         // as the legacy path.
@@ -1246,6 +1282,7 @@ impl RustEmitter {
             self.emit_inherited_operator_methods(class_decl);
         }
         self.emitting_wrapper_class = prev_wrapper;
+        self.relaxed_class = prev_relaxed;
         self.w.line("}");
         self.w.newline();
 
@@ -1354,6 +1391,9 @@ impl RustEmitter {
         let has_to_string = effective_ops
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+        // The identity impls print and compare the handle's address, so a
+        // relaxed class writes them over its relaxed parameters too.
+        self.relaxed_header_params = relaxed_set.clone();
         if !has_to_string {
             self.emit_identity_display(name, true, &class_decl.generic_params);
         } else if !class_decl.generic_params.is_empty() {
@@ -1393,6 +1433,7 @@ impl RustEmitter {
         if !self.class_chain_declares_equality(class_decl) {
             self.emit_identity_eq_hash(name, &class_decl.generic_params);
         }
+        self.relaxed_header_params.clear();
         let generic = !class_decl.generic_params.is_empty();
         self.op_impl_class = generic.then(|| class_decl.clone());
         for op in &effective_ops {
@@ -6126,6 +6167,11 @@ impl RustEmitter {
                 self.w.push_str(" -> ");
                 self.emit_return_type_as_rust(t);
             }
+        }
+        // A relaxed class's method states the `Clone + Debug` it needs
+        // (gap 2, `decls::clone_bounds`).
+        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(method.span)) {
+            self.w.push_str(&clause);
         }
         self.w.push_str(" {\n");
         // Body sits at depth 2 — push one more level so

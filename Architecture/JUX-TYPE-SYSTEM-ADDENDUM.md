@@ -146,7 +146,7 @@ A Jux type parameter carries the bounds the program writes. The lowering needs a
 
 | Use | Added bound | Why |
 |---|---|---|
-| any type parameter | `Clone + Debug + 'static` | Jux values are owned and copyable at the boundary; every Jux type's `Debug` writes its string form (`ERRATA.md` E107). |
+| any type parameter | `Clone + Debug + 'static` | Jux values are owned and copyable at the boundary; every Jux type's `Debug` writes its string form (`ERRATA.md` E107). A standalone generic class moves `Clone + Debug` from its declaration to the constructors and methods that read a `T` by value, so a parameter that is only stored carries `'static` alone and `Cell<File>` is legal (`ERRATA.md` E1XX-PHASE3). |
 | a `HashMap` / `HashSet` key | `Eq + Hash` | Rust puts those on the container's methods, so a class merely HOLDING a `HashMap<K, V>` fails at the first lookup. |
 | a `BTreeMap` / `BTreeSet` key | `Ord` | Same rule, ordered containers. |
 | compared with `==` / `!=` | `PartialEq` | Every type has `==` (§T.1.3), but Rust asks the parameter to say so. |
