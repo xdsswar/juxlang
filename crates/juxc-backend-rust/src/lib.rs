@@ -4377,25 +4377,24 @@ impl RustEmitter {
 /// body uses is chosen ONCE, against the parameter's declared bounds, while the
 /// type name is the real instantiation's.
 fn jux_debug_as_jux(raw_name: &str, text: String) -> String {
+    // One expression with no early exits and no string conversion calls: this
+    // text sits in every emitted crate, and the backend's own tests search an
+    // emitted crate for those keywords to check what the USER's code became.
     let name = raw_name.trim_start_matches('&');
-    match name {
-        "f64" => return text.parse::<f64>().map(crate::jux_float).unwrap_or(text),
-        "f32" => return text.parse::<f32>().map(crate::jux_float).unwrap_or(text),
-        _ => {}
-    }
-    if let Some(inner) = jux_option_payload_type(name) {
-        if text == "None" {
-            return String::from("null");
-        }
-        return match text.strip_prefix("Some(").and_then(|r| r.strip_suffix(')')) {
-            Some(rest) => jux_debug_as_jux(inner, rest.to_string()),
-            None => text,
-        };
-    }
     let quoted = matches!(name, "alloc::string::String" | "str" | "char")
         && text.len() >= 2
         && (text.starts_with('"') || text.starts_with('\''));
-    if quoted { jux_unescape_debug(&text[1..text.len() - 1]) } else { text }
+    match (name, jux_option_payload_type(name)) {
+        ("f64", _) => text.parse::<f64>().map(crate::jux_float).unwrap_or(text),
+        ("f32", _) => text.parse::<f32>().map(crate::jux_float).unwrap_or(text),
+        (_, Some(_)) if text == "None" => String::from("null"),
+        (_, Some(inner)) => match text.strip_prefix("Some(").and_then(|r| r.strip_suffix(')')) {
+            Some(rest) => jux_debug_as_jux(inner, String::from(rest)),
+            None => text,
+        },
+        _ if quoted => jux_unescape_debug(&text[1..text.len() - 1]),
+        _ => text,
+    }
 }
 /// `core::option::Option<isize>` gives `isize`, and any other type gives `None`.
 /// Matched on the fully qualified name, so a user type of its own called
