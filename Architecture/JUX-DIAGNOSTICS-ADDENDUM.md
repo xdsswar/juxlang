@@ -364,9 +364,9 @@ Cross-phase codes (e.g., overflow detected in const eval and runtime) reuse the 
 The build driver has no band of its own, because until 2026-09-25 it raised no
 coded diagnostic at all: a `jux.toml` it could not read was an uncoded warning
 on stderr. Its checks (`E0901`-`E0903`, `W0901`-`W0903`, BUILD-SYSTEM §B.2.5)
-sit in `E0900`-`E0999` beside the other whole-build errors the driver already
-owns there, `E0905` (cannot resolve dependency) and `E0908` (linkage
-unavailable in the `core` profile). They run before phase 1 rather than after
+sit in `E0900`-`E0999` beside the whole-build errors this table already
+reserves there for the driver, `E0905` (cannot resolve dependency) and `E0908`
+(linkage unavailable in the `core` profile), neither of which is raised yet. They run before phase 1 rather than after
 phase 19, so the band is the build's, not the backend's alone.
 
 ---

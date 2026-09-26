@@ -2736,12 +2736,17 @@ present value the compiler cannot honour is an error.**
 - `W0903` -- a `name` that is legal but not reverse-DNS shaped, such as the
   single-segment `linalg`. §B.2.3 states the shape as a requirement, and it is
   the convention that keeps two unrelated packages from claiming one name, but
-  a one-segment name resolves unambiguously and every project in this
-  repository that uses one builds correctly. Illegal characters are the error;
-  the wrong shape is the warning.
+  a one-segment name resolves unambiguously and builds correctly. Illegal
+  characters are the error; the wrong shape is the warning.
 
-The codes sit in `E0900`-`E0999` with the other whole-build errors the driver
-owns there (`E0905` cannot-resolve-dependency, `E0908` linkage-unavailable),
+The repository's own manifests were brought up to the table rather than the
+table down to them: 98 of them predated `edition` and now declare it, and
+`examples/apps/matrix_lab`'s `lab` and `linalg` became `apps.lab` and
+`apps.linalg`, the prefix the other apps already use.
+
+The codes sit in `E0900`-`E0999` beside the whole-build errors that band
+already reserves for the driver (`E0905` cannot-resolve-dependency, `E0908`
+linkage-unavailable, both still unraised),
 per the note added to `JUX-DIAGNOSTICS-ADDENDUM.md` §D.3. The manifest is
 reported as a source file of its own, with the offending line and a caret, so
 `jux.toml:3:8` is as clickable as any `.jux` diagnostic.
