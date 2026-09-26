@@ -1,0 +1,7 @@
+[3, null]
+["a", null, "None"]
+[[1, null], [], [null]]
+{"k": null}
+{"k": 7}
+n=[3, null]
+[2.5, null]

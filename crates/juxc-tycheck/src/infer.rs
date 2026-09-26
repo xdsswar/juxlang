@@ -1514,6 +1514,66 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     return task_of_vec(element, env, symbols);
                 }
             }
+            // `Task.completed(v)` is a `Task` of `v`'s type. `Task.failed(e)`
+            // says nothing about the value it never produces, so its `T` is
+            // whatever the slot it lands in makes it.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Task"
+                    && matches!(method_name, "completed" | "failed")
+                    && !symbols.classes.contains_key("Task")
+                    && env.lookup("Task").is_none()
+                {
+                    let value = match (method_name, c.args.first()) {
+                        ("completed", Some(v)) => infer_expr(v, env, symbols),
+                        _ => Ty::Unknown,
+                    };
+                    return Ty::User {
+                        name: juxc_ast::TASK_SENTINEL.to_string(),
+                        generic_args: vec![value],
+                    };
+                }
+            }
+            // A task's own queries and combinators (§18.1.4). `map(f)` is a
+            // `Task` of what `f` produces and `flatMap(f)` is the task `f`
+            // produces. As with `spawn`, a lambda has no type of its own, so
+            // its body is read; a body computing from the parameter lands on
+            // `Unknown`, which costs precision, not correctness.
+            if matches!(method_name, "isCancelled" | "isResolved" | "map" | "flatMap") {
+                if let Ty::User { name, .. } = infer_expr(&field.object, env, symbols) {
+                    if name == juxc_ast::TASK_SENTINEL {
+                        let produced = || match c.args.first() {
+                            Some(Expr::Lambda(l)) => match &l.body {
+                                juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
+                                juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
+                                    Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+                                    Some(Stmt::Return(Some(e), _)) => infer_expr(e, env, symbols),
+                                    _ => Ty::Unknown,
+                                },
+                            },
+                            _ => Ty::Unknown,
+                        };
+                        return match method_name {
+                            "map" => Ty::User {
+                                name: juxc_ast::TASK_SENTINEL.to_string(),
+                                generic_args: vec![produced()],
+                            },
+                            "flatMap" => match produced() {
+                                Ty::User { name, generic_args }
+                                    if name == juxc_ast::TASK_SENTINEL =>
+                                {
+                                    Ty::User { name, generic_args }
+                                }
+                                _ => Ty::User {
+                                    name: juxc_ast::TASK_SENTINEL.to_string(),
+                                    generic_args: vec![Ty::Unknown],
+                                },
+                            },
+                            _ => Ty::Primitive(Primitive::Bool),
+                        };
+                    }
+                }
+            }
             // `task.blockingGet()` (§18.1.4) reads a task's value from sync
             // code, so it has the type the task carries. Left untyped, the
             // `Vec` handle `Task.all(..).blockingGet()` answers with was

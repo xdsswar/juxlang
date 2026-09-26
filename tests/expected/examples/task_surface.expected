@@ -1,0 +1,13 @@
+completed resolved: true
+completed value: 5
+failed resolved: true
+failed threw: no luck
+map: 42
+flatMap: 5
+map carried: upstream
+quick resolved before: false
+quick resolved after: true
+quick value: 3
+slow cancelled: false
+slow cancelled: true
+slow threw: task was cancelled

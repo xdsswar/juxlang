@@ -1602,6 +1602,12 @@ impl RustEmitter {
             }
             Expr::Call(c) if self.emit_untyped_collect_of_strings(c) => {}
             Expr::Call(c) => {
+                // A fully-qualified static call is asked every question below
+                // in its re-shaped form, the one `emit_call` lowers: a field
+                // chain `((rust).std).File` names no class to look a `Result`
+                // or a collection return up on (gap 6).
+                let reshaped = self.reshape_qualified_static_call(c);
+                let c = reshaped.as_ref().unwrap_or(c);
                 // A foreign method that hands back a COLLECTION hands back the
                 // bare container; the slot receiving it is a handle (§6.5.1),
                 // so it is wrapped here. Outside the `Result` unwrap below, so

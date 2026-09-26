@@ -864,6 +864,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         let result = match slot {
             Ty::Primitive(Primitive::Bool) => crate::const_eval::eval_const_bool(init, &ctx).map(|_| ()),
@@ -1206,6 +1208,8 @@ impl<'a> Checker<'a> {
                 symbols: self.symbols,
                 generic_param_names: &std::collections::HashSet::new(),
                 enclosing_class: None,
+                package: &self.env.current_package,
+                imports: Some(&self.env.unqualified),
             };
             for variant in &enum_decl.variants {
                 if !variant.payload.is_empty() {
@@ -9895,6 +9899,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         let span = match expr_span(value) {
             s if s == Span::DUMMY => fallback,
@@ -9946,6 +9952,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         match crate::const_eval::eval_const_int(size, &ctx) {
             // Reduces to a concrete value (`5`, `SIZE`, `SIZE + 1`, a const-fn
@@ -10845,6 +10853,8 @@ impl<'a> Checker<'a> {
                         symbols: self.symbols,
                         generic_param_names: &self.const_param_names,
                         enclosing_class: None,
+                        package: &self.env.current_package,
+                        imports: Some(&self.env.unqualified),
                     };
                     let param_is_bool = cty
                         .name
@@ -11916,6 +11926,27 @@ impl<'a> Checker<'a> {
                 // millisecond count for delay) — future-consuming
                 // positions (E0705 exempt).
                 if let Expr::Path(qn) = field.object.as_ref() {
+                    // `Task.completed(v)` / `Task.failed(e)` take a VALUE and an
+                    // exception, not a task, so theirs is an ordinary argument
+                    // position: an unawaited future there is still E0705.
+                    if qn.segments.len() == 1
+                        && qn.segments[0].text == "Task"
+                        && matches!(method_name, "completed" | "failed")
+                        && self.env.lookup("Task").is_none()
+                        && !self
+                            .symbols
+                            .classes
+                            .keys()
+                            .chain(self.symbols.records.keys())
+                            .chain(self.symbols.enums.keys())
+                            .chain(self.symbols.interfaces.keys())
+                            .any(|k| k.rsplit('.').next() == Some("Task"))
+                    {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                     if qn.segments.len() == 1
                         && qn.segments[0].text == "Task"
                         && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay")
@@ -11959,7 +11990,8 @@ impl<'a> Checker<'a> {
                                 code::Code::E0413_UnresolvedMethod,
                                 format!(
                                     "no static `{method_name}` on `Task` -- the task statics are \
-                                     `all`, `any`, `race`, `allSettled` and `delay` (§18.1.4)",
+                                     `completed`, `failed`, `all`, `any`, `race`, `allSettled` \
+                                     and `delay` (§18.1.4)",
                                 ),
                             )
                             .with_span(field.field.span),
@@ -12379,13 +12411,22 @@ impl<'a> Checker<'a> {
                     // than a rustc message about a type the program never
                     // wrote, which is all a typo used to get.
                     if name == juxc_ast::TASK_SENTINEL {
-                        if !matches!(method_name, "cancel" | "blockingGet") {
+                        if !matches!(
+                            method_name,
+                            "cancel"
+                                | "blockingGet"
+                                | "isCancelled"
+                                | "isResolved"
+                                | "map"
+                                | "flatMap"
+                        ) {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0413_UnresolvedMethod,
                                     format!(
                                         "no method `{method_name}` on `Task` -- a task's own \
-                                         members are `cancel()` and `blockingGet()`; `await task` \
+                                         members are `cancel()`, `isCancelled()`, `isResolved()`, \
+                                         `blockingGet()`, `map(f)` and `flatMap(f)`; `await task` \
                                          is what reads its value (§18.1.4)",
                                     ),
                                 )

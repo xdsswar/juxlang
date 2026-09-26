@@ -1568,21 +1568,25 @@ impl RustEmitter {
     /// `decls/classes.rs` or the emitted call names a method that does not
     /// exist:
     ///
-    /// - a **bound-position class outside any polymorphic hierarchy** declares
-    ///   the accessors for its whole `extends` chain on its own trait, when it
-    ///   uses the shared-handle representation the accessor bodies read through
-    ///   (see `carries_bound_position_members`);
+    /// - a **bound-position class outside any polymorphic hierarchy**, generic
+    ///   or not, declares the accessors for its whole `extends` chain on its
+    ///   own trait, when it uses the shared-handle representation the accessor
+    ///   bodies read through (see `carries_bound_position_accessors`);
     /// - a **polymorphic base** declares the accessors for the fields IT
-    ///   declares, and a subclass's `<Sub>Kind` reaches them as a supertrait.
+    ///   declares, and a subclass's `<Sub>Kind` reaches them as a supertrait;
+    /// - a **leaf** of such a hierarchy in bound position declares its own
+    ///   fields' accessors (see `leaf_bound_accessor_fields`).
     ///
-    /// Anything else (a leaf subclass's own field, a generic class's marker)
-    /// keeps direct field access, which is what the non-`dyn` representation
-    /// wants anyway.
+    /// Anything else keeps direct field access, which is what the non-`dyn`
+    /// representation wants anyway.
     pub(crate) fn bound_field_accessor_ok(&self, bare: &str, field: &str) -> bool {
         let Some(owner) = self.accessor_field_owner(bare, field) else {
             return false;
         };
-        if self.carries_bound_position_members(bare) && self.is_refcell_class(bare) {
+        if self.carries_bound_position_accessors(bare) {
+            return true;
+        }
+        if self.leaf_bound_accessor_fields(bare).iter().any(|(n, ..)| n == field) {
             return true;
         }
         self.is_poly_base_class(&owner)

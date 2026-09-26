@@ -61,13 +61,31 @@ pub struct ConstCtx<'a> {
     /// each declare a `NAME`; without this the lookup can only accept a name
     /// that is unique program-wide.
     pub enclosing_class: Option<&'a str>,
+    /// The package the expression was written in, `[]` for the root package.
+    /// A bare `MAX` means this package's `MAX` first: two packages may each
+    /// declare one (§M.16).
+    pub package: &'a [String],
+    /// The writing unit's bare-name → FQN map (its imports and aliases), when
+    /// the caller has one. Consulted after the package, before the library.
+    pub imports: Option<&'a HashMap<String, String>>,
 }
 
 impl<'a> ConstCtx<'a> {
     /// A context with no enclosing class -- for a top-level const, an array
-    /// size, or any position that is not inside a class body.
+    /// size, or any position that is not inside a class body -- in the root
+    /// package with no imports.
     pub fn new(symbols: &'a SymbolTable, generic_param_names: &'a HashSet<String>) -> Self {
-        Self { symbols, generic_param_names, enclosing_class: None }
+        Self { symbols, generic_param_names, enclosing_class: None, package: &[], imports: None }
+    }
+
+    /// The same context, placed in the unit `unit` describes: its package and
+    /// its imports. `None` leaves it in the root package with no imports.
+    pub fn in_unit(mut self, unit: Option<&'a crate::symbol_table::UnitContext>) -> Self {
+        if let Some(unit) = unit {
+            self.package = &unit.package;
+            self.imports = Some(&unit.unqualified);
+        }
+        self
     }
 }
 
@@ -175,24 +193,16 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
             if let Some(v) = f.locals.get(name) {
                 return Ok(v.clone());
             }
-            if let Some(v) = f.memo.get(name) {
-                return Ok(v.clone());
-            }
             // A top-level `const`/`final` binding: evaluate its initializer in a
-            // FRESH frame (a const has no locals), then memoize.
-            if let Some((_, sig)) = lookup_const(f.ctx.symbols, name) {
-                let init = sig.init.clone();
-                let v = {
-                    let mut sub = Frame {
-                        ctx: f.ctx,
-                        budget: f.budget,
-                        locals: HashMap::new(),
-                        memo: f.memo,
-                    };
-                    eval(&init, &mut sub)?
+            // FRESH frame (a const has no locals), in the package that declared
+            // it, then memoize under its FQN. Two packages may each declare a
+            // `MAX`, so neither the lookup nor the memo can be keyed by `MAX`.
+            if let Some((fqn, sig)) = lookup_const(f.ctx, name) {
+                let package: Vec<String> = match fqn.rsplit_once('.') {
+                    Some((p, _)) => p.split('.').map(str::to_string).collect(),
+                    None => Vec::new(),
                 };
-                f.memo.insert(name.to_string(), v.clone());
-                return Ok(v);
+                return eval_in(&sig.init, f, fqn, &package, None);
             }
             // A `static const` FIELD of a class, named bare from inside the
             // class that declares it (`FULL = NAME + SUFFIX`). There is no
@@ -202,12 +212,12 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
             // The enclosing class first: a bare `NAME` inside `class Brand`
             // is `Brand.NAME`, even when another class also declares a `NAME`.
             if let Some(owner) = f.ctx.enclosing_class {
-                if let Some(init) = lookup_static_const_field(f.ctx.symbols, owner, name) {
-                    return eval_fresh(&init, f, &format!("{owner}.{name}"));
+                if let Some(field) = lookup_static_const_field(f.ctx, owner, name) {
+                    return eval_field(field, f, name);
                 }
             }
-            if let Some(init) = lookup_static_const_field_by_bare(f.ctx.symbols, name) {
-                return eval_fresh(&init, f, name);
+            if let Some(field) = lookup_static_const_field_by_bare(f.ctx.symbols, name) {
+                return eval_field(field, f, name);
             }
             Err(ConstEvalError::NonConst(format!(
                 "`{name}` is not a compile-time constant"
@@ -217,8 +227,8 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
         // path when the parser saw two plain segments.
         Expr::Path(qn) if qn.segments.len() == 2 => {
             let (owner, member) = (qn.segments[0].text.as_str(), qn.segments[1].text.as_str());
-            match lookup_static_const_field(f.ctx.symbols, owner, member) {
-                Some(init) => eval_fresh(&init, f, member),
+            match lookup_static_const_field(f.ctx, owner, member) {
+                Some(field) => eval_field(field, f, member),
                 None => Err(ConstEvalError::NonConst(format!(
                     "`{owner}.{member}` is not a compile-time constant"
                 ))),
@@ -240,8 +250,8 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
                 }
             };
             let member = fe.field.text.as_str();
-            match lookup_static_const_field(f.ctx.symbols, owner, member) {
-                Some(init) => eval_fresh(&init, f, member),
+            match lookup_static_const_field(f.ctx, owner, member) {
+                Some(field) => eval_field(field, f, member),
                 None => Err(ConstEvalError::NonConst(format!(
                     "`{owner}.{member}` is not a compile-time constant"
                 ))),
@@ -611,20 +621,37 @@ fn exec_if(i: &juxc_ast::IfStmt, f: &mut Frame) -> Result<Flow, ConstEvalError> 
     }
 }
 
-/// Resolve a bare const NAME to `(fqn, &ConstSig)` — exact key first, then a
-/// unique last-segment match.
 /// Evaluate a constant's initializer in a FRESH frame (a constant has no
-/// locals of its own) and memoize the result under `key`.
-fn eval_fresh(init: &Expr, f: &mut Frame, key: &str) -> Result<ConstVal, ConstEvalError> {
+/// locals of its own) and memoize the result under `key`, a name that is
+/// unique program-wide.
+///
+/// The initializer's own names mean what they mean where it was WRITTEN: in
+/// `package`, with `enclosing_class`'s constants in scope. The caller's imports
+/// carry over only when the initializer lives in the caller's own package; a
+/// unit's imports are its own, and another package's unit is not this one.
+fn eval_in(
+    init: &Expr,
+    f: &mut Frame,
+    key: &str,
+    package: &[String],
+    enclosing_class: Option<&str>,
+) -> Result<ConstVal, ConstEvalError> {
     if let Some(v) = f.memo.get(key) {
         return Ok(v.clone());
     }
+    let ctx = ConstCtx {
+        symbols: f.ctx.symbols,
+        generic_param_names: f.ctx.generic_param_names,
+        enclosing_class,
+        package,
+        imports: if package == f.ctx.package { f.ctx.imports } else { None },
+    };
     let v = {
         let mut sub = Frame {
-            ctx: f.ctx,
-            budget: f.budget,
+            ctx: &ctx,
+            budget: &mut *f.budget,
             locals: HashMap::new(),
-            memo: f.memo,
+            memo: &mut *f.memo,
         };
         eval(init, &mut sub)?
     };
@@ -632,49 +659,221 @@ fn eval_fresh(init: &Expr, f: &mut Frame, key: &str) -> Result<ConstVal, ConstEv
     Ok(v)
 }
 
-/// The initializer of `Owner.member`, when `member` is a `static final` /
-/// `const` field of a class named `Owner` (bare or fully qualified).
-fn lookup_static_const_field(
-    symbols: &SymbolTable,
-    owner: &str,
+/// A `static final` / `const` field of a class, found by name.
+struct ConstField<'a> {
+    /// The declaring class's FQN, which also keys the memo.
+    class_fqn: &'a str,
+    /// The declaring class's package.
+    package: &'a [String],
+    init: &'a Expr,
+}
+
+/// Evaluate `field` in its declaring class, memoized as `Class::member`.
+fn eval_field(field: ConstField, f: &mut Frame, member: &str) -> Result<ConstVal, ConstEvalError> {
+    let key = format!("{}::{member}", field.class_fqn);
+    eval_in(field.init, f, &key, field.package, Some(field.class_fqn))
+}
+
+/// `member` of the class `(fqn, sig)`, when it is a constant field with an
+/// initializer.
+fn const_field<'a>(
+    (fqn, class): (&'a String, &'a crate::symbol_table::ClassSig),
     member: &str,
-) -> Option<Expr> {
-    let (_, class) = symbols
-        .classes
-        .iter()
-        .find(|(k, _)| k.as_str() == owner || k.rsplit('.').next().unwrap_or(k) == owner)?;
+) -> Option<ConstField<'a>> {
     let field = class.fields.get(member)?;
     if !field.is_static || !field.is_final {
         return None;
     }
-    field.default.clone()
+    Some(ConstField { class_fqn: fqn, package: &class.package, init: field.default.as_ref()? })
 }
 
-/// The initializer of a `static final` field named `bare`, when exactly one
-/// class in the program declares one by that name. Ambiguity yields `None`:
-/// folding the wrong constant would be worse than not folding at all.
-fn lookup_static_const_field_by_bare(symbols: &SymbolTable, bare: &str) -> Option<Expr> {
-    let mut hits = symbols.classes.values().filter_map(|c| {
-        let f = c.fields.get(bare)?;
-        (f.is_static && f.is_final).then(|| f.default.clone()).flatten()
-    });
+/// `name` qualified by `package`: `a.b.NAME`, or `NAME` in the root package.
+fn qualify(package: &[String], name: &str) -> String {
+    if package.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}.{name}", package.join("."))
+    }
+}
+
+/// The constant field `Owner.member`, where `Owner` is a class named bare or in
+/// full. A bare owner is looked for as the writing unit would name it: fully
+/// qualified, in its own package, through its imports, and only then by last
+/// segment anywhere, a user class ahead of a library one and ties broken by
+/// FQN so the answer does not follow `HashMap` order.
+fn lookup_static_const_field<'a>(
+    ctx: &ConstCtx<'a>,
+    owner: &str,
+    member: &str,
+) -> Option<ConstField<'a>> {
+    let symbols: &'a SymbolTable = ctx.symbols;
+    let classes = &symbols.classes;
+    let class = classes
+        .get_key_value(owner)
+        .or_else(|| classes.get_key_value(&qualify(ctx.package, owner)))
+        .or_else(|| {
+            let fqn = ctx.imports?.get(owner)?;
+            classes.get_key_value(fqn)
+        })
+        .or_else(|| {
+            classes
+                .iter()
+                .filter(|(k, _)| k.rsplit('.').next().unwrap_or(k) == owner)
+                .min_by(|a, b| a.1.is_external.cmp(&b.1.is_external).then_with(|| a.0.cmp(b.0)))
+        })?;
+    const_field(class, member)
+}
+
+/// The constant field named `bare`, when exactly one class in the program
+/// declares one by that name. Ambiguity yields `None`: folding the wrong
+/// constant would be worse than not folding at all.
+fn lookup_static_const_field_by_bare<'a>(
+    symbols: &'a SymbolTable,
+    bare: &str,
+) -> Option<ConstField<'a>> {
+    let mut hits = symbols.classes.iter().filter_map(|class| const_field(class, bare));
     match (hits.next(), hits.next()) {
-        (Some(init), None) => Some(init),
+        (Some(field), None) => Some(field),
         _ => None,
     }
 }
 
-fn lookup_const<'a>(
-    symbols: &'a SymbolTable,
-    name: &str,
+/// The one entry `hits` yields, or `None` for none or several.
+fn unique_const<'a>(
+    mut hits: impl Iterator<Item = (&'a String, &'a crate::symbol_table::ConstSig)>,
 ) -> Option<(&'a str, &'a crate::symbol_table::ConstSig)> {
-    if let Some((k, c)) = symbols.consts.get_key_value(name) {
-        return Some((k.as_str(), c));
-    }
-    let suffix = format!(".{name}");
-    let mut hits = symbols.consts.iter().filter(|(k, _)| k.ends_with(&suffix));
     match (hits.next(), hits.next()) {
         (Some((k, c)), None) => Some((k.as_str(), c)),
         _ => None,
+    }
+}
+
+/// Resolve a bare constant NAME to `(fqn, &ConstSig)` the way the writing unit
+/// sees it (§M.16): its own package's constant first, then one its imports
+/// name, then the library realm's (when exactly one package there declares
+/// it). Past those, the root package's constant and then a unique match
+/// anywhere, which is how a bare name reached across user packages before
+/// (GAPS 24 keeps that open for types too).
+fn lookup_const<'a>(
+    ctx: &ConstCtx<'a>,
+    name: &str,
+) -> Option<(&'a str, &'a crate::symbol_table::ConstSig)> {
+    let symbols: &'a SymbolTable = ctx.symbols;
+    let consts = &symbols.consts;
+    let exact = |fqn: &str| consts.get_key_value(fqn).map(|(k, c)| (k.as_str(), c));
+    let suffix = format!(".{name}");
+    exact(&qualify(ctx.package, name))
+        .or_else(|| exact(ctx.imports?.get(name)?))
+        .or_else(|| {
+            unique_const(consts.iter().filter(|(k, _)| {
+                k.strip_suffix(&suffix)
+                    .is_some_and(crate::symbol_table::is_library_realm_package)
+            }))
+        })
+        .or_else(|| exact(name))
+        .or_else(|| unique_const(consts.iter().filter(|(k, _)| k.ends_with(&suffix))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use juxc_lex::lex;
+    use juxc_parse::parse;
+    use juxc_source::SourceFile;
+
+    /// The merged table of `srcs`, one compilation unit each.
+    fn table(srcs: &[&str]) -> SymbolTable {
+        let units: Vec<juxc_ast::CompilationUnit> = srcs
+            .iter()
+            .map(|src| {
+                let sf = SourceFile::new("test.jux", *src);
+                let lexed = lex(&sf);
+                assert!(lexed.diagnostics.is_empty());
+                let parsed = parse(&lexed.tokens);
+                assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+                parsed.ast
+            })
+            .collect();
+        let mut diags = Vec::new();
+        let table = crate::symbol_table::build_workspace(&units, &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        table
+    }
+
+    fn name(text: &str) -> Expr {
+        Expr::Path(juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident {
+                text: text.to_string(),
+                span: juxc_source::Span::DUMMY,
+            }],
+            span: juxc_source::Span::DUMMY,
+        })
+    }
+
+    fn pkg(p: &str) -> Vec<String> {
+        p.split('.').map(str::to_string).collect()
+    }
+
+    const TWO_PACKAGES: &[&str] = &[
+        "package a;\npublic const int MAX = 10;\npublic const int TWICE = MAX * 2;",
+        "package b;\npublic const int MAX = 7;\npublic const int TWICE = MAX * 2;",
+    ];
+
+    /// Two packages each declaring `MAX`: a bare `MAX` is the writer's own.
+    #[test]
+    fn a_bare_constant_is_the_writing_packages_own() {
+        let symbols = table(TWO_PACKAGES);
+        let none = HashSet::new();
+        let (a, b) = (pkg("a"), pkg("b"));
+        let in_a = ConstCtx { package: &a, ..ConstCtx::new(&symbols, &none) };
+        let in_b = ConstCtx { package: &b, ..ConstCtx::new(&symbols, &none) };
+        assert_eq!(eval_const_int(&name("MAX"), &in_a).ok(), Some(10));
+        assert_eq!(eval_const_int(&name("MAX"), &in_b).ok(), Some(7));
+        // Nowhere in particular, the name is ambiguous and does not fold.
+        let root = ConstCtx::new(&symbols, &none);
+        assert!(eval_const_int(&name("MAX"), &root).is_err());
+    }
+
+    /// A constant's initializer reads its OWN package's names, and one
+    /// evaluation that reaches both `TWICE`s keeps them apart: the memo is
+    /// keyed by FQN, not by the bare name both share.
+    #[test]
+    fn an_initializer_reads_its_own_package_and_the_memo_keeps_them_apart() {
+        let symbols = table(TWO_PACKAGES);
+        let none = HashSet::new();
+        let (a, b) = (pkg("a"), pkg("b"));
+        let in_a = ConstCtx { package: &a, ..ConstCtx::new(&symbols, &none) };
+        let in_b = ConstCtx { package: &b, ..ConstCtx::new(&symbols, &none) };
+        assert_eq!(eval_const_int(&name("TWICE"), &in_a).ok(), Some(20));
+        assert_eq!(eval_const_int(&name("TWICE"), &in_b).ok(), Some(14));
+    }
+
+    /// An import names the constant when the writer's package has none.
+    #[test]
+    fn an_import_names_a_constant_from_another_package() {
+        let symbols = table(TWO_PACKAGES);
+        let none = HashSet::new();
+        let c = pkg("c");
+        let imports: HashMap<String, String> =
+            [("MAX".to_string(), "b.MAX".to_string())].into_iter().collect();
+        let in_c = ConstCtx { package: &c, imports: Some(&imports), ..ConstCtx::new(&symbols, &none) };
+        assert_eq!(eval_const_int(&name("MAX"), &in_c).ok(), Some(7));
+        // `TWICE` is not imported, and two packages declare it.
+        assert!(eval_const_int(&name("TWICE"), &in_c).is_err());
+    }
+
+    /// Two classes' same-named constants, read in one expression, stay two
+    /// values: `A.K + B.K` used to memoize both as `K`.
+    #[test]
+    fn two_classes_same_named_constants_are_memoized_apart() {
+        let symbols = table(&[
+            "class A { public static final int K = 1; }\nclass B { public static final int K = 100; }",
+        ]);
+        let none = HashSet::new();
+        let src = "const int S = A.K + B.K;";
+        let unit = table(&[src]);
+        let init = unit.consts.get("S").expect("S").init.clone();
+        let root = ConstCtx::new(&symbols, &none);
+        assert_eq!(eval_const_int(&init, &root).ok(), Some(101));
     }
 }

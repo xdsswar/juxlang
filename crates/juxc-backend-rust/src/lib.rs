@@ -4393,8 +4393,96 @@ fn jux_debug_as_jux(raw_name: &str, text: String) -> String {
             None => text,
         },
         _ if quoted => jux_unescape_debug(&text[1..text.len() - 1]),
+        _ if jux_debug_nests_option(name) => jux_debug_strip_options(&text),
         _ => text,
     }
+}
+/// Whether `name` holds a nullable somewhere INSIDE it, and is built only from
+/// types whose `Debug` text is known: primitives, `String`, the collections and
+/// the handles around them (this prelude's own `JuxCell` included, which lives
+/// in the `__jux_rt` module of whatever crate it was emitted into).
+/// `Vec<Option<isize>>` qualifies, so its elements'
+/// `Some(3)` and `None` can be re-laid out as `3` and `null` (GAPS 26).
+///
+/// The list is what keeps that rewrite honest. Since ERRATA E107 a Jux class's
+/// `Debug` is its own string form, which may well contain the text `Some(`, and
+/// a foreign type's `Debug` is whatever its author wrote. A type name naming
+/// anything off the list is left exactly as `Debug` wrote it.
+fn jux_debug_nests_option(name: &str) -> bool {
+    let known = |path: &str| {
+        matches!(
+            path,
+            "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
+                | "usize" | "u8" | "u16" | "u32" | "u64" | "u128"
+                | "f32" | "f64" | "bool" | "char" | "str"
+                | "alloc::string::String"
+                | "core::option::Option" | "std::option::Option"
+                | "alloc::vec::Vec" | "alloc::alloc::Global"
+                | "alloc::collections::vec_deque::VecDeque"
+                | "std::collections::hash::map::HashMap"
+                | "std::collections::hash::set::HashSet"
+                | "std::hash::random::RandomState"
+                | "std::collections::hash::map::RandomState"
+                | "alloc::collections::btree::map::BTreeMap"
+                | "alloc::collections::btree::set::BTreeSet"
+                | "alloc::rc::Rc"
+        ) || path.ends_with("::__jux_rt::JuxCell")
+    };
+    name.contains("::option::Option<")
+        && name
+            .split(|c: char| matches!(c, '<' | '>' | ',' | ' ' | '&'))
+            .filter(|path| !path.is_empty())
+            .all(known)
+}
+/// `Debug`'s text with every `None` written `null` and every `Some(x)` written
+/// `x`, at any depth. Quoted spans are copied untouched, escapes included, so a
+/// string element that happens to read `"None"` keeps its text.
+fn jux_debug_strip_options(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    // One entry per open parenthesis: `true` when it was a `Some(` whose
+    // closing parenthesis is dropped along with it.
+    let mut parens: Vec<bool> = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' || c == '\'' {
+            out.push(c);
+            while let Some(d) = chars.next() {
+                out.push(d);
+                if d == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        out.push(escaped);
+                    }
+                } else if d == c {
+                    break;
+                }
+            }
+        } else if c.is_alphanumeric() || c == '_' {
+            let mut word = String::from(c);
+            while let Some(&d) = chars.peek() {
+                if !(d.is_alphanumeric() || d == '_') {
+                    break;
+                }
+                word.push(d);
+                chars.next();
+            }
+            if word == "None" {
+                out.push_str("null");
+            } else if word == "Some" && chars.peek() == Some(&'(') {
+                chars.next();
+                parens.push(true);
+            } else {
+                out.push_str(&word);
+            }
+        } else {
+            match c {
+                '(' => parens.push(false),
+                ')' if parens.pop().unwrap_or(false) => continue,
+                _ => {}
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 /// `core::option::Option<isize>` gives `isize`, and any other type gives `None`.
 /// Matched on the fully qualified name, so a user type of its own called
@@ -5145,6 +5233,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
         w.push_str("    // Set by `cancel()`: the task throws where it next resumes.\n");
         w.push_str("    cancelled: std::sync::atomic::AtomicBool,\n");
+        w.push_str("    // Set once the task has an outcome, a value or a failure: `isResolved()`.\n");
+        w.push_str("    settled: std::sync::atomic::AtomicBool,\n");
         w.push_str("}\n");
         // **Cooperative cancellation** (EXCEPTIONS §X.7.3, ERRATA E92).
         // `cancel()` sets the flag above and returns; the task notices it
@@ -5236,6 +5326,51 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        // afterwards re-throws what the task threw.\n");
         w.push_str("        self.1.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
         w.push_str("    }\n");
+        // The rest of §18.1.4's instance surface. The two queries read the
+        // shared state and leave the handle alone; the two combinators consume
+        // it, as `await` does, and run as tasks of their own, so a failure or
+        // a cancellation of the source reaches the derived task as the
+        // exception it is, through the same `catch_unwind` every task has.
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn isCancelled(&self) -> bool {\n");
+        w.push_str("        self.1.cancelled.load(std::sync::atomic::Ordering::SeqCst)\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn isResolved(&self) -> bool {\n");
+        w.push_str("        self.1.settled.load(std::sync::atomic::Ordering::SeqCst)\n");
+        w.push_str("    }\n");
+        w.push_str("    pub fn map<U: 'static>(self, f: std::rc::Rc<dyn Fn(T) -> U>) -> JuxTask<U> {\n");
+        w.push_str("        crate::__jux_spawn(async move { f(crate::__jux_awaited(self.await)) })\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn flatMap<U: 'static>(self, f: std::rc::Rc<dyn Fn(T) -> JuxTask<U>>) -> JuxTask<U> {\n");
+        w.push_str("        crate::__jux_spawn(async move {\n");
+        w.push_str("            let next = f(crate::__jux_awaited(self.await));\n");
+        w.push_str("            crate::__jux_awaited(next.await)\n");
+        w.push_str("        })\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // `Task.completed(v)` and `Task.failed(e)`: a task that is settled
+        // before anyone looks at it. Nothing runs, so nothing is spawned: the
+        // outcome goes straight into the handle's channel, and a failure is
+        // parked exactly where a task that threw parks its exception, so the
+        // awaiter re-throws it and an unawaited one is an unhandled rejection.
+        w.push_str("pub fn __jux_settled_task<T: 'static>(\n");
+        w.push_str("    outcome: Result<T, ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>,\n");
+        w.push_str(") -> JuxTask<T> {\n");
+        w.push_str("    let (result, parked) = match outcome {\n");
+        w.push_str("        Ok(v) => (Ok(v), None),\n");
+        w.push_str("        Err(p) => (Err(()), Some(p)),\n");
+        w.push_str("    };\n");
+        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
+        w.push_str("        state: std::sync::Mutex::new((false, parked)),\n");
+        w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("        settled: std::sync::atomic::AtomicBool::new(true),\n");
+        w.push_str("    });\n");
+        w.push_str("    let (remote, handle) = futures::FutureExt::remote_handle(async move { result });\n");
+        w.push_str("    // Ready on its first poll, which delivers the outcome to the handle.\n");
+        w.push_str("    let _ = futures::FutureExt::now_or_never(remote);\n");
+        w.push_str("    JuxTask(std::cell::Cell::new(Some(handle)), shared)\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
         // RemoteHandle CANCELS its computation when dropped. The
@@ -5371,10 +5506,13 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
         w.push_str("        state: std::sync::Mutex::new((false, None)),\n");
         w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("        settled: std::sync::atomic::AtomicBool::new(false),\n");
         w.push_str("    });\n");
         w.push_str("    let task_side = shared.clone();\n");
         w.push_str("    let guarded = async move {\n");
-        w.push_str("        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {\n");
+        w.push_str("        let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await;\n");
+        w.push_str("        task_side.settled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("        match outcome {\n");
         w.push_str("            Ok(v) => Ok(v),\n");
         w.push_str("            Err(p) => {\n");
         w.push_str("                let orphaned = {\n");

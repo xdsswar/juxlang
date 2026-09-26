@@ -1,0 +1,106 @@
+// Fields read through a bound that names a GENERIC class (GAPS 11, §T.4.8).
+//
+// `examples/wildcard_bound_members.jux` reads fields through
+// `? extends Rock`. This does the same through `? extends Crate<int>`, where
+// the class has type parameters of its own, and through the leaf of a
+// hierarchy whose parent is generic:
+//
+//   * a generic class nothing extends: its fields and a method, read through
+//     `? extends Crate<int>` and through a declared `<C extends Crate<String>>`;
+//   * a generic leaf of a generic parent: the inherited field, declared as
+//     `U item` in the parent's own vocabulary, reads as an `int` through
+//     `? extends Bin<int>`, and the leaf's own field and method resolve too;
+//   * a plain leaf of a generic parent, `Tagged extends Named<String>`.
+//
+// Expected output:
+//   crates:
+//     apples x3 = 3
+//     pears x5 = 5
+//   first label: figs
+//   bins:
+//     7 in slot 2 (c) -> 7
+//   tagged:
+//     t weighs 3
+
+class Crate<T> {
+    public String label;
+    public T amount;
+    public Crate(String label, T amount) {
+        this.label = label;
+        this.amount = amount;
+    }
+    public T get() { return this.amount; }
+}
+
+class Holder<U> {
+    public U item;
+    public String tag;
+    public Holder(U item, String tag) {
+        this.item = item;
+        this.tag = tag;
+    }
+}
+
+class Bin<T> extends Holder<T> {
+    public int slot;
+    public Bin(T item, int slot) {
+        super(item, "c");
+        this.slot = slot;
+    }
+    public T peek() { return this.item; }
+}
+
+class Named<N> {
+    public N name;
+    public Named(N name) { this.name = name; }
+}
+
+class Tagged extends Named<String> {
+    public int weight;
+    public Tagged(String name, int weight) {
+        super(name);
+        this.weight = weight;
+    }
+}
+
+public void reportCrates(Vec<? extends Crate<int>> xs) {
+    for (var c : xs) {
+        print($"  ${c.label} x${c.amount} = ${c.get()}");
+    }
+}
+
+public <C extends Crate<String>> String firstLabel(C c) {
+    return c.label;
+}
+
+public void reportBins(Vec<? extends Bin<int>> xs) {
+    for (var b : xs) {
+        print($"  ${b.item} in slot ${b.slot} (${b.tag}) -> ${b.peek()}");
+    }
+}
+
+public void reportTagged(Vec<? extends Tagged> xs) {
+    for (var t : xs) {
+        print($"  ${t.name} weighs ${t.weight}");
+    }
+}
+
+public void main() {
+    Vec<Crate<int>> crates = new Vec<Crate<int>>();
+    crates.push(new Crate<int>("apples", 3));
+    crates.push(new Crate<int>("pears", 5));
+    print("crates:");
+    reportCrates(crates);
+
+    print($"first label: ${firstLabel(new Crate<String>("figs", "many"))}");
+
+    Vec<Bin<int>> bins = new Vec<Bin<int>>();
+    bins.push(new Bin<int>(7, 2));
+    print("bins:");
+    reportBins(bins);
+
+    Vec<Tagged> tagged = new Vec<Tagged>();
+    tagged.push(new Tagged("t", 3));
+    print("tagged:");
+    reportTagged(tagged);
+}

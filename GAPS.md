@@ -114,14 +114,14 @@ emitted line is `v[0]` with no `.borrow()`. Spelled `Vec<int>` or
 `E0308`. Almost certainly two more sites that did not get E102's memo
 ("a resolved name keeps its package"), not a new rule.
 
-**6. `rust.std.File.open("x")` as a fully-qualified static call** emits the raw
+**6. CLOSED 2026-09-26 (phase 2 merge, ERRATA E111).** ~~`rust.std.File.open("x")` as a fully-qualified static call~~ emitted the raw
 `Result` into a `rust.std.File?` slot (`E0308`). The imported spelling
 `File.open(..)` is correct.
 
 ### Missing surface
 
-**7. `Task.completed`, `Task.failed`, `map`, `flatMap`, `isCancelled`,
-`isResolved`.** Listed in §18.1.4, unimplemented. They report honestly as
+**7. CLOSED 2026-09-26 (phase 2 merge, ERRATA E114).** ~~`Task.completed`, `Task.failed`, `map`, `flatMap`, `isCancelled`,
+`isResolved`.~~ Listed in §18.1.4, unimplemented. They report honestly as
 `E0413` now rather than leaking, so this is completing a documented surface.
 
 **8. A task used in two combinators leaks `E0382`.** Awaiting consumes a task,
@@ -142,7 +142,7 @@ non-`Clone` foreign payload still goes through `decls/enums.rs`'s unconditional
 derive. E97's fix applied at a third site; `ForeignDerives` and
 `foreign_derives_of` already exist.
 
-**11. Reading a field through a bound that names a GENERIC class**
+**11. CLOSED 2026-09-26 (phase 2 merge, ERRATA E115).** ~~Reading a field through a bound that names a GENERIC class~~
 (`? extends Container<int>` then `it.someField`). Scoped into E100 rule 1
 deliberately: the accessor bodies read through the shared handle at a fixed
 depth, and a generic class's inherited field types are spelled in its parent's
@@ -218,13 +218,13 @@ cross-package fallback. Left deliberately in E96: it is what makes `E0416` fire
 at all for user code. §M.16's ladder is written so tightening it later is a
 refinement, not a contradiction.
 
-**25. `const_eval`'s constant lookup is still name-keyed** (`ConstCtx` carries
+**25. CLOSED 2026-09-26 (phase 2 merge, ERRATA E113).** ~~`const_eval`'s constant lookup is still name-keyed~~ (`ConstCtx` carries
 no package). Cannot bite today because `jux.std` declares no constants; if one
 is ever added, `ConstCtx` needs a package.
 
 ### Found while closing gap 1
 
-**26. A nullable INSIDE a collection prints Rust's form.** `Vec<int?>` holding
+**26. CLOSED 2026-09-26 (phase 2 merge, ERRATA E112).** ~~A nullable INSIDE a collection prints Rust's form.~~ `Vec<int?>` holding
 `3` and `null` prints `[Some(3), None]` rather than `[3, null]`. The
 collection's own `Debug` writes its elements, and E107's run-time
 normalization only sees the outer type's name. Not a regression: the output

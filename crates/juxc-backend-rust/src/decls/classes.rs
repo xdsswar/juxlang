@@ -3220,6 +3220,12 @@ impl RustEmitter {
     /// hierarchy has no parent marker as a supertrait, so an inherited field
     /// read through the bound would have nowhere to resolve. A subclass field of
     /// the same name shadows the ancestor's, matching direct field access.
+    ///
+    /// Each type is spelled in `class_bare`'s OWN vocabulary. An inherited
+    /// field is declared in its owner's type parameters (`U item` on
+    /// `Holder<U>`), which mean nothing in `class_bare`'s trait or impl; the
+    /// `extends` chain says what `class_bare` passed for them (`Holder<T>`,
+    /// `Holder<int>`), so that is what the accessor's type is written as.
     fn class_chain_accessor_fields(
         &self,
         class_bare: &str,
@@ -3232,8 +3238,14 @@ impl RustEmitter {
             if depth > 64 {
                 break;
             }
+            let subst = if depth == 0 {
+                std::collections::HashMap::new()
+            } else {
+                self.kind_subst_for_ancestor(class_bare, &owner)
+            };
             for (name, ty) in self.class_accessor_fields(&owner) {
                 if seen.insert(name.clone()) {
+                    let ty = if subst.is_empty() { ty } else { Self::subst_type_ref(&ty, &subst) };
                     out.push((name, ty, depth));
                 }
             }
@@ -3335,6 +3347,126 @@ impl RustEmitter {
                 .lookup_class_ast_by_bare_or_fqn(bare)
                 .is_some_and(|cd| !cd.is_abstract && cd.generic_params.is_empty())
             && !self.class_is_extended(bare)
+    }
+
+    /// True when class `bare` is a GENERIC class that takes the
+    /// element-parameterized marker ([`Self::emit_generic_bound_marker_trait`],
+    /// `ContainerKind<T>`): in bound position, not dispatch-relevant, not
+    /// abstract. The same test [`Self::emit_class_marker_trait`] routes on.
+    pub(crate) fn takes_generic_bound_marker(&self, bare: &str) -> bool {
+        self.bound_position_classes.contains(bare)
+            && !self.is_dispatch_relevant_class(bare)
+            && self
+                .lookup_class_ast_by_bare_or_fqn(bare)
+                .is_some_and(|cd| !cd.is_abstract && !cd.generic_params.is_empty())
+    }
+
+    /// True when class `bare`'s marker trait declares a `__get_<f>` /
+    /// `__set_<f>` pair for every non-private instance field on its `extends`
+    /// chain (ERRATA E100 rule 1, and GAPS 11 for a generic class).
+    ///
+    /// The one predicate the field-read rewrite in `exprs/field.rs` and both
+    /// marker synthesizers consult. Two shapes qualify, and both need the
+    /// shared-handle representation the accessor bodies read through:
+    ///
+    /// - a class with no type parameters that carries the bound-position
+    ///   member surface ([`Self::carries_bound_position_members`]);
+    /// - a generic class on the element-parameterized marker that nothing
+    ///   extends, for the same reason the plain case excludes one: a child's
+    ///   `impl <Parent>Kind for <Child>` would carry no accessor bodies.
+    ///   Its accessors are written in its own parameters, an inherited one
+    ///   substituted through the `extends` chain
+    ///   ([`Self::class_chain_accessor_fields`]), so reading through
+    ///   `? extends Container<int>` gives an `int`.
+    pub(crate) fn carries_bound_position_accessors(&self, bare: &str) -> bool {
+        self.is_refcell_class(bare)
+            && (self.carries_bound_position_members(bare)
+                || (self.takes_generic_bound_marker(bare) && !self.class_is_extended(bare)))
+    }
+
+    /// The accessors a **leaf** of a polymorphic hierarchy declares on its own
+    /// marker trait when it is in bound position (GAPS 11): one per field it
+    /// declares itself, read at depth 0. Empty for any other class.
+    ///
+    /// A leaf's `<Name>Kind` has its parent's marker as a supertrait, and every
+    /// ancestor on the chain is a polymorphic base carrying accessors for the
+    /// fields IT declares, so `it.item` through `? extends Container<int>`
+    /// already resolved; `it.count`, declared by the leaf, had nowhere to. A
+    /// field that shadows an ancestor's of the same name is left out: a second
+    /// `__get_<f>` would make the call ambiguous (rustc E0034), and the read
+    /// then stays a direct field access rather than silently reading the
+    /// ancestor's field.
+    ///
+    /// Consulted by both the marker synthesis and `exprs/field.rs`, so a read
+    /// is rewritten exactly when the accessor it names exists.
+    pub(crate) fn leaf_bound_accessor_fields(
+        &self,
+        bare: &str,
+    ) -> Vec<(String, juxc_ast::TypeRef, usize)> {
+        if !self.is_bound_position_leaf(bare) {
+            return Vec::new();
+        }
+        let mut inherited: HashSet<String> = HashSet::new();
+        for ancestor in self.ancestor_bares(bare) {
+            inherited.extend(self.class_accessor_fields(&ancestor).into_iter().map(|(n, _)| n));
+        }
+        self.class_accessor_fields(bare)
+            .into_iter()
+            .filter(|(name, _)| !inherited.contains(name))
+            .map(|(name, ty)| (name, ty, 0))
+            .collect()
+    }
+
+    /// The methods a bound-position leaf (see
+    /// [`Self::leaf_bound_accessor_fields`]) declares on its own marker: the
+    /// callable surface whose NAME no ancestor declares. An inherited or
+    /// overriding method already resolves through the parent marker, and a
+    /// second declaration of it here would make the call ambiguous.
+    fn leaf_bound_methods(&self, bare: &str) -> Vec<(String, MethodSig)> {
+        if !self.is_bound_position_leaf(bare) {
+            return Vec::new();
+        }
+        let mut inherited: HashSet<String> = HashSet::new();
+        for ancestor in self.ancestor_bares(bare) {
+            if let Some(sig) = self.lookup_class_by_bare_or_fqn(&ancestor) {
+                inherited.extend(sig.methods.keys().cloned());
+                inherited.extend(sig.method_overloads.keys().cloned());
+            }
+        }
+        self.class_bound_visible_methods(bare)
+            .into_iter()
+            .filter(|(emitted, _)| {
+                let name = emitted.split("__ov").next().unwrap_or(emitted);
+                !inherited.contains(name)
+            })
+            .collect()
+    }
+
+    /// True when `bare` is a concrete LEAF of a polymorphic hierarchy that
+    /// sits in bound position on the shared-handle representation: the class
+    /// whose own members a `? extends <bare>` read or call has to reach
+    /// through its own marker (GAPS 11).
+    fn is_bound_position_leaf(&self, bare: &str) -> bool {
+        self.bound_position_classes.contains(bare)
+            && self.is_dispatch_relevant_class(bare)
+            && !self.is_poly_base_class(bare)
+            && !self.class_is_extended(bare)
+            && self.is_refcell_class(bare)
+            && self.lookup_class_ast_by_bare_or_fqn(bare).is_some_and(|cd| !cd.is_abstract)
+    }
+
+    /// `bare`'s ancestors, nearest first.
+    fn ancestor_bares(&self, bare: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cursor = self.direct_parent_bare(bare);
+        while let Some(ancestor) = cursor {
+            if out.len() > 64 {
+                break;
+            }
+            cursor = self.direct_parent_bare(&ancestor);
+            out.push(ancestor);
+        }
+        out
     }
 
     /// True when some other class in the program extends `class_bare`.
@@ -3638,15 +3770,18 @@ impl RustEmitter {
         let bound_methods = if bound_pos {
             self.class_bound_visible_methods(&class_bare)
         } else {
-            Vec::new()
+            self.leaf_bound_methods(&class_bare)
         };
         // The accessor BODIES read `self.0.borrow()…`, so they only make sense
         // for a class that uses the shared-handle representation. A class on the
         // legacy plain-struct path reads its fields directly and needs none.
-        let bound_accessors = if bound_pos && self.is_refcell_class(&class_bare) {
+        let bound_accessors = if bound_pos && self.carries_bound_position_accessors(&class_bare) {
             self.class_chain_accessor_fields(&class_bare)
         } else {
-            Vec::new()
+            // A LEAF of a polymorphic hierarchy reaches its inherited fields
+            // through the parent marker it has as a supertrait, and its own
+            // through these (GAPS 11).
+            self.leaf_bound_accessor_fields(&class_bare)
         };
         if own_methods.is_empty()
             && hook_targets.is_empty()
@@ -4144,6 +4279,15 @@ impl RustEmitter {
                     && m.generic_params.is_empty()
             })
             .collect();
+        // The field half of the surface (GAPS 11): `it.count` through
+        // `? extends Container<int>` reads `it.__get_count()`. Written in the
+        // class's own parameters, which are the trait's, so the bound's
+        // `ContainerKind<isize>` makes the accessor answer an `isize`.
+        let accessors = if self.carries_bound_position_accessors(class_bare) {
+            self.class_chain_accessor_fields(class_bare)
+        } else {
+            Vec::new()
+        };
 
         // --- trait ContainerKind<T…>: Debug { fn peek(&self) -> T; } ---
         self.w.emit_indent();
@@ -4177,6 +4321,7 @@ impl RustEmitter {
             }
             self.w.push_str(";\n");
         }
+        self.emit_accessor_trait_sigs_at(&accessors);
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
@@ -4232,6 +4377,7 @@ impl RustEmitter {
             }
             self.w.push_str(") }\n");
         }
+        self.emit_accessor_impl_methods_at(&accessors);
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
