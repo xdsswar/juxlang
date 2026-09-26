@@ -43,7 +43,7 @@ up, and because several of these have documented boundaries that are still open
 | E96 | A user type may be named `T`, `String`, `Vec`, `Exception`, `Iterator`. Bare-name resolution became unit-scoped; `jux.std` and the `rust.*` stubs are a library realm that never binds a bare name to a user declaration. New §M.16. |
 | E97 | A Rust type that is not `Clone + Debug` can be held in an aggregate. Bindgen now discovers `@RustDebug`, `@RustPartialEq`, `@RustDefault` beside `@RustClone`; `__jux_show!` gained a bottom tier that prints `<TypeName>`. |
 | E98 | A function type over a polymorphic class lowers to the handle, so callbacks over a class hierarchy work. |
-| E99 | Recorded OPEN. See section 3, item 1. |
+| E99 | Part 2 closed later the same day by E107 (gap 1). |
 | E100 | Members reached through a wildcard over a class bound: field reads, method calls, and `? super` printing through `Display`. |
 | E101 | A sealed class hierarchy is a reference hierarchy, not a Rust enum. The enum lowering is deleted. `case Sub(part, ...)` got a real lowering and a grammar production. |
 | E102 | An aliased or fully-qualified library type is not shadowed by a same-named user class. |
@@ -61,7 +61,7 @@ up, and because several of these have documented boundaries that are still open
 
 ### Blocks ordinary use
 
-**1. `Box<int?>` leaks `Option<isize>: Display`.** Contradicts §T.2.1's explicit
+**1. CLOSED 2026-09-25 (`dc929a7`, ERRATA E107).** ~~`Box<int?>` leaks `Option<isize>: Display`.~~ Contradicts §T.2.1's explicit
 promise that a compiler-added bound can never make a legal type argument
 illegal. Recorded OPEN as ERRATA **E99**, which also records the trap: removing
 the `Display` bound looks right and is wrong, because the spez probe resolves
@@ -130,14 +130,14 @@ reports. Needs a Jux diagnostic. Alongside it, an exception inside a `Result`
 renders its Debug internals (`Err(Exception { __parent: ... })`) rather than its
 message.
 
-**9. The checker does not consult `@RustDefault`.**
+**9. CLOSED 2026-09-25 (`dc929a7`, ERRATA E107).** ~~The checker does not consult `@RustDefault`.~~
 `juxc_tycheck::defaults::user_type_has_default` returns `true` for any external
 class, which E97's markers make false, so `new Holder[3]` over a record that
 lost `Default` is reported by rustc. About five lines, but it changes
 `member_has_default` for every foreign type at once, so it wants the corpus as
 its guard.
 
-**10. Enums are not covered by the derive rule.** A Jux `enum` variant holding a
+**10. CLOSED 2026-09-25 (`dc929a7`, ERRATA E107).** ~~Enums are not covered by the derive rule.~~ A Jux `enum` variant holding a
 non-`Clone` foreign payload still goes through `decls/enums.rs`'s unconditional
 derive. E97's fix applied at a third site; `ForeignDerives` and
 `foreign_derives_of` already exist.
@@ -222,6 +222,14 @@ refinement, not a contradiction.
 no package). Cannot bite today because `jux.std` declares no constants; if one
 is ever added, `ConstCtx` needs a package.
 
+### Found while closing gap 1
+
+**26. A nullable INSIDE a collection prints Rust's form.** `Vec<int?>` holding
+`3` and `null` prints `[Some(3), None]` rather than `[3, null]`. The
+collection's own `Debug` writes its elements, and E107's run-time
+normalization only sees the outer type's name. Not a regression: the output
+was the same before E107. Recorded under E107's "Still open".
+
 ---
 
 ## 4. Three streams stopped mid-flight
@@ -245,12 +253,14 @@ causes and pass on the fixed build, clippy clean.
 tests passed, the two failures (`dashboard`, `svg_studio`) were crates.io
 download errors and pass on rerun, clippy clean. The worktree can go.
 
-**`agent-aaba5147cd3b13715` (gaps 1, 9 and 10).** The largest: edits across
-`decls/{classes,enums,functions,interfaces,operators,records}.rs`,
-`analysis.rs`, `types.rs`, `lib.rs` and `juxc-tycheck/src/defaults.rs`. Was
-gating the enum's `cases()` helper on `Clone` and fixing the tycheck default
-when stopped. This is the `Debug`-canonical change, so it is the one that most
-needs the full corpus run before it can be trusted.
+**`agent-aaba5147cd3b13715` (gaps 1, 9 and 10).** Merged as `dc929a7`. The
+first gate failed 19 tests, all of them assertions on the old
+`#[derive(Debug, ...)]` lists or whole-crate searches for `return` /
+`.to_string()` that the new prelude helper tripped; the helper was rewritten
+as one expression and the derive assertions now check for the written
+`Debug` impl. `examples/nullable_type_arguments.jux` and
+`tests/ui/foreign_record_array_default.jux` pin the three gaps. Second gate:
+1551 passed, 0 failed, clippy clean.
 
 ---
 
