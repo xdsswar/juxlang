@@ -178,3 +178,38 @@ fn a_worker_shared_class_is_atomic_and_locks_only_when_written() {
     assert!(rust.contains("// JUX-REP: arc\n"), "Config is marked `arc`:\n{rust}");
     assert!(rust.contains("// JUX-REP: arc-mutex\n"), "Tally is marked `arc-mutex`:\n{rust}");
 }
+
+/// Hierarchies and generics (§CR.3.4, §CR.3.5): a hierarchy takes the most
+/// general representation any member needs, and a generic class one for all
+/// its arguments.
+#[test]
+fn a_hierarchy_and_a_generic_class_each_take_one_representation() {
+    let rust = emit(&example_case("cr_rep_hierarchy"));
+    // Nothing writes a shape: the whole hierarchy is a plain `Rc`.
+    for class in ["Circle", "Square"] {
+        assert_handle(&rust, class, &format!("std::rc::Rc<{class}_Inner>"));
+    }
+    assert_eq!(rep_label(&rust, "Shape_Inner").as_deref(), Some("rc"), "Shape is `rc`:\n{rust}");
+    // `Truck` is written, and pulls `Vehicle` up with it.
+    assert_handle(&rust, "Truck", "std::rc::Rc<crate::JuxCell<Truck_Inner>>");
+    assert_eq!(
+        rep_label(&rust, "Vehicle_Inner").as_deref(),
+        Some("rc-refcell"),
+        "Vehicle is raised to `rc-refcell`:\n{rust}",
+    );
+    // `Slot<int>` is written; `Slot<String>` shares its representation.
+    assert_eq!(
+        rep_label(&rust, "Slot_Inner").as_deref(),
+        Some("rc-refcell"),
+        "Slot is `rc-refcell` for every argument:\n{rust}",
+    );
+}
+
+/// The `// JUX-REP:` label written above the struct named `name` (§CR.9
+/// Phase D): the nearest one before its declaration.
+fn rep_label(rust: &str, name: &str) -> Option<String> {
+    let at = rust.find(&format!("struct {name}"))?;
+    let before = &rust[..at];
+    let mark = before.rfind("// JUX-REP: ")? + "// JUX-REP: ".len();
+    Some(before[mark..].lines().next()?.trim().to_string())
+}

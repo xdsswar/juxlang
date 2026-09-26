@@ -51,6 +51,7 @@ mod lastuse;
 mod literals;
 mod patterns;
 mod rep_select;
+pub use rep_select::RepViolation;
 mod sizeof_emit;
 mod stmts;
 mod types;
@@ -82,6 +83,10 @@ pub struct RustCrate {
     /// (ERRATA E1XX-PHASE8). Empty when the selector was right, which the
     /// corpus's self-check (`JUX_SELFCHECK`) requires.
     pub rep_fallbacks: Vec<String>,
+    /// Value representations the selector committed to that §CR.7 forbids
+    /// (`E0953`-`E0955`). Empty unless the selector is wrong; the driver
+    /// reports each as an error.
+    pub rep_violations: Vec<RepViolation>,
 }
 
 /// The fixed crate name for the emitted Rust crate. The driver knows to
@@ -314,6 +319,7 @@ fn lower_workspace_pass(
         demanded,
         &|cd| e.inner_is_clone(cd),
     );
+    e.rep_violations = rep_select::verify_selection(units, &e.expr_types, &e.class_reps);
     // `wrapper_classes` = every newtype-handle class (`Box`, bare `Rc` OR
     // `Rc<RefCell>`) — the `.0` newtype shape. `refcell_classes` is the
     // interior-mutable subset that the `.0.borrow()` / `RefCell::new` sites
@@ -529,6 +535,7 @@ fn lower_workspace_test_pass(
         demanded,
         &|cd| e.inner_is_clone(cd),
     );
+    e.rep_violations = rep_select::verify_selection(units, &e.expr_types, &e.class_reps);
     // `wrapper_classes` = every newtype-handle class (`Box`, bare `Rc` OR
     // `Rc<RefCell>`) — the `.0` newtype shape. `refcell_classes` is the
     // interior-mutable subset that the `.0.borrow()` / `RefCell::new` sites
@@ -1254,6 +1261,8 @@ struct RustEmitter {
     /// [`lower_to_rep_fixpoint`]. (The workspace passes hand theirs to
     /// [`compute_class_reps`] directly.)
     pub(crate) rep_demanded: std::collections::HashSet<String>,
+    /// §CR.7's check of the selection ([`rep_select::verify_selection`]).
+    pub(crate) rep_violations: Vec<RepViolation>,
     /// Bare names of **polymorphic base classes** (non-final classes
     /// extended by ≥1 subclass, sealed or not, generic or not — see
     /// [`compute_polymorphic_base_classes`]). A value slot of one of these
@@ -2737,7 +2746,6 @@ pub(crate) fn compute_class_reps(
     let cells = rep_select::compute_cell_classes(units, expr_types, symbols, unit_offset, extern_mut_methods);
     let worker_shared = worker::compute_worker_shared_class_fqns(units, expr_types, symbols);
     let adjacency = fqn_extends_adjacency(units, symbols, unit_offset);
-    let in_hierarchy = |n: &String| adjacency.get(n).is_some_and(|v| !v.is_empty());
     let contained = rep_select::compute_contained_classes(units, expr_types);
     let arc_fields_ok = |fqn: &String| rep_select::fields_are_jux_values(units, symbols, fqn);
     // The declarations of the contained classes, for the checks only a
@@ -2761,7 +2769,7 @@ pub(crate) fn compute_class_reps(
 
     let mut reps: HashMap<String, ClassRep> = HashMap::new();
     for n in &eligible {
-        let needs_cell = cells.contains(n) || demanded.contains(n) || in_hierarchy(n);
+        let needs_cell = cells.contains(n) || demanded.contains(n);
         let mut rep = if needs_cell { ClassRep::RcRefCell } else { ClassRep::Rc };
         // A class whose objects cross a worker boundary takes the atomic
         // handle: `JuxSync` (`Arc<Mutex>`) when it needs its cell, `JuxArc`
@@ -5895,6 +5903,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             box_classes: std::collections::HashSet::new(),
             cell_demands: std::cell::RefCell::new(std::collections::HashSet::new()),
             rep_demanded: std::collections::HashSet::new(),
+            rep_violations: Vec::new(),
             poly_base_classes: std::collections::HashSet::new(),
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
@@ -6034,6 +6043,11 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                 &self.rep_demanded,
                 &|cd| self.inner_is_clone(cd),
             );
+            self.rep_violations.extend(rep_select::verify_selection(
+                std::slice::from_ref(unit),
+                &self.expr_types,
+                &reps,
+            ));
             for (n, rep) in reps {
                 if rep != ClassRep::Inline {
                     self.wrapper_classes.insert(n.clone());
@@ -7978,6 +7992,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             cargo_toml: cargo_toml_for_with(CRATE_NAME, uses_async),
             sources,
             rep_fallbacks: Vec::new(),
+            rep_violations: std::mem::take(&mut self.rep_violations),
         }
     }
 }

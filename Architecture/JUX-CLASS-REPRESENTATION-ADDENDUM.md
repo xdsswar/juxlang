@@ -1,5 +1,13 @@
 # Jux Spec Addendum — Class Representation (Draft)
 
+**Implementation status (ERRATA E1XX-PHASE8):** the selector is built.
+Every class takes one of Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` (the
+prelude's `JuxArc`) or `Arc<Mutex>` (`JuxSync`), decided per class by
+fully-qualified name; each is marked `// JUX-REP: <rep>` in the generated
+Rust. Where the implementation departs from this text (value tiers only for
+classes nothing writes, `Rc` for `dyn` slots per ERRATA E14, the §CR.7 codes
+as the selector's own check), the ERRATA entry says why.
+
 **Status:** Proposed insertion. Locks the design for **how classes are
 represented in lowered code** so the backend stops calcifying any
 single choice (currently a tacit "every class is `Arc<C_Inner>`")
@@ -747,6 +755,13 @@ should never produce a diagnostic on the user's own code. The E095x
 codes above only fire when the user does something the selector
 can't make sound.
 
+**As implemented (ERRATA E1XX-PHASE8).** The selector escalates before it
+chooses: a class compared by identity, aimed at by a `weak` reference or
+containing itself is never a candidate for Inline or `Box`. So `E0953`-`E0955`
+check the finished selection on every build and fire only if the selector is
+wrong. A self-containing class is refcounted (`Rc`, or `Rc<RefCell>` when
+written) rather than rejected; uncollected cycles leak as Phase C documents.
+
 ---
 
 ## §CR.8 — Worked Examples
@@ -901,6 +916,11 @@ cost where sharing isn't needed. (This supersedes the original
 
 ### Phase B — Escape-analysis selector (the "fast tier")
 
+*Built (ERRATA E1XX-PHASE8).* `mutated` is `rep_select::compute_cell_classes`;
+`escapes`/`aliased` are decided together by a whitelist of positions
+(`compute_contained_classes`); a write the analysis misses is caught by the
+emitter and lowered again with the cell restored.
+
 1. New per-class analysis pass between tycheck and lowering: collect
    `escapes` / `aliased` / `mutated` / `cross_thread` (§CR.3.2, §CR.4.1).
 2. Apply the decision table (§CR.3.3 + §CR.4.1) to pick a rep per class;
@@ -917,6 +937,11 @@ cost where sharing isn't needed. (This supersedes the original
   later full-GC-fidelity option.
 
 ### Phase D — Polish
+
+*Built:* the §CR.7 diagnostics (as `E0953`-`E0955`) and the per-class
+comment, spelled `// JUX-REP: <rep>` because `// JUX:` is the source-marker
+prefix. *Open:* per-instantiation selection for generics, and
+interprocedural escape beyond "returned into the caller's local".
 
 - Per-instantiation rep selection for generics; interproc escape for
   return-then-consume.

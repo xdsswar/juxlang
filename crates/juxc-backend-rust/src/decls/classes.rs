@@ -1356,15 +1356,18 @@ impl RustEmitter {
                     self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str(") -> Self { ");
                     self.w.push_str(parent_bare);
-                    // The parent slice takes the PARENT class's handle shape — a shared
-                    // base may be atomic while the child that slices from it is not.
-                    self.w.push_str(if self.sync_classes.contains(parent_bare) {
-                        "(crate::JuxSync::new(v.0.borrow().__parent.clone())) } }
-"
+                    // The parent slice takes the PARENT class's handle shape, and
+                    // is read out of the child the way the child's fields are
+                    // (ERRATA E1XX-PHASE8: a hierarchy nothing writes has no cell).
+                    let (open, close) = if self.sync_classes.contains(parent_bare) {
+                        (self.atomic_handle(parent_bare).1, ")")
+                    } else if self.is_refcell_class(parent_bare) {
+                        ("std::rc::Rc::new(crate::JuxCell::new(", "))")
                     } else {
-                        "(std::rc::Rc::new(crate::JuxCell::new(v.0.borrow().__parent.clone()))) } }
-"
-                    });
+                        ("std::rc::Rc::new(", ")")
+                    };
+                    let read = self.cell_read(name);
+                    self.w.push_str(&format!("({open}v.0{read}.__parent.clone(){close}) }} }}\n"));
                     self.w.newline();
                 }
             }
@@ -3540,7 +3543,7 @@ impl RustEmitter {
             && self.is_dispatch_relevant_class(bare)
             && !self.is_poly_base_class(bare)
             && !self.class_is_extended(bare)
-            && self.is_refcell_class(bare)
+            && self.is_wrapper_class(bare)
             && self.lookup_class_ast_by_bare_or_fqn(bare).is_some_and(|cd| !cd.is_abstract)
     }
 
@@ -4279,6 +4282,11 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&**self) }
 ");
+            // A hierarchy nothing writes has no setters to forward
+            // (`emit_accessor_trait_sigs_at`).
+            if !self.is_refcell_class(&class_bare) {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str("fn __set_");
             self.w.push_str(&to_rust_ident(name));

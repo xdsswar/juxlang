@@ -3769,8 +3769,60 @@ since E65, and `E0952` (reserved by §R.3.6).
   representations rather than taking the higher rank: `Arc` joined with
   `RcRefCell` is `ArcMutex`, the one that both crosses threads and is written.
 
+- **Hierarchies and generics.** A hierarchy no longer keeps the cell as a
+  matter of course: every class of an `extends` component takes the join of
+  what its members need (§CR.3.5), so a hierarchy nothing writes is a plain
+  `Rc` with its `Rc<dyn Kind>` dispatch unchanged, and one written through
+  any member (a subclass's method, a store through a base-typed reference,
+  which the analysis attributes to the whole component) keeps the cell for
+  every member. The slicing upcast, the `Kind` forwarding impls and the
+  bound-position accessors of a leaf follow the representation; a hierarchy
+  without a cell offers no `__set_<f>`. A constructor in a hierarchy that
+  does more than store its parameters runs against the handle (E21) and so
+  keeps the cell. A generic class has one representation for all its
+  arguments (§CR.3.4): the analysis reads every use of every instantiation,
+  so one written `Slot<int>` gives `Slot<String>` its cell too.
+  Per-instantiation selection stays future work, as §CR.9 Phase D says.
+- **`E0953`-`E0955` are the selector's own check.** §CR.7 describes them as
+  firing "before the selector commits" when the program needs something a
+  value representation cannot give. The selector here never commits: its
+  whitelist rules out, before choosing, every class compared with `===`, the
+  target of any `weak` reference, and every class that contains itself. So
+  the three codes are a verification of the finished selection
+  (`verify_selection`), run on every build: a class selected Inline or `Box`
+  that is compared by identity (`E0953`), aimed at by a `weak` field or
+  parameter (`E0954`) or self-containing (`E0955`) is reported as an error
+  naming the class, instead of being lowered into a program that would behave
+  differently from Java. None can fire unless the selector is wrong, which is
+  why the help line calls it a compiler bug. §CR.7's `E0952` wording ("a hard
+  error until the cycle-breaker lands") is not followed literally: a
+  self-containing class takes a refcounted representation (`Rc`, or
+  `Rc<RefCell>` when written), leaking uncollected cycles as §CR.9 Phase C
+  documents, rather than rejecting every linked list.
+- **What is reported.** Each class's representation is written above it in
+  the generated Rust as `// JUX-REP: inline|box|rc|rc-refcell|arc|arc-mutex`
+  (§CR.9 Phase D). §CR.9 asked for `// JUX:rep=...`; `// JUX:` is the
+  source-marker prefix the driver maps lines by, so the spelling differs. On
+  the example corpus (436 programs, the core library's classes left out),
+  the 579 user classes select as: 293 `rc`, 196 `rc-refcell`, 81 `inline`,
+  2 `box`, 2 `arc`, 5 `arc-mutex`. Every program prints exactly what it
+  printed before, the borrow self-check stays clean, and no class needed the
+  fallback.
+
+**Known boundary.** Where this departs from §CR.3.3's table, it is toward
+the more general representation: a contained class that is written stays on
+the `Rc` tiers (Inline and `Box` copy, and a write to a copy is lost); a
+contained class holding a foreign value stays there too; a candidate for a
+value representation must not be generic, in a hierarchy, or implement an
+interface; `Arc` without a lock needs every field to be a Jux value or class.
+§CR.2 and §CR.5.2 still say a `dyn`-dispatched slot forces `Arc`; the
+selector keeps E14's resolution (`Rc`, atomic only across a worker boundary).
+The value tiers are rare by construction: most objects in a Java-shaped
+program are passed somewhere, and a passed object is shared.
+
 **Spec status:** §CR.7 carries the new numbers and a note on the old ones;
-§D.4 has the three rows.
+§D.4 has the three rows, implemented. The addendum's status line and §CR.9
+say what is built. GAPS.md gap 23 is closed.
 
 ---
 

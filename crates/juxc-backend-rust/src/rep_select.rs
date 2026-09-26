@@ -1107,3 +1107,193 @@ pub(crate) fn fields_are_jux_values(units: &[juxc_ast::CompilationUnit], symbols
     }
     false
 }
+
+// ---------------------------------------------------------------------------
+// §CR.7: the representations the selector must never commit to.
+// ---------------------------------------------------------------------------
+
+/// A value representation (Inline or `Box`) the program cannot have (§CR.7,
+/// ERRATA E1XX-PHASE8). The selector escalates past each of these on its own
+/// (the whitelist of [`compute_contained_classes`] rules every one of them
+/// out), so a violation means the selector was wrong about a class, and it is
+/// reported rather than lowered into a program that would behave differently
+/// from Java.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepViolation {
+    /// `E0953`, `E0954` or `E0955`.
+    pub code: &'static str,
+    /// The class, by fully-qualified name.
+    pub class: String,
+    /// What it was selected as.
+    pub rep: &'static str,
+}
+
+/// Check the value representations in `reps` against §CR.7:
+///
+/// - `E0953`: an Inline or `Box` class whose objects are compared with `===`
+///   or `!==`: identity needs a stable address that a copied value lacks;
+/// - `E0954`: an Inline or `Box` class that a `weak` field or parameter
+///   points at: a `Weak` needs a refcount;
+/// - `E0955`: an Inline or `Box` class whose fields, followed through other
+///   classes' fields, contain itself: a cycle needs a refcount (and Inline
+///   would be infinitely large).
+pub(crate) fn verify_selection(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+    reps: &HashMap<String, crate::ClassRep>,
+) -> Vec<RepViolation> {
+    let value = |r: &crate::ClassRep| match r {
+        crate::ClassRep::Inline => Some("inline"),
+        crate::ClassRep::Box => Some("box"),
+        _ => None,
+    };
+    // Simple name → (FQN, rep) of each value class.
+    let mut by_simple: HashMap<String, Vec<(String, &'static str)>> = HashMap::new();
+    for (fqn, r) in reps {
+        if let Some(label) = value(r) {
+            by_simple.entry(bare_of(fqn)).or_default().push((fqn.clone(), label));
+        }
+    }
+    let mut out: Vec<RepViolation> = Vec::new();
+    if by_simple.is_empty() {
+        return out;
+    }
+    let report = |code: &'static str, simple: &str, out: &mut Vec<RepViolation>| {
+        for (fqn, rep) in by_simple.get(simple).cloned().unwrap_or_default() {
+            let v = RepViolation { code, class: fqn, rep };
+            if !out.contains(&v) {
+                out.push(v);
+            }
+        }
+    };
+
+    // E0953: identity comparisons.
+    let mut compared: HashSet<String> = HashSet::new();
+    let mut note = |e: &Expr| {
+        if let Expr::Binary(b) = e {
+            if matches!(b.op, juxc_ast::BinaryOp::RefEq | juxc_ast::BinaryOp::RefNeq) {
+                for side in [&b.left, &b.right] {
+                    if let Some(Ty::User { name, .. }) =
+                        expr_types.get(&crate::exprs::expr_span_of(side)).map(strip_nullable_ty)
+                    {
+                        compared.insert(bare_of(name));
+                    }
+                }
+            }
+        }
+    };
+    for unit in units {
+        for item in &unit.items {
+            for_each_member_body(item, &mut |b| for_each_expr_in_block(b, &mut note));
+        }
+    }
+    for simple in &compared {
+        report("E0953", simple, &mut out);
+    }
+
+    // E0954: weak references.
+    let mut weak_targets: HashSet<String> = HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Class(cd) => {
+                    for f in cd.fields.iter().filter(|f| f.is_weak) {
+                        if let Some(t) = f.ty.as_ref().and_then(exact_name) {
+                            weak_targets.insert(t);
+                        }
+                    }
+                    let params = cd
+                        .methods
+                        .iter()
+                        .flat_map(|m| m.params.iter())
+                        .chain(cd.constructors.iter().flat_map(|c| c.params.iter()));
+                    for p in params.filter(|p| p.is_weak) {
+                        if let Some(t) = exact_name(&p.ty) {
+                            weak_targets.insert(t);
+                        }
+                    }
+                }
+                TopLevelDecl::Function(f) => {
+                    for p in f.params.iter().filter(|p| p.is_weak) {
+                        if let Some(t) = exact_name(&p.ty) {
+                            weak_targets.insert(t);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for simple in &weak_targets {
+        report("E0954", simple, &mut out);
+    }
+
+    // E0955: classes that contain themselves.
+    for simple in crate::compute_recursive_field_classes(units) {
+        report("E0955", &simple_name(&simple), &mut out);
+    }
+    out.sort_by(|a, b| (a.code, &a.class).cmp(&(b.code, &b.class)));
+    out
+}
+
+fn strip_nullable_ty(t: &Ty) -> &Ty {
+    match t {
+        Ty::Nullable(inner) => strip_nullable_ty(inner),
+        other => other,
+    }
+}
+
+fn for_each_expr_in_block(b: &Block, f: &mut dyn FnMut(&Expr)) {
+    juxc_ast::visit::for_each_expr(b, f);
+}
+
+/// Every executable body of a declaration.
+fn for_each_member_body(item: &TopLevelDecl, f: &mut dyn FnMut(&Block)) {
+    match item {
+        TopLevelDecl::Function(fd) => {
+            if let Some(b) = &fd.body {
+                f(b);
+            }
+        }
+        TopLevelDecl::Class(cd) => {
+            for m in &cd.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+            for op in &cd.operators {
+                if let Some(b) = &op.body {
+                    f(b);
+                }
+            }
+            for c in &cd.constructors {
+                f(&c.body);
+            }
+            for b in cd.init_blocks.iter().chain(&cd.static_init_blocks).chain(&cd.drop_blocks) {
+                f(b);
+            }
+        }
+        TopLevelDecl::Record(rd) => {
+            for m in &rd.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        TopLevelDecl::Enum(ed) => {
+            for m in &ed.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        TopLevelDecl::Interface(id) => {
+            for m in &id.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        _ => {}
+    }
+}

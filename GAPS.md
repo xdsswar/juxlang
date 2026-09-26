@@ -206,7 +206,7 @@ editors" architecture. New surface rather than a fix. The TextMate grammar has
 also drifted (`ref`, `typeof`, `weak` unhighlighted) and `jux.tmbundle/` has no
 `Syntaxes/`, so the documented install path does not load.
 
-**23. The §CR representation selector is unbuilt.** Every class is
+**23. CLOSED 2026-09-26 (phase 8, ERRATA E1XX-PHASE8).** ~~The §CR representation selector is unbuilt.~~ The selector picks Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` or `Arc<Mutex>` per class; what it leaves on a more general tier than §CR.3.3's table, and why, is in the ERRATA entry. Every class is
 `Rc<RefCell>`, including the spec's own "zero heap allocation" example. This is
 the single largest scoring hole (§CR at 44%), but it is a performance promise,
 not correctness, and §CR.9 sequences it as a later phase. It also means

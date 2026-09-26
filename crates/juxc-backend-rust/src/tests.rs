@@ -1811,18 +1811,19 @@ fn extends_lowers_to_wrapper_hierarchy() {
         "#,
     );
     // Dog's inner embeds Animal's INNER as `__parent` (not the
-    // wrapper newtype) so the whole chain shares one RefCell.
+    // wrapper newtype) so the whole chain shares one handle.
     assert!(
         rust.contains("pub struct Dog_Inner {\n    pub __parent: Animal_Inner,"),
         "inner embed: {rust}",
     );
-    // Both classes wrap in `Rc<RefCell<_Inner>>`.
+    // The hierarchy takes one representation (§CR.3.5). Nothing writes an
+    // `Animal` or a `Dog`, so both wrap in a plain `Rc<_Inner>`.
     assert!(
-        rust.contains("pub struct Animal(pub std::rc::Rc<crate::JuxCell<Animal_Inner>>);"),
+        rust.contains("pub struct Animal(pub std::rc::Rc<Animal_Inner>);"),
         "Animal wrapper newtype: {rust}",
     );
     assert!(
-        rust.contains("pub struct Dog(pub std::rc::Rc<crate::JuxCell<Dog_Inner>>);"),
+        rust.contains("pub struct Dog(pub std::rc::Rc<Dog_Inner>);"),
         "Dog wrapper newtype: {rust}",
     );
     // Stage-2: `Animal` is a polymorphic base (extended by `Dog`), so the
@@ -1873,9 +1874,10 @@ fn super_call_lifts_into_inner_literal() {
         !rust.contains("super(") && !rust.contains("__super__"),
         "super shouldn't appear in body: {rust}",
     );
-    // Public `new` delegates to `new_inner`.
+    // Public `new` delegates to `new_inner` (a plain `Rc`: nothing writes
+    // the hierarchy after construction).
     assert!(
-        rust.contains("Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner("),
+        rust.contains("Self(std::rc::Rc::new(Self::new_inner("),
         "new delegates to new_inner: {rust}",
     );
 }
@@ -2572,13 +2574,13 @@ fn bare_inherited_field_resolves_through_this() {
     );
     // Base's own body reads its own field directly.
     assert!(
-        rust.contains("self.0.borrow().name"),
+        rust.contains("self.0.name"),
         "base reads own field: {rust}",
     );
     // Sub's inherited `tag()` AND its own `tagBare()` reach the inherited field
     // through `__parent` — never a bare, unresolved `name`.
     assert!(
-        rust.contains("self.0.borrow().__parent.name"),
+        rust.contains("self.0.__parent.name"),
         "subclass reaches inherited field via __parent: {rust}",
     );
     // The smoking gun: no method body emits a bare `name` statement/return.
@@ -2729,11 +2731,11 @@ fn inherited_nullable_getter_not_double_wrapped() {
     // The copied `Sub::getName` reads the inherited field through `__parent`
     // WITHOUT a `Some(...)` wrap — the field is already `Option`-shaped.
     assert!(
-        !rust.contains("Some(self.0.borrow().__parent.name"),
+        !rust.contains("Some(self.0.__parent.name"),
         "inherited nullable getter must not double-wrap Some: {rust}",
     );
     assert!(
-        rust.contains("self.0.borrow().__parent.name.clone()"),
+        rust.contains("self.0.__parent.name.clone()"),
         "inherited getter still reads the parent field: {rust}",
     );
 }
@@ -2834,7 +2836,7 @@ fn wrapper_three_level_hierarchy_walks_two_parents() {
     // The inherited `name()` reaches the grandparent field across two
     // `__parent` hops (with the auto-`.clone()` on the String read).
     assert!(
-        rust.contains("self.0.borrow().__parent.__parent.name"),
+        rust.contains("self.0.__parent.__parent.name"),
         "two-level inherited field walk: {rust}",
     );
     // Construction chains `new_inner` through every level.
@@ -6806,7 +6808,15 @@ fn a_missed_write_is_lowered_again_with_the_cell_restored() {
         } else {
             std::iter::once("app.C".to_string()).collect()
         };
-        (RustCrate { cargo_toml: String::new(), sources: Vec::new(), rep_fallbacks: Vec::new() }, missed)
+        (
+            RustCrate {
+                cargo_toml: String::new(),
+                sources: Vec::new(),
+                rep_fallbacks: Vec::new(),
+                rep_violations: Vec::new(),
+            },
+            missed,
+        )
     });
     assert_eq!(passes, 2);
     assert_eq!(produced.rep_fallbacks, vec!["app.C".to_string()]);
@@ -6862,4 +6872,46 @@ fn representations_join_to_the_least_general_sound_one() {
     .collect();
     rollup_class_reps(&mut reps, &adj);
     assert!(reps.values().all(|r| *r == ArcMutex), "{reps:?}");
+}
+
+/// §CR.7's three checks, fed a selection the selector itself never makes:
+/// each class below is forced to a value representation it cannot have.
+#[test]
+fn a_value_representation_the_program_cannot_have_is_reported() {
+    let src = r#"
+        class Seen { public int n; public Seen(int n) { this.n = n; } }
+        class Target { public int n; public Target(int n) { this.n = n; } }
+        class Holder { public weak Target t; }
+        class Node { public Node? next; }
+        class Fine { public int n; public Fine(int n) { this.n = n; } }
+        public void main() {
+            var a = new Seen(1);
+            var b = new Seen(2);
+            print(a === b);
+        }
+    "#;
+    let sf = SourceFile::new("test.jux", src);
+    let parsed = parse(&lex(&sf).tokens).ast;
+    let typed = juxc_tycheck::typecheck(&parsed);
+    let units = vec![parsed];
+    let mut reps: HashMap<String, ClassRep> = HashMap::new();
+    for c in ["Seen", "Target", "Node", "Fine"] {
+        reps.insert(c.to_string(), ClassRep::Inline);
+    }
+    reps.insert("Holder".to_string(), ClassRep::RcRefCell);
+    let found: Vec<(&str, String)> = rep_select::verify_selection(&units, &typed.expr_types, &reps)
+        .into_iter()
+        .map(|v| (v.code, v.class))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            ("E0953", "Seen".to_string()),
+            ("E0954", "Target".to_string()),
+            ("E0955", "Node".to_string()),
+        ],
+    );
+    // The selector itself never makes any of those choices.
+    let rust = emit(src);
+    assert!(!rust.contains("// JUX-REP: inline\n#[derive(Clone)]\nstruct Seen"), "{rust}");
 }

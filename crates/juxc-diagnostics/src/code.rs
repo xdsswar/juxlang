@@ -1113,6 +1113,18 @@ pub enum Code {
     /// operand types (Runtime/ABI §R.3.3): a call could not tell which one
     /// runs.
     E0951_DuplicateOperator,
+    /// E0953 -- A class compared by identity (`===` / `!==`) was selected
+    /// as a value representation, Inline or `Box` (Class representation
+    /// §CR.7): a copied value has no stable address to compare. The selector
+    /// escalates past this on its own; the code reports a selector that did
+    /// not (ERRATA E1XX-PHASE8).
+    E0953_ValueRepIdentity,
+    /// E0954 -- A `weak` field or parameter targets a class selected as a
+    /// value representation (§CR.7): a `Weak` needs a refcount.
+    E0954_ValueRepWeakTarget,
+    /// E0955 -- A class whose fields contain itself was selected as a value
+    /// representation (§CR.7): a cycle needs a refcount.
+    E0955_ValueRepSelfContaining,
 
     // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
     /// E0970 — Write to a read-only property outside the place where
@@ -1425,6 +1437,9 @@ impl Code {
             Code::E0936_InterfaceOperatorShape   => "E0936",
             Code::E0950_OrphanOperator           => "E0950",
             Code::E0951_DuplicateOperator        => "E0951",
+            Code::E0953_ValueRepIdentity         => "E0953",
+            Code::E0954_ValueRepWeakTarget       => "E0954",
+            Code::E0955_ValueRepSelfContaining   => "E0955",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
             Code::E0975_ObserverShapeMismatch    => "E0975",

@@ -161,6 +161,40 @@ pub(crate) fn check_rep_fallbacks(rep_fallbacks: &[String]) -> Result<(), BuildF
     Err(failure)
 }
 
+/// Report the value representations the selector committed to that §CR.7
+/// forbids (`E0953`-`E0955`, ERRATA E1XX-PHASE8). Unlike a fallback this is
+/// checked on every build: lowering such a class would give a program that
+/// behaves differently from Java, so it is refused instead. The selector rules
+/// each case out before it chooses, so this reports a selector bug.
+pub(crate) fn check_rep_violations(violations: &[juxc_backend_rust::RepViolation]) -> Result<(), BuildFailure> {
+    if violations.is_empty() {
+        return Ok(());
+    }
+    let mut failure = BuildFailure {
+        diagnostics: Vec::new(),
+        sources: Vec::new(),
+        detail: String::new(),
+        exit_code: crate::ice::ICE_EXIT_CODE,
+    };
+    for v in violations {
+        let (code, why) = match v.code {
+            "E0953" => (Code::E0953_ValueRepIdentity, "its objects are compared by identity, which a copied value cannot answer"),
+            "E0954" => (Code::E0954_ValueRepWeakTarget, "a `weak` reference points at it, which needs a refcount"),
+            _ => (Code::E0955_ValueRepSelfContaining, "its fields contain itself, which needs a refcount"),
+        };
+        let d = Diagnostic::error(
+            code,
+            format!("class `{}` was selected as `{}`, but {why}", v.class, v.rep),
+        );
+        failure.detail.push_str(&format!("{}: {} as {}\n", v.code, v.class, v.rep));
+        failure.diagnostics.push(d.with_help(format!(
+            "this is a bug in the Jux compiler's representation selector; please report it at {}",
+            crate::ice::ISSUES_URL
+        )));
+    }
+    Err(failure)
+}
+
 /// Check emitted `(crate-relative path, contents)` pairs. A file that does not
 /// parse is skipped: rustc will say why, and that is `E0900` already.
 pub(crate) fn check_sources(sources: &[(&str, &str)]) -> Vec<Hit> {
