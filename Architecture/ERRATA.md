@@ -2861,7 +2861,7 @@ string form is, and this entry only makes `Debug` produce it.
 
 ---
 
-## E1XX-PHASE5a. Record components and lambda parameters: the last two annotation positions
+## E108. Record components and lambda parameters: the last two annotation positions
 
 **Conflict.** E104 gave parameters and locals their annotations and left two
 positions behind, one grammatical and unparsed, one ungrammatical and badly
@@ -2929,7 +2929,7 @@ and §A.3.1's lambda paragraph states the one-diagnostic refusal.
 
 ---
 
-## E1XX-PHASE5b. Three diagnostics that said something untrue
+## E109. Three diagnostics that said something untrue
 
 **Conflict.** Grammar A.2.2 makes `final` and `const` synonyms and says the
 compiler echoes the spelling that was written. E95 did that for `E0464`, the
@@ -2960,7 +2960,7 @@ and `volatile` only, and say where `yield` and `annotation` went.
 
 ---
 
-## E1XX-PHASE5c. Lint levels, `-Werror`, and `W0820` under `jux check`
+## E110. Lint levels, `-Werror`, and `W0820` under `jux check`
 
 **Conflict.** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.5.4 specified a `[lints]` table
 (`warnings-as-errors`, `all`, a level per lint) and an `@lint(allow = ...)`

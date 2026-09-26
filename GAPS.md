@@ -149,18 +149,18 @@ depth, and a generic class's inherited field types are spelled in its parent's
 type-parameter vocabulary, which the bound surface does not substitute through.
 Calling a METHOD through such a bound does work.
 
-**12. Record components take no annotations.** Grammar §A.2.5 is
+**12. CLOSED 2026-09-26 (`5acd391`, ERRATA E108).** ~~Record components take no annotations.~~ Grammar §A.2.5 is
 `record-component = annotation* type identifier`. A component becomes a
 canonical-constructor parameter, so it is the natural next position after E104,
 but it is its own AST node with its own construction sites.
 
-**13. Lambda parameter annotations cascade.** `(@Tag int a) -> a` produces five
+**13. CLOSED 2026-09-26 (`5acd391`, ERRATA E108).** ~~Lambda parameter annotations cascade.~~ `(@Tag int a) -> a` produces five
 errors rather than one clean diagnostic. The grammar is right to refuse them
 (§A.2.9 `lambda-param = type? identifier`), so this is refusal quality. The fix
 is in `parse_lambda`'s lookahead (`crates/juxc-parse/src/exprs.rs:1855`), which
 does not confirm a lambda at all when the parens open with `@`.
 
-**14. `check_annotation_applications` does not recurse into `nested_types`.**
+**14. CLOSED 2026-09-26 as stale (`5acd391`): nested-type flattening already covered it; now pinned by `tests/ui/annotation_target_nested_type`.** ~~`check_annotation_applications` does not recurse into `nested_types`.~~
 Pre-existing: a nested class's own `TYPE`/`METHOD`/`FIELD` annotations were
 never checked either. Adding the recursion would newly fire `E0470`/`E0472`/
 `E0473` across the corpus, so it needs its own change and its own corpus run.
@@ -173,7 +173,7 @@ never checked either. Adding the recursion would newly fire `E0470`/`E0472`/
 `[ffi.*] linkage="framework"` entry kills the build. The rustc-leak remapper
 already exists for the compile path and is the model.
 
-**16. No lint configuration and no `-Werror` (§D.5.4).** W0820 is additionally
+**16. CLOSED 2026-09-26 (`5acd391`, ERRATA E110).** ~~No lint configuration and no `-Werror` (§D.5.4).~~ W0820 is additionally
 dropped by `jux check`, so "deny unjustified unsafe" cannot be expressed at all.
 
 **17. `secondary_spans` and `code_action` have zero producers.** The schema and
@@ -181,7 +181,7 @@ both renderers support them; the only `.with_label` call sites in `crates/` are
 LSP test fixtures. Wiring roughly ten diagnostics would deliver most of
 §D.1.3's promised quality for little work.
 
-**18. Diagnostic polish.** `E0464`'s sibling message at
+**18. CLOSED 2026-09-26 (`5acd391`, ERRATA E109).** ~~Diagnostic polish.~~ `E0464`'s sibling message at
 `crates/juxc-tycheck/src/check.rs:6052` still says "Drop `final`/`const`" rather
 than echoing the written keyword, now that `FinalKw` exists to ask. `E0203`
 covers only the four non-escapable Rust words, and `E0305`'s text claims "every
@@ -195,7 +195,7 @@ editor consumes it.
 Rename dialog still refuses renaming a package segment to `type` or `record`,
 although ERRATA E78 makes the resulting path legal.
 
-**21. `tools/java-differential/run.sh` does not honour a shared
+**21. CLOSED 2026-09-26 (`5acd391`).** `tools/java-differential/run.sh` did not honour a shared
 `CARGO_TARGET_DIR`** when locating the built compiler; it needs `JUX_BIN`.
 
 ### Deferred by decision, not by oversight
