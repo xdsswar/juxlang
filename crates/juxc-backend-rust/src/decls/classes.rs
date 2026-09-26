@@ -3457,9 +3457,8 @@ impl RustEmitter {
 
     /// Emit a `Kind` trait's / `Kind` impl's generic parameter list.
     ///
-    /// Same shape as the class's own inherent impl: `Clone + Debug + 'static`
-    /// plus `Display` for the params whose values reach a format position (see
-    /// [`Self::class_displayed_generic_params`]). The bounds must match,
+    /// Same shape as the class's own inherent impl, `Clone + Debug + 'static`
+    /// and no `Display` (ERRATA E107). The bounds must match,
     /// because a `Kind` impl body calls straight into the inherent method
     /// (`fn get(&self) -> T { Holder::get(self) }`) — a weaker bound here would
     /// fail to satisfy the inherent impl's.
