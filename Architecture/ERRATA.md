@@ -3274,6 +3274,96 @@ them. `JUX-ASYNC-ADDENDUM-v2.md` §18.1.4 says a task yields its result once.
 
 ---
 
+## E1XX-PHASE7. The compiler checks its own borrow discipline
+
+**Conflict.** E23 stands: Jux has no user-visible borrow checker, and the
+reserved `E0500`-`E0505` stay reserved. What E23 leaves to the compiler is
+JUX-CLASS-REPRESENTATION §CR.4.1's promise that no cell guard is alive while
+Jux code runs, and nothing checked it. A missed hoist compiled cleanly and
+stopped the program with E116's "object of type C was already in use", a
+compiler bug found by the user (gap 29). The corpus pinned one such program
+as its expected output. Probing the re-entrancy shapes Java programs use
+found more:
+
+- **A function stored in a field**, called through `this.hook()`, `hook()` or
+  `obj.hook()`, was `(self.0.borrow().hook.clone())()`: the guard lived to
+  the end of the statement, across the call, so a callback that reached back
+  into its owner (an event handler, `b.hook = () -> b.bump()`) found the
+  object in use. The standard library's `LazyIterable.iterator()` had the
+  same shape. An argument read out of the object (`this.step(this.n)`) went
+  through the method-call hoist, which wrote `self.step(..)`, a method that
+  does not exist (rustc `E0599`, so `E0900`). A function taken out of a
+  collection field and called, `this.fs[0](x)`, skipped the owner's borrow
+  altogether (`E0609`).
+- **An operand read before an operand that runs Jux code.** `a.n + a.inc()`,
+  `this.state == this.step()` in an `if` or `while` condition, `$"${a.n}
+  ${a.inc()}"`, `new Pair(a.n, a.inc())`, `new int[]{n, inc()}` and
+  `v.x + (v + v).get()` with a user operator all kept the read's guard to
+  the end of the statement while the call took a mutable borrow.
+- **A field named bare as an argument** in the class's own method,
+  `add(n)`, kept `self.0.borrow()` alive across `self.add(..)`: the
+  argument hoist only recognised `this.n`.
+- **A static helper handed `this` by its bare name**, `reset(this)` inside
+  the class, passed `self` (a reference) where the method takes the object
+  (rustc `E0308`); `Button.reset(this)` already shared the handle.
+- **Compound assignment read the field after its right side.** The
+  borrow-safe `{ let v = rhs; obj.0.borrow_mut().f += v; }` evaluated `rhs`
+  first, so `n += inc()` added `inc()`'s result to the NEW `n`; JLS 15.26.2
+  reads the left side first.
+
+**Resolution.** The backend holds to one rule, and the driver checks it.
+
+- **Lowering rule: nothing that runs Jux code runs under a guard taken
+  earlier in the same statement.** A stored function is bound before it is
+  called, `({ let __jux_callee = self.0.borrow().hook.clone();
+  __jux_callee(args) })`, with any argument that reads a cell bound after it
+  (Java's order: the target, then the arguments). A function read out of an
+  indexed collection is bound the same way. For an operator chain, an
+  interpolated string, constructor arguments and an array literal, the
+  operands are taken in evaluation order; when one that reads through a cell
+  comes before one that may run Jux code (a Jux method, function or stored
+  function, a constructor, a user operator), every operand ahead of the last
+  such call that reads a cell or runs code is bound to a `let` first, in
+  order, and the expression reads the temps. Operands that do neither
+  (literals, locals) stay in place. Whether the call really reaches the
+  object is not asked, as §CR.4.1 already decides for stores: being wrong
+  costs a binding, not a crash. A bare field argument counts as the read it
+  is. A compound assignment whose right side may run Jux code binds the
+  field's old value first and stores it back just before the operator
+  applies, which is Java's order. A static method called by its bare name
+  with `this` shares the handle.
+- **Self-check.** Under `JUX_SELFCHECK=1` the driver parses the emitted Rust
+  (after rustfmt, before cargo) and walks every function generated for Jux
+  code, following Rust's temporary-scope rules (edition 2021: statement
+  ends, `if`/`while` conditions, match arms, lazy `&&`/`||` operands, block
+  tails that outlive their block, `match` scrutinees and `for` iterators that
+  live across the body). It reports a guard still alive when the same cell is
+  borrowed again with either side mutable; when a Jux method that may take a
+  mutable borrow (by name, closed over its callers) is called on the guarded
+  object or handed it as an argument; or when Jux code the object holds runs,
+  a method of a handle read out of its field or a function stored in one.
+  Copies of a handle (`let b = a.clone()`) are followed; other aliasing is
+  not, so a clean report is not a proof. Each hit is an `E0900` at the
+  `.jux` line, "the compiler would emit a borrow conflict here", with the
+  conflict in Jux words as a note and exit status 101. Users do not pay for
+  the check; the example corpus and every test that builds an example set
+  the variable, and the corpus fails outright, never blessed, on a
+  self-check hit or on E116's run-time message. On the corpus it reports
+  nothing.
+- **The pinned conflict is gone.** `examples/borrow_conflict_report.jux` is
+  `examples/reentrant_stored_lambda.jux` and prints what Java prints;
+  `reentrant_operands.jux` and `reentrant_callbacks.jux` pin the other
+  shapes. E116's run-time message is unchanged and has no example left that
+  reaches it.
+
+**Spec status:** JUX-CLASS-REPRESENTATION §CR.4.1 is correct as written (its
+read rule already says a borrow is never held across a method call); the
+lowering above is how the backend meets it for stored functions and for
+operands. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0900` row names the
+self-check as a second source.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

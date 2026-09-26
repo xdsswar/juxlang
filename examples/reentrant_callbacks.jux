@@ -1,0 +1,105 @@
+// Callbacks that come back into the object that called them.
+//
+// An object handing itself to a helper, a listener changing the button it
+// listens to, an object passed to its own method: in Java these are
+// ordinary, and they are in Jux (ERRATA E23). Each object sits in a cell, and
+// the backend never keeps the cell borrowed while Jux code runs, so the call
+// that comes back finds the object free (JUX-CLASS-REPRESENTATION §CR.4.1,
+// ERRATA E1XX-PHASE7).
+
+interface Listener {
+    void onClick(Button b);
+    default void twice(Button b) {
+        onClick(b);
+        onClick(b);
+    }
+}
+
+class Button {
+    public int clicks = 0;
+    public Listener l;
+    public Vec<Listener> more = new Vec<Listener>();
+    public Vec<(Button) -> int> probes = new Vec<(Button) -> int>();
+
+    public Button(Listener l) { this.l = l; }
+
+    public void click() {
+        clicks = clicks + 1;
+        this.l.onClick(this);           // a field's method, handed `this`
+        l.twice(this);                  // by the field's bare name
+        for (var x : more) {            // a collection field, walked while
+            x.onClick(this);            // each listener changes the button
+            clicks = clicks + 1;
+        }
+    }
+
+    public int probeAll() {
+        int total = 0;
+        for (var f : probes) {
+            total = total + f(this);
+        }
+        return total + this.probes[0](this) + clicks;
+    }
+
+    public static void reset(Button b) { b.clicks = 0; }
+
+    public void selfReset() {
+        Button.reset(this);             // a static helper, handed `this`
+        reset(this);                    // the same, by its bare name
+        clicks = clicks + 1;
+    }
+
+    public void absorb(Button other) {  // `b.absorb(b)`: `other` is `this`
+        other.clicks = other.clicks + 100;
+        this.clicks = this.clicks + 1;
+    }
+}
+
+class Counter implements Listener {
+    public int seen = 0;
+    public void onClick(Button b) {
+        seen = seen + 1;
+        b.clicks = b.clicks + 1000;
+    }
+}
+
+class Helper {
+    public int grab(Button b) {
+        b.clicks = b.clicks + 10;
+        return b.clicks;
+    }
+}
+
+class Panel {
+    public Button button;
+    public Helper helper = new Helper();
+    public Panel(Button b) { this.button = b; }
+    public int poke() {
+        return helper.grab(button) + this.helper.grab(this.button);
+    }
+}
+
+public void main() {
+    Counter c = new Counter();
+    Button b = new Button(c);
+    b.more.push(c);
+    b.click();
+    print(b.clicks);
+    print(c.seen);
+
+    b.probes.push((x) -> {
+        x.clicks = x.clicks + 1;
+        return x.clicks;
+    });
+    print(b.probeAll());
+
+    b.selfReset();
+    print(b.clicks);
+    b.absorb(b);
+    print(b.clicks);
+
+    Panel p = new Panel(b);
+    print(p.poke());
+    p.helper.grab(p.button);
+    print(p.button.clicks);
+}

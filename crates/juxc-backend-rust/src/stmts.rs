@@ -4589,7 +4589,26 @@ impl RustEmitter {
                 let depth = self
                     .wrapper_field_parent_depth(&tf.object, &tf.field.text)
                     .unwrap_or(0);
-                self.w.push_str("{ let __jux_v = ");
+                // **Compound assignment keeps Java's order** (JLS 15.26.2): the
+                // field's old value is read BEFORE the right side runs. Binding
+                // only the right side first (the borrow-safe shape below) read
+                // the field after it, so `n += inc()` with an `inc` that bumps
+                // `n` added to the new value. When the right side may run Jux
+                // code, the old value is bound first and stored back just
+                // before the operator applies (ERRATA E1XX-PHASE7).
+                let keep_old = a.op.is_some()
+                    && matches!(&*tf.object, Expr::This(_) | Expr::Path(_))
+                    && self.operand_may_run_jux_code(&a.value);
+                if keep_old {
+                    self.w.push_str("{ let __jux_old = ");
+                    self.emit_expr(&a.target);
+                    if self.wrapper_value_needs_clone(&a.target) || self.value_place_needs_clone(&a.target) {
+                        self.w.push_str(".clone()");
+                    }
+                    self.w.push_str("; let __jux_v = ");
+                } else {
+                    self.w.push_str("{ let __jux_v = ");
+                }
                 let assign_nullable = a.op.is_none() && self.assign_target_is_nullable(&a.target);
                 // Base/interface upcast (S8): a derived RHS stored into a
                 // base- or interface-typed field must coerce exactly like the
@@ -4621,6 +4640,7 @@ impl RustEmitter {
                 }
                 self.w.push_str("; ");
                 // LHS place expression with a MUTABLE borrow.
+                let place_mark = self.w.mark();
                 self.emit_expr(&tf.object);
                 self.w.push_str(".0.borrow_mut()");
                 for _ in 0..depth {
@@ -4628,6 +4648,11 @@ impl RustEmitter {
                 }
                 self.w.push('.');
                 self.w.push_str(&to_rust_ident(&tf.field.text));
+                if keep_old {
+                    let place = self.w.text_from(place_mark).to_string();
+                    self.w.push_str(" = __jux_old; ");
+                    self.w.push_str(&place);
+                }
                 // `buf += s` on a `String` field appends, as the local form
                 // above does: Rust has no `String += String`.
                 let class_of_field = if matches!(&*tf.object, Expr::This(_)) {

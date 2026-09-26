@@ -2263,6 +2263,12 @@ impl RustEmitter {
                             self.w.push_str(", ");
                         }
                         self.emit_expr(arg);
+                        // `poke(this)`: the method takes the object by
+                        // value, and `self` is a reference to it -- share
+                        // the handle, as `Node.poke(this)` does.
+                        if matches!(arg, Expr::This(_)) {
+                            self.w.push_str(".clone()");
+                        }
                     }
                     self.emitting_format_arg = prev;
                     self.w.push(')');
@@ -2603,6 +2609,22 @@ impl RustEmitter {
         // lexical order so side effects fire left-to-right as written,
         // then pass them positionally. (`emit_call_with_hoisted_args`
         // reads `call.eval_order`.)
+        // **Function-typed field call** — `obj.task()` where `task` is
+        // declared as a `() -> T` field (stored as `Rc<dyn Fn(…)>`). Ahead
+        // of the borrow hoists below: those write `recv.task(..)`, a METHOD
+        // call, and a stored function is no method (rustc E0599).
+        if let Some(through_cell) = self.fn_field_callee(call) {
+            self.emit_fn_field_call(call, through_cell);
+            return;
+        }
+        // A function taken out of a collection and called, `this.fs[0](x)`:
+        // the element is read as a value (not as a method callee, which would
+        // skip the owner's `.0.borrow()`) and bound first, so no guard of the
+        // owner or the collection is alive while it runs.
+        if matches!(&*call.callee, Expr::Index(_)) {
+            self.emit_fn_value_call_bound(call);
+            return;
+        }
         if !call.eval_order.is_empty() {
             self.emit_call_with_hoisted_args(call);
             return;
@@ -2645,75 +2667,6 @@ impl RustEmitter {
         if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
             self.emit_call_with_hoisted_receiver(call, cf, false);
             return;
-        }
-        // **Function-typed field call** — `obj.task()` where `task` is
-        // declared as a `() -> T` field (stored as `Rc<dyn Fn(…)>`).
-        // Methods live on the wrapper newtype, so `emit_call_callee=true`
-        // suppresses `.0.borrow()` to avoid the guard. But function-typed
-        // fields live INSIDE `C_Inner`, so the borrow IS required. Detect
-        // and handle this before the generic path sets the flag.
-        if let Expr::Field(f) = &*call.callee {
-            let class_bare = if matches!(*f.object, Expr::This(_)) {
-                self.enclosing_class.clone()
-            } else {
-                self.receiver_class_bare(&f.object)
-            };
-            // Use lookup_class_by_bare_or_fqn (bare-name aware) instead of
-            // symbols.lookup_field (FQN-only) so probes.TaskRunner resolves
-            // from the bare "TaskRunner" key stored in enclosing_class.
-            let is_fn_field = class_bare
-                .as_deref()
-                .and_then(|bare| {
-                    let class = self.lookup_class_by_bare_or_fqn(bare)?;
-                    class.fields.get(f.field.text.as_str())
-                })
-                .map(|fsig| fsig.ty.closure_shape().is_some())
-                .unwrap_or(false);
-            if is_fn_field {
-                // Emit as `(field_read)(args)` — parens prevent Rust from
-                // interpreting this as a method call on the struct/wrapper.
-                // For plain structs: `(self.task)(args)`
-                // For wrapper classes: `(self.0.borrow().task.clone())(args)`
-                // Both are valid because Rc<dyn Fn(...)> implements Fn via Deref.
-                self.w.push('(');
-                self.emit_expr(&call.callee); // emitting_call_callee=false → borrow fires
-                self.w.push(')');
-                self.w.push('(');
-                let prev = self.emitting_format_arg;
-                self.emitting_format_arg = false;
-                for (i, arg) in call.args.iter().enumerate() {
-                    if i > 0 {
-                        self.w.push_str(", ");
-                    }
-                    // The stored function's parameter is a slot like any other,
-                    // so an argument converts into it. A `(Animal) -> String`
-                    // field over a polymorphic base holds an
-                    // `Rc<dyn Fn(Rc<dyn AnimalKind>) -> String>`, and
-                    // `this.fmt(new Dog())` was handing it a bare `Dog`
-                    // (rustc E0308) -- the ordinary shape of a strategy or
-                    // event-handler object.
-                    let slot = self.callee_param_type(&call.callee, i);
-                    if let Some(pty) = &slot {
-                        if !matches!(
-                            self.iface_coercion_to(pty, arg),
-                            crate::analysis::IfaceCoercion::None,
-                        ) {
-                            self.emit_expr_coerced_to_iface(pty, arg);
-                            continue;
-                        }
-                    }
-                    self.emit_expr(arg);
-                    // The closure takes its arguments by value, so a place
-                    // read again after the call passes a copy (a record, a
-                    // String) or a shared handle (a class object).
-                    if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
-                        self.w.push_str(".clone()");
-                    }
-                }
-                self.emitting_format_arg = prev;
-                self.w.push(')');
-                return;
-            }
         }
         // Generic call: emit `callee(args, …)` literally. Post Fix 1
         // every Jux `String` value is already an owned Rust `String`,
@@ -3803,6 +3756,153 @@ impl RustEmitter {
         }
     }
 
+    /// `Some(through_cell)` when `call` calls a field of function type,
+    /// `obj.task(..)`; `through_cell` when the field lives inside a shared
+    /// object's cell, so reading it takes a guard.
+    fn fn_field_callee(&self, call: &CallExpr) -> Option<bool> {
+        let Expr::Field(f) = &*call.callee else { return None };
+        let class_bare = if matches!(*f.object, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            self.receiver_class_bare(&f.object)
+        };
+        // Use lookup_class_by_bare_or_fqn (bare-name aware) instead of
+        // symbols.lookup_field (FQN-only) so probes.TaskRunner resolves
+        // from the bare "TaskRunner" key stored in enclosing_class.
+        let bare = class_bare?;
+        let class = self.lookup_class_by_bare_or_fqn(&bare)?;
+        let fsig = class.fields.get(f.field.text.as_str())?;
+        fsig.ty.closure_shape()?;
+        Some(self.is_wrapper_class(&bare))
+    }
+
+    /// Emit a call of a function stored in a field.
+    ///
+    /// Methods live on the wrapper newtype, so `emitting_call_callee`
+    /// suppresses `.0.borrow()`; a function-typed field lives INSIDE
+    /// `C_Inner`, so here the borrow is required. A plain struct's field is
+    /// called in place, `(self.task)(args)`.
+    ///
+    /// A shared object's field is read into a temp first (§CR.4.1, ERRATA
+    /// E1XX-PHASE7):
+    ///
+    ///   ({ let __jux_callee = self.0.borrow().hook.clone(); __jux_callee(args) })
+    ///
+    /// `(self.0.borrow().hook.clone())()` kept the guard alive to the end of
+    /// the statement, across the call, and a stored callback that reaches
+    /// back into its owner (`b.hook = () -> b.bump()`, an observer, an event
+    /// handler) found the object in use. An argument that reads through a
+    /// guard of its own is bound too, after the function (Java's order: the
+    /// target, then the arguments).
+    fn emit_fn_field_call(&mut self, call: &CallExpr, through_cell: bool) {
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        if !through_cell {
+            // `emitting_call_callee=false` → the field reads as a value.
+            self.w.push('(');
+            self.emit_expr(&call.callee);
+            self.w.push(')');
+            self.w.push('(');
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_fn_field_arg(call, i, arg);
+            }
+            self.w.push(')');
+            self.emitting_format_arg = prev;
+            return;
+        }
+        let hoist_args = call.args.iter().any(|a| self.operand_leaves_guard(a));
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        self.w.push_str("({ let __jux_callee = ");
+        self.emit_expr(&call.callee);
+        self.w.push_str("; ");
+        if hoist_args {
+            for (i, arg) in call.args.iter().enumerate() {
+                self.w.push_str(&format!("let __jux_arg{i} = "));
+                self.emit_fn_field_arg(call, i, arg);
+                self.w.push_str("; ");
+            }
+        }
+        self.w.push_str("__jux_callee(");
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if hoist_args {
+                self.w.push_str(&format!("__jux_arg{i}"));
+            } else {
+                self.emit_fn_field_arg(call, i, arg);
+            }
+        }
+        self.w.push_str(") })");
+        self.emitting_comparison_operand = prev_cmp;
+        self.emitting_format_arg = prev;
+    }
+
+    /// `({ let __jux_callee = <callee>.clone(); __jux_callee(args) })`, for a
+    /// function value read out of a place that takes a guard.
+    fn emit_fn_value_call_bound(&mut self, call: &CallExpr) {
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        let prev_callee = std::mem::take(&mut self.emitting_call_callee);
+        self.w.push_str("({ let __jux_callee = ");
+        self.emit_expr(&call.callee);
+        self.w.push_str(".clone(); ");
+        let hoist_args = call.args.iter().any(|a| self.operand_leaves_guard(a));
+        if hoist_args {
+            for (i, arg) in call.args.iter().enumerate() {
+                self.w.push_str(&format!("let __jux_arg{i} = "));
+                self.emit_fn_field_arg(call, i, arg);
+                self.w.push_str("; ");
+            }
+        }
+        self.w.push_str("__jux_callee(");
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if hoist_args {
+                self.w.push_str(&format!("__jux_arg{i}"));
+            } else {
+                self.emit_fn_field_arg(call, i, arg);
+            }
+        }
+        self.w.push_str(") })");
+        self.emitting_call_callee = prev_callee;
+        self.emitting_comparison_operand = prev_cmp;
+        self.emitting_format_arg = prev;
+    }
+
+    /// Argument `i` of a call of a function stored in a field, converted into
+    /// the function's parameter slot.
+    fn emit_fn_field_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        // The stored function's parameter is a slot like any other,
+        // so an argument converts into it. A `(Animal) -> String`
+        // field over a polymorphic base holds an
+        // `Rc<dyn Fn(Rc<dyn AnimalKind>) -> String>`, and
+        // `this.fmt(new Dog())` was handing it a bare `Dog`
+        // (rustc E0308) -- the ordinary shape of a strategy or
+        // event-handler object.
+        let slot = self.callee_param_type(&call.callee, i);
+        if let Some(pty) = &slot {
+            if !matches!(
+                self.iface_coercion_to(pty, arg),
+                crate::analysis::IfaceCoercion::None,
+            ) {
+                self.emit_expr_coerced_to_iface(pty, arg);
+                return;
+            }
+        }
+        self.emit_expr(arg);
+        // The closure takes its arguments by value, so a place
+        // read again after the call passes a copy (a record, a
+        // String) or a shared handle (a class object).
+        if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
+            self.w.push_str(".clone()");
+        }
+    }
+
     /// True when `call` needs the **borrow-hoist** form — the callee is
     /// a method on a simple place (`x.m(…)` / `this.m(…)`) and some
     /// argument contains a call to a *mutating* method on that same
@@ -3814,7 +3914,7 @@ impl RustEmitter {
     /// Names of array or collection handles that `e` reads THROUGH their cell:
     /// the array of an index, the receiver of `.length` or of a method call.
     /// Each such read is a `borrow()` guard in the emitted Rust.
-    fn handle_roots_read_in(&self, e: &Expr) -> Vec<String> {
+    pub(crate) fn handle_roots_read_in(&self, e: &Expr) -> Vec<String> {
         let mut roots = Vec::new();
         let mut visit = |sub: &Expr| {
             let through = match sub {
@@ -3846,7 +3946,9 @@ impl RustEmitter {
         // (place, call result, free function): hoisting the args into
         // statement-scoped temps drops the guards before the call and
         // matches Java's args-before-call evaluation order.
-        if call.args.iter().any(|a| self.expr_reads_wrapper_field(a)) {
+        // A field read by its bare name in the class's own method (`add(n)`)
+        // is the same `self.0.borrow()` read.
+        if call.args.iter().any(|a| self.expr_reads_wrapper_field(a) || self.reads_own_field_by_bare_name(a)) {
             return true;
         }
         // The same hazard with an array or collection HANDLE (§6.5.2): one
@@ -3933,7 +4035,7 @@ impl RustEmitter {
     /// call-expression temporary scope), so a method that `borrow_mut`s
     /// the same object panics at runtime. Conservative: any wrapper
     /// field read triggers the (harmless) hoist, aliasing or not.
-    fn expr_reads_wrapper_field(&self, e: &Expr) -> bool {
+    pub(crate) fn expr_reads_wrapper_field(&self, e: &Expr) -> bool {
         match e {
             // A `ref` binding read (§M.13) clones out of its cell via a
             // borrow guard — same call-expression-temporary hazard as a
@@ -4786,7 +4888,10 @@ impl RustEmitter {
     ///   `std.io.print` is properly specced.
     pub(crate) fn emit_print_call(&mut self, call: &CallExpr) {
         // Hot path: one string-literal argument. Inline it as the format.
-        if call.args.len() == 1 {
+        // Not for an argument whose operands must be bound first
+        // (`exprs/operand_hoist.rs`): the general path below formats it as
+        // one value, through the expression emitter that binds them.
+        if call.args.len() == 1 && self.prehoist_plan(&call.args[0]).is_none() {
             if let Expr::Literal(Literal::String(s)) = &call.args[0] {
                 self.w.push_str("println!(");
                 self.emit_rust_format_string_literal(s);

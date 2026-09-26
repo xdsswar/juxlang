@@ -236,6 +236,7 @@ pub fn cargo_profile_args(release: bool) -> (Vec<String>, String) {
 
 pub mod annotations;
 pub mod big_stack;
+mod borrow_selfcheck;
 pub mod build_failure;
 pub mod cfg;
 pub mod diagnostic_order;
@@ -1026,6 +1027,10 @@ pub fn write_crate_with_manifest(
     // Then the marker table a run-time borrow conflict reads its `.jux` line
     // from, against the formatted line numbers.
     source_map::write_line_table(crate_dir, &written_rs);
+    // The borrow self-check (gap 29), before anything is built or run.
+    if borrow_selfcheck::enabled() {
+        borrow_selfcheck::check_crate(crate_dir, &written_rs)?;
+    }
     Ok(written_rs)
 }
 
@@ -1332,6 +1337,9 @@ pub fn build_emitted_crate(
         .map(|r| crate_dir.join(r))
         .collect();
     source_map::write_line_table(crate_dir, &all_rs);
+    if borrow_selfcheck::enabled() {
+        borrow_selfcheck::check_crate(crate_dir, &all_rs)?;
+    }
 
     // Run `cargo build`.
     let (profile_args, profile_dir) = cargo_profile_args(release);
