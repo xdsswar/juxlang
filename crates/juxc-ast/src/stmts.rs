@@ -249,6 +249,10 @@ pub struct VarDecl {
     /// it. [`Self::is_final`] says whether the binding is final;
     /// this says what to call it when telling the programmer so.
     pub final_kw: FinalKw,
+    /// The written `final`/`const` modifier and the whitespace after it:
+    /// exactly the text a "remove `final`" quick fix deletes (§D.2.3).
+    /// `None` when no modifier was written or the node was synthesized.
+    pub final_span: Option<Span>,
     /// `ref` binding mode (§M.13) — the local holds a SHARED reference
     /// to a value-typed object (`Rc<RefCell<T>>`): aliases see each
     /// other's writes, assignment stores through.
@@ -376,6 +380,10 @@ pub struct ForEachStmt {
     pub is_final: bool,
     /// Which synonym the header wrote, for the diagnostic that names it.
     pub final_kw: FinalKw,
+    /// The written `final`/`const` modifier and the whitespace after it:
+    /// exactly the text a "remove `final`" quick fix deletes (§D.2.3).
+    /// `None` when no modifier was written or the node was synthesized.
+    pub final_span: Option<Span>,
     /// Optional declared type of the loop variable. `None` for the
     /// inference-form `var i : …`.
     pub var_type: Option<TypeRef>,

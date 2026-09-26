@@ -220,6 +220,7 @@ impl RustEmitter {
                     ty: c.ty.clone(),
                     is_final: false,
                     final_kw: juxc_ast::FinalKw::None,
+                    final_span: None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,

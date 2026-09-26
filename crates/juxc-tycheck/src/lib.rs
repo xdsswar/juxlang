@@ -57,6 +57,7 @@ pub mod assigned;
 pub mod return_check;
 pub mod static_init;
 pub mod symbol_table;
+pub(crate) mod task_consume;
 pub mod ty;
 
 pub use env::TypeEnv;

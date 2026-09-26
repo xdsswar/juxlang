@@ -132,6 +132,11 @@ struct Cli {
     /// the only value.
     #[arg(short = 'W', value_name = "error", value_parser = ["error"])]
     warnings: Option<String>,
+
+    /// When the build fails after the program was accepted, also print
+    /// cargo's and rustc's own report (the full linker command line, for one).
+    #[arg(long)]
+    verbose: bool,
 }
 
 fn main() -> Result<ExitCode> {
@@ -246,6 +251,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     // single emit target — there's only ever one output crate.)
     let emit_dir = cli
         .emit_dir
+        .clone()
         .unwrap_or_else(|| default_emit_dir(&files[0]));
 
     // `project_root` / `manifest` were discovered up front (before the compile)
@@ -286,13 +292,32 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         return Ok(None);
     }
 
-    let artifact = juxc_driver::build_with_manifest(
+    // The build step's own warnings (`W0906`) read `-Werror` from the
+    // environment, the way `jux` hands it over.
+    if deny {
+        std::env::set_var("JUX_DENY_WARNINGS", "1");
+    }
+    let built = juxc_driver::build_with_manifest(
         &crate_,
         &emit_dir,
         &crate_name,
         cli.release,
         manifest.as_ref(),
-    )?;
+    );
+    // A build that failed after the front end accepted the program is Jux
+    // diagnostics (ERRATA E116), printed like the rest and exiting 101
+    // when the compiler is at fault.
+    let artifact = match built.map_err(|e| e.downcast::<juxc_driver::BuildFailure>()) {
+        Ok(artifact) => artifact,
+        Err(Ok(failure)) => {
+            report(&cli, &failure.diagnostics, &failure.sources);
+            if cli.verbose && !failure.detail.is_empty() {
+                eprintln!("{}", failure.detail.trim_end());
+            }
+            return Ok(Some(ExitCode::from(failure.exit_code)));
+        }
+        Err(Err(e)) => return Err(e),
+    };
     eprintln!("juxc: built {}", artifact.binary_path.display());
 
     if cli.run {

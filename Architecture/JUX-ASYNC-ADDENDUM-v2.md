@@ -212,6 +212,8 @@ The `Vec` that `all` and `allSettled` resolve with is an ordinary Jux collection
 
 Two points the JavaScript names leave open are fixed here. When every task given to `Task.any` fails, it re-throws the failure of the **last** task to settle, unchanged, so a `catch` sees an ordinary exception rather than an aggregate. `Task.allSettled` never fails on account of its tasks: each settles to `Result.Ok(value)` or to `Result.Err(exception)` holding what that task threw, in the order the tasks were given. Only an exception is a settlement; a panic that is not one propagates as it would anywhere else.
 
+A task yields its result once. `await task`, `task.blockingGet()`, `task.map(f)`, `task.flatMap(f)` and passing the task to `Task.all`, `any`, `race` or `allSettled` each take it, and a later use of the same local is `E0707`, with a label on the use that took it (ERRATA E116). To use a result twice, keep the value the first `await` gives.
+
 A common pattern — fan out, await all — gets a built-in shorthand:
 
 ```jux

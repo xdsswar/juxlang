@@ -1397,6 +1397,9 @@ pub struct FieldSig {
     pub is_final: bool,
     /// Which synonym was written (`final` or `const`), for E0465's message.
     pub final_kw: juxc_ast::FinalKw,
+    /// The written `final`/`const` modifier with its trailing whitespace,
+    /// for the E0465 "remove `final`" fix. `None` when none was written.
+    pub final_span: Option<Span>,
     /// True if the field is declared `weak` (§6.5). Drives the
     /// `Weak<RefCell<…>>` storage lowering, the `.get()` → `T?` typing,
     /// the downgrade-on-store, and the definite-assignment exemption.
@@ -1728,20 +1731,21 @@ fn insert_annotation(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &decl.name.text);
-    if table.annotations.contains_key(&fqn) {
+    if let Some(first) = table.annotations.get(&fqn) {
         diagnostics.push(
             Diagnostic::error(
                 code::Code::E0400_DuplicateDeclaration,
                 format!("annotation `{}` is declared more than once", decl.name.text),
             )
-            .with_span(decl.name.span),
+            .with_span(decl.name.span)
+            .with_label(first.span, "first declared here"),
         );
         return;
     }
 
     let mut params = Vec::with_capacity(decl.params.len());
     for p in &decl.params {
-        if params.iter().any(|q: &AnnotationParamSig| q.name == p.name.text) {
+        if let Some(first) = params.iter().find(|q: &&AnnotationParamSig| q.name == p.name.text) {
             diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0400_DuplicateDeclaration,
@@ -1750,7 +1754,8 @@ fn insert_annotation(
                         decl.name.text, p.name.text
                     ),
                 )
-                .with_span(p.name.span),
+                .with_span(p.name.span)
+                .with_label(first.span, "first declared here"),
             );
             continue;
         }
@@ -2265,7 +2270,9 @@ fn check_imports_resolve(
             .chain(table.consts.keys())
             .any(|k| k.starts_with(&prefix))
     };
-    let report = |fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
+    // `path` is the span of the written path when the whole path can be
+    // replaced by the suggestion; a `{...}` item list cannot, so it passes None.
+    let report = |fqn: String, span: Span, path: Option<Span>, diagnostics: &mut Vec<Diagnostic>| {
         if exists(&fqn) {
             return;
         }
@@ -2284,12 +2291,21 @@ fn check_imports_resolve(
         let bare = fqn_bare(&fqn).to_string();
         let mut msg =
             format!("unresolved import `{fqn}`: no declaration with that fully-qualified name");
+        let mut fix = None;
         if let Some(real) = suggest(&bare) {
             if real != fqn {
                 msg.push_str(&format!(" (did you mean `{real}`?)"));
+                fix = path.map(|p| (real, p));
             }
         }
-        diagnostics.push(Diagnostic::error(code::Code::E0301_NameNotFound, msg).with_span(span));
+        let mut d = Diagnostic::error(code::Code::E0301_NameNotFound, msg).with_span(span);
+        if let Some((real, path)) = fix {
+            d = d.with_code_action(
+                format!("Import `{real}` instead"),
+                vec![juxc_diagnostics::TextEdit { span: path, replacement: real }],
+            );
+        }
+        diagnostics.push(d);
     };
     for unit in units {
         // **Conflicting-import detection (E0307).** Two imports in one file
@@ -2300,12 +2316,12 @@ fn check_imports_resolve(
         // (e.g. a confusing arg-type error against the wrong `Foo`). Java
         // forbids it; require an `as` alias or a fully-qualified reference. The
         // binding name is the alias when present, else the imported leaf.
-        let mut bound: HashMap<String, String> = HashMap::new();
+        let mut bound: HashMap<String, (String, Span)> = HashMap::new();
         let mut note_binding =
             |bind: String, fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| match bound
                 .get(&bind)
             {
-                Some(prev) if *prev != fqn => {
+                Some((prev, prev_span)) if *prev != fqn => {
                     diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0303_ConflictingImport,
@@ -2315,11 +2331,12 @@ fn check_imports_resolve(
                                      (`import {fqn} as {bind}2;`) or use a fully-qualified name",
                             ),
                         )
-                        .with_span(span),
+                        .with_span(span)
+                        .with_label(*prev_span, format!("`{bind}` first imported here")),
                     );
                 }
                 _ => {
-                    bound.insert(bind, fqn);
+                    bound.insert(bind, (fqn, span));
                 }
             };
         // The importing file's own package (`xss.it`), for the same-package
@@ -2379,7 +2396,7 @@ fn check_imports_resolve(
                             continue;
                         }
                     }
-                    report(fqn.clone(), import.span, diagnostics);
+                    report(fqn.clone(), import.span, Some(name.span), diagnostics);
                     // §4.4: a free function declared with no modifier is
                     // visible inside its own package only, the rule types
                     // already follow. Importing one from another package
@@ -2433,7 +2450,7 @@ fn check_imports_resolve(
                         } else {
                             format!("{pfx}.{}", it.name.text)
                         };
-                        report(fqn.clone(), import.span, diagnostics);
+                        report(fqn.clone(), import.span, None, diagnostics);
                         let bind = it
                             .alias
                             .as_ref()
@@ -3049,7 +3066,8 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
                         "class `{child_name}` cannot extend `{parent_name}` because `{parent_name}` is declared `final`",
                     ),
                 )
-                .with_span(extends.span),
+                .with_span(extends.span)
+                .with_label(parent.span, format!("`{parent_name}` is declared `final` here")),
             );
         }
         if parent.is_sealed {
@@ -3469,7 +3487,8 @@ fn check_final_method_overrides(table: &SymbolTable, diagnostics: &mut Vec<Diagn
                                     "method `{method_name}` on `{child_name}` cannot override `{ancestor_name}::{method_name}` because the parent declares it `final`",
                                 ),
                             )
-                            .with_span(child_method.span),
+                            .with_span(child_method.span)
+                            .with_label(ancestor_method.span, "declared `final` here"),
                         );
                         break;
                     }
@@ -4824,7 +4843,7 @@ fn ensure_top_level_unique(
         || table.functions.contains_key(name)
         || table.consts.contains_key(name)
     {
-        report_duplicate_top_level(name, span, diagnostics);
+        report_duplicate_top_level(name, span, top_level_decl_span(table, name), diagnostics);
         false
     } else {
         true
@@ -4846,9 +4865,8 @@ fn insert_class(
     // Fields — duplicate names within the same class emit E0401.
     let mut fields = HashMap::new();
     for field in &class_decl.fields {
-        if let Some(existing) = fields.get(&field.name.text) {
-            let _: &FieldSig = existing; // silence unused-binding warning
-            diagnostics.push(
+        if fields.contains_key(&field.name.text) {
+            diagnostics.push(with_first_declared(
                 Diagnostic::error(
                     code::Code::E0401_DuplicateField,
                     format!(
@@ -4857,7 +4875,9 @@ fn insert_class(
                     ),
                 )
                 .with_span(field.span),
-            );
+                class_decl.fields.iter().map(|f| &f.name),
+                &field.name.text,
+            ));
             continue;
         }
         fields.insert(field.name.text.clone(), field_sig(field));
@@ -5008,7 +5028,7 @@ fn insert_record(
     let mut methods: HashMap<String, MethodSig> = HashMap::new();
     for method in &record_decl.methods {
         if methods.contains_key(&method.name.text) {
-            diagnostics.push(
+            diagnostics.push(with_first_declared(
                 Diagnostic::error(
                     code::Code::E0402_DuplicateMethod,
                     format!(
@@ -5017,7 +5037,9 @@ fn insert_record(
                     ),
                 )
                 .with_span(method.span),
-            );
+                record_decl.methods.iter().map(|m| &m.name),
+                &method.name.text,
+            ));
             continue;
         }
         methods.insert(method.name.text.clone(), method_sig(method, is_external));
@@ -5113,7 +5135,7 @@ fn insert_enum(
     let mut variants = HashMap::new();
     for variant in &enum_decl.variants {
         if variants.contains_key(&variant.name.text) {
-            diagnostics.push(
+            diagnostics.push(with_first_declared(
                 Diagnostic::error(
                     code::Code::E0403_DuplicateVariant,
                     format!(
@@ -5122,7 +5144,9 @@ fn insert_enum(
                     ),
                 )
                 .with_span(variant.span),
-            );
+                enum_decl.variants.iter().map(|v| &v.name),
+                &variant.name.text,
+            ));
             continue;
         }
         variants.insert(
@@ -5195,7 +5219,7 @@ fn insert_interface(
     let mut methods = HashMap::new();
     for method in &interface_decl.methods {
         if methods.contains_key(&method.name.text) {
-            diagnostics.push(
+            diagnostics.push(with_first_declared(
                 Diagnostic::error(
                     code::Code::E0402_DuplicateMethod,
                     format!(
@@ -5204,7 +5228,9 @@ fn insert_interface(
                     ),
                 )
                 .with_span(method.span),
-            );
+                interface_decl.methods.iter().map(|m| &m.name),
+                &method.name.text,
+            ));
             continue;
         }
         methods.insert(method.name.text.clone(), method_sig(method, is_external));
@@ -5212,7 +5238,7 @@ fn insert_interface(
     let mut fields = HashMap::new();
     for field in &interface_decl.fields {
         if fields.contains_key(&field.name.text) {
-            diagnostics.push(
+            diagnostics.push(with_first_declared(
                 Diagnostic::error(
                     code::Code::E0401_DuplicateField,
                     format!(
@@ -5221,7 +5247,9 @@ fn insert_interface(
                     ),
                 )
                 .with_span(field.span),
-            );
+                interface_decl.fields.iter().map(|f| &f.name),
+                &field.name.text,
+            ));
             continue;
         }
         fields.insert(field.name.text.clone(), field_sig(field));
@@ -5268,7 +5296,7 @@ fn insert_function(
         || table.consts.contains_key(&fqn)
         || (fqn == "main" && table.functions.contains_key(&fqn))
     {
-        report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
+        report_duplicate_top_level(&fqn, fn_decl.span, top_level_decl_span(table, &fqn), diagnostics);
         return;
     }
     let sig = FunctionSig {
@@ -5327,7 +5355,7 @@ fn insert_function(
             .entry(fqn.clone())
             .or_insert_with(|| vec![first]);
         let want = param_shape_key(&sig.params);
-        if group.iter().any(|fs| param_shape_key(&fs.params) == want) {
+        if let Some(clash) = group.iter().find(|fs| param_shape_key(&fs.params) == want).map(|fs| fs.span) {
             // A free-function operator (§7.14) is stored under its internal
             // name (`__op_mul`); report it the way it was written (E0951,
             // Runtime/ABI §R.3.3), never by that name.
@@ -5344,11 +5372,12 @@ fn insert_function(
                             operands.join(", "),
                         ),
                     )
-                    .with_span(fn_decl.span),
+                    .with_span(fn_decl.span)
+                    .with_label(clash, "first declared here"),
                 );
                 return;
             }
-            report_duplicate_top_level(&fqn, fn_decl.span, diagnostics);
+            report_duplicate_top_level(&fqn, fn_decl.span, Some(clash), diagnostics);
             return;
         }
         group.push(sig);
@@ -5361,15 +5390,51 @@ fn insert_function(
 // Helpers
 // ============================================================================
 
-/// The E0400 a second declaration of a top-level name earns.
-fn report_duplicate_top_level(name: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
-    diagnostics.push(
-        Diagnostic::error(
-            code::Code::E0400_DuplicateDeclaration,
-            format!("`{name}` is declared more than once at the top level"),
-        )
-        .with_span(span),
-    );
+/// The E0400 a second declaration of a top-level name earns, with a label on
+/// the declaration that took the name first when the table still knows it.
+fn report_duplicate_top_level(
+    name: &str,
+    span: Span,
+    previous: Option<Span>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut d = Diagnostic::error(
+        code::Code::E0400_DuplicateDeclaration,
+        format!("`{name}` is declared more than once at the top level"),
+    )
+    .with_span(span);
+    if let Some(first) = previous {
+        d = d.with_label(first, "first declared here");
+    }
+    diagnostics.push(d);
+}
+
+/// Where the top-level declaration already holding `fqn` was written.
+fn top_level_decl_span(table: &SymbolTable, fqn: &str) -> Option<Span> {
+    table
+        .classes
+        .get(fqn)
+        .map(|s| s.span)
+        .or_else(|| table.records.get(fqn).map(|s| s.span))
+        .or_else(|| table.enums.get(fqn).map(|s| s.span))
+        .or_else(|| table.interfaces.get(fqn).map(|s| s.span))
+        .or_else(|| table.aliases.get(fqn).map(|s| s.span))
+        .or_else(|| table.functions.get(fqn).map(|s| s.span))
+        .or_else(|| table.consts.get(fqn).map(|s| s.span))
+}
+
+/// Attach the "first declared here" label for a member declared twice:
+/// `names` are the member names of the declaration in source order, and the
+/// first one spelled `name` is the declaration the duplicate collides with.
+fn with_first_declared<'a>(
+    d: Diagnostic,
+    mut names: impl Iterator<Item = &'a juxc_ast::Ident>,
+    name: &str,
+) -> Diagnostic {
+    match names.find(|n| n.text == name) {
+        Some(first) => d.with_label(first.span, "first declared here"),
+        None => d,
+    }
 }
 
 fn field_sig(field: &FieldDecl) -> FieldSig {
@@ -5378,6 +5443,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         is_static: field.is_static,
         is_final: field.is_final,
         final_kw: field.final_kw,
+        final_span: field.final_span,
         is_weak: field.is_weak,
         is_ref: field.is_ref,
         // Resolved type: the written type, or one inferred from the
@@ -5651,8 +5717,8 @@ fn collect_operator_sigs(
         let binary = |s: &OperatorSig| s.params.len() == 1 && !s.is_deleted;
         let by_operand = operator_overloads_by_operand(op.kind) && binary(&sig) && group.iter().all(binary);
         let key = param_shape_key(&sig.params);
-        let same_operand = group.iter().any(|g| param_shape_key(&g.params) == key);
-        if !by_operand || same_operand {
+        let clash = group.iter().find(|g| param_shape_key(&g.params) == key).map(|g| g.span);
+        if !by_operand || clash.is_some() {
             let message = if by_operand {
                 format!(
                     "operator `{}` taking `{key}` is declared more than once in {host} `{host_name}`",
@@ -5664,7 +5730,12 @@ fn collect_operator_sigs(
                     operator_kind_display(op.kind),
                 )
             };
-            diagnostics.push(Diagnostic::error(code::Code::E0402_DuplicateMethod, message).with_span(op.span));
+            let first = clash.unwrap_or(first.span);
+            diagnostics.push(
+                Diagnostic::error(code::Code::E0402_DuplicateMethod, message)
+                    .with_span(op.span)
+                    .with_label(first, "first declared here"),
+            );
             continue;
         }
         table.operator_overload_index.insert(op.span, group.len());

@@ -189,6 +189,7 @@ fn desugar_interface(iface: &mut InterfaceDecl) {
                     ty: prop.ty.clone(),
                     is_final: false,
                     final_kw: crate::FinalKw::None,
+                    final_span: None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,
@@ -258,6 +259,7 @@ fn synth_value_struct_ctor(class: &mut ClassDecl) {
             ty,
             is_final: false,
             final_kw: crate::FinalKw::None,
+            final_span: None,
             is_ref: false,
             is_mut_ref: false,
             default: None,
@@ -427,6 +429,7 @@ fn lower_one_property(
             // No keyword was written: a property's writes are checked by its
             // own rules (§M.7.2), so no diagnostic names this slot's.
             final_kw: crate::FinalKw::None,
+            final_span: None,
             // Property backing fields are never `weak`.
             is_weak: false,
             ty: Some(prop.ty.clone()),
@@ -529,6 +532,7 @@ fn lower_one_property(
             ty: prop.ty.clone(),
             is_final: false,
             final_kw: crate::FinalKw::None,
+            final_span: None,
             is_ref: false,
             is_mut_ref: false,
             default: None,

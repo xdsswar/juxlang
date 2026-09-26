@@ -1588,7 +1588,7 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
     // `String` field on the inner struct.
     assert!(rust.contains("pub struct User_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct User(pub std::rc::Rc<std::cell::RefCell<User_Inner>>);"),
+        rust.contains("pub struct User(pub std::rc::Rc<crate::JuxCell<User_Inner>>);"),
         "Rc<RefCell> newtype: {rust}",
     );
     assert!(rust.contains("name: String,"), "field type: {rust}");
@@ -1814,11 +1814,11 @@ fn extends_lowers_to_wrapper_hierarchy() {
     );
     // Both classes wrap in `Rc<RefCell<_Inner>>`.
     assert!(
-        rust.contains("pub struct Animal(pub std::rc::Rc<std::cell::RefCell<Animal_Inner>>);"),
+        rust.contains("pub struct Animal(pub std::rc::Rc<crate::JuxCell<Animal_Inner>>);"),
         "Animal wrapper newtype: {rust}",
     );
     assert!(
-        rust.contains("pub struct Dog(pub std::rc::Rc<std::cell::RefCell<Dog_Inner>>);"),
+        rust.contains("pub struct Dog(pub std::rc::Rc<crate::JuxCell<Dog_Inner>>);"),
         "Dog wrapper newtype: {rust}",
     );
     // Stage-2: `Animal` is a polymorphic base (extended by `Dog`), so the
@@ -1871,7 +1871,7 @@ fn super_call_lifts_into_inner_literal() {
     );
     // Public `new` delegates to `new_inner`.
     assert!(
-        rust.contains("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner("),
+        rust.contains("Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner("),
         "new delegates to new_inner: {rust}",
     );
 }
@@ -2125,7 +2125,7 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "inner struct header carries the Clone+Debug bound: {rust}",
     );
     assert!(
-        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<crate::JuxCell<Box_Inner<T>>>);"),
         "Rc<RefCell> newtype carries the bound: {rust}",
     );
     assert!(rust.contains("value: T,"), "generic field: {rust}");
@@ -2164,7 +2164,7 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     );
     // Newtype + inner are the wrapper shape (shared cell).
     assert!(
-        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
+        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<crate::JuxCell<Holder_Inner<T>>>);"),
         "newtype: {rust}",
     );
     // `var y = x` aliases through the newtype's derived Clone — the
@@ -2198,12 +2198,12 @@ fn aliased_class_shares_through_rc_refcell() {
     );
     // Uniform `Rc<RefCell>` newtype.
     assert!(
-        rust.contains("pub struct Point(pub std::rc::Rc<std::cell::RefCell<Point_Inner>>);"),
+        rust.contains("pub struct Point(pub std::rc::Rc<crate::JuxCell<Point_Inner>>);"),
         "expected Rc<RefCell> newtype: {rust}",
     );
     // Constructor wraps the inner in `Rc::new(RefCell::new(…))`.
     assert!(
-        rust.contains("std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner"),
+        rust.contains("std::rc::Rc::new(crate::JuxCell::new(Self::new_inner"),
         "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
     );
     // Aliasing shares via an `Rc` clone (pointer bump, not deep copy).
@@ -2229,11 +2229,11 @@ fn escaping_class_lowers_to_rc_refcell() {
         "#,
     );
     assert!(
-        rust.contains("pub struct Token(pub std::rc::Rc<std::cell::RefCell<Token_Inner>>);"),
+        rust.contains("pub struct Token(pub std::rc::Rc<crate::JuxCell<Token_Inner>>);"),
         "expected Rc<RefCell> newtype: {rust}",
     );
     assert!(
-        rust.contains("std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner"),
+        rust.contains("std::rc::Rc::new(crate::JuxCell::new(Self::new_inner"),
         "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
     );
 }
@@ -2284,7 +2284,7 @@ fn simple_constructor_emits_direct_inner_literal() {
     // Wrapper shape: inner field struct + `Rc<RefCell>` newtype.
     assert!(rust.contains("pub struct Pair_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct Pair(pub std::rc::Rc<std::cell::RefCell<Pair_Inner>>);"),
+        rust.contains("pub struct Pair(pub std::rc::Rc<crate::JuxCell<Pair_Inner>>);"),
         "Rc<RefCell> newtype: {rust}",
     );
     // No `__self` builder — the simple-ctor path emits the inner literal
@@ -2296,7 +2296,7 @@ fn simple_constructor_emits_direct_inner_literal() {
     );
     // The public `new` wraps the inner in `Rc::new(RefCell::new(…))`.
     assert!(
-        rust.contains("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(a, b))))"),
+        rust.contains("Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner(a, b))))"),
         "ctor wraps inner in Rc<RefCell>: {rust}",
     );
     // Inner literal with field shorthand.
@@ -2345,7 +2345,7 @@ fn simple_class_lowers_to_shared_mutation_wrapper() {
     // The newtype handle.
     assert!(
         rust.contains(
-            "pub struct Counter(pub std::rc::Rc<std::cell::RefCell<Counter_Inner>>);"
+            "pub struct Counter(pub std::rc::Rc<crate::JuxCell<Counter_Inner>>);"
         ),
         "newtype handle: {rust}",
     );
@@ -2357,7 +2357,7 @@ fn simple_class_lowers_to_shared_mutation_wrapper() {
     );
     assert!(
         rust.contains(
-            "Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(v))))"
+            "Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner(v))))"
         ),
         "wrapping ctor: {rust}",
     );
@@ -2854,7 +2854,7 @@ fn exception_hierarchy_stays_on_legacy_path() {
         "exception must not get wrapper inner: {rust}",
     );
     assert!(
-        !rust.contains("MyError(std::rc::Rc<std::cell::RefCell<"),
+        !rust.contains("MyError(std::rc::Rc<crate::JuxCell<"),
         "exception must not get Rc<RefCell> newtype: {rust}",
     );
     // Legacy `__parent: Throwable` embed (a real struct, not `_Inner`).
@@ -5545,7 +5545,7 @@ fn layout_c_struct_lowers_to_repr_c_value() {
     assert!(rust.contains("struct P {"), "expected a plain struct P: {rust}");
     assert!(!rust.contains("P_Inner"), "value struct has no _Inner: {rust}");
     assert!(
-        !rust.contains("Rc<std::cell::RefCell<P"),
+        !rust.contains("Rc<crate::JuxCell<P"),
         "value struct is not Rc<RefCell>: {rust}"
     );
     // Plain field access, no wrapper borrow.
@@ -6339,7 +6339,7 @@ fn ref_binding_from_a_plain_local_promotes_and_aliases_it() {
            }"#,
     );
     assert!(
-        rust.contains("let total = std::rc::Rc::new(std::cell::RefCell::new(0));"),
+        rust.contains("let total = std::rc::Rc::new(crate::JuxCell::new(0));"),
         "the aliased local must BE the shared cell: {rust}",
     );
     assert!(
@@ -6359,7 +6359,7 @@ fn ref_binding_from_a_plain_local_promotes_and_aliases_it() {
 fn ref_binding_from_a_value_still_wraps_a_fresh_cell() {
     let rust = emit(r#"public void main() { ref int n = 10; print(n); }"#);
     assert!(
-        rust.contains("let n = std::rc::Rc::new(std::cell::RefCell::new(10));"),
+        rust.contains("let n = std::rc::Rc::new(crate::JuxCell::new(10));"),
         "a ref from a literal keeps its own fresh cell: {rust}",
     );
 }
@@ -6384,7 +6384,7 @@ fn a_call_through_a_binding_ignores_a_same_named_free_function() {
         "#,
     );
     assert!(
-        !rust.contains("f(std::rc::Rc::new(std::cell::RefCell::new(v)))"),
+        !rust.contains("f(std::rc::Rc::new(crate::JuxCell::new(v)))"),
         "a call through a lambda parameter must not take the free fn's ref mode: {rust}",
     );
 }
@@ -6424,4 +6424,31 @@ fn bare_interp_of_an_inferred_double_keeps_its_point() {
 fn bare_interp_of_an_inferred_int_stays_plain() {
     let rust = emit(r#"public void main() { var n = 5; print($"$n"); }"#);
     assert!(rust.contains(r#"println!("{}", n)"#), "got: {rust}");
+}
+
+/// Gap 28: a class handle is `Rc<crate::JuxCell<..>>`, and the cell's own
+/// `borrow`/`borrow_mut` report a conflict as a compiler bug naming the Jux
+/// type and the `.jux` line, not Rust's `already borrowed: BorrowMutError`.
+/// The `.0.borrow_mut()` the backend writes is unchanged: an inherent method
+/// wins over the `Deref` to `RefCell`.
+#[test]
+fn a_class_handle_is_a_jux_cell_that_reports_a_conflict_in_jux_terms() {
+    let rust = emit(
+        r#"class Account {
+               public int balance = 0;
+               public void deposit(int n) { balance = balance + n; }
+           }
+           public void main() { Account a = new Account(); a.deposit(5); print(a.balance); }"#,
+    );
+    assert!(rust.contains("struct Account(std::rc::Rc<crate::JuxCell<Account_Inner>>);"), "{rust}");
+    assert!(rust.contains("std::rc::Rc::new(crate::JuxCell::new("), "{rust}");
+    assert!(!rust.contains("Rc<std::cell::RefCell<"), "no handle is a bare RefCell any more: {rust}");
+    assert!(rust.contains(".0.borrow_mut()"), "{rust}");
+    assert!(rust.contains("    #[track_caller]\n    pub fn borrow_mut(&self) -> std::cell::RefMut<'_, T> {"), "{rust}");
+    assert!(
+        rust.contains("internal error: object of type {} was already in use at {}. This is a bug in the Jux compiler (ERRATA E23)"),
+        "{rust}"
+    );
+    // The driver fills this one line in after rustfmt.
+    assert!(rust.contains("pub static __JUX_LINES: JuxLines = &[/*jux-lines*/];"), "{rust}");
 }

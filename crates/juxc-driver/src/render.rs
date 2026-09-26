@@ -457,6 +457,33 @@ pub fn render_json(diagnostics: &[Diagnostic], sources: &[SourceFile], duration_
         if let Some(hint) = d.help.first() {
             fields.push(format!("\"hint\":{}", json_str(hint)));
         }
+        if let Some(action) = &d.code_action {
+            // §D.2.3. An edit whose file the renderer cannot name is dropped,
+            // and an action left with no edit is not offered at all: half a
+            // fix applied atomically is still half a fix.
+            let edits: Vec<String> = action
+                .edits
+                .iter()
+                .filter_map(|e| {
+                    label_source(e.span, d, sources).map(|src| {
+                        format!(
+                            "{{\"file\":{},\"byte_start\":{},\"byte_end\":{},\"replacement\":{}}}",
+                            json_str(&fwd_slash(src.path())),
+                            e.span.start,
+                            e.span.end,
+                            json_str(&e.replacement),
+                        )
+                    })
+                })
+                .collect();
+            if edits.len() == action.edits.len() && !edits.is_empty() {
+                fields.push(format!(
+                    "\"code_action\":{{\"title\":{},\"edits\":[{}]}}",
+                    json_str(&action.title),
+                    edits.join(","),
+                ));
+            }
+        }
         fields.push(format!(
             "\"docs_url\":{}",
             json_str(&format!("https://docs.jux-lang.org/diag/{}", d.code)),

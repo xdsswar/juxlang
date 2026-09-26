@@ -462,7 +462,7 @@ impl RustEmitter {
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.
             if field.is_ref {
-                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
             }
             if let Some(local) = seeded.get(&field.name.text) {
                 // Lifted above: the constructor's own first write to this slot.
@@ -741,7 +741,7 @@ impl RustEmitter {
             // param is the VALUE, the field is the cell).
             if field.is_ref {
                 self.w.push_str(&to_rust_ident(&field.name.text));
-                self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str(": std::rc::Rc::new(crate::JuxCell::new(");
                 if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                     self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
                     // A place init (ctor param / field) may be used by
@@ -816,7 +816,7 @@ impl RustEmitter {
     ///
     /// ```text
     /// pub fn new(v: isize) -> Self {
-    ///     Self(std::rc::Rc::new(std::cell::RefCell::new(C_Inner { v })))
+    ///     Self(std::rc::Rc::new(crate::JuxCell::new(C_Inner { v })))
     /// }
     /// ```
     ///
@@ -1236,7 +1236,7 @@ impl RustEmitter {
             } else if self.is_box_class(&class_decl.name.text) {
                 ("std::boxed::Box::new(", ")")
             } else if self.is_refcell_class(&class_decl.name.text) {
-                ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
+                ("std::rc::Rc::new(crate::JuxCell::new(", "))")
             } else {
                 ("std::rc::Rc::new(", ")")
             };
@@ -1584,7 +1584,7 @@ impl RustEmitter {
                 self.w.push_str(": ");
                 // `ref` field (§M.13): seed a fresh shared cell.
                 if field.is_ref {
-                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                    self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
                 }
                 if let Some(local) = seeded.get(&field.name.text) {
                     // Lifted above: the constructor's own first write here.
@@ -1763,7 +1763,7 @@ impl RustEmitter {
             // `ref` field (§M.13): wrap into a fresh shared cell.
             if field.is_ref {
                 self.w.push_str(&to_rust_ident(&field.name.text));
-                self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str(": std::rc::Rc::new(crate::JuxCell::new(");
                 if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                     self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
                     // A place init (ctor param / field) may be used by
@@ -1894,7 +1894,7 @@ impl RustEmitter {
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.
             if field.is_ref {
-                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
             }
             if let Some(default) = &field.default {
                 self.emit_ctor_field_init(field.ty.as_ref(), default);
@@ -1965,7 +1965,7 @@ impl RustEmitter {
         } else if self.is_box_class(&class_decl.name.text) {
             "Self(std::boxed::Box::new(Self::new_inner()))"
         } else if self.is_refcell_class(&class_decl.name.text) {
-            "Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))"
+            "Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner())))"
         } else {
             "Self(std::rc::Rc::new(Self::new_inner()))"
         };
@@ -2043,7 +2043,7 @@ impl RustEmitter {
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.
             if field.is_ref {
-                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
             }
             if let Some(default) = &field.default {
                 self.emit_ctor_field_init(field.ty.as_ref(), default);

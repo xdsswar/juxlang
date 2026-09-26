@@ -652,10 +652,10 @@ impl RustEmitter {
             };
             self.w.indent_inc();
             self.w.line(&format!(
-                "pub fn __jux_weak(&self) -> std::rc::Weak<std::cell::RefCell<{name}_Inner{gargs}>> {{ std::rc::Rc::downgrade(&self.0) }}"
+                "pub fn __jux_weak(&self) -> std::rc::Weak<crate::JuxCell<{name}_Inner{gargs}>> {{ std::rc::Rc::downgrade(&self.0) }}"
             ));
             self.w.line(&format!(
-                "pub fn __jux_from_inner(rc: std::rc::Rc<std::cell::RefCell<{name}_Inner{gargs}>>) -> Self {{ Self(rc) }}"
+                "pub fn __jux_from_inner(rc: std::rc::Rc<crate::JuxCell<{name}_Inner{gargs}>>) -> Self {{ Self(rc) }}"
             ));
             self.w.indent_dec();
             self.w.newline();

@@ -1,0 +1,33 @@
+// A task yields its result once (§18.1.4): awaiting it, `blockingGet()` and
+// the `Task` combinators each take it. A second use is E0707, not rustc's
+// "use of moved value" about the emitted crate.
+
+public async int twice() {
+    var t = spawn(() -> 1);
+    int first = await t;
+    int second = await t;
+    return first + second;
+}
+
+public void main() {
+    var a = spawn(() -> 1);
+    var b = spawn(() -> 2);
+    print(Task.any(a, b).blockingGet());
+    print(Task.allSettled(a, b).blockingGet());
+
+    // Re-spawning re-arms the local, and a branch that did not run the
+    // consumer still counts: the task may be gone either way.
+    var c = spawn(() -> 3);
+    print(c.blockingGet());
+    c = spawn(() -> 4);
+    if (now_ms() > 0) {
+        print(c.blockingGet());
+    }
+    c.cancel();
+
+    // `map` and `flatMap` take their source too: the derived task owns it.
+    var d = spawn(() -> 5);
+    var e = d.map(n -> n + 1);
+    print(d.isResolved());
+    print(e.blockingGet());
+}

@@ -402,6 +402,19 @@ impl<'a> Parser<'a> {
         else { self.tokens[self.pos - 1].span }
     }
 
+    /// The modifier token just consumed plus the whitespace after it, up to
+    /// the next token: the text a "remove this modifier" quick fix deletes.
+    /// Call it right after eating the modifier.
+    pub(crate) fn consumed_modifier_span(&self) -> Span {
+        let kw = self.last_consumed_span();
+        let next = self.peek_span();
+        if next.start >= kw.end && next.file == kw.file {
+            Span::in_file(kw.start, next.start, kw.file)
+        } else {
+            kw
+        }
+    }
+
     /// True once we're at end of file.
     pub(crate) fn at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)

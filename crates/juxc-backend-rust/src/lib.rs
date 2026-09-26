@@ -4688,6 +4688,77 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
+        // The handle's own `borrow`/`borrow_mut`. Inherent methods win over
+        // the `Deref` to `RefCell`, so every `.0.borrow_mut()` the backend
+        // writes lands here unchanged. A conflict is a missed hoist in the
+        // backend (§CR.4.1), never the program's doing (ERRATA E23), so it
+        // names the Jux type and the Jux line instead of Rust's bare
+        // `already borrowed: BorrowMutError` at an emitted-Rust line.
+        w.push_str(concat!(
+            "impl<T: ?Sized> JuxCell<T> {\n",
+            "    pub const fn new(value: T) -> Self where T: Sized {\n",
+            "        JuxCell(std::cell::RefCell::new(value))\n",
+            "    }\n",
+            "    #[inline]\n",
+            "    #[track_caller]\n",
+            "    pub fn borrow(&self) -> std::cell::Ref<'_, T> {\n",
+            "        match self.0.try_borrow() {\n",
+            "            Ok(r) => r,\n",
+            "            Err(_) => jux_cell_in_use(std::any::type_name::<T>()),\n",
+            "        }\n",
+            "    }\n",
+            "    #[inline]\n",
+            "    #[track_caller]\n",
+            "    pub fn borrow_mut(&self) -> std::cell::RefMut<'_, T> {\n",
+            "        match self.0.try_borrow_mut() {\n",
+            "            Ok(r) => r,\n",
+            "            Err(_) => jux_cell_in_use(std::any::type_name::<T>()),\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "/// The panic a borrow conflict ends in: the Jux type, the Jux line.\n",
+            "#[cold]\n",
+            "#[track_caller]\n",
+            "fn jux_cell_in_use(type_name: &str) -> ! {\n",
+            "    let at = std::panic::Location::caller();\n",
+            "    panic!(\n",
+            "        \"internal error: object of type {} was already in use at {}. This is a bug in the Jux compiler (ERRATA E23)\",\n",
+            "        jux_cell_type_label(type_name),\n",
+            "        jux_line_at(at.file(), at.line(), at.column()),\n",
+            "    )\n",
+            "}\n",
+            "/// `app::model::Account_Inner<i64>` as a Jux programmer wrote it: `Account`.\n",
+            "fn jux_cell_type_label(type_name: &str) -> &str {\n",
+            "    let head = type_name.split('<').next().unwrap_or(type_name);\n",
+            "    let bare = head.rsplit(\"::\").next().unwrap_or(head);\n",
+            "    bare.strip_suffix(\"_Inner\").unwrap_or(bare)\n",
+            "}\n",
+            "/// The `.jux` line the generated line `file:line` came from, read from the\n",
+            "/// source-marker table the driver writes into `__JUX_LINES` once the\n",
+            "/// crate is formatted. A crate built without it names the Rust line.\n",
+            "fn jux_line_at(file: &str, line: u32, column: u32) -> String {\n",
+            "    let file = file.replace('\\\\', \"/\");\n",
+            "    let mut found: Option<&(u32, &str, u32, u32)> = None;\n",
+            "    for (rust, marks) in crate::__JUX_LINES {\n",
+            "        if file.ends_with(rust) {\n",
+            "            for mark in *marks {\n",
+            "                if mark.0 <= line {\n",
+            "                    found = Some(mark);\n",
+            "                }\n",
+            "            }\n",
+            "        }\n",
+            "    }\n",
+            "    match found {\n",
+            "        Some(m) => format!(\"{}:{}:{}\", m.1, m.2, m.3),\n",
+            "        None => format!(\"{file}:{line}:{column} of the generated Rust\"),\n",
+            "    }\n",
+            "}\n",
+            "/// `(emitted file, [(rust line, jux file, jux line, jux column)])`, one\n",
+            "/// entry per source marker. Empty as emitted; the driver fills it in\n",
+            "/// on this one line after formatting, so no other line moves.\n",
+            "pub type JuxLines = &'static [(&'static str, &'static [(u32, &'static str, u32, u32)])];\n",
+            "pub static __JUX_LINES: JuxLines = &[/*jux-lines*/];\n",
+        ));
         w.push_str("impl<T: Default> Default for JuxCell<T> {\n");
         w.push_str("    fn default() -> Self {\n");
         w.push_str("        JuxCell(std::cell::RefCell::new(T::default()))\n");
@@ -5599,7 +5670,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // returned stream only (§18.6.5 — a stream is a one-shot
         // sequence and the combinator is its new front).
         w.push_str("pub struct JuxStream<T> {\n");
-        w.push_str("    inner: std::rc::Rc<std::cell::RefCell<futures::stream::LocalBoxStream<'static, T>>>,\n");
+        w.push_str("    inner: std::rc::Rc<crate::JuxCell<futures::stream::LocalBoxStream<'static, T>>>,\n");
         w.push_str("}\n");
         w.push_str("impl<T> Clone for JuxStream<T> {\n");
         w.push_str("    fn clone(&self) -> Self {\n");
@@ -5617,7 +5688,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "        let fused = ::std::boxed::Box::pin(futures::stream::StreamExt::fuse(s));\n",
         );
         w.push_str(
-            "        JuxStream { inner: std::rc::Rc::new(std::cell::RefCell::new(fused)) }\n",
+            "        JuxStream { inner: std::rc::Rc::new(crate::JuxCell::new(fused)) }\n",
         );
         w.push_str("    }\n");
         w.push_str("    pub fn of(items: Vec<T>) -> Self {\n");

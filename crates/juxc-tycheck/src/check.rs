@@ -80,7 +80,7 @@ use juxc_ast::{
     RecordDecl, ReturnType, Stmt, SwitchBody, SwitchExpr, TopLevelDecl, TypeParam, TypeRef,
     UnaryOp,
 };
-use juxc_diagnostics::{code, Diagnostic};
+use juxc_diagnostics::{code, Diagnostic, TextEdit};
 use juxc_source::Span;
 
 use crate::env::TypeEnv;
@@ -90,6 +90,20 @@ use crate::ty::{
     compose_extends_substitution, infer_generic_args, is_subtype, lower_member_type, substitute,
     ty_from_ref, Primitive, Ty,
 };
+
+/// A binding the E0464 walk knows to be `final`, with what the diagnostic
+/// needs to point back at it: the keyword written, the declared name (for the
+/// "declared `final` here" label) and the modifier's own text (for the
+/// "remove `final`" fix; `None` where the parser did not record it).
+#[derive(Clone, Copy)]
+struct FinalBinding {
+    kw: juxc_ast::FinalKw,
+    name: Span,
+    modifier: Option<Span>,
+}
+
+/// The `final` bindings in scope, by name.
+type FinalBindings = HashMap<String, FinalBinding>;
 
 // ============================================================================
 // Built-in allowlists
@@ -2525,6 +2539,7 @@ impl<'a> Checker<'a> {
         self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
         self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&fn_decl.params, body);
+        crate::task_consume::check_body(body, &self.expr_types, self.diagnostics);
         self.check_missing_return(
             &fn_decl.return_type,
             body,
@@ -2620,10 +2635,10 @@ impl<'a> Checker<'a> {
         // `ref`/`weak` bindings are excluded: on those, `x = v` is a
         // store-through / handle operation (§M.13.2), not a binding
         // reassignment, so `final ref` / `final weak` never trip E0464.
-        let finals: std::collections::HashMap<String, juxc_ast::FinalKw> = params
+        let finals: FinalBindings = params
             .iter()
             .filter(|p| p.is_final && !p.is_shared_ref && !p.is_weak)
-            .map(|p| (p.name.text.clone(), p.final_kw))
+            .map(|p| (p.name.text.clone(), FinalBinding { kw: p.final_kw, name: p.name.span, modifier: p.final_span }))
             .collect();
         // A body with no `final` params can still declare `final` locals, so we
         // always walk — the walker accumulates locals as it descends.
@@ -2637,7 +2652,7 @@ impl<'a> Checker<'a> {
     fn walk_block_final_reassign(
         &mut self,
         block: &juxc_ast::Block,
-        incoming: &std::collections::HashMap<String, juxc_ast::FinalKw>,
+        incoming: &FinalBindings,
     ) {
         let mut finals = incoming.clone();
         for stmt in &block.statements {
@@ -2651,7 +2666,7 @@ impl<'a> Checker<'a> {
     fn walk_stmt_final_reassign(
         &mut self,
         stmt: &Stmt,
-        finals: &mut std::collections::HashMap<String, juxc_ast::FinalKw>,
+        finals: &mut FinalBindings,
     ) {
         match stmt {
             // A local declaration (re)binds its name in this scope: a `final`
@@ -2659,7 +2674,10 @@ impl<'a> Checker<'a> {
             // local, whose `=` stores through (§M.13.2) — un-finals the name.
             Stmt::VarDecl(v) => {
                 if v.is_final && !v.is_ref {
-                    finals.insert(v.name.text.clone(), v.final_kw);
+                    finals.insert(
+                        v.name.text.clone(),
+                        FinalBinding { kw: v.final_kw, name: v.name.span, modifier: v.final_span },
+                    );
                 } else {
                     finals.remove(&v.name.text);
                 }
@@ -2669,22 +2687,28 @@ impl<'a> Checker<'a> {
             Stmt::Assign(a) => {
                 if let Expr::Path(qn) = &a.target {
                     let bare = qn.segments.first().filter(|_| qn.segments.len() == 1);
-                    if let Some(kw) = bare.and_then(|s| finals.get(&s.text)) {
+                    if let Some(binding) = bare.and_then(|s| finals.get(&s.text)) {
                         let name = &qn.segments[0].text;
                         // A.2.2: echo the spelling the programmer wrote. Telling
                         // someone who wrote `const` to drop `final` is correct
                         // advice under a word they never used.
-                        let word = kw.word();
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0464_FinalBindingReassigned,
-                                format!(
-                                    "cannot reassign `{name}`: it is a `{word}` binding and is \
-                                     immutable (§M.14.2). Drop `{word}`, or bind a new local.",
-                                ),
-                            )
-                            .with_span(a.span),
-                        );
+                        let word = binding.kw.word();
+                        let mut d = Diagnostic::error(
+                            code::Code::E0464_FinalBindingReassigned,
+                            format!(
+                                "cannot reassign `{name}`: it is a `{word}` binding and is \
+                                 immutable (§M.14.2). Drop `{word}`, or bind a new local.",
+                            ),
+                        )
+                        .with_span(a.span)
+                        .with_label(binding.name, format!("`{name}` is declared `{word}` here"));
+                        if let Some(modifier) = binding.modifier {
+                            d = d.with_code_action(format!("Remove `{word}` from `{name}`"), vec![TextEdit {
+                                span: modifier,
+                                replacement: String::new(),
+                            }]);
+                        }
+                        self.diagnostics.push(d);
                     }
                 }
             }
@@ -2715,7 +2739,10 @@ impl<'a> Checker<'a> {
                 // stays reassignable and un-finals the outer name.
                 let mut inner = finals.clone();
                 if fe.is_final {
-                    inner.insert(fe.var_name.text.clone(), fe.final_kw);
+                    inner.insert(
+                        fe.var_name.text.clone(),
+                        FinalBinding { kw: fe.final_kw, name: fe.var_name.span, modifier: fe.final_span },
+                    );
                 } else {
                     inner.remove(&fe.var_name.text);
                 }
@@ -3243,7 +3270,8 @@ impl<'a> Checker<'a> {
                         class.drop_blocks.len(),
                     ),
                 )
-                .with_span(class.drop_blocks[1].span),
+                .with_span(class.drop_blocks[1].span)
+                .with_label(class.drop_blocks[0].span, "first `drop` block here"),
             );
         }
         for block in &class.drop_blocks {
@@ -3505,6 +3533,7 @@ impl<'a> Checker<'a> {
         self.check_out_params_assigned(&method.params, body, &method.name.text);
         self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&method.params, body);
+        crate::task_consume::check_body(body, &self.expr_types, self.diagnostics);
         self.check_missing_return(
             &method.return_type,
             body,
@@ -5406,6 +5435,7 @@ impl<'a> Checker<'a> {
                     ty: c.ty.clone(),
                     is_final: false,
                     final_kw: juxc_ast::FinalKw::None,
+                    final_span: None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,
@@ -6279,22 +6309,28 @@ impl<'a> Checker<'a> {
                         )),
                     );
                 }
-                if let Some((field, kw)) = self.final_field_assign_violation(&a.target) {
+                if let Some((field, kw, decl, modifier)) = self.final_field_assign_violation(&a.target) {
                     // The keyword echoed is the one written (grammar A.2.2),
                     // as E0464 does for a local.
                     let word = kw.word();
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0465_FinalFieldReassigned,
-                            format!(
-                                "cannot assign to `{field}`: it is a `{word}` field \
-                                 and may only be set in its declaration or a constructor \
-                                 (§5.6). Drop `{word}`, or move the assignment into \
-                                 the constructor.",
-                            ),
-                        )
-                        .with_span(a.span),
-                    );
+                    let mut d = Diagnostic::error(
+                        code::Code::E0465_FinalFieldReassigned,
+                        format!(
+                            "cannot assign to `{field}`: it is a `{word}` field \
+                             and may only be set in its declaration or a constructor \
+                             (§5.6). Drop `{word}`, or move the assignment into \
+                             the constructor.",
+                        ),
+                    )
+                    .with_span(a.span)
+                    .with_label(decl, format!("`{field}` is declared `{word}` here"));
+                    if let Some(modifier) = modifier {
+                        d = d.with_code_action(
+                            format!("Remove `{word}` from `{field}`"),
+                            vec![TextEdit { span: modifier, replacement: String::new() }],
+                        );
+                    }
+                    self.diagnostics.push(d);
                 }
                 // `a += b` is `a = a + b` (§O.2.3), so the `+` has to exist. When
                 // a free-function operator answers it (§7.14), record the pick
@@ -8379,8 +8415,8 @@ impl<'a> Checker<'a> {
     fn final_field_assign_violation(
         &self,
         target: &juxc_ast::Expr,
-    ) -> Option<(String, juxc_ast::FinalKw)> {
-        let (name, is_final, final_kw, is_weak, is_static, recv_is_this) = match target {
+    ) -> Option<(String, juxc_ast::FinalKw, Span, Option<Span>)> {
+        let (name, fs, recv_is_this) = match target {
             Expr::Field(f) => {
                 // Resolve the declaring class — instance (`obj.x` / `this.x`) or
                 // static (`ClassName.x`) — the same way property-write
@@ -8400,14 +8436,7 @@ impl<'a> Checker<'a> {
                 };
                 let class_fqn = class_fqn?;
                 let (fs, _) = self.symbols.lookup_field(&class_fqn, &f.field.text)?;
-                (
-                    f.field.text.clone(),
-                    fs.is_final,
-                    fs.final_kw,
-                    fs.is_weak,
-                    fs.is_static,
-                    matches!(&*f.object, Expr::This(_)),
-                )
+                (f.field.text.clone(), fs, matches!(&*f.object, Expr::This(_)))
             }
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let nm = qn.segments[0].text.clone();
@@ -8418,14 +8447,14 @@ impl<'a> Checker<'a> {
                 }
                 let class = self.env.current_class.clone()?;
                 let (fs, _) = self.symbols.lookup_field(&class, &nm)?;
-                (nm, fs.is_final, fs.final_kw, fs.is_weak, fs.is_static, true)
+                (nm, fs, true)
             }
             _ => return None,
         };
-        if !is_final || is_weak {
+        if !fs.is_final || fs.is_weak {
             return None;
         }
-        let allowed = if is_static {
+        let allowed = if fs.is_static {
             self.in_init_block
         } else {
             (self.current_ctor.is_some() || self.in_init_block) && recv_is_this
@@ -8433,7 +8462,7 @@ impl<'a> Checker<'a> {
         if allowed {
             None
         } else {
-            Some((name, final_kw))
+            Some((name, fs.final_kw, fs.span, fs.final_span))
         }
     }
 

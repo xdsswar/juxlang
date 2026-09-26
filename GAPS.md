@@ -124,7 +124,7 @@ emitted line is `v[0]` with no `.borrow()`. Spelled `Vec<int>` or
 `isResolved`.~~ Listed in §18.1.4, unimplemented. They report honestly as
 `E0413` now rather than leaking, so this is completing a documented surface.
 
-**8. A task used in two combinators leaks `E0382`.** Awaiting consumes a task,
+**8. CLOSED 2026-09-26 (phase 1 merge, ERRATA E116).** ~~A task used in two combinators leaks `E0382`.~~ Awaiting consumes a task,
 so `Task.any(a, b)` then `Task.allSettled(a, b)` is a use-after-move that rustc
 reports. Needs a Jux diagnostic. Alongside it, an exception inside a `Result`
 renders its Debug internals (`Err(Exception { __parent: ... })`) rather than its
@@ -167,7 +167,7 @@ never checked either. Adding the recursion would newly fire `E0470`/`E0472`/
 
 ### Build, tooling, diagnostics
 
-**15. Linking and target selection leak raw rustc and cargo.** An unlinkable
+**15. CLOSED 2026-09-26 (phase 1 merge, ERRATA E116).** ~~Linking and target selection leak raw rustc and cargo.~~ An unlinkable
 `@extern(lib="c")` dumps the whole `link.exe` command line; an uninstalled
 `--target` leaks `E0463` across seven crates; an unused
 `[ffi.*] linkage="framework"` entry kills the build. The rustc-leak remapper
@@ -176,7 +176,7 @@ already exists for the compile path and is the model.
 **16. CLOSED 2026-09-26 (`5acd391`, ERRATA E110).** ~~No lint configuration and no `-Werror` (§D.5.4).~~ W0820 is additionally
 dropped by `jux check`, so "deny unjustified unsafe" cannot be expressed at all.
 
-**17. `secondary_spans` and `code_action` have zero producers.** The schema and
+**17. CLOSED 2026-09-26 (phase 1 merge, ERRATA E116).** ~~`secondary_spans` and `code_action` have zero producers.~~ The schema and
 both renderers support them; the only `.with_label` call sites in `crates/` are
 LSP test fixtures. Wiring roughly ten diagnostics would deliver most of
 §D.1.3's promised quality for little work.
@@ -232,7 +232,7 @@ was the same before E107. Recorded under E107's "Still open".
 
 ### Rust leaking through the abstraction (added 2026-09-26)
 
-**27. rustc's borrow errors reach the user verbatim.** When the backend emits
+**27. CLOSED 2026-09-26 (phase 1 merge, ERRATA E116).** ~~rustc's borrow errors reach the user verbatim.~~ When the backend emits
 invalid Rust, `cargo_build` / `build_emitted_crate` (`crates/juxc-driver/src/lib.rs`)
 bail with rustc's text. `source_map.rs` remaps the `-->` arrow to the `.jux`
 line, but the message stays `error[E0502]: cannot borrow ... as mutable`, it is
@@ -240,7 +240,7 @@ not a `Diagnostic` (so `--diagnostic-format json` never sees it), and the exit
 code is 1, not the ICE's 101. Every such error is a compiler bug (ERRATA E23),
 and should say so in Jux terms.
 
-**28. A missed hoist panics with Rust's `already borrowed`.** Class handles are
+**28. CLOSED 2026-09-26 (phase 1 merge, ERRATA E116).** ~~A missed hoist panics with Rust's `already borrowed`.~~ Class handles are
 `Rc<std::cell::RefCell<..>>`; when the backend misses one of the §CR.4.1 hoists
 the program dies with `thread 'main' panicked at src\main.rs:L:C: already
 borrowed: BorrowMutError`, naming an emitted-Rust line and no Jux type.

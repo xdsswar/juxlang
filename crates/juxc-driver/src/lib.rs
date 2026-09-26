@@ -236,6 +236,7 @@ pub fn cargo_profile_args(release: bool) -> (Vec<String>, String) {
 
 pub mod annotations;
 pub mod big_stack;
+pub mod build_failure;
 pub mod cfg;
 pub mod diagnostic_order;
 pub mod docgen;
@@ -257,6 +258,7 @@ mod stdlib_embedded;
 pub mod stubs;
 pub mod workspace;
 
+pub use build_failure::BuildFailure;
 pub use cfg::CfgFacts;
 pub use juxc_tycheck::Profile;
 pub use manifest::{Manifest, ManifestError};
@@ -835,6 +837,43 @@ pub fn build(
 /// who just downloaded a Jux binary and has never installed Rust hits this on
 /// their very first build. `git_deps::run_git` already gets this right; this is
 /// the same courtesy for the toolchain itself.
+/// Run `cargo build` in an emitted crate, for the target `--target` named.
+///
+/// A failure comes back as a [`BuildFailure`] whenever rustc said anything
+/// (ERRATA E116): cargo reports in JSON, and `build_failure` turns
+/// each compiler error into a Jux diagnostic at the `.jux` line the `// JUX:`
+/// markers in `rs_files` map it to. The markers are read from the ON-DISK,
+/// post-rustfmt files so line numbers match what rustc saw. A failure rustc
+/// had no part in (a registry out of reach) still passes cargo's own text
+/// through, arrows rewritten.
+fn run_cargo_build(crate_dir: &Path, profile_args: &[String], rs_files: &[PathBuf]) -> Result<()> {
+    let triple = cross_target();
+    if let Some(triple) = &triple {
+        build_failure::preflight_target(triple, crate_dir)?;
+    }
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--quiet").arg("--message-format=json");
+    cmd.args(profile_args);
+    if let Some(triple) = &triple {
+        cmd.args(["--target", triple]);
+    }
+    cmd.current_dir(crate_dir);
+    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
+        .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let map = source_map::SourceMap::from_disk(crate_dir, rs_files);
+    if let Some(mut failure) = build_failure::from_messages(&stdout, &map) {
+        failure.detail.push_str(&stderr);
+        return Err(failure.into());
+    }
+    let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
+    anyhow::bail!("`cargo build` failed for the emitted Rust crate:\n{rewritten}");
+}
+
 fn spawn_toolchain(
     mut cmd: Command,
     program: &str,
@@ -900,9 +939,18 @@ pub fn write_crate_with_manifest(
     // detection, no source-scanning) is worth the up-front cost.
     // Project the manifest's `[package]` metadata into the backend's
     // `CargoMeta` shape. No manifest → empty meta → legacy Cargo.toml.
-    let cargo_meta = manifest
+    let mut cargo_meta = manifest
         .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
+    // `[ffi.*]` entries no `@extern` names are left out of the build script
+    // (W0906), and a framework on a non-Apple target stops here (E0908).
+    let ffi_warnings = build_failure::check_ffi_links(
+        &mut cargo_meta.ffi,
+        &crate_.sources,
+        cross_target().as_deref(),
+        &manifest.map(|m| m.lints.clone()).unwrap_or_default(),
+    )?;
+    build_failure::print_warnings(&ffi_warnings);
     let cargo_toml = with_bin_name(
         juxc_backend_rust::cargo_toml_for_with_meta(
             crate_name,
@@ -975,6 +1023,9 @@ pub fn write_crate_with_manifest(
     // purely a readability upgrade. We swallow the error and continue
     // so users without rustfmt on `PATH` aren't blocked.
     run_rustfmt(&written_rs);
+    // Then the marker table a run-time borrow conflict reads its `.jux` line
+    // from, against the formatted line numbers.
+    source_map::write_line_table(crate_dir, &written_rs);
     Ok(written_rs)
 }
 
@@ -993,32 +1044,9 @@ fn cargo_build(
     // actually went wrong via the captured stderr. When `release` is
     // set we also pass `--release` so the emitted program is built
     // with optimizations (and lands under `target/release/`).
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build").arg("--quiet");
     // `--release`, `--profile <name>`, or nothing for the dev profile.
     let (profile_args, profile_dir) = cargo_profile_args(release);
-    cmd.args(&profile_args);
-    if let Some(triple) = cross_target() {
-        cmd.args(["--target", &triple]);
-    }
-    cmd.current_dir(crate_dir);
-    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
-        .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Rewrite emitted-Rust file/line anchors back to original `.jux`
-        // locations using the `// JUX:` markers the backend sprinkles into
-        // the emission. Built from the ON-DISK, post-rustfmt files (every
-        // emitted `.rs`, not just `src/main.rs`) so line numbers match what
-        // rustc saw and multi-file/multi-package leaks map correctly. When
-        // markers are absent (a `lower_with_types` build) stderr passes
-        // through unchanged.
-        let map = source_map::SourceMap::from_disk(crate_dir, written_rs);
-        let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
-        anyhow::bail!(
-            "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
-        );
-    }
+    run_cargo_build(crate_dir, &profile_args, written_rs)?;
 
     // Compute the binary path. Cargo's default target dir is
     // `target/debug/{name}{exe-suffix}` (or `target/release/...`
@@ -1182,9 +1210,18 @@ pub fn build_emitted_crate(
     // compile is cached across builds.
     let uses_async = true;
 
-    let cargo_meta = manifest
+    let mut cargo_meta = manifest
         .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
+    // `[ffi.*]` entries no `@extern` names are left out of the build script
+    // (W0906), and a framework on a non-Apple target stops here (E0908).
+    let ffi_warnings = build_failure::check_ffi_links(
+        &mut cargo_meta.ffi,
+        &crate_.sources,
+        cross_target().as_deref(),
+        &manifest.map(|m| m.lints.clone()).unwrap_or_default(),
+    )?;
+    build_failure::print_warnings(&ffi_warnings);
     // Foreign (`rust.<crate>`) `[dependencies]` become registry deps in the
     // emitted Cargo.toml so the bound crate is actually linked into the binary
     // (the `.jux.d` stub only put its API in scope at type-check time).
@@ -1284,37 +1321,21 @@ pub fn build_emitted_crate(
 
     run_rustfmt(&written_rs);
 
+    // Every emitted `.rs`, the full `keep` set rather than just the files
+    // written this run: the incremental cache skips rewriting unchanged files,
+    // but their on-disk (formatted) copy is still what rustc compiles. The
+    // marker table a run-time borrow conflict reads is built from all of them,
+    // and so is the map a build failure is traced back through.
+    let all_rs: Vec<PathBuf> = keep
+        .iter()
+        .filter(|r| r.ends_with(".rs"))
+        .map(|r| crate_dir.join(r))
+        .collect();
+    source_map::write_line_table(crate_dir, &all_rs);
+
     // Run `cargo build`.
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build").arg("--quiet");
-    // `--release`, `--profile <name>`, or nothing for the dev profile.
     let (profile_args, profile_dir) = cargo_profile_args(release);
-    cmd.args(&profile_args);
-    if let Some(triple) = cross_target() {
-        cmd.args(["--target", &triple]);
-    }
-    cmd.current_dir(crate_dir);
-    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
-        .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Map emitted-Rust anchors back to `.jux` sites via `// JUX:` markers
-        // in EVERY emitted `.rs`, read from disk (post-rustfmt) so line numbers
-        // match what rustc saw. Built from the full `keep` set, not just the
-        // files written this run — the incremental cache skips rewriting
-        // unchanged files, but their on-disk (formatted) copy is still what
-        // rustc compiled and may carry the failing span.
-        let all_rs: Vec<PathBuf> = keep
-            .iter()
-            .filter(|r| r.ends_with(".rs"))
-            .map(|r| crate_dir.join(r))
-            .collect();
-        let map = source_map::SourceMap::from_disk(crate_dir, &all_rs);
-        let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
-        anyhow::bail!(
-            "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
-        );
-    }
+    run_cargo_build(crate_dir, &profile_args, &all_rs)?;
 
     // Compute the produced-artifact path (cross targets add their
     // triple segment: `target/<triple>/<profile>/...`).

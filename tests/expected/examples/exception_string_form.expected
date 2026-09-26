@@ -1,0 +1,4 @@
+Ok(1)
+Err(boom)
+plain
+caught: from a subclass

@@ -3656,7 +3656,7 @@ impl RustEmitter {
             // spelled out, NOT the collection handle. They look alike, but the
             // declared parameter type here is the plain one, so building it
             // with the collection constructor would not typecheck.
-            self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+            self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
             let prev = std::mem::take(&mut self.emitting_format_arg);
             self.emit_expr(arg);
             self.emitting_format_arg = prev;

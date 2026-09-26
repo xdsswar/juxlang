@@ -3140,7 +3140,7 @@ impl RustEmitter {
                 None => false,
             };
             if !aliased {
-                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
                 if let Some(init) = &var.init {
                     let prev = std::mem::take(&mut self.emitting_format_arg);
                     self.arm_void_lambda_slot(var.ty.as_ref(), init);
