@@ -1245,7 +1245,7 @@ impl RustEmitter {
         // `Box::new(..)` for the unique-owner `Box` rep.
         let (wrap_open, wrap_close): (&str, &str) =
             if self.sync_classes.contains(&class_decl.name.text) {
-                ("crate::JuxSync::new(", ")")
+                (self.atomic_handle(&class_decl.name.text).1, ")")
             } else if self.is_box_class(&class_decl.name.text) {
                 ("std::boxed::Box::new(", ")")
             } else if self.is_refcell_class(&class_decl.name.text) {
@@ -1989,8 +1989,9 @@ impl RustEmitter {
         self.w.line(&format!("pub fn new() -> Self{relaxed_where} {{"));
         self.w.indent_inc();
         self.emit_static_init_trigger();
+        let atomic = format!("Self({}Self::new_inner()))", self.atomic_handle(&class_decl.name.text).1);
         let wrapped = if self.sync_classes.contains(&class_decl.name.text) {
-            "Self(crate::JuxSync::new(Self::new_inner()))"
+            atomic.as_str()
         } else if self.is_box_class(&class_decl.name.text) {
             "Self(std::boxed::Box::new(Self::new_inner()))"
         } else if self.is_refcell_class(&class_decl.name.text) {

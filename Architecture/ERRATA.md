@@ -3757,6 +3757,17 @@ since E65, and `E0952` (reserved by §R.3.6).
   place, but the lowering copies a value where it would have shared a handle,
   and a write to a copy is lost silently. That restriction is the whole
   difference from §CR.3.3's table, and it is what makes these tiers sound.
+- **Tiers `Arc` and `Arc<Mutex>`: the worker path, split on `mutated`.** A
+  class whose objects cross a worker boundary (§18.2's capture analysis,
+  closed over fields, unchanged) takes an atomic handle. §CR.4.1's two
+  cross-thread rows now both exist: a class that needs its cell keeps
+  `JuxSync` (`Arc<Mutex<C_Inner>>`), and one nothing writes, whose fields are
+  all Jux values or classes (so the handle is `Sync`), is `JuxArc<C_Inner>`, an
+  `Arc` with no lock that reads its fields through `Deref` and answers the same
+  `new`/`as_ptr`/`ptr_eq` surface. A write the analysis missed falls back to
+  `JuxSync` through the same demand mechanism. The §CR.3.5 roll-up joins
+  representations rather than taking the higher rank: `Arc` joined with
+  `RcRefCell` is `ArcMutex`, the one that both crosses threads and is written.
 
 **Spec status:** §CR.7 carries the new numbers and a note on the old ones;
 §D.4 has the three rows.

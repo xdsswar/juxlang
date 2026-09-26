@@ -1062,3 +1062,48 @@ fn ty_names(t: &Ty, out: &mut Vec<String>) {
         _ => {}
     }
 }
+
+/// Whether every instance field of class `fqn` holds a Jux value or a Jux
+/// class, never a foreign type, an array, a collection or a function: the
+/// condition under which a lock-free `Arc` over its inner struct is `Sync`
+/// (a worker-shared class's fields are themselves worker-shared, so each
+/// class it holds carries an atomic handle too).
+pub(crate) fn fields_are_jux_values(units: &[juxc_ast::CompilationUnit], symbols: &SymbolTable, fqn: &str) -> bool {
+    const PRIMITIVES: &[&str] =
+        &["int", "long", "short", "byte", "double", "float", "bool", "boolean", "char", "String"];
+    for unit in units.iter().filter(|u| !u.is_external) {
+        let pkg = unit_package(unit);
+        for item in &unit.items {
+            let TopLevelDecl::Class(cd) = item else { continue };
+            let this = if pkg.is_empty() { cd.name.text.clone() } else { format!("{pkg}.{}", cd.name.text) };
+            if this != fqn {
+                continue;
+            }
+            return cd.fields.iter().filter(|f| !f.is_static).all(|f| {
+                let Some(t) = &f.ty else { return false };
+                if t.array_shape.is_some()
+                    || t.fn_shape.is_some()
+                    || t.ptr_depth > 0
+                    || !t.generic_args.is_empty()
+                    || f.is_ref
+                    || f.is_weak
+                {
+                    return false;
+                }
+                let Some(head) = t.name.segments.last().map(|s| s.text.as_str()) else { return false };
+                if PRIMITIVES.contains(&head) {
+                    return true;
+                }
+                let jux = |name: &str| {
+                    symbols.classes.get(name).is_some_and(|c| !c.is_external)
+                        || symbols.records.contains_key(name)
+                        || symbols.enums.get(name).is_some_and(|e| !e.is_external)
+                };
+                let written = t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                let in_pkg = if pkg.is_empty() { written.clone() } else { format!("{pkg}.{written}") };
+                jux(&written) || jux(&in_pkg)
+            });
+        }
+    }
+    false
+}

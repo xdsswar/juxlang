@@ -163,3 +163,18 @@ fn contained_classes_are_values_and_a_passed_one_is_not() {
     );
     assert_handle(&rust, "Ledger", "std::rc::Rc<Ledger_Inner>");
 }
+
+/// Tier `Arc` / `Arc<Mutex>`: a class a worker takes across gets an atomic
+/// handle, with no lock when nothing writes it.
+#[test]
+fn a_worker_shared_class_is_atomic_and_locks_only_when_written() {
+    let rust = emit(&example_case("cr_rep_arc"));
+    assert_handle(&rust, "Config", "crate::JuxArc<Config_Inner>");
+    assert_handle(&rust, "Tally", "crate::JuxSync<Tally_Inner>");
+    assert!(
+        rust.contains("Self(crate::JuxArc::new(Self::new_inner(name, step)))"),
+        "Config is built straight into an Arc:\n{rust}",
+    );
+    assert!(rust.contains("// JUX-REP: arc\n"), "Config is marked `arc`:\n{rust}");
+    assert!(rust.contains("// JUX-REP: arc-mutex\n"), "Tally is marked `arc-mutex`:\n{rust}");
+}

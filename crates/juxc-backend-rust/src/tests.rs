@@ -6839,3 +6839,27 @@ fn the_selector_keeps_the_cell_exactly_for_written_classes() {
     // which is conservative here: the owner keeps its cell too.
     assert!(rust.contains("struct Holder(std::rc::Rc<crate::JuxCell<Holder_Inner>>);"), "{rust}");
 }
+
+/// §CR.3.5's roll-up joins representations: crossing threads and being written
+/// meet at `ArcMutex`, and otherwise the more general one wins.
+#[test]
+fn representations_join_to_the_least_general_sound_one() {
+    use ClassRep::*;
+    assert_eq!(Arc.join(RcRefCell), ArcMutex);
+    assert_eq!(RcRefCell.join(Arc), ArcMutex);
+    assert_eq!(Rc.join(Arc), Arc);
+    assert_eq!(Inline.join(Rc), Rc);
+    assert_eq!(Box.join(RcRefCell), RcRefCell);
+    assert_eq!(ArcMutex.join(Rc), ArcMutex);
+    let mut reps: HashMap<String, ClassRep> =
+        [("A".to_string(), Arc), ("B".to_string(), RcRefCell), ("C".to_string(), Rc)].into_iter().collect();
+    let adj: HashMap<String, Vec<String>> = [
+        ("A".to_string(), vec!["B".to_string()]),
+        ("B".to_string(), vec!["A".to_string(), "C".to_string()]),
+        ("C".to_string(), vec!["B".to_string()]),
+    ]
+    .into_iter()
+    .collect();
+    rollup_class_reps(&mut reps, &adj);
+    assert!(reps.values().all(|r| *r == ArcMutex), "{reps:?}");
+}

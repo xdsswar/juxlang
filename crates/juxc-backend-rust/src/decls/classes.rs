@@ -1119,7 +1119,7 @@ impl RustEmitter {
         // handle instead (§18.2) — the same surface, `Send + Sync`.
         let sync = self.sync_classes.contains(&class_decl.name.text);
         let (wrap_open, close): (&str, &str) = if sync {
-            ("crate::JuxSync<", ">);
+            (self.atomic_handle(&class_decl.name.text).0, ">);
 ")
         } else if is_box {
             ("std::boxed::Box<", ">);\n")

@@ -2646,6 +2646,10 @@ pub(crate) enum ClassRep {
     /// `Rc<C_Inner>` — aliased (shared) but never mutated after construction:
     /// refcount sharing with **no** `RefCell` and therefore no borrow-flag cost.
     Rc,
+    /// `JuxArc<C_Inner>` (an `Arc` with no lock) — a worker-shared class that
+    /// is never mutated after construction (§CR.2.4, §CR.4.1's cross-thread
+    /// read-only row).
+    Arc,
     /// `Rc<RefCell<C_Inner>>` — aliased AND mutated: full Java shared-mutation
     /// semantics with statement-scoped runtime borrows (§CR.4.1, NORMATIVE).
     RcRefCell,
@@ -2667,8 +2671,24 @@ impl ClassRep {
             ClassRep::Inline => 0,
             ClassRep::Box => 1,
             ClassRep::Rc => 2,
-            ClassRep::RcRefCell => 3,
-            ClassRep::ArcMutex => 4,
+            ClassRep::Arc => 3,
+            ClassRep::RcRefCell => 4,
+            ClassRep::ArcMutex => 5,
+        }
+    }
+
+    /// The least representation at least as general as both (§CR.3.5). The
+    /// reps are not a chain: `Arc` crosses threads and `RcRefCell` is written,
+    /// and the one that does both is `ArcMutex`.
+    pub(crate) fn join(self, other: ClassRep) -> ClassRep {
+        let threads = |r: ClassRep| matches!(r, ClassRep::Arc | ClassRep::ArcMutex);
+        let cell = |r: ClassRep| matches!(r, ClassRep::RcRefCell | ClassRep::ArcMutex);
+        if (threads(self) || threads(other)) && (cell(self) || cell(other)) {
+            ClassRep::ArcMutex
+        } else if self.rank() >= other.rank() {
+            self
+        } else {
+            other
         }
     }
 }
@@ -2680,8 +2700,12 @@ impl ClassRep {
 ///   objects are written after construction, or its lowering updates them in
 ///   place for another reason ([`rep_select::compute_cell_classes`]), or the
 ///   emitter asked for a mutable borrow of it on an earlier pass (`demanded`).
-///   A class whose objects cross a worker boundary stays here too: its handle
-///   is the atomic `JuxSync`, which answers the same `borrow()` surface.
+///   A class whose objects cross a worker boundary and needs its cell stays
+///   here too: its handle is the atomic `JuxSync` (`Arc<Mutex>`, §CR.4.1's
+///   `ArcMutex` row), which answers the same `borrow()` surface.
+/// - **`Arc`** (`JuxArc<C_Inner>`): a worker-shared class nothing writes,
+///   whose fields are all Jux values or classes (§CR.4.1's cross-thread
+///   read-only row).
 /// - **`Rc`** (`Rc<C_Inner>`): every other class. Nothing writes its objects
 ///   once built, so they are shared through the refcount alone: no borrow
 ///   flag, no guard, and nothing that can be "already in use".
@@ -2715,6 +2739,7 @@ pub(crate) fn compute_class_reps(
     let adjacency = fqn_extends_adjacency(units, symbols, unit_offset);
     let in_hierarchy = |n: &String| adjacency.get(n).is_some_and(|v| !v.is_empty());
     let contained = rep_select::compute_contained_classes(units, expr_types);
+    let arc_fields_ok = |fqn: &String| rep_select::fields_are_jux_values(units, symbols, fqn);
     // The declarations of the contained classes, for the checks only a
     // declaration answers.
     let mut contained_decls: HashMap<String, &juxc_ast::ClassDecl> = HashMap::new();
@@ -2736,9 +2761,15 @@ pub(crate) fn compute_class_reps(
 
     let mut reps: HashMap<String, ClassRep> = HashMap::new();
     for n in &eligible {
-        let needs_cell =
-            cells.contains(n) || demanded.contains(n) || worker_shared.contains(n) || in_hierarchy(n);
+        let needs_cell = cells.contains(n) || demanded.contains(n) || in_hierarchy(n);
         let mut rep = if needs_cell { ClassRep::RcRefCell } else { ClassRep::Rc };
+        // A class whose objects cross a worker boundary takes the atomic
+        // handle: `JuxSync` (`Arc<Mutex>`) when it needs its cell, `JuxArc`
+        // (an `Arc` alone) when nothing writes it and every field it holds is
+        // a Jux value or class (so the lock-free handle is `Sync`).
+        if worker_shared.contains(n) {
+            rep = if !needs_cell && arc_fields_ok(n) { ClassRep::Arc } else { ClassRep::RcRefCell };
+        }
         if let (Some(how), Some(cd)) = (contained.get(n), contained_decls.get(n)) {
             // A constructor that runs against the finished object needs a
             // handle to run against.
@@ -2802,10 +2833,11 @@ pub(crate) fn rollup_class_reps(reps: &mut HashMap<String, ClassRep>, adj: &Hash
             let rep = reps[&name];
             if let Some(neighbors) = adj.get(&name) {
                 for n in neighbors.clone() {
-                    // A neighbour that is wrapped (present) and lower-rank rises.
+                    // A neighbour that is wrapped (present) rises to the join.
                     if let Some(nr) = reps.get(&n).copied() {
-                        if nr.rank() < rep.rank() {
-                            reps.insert(n, rep);
+                        let joined = nr.join(rep);
+                        if joined != nr {
+                            reps.insert(n, joined);
                             changed = true;
                         }
                     }
@@ -4603,6 +4635,41 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
 
 ",
         );
+        // The atomic handle of a worker-shared class that nothing writes
+        // (ERRATA E1XX-PHASE8): an `Arc` with no lock, answering the same
+        // `new` / `as_ptr` / `ptr_eq` surface as `JuxSync`, and reaching its
+        // fields through `Deref` as a plain `Rc` handle does.
+        w.push_str(concat!(
+            "/// A class handle shared across threads, for objects nothing writes.\n",
+            "pub struct JuxArc<T: ?Sized>(pub std::sync::Arc<T>);\n",
+            "impl<T> JuxArc<T> {\n",
+            "    pub fn new(value: T) -> Self {\n",
+            "        JuxArc(std::sync::Arc::new(value))\n",
+            "    }\n",
+            "}\n",
+            "impl<T: ?Sized> JuxArc<T> {\n",
+            "    pub fn as_ptr(&self) -> *const T {\n",
+            "        std::sync::Arc::as_ptr(&self.0)\n",
+            "    }\n",
+            "    pub fn ptr_eq(&self, other: &Self) -> bool {\n",
+            "        std::sync::Arc::ptr_eq(&self.0, &other.0)\n",
+            "    }\n",
+            "}\n",
+            "impl<T: ?Sized> std::ops::Deref for JuxArc<T> {\n",
+            "    type Target = T;\n",
+            "    fn deref(&self) -> &T {\n",
+            "        &self.0\n",
+            "    }\n",
+            "}\n",
+            "impl<T: ?Sized> Clone for JuxArc<T> {\n",
+            "    fn clone(&self) -> Self { JuxArc(self.0.clone()) }\n",
+            "}\n",
+            "impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxArc<T> {\n",
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n",
+            "        std::fmt::Debug::fmt(&*self.0, f)\n",
+            "    }\n",
+            "}\n\n",
+        ));
         // Observable-property observer handle (§P.2/§P.3): one
         // attached observer of a `{ get; set; }` property. NAMED
         // observer variables attach weakly (§P.2.3 — the owner's

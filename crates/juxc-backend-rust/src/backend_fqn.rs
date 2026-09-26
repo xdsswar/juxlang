@@ -396,13 +396,14 @@ impl crate::RustEmitter {
     pub(crate) fn class_rep_label(&self, name: &str) -> Option<&'static str> {
         let fqn = self.resolve_bare_class_fqn(name)?;
         let rep = self.class_reps.get(&fqn)?;
-        if self.sync_class_fqns.contains(&fqn) {
+        if self.sync_class_fqns.contains(&fqn) && *rep != crate::ClassRep::Arc {
             return Some("arc-mutex");
         }
         Some(match rep {
             crate::ClassRep::Inline => "inline",
             crate::ClassRep::Box => "box",
             crate::ClassRep::Rc => "rc",
+            crate::ClassRep::Arc => "arc",
             crate::ClassRep::RcRefCell => "rc-refcell",
             crate::ClassRep::ArcMutex => "arc-mutex",
         })
@@ -416,6 +417,23 @@ impl crate::RustEmitter {
     /// not call.
     pub(crate) fn emitting_inline_class(&self) -> bool {
         self.enclosing_class.as_deref().is_some_and(|c| self.class_rep_label(c) == Some("inline"))
+    }
+
+    /// Whether the class `name` takes the lock-free atomic handle
+    /// (`JuxArc`, ERRATA E1XX-PHASE8). See [`Self::is_wrapper_class`].
+    pub(crate) fn is_arc_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name)
+            .is_some_and(|fqn| self.class_reps.get(&fqn) == Some(&crate::ClassRep::Arc))
+    }
+
+    /// The atomic handle type and its constructor for a worker-shared class:
+    /// `JuxArc` for one nothing writes, `JuxSync` for the rest.
+    pub(crate) fn atomic_handle(&self, name: &str) -> (&'static str, &'static str) {
+        if self.is_arc_class(name) {
+            ("crate::JuxArc<", "crate::JuxArc::new(")
+        } else {
+            ("crate::JuxSync<", "crate::JuxSync::new(")
+        }
     }
 
     /// The Rust type of a non-owning reference to an object of class `name`
