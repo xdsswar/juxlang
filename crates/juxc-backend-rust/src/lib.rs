@@ -4438,53 +4438,48 @@ fn jux_debug_nests_option(name: &str) -> bool {
 /// `x`, at any depth. Quoted spans are copied untouched, escapes included, so a
 /// string element that happens to read `"None"` keeps its text.
 fn jux_debug_strip_options(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     // One entry per open parenthesis: `true` when it was a `Some(` whose
     // closing parenthesis is dropped along with it.
     let mut parens: Vec<bool> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
         if c == '"' || c == '\'' {
             out.push(c);
-            i += 1;
-            while i < chars.len() {
-                let d = chars[i];
+            while let Some(d) = chars.next() {
                 out.push(d);
-                i += 1;
-                if d == '\\' && i < chars.len() {
-                    out.push(chars[i]);
-                    i += 1;
+                if d == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        out.push(escaped);
+                    }
                 } else if d == c {
                     break;
                 }
             }
         } else if c.is_alphanumeric() || c == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
+            let mut word = String::from(c);
+            while let Some(&d) = chars.peek() {
+                if !(d.is_alphanumeric() || d == '_') {
+                    break;
+                }
+                word.push(d);
+                chars.next();
             }
-            let word: String = chars[start..i].iter().collect();
             if word == "None" {
                 out.push_str("null");
-            } else if word == "Some" && chars.get(i) == Some(&'(') {
+            } else if word == "Some" && chars.peek() == Some(&'(') {
+                chars.next();
                 parens.push(true);
-                i += 1;
             } else {
                 out.push_str(&word);
             }
         } else {
             match c {
                 '(' => parens.push(false),
-                ')' if parens.pop().unwrap_or(false) => {
-                    i += 1;
-                    continue;
-                }
+                ')' if parens.pop().unwrap_or(false) => continue,
                 _ => {}
             }
             out.push(c);
-            i += 1;
         }
     }
     out
@@ -5360,7 +5355,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // outcome goes straight into the handle's channel, and a failure is
         // parked exactly where a task that threw parks its exception, so the
         // awaiter re-throws it and an unawaited one is an unhandled rejection.
-        w.push_str("pub fn __jux_task_settled<T: 'static>(\n");
+        w.push_str("pub fn __jux_settled_task<T: 'static>(\n");
         w.push_str("    outcome: Result<T, ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>,\n");
         w.push_str(") -> JuxTask<T> {\n");
         w.push_str("    let (result, parked) = match outcome {\n");

@@ -1553,9 +1553,9 @@ impl RustEmitter {
                         "completed" | "failed" => {
                             let ok = f.field.text == "completed";
                             self.w.push_str(if ok {
-                                "crate::__jux_task_settled(Ok("
+                                "crate::__jux_settled_task(Ok("
                             } else {
-                                "crate::__jux_task_settled(Err(::std::boxed::Box::new("
+                                "crate::__jux_settled_task(Err(::std::boxed::Box::new("
                             });
                             if let Some(arg) = call.args.first() {
                                 self.emit_expr(arg);
