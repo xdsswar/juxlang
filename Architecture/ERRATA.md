@@ -2469,6 +2469,21 @@ declaration does not shadow either. Concretely:
 This is a representation and routing rule, not a new restriction: no name is
 reserved, and nothing tells an author to rename (§M.16.1).
 
+**Two reads followed.** This entry fixed the member CALL and deliberately left
+an INDEX read and a `@RustRefOut` read alone, because both failed through an
+alias with NO user class present and so had a cause of their own rather than a
+shadow test asking the wrong question. They did, and it was this rule one step
+earlier: the backend lowered a local's written type with no unit context, so the
+alias `RVec` (the last segment of nothing) resolved to no type at all, `v[0]`
+came out with no `.borrow()` (rustc E0608) and `d.front() ?? 0` with no
+`.cloned()` (rustc E0308), while the slot itself still carried the handle. The
+index's KEY shape was a third site of the original mistake, measured by last
+segment, so `qmap["three"] = 33` beside a program's own `class HashMap` was
+emitted as an `Index` store instead of an `insert` (rustc E0594). All three are
+closed, under this entry and §M.16.6: no new rule was needed.
+`examples/stdlib_alias_reads.jux` runs the matrix with no collision in sight and
+`examples/stdlib_alias_collisions.jux` runs it beside one.
+
 **Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.6 carries the rule.
 
 ---
@@ -2664,6 +2679,125 @@ the default only when no `@entry` exists in the binary. Concretely:
 
 **Spec status:** `JUX-ENTRY-POINTS-ADDENDUM.md` §E.2, §E.2.1, §E.2.2, §E.2.3
 and §E.6 carry the rules.
+
+---
+
+## E106. `jux.toml` was specified as required and validated as optional
+
+**Conflict.** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.2.1 draws the minimum-viable
+manifest as three keys, §B.2.2 marks all three REQUIRED, §B.2.3 gives
+`package.name` a regex and §B.2.4 says v0.1 supports only edition `"2026"`.
+Nothing was checked. Every one of these passed `jux check` with no output at
+all:
+
+```toml
+[package]
+name = "MyApp"          # not lowercase, not reverse-DNS, §B.2.3's regex rejects it
+
+[nonsense]              # no such table; nothing reads it
+whatever = 1
+```
+
+```toml
+[package]
+name = "com.example.app"
+edition = "2015"        # §B.2.4: v0.1 supports only "2026"
+```
+
+A missing `version`, a missing `edition` and a missing `[package]` table were
+equally silent, and a misspelt `[depedencies]` behaved exactly like a correct
+table that happened to be empty.
+
+Worse, a manifest that was not valid TOML was an uncoded `eprintln!` warning
+and a `None` return from the loader, so every caller read a typo in `jux.toml`
+as "this directory has no manifest": the build continued with the defaulted
+name `app`, version `0.0.0` and no dependencies, and the first thing the user
+saw was an unresolved import from a dependency they had declared. The module
+doc on the loader stated the tolerance as deliberate, which is why the decision
+is recorded here rather than simply implemented.
+
+Three things had to be settled: which conditions are errors, which are
+warnings, and where the codes come from. §B.2.2's flat REQUIRED answers none of
+them, because a key that is required of a *new* manifest is not therefore worth
+refusing to build an *existing* project over.
+
+**Resolution.** §B.2.5 is the check table, and the rule behind it is: **a key's
+absence is a warning when the default is the only value it could have had; a
+present value the compiler cannot honour is an error.**
+
+- `E0901` -- `jux.toml` unreadable or not valid TOML. A manifest the compiler
+  cannot read is not one it may guess at, and the loader now reports the two
+  cases apart: no file is still `Ok(None)`, a bad file is an `Err`.
+- `E0902` -- no `[package]` table (and no `[workspace]` either), or a
+  `[package]` with no `name`. `name` is the one key with no defensible default:
+  it is what a consumer writes in its own `[dependencies]`, the default package
+  path for every file under `src/`, and the stem of the emitted artifact's
+  name. The old default, `app`, silently built a package nobody could import
+  under the name they wrote. A `[workspace]`-only virtual manifest declares no
+  package and is exempt, which is the shape `jux new --workspace` writes.
+- `E0903` -- a `name` holding a character §B.2.3's grammar forbids, a `version`
+  that is not SemVer 2.0, an `edition` other than `"2026"`. `edition = "2015"`
+  names a language this compiler does not implement; compiling it as 2026
+  anyway would be a substitution the user never gets to see.
+- `W0901` -- `version` or `edition` absent, defaulted to `0.0.0` and `"2026"`.
+  Both are REQUIRED of a manifest being written today and neither is worth
+  breaking a project that built yesterday: `"2026"` is the only edition that
+  exists, so the assumption cannot be wrong yet, and the version matters at
+  `jux publish` rather than at `jux build`. One warning per manifest names
+  every key it is missing, because two lines per package across a workspace is
+  noise nobody reads.
+- `W0902` -- an unknown top-level table or `[package]` key. A manifest is
+  forward-compatible by design (`[publish]`, `[package.sign]` and the
+  `[ffi.<name>]` sub-tables are all specified ahead of their implementations),
+  so an unknown key may not be an error; but it may not be silent either.
+- `W0903` -- a dotted `name` whose first segment, the reverse-DNS root, holds
+  an `_` (`my_co.app`). Illegal characters are the error; the wrong shape is
+  the warning. A SINGLE segment is not warned about, and §B.2.3's regex now
+  admits one: §B.15.1's own `jux new myapp` template writes `name = "myapp"`,
+  so a warning there would fire on the first build of every project the tool
+  creates. Reverse-DNS remains the convention for a library meant to be
+  published.
+
+`jux new` and `jux init` used to write the directory name verbatim, so
+`jux init` in a directory called `clean-init` wrote a manifest the very next
+command refused (`E0903`). Both now write the spellable segment: `clean_init`,
+and `app_3d` for `3d`.
+
+The repository's own manifests were brought up to the table rather than the
+table down to them: 98 of them predated `edition` and now declare it, and
+`examples/apps/matrix_lab`'s `lab` and `linalg` became `apps.lab` and
+`apps.linalg`, the prefix the other apps already use.
+
+The codes sit in `E0900`-`E0999` beside the whole-build errors that band
+already reserves for the driver (`E0905` cannot-resolve-dependency, `E0908`
+linkage-unavailable, both still unraised),
+per the note added to `JUX-DIAGNOSTICS-ADDENDUM.md` §D.3. The manifest is
+reported as a source file of its own, with the offending line and a caret, so
+`jux.toml:3:8` is as clickable as any `.jux` diagnostic.
+
+**A second contradiction, in the same area.** §B.15.2's table says what each
+*target* of a package compiles, and E103 added it, but it said nothing about
+what a *dependency* contributes to a dependent. The dependency loader took the
+whole `src/` tree, entry files included, so a package that path-depended on a
+package having any `[[bin]]` -- including the `src/main.jux` a bin package gets
+by default -- failed with the dependency's `main` reported against the
+dependent's own entry file:
+
+```text
+src/main.jux:3:8: [E0400] error: `main` is declared more than once at the top level
+```
+
+§B.15.2 now carries the dependency row: a dependency contributes its shared
+code minus all of its own `[[bin]]` entry files, which is exactly what it
+compiles into its own `[lib]`. The same function also collected the doc items
+for `jux doc`, which is why the obvious one-line filter was wrong: documentation
+is about the package's source, not about a compiled target, so `jux doc` keeps
+documenting `src/main.jux` and reads through a separate entry point that says so
+in its name.
+
+**Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.2.5 carries the validation
+table, §B.15.2 the dependency source list, and `JUX-DIAGNOSTICS-ADDENDUM.md`
+§D.3 / §D.4 the codes.
 
 ---
 

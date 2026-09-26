@@ -9,3 +9,4 @@
 [package]
 name = "apps.job_runner"
 version = "0.1.0"
+edition = "2026"

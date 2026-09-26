@@ -842,12 +842,44 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 /// Collect a dependency's *public* sources for prepending into a dependent
-/// package's compile. First cut: the whole `src/` tree (Jux `public`
-/// visibility is enforced by tycheck against the merged table, so private
-/// members of the dependency stay inaccessible even though their source is
-/// present).
+/// package's compile: its `src/` tree minus every one of ITS `[[bin]]` entry
+/// files (§B.15.2's dependency row).
+///
+/// Jux `public` visibility is enforced by tycheck against the merged table, so
+/// private members of the dependency stay inaccessible even though their source
+/// is present. The entry files are a different matter: each declares a top-level
+/// `main`, so a dependent that took them saw two, and a package that path-
+/// depended on a package having any `[[bin]]` (an explicit one, or the
+/// `src/main.jux` a bin package gets by default) failed with the DEPENDENCY's
+/// `main` reported against the dependent's own entry file:
+///
+/// ```text
+/// src/main.jux:3:8: [E0400] `main` is declared more than once at the top level
+/// ```
+///
+/// What a dependency contributes is exactly what it compiles into its own
+/// `[lib]`, which is what [`load_lib_sources`] asks for.
+///
+/// This is deliberately NOT the function `jux doc` calls: see
+/// [`load_package_doc_sources`], which keeps the entry files because
+/// documentation is about the package's source rather than about a compiled
+/// target.
 pub fn collect_dependency_sources(dep_manifest: &Manifest) -> Result<Vec<SourceFile>> {
-    load_src_tree(&dep_manifest.project_root.join("src"))
+    load_src_tree_without_entries(dep_manifest, None)
+}
+
+/// Every `.jux` file under a package's own `src/`, entry files included, for
+/// documenting it.
+///
+/// `jux doc` and `jux test --doc` used to call [`collect_dependency_sources`] on
+/// their OWN package, which is why that function could not simply start
+/// filtering: a documented free function in `src/main.jux` is part of what the
+/// package's source says, and dropping it would have silently emptied a section
+/// of the generated site to fix a dependency bug. `jux doc` is not a target and
+/// is not bound by §B.15.2's per-target source lists, so the two uses are two
+/// functions, each saying in its name which it is.
+pub fn load_package_doc_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> {
+    load_src_tree(&manifest.project_root.join("src"))
 }
 
 /// Resolve a package's foreign `[dependencies]` to `.jux.d` stubs and load every

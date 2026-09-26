@@ -383,6 +383,19 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
     // nearest `jux.toml` walking up from the cwd. `None` when no manifest is
     // found (project-mode commands report their own "no jux.toml" error).
     let root = resolve_project_root(cli.manifest_path.as_deref());
+    // Validate that manifest before anything reads it (BUILD-SYSTEM §B.2.5).
+    // Nothing used to: `name = "MyApp"`, a missing `version`, a missing
+    // `edition`, `edition = "2015"` and an unknown `[nonsense]` table all
+    // passed `jux check` in silence, and a `jux.toml` that was not valid TOML
+    // was an uncoded warning the build then ignored, compiling the project as
+    // if it had no manifest at all (ERRATA E106).
+    if reads_the_manifest(&cli.command) {
+        if let Some(r) = &root {
+            if report_manifest_checks(r) {
+                return Ok(ExitCode::from(1));
+            }
+        }
+    }
     match cli.command {
         CliCommand::New { name, lib, workspace } => {
             let kind = if workspace {
@@ -601,6 +614,58 @@ fn resolve_project_root(manifest_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// Whether this command reads the project's `jux.toml` to do its work, and so
+/// must not run against one the compiler cannot honour (§B.2.5).
+///
+/// The exclusions are deliberate and each has a reason:
+///
+/// - `new`, `init`, `explain` and `target` do not read a project at all, and a
+///   broken manifest in some ancestor directory is none of their business.
+/// - `clean` deletes build output. Refusing to clean a project until its
+///   manifest is fixed would be the one moment the user cannot get unstuck.
+/// - `add` and `remove` EDIT the manifest, so they have to work on one that
+///   needs editing; that is how a bad `name` or a stale `edition` gets fixed.
+/// - `check` / `build` / `run` with an explicit `.jux` file are single-file
+///   mode: they never read the manifest, even when the working directory
+///   happens to sit inside a project.
+fn reads_the_manifest(command: &CliCommand) -> bool {
+    match command {
+        CliCommand::New { .. }
+        | CliCommand::Init
+        | CliCommand::Clean
+        | CliCommand::Add { .. }
+        | CliCommand::Remove { .. }
+        | CliCommand::Explain { .. }
+        | CliCommand::Target { .. } => false,
+        CliCommand::Check { file, .. }
+        | CliCommand::Build { file, .. }
+        | CliCommand::Run { file, .. } => file.is_none(),
+        CliCommand::Doc { .. }
+        | CliCommand::Test { .. }
+        | CliCommand::Tree
+        | CliCommand::Update
+        | CliCommand::Metadata { .. } => true,
+    }
+}
+
+/// Validate `root`'s manifest (and its workspace members') and print whatever
+/// §B.2.5 found. Answers true when an error was reported, so the caller stops.
+///
+/// Each manifest renders on its own, because a diagnostic's `file` index is
+/// resolved against the source list it is rendered with and every check carries
+/// exactly one source of its own. Rendering them together would attribute a
+/// member's diagnostics to the root's `jux.toml`.
+fn report_manifest_checks(root: &Path) -> bool {
+    let mut any_error = false;
+    for check in juxc_driver::manifest_check::check_project(root) {
+        any_error |= check.has_errors();
+        if !check.diagnostics.is_empty() {
+            print_diagnostics(&check.diagnostics, std::slice::from_ref(&check.source));
+        }
+    }
+    any_error
+}
+
 /// Run a project command that needs a `jux.toml`, or say how to get one.
 fn with_root(
     root: Option<PathBuf>,
@@ -661,7 +726,9 @@ fn cmd_doc(root: &Path, package: Option<&str>, open: bool, run_examples: bool) -
     let mut index_links: Vec<(String, String)> = Vec::new();
     let mut failed = 0usize;
     for manifest in &manifests {
-        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        // The package's WHOLE `src/` tree, entry files included: a documented
+        // free function in `src/main.jux` belongs in the site (§B.15.2).
+        let sources = juxc_driver::project::load_package_doc_sources(manifest)?;
         let packages = juxc_driver::docgen::collect(&sources);
         let out_dir = if nested {
             doc_root.join(juxc_driver::manifest::default_target_name(&manifest.package.name))
@@ -703,7 +770,9 @@ fn cmd_doctest(root: &Path, package: Option<&str>, release: bool) -> Result<Exit
     };
     let mut failed = 0usize;
     for manifest in &manifests {
-        let sources = juxc_driver::project::collect_dependency_sources(manifest)?;
+        // As `cmd_doc`: a doc example written on an item in `src/main.jux` is
+        // one of this package's doc examples.
+        let sources = juxc_driver::project::load_package_doc_sources(manifest)?;
         let packages = juxc_driver::docgen::collect(&sources);
         failed += run_doctests_for(manifest, &packages, root, release)?;
     }

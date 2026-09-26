@@ -1,6 +1,7 @@
 [package]
 name = "demo.skia_java_style"
 version = "0.1.0"
+edition = "2026"
 
 # Skia, the graphics engine behind Chrome, Android and Flutter, consumed in Jux
 # syntax.

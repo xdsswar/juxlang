@@ -440,7 +440,88 @@ struct RawFfi {
     extra_lib_paths: Vec<String>,
 }
 
+/// Why a `jux.toml` that is PRESENT could not be turned into a [`Manifest`].
+///
+/// [`Manifest::load`] answers `Option`, which cannot tell "this directory has
+/// no manifest" from "this directory's manifest has a typo in it". Every caller
+/// read the second as the first, so a misplaced bracket in `jux.toml` built the
+/// project with the defaulted name `app`, version `0.0.0` and no dependencies
+/// at all, and the user's first clue was an unresolved import of a dependency
+/// they had declared. [`Manifest::try_load`] returns this instead, and
+/// [`crate::manifest_check`] turns it into `E0901` (BUILD-SYSTEM §B.2.5,
+/// ERRATA E106).
+#[derive(Debug)]
+pub enum ManifestError {
+    /// The file exists but could not be read: permissions, a directory in its
+    /// place, a device error. Carries the OS message.
+    Unreadable {
+        /// The `jux.toml` that could not be read.
+        path: PathBuf,
+        /// The underlying OS error, already rendered.
+        message: String,
+    },
+    /// The file was read but is not valid TOML, or is valid TOML of the wrong
+    /// shape (`version = 1.0` as a float, `[[package]]` as an array of tables).
+    Malformed {
+        /// The `jux.toml` that would not parse.
+        path: PathBuf,
+        /// The `toml` crate's own message, which names the offending construct.
+        message: String,
+        /// Byte range of the offending span within the file, when the parser
+        /// reported one. Used to point the diagnostic at the right line.
+        span: Option<std::ops::Range<usize>>,
+    },
+}
+
+impl std::fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ManifestError::Unreadable { path, message } => {
+                write!(f, "cannot read {}: {message}", path.display())
+            }
+            ManifestError::Malformed { path, message, .. } => {
+                write!(f, "{} is not valid TOML: {message}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ManifestError {}
+
+impl ManifestError {
+    /// The `jux.toml` this error is about.
+    pub fn path(&self) -> &Path {
+        match self {
+            ManifestError::Unreadable { path, .. } | ManifestError::Malformed { path, .. } => path,
+        }
+    }
+}
+
 impl Manifest {
+    /// Load the `jux.toml` directly in `project_root`, distinguishing all three
+    /// outcomes: `Ok(None)` when there is no manifest here, `Ok(Some(m))` when
+    /// it parsed, and `Err` when a manifest IS present and could not be used.
+    ///
+    /// This is the entry point anything that must not guess should call;
+    /// [`Manifest::load`] is the tolerant wrapper around it. Note that parsing
+    /// is all this does: the §B.2 field rules (`name`'s grammar, SemVer, the
+    /// edition) are checked by [`crate::manifest_check`], which needs the raw
+    /// TOML text to point a diagnostic at the offending line.
+    pub fn try_load(project_root: &Path) -> Result<Option<Manifest>, ManifestError> {
+        let path = project_root.join("jux.toml");
+        let text = match std::fs::read_to_string(&path) {
+            // No manifest at all: the common loose-file case, and not an error.
+            // Anything else (a permission denial, a directory named `jux.toml`)
+            // IS one: the file is there and we would be about to ignore it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(ManifestError::Unreadable { path, message: e.to_string() });
+            }
+            Ok(t) => t,
+        };
+        Manifest::from_toml_text(project_root, &path, &text).map(Some)
+    }
+
     /// Load the `jux.toml` directly in `project_root`, returning the
     /// parsed [`Manifest`] or `None`.
     ///
@@ -450,31 +531,45 @@ impl Manifest {
     /// - the TOML is malformed.
     ///
     /// The two error cases are reported to stderr as warnings (rather than
-    /// failing the build) so a typo in `jux.toml` doesn't block a
-    /// compile that would otherwise succeed with default metadata.
+    /// failing the build) so a typo in `jux.toml` doesn't block a compile that
+    /// would otherwise succeed with default metadata. That tolerance is for
+    /// tooling that must degrade rather than stop, above all the language
+    /// server, which still has to offer completion in a project whose manifest
+    /// is half-typed. A build does not reach here with a manifest it should
+    /// have refused, because the CLI validates first (`E0901`, §B.2.5).
     pub fn load(project_root: &Path) -> Option<Manifest> {
-        let path = project_root.join("jux.toml");
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            // No manifest at all: the common loose-file case. Silent.
-            Err(_) => return None,
-        };
+        match Manifest::try_load(project_root) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("juxc: warning: {e}; using default metadata");
+                None
+            }
+        }
+    }
+
+    /// The parse half of [`Manifest::try_load`], split out so the validator can
+    /// hand in text it has already read instead of reading the file twice.
+    fn from_toml_text(
+        project_root: &Path,
+        path: &Path,
+        text: &str,
+    ) -> Result<Manifest, ManifestError> {
         // Parse to a plain TOML value first so `key.workspace = true` entries
         // can be replaced by the workspace root's values (§B.7.1) before the
         // typed shape sees them; `edition = { workspace = true }` would not
         // deserialize as a string otherwise.
-        let parsed = toml::from_str::<toml::Value>(&text).and_then(|mut value| {
+        let parsed = toml::from_str::<toml::Value>(text).and_then(|mut value| {
             crate::workspace::inherit_from_workspace(&mut value, project_root);
             value.try_into::<RawManifest>()
         });
         let raw: RawManifest = match parsed {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
-                    "juxc: warning: failed to parse {} ({e}); using default metadata",
-                    path.display()
-                );
-                return None;
+                return Err(ManifestError::Malformed {
+                    path: path.to_path_buf(),
+                    message: e.message().to_string(),
+                    span: e.span(),
+                });
             }
         };
         let features = raw.features.clone();
@@ -730,7 +825,7 @@ impl Manifest {
             })
             .collect();
 
-        Some(Manifest {
+        Ok(Manifest {
             project_root: project_root.to_path_buf(),
             package,
             lib,

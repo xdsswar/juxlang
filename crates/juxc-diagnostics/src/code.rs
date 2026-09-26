@@ -1122,6 +1122,64 @@ pub enum Code {
     /// a convention, never a requirement, so this is a suppressible
     /// warning and compilation proceeds unchanged.
     W0974_PropertyNamePascalCase,
+
+    // ---- Project manifest / build configuration (E0900-E0999) ----
+    // `jux.toml` is read before any Jux source is, so these codes belong to
+    // the same band as the rest of the build driver's errors (DIAGNOSTICS
+    // §D.3: E0900-E0999 is the backend/build phase). BUILD-SYSTEM §B.2.5
+    // is the check table; ERRATA E106 records why each severity is what it is.
+    /// E0901 -- The project's `jux.toml` **cannot be read or is not valid
+    /// TOML** (BUILD-SYSTEM §B.2.5).
+    ///
+    /// This used to be an `eprintln!` warning plus a `None` return, which made
+    /// a manifest with a typo in it indistinguishable from no manifest at all:
+    /// the build carried on with `name = "app"`, version `0.0.0` and no
+    /// dependencies, and the first thing the user saw was an unresolved import.
+    /// A manifest the compiler cannot read is not a manifest it may guess at.
+    E0901_ManifestUnreadable,
+    /// E0902 -- The manifest has **no `[package]` table, or one with no
+    /// `name`** (BUILD-SYSTEM §B.2.2, §B.2.5).
+    ///
+    /// Every other `[package]` key has a defensible default; the name has
+    /// none. It is the key consumers write in their own `[dependencies]`, the
+    /// default package path for every file under `src/`, and the stem of the
+    /// emitted artifact's name, so a defaulted one silently builds a package
+    /// nobody can import under the name they wrote. A manifest that declares
+    /// only `[workspace]` is exempt: it has no package to name.
+    E0902_ManifestMissingName,
+    /// E0903 -- A `[package]` key's **value is not one this compiler can
+    /// honour** (BUILD-SYSTEM §B.2.5): a `name` holding a character the
+    /// package grammar does not allow (`MyApp`, `my-app`), a `version` that is
+    /// not SemVer 2.0, or an `edition` other than `"2026"`.
+    ///
+    /// Absence is a warning and a wrong value is an error, because the two are
+    /// different mistakes: a project written before a key existed simply lacks
+    /// it, whereas `edition = "2015"` asks for a language this compiler does
+    /// not implement, and answering it with edition 2026 anyway would be a
+    /// silent substitution.
+    E0903_ManifestInvalidValue,
+    /// W0901 -- A **required `[package]` key is absent** and was defaulted
+    /// (BUILD-SYSTEM §B.2.5): `version` (assumed `0.0.0`) or `edition`
+    /// (assumed `"2026"`, the only edition v0.1 has).
+    ///
+    /// §B.2.2 calls both REQUIRED, and they are: `jux publish` needs a real
+    /// version, and an edition-less manifest stops being unambiguous the day a
+    /// second edition ships. Neither is worth refusing to build a project that
+    /// worked yesterday, so this says so once per manifest and carries on.
+    W0901_ManifestMissingRequiredKey,
+    /// W0902 -- An **unknown key or table in `jux.toml`** (BUILD-SYSTEM
+    /// §B.2.5). Nothing reads it, so a misspelt `[depedencies]` or
+    /// `verison = "1.0"` used to behave exactly like a correct key that
+    /// happened to have no effect.
+    W0902_ManifestUnknownKey,
+    /// W0903 -- A `package.name` that is **legal but not reverse-DNS shaped**
+    /// (BUILD-SYSTEM §B.2.3): a dotted name whose first segment, the
+    /// reverse-DNS root, holds an underscore (`my_co.app`).
+    ///
+    /// A single segment (`myapp`, `my_app`) is not warned about: it resolves
+    /// unambiguously, and it is what `jux new` writes. Illegal characters are
+    /// the error (`E0903`); the wrong shape is this warning.
+    W0903_ManifestNameNotReverseDns,
 }
 
 impl Code {
@@ -1314,6 +1372,12 @@ impl Code {
             Code::E0975_ObserverShapeMismatch    => "E0975",
             Code::E0974_BindTypeMismatch         => "E0974",
             Code::W0974_PropertyNamePascalCase   => "W0974",
+            Code::E0901_ManifestUnreadable       => "E0901",
+            Code::E0902_ManifestMissingName      => "E0902",
+            Code::E0903_ManifestInvalidValue     => "E0903",
+            Code::W0901_ManifestMissingRequiredKey => "W0901",
+            Code::W0902_ManifestUnknownKey       => "W0902",
+            Code::W0903_ManifestNameNotReverseDns => "W0903",
         }
     }
 }

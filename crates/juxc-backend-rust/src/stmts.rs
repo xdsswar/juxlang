@@ -2903,7 +2903,7 @@ impl RustEmitter {
                     .find(|fd| fd.name.text == f.field.text)
                     .and_then(|fd| fd.ty.as_ref())
                 {
-                    let ty = juxc_tycheck::ty_from_ref_in_env(field_ty, &self.symbols);
+                    let ty = self.ty_from_written_ref(field_ty);
                     return Self::element_of(&ty);
                 }
             }
@@ -3124,7 +3124,7 @@ impl RustEmitter {
         // a shared cell observed by the outer scope.
         if var.is_ref || self.forced_cell_locals.contains(&var.name.text) {
             if let Some(ty_ref) = &var.ty {
-                let ty = juxc_tycheck::ty_from_ref_in_env(ty_ref, &self.symbols);
+                let ty = self.ty_from_written_ref(ty_ref);
                 if let Some(scope) = self.local_types.last_mut() {
                     scope.insert(var.name.text.clone(), ty);
                 }
@@ -3182,7 +3182,7 @@ impl RustEmitter {
         // used below to mark it `mut` conservatively (§G.9.2).
         let mut external_local = false;
         if let Some(ty_ref) = &var.ty {
-            let ty = juxc_tycheck::ty_from_ref_in_env(ty_ref, &self.symbols);
+            let ty = self.ty_from_written_ref(ty_ref);
             external_local = self.is_external_user_ty(&ty);
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(var.name.text.clone(), ty);

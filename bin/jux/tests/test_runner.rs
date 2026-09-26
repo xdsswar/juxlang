@@ -47,7 +47,7 @@ fn jux_test_full_lifecycle() {
 
     write(
         &root.join("jux.toml"),
-        "[package]\nname = \"com.test.mathapp\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"com.test.mathapp\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
     );
     write(
         &root.join("src/com/test/mathapp/math.jux"),
@@ -188,7 +188,7 @@ fn jux_test_ignore_and_typed_assert_throws() {
 
     write(
         &root.join("jux.toml"),
-        "[package]\nname = \"com.test.parse\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"com.test.parse\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
     );
     // One public type per file, each named after it (3.1). `parse.jux` keeps
     // the free function, which puts no constraint on the file name.

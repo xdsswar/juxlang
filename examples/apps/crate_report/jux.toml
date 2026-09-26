@@ -9,6 +9,7 @@
 [package]
 name = "apps.crate_report"
 version = "0.1.0"
+edition = "2026"
 
 [dependencies]
 "rust.serde_json" = "1.0"

@@ -23,16 +23,22 @@ pub enum NewKind {
     Workspace,
 }
 
-/// A package-path segment made from a directory name: lowercase ASCII,
-/// letters, digits and `_` only, not starting with a digit. `my-app` becomes
-/// `my_app`, the form a `package` line and an import can spell.
+/// A package-path segment made from a directory name: lowercase ASCII
+/// letters, digits and `_` only, starting with a letter. `my-app` becomes
+/// `my_app`, the form a `package` line, an import and `[package] name` can all
+/// spell (BUILD-SYSTEM §B.2.3). A name that would start with anything but a
+/// letter takes an `app_` prefix: `3d` becomes `app_3d`, where it used to become
+/// `_3d`, which §B.2.5 rejects as `E0903` (ERRATA E106).
 pub fn package_segment(name: &str) -> String {
-    let mut out: String = name
+    let out: String = name
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
         .collect();
-    if out.is_empty() || out.starts_with(|c: char| c.is_ascii_digit()) {
-        out.insert(0, '_');
+    if out.is_empty() {
+        return "app".to_string();
+    }
+    if !out.starts_with(|c: char| c.is_ascii_lowercase()) {
+        return format!("app_{out}");
     }
     out
 }
@@ -117,7 +123,10 @@ pub fn cmd_new(name: &str, kind: NewKind) -> Result<ExitCode> {
             )?;
         }
         NewKind::Bin => {
-            write_new(&target, "jux.toml", &package_manifest(&base, false))?;
+            // The directory keeps the name as typed; the manifest gets the
+            // spellable form, since `jux new My-App` must not write a manifest
+            // the very next command refuses (`E0903`, ERRATA E106).
+            write_new(&target, "jux.toml", &package_manifest(&package_segment(&base), false))?;
             write_new(
                 &target,
                 "src/main.jux",
@@ -220,7 +229,8 @@ pub fn cmd_init(dir: &Path) -> Result<ExitCode> {
         .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
         .unwrap_or_else(|| "app".to_string());
     let has_lib = dir.join("src").join("lib.jux").is_file();
-    write_new(dir, "jux.toml", &package_manifest(&base, has_lib))?;
+    // As `jux new`: a directory called `clean-init` gets `clean_init`.
+    write_new(dir, "jux.toml", &package_manifest(&package_segment(&base), has_lib))?;
     // Loose `.jux` files already here are the user's program: point them at
     // the layout instead of adding a second `main` beside them.
     let loose: Vec<String> = std::fs::read_dir(dir)
@@ -522,7 +532,9 @@ mod tests {
     fn package_segments_are_spellable() {
         assert_eq!(package_segment("my-app"), "my_app");
         assert_eq!(package_segment("Greeter"), "greeter");
-        assert_eq!(package_segment("3d"), "_3d");
+        assert_eq!(package_segment("3d"), "app_3d");
+        assert_eq!(package_segment("_x"), "app__x");
+        assert_eq!(package_segment(""), "app");
         assert_eq!(type_name_for("my_app"), "MyApp");
     }
 
