@@ -73,6 +73,26 @@ impl<'a> Parser<'a> {
                     // better story — restore them and recover.
                     let stashed: Vec<_> = self.diagnostics.drain(diags_before..).collect();
                     self.pos = before;
+                    // A type declaration that failed is never a statement:
+                    // retried as one it became E0993 "a class cannot be
+                    // declared inside a function body" plus a synthetic
+                    // `main` that collided with the real one (LEAKS L22).
+                    // Its own diagnostics are the story; skip it whole.
+                    if self.local_type_declaration_ahead().is_some() {
+                        self.diagnostics.extend(stashed);
+                        while !self.at(&TokenKind::LBrace)
+                            && !self.at(&TokenKind::Semicolon)
+                            && !self.at_eof()
+                        {
+                            self.advance();
+                        }
+                        self.skip_balanced_braces();
+                        self.eat(&TokenKind::Semicolon);
+                        if self.pos == before {
+                            self.advance();
+                        }
+                        continue;
+                    }
                     let stmt_diags_before = self.diagnostics.len();
                     // Where the statement STARTS: read before parsing it, not
                     // after, or the synthetic entry's span begins one statement
