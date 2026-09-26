@@ -1299,9 +1299,22 @@ impl RustEmitter {
             // type args), so this always holds, and it lets a bounded
             // param coerce into a trait object — `Rc::new(t) as Rc<dyn
             // Iface>` requires `T: 'static` (rustc E0310).
-            self.w.push_str("Clone + std::fmt::Debug + 'static");
+            self.emit_baseline_bound(&p.name.text);
         }
         self.w.push('>');
+    }
+
+    /// The bound every type parameter carries: `Clone + std::fmt::Debug +
+    /// 'static`, or `'static` alone for a parameter of a relaxed class while
+    /// one of its relaxed headers is written (gap 2, see
+    /// `decls::clone_bounds`). The members of such a class state the
+    /// `Clone + Debug` they need in `where` clauses of their own.
+    fn emit_baseline_bound(&mut self, param: &str) {
+        if self.relaxed_header_params.contains(param) {
+            self.w.push_str("'static");
+        } else {
+            self.w.push_str("Clone + std::fmt::Debug + 'static");
+        }
     }
 
     /// Like [`Self::emit_generic_params_with_clone_bound`] but adds the bounds
@@ -1384,7 +1397,7 @@ impl RustEmitter {
             // `+ 'static` mirrors `emit_generic_params_with_clone_bound` so the
             // struct decl and this inherent impl agree on the param bounds (and
             // a bounded param can coerce into a trait object).
-            self.w.push_str("Clone + std::fmt::Debug + 'static");
+            self.emit_baseline_bound(&p.name.text);
             // A param used as a fixed-array-field element (`T[N]`)
             // needs `Default` for the `from_fn` construction — see
             // `class_default_bound_params`.

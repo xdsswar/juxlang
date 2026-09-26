@@ -2080,6 +2080,9 @@ not compile while `Vec<File>` does. Removing that bound is a separate change
 and not a small one: the core library's own `Iterable.reduce<U>` calls
 `initial.clone()` in its body, so the bound is load-bearing well beyond the
 aggregate rule this entry settles. Until then the limit stands as written.
+(Narrowed by E118: a standalone generic class now moves the bound to
+the members that need it, so `Cell<File>` compiles; the limit stands for the
+declaration shapes that entry leaves on the baseline.)
 
 **Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.6.4.7 carries the markers and
 their discovery; `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.5.8 carries the
@@ -3347,6 +3350,90 @@ position and every lookup behind the resolver.
 
 **Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16 states the root-package
 rule and the import help; GAPS 24 is closed by this entry.
+## E118. A generic class over a type that is not `Clone`
+
+**Conflict.** §T.2.1 promises that a compiler-added bound never makes a legal
+type argument illegal, and E97 made a foreign type that is not `Clone` (139 of
+the 296 `rust.std` stub types, `std::fs::File` among them) something a class
+can hold. The two did not meet: every generic declaration lowered each type
+parameter with the literal `Clone + std::fmt::Debug + 'static`, so
+`Cell<File>` over `class Cell<T> { T value; }` failed in rustc with a bound the
+program never wrote, while `Vec<File>` worked. E97 recorded this as its known
+boundary (GAPS.md gap 2). The bound cannot simply go: a field read of a `T`
+auto-`.clone()`s, a `return` copies, and the renderer picks its tier against
+the declared bounds, so every body that touches a `T` by value needs it.
+
+**Resolution.** The bound MOVES, for the classes where that is provably
+enough, from the declaration to the members that need it.
+
+- **Which classes.** A generic class lowered to the `Rc<RefCell>` handle that
+  stands alone: no `extends`, not extended, no `implements`, not abstract,
+  and no properties, operators, instance initializer blocks or `drop` body
+  (each of those adds impls or helpers that call back into the inherent impl,
+  and a `Drop` impl must repeat the struct's bounds exactly). A worker-shared
+  (atomic) class does not qualify. Records, enums, interfaces, free functions
+  and every other class keep the baseline unchanged.
+- **Which parameters.** Within such a class, a parameter is RELAXED when
+  every instance field that mentions it holds it bare (`T value`, `T? value`)
+  or passes it bare to another class in a position whose parameter is itself
+  relaxed (`Cell<U> slot`). That last rule is a greatest fixpoint over all
+  classes: start with every parameter relaxed, drop one whenever a field
+  forwards it to a slot that is not, repeat until nothing changes. Any other
+  field shape (`List<T>`, `T[]`, `(T) -> void`, an interface over `T`) keeps
+  the parameter on the baseline, because that type's own declaration asks.
+  So does a parameter a declared bound passes as a type argument
+  (`K extends Comparable<K>`), for the same reason.
+- **What a relaxed parameter carries.** On the struct heads, the handle, the
+  inherent `impl` header and the identity impls (`Display`, `Debug`,
+  `JuxIdentity`, `PartialEq`/`Eq`/`Hash`, all of which print or compare the
+  handle's address) it carries `'static` plus the user's own bounds and the
+  key/equality/default bounds §T.2.1 already infers. The handle's `Clone` is
+  written by hand (`Self(self.0.clone())`, an `Rc` bump): the derive would
+  have bounded it on `T: Clone`. Every other impl of the class (its `Kind`
+  marker, the E115 bound-position accessors, lifted statics) keeps the full
+  baseline, so a delegating body there still resolves to the inherent method.
+- **What a member states.** Each constructor and method writes
+  `where T: Clone + std::fmt::Debug` for exactly the relaxed parameters it
+  touches, and nothing when it touches none. A member touches `T` when a
+  parameter or return type mentions it (other than a bare `T` parameter, and
+  a relaxed handle such as `Cell<T>` anywhere); when the recorded type of any
+  expression in its body, or the declared type of a field, parameter, local,
+  loop binder or lambda parameter it reads, mentions it (a relaxed handle
+  exempt, a bare `T` not); when a catch clause, cast, type test, `new`,
+  `new T[n]` or explicit type argument names it; or when it calls a method on
+  a receiver whose type mentions it (the callee's own clause is not consulted).
+  It touches EVERY relaxed parameter when it names `this` other than to reach
+  a field, uses `super`, calls a method of the class unqualified, or takes a
+  method reference. A constructor also inherits whatever the instance field
+  initializers touch; the one exemption is a constructor on the fast path
+  (nothing but field stores) whose same-named store `this.f = f;`, of a
+  parameter named nowhere else, is the `C_Inner { f }` shorthand: the value
+  is moved, not cloned. A synthesized default constructor and an
+  abstract member touch everything.
+
+So over `File`, `new Cell<File>(f)`, `c.label()`, `c.count()` and a
+`Pair<File, int>`'s `getSecond()` all compile, while `c.get()` (which returns
+a copy of a `T`) does not: the `where` clause names the bound it needs.
+
+One related fix: a method called on a FIELD whose value is a foreign type
+without `@RustClone` (`c.value.metadata()`, and equally the non-generic
+`w.file.metadata()`) is called in place through the object's borrow. It used
+to be hoisted out of the borrow, which copies the receiver, so it did not
+compile at all; a foreign method runs no Jux code that could find the object
+borrowed, which is what the hoist guards against.
+
+**Known boundary.** Calling a member whose `where` clause the type argument
+does not meet (`Cell<File>.get()`) is still reported by rustc, not by the
+checker, since the checker does not model these bounds. A class outside the
+qualifying shape (a hierarchy, an interface implementation, a class with a
+property or an operator) keeps the baseline, so `Cell<File>` for such a class
+is still refused in rustc. `examples/generic_over_foreign.jux` pins both
+halves: the classes over `File`, and the same classes over `int` and `String`
+keeping every member.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1's first table row now
+points here; E97's "known boundary" paragraph is narrowed to the shapes this
+entry leaves on the baseline.
 
 ---
 

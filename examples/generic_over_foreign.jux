@@ -1,0 +1,81 @@
+// A Jux generic class instantiated with a Rust type that is not `Clone`
+// (GAPS.md gap 2). `std::fs::File` cannot be copied, so a parameter that
+// only STORES its value, or hands it to a foreign method in place, carries
+// no `Clone` bound; a member that reads a `T` by value asks for it in a
+// `where` clause of its own, so the same classes still work over `int`
+// and `String`.
+import rust.std.File;
+import rust.std.PathBuf;
+import rust.std.temp_dir;
+import rust.std.remove_file;
+
+class Cell<T> {
+    public T value;
+    private int reads = 0;
+    public Cell(T value) { this.value = value; }
+    public T get() { reads = reads + 1; return value; }
+    public void set(T v) { this.value = v; }
+    public int count() { return reads; }
+    public String label() { return "cell"; }
+}
+
+class Box<T> {
+    private T item;
+    private String name;
+    public Box(T item, String name) {
+        this.item = item;
+        this.name = name;
+    }
+    public String describe() { return "box " + name; }
+    public T open() { return item; }
+}
+
+class Pair<A, B> {
+    public A first;
+    public B second;
+    public Pair(A first, B second) {
+        this.first = first;
+        this.second = second;
+    }
+    public B getSecond() { return second; }
+}
+
+class Shelf<U> {
+    public Cell<U> slot;
+    public Shelf(Cell<U> slot) { this.slot = slot; }
+    public Cell<U> cell() { return slot; }
+}
+
+void main() {
+    final PathBuf path = temp_dir().join("jux_generic_over_foreign.txt");
+
+    // Over a foreign type that is not `Clone`.
+    Cell<File> c = new Cell<File>(File.create(path));
+    print(c.label());
+    print(c.count());
+    print(c.value.metadata().len());
+
+    Box<File> b = new Box<File>(File.open(path), "of files");
+    print(b.describe());
+
+    Pair<File, int> p = new Pair<File, int>(File.open(path), 42);
+    print(p.getSecond());
+    print(p.first.metadata().is_file());
+
+    Shelf<File> s = new Shelf<File>(c);
+    print(s.cell().label());
+
+    // The same classes over ordinary Jux types keep every member.
+    Cell<int> n = new Cell<int>(5);
+    n.set(n.get() + 2);
+    print(n.get());
+    print(n.count());
+    Box<String> t = new Box<String>("hello", "of words");
+    print($"${t.describe()}: ${t.open()}");
+    Pair<String, double> q = new Pair<String, double>("pi", 3.5);
+    print($"${q.first} ${q.getSecond()}");
+    Shelf<int> shelf = new Shelf<int>(n);
+    print(shelf.cell().get());
+
+    remove_file(path);
+}

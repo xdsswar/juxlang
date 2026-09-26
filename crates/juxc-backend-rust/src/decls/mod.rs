@@ -20,6 +20,7 @@
 use juxc_ast::OperatorKind;
 
 pub(crate) mod classes;
+pub(crate) mod clone_bounds;
 pub(crate) mod constructors;
 pub(crate) mod enums;
 pub(crate) mod functions;

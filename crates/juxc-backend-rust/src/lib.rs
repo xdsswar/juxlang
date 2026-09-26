@@ -1223,6 +1223,17 @@ struct RustEmitter {
     /// non-generic declaration. See `emit_operator_impl_head`.
     pub(crate) op_impl_class: Option<juxc_ast::ClassDecl>,
     pub(crate) hashed_params: std::collections::HashSet<String>,
+    /// Relaxed type parameters per class FQN (gap 2): those whose
+    /// `Clone + Debug` moves from the headers to the members that need it.
+    /// Computed once, on first use, by `compute_relaxed_class_params`.
+    pub(crate) relaxed_params_by_fqn: Option<std::collections::HashMap<String, Vec<String>>>,
+    /// Parameters the header being written declares with `'static` alone
+    /// rather than the `Clone + Debug + 'static` baseline. Set around the
+    /// specific headers of a relaxed class and cleared straight after.
+    pub(crate) relaxed_header_params: std::collections::HashSet<String>,
+    /// The relaxed class whose inherent impl is being written: each
+    /// constructor and method takes its `where` clause from it.
+    pub(crate) relaxed_class: Option<crate::decls::clone_bounds::RelaxedClass>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -6126,6 +6137,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             eq_bound_params: std::collections::HashSet::new(),
             op_impl_class: None,
             hashed_params: std::collections::HashSet::new(),
+            relaxed_params_by_fqn: None,
+            relaxed_header_params: std::collections::HashSet::new(),
+            relaxed_class: None,
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),

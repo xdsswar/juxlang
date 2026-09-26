@@ -74,7 +74,7 @@ route E99 names: make `Debug` canonical for Jux values, emitting a hand-written
 (§O.7.1). E97 already has a worked example of writing that impl rather than
 deriving it, in `decls/classes.rs`.
 
-**2. `Cell<File>` over a Jux generic.** The blanket `Clone + Debug + 'static`
+**2. CLOSED 2026-09-26 (phase 3 merge, ERRATA E118), for the qualifying class shape; hierarchies and classes with properties/operators keep the baseline.** ~~`Cell<File>` over a Jux generic.~~ The blanket `Clone + Debug + 'static`
 on every generic declaration. Dropping it wholesale breaks the core library
 (`Iterable.reduce<U>` clones its accumulator; `LazyIterable.chain` needs
 `T: Clone`); dropping it only from the struct emitter leaves the inherent

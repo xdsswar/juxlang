@@ -4059,6 +4059,12 @@ impl RustEmitter {
         if self.callee_mutates_external_receiver(cf) {
             return None;
         }
+        // Nor is a FOREIGN value without `Clone` (`std::fs::File`, gap 2):
+        // hoisting would copy it out of the borrow, which it cannot do, and its
+        // own method runs no Jux code that could find the object borrowed.
+        if self.value_is_uncloneable_foreign(recv) {
+            return None;
+        }
         if self.receiver_is_wrapper_class(&rf.object)
             && self
                 .wrapper_field_parent_depth(&rf.object, &rf.field.text)
@@ -4068,6 +4074,21 @@ impl RustEmitter {
         } else {
             None
         }
+    }
+
+    /// Whether `e`'s recorded type is a foreign (`rust.<crate>` stub) class
+    /// whose stub carries no `@RustClone`: a value that can be used in place
+    /// but never copied out of one (ERRATA E97).
+    pub(crate) fn value_is_uncloneable_foreign(&self, e: &Expr) -> bool {
+        self.span_is_uncloneable_foreign(crate::exprs::expr_span_of(e))
+    }
+
+    /// [`Self::value_is_uncloneable_foreign`] by the expression's span.
+    pub(crate) fn span_is_uncloneable_foreign(&self, span: juxc_source::Span) -> bool {
+        let ty = self.expr_types.get(&span).cloned().map(crate::exprs::field::strip_nullable);
+        let Some(juxc_tycheck::Ty::User { name, .. }) = ty else { return false };
+        let bare = name.rsplit('.').next().unwrap_or(&name);
+        self.lookup_class_by_bare_or_fqn(bare).is_some_and(|c| c.is_external) && !self.class_is_rust_clone(&name)
     }
 
     /// True when `callee` names a method on an EXTERNAL (`rust.<crate>` stub)
