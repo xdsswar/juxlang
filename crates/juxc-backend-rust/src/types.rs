@@ -72,7 +72,10 @@ impl RustEmitter {
             generic_param_names: &self.const_int_params,
             // A bare `NAME` in a class body means that class's own constant.
             enclosing_class: self.enclosing_class.as_deref(),
-        };
+            package: &[],
+            imports: None,
+        }
+        .in_unit(self.current_unit_idx.and_then(|i| self.symbols.units.get(i)));
         juxc_tycheck::const_eval::eval_const_string(e, &ctx).ok()
     }
 
@@ -111,7 +114,10 @@ impl RustEmitter {
             symbols: &self.symbols,
             generic_param_names: &self.const_int_params,
             enclosing_class: None,
-        };
+            package: &[],
+            imports: None,
+        }
+        .in_unit(self.current_unit_idx.and_then(|i| self.symbols.units.get(i)));
         juxc_tycheck::const_eval::eval_const_int(e, &ctx).ok()
     }
 
@@ -121,7 +127,10 @@ impl RustEmitter {
             symbols: &self.symbols,
             generic_param_names: &self.const_int_params,
             enclosing_class: None,
-        };
+            package: &[],
+            imports: None,
+        }
+        .in_unit(self.current_unit_idx.and_then(|i| self.symbols.units.get(i)));
         juxc_tycheck::const_eval::eval_const_bool(e, &ctx).ok()
     }
 

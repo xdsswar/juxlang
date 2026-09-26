@@ -864,6 +864,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         let result = match slot {
             Ty::Primitive(Primitive::Bool) => crate::const_eval::eval_const_bool(init, &ctx).map(|_| ()),
@@ -1206,6 +1208,8 @@ impl<'a> Checker<'a> {
                 symbols: self.symbols,
                 generic_param_names: &std::collections::HashSet::new(),
                 enclosing_class: None,
+                package: &self.env.current_package,
+                imports: Some(&self.env.unqualified),
             };
             for variant in &enum_decl.variants {
                 if !variant.payload.is_empty() {
@@ -9862,6 +9866,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         let span = match expr_span(value) {
             s if s == Span::DUMMY => fallback,
@@ -9913,6 +9919,8 @@ impl<'a> Checker<'a> {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
             enclosing_class: None,
+            package: &self.env.current_package,
+            imports: Some(&self.env.unqualified),
         };
         match crate::const_eval::eval_const_int(size, &ctx) {
             // Reduces to a concrete value (`5`, `SIZE`, `SIZE + 1`, a const-fn
@@ -10812,6 +10820,8 @@ impl<'a> Checker<'a> {
                         symbols: self.symbols,
                         generic_param_names: &self.const_param_names,
                         enclosing_class: None,
+                        package: &self.env.current_package,
+                        imports: Some(&self.env.unqualified),
                     };
                     let param_is_bool = cty
                         .name
