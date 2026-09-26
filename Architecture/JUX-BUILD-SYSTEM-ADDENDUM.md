@@ -300,6 +300,32 @@ The `edition` field selects the language edition. v0.1 supports only `"2026"`. L
 
 **Editions are not breakage.** A `2026`-edition crate can depend on a future `2029`-edition crate transparently. Each compiles under its declared edition.
 
+### B.2.5. Manifest Validation
+
+`jux build`, `jux check`, `jux run`, `jux test`, `jux doc`, `jux tree`, `jux metadata` and `jux update` validate the manifest of the package they act on, and of every `[workspace] members` entry when that package is a workspace root, before compiling anything. The checks and their severities:
+
+| Condition | Severity | Code | Result |
+|---|---|---|---|
+| `jux.toml` exists but cannot be read, or is not valid TOML | error | `E0901` | nothing is built |
+| no `[package]` table, and no `[workspace]` table either | error | `E0902` | nothing is built |
+| `[package]` with no `name` | error | `E0902` | nothing is built |
+| `name` holds a character the package grammar forbids (an upper-case letter, `-`, a space, a leading digit, an empty segment, `_` starting a segment) | error | `E0903` | nothing is built |
+| `name` is legal but not reverse-DNS shaped: one segment, or `_` in the first segment | warning | `W0903` | builds; the name is used as written |
+| `version` absent | warning | `W0901` | builds as version `0.0.0` |
+| `version` present and not SemVer 2.0 | error | `E0903` | nothing is built |
+| `edition` absent | warning | `W0901` | builds as edition `"2026"` |
+| `edition` present and not `"2026"` | error | `E0903` | nothing is built |
+| an unknown top-level table, or an unknown key in `[package]` | warning | `W0902` | builds; the key is ignored |
+| `key.workspace = true` that no workspace root defines | warning | (uncoded) | builds; the key is dropped (§B.7.2a) |
+
+A manifest holding only `[workspace]` is a *virtual* manifest: it declares no package, so the `[package]` rows do not apply to it. This is the shape `jux new --workspace` writes and the shape every workspace root in this repository uses.
+
+**Why absence warns and a wrong value errors.** They are different mistakes. A project written before a key was required simply lacks it, and refusing to build it would mean a compiler upgrade breaks working code for a key whose only legal value is the one the compiler would have assumed anyway. A *present* value the compiler cannot honour is a statement of intent it must not silently substitute: `edition = "2015"` asks for a language this compiler does not implement, and `version = "1"` is not a version the resolver can order. The one absence that is an error is `name`, because it is the only key with no defensible default: it is what consumers write in their own `[dependencies]`, the default package path for every file under `src/`, and the stem of the emitted artifact's name, so a defaulted one builds a package nobody can import under the name they wrote.
+
+**Why an unknown key warns rather than errors.** A manifest is forward-compatible by design: `[publish]`, `[package.sign]` and the `[ffi.<name>]` sub-tables are all specified ahead of their implementations, and a future key must not make today's compiler refuse the file. But an unread key is indistinguishable from a key that works and happens to do nothing, which is how `[depedencies]` and `verison = "0.1.0"` used to pass in silence. Naming it once is the middle answer.
+
+Validation covers the package being built and its workspace siblings, not the manifests of its dependencies: a dependency is validated when it is itself the package being built, and a consumer cannot fix a defect in a manifest it does not own.
+
 ---
 
 ## §B.3 — No Module Declaration File
@@ -1343,8 +1369,17 @@ Each target compiles the package's shared code plus at most one entry file, sinc
 | `[lib]` | every `.jux` under `src/` EXCEPT all `[[bin]]` entry files |
 | `[[bin]] X` | the same, plus X's own entry file |
 | `examples/<name>` | the same, plus the example's files (which bring their own `main`) |
+| a dependency's contribution to a dependent | every `.jux` under the DEPENDENCY's `src/` except all of ITS `[[bin]]` entry files |
 
 A target that saw more than one entry would report each of them as `E0400`, "`main` is declared more than once at the top level". The `[lib]` target is built whenever no single `--bin` was selected, so this is not an error a binary-only build could avoid.
+
+A dependency contributes the same shared code it would compile into its own `[lib]`, and for the same reason: its entry files declare a top-level `main`, and a dependent that took them would see two. A package that path-depends on a package having any `[[bin]]` (an explicit one, or the `src/main.jux` a bin package gets by default) used to fail with the dependency's `main` reported against the dependent's own entry file:
+
+```text
+src/main.jux:3:8: [E0400] error: `main` is declared more than once at the top level
+```
+
+`jux doc` is not a target and is not bound by this table: it documents the package's whole `src/` tree, entry files included, because a documented free function in `src/main.jux` is part of what the package's source says even though no dependent compiles it.
 
 The entry files in `src/bin/` are package-less, per the `[[bin]]` rows of §B.1.1's table: the manifest locates them, so their directory is not a package name.
 

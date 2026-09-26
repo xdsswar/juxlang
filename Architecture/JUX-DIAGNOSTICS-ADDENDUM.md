@@ -361,6 +361,14 @@ Each compiler phase (per `JUX-COMPILER-PIPELINE-ADDENDUM.md` §C.1.2) owns a con
 
 Cross-phase codes (e.g., overflow detected in const eval and runtime) reuse the same code and clarify in the message.
 
+The build driver has no band of its own, because until 2026-09-25 it raised no
+coded diagnostic at all: a `jux.toml` it could not read was an uncoded warning
+on stderr. Its checks (`E0901`-`E0903`, `W0901`-`W0903`, BUILD-SYSTEM §B.2.5)
+sit in `E0900`-`E0999` beside the other whole-build errors the driver already
+owns there, `E0905` (cannot resolve dependency) and `E0908` (linkage
+unavailable in the `core` profile). They run before phase 1 rather than after
+phase 19, so the band is the build's, not the backend's alone.
+
 ---
 
 ## §D.4 — Master Catalog
@@ -627,6 +635,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0900`  | Backend cannot lower construct *(reserved)*                 | Pipeline §C.9.4                |
+| `E0901`  | The project's `jux.toml` cannot be read, or is not valid TOML | Build system §B.2.5 / `ERRATA.md` E106 |
+| `E0902`  | The manifest has no `[package]` table, or a `[package]` with no `name` (a `[workspace]`-only manifest is exempt) | Build system §B.2.5 / `ERRATA.md` E106 |
+| `E0903`  | A `[package]` value this compiler cannot honour: a `name` with a character the package grammar forbids, a non-SemVer `version`, or an `edition` other than `"2026"` | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0905`  | Cannot resolve dependency *(reserved)*                      | Build system §B.5.4            |
 | `E0907`  | A `.jux.d` declaration has a body *(reserved)*               | Bindgen §G.12                  |
 | `E0908`  | Dynamic linkage unavailable in `core` profile *(reserved)*   | Build system §B.14.6           |
@@ -698,6 +709,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0530`  | Cyclic class initialization within a module *(retired: the check is the error `E0497`, ERRATA E93; the number is not reused)* | Semantics §S.4.2 |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
 | `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor, not by a build) | Layout-ABI §L.5.5 |
+| `W0901`  | A required `[package]` key is absent and was defaulted (`version` → `0.0.0`, `edition` → `"2026"`) | Build system §B.2.5 / `ERRATA.md` E106 |
+| `W0902`  | An unknown key or table in `jux.toml`: nothing reads it | Build system §B.2.5 / `ERRATA.md` E106 |
+| `W0903`  | A `package.name` that is legal but not reverse-DNS shaped (one segment, or `_` in the first segment) | Build system §B.2.3 / `ERRATA.md` E106 |
 | `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |
 | `W0970`  | `observer<T>` attached but never detached and target has no `drop` *(reserved)*| Properties §P.6         |
 | `W0971`  | Property declared `{ get; set; }` but never observed or bound *(reserved)*| Properties §P.7.2            |
