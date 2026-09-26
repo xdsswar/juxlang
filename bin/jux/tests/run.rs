@@ -128,6 +128,10 @@ fn run_example(root: &Path, name: &str) -> String {
         // without this an example doing file I/O writes somewhere else entirely
         // and dies. `examples/io_and_time.jux` did exactly that.
         .current_dir(root)
+        // The compiler checks the Rust it emitted for the borrow conflicts
+        // its cells would stop on (gap 29, `borrow_selfcheck.rs`). Users do
+        // not pay for it; the corpus always does.
+        .env("JUX_SELFCHECK", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawning jux for {name}: {e}"));
 
@@ -200,6 +204,16 @@ const SUSPICIOUS: &[(&str, &str)] = &[
     ("\\\"", "an escaped quote, seen when a String inside a generic printed with quotes"),
 ];
 
+/// Output that means the compiler broke its own borrow discipline (ERRATA
+/// E23, gap 29). Unlike [`SUSPICIOUS`], these fail the run outright: the
+/// first is a cell conflict the program hit at run time, the second the
+/// self-check (`JUX_SELFCHECK`) finding one in the emitted Rust before it
+/// ran.
+const BORROW_BUGS: &[(&str, &str)] = &[
+    ("This is a bug in the Jux compiler (ERRATA E23)", "the program stopped on a borrow conflict"),
+    ("the compiler would emit a borrow conflict here", "the borrow self-check found a conflict in the emitted Rust"),
+];
+
 /// The whole corpus, minus the exclusions, sorted.
 fn corpus(root: &Path) -> Vec<String> {
     let dir = root.join("examples");
@@ -254,6 +268,14 @@ fn every_example_matches_its_expected_output() {
     let failures = each_example(&names, |name| {
         let got = run_example(&root, name);
         let path = expected_path(&root, name);
+
+        // Never pinned, never blessed: a compiler bug of this kind is fixed.
+        if let Some((_, why)) = BORROW_BUGS.iter().find(|(needle, _)| got.contains(needle)) {
+            return Some(format!(
+                "{name}: {why}. This is a bug in the Jux compiler, and no .expected \
+                 file may record it (gap 29):\n{got}"
+            ));
+        }
 
         if bless {
             std::fs::write(&path, &got).expect("writing .expected");

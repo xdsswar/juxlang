@@ -511,8 +511,10 @@ dependencies = [
  "juxc-resolve",
  "juxc-source",
  "juxc-tycheck",
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn",
  "toml 0.8.23",
 ]
 

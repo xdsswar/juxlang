@@ -1,0 +1,51 @@
+// A function stored in an object that calls back into the same object.
+//
+// Jux has no borrow checker a program can fail (ERRATA E23): aliasing an
+// object and changing it through the alias is ordinary. Each object lives in
+// a cell, and the backend keeps every borrow of that cell to the statement
+// that needs it (JUX-CLASS-REPRESENTATION §CR.4.1). A stored lambda is where
+// that is easiest to get wrong: reading `hook` out of the object borrows it,
+// and if that borrow were still held while `hook` ran, `bump` below would
+// find the object in use.
+//
+// Until phase 7 of the gap plan (gap 29) this file was the pinned example of
+// that mistake and stopped with "object of type Box was already in use". The
+// stored function is now read into a temporary first, and the borrow ends
+// before it runs.
+
+class Box {
+    public int n = 0;
+    public () -> void hook = () -> {};
+    public (int) -> int step = (x) -> x;
+    public Vec<() -> void> hooks = new Vec<() -> void>();
+
+    public void fire() {
+        this.hook();                    // through `this`
+        hook();                         // by its bare name
+        n = n + step(n);                // the field is read before the call
+        this.n = this.step(this.n);     // an argument read out of the object
+        this.hooks[0]();                // a function kept in a collection
+        for (var h : hooks) {
+            h();
+        }
+    }
+
+    public void bump() {
+        n = n + 1;
+    }
+}
+
+public void main() {
+    Box b = new Box();
+    b.hook = () -> b.bump();
+    b.step = (x) -> {
+        b.bump();
+        return x + 1;
+    };
+    b.hooks.push(() -> b.bump());
+    b.fire();
+    print(b.n);
+    b.hook();
+    print(b.step(b.n));
+    print(b.n);
+}

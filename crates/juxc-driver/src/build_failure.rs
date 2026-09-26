@@ -267,7 +267,7 @@ fn primary_span(message: &serde_json::Value) -> Option<(String, u32, u32)> {
 /// A span at `line:col` of the `.jux` file at `path`, reading the file into
 /// `sources` the first time it is needed. `None` when the file cannot be read,
 /// which is the case for the embedded standard library.
-fn locate(path: &str, line: u32, col: u32, sources: &mut Vec<SourceFile>) -> Option<(Span, usize)> {
+pub(crate) fn locate(path: &str, line: u32, col: u32, sources: &mut Vec<SourceFile>) -> Option<(Span, usize)> {
     let index = match sources.iter().position(|s| s.path() == Path::new(path)) {
         Some(i) => i,
         None => {

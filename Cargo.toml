@@ -66,6 +66,10 @@ serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 toml        = "0.8"
 
+# The driver's borrow self-check parses the Rust the backend emitted (gap 29).
+syn         = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
 # Language-server stack (juxc-lsp). Pinned per JUX-LSP-SERVER-ADDENDUM.md §L.4.
 tower-lsp   = "0.20"
 tokio       = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"] }

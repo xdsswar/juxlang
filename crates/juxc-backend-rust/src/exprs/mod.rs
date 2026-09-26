@@ -31,6 +31,7 @@ pub(crate) mod field;
 pub(crate) mod fn_pointer;
 pub(crate) use fn_pointer::{fn_pointer_sig_type_ref, type_ref_is_void_name};
 pub(crate) mod fn_value;
+pub(crate) mod operand_hoist;
 pub(crate) mod outer_capture;
 pub(crate) mod simple;
 
@@ -1220,6 +1221,12 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // An operand the pre-hoist already bound (`exprs/operand_hoist.rs`).
+        if let Some(name) = self.operand_substitute(expr) {
+            let name = name.to_string();
+            self.w.push_str(&name);
+            return;
+        }
         // A nullable local read where a null test has already proved it
         // present (`it != null && it.qty() < 5`): the value inside.
         if let Expr::Path(qn) = expr {
@@ -1654,7 +1661,11 @@ impl RustEmitter {
                     self.w.push(')');
                 }
             }
-            Expr::Binary(b) => self.emit_binary(b),
+            Expr::Binary(b) => {
+                if !self.emit_with_prehoisted_operands(expr) {
+                    self.emit_binary(b);
+                }
+            }
             Expr::IncDec(i) => self.emit_incdec_value(i),
             Expr::Unary(u) => self.emit_unary(u),
             Expr::Range(r) => self.emit_range(r),
@@ -1662,10 +1673,18 @@ impl RustEmitter {
             Expr::TypeTest(t) => self.emit_type_test(t),
             Expr::SizeOf(s) => self.emit_sizeof(s),
             Expr::NewArray(n) => self.emit_new_array(n),
-            Expr::NewArrayLit(n) => self.emit_new_array_lit(n),
+            Expr::NewArrayLit(n) => {
+                if !self.emit_with_prehoisted_operands(expr) {
+                    self.emit_new_array_lit(n);
+                }
+            }
             Expr::Index(i) => self.emit_index(i),
             Expr::Field(f) => self.emit_field(f),
-            Expr::InterpString(s) => self.emit_interp_string(s),
+            Expr::InterpString(s) => {
+                if !self.emit_with_prehoisted_operands(expr) {
+                    self.emit_interp_string(s);
+                }
+            }
             Expr::This(_) => {
                 // Lowers to `self` in a method or `__self` in a
                 // constructor. `this_alias` is set by `emit_method` /
@@ -1689,6 +1708,7 @@ impl RustEmitter {
             Expr::NewObject(n) if n.anonymous_body.is_some() => {
                 self.emit_anonymous_class(n);
             }
+            Expr::NewObject(_) if self.emit_with_prehoisted_operands(expr) => {}
             Expr::NewObject(n) => {
                 // A collection is a reference type (§6.5.1): its construction
                 // produces the shared handle, not a bare container.

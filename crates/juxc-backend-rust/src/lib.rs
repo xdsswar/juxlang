@@ -749,6 +749,15 @@ struct RustEmitter {
     /// its `uint` operands are converted to this type first. See
     /// `numeric_widen_or_arm`.
     pub(crate) signed_slot_target: Option<juxc_tycheck::Primitive>,
+    /// Operands already bound to a `let` by the operand pre-hoist
+    /// (`exprs/operand_hoist.rs`): an expression with one of these spans is
+    /// written as the temp's name.
+    pub(crate) operand_subst: Vec<(juxc_source::Span, std::mem::Discriminant<juxc_ast::Expr>, String)>,
+    /// Numbers the pre-hoist's temps, `__jux_op<N>`.
+    pub(crate) operand_hoist_seq: usize,
+    /// The expression the pre-hoist is emitting inside its own block, which
+    /// must not be hoisted a second time.
+    pub(crate) operand_hoist_skip: Option<juxc_source::Span>,
     /// Set for the one unsuffixed integer literal about to be emitted into a
     /// float slot, which is then written as a float literal (`1.0`). See
     /// `numeric_widen_or_arm`.
@@ -6070,6 +6079,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             emitting_lvalue: false,
             emitting_raw_place: false,
             signed_slot_target: None,
+            operand_subst: Vec::new(),
+            operand_hoist_seq: 0,
+            operand_hoist_skip: None,
             int_literal_as_float: false,
             emitting_out_place: false,
             cloning_borrowed_iterator: false,

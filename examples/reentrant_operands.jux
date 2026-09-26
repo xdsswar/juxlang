@@ -1,0 +1,89 @@
+// Operands that read an object, next to operands that change it.
+//
+// Every field read of a shared object borrows the object's cell. In
+// `a.n + a.inc()` the read comes first and `inc` changes `n`, so if the read's
+// borrow were still held when `inc` ran, the program would stop with "object
+// of type Counter was already in use" (ERRATA E23 calls that a compiler bug,
+// never the program's). The backend binds such an operand to a temporary
+// before the call runs (ERRATA E1XX-PHASE7), in Java's left-to-right order,
+// so each operand still sees the value Java would give it.
+
+class Counter {
+    public int n = 1;
+    public String name = "c";
+
+    public int inc() {
+        n = n + 1;
+        return n;
+    }
+
+    public String next() {
+        name = name + "!";
+        return name;
+    }
+
+    public void add(int k) {
+        n = n + k;
+    }
+
+    public int selfSum() {
+        return this.n + this.inc();
+    }
+
+    public void run() {
+        add(n);                         // a bare field as the argument
+        n += inc();                     // Java reads n before inc() runs
+        print(n);
+        if (this.n == this.inc()) {
+            print("same");
+        } else {
+            print("changed");
+        }
+        int s = switch (n) {
+            case 0 -> 0;
+            default -> n + inc();
+        };
+        print(s);
+    }
+}
+
+class Pair {
+    public int left;
+    public int right;
+    public Pair(int left, int right) {
+        this.left = left;
+        this.right = right;
+    }
+}
+
+class Vec2 {
+    public int x;
+    public Vec2(int x) { this.x = x; }
+    // An operator that changes its left operand, to make the order visible.
+    public Vec2 operator+(Vec2 o) {
+        this.x = this.x + 1;
+        return new Vec2(this.x + o.x);
+    }
+    public int get() { return x; }
+}
+
+public void main() {
+    Counter a = new Counter();
+    print(a.n + a.inc());               // 1 + 2
+    print($"${a.n} ${a.inc()}");        // 2 3
+    a.n = a.n + a.inc();                // 3 + 4
+    print(a.n);
+    print(a.selfSum());                 // 7 + 8
+    print(a.n > 0 ? a.inc() : 0);
+    print(a.name == a.next());
+    print(a.name + a.next());
+    Pair p = new Pair(a.n, a.inc());
+    print($"${p.left} ${p.right}");
+    int[] xs = new int[]{a.n, a.inc()};
+    print(xs[0] + xs[1]);
+    a.run();
+
+    Vec2 v = new Vec2(1);
+    print(v.x + (v + v).get());         // 1 + (2 + 2)
+    print(v.x);
+}

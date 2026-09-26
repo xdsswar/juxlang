@@ -86,6 +86,8 @@ pub fn run_example_expecting(name: &str, tag: &str, must_succeed: bool) -> (Vec<
         .arg("--emit-dir")
         .arg(&emit_dir)
         .arg(&source)
+        // The compiler's borrow self-check (gap 29) runs on every test build.
+        .env("JUX_SELFCHECK", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawning jux for {name}: {e}"));
 
