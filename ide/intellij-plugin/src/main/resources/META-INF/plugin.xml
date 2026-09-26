@@ -255,6 +255,12 @@
     <lang.namesValidator
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.JuxNamesValidator"/>
+    <!-- A package directory's new name follows ERRATA E78, not the identifier
+         rule: `demo.type` is a legal package, `self`/`Self`/`crate`/`super`
+         never are. -->
+    <renameInputValidator
+        order="first"
+        implementation="dev.jux.intellij.resolve.JuxPackageSegmentRenameValidator"/>
     <!-- Rename: in-file usages follow automatically (they resolve through the
          reference contributor); this adds same-scope name-collision conflicts. -->
     <renamePsiElementProcessor
