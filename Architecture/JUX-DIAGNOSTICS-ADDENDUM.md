@@ -365,9 +365,12 @@ The build driver has no band of its own, because until 2026-09-25 it raised no
 coded diagnostic at all: a `jux.toml` it could not read was an uncoded warning
 on stderr. Its checks (`E0901`-`E0903`, `W0901`-`W0903`, BUILD-SYSTEM §B.2.5)
 sit in `E0900`-`E0999` beside the whole-build errors this table already
-reserves there for the driver, `E0905` (cannot resolve dependency) and `E0908`
-(linkage unavailable in the `core` profile), neither of which is raised yet. They run before phase 1 rather than after
-phase 19, so the band is the build's, not the backend's alone.
+reserves there for the driver, `E0905` (cannot resolve dependency, not raised
+yet) and `E0908` (a linkage the target cannot provide). They run before phase 1
+rather than after phase 19, so the band is the build's, not the backend's alone.
+The rest of the build's failures sit there too: `E0904` (an uninstalled
+`--target`), `E0906` (a failed link) and `E0900`, the internal compiler error
+raised when rustc rejects the Rust the backend emitted (ERRATA E1XX-PHASE1).
 
 ---
 
@@ -616,6 +619,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0704`  | `for await` requires a `Stream<T>` (and a stream requires `for await`) | Async §18.6         |
 | `E0705`  | Async call is never awaited                                 | Async §18.1.2                  |
 | `E0706`  | Async `try` mutates a local captured from outside it        | Async §18.1.6                  |
+| `E0707`  | A task is used after it was consumed: awaited, `blockingGet()`, or passed to `Task.all`/`any`/`race`/`allSettled` (a task yields its result once) | Async §18.1.4 / `ERRATA.md` E1XX-PHASE1 |
 
 ### Const Evaluation (`E0800–E0899`)
 
@@ -634,13 +638,15 @@ code, and all of `E0506`–`E0510` are emitted today.
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0900`  | Backend cannot lower construct *(reserved)*                 | Pipeline §C.9.4                |
+| `E0900`  | Backend cannot lower construct: rustc rejected the Rust the backend emitted. An internal compiler error, reported at the Jux line with the rustc code as a note, exit status 101 | Pipeline §C.9.4 / `ERRATA.md` E1XX-PHASE1 |
 | `E0901`  | The project's `jux.toml` cannot be read, or is not valid TOML | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0902`  | The manifest has no `[package]` table, or a `[package]` with no `name` (a `[workspace]`-only manifest is exempt) | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0903`  | A `[package]` value this compiler cannot honour: a `name` with a character the package grammar forbids, a non-SemVer `version`, or an `edition` other than `"2026"` | Build system §B.2.5 / `ERRATA.md` E106 |
+| `E0904`  | `--target` names a target whose Rust standard library is not installed (`rustup target add` it) | Build system §B.14 / `ERRATA.md` E1XX-PHASE1 |
 | `E0905`  | Cannot resolve dependency *(reserved)*                      | Build system §B.5.4            |
+| `E0906`  | The program could not be linked: a native library named by `@extern(lib=...)` or `[ffi.*]` was not found, or the linker failed | Build system §B.14 / `ERRATA.md` E1XX-PHASE1 |
 | `E0907`  | A `.jux.d` declaration has a body *(reserved)*               | Bindgen §G.12                  |
-| `E0908`  | Dynamic linkage unavailable in `core` profile *(reserved)*   | Build system §B.14.6           |
+| `E0908`  | A linkage the target cannot provide: `linkage = "framework"` in an `[ffi.*]` entry on a non-Apple target (dynamic linkage in the `core` profile, §B.14.6, is the same code and is not checked yet) | Build system §B.14.6 / `ERRATA.md` E1XX-PHASE1 |
 | `E0909`  | C++ template referenced without `instantiate` *(reserved)*   | Bindgen §G.8.4 / `ERRATA.md` E25 |
 | `E0910`  | `init` block escapes `this` *(reserved)*                     | Missing-defs §M.1.3            |
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |

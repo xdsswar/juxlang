@@ -1,0 +1,22 @@
+// An exception's string form is its message (§O.7.1): `Throwable` declares
+// `operator string`, and every exception inherits it. So a failed task's
+// `Result` prints `Err(boom)`, not the object's address.
+
+import jux.std.exceptions.Exception;
+import jux.std.exceptions.IllegalStateException;
+
+public int failWith(String msg) throws Exception {
+    throw new IllegalStateException(msg);
+}
+
+public void main() {
+    var one = spawn(() -> 1);
+    var boom = spawn(() -> failWith("boom"));
+    for (var r : Task.allSettled(one, boom).blockingGet()) {
+        print(r);
+    }
+
+    Exception plain = new Exception("plain");
+    print(plain);
+    print("caught: " + new IllegalStateException("from a subclass"));
+}

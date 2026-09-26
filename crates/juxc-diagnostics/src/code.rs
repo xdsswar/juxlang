@@ -974,6 +974,12 @@ pub enum Code {
     /// instead (`AtomicInt`/`AtomicLong`, a class field) or restructure
     /// to return the value out of the try.
     E0706_AsyncTryMutatesOuterLocal,
+    /// E0707 — a task used after something consumed it (§18.1.4). A task
+    /// yields its result once: `await t`, `t.blockingGet()` and passing `t`
+    /// to `Task.all`/`any`/`race`/`allSettled` each take it, and a later use
+    /// of `t` used to leak rustc's E0382 ("use of moved value"). Carries a
+    /// label on the consuming site.
+    E0707_TaskAlreadyConsumed,
 
     // ---- Memory / Unsafe (E0500–E0599) ----
     /// E0506 — An `unsafe` operation used outside an `unsafe` context. Per
@@ -1180,6 +1186,32 @@ pub enum Code {
     /// unambiguously, and it is what `jux new` writes. Illegal characters are
     /// the error (`E0903`); the wrong shape is this warning.
     W0903_ManifestNameNotReverseDns,
+
+    // ---- Build and backend failures (E0900-E0999) ----
+    // What goes wrong after the front end has accepted the program: rustc
+    // rejecting the emitted crate, a target that is not installed, a link that
+    // fails. Each used to reach the user as cargo's own text. ERRATA
+    // E1XX-PHASE1 records the change.
+    /// E0900 -- **rustc rejected the Rust the backend emitted**: an internal
+    /// compiler error. Every such failure is a bug in the Jux compiler (ERRATA
+    /// E23: Jux has no user-visible borrow checker), so it is reported the way
+    /// an ICE is: at the Jux line the failure maps to, in Jux words, with the
+    /// rustc code as a note, and exit status 101.
+    E0900_BackendEmittedInvalidRust,
+    /// E0904 -- **`--target` names a target whose standard library is not
+    /// installed.** Checked before the build starts; it used to surface as a
+    /// flood of rustc `E0463` ("can't find crate for `std`"), one per crate.
+    E0904_TargetNotInstalled,
+    /// E0906 -- **the program could not be linked**: a native library an
+    /// `@extern(lib=...)` or `[ffi.*]` entry names was not found, or the linker
+    /// failed. Reported with the one line of the linker's output that says why;
+    /// the full linker command line is shown only under `--verbose`.
+    E0906_LinkFailed,
+    /// E0908 -- **a linkage the target cannot provide**: an `[ffi.*]` entry
+    /// with `linkage = "framework"` built for a target that is not Apple's.
+    /// Frameworks exist only there, and rustc's `-l framework=` is refused
+    /// everywhere else.
+    E0908_LinkageUnavailable,
 }
 
 impl Code {
@@ -1350,6 +1382,7 @@ impl Code {
             Code::E0704_ForAwaitRequiresStream   => "E0704",
             Code::E0705_AsyncCallNotAwaited      => "E0705",
             Code::E0706_AsyncTryMutatesOuterLocal => "E0706",
+            Code::E0707_TaskAlreadyConsumed      => "E0707",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
             Code::E0710_ThrowRequiresException   => "E0710",
@@ -1378,6 +1411,10 @@ impl Code {
             Code::W0901_ManifestMissingRequiredKey => "W0901",
             Code::W0902_ManifestUnknownKey       => "W0902",
             Code::W0903_ManifestNameNotReverseDns => "W0903",
+            Code::E0900_BackendEmittedInvalidRust => "E0900",
+            Code::E0904_TargetNotInstalled       => "E0904",
+            Code::E0906_LinkFailed               => "E0906",
+            Code::E0908_LinkageUnavailable       => "E0908",
         }
     }
 }

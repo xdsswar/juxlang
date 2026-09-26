@@ -95,6 +95,14 @@ fn a_final_method_override_points_at_the_final_method() {
     assert!(got.contains("inheritance_errors.jux:21:12: note: declared `final` here\n"), "{got}");
 }
 
+#[test]
+fn a_second_use_of_a_task_points_at_what_consumed_it() {
+    let got = check("task_consumed_twice.jux", "compact");
+    assert!(got.contains("task_consumed_twice.jux:7:17: note: `t` consumed here\n"), "{got}");
+    assert!(got.contains("task_consumed_twice.jux:15:11: note: `a` consumed here\n"), "{got}");
+    assert!(got.contains("task_consumed_twice.jux:24:15: note: `c` consumed here\n"), "{got}");
+}
+
 /// The fix deletes exactly the modifier and the space after it.
 #[test]
 fn the_remove_final_edit_covers_the_keyword_and_its_space() {

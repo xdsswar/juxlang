@@ -617,6 +617,14 @@ impl RustEmitter {
         for op in &class_decl.operators {
             self.emit_operator_as_method(op);
         }
+        // An inherited `operator string` comes along the way the methods above
+        // do (§O.2.9), so `IllegalStateException` prints through
+        // `Throwable`'s. The other operators stay the class's own: their
+        // bridges carry trait bounds this path does not propagate.
+        let inherited_to_string = self.inherited_to_string(class_decl);
+        if let Some(op) = &inherited_to_string {
+            self.emit_operator_as_method(op);
+        }
         // **Interface-default forwarders (§7.4.3)** — same as the wrapper
         // path: emit a `pub fn` forwarding to the trait default for every
         // `default` interface method this (non-wrapper) class doesn't
@@ -676,7 +684,8 @@ impl RustEmitter {
         let has_to_string = class_decl
             .operators
             .iter()
-            .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+            .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted)
+            || inherited_to_string.is_some();
         if !has_to_string && class_decl.is_struct {
             // A struct prints its fields, the way a record does (§O.3.2).
             self.emit_struct_display(class_decl);
@@ -705,7 +714,7 @@ impl RustEmitter {
         // bridges stay non-generic; `operator string` is bridged above.
         let generic = !class_decl.generic_params.is_empty();
         self.op_impl_class = generic.then(|| class_decl.clone());
-        for op in &class_decl.operators {
+        for op in class_decl.operators.iter().chain(inherited_to_string.iter()) {
             if generic && !Self::bridged_for_generic_class(op.kind) {
                 continue;
             }

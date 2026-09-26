@@ -501,6 +501,18 @@ impl RustEmitter {
     /// return types are read through the `extends` arguments, as an inherited
     /// method's are, so `Store<T>`'s `operator+(Store<T>)` reads as
     /// `operator+(Store<String>)` in `Names extends Store<String>`.
+    /// The `operator string` a concrete class inherits and does not declare,
+    /// if an ancestor declares one that is not deleted.
+    pub(crate) fn inherited_to_string(&self, class_decl: &juxc_ast::ClassDecl) -> Option<OperatorDecl> {
+        if class_decl.is_abstract || class_decl.operators.iter().any(|o| o.kind == OperatorKind::ToString) {
+            return None;
+        }
+        self.class_effective_operators(class_decl)
+            .into_iter()
+            .skip(class_decl.operators.len())
+            .find(|o| o.kind == OperatorKind::ToString && !o.is_deleted)
+    }
+
     pub(crate) fn class_effective_operators(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<OperatorDecl> {
         use super::classes::substitute_type_ref;
         let mut out: Vec<OperatorDecl> = class_decl.operators.clone();

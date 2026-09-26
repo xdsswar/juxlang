@@ -979,6 +979,15 @@ public class Throwable {
     public String getMessage() {
         return this.message;
     }
+
+    /**
+     * An exception's string form is its message (§O.7.1), so printing
+     * one, or a `Result` holding one (`Err(boom)`), shows what went
+     * wrong rather than the object's identity.
+     */
+    public String operator string() {
+        return this.getMessage();
+    }
 }
 "###),
     ("exceptions/UnsupportedOperationException.jux", r###"/**

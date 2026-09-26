@@ -1,0 +1,4 @@
+task_consumed_twice.jux:8:24: [E0707] error: task `t` was already consumed: awaiting a task, `blockingGet()`, or passing it to `Task.all`/`any`/`race`/`allSettled` takes its result, and a task has only one (§18.1.4)
+task_consumed_twice.jux:16:27: [E0707] error: task `a` was already consumed: awaiting a task, `blockingGet()`, or passing it to `Task.all`/`any`/`race`/`allSettled` takes its result, and a task has only one (§18.1.4)
+task_consumed_twice.jux:16:30: [E0707] error: task `b` was already consumed: awaiting a task, `blockingGet()`, or passing it to `Task.all`/`any`/`race`/`allSettled` takes its result, and a task has only one (§18.1.4)
+task_consumed_twice.jux:26:5: [E0707] error: task `c` was already consumed: awaiting a task, `blockingGet()`, or passing it to `Task.all`/`any`/`race`/`allSettled` takes its result, and a task has only one (§18.1.4)
