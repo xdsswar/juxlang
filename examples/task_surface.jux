@@ -1,0 +1,72 @@
+// The rest of a task's surface (JUX-ASYNC v2 §18.1.4).
+//
+//   * `Task.completed(v)` and `Task.failed(e)` are tasks settled at birth;
+//   * `t.map(f)` is a task of what `f` makes of `t`'s value, and
+//     `t.flatMap(f)` is the task `f` hands back;
+//   * `t.isResolved()` says whether `t` has an outcome yet, a value or a
+//     failure, and `t.isCancelled()` whether `cancel()` was called on it.
+//
+// A failure travels through `map` and `flatMap` as the exception it is, and a
+// derived task is a task of its own: it runs on the loop like any other.
+
+import jux.std.exceptions.Exception;
+import jux.std.exceptions.IllegalStateException;
+
+public int failWith(String msg) throws Exception {
+    throw new IllegalStateException(msg);
+}
+
+public void main() {
+    // Settled at birth: nothing runs, and both are resolved already.
+    var done = Task.completed(5);
+    print($"completed resolved: ${done.isResolved()}");
+    print($"completed value: ${done.blockingGet()}");
+
+    var failed = Task.failed(new IllegalStateException("no luck"));
+    print($"failed resolved: ${failed.isResolved()}");
+    try {
+        int never = failed.blockingGet();
+        print(never);
+    } catch (Exception e) {
+        print($"failed threw: ${e.getMessage()}");
+    }
+
+    // map: a task of what `f` makes of the value.
+    var doubled = spawn(() -> 21).map(n -> n * 2);
+    print($"map: ${doubled.blockingGet()}");
+
+    // flatMap: the task `f` hands back.
+    var chained = Task.completed(4).flatMap(n -> spawn(() -> n + 1));
+    print($"flatMap: ${chained.blockingGet()}");
+
+    // A failure passes through `map` untouched; `f` never runs.
+    var broken = spawn(() -> failWith("upstream")).map(n -> n + 1);
+    try {
+        int never = broken.blockingGet();
+        print(never);
+    } catch (Exception e) {
+        print($"map carried: ${e.getMessage()}");
+    }
+
+    // A spawned task has no outcome until the loop has run it.
+    var quick = spawn(() -> 3);
+    print($"quick resolved before: ${quick.isResolved()}");
+    Task.delay(10).blockingGet();
+    print($"quick resolved after: ${quick.isResolved()}");
+    print($"quick value: ${quick.blockingGet()}");
+
+    // Cancelling is a request the task sees where it next resumes.
+    var slow = spawn(async () -> {
+        await Task.delay(100);
+        1;
+    });
+    print($"slow cancelled: ${slow.isCancelled()}");
+    slow.cancel();
+    print($"slow cancelled: ${slow.isCancelled()}");
+    try {
+        slow.blockingGet();
+        print("unreachable");
+    } catch (Exception e) {
+        print($"slow threw: ${e.getMessage()}");
+    }
+}

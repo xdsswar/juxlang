@@ -1546,6 +1546,31 @@ impl RustEmitter {
                             self.emitting_format_arg = prev;
                             return;
                         }
+                        // `completed(v)` and `failed(e)` are tasks settled at
+                        // birth. A failure is boxed the way `throw` hands an
+                        // exception to `panic_any`, so the awaiter re-throws
+                        // exactly what a task that threw `e` would.
+                        "completed" | "failed" => {
+                            let ok = f.field.text == "completed";
+                            self.w.push_str(if ok {
+                                "crate::__jux_task_settled(Ok("
+                            } else {
+                                "crate::__jux_task_settled(Err(::std::boxed::Box::new("
+                            });
+                            if let Some(arg) = call.args.first() {
+                                self.emit_expr(arg);
+                                // Taken by value: a place read again later
+                                // passes a copy or a shared handle.
+                                if self.wrapper_value_needs_clone(arg)
+                                    || self.value_place_needs_clone(arg)
+                                {
+                                    self.w.push_str(".clone()");
+                                }
+                            }
+                            self.w.push_str(if ok { "))" } else { ")))" });
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
                         "delay" => {
                             // A timer the loop WAITS on, not a task that
                             // sleeps: with one event loop (ERRATA E85) a

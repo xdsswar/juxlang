@@ -5238,6 +5238,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    state: std::sync::Mutex<(bool, Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>)>,\n");
         w.push_str("    // Set by `cancel()`: the task throws where it next resumes.\n");
         w.push_str("    cancelled: std::sync::atomic::AtomicBool,\n");
+        w.push_str("    // Set once the task has an outcome, a value or a failure: `isResolved()`.\n");
+        w.push_str("    settled: std::sync::atomic::AtomicBool,\n");
         w.push_str("}\n");
         // **Cooperative cancellation** (EXCEPTIONS §X.7.3, ERRATA E92).
         // `cancel()` sets the flag above and returns; the task notices it
@@ -5329,6 +5331,51 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        // afterwards re-throws what the task threw.\n");
         w.push_str("        self.1.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
         w.push_str("    }\n");
+        // The rest of §18.1.4's instance surface. The two queries read the
+        // shared state and leave the handle alone; the two combinators consume
+        // it, as `await` does, and run as tasks of their own, so a failure or
+        // a cancellation of the source reaches the derived task as the
+        // exception it is, through the same `catch_unwind` every task has.
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn isCancelled(&self) -> bool {\n");
+        w.push_str("        self.1.cancelled.load(std::sync::atomic::Ordering::SeqCst)\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn isResolved(&self) -> bool {\n");
+        w.push_str("        self.1.settled.load(std::sync::atomic::Ordering::SeqCst)\n");
+        w.push_str("    }\n");
+        w.push_str("    pub fn map<U: 'static>(self, f: std::rc::Rc<dyn Fn(T) -> U>) -> JuxTask<U> {\n");
+        w.push_str("        crate::__jux_spawn(async move { f(crate::__jux_awaited(self.await)) })\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    pub fn flatMap<U: 'static>(self, f: std::rc::Rc<dyn Fn(T) -> JuxTask<U>>) -> JuxTask<U> {\n");
+        w.push_str("        crate::__jux_spawn(async move {\n");
+        w.push_str("            let next = f(crate::__jux_awaited(self.await));\n");
+        w.push_str("            crate::__jux_awaited(next.await)\n");
+        w.push_str("        })\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // `Task.completed(v)` and `Task.failed(e)`: a task that is settled
+        // before anyone looks at it. Nothing runs, so nothing is spawned: the
+        // outcome goes straight into the handle's channel, and a failure is
+        // parked exactly where a task that threw parks its exception, so the
+        // awaiter re-throws it and an unawaited one is an unhandled rejection.
+        w.push_str("pub fn __jux_task_settled<T: 'static>(\n");
+        w.push_str("    outcome: Result<T, ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>>,\n");
+        w.push_str(") -> JuxTask<T> {\n");
+        w.push_str("    let (result, parked) = match outcome {\n");
+        w.push_str("        Ok(v) => (Ok(v), None),\n");
+        w.push_str("        Err(p) => (Err(()), Some(p)),\n");
+        w.push_str("    };\n");
+        w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
+        w.push_str("        state: std::sync::Mutex::new((false, parked)),\n");
+        w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("        settled: std::sync::atomic::AtomicBool::new(true),\n");
+        w.push_str("    });\n");
+        w.push_str("    let (remote, handle) = futures::FutureExt::remote_handle(async move { result });\n");
+        w.push_str("    // Ready on its first poll, which delivers the outcome to the handle.\n");
+        w.push_str("    let _ = futures::FutureExt::now_or_never(remote);\n");
+        w.push_str("    JuxTask(std::cell::Cell::new(Some(handle)), shared)\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
         // RemoteHandle CANCELS its computation when dropped. The
@@ -5464,10 +5511,13 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    let shared = std::sync::Arc::new(JuxTaskShared {\n");
         w.push_str("        state: std::sync::Mutex::new((false, None)),\n");
         w.push_str("        cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("        settled: std::sync::atomic::AtomicBool::new(false),\n");
         w.push_str("    });\n");
         w.push_str("    let task_side = shared.clone();\n");
         w.push_str("    let guarded = async move {\n");
-        w.push_str("        match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {\n");
+        w.push_str("        let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await;\n");
+        w.push_str("        task_side.settled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("        match outcome {\n");
         w.push_str("            Ok(v) => Ok(v),\n");
         w.push_str("            Err(p) => {\n");
         w.push_str("                let orphaned = {\n");
