@@ -1,0 +1,77 @@
+/**
+ * A nullable is a legal type argument, and a value prints the same whichever
+ * way the compiler reaches it (ERRATA E99, E107).
+ *
+ * A type parameter whose value reached a format position used to acquire a
+ * Rust `Display` bound, and `int?` lowers to `Option<isize>`, which has none
+ * and may not be given one. So `Box<int?>` did not compile at all, although
+ * `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1 promises that a bound the compiler adds
+ * never makes a legal type argument illegal.
+ *
+ * The bound is gone because every Jux type's `Debug` now writes its string
+ * form, and a nullable reached inside a generic body is recognised from its
+ * type name at run time: `null` for none, the payload for some.
+ *
+ * The second half is ERRATA E97's derive rule at its third site: an enum
+ * whose variant holds a foreign `File`, which has neither `Clone` nor
+ * `PartialEq`, used to derive both anyway and fail in rustc.
+ */
+
+import rust.std.File;
+
+class Box<T> {
+    public T value;
+
+    public Box(T value) {
+        this.value = value;
+    }
+
+    public String show() {
+        return $"Box(${value})";
+    }
+}
+
+record Pair<A, B>(A a, B b);
+
+enum Maybe<T> {
+    Some(T v),
+    Nothing
+}
+
+enum Source {
+    Disk(File f),
+    Memory(String text)
+}
+
+record Point(int x, int y);
+
+public void main() {
+    // --------------------------------------------- nullable type arguments
+    int? five = 5;
+    int? none = null;
+    Box<int?> full = new Box<int?>(five);
+    Box<int?> empty = new Box<int?>(none);
+    print(full.show());
+    print(empty.show());
+    print($"values: ${full.value} ${empty.value}");
+
+    Pair<String?, double> p = new Pair<String?, double>("hi", 1.5);
+    print($"pair: ${p}");
+
+    Maybe<int?> m = Maybe.Some(five);
+    print($"maybe: ${m}");
+
+    // A string through the generic keeps no quotes and no escapes.
+    Box<String> quoted = new Box<String>("say \"hi\"");
+    print(quoted.show());
+
+    // --------------------------------- a record printed inside a collection
+    // Its own string form, not Rust's struct syntax.
+    Vec<Point> points = new Vec<Point>();
+    points.push(new Point(1, 2));
+    print($"points: ${points}");
+
+    // ------------------------------------------ an enum with a foreign payload
+    Source s = Source.Memory("abc");
+    print($"source: ${s}");
+}

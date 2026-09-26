@@ -170,8 +170,14 @@ fn a_type_without_clone_loses_only_clone() {
     );
     let newtype = declaration_of(&rust, "Wrap(");
     assert!(
-        newtype.contains("#[derive(Clone, Debug)]"),
+        newtype.contains("#[derive(Clone)]"),
         "the handle itself still clones by refcount, got:\n{newtype}",
+    );
+    // The handle's `Debug` is written, printing the class's string form
+    // (ERRATA E107), so it is not on the derive list.
+    assert!(
+        rust.contains("impl std::fmt::Debug for Wrap"),
+        "the handle has a written Debug, got:\n{rust}",
     );
 }
 
@@ -243,8 +249,9 @@ fn a_whole_record_component_keeps_the_full_derive_list() {
     let rust = emit(&dir);
     let decl = declaration_of(&rust, "Holder");
     assert!(
-        decl.contains("#[derive(Debug, Clone, PartialEq, Default)]"),
-        "a Clone+Debug+PartialEq+Default component keeps all four, got:\n{decl}",
+        decl.contains("#[derive(Clone, PartialEq, Default)]"),
+        "a Clone+PartialEq+Default component keeps all three (Debug is written, \
+         ERRATA E107), got:\n{decl}",
     );
 }
 

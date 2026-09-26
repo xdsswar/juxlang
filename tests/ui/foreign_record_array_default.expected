@@ -1,0 +1,1 @@
+foreign_record_array_default.jux:11:19: [E0458] error: `new Holder[…]` has nothing to start its elements from: `Holder` has no default value -- list the elements with `new Holder[]{…}`, or collect them in a `Vec<Holder>`

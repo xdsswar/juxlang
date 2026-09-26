@@ -1,0 +1,13 @@
+// E0458 over a FOREIGN component with no `Default`: `File` has no default
+// value (its stub carries no `@RustDefault`), so a record holding one has none
+// either, and `new Holder[3]` has nothing to fill its elements with. The
+// checker used to assume every foreign type had one, and this reached rustc
+// as "no associated function named `default`" (ERRATA E107).
+import rust.std.File;
+
+record Holder(File f);
+
+public void main() {
+    Holder[] hs = new Holder[3];
+    print($"${hs.length}");
+}

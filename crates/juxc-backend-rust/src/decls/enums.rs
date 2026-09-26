@@ -89,116 +89,6 @@ use crate::RustEmitter;
 
 impl RustEmitter {
 
-    /// The enum's type parameters that need a `std::fmt::Display` bound —
-    /// those whose values reach a **format position** in one of its methods.
-    ///
-    /// The class version of this reads fields; an enum's values arrive instead
-    /// through a `switch (this)` pattern binder, so this maps each binder to
-    /// the variant payload it destructures and marks the parameter when that
-    /// binder is formatted. Without it, `case Result.Err(var e) -> "err:" + e`
-    /// resolved to `Debug` and printed a `String` with quotes around it —
-    /// wrong output, not an error.
-    fn enum_displayed_generic_params(
-        &self,
-        enum_decl: &juxc_ast::EnumDecl,
-    ) -> HashSet<String> {
-        let mut displayed: HashSet<String> = HashSet::new();
-        if enum_decl.generic_params.is_empty() {
-            return displayed;
-        }
-        let params: HashSet<&str> = enum_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.as_str())
-            .collect();
-        // Binder name → the enum type param it is bound to, across every
-        // `case Variant(var x)` in the enum's own bodies. A binder for a
-        // payload of a concrete type contributes nothing.
-        let mut binders: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for m in &enum_decl.methods {
-            let Some(body) = &m.body else { continue };
-            Self::collect_enum_pattern_binders(body, enum_decl, &params, &mut binders);
-        }
-        if binders.is_empty() {
-            return displayed;
-        }
-        for m in &enum_decl.methods {
-            if let Some(body) = &m.body {
-                Self::scan_block_for_displayed_fields(body, &binders, &mut displayed);
-            }
-        }
-        displayed
-    }
-
-    /// Walk an enum method body for `case <Variant>(var x)` patterns, recording
-    /// each binder that destructures a payload typed as one of the enum's own
-    /// parameters.
-    fn collect_enum_pattern_binders(
-        block: &juxc_ast::Block,
-        enum_decl: &juxc_ast::EnumDecl,
-        params: &HashSet<&str>,
-        out: &mut std::collections::HashMap<String, String>,
-    ) {
-        use juxc_ast::{Expr, Pattern, Stmt};
-        fn from_pattern(
-            p: &Pattern,
-            enum_decl: &juxc_ast::EnumDecl,
-            params: &HashSet<&str>,
-            out: &mut std::collections::HashMap<String, String>,
-        ) {
-            let Pattern::EnumVariant { path, args, .. } = p else { return };
-            let Some(variant_name) = path.segments.last() else { return };
-            let Some(variant) = enum_decl
-                .variants
-                .iter()
-                .find(|v| v.name.text == variant_name.text)
-            else {
-                return;
-            };
-            for (arg, payload) in args.iter().zip(&variant.payload) {
-                let Pattern::Bind(name) = arg else { continue };
-                if payload.ty.generic_args.is_empty()
-                    && payload.ty.array_shape.is_none()
-                    && payload.ty.name.segments.len() == 1
-                {
-                    let head = payload.ty.name.segments[0].text.as_str();
-                    if params.contains(head) {
-                        out.insert(name.text.clone(), head.to_string());
-                    }
-                }
-            }
-        }
-        fn scan_expr(
-            e: &Expr,
-            enum_decl: &juxc_ast::EnumDecl,
-            params: &HashSet<&str>,
-            out: &mut std::collections::HashMap<String, String>,
-        ) {
-            if let Expr::Switch(sw) = e {
-                for arm in &sw.arms {
-                    from_pattern(&arm.pattern, enum_decl, params, out);
-                    match &arm.body {
-                        juxc_ast::SwitchBody::Expr(b) => scan_expr(b, enum_decl, params, out),
-                        juxc_ast::SwitchBody::Block(b) => {
-                            RustEmitter::collect_enum_pattern_binders(b, enum_decl, params, out)
-                        }
-                    }
-                }
-            }
-        }
-        for stmt in &block.statements {
-            match stmt {
-                Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, enum_decl, params, out),
-                Stmt::VarDecl(v) => {
-                    if let Some(init) = &v.init {
-                        scan_expr(init, enum_decl, params, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
     /// Emit a Jux enum declaration as a Rust `pub enum` with auto-derives
     /// and a hand-written `Display` impl per `JUX-LANG-V1.md` §7.7.2:
     /// `"VariantName"` for unit variants, `"VariantName(v1, v2, …)"`
@@ -227,7 +117,19 @@ impl RustEmitter {
         // `#[derive(...)] pub enum Name {` — deletion-aware just like
         // records (`record_derive_attribute` shape).
         let hash_plan = self.enum_hash_plan(enum_decl);
-        self.w.line(&enum_derive_attribute(enum_decl, hash_plan));
+        // What the FOREIGN payload types allow (ERRATA E97). A variant holding a
+        // `rust.std.File` used to reach an unconditional `#[derive(Debug, Clone,
+        // PartialEq, Default)]`, and `File` has neither `Clone` nor `PartialEq`,
+        // so the declaration came out as two rustc errors naming a derive the
+        // program never wrote. E97 fixed this for classes and records; an enum
+        // is the third site with the same derive list.
+        let foreign = self.foreign_derives_of(
+            enum_decl
+                .variants
+                .iter()
+                .flat_map(|v| v.payload.iter().map(|p| &p.ty)),
+        );
+        self.w.line(&enum_derive_attribute(enum_decl, hash_plan, foreign));
         // `@layout(c, repr = "…")` (§L.1.3): a C-compatible integer enum. Emit
         // `#[repr(<int>)]` so the value is bit-identical to a C `int` enum; the
         // explicit per-variant discriminants are emitted below.
@@ -312,7 +214,6 @@ impl RustEmitter {
             // bodies clone the receiver for `switch (this)` dispatch
             // (owned payload binders), and derived `Clone` on the
             // enum needs `T: Clone` anyway.
-            let displayed = self.enum_displayed_generic_params(enum_decl);
             let params = enum_decl.generic_params.clone();
             // Same key-bound rule as a class: a variant payload or method
             // signature that keys a map by a type param needs `Eq + Hash`
@@ -332,11 +233,7 @@ impl RustEmitter {
                 }))
                 .collect();
             self.collect_key_bound_params(&params, declared.iter());
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &params,
-                &displayed,
-                &HashSet::new(),
-            );
+            self.emit_generic_params_with_bounds(&params, &HashSet::new());
             self.w.push(' ');
             self.w.push_str(&to_rust_ident(&enum_decl.name.text));
             self.emit_generic_params_as_args(&enum_decl.generic_params);
@@ -408,9 +305,26 @@ impl RustEmitter {
         // which the conditional-derive machinery doesn't yet compute. A generic
         // enum still lowers, prints via `Debug`, and is fully usable; the
         // value-rendering Display lands with the bound-inference work.
-        if !enum_decl.variants.is_empty() && !has_string_override && !string_deleted {
+        let auto_display = !enum_decl.variants.is_empty() && !has_string_override && !string_deleted;
+        if auto_display {
             self.emit_enum_auto_display(enum_decl);
         }
+        // The enum's debug form IS its string form (§O.7.1, ERRATA E107). Which
+        // of the three sources supplies it follows the same three cases the
+        // `Display` above does: the auto-derived arms, a user-written
+        // `operator string`, or nothing at all, and nothing at all prints as the
+        // type's own name so a deleted operator leaks no payload.
+        let name = to_rust_ident(&enum_decl.name.text);
+        let type_name_body;
+        let body = if auto_display {
+            Self::DEBUG_VIA_DISPLAY
+        } else if has_string_override {
+            Self::DEBUG_VIA_OP_STRING
+        } else {
+            type_name_body = Self::debug_via_type_name(&enum_decl.name.text);
+            type_name_body.as_str()
+        };
+        self.emit_debug_as_string_form(&name, &enum_decl.generic_params, body);
         // A value's identity is its own address; interfaces it implements
         // require the impl (see the prelude's `JuxIdentity`).
         self.emit_jux_identity_impl(&enum_decl.name.text, &enum_decl.generic_params, "self as *const Self");
@@ -681,7 +595,15 @@ impl RustEmitter {
         // `cases()` (§7.7.3): one `EnumCase` per variant, on every enum. A
         // payload-free variant carries itself as `value()`; a payload variant
         // is described by its declared payload and has no value.
-        if !declared.contains("cases") && enum_decl.generic_params.is_empty() {
+        let cloneable = self
+            .foreign_derives_of(
+                enum_decl
+                    .variants
+                    .iter()
+                    .flat_map(|v| v.payload.iter().map(|p| &p.ty)),
+            )
+            .clone;
+        if !declared.contains("cases") && enum_decl.generic_params.is_empty() && cloneable {
             let case = "crate::jux::std::meta::EnumCase";
             self.w.line(&format!(
                 "pub fn cases() -> crate::JuxArr<std::vec::Vec<{case}<{self_ty}>>> {{"
@@ -731,27 +653,14 @@ impl RustEmitter {
     fn emit_enum_auto_display(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         self.w.emit_indent();
         self.w.push_str("impl");
-        // A GENERIC enum gets the impl too, bounding each parameter it uses as
-        // a bare PAYLOAD type -- those are the ones the arms format. Skipping
-        // the impl left the enum printable only through `Debug`, and left it
-        // unable to be another generic's type argument, since a formatted
-        // parameter carries a `Display` bound (§T.2.1).
+        // A GENERIC enum gets the impl too, with no `Display` bound on any
+        // parameter: a payload typed as a bare `T` renders through the universal
+        // show helper below. The bound used to be added here, and it made
+        // `Maybe<int?>` an illegal type argument although `int?` is a legal
+        // type (ERRATA E99, E107).
         if !enum_decl.generic_params.is_empty() {
-            let payloads: Vec<&juxc_ast::TypeRef> = enum_decl
-                .variants
-                .iter()
-                .flat_map(|v| v.payload.iter().map(|p| &p.ty))
-                .collect();
-            let displayed = crate::analysis::displayed_bare_params(
-                &enum_decl.generic_params,
-                payloads.into_iter(),
-            );
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &enum_decl.generic_params,
-                &displayed,
-                &none,
-            );
+            self.emit_generic_params_with_bounds(&enum_decl.generic_params, &none);
         }
         self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(&enum_decl.name.text));
@@ -814,8 +723,15 @@ impl RustEmitter {
                     // in a record.
                     if crate::analysis::type_ref_is_float(&slot.ty) {
                         self.w.push_str(&format!("crate::jux_float(f{i})"));
-                    } else {
+                    } else if crate::analysis::field_supports_display(&slot.ty) {
                         self.w.push_str(&format!("f{i}"));
+                    } else {
+                        // A payload the emitter cannot promise a `Display` for:
+                        // a type parameter, an object, a collection. The
+                        // universal helper renders any of them, and asking it
+                        // here is what lets a generic enum print without a
+                        // `Display` bound on its parameter (ERRATA E107).
+                        self.w.push_str(&format!("crate::__jux_show!(f{i})"));
                     }
                 }
                 self.w.push_str("),\n");
@@ -836,8 +752,19 @@ impl RustEmitter {
 /// helper for records — kept separate because the spec's wording
 /// applies independently to each value-type kind and an enum-specific
 /// helper makes the derives easier to evolve.
-fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl, hash_plan: crate::decls::hashing::HashPlan) -> String {
-    let mut derives: Vec<&str> = vec!["Debug", "Clone"];
+fn enum_derive_attribute(
+    enum_decl: &juxc_ast::EnumDecl,
+    hash_plan: crate::decls::hashing::HashPlan,
+    foreign: crate::analysis::ForeignDerives,
+) -> String {
+    // `Debug` is never derived: an enum's debug form IS its string form
+    // (§O.7.1, ERRATA E107), written out at the declaration. `Clone` goes
+    // unless a payload's own foreign type has none, and it cannot be written by
+    // hand, since nothing can copy the value the payload holds (ERRATA E97).
+    let mut derives: Vec<&str> = Vec::new();
+    if foreign.clone {
+        derives.push("Clone");
+    }
 
     let has_eq_op = enum_decl
         .operators
@@ -850,18 +777,20 @@ fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl, hash_plan: crate::decls
         .collect();
     let all_copy = payload_tys.iter().all(|t| field_supports_copy(t));
 
-    if !has_eq_op {
+    if !has_eq_op && foreign.partial_eq {
         derives.push("PartialEq");
     }
     // Eq and Hash follow the shared hash plan (§O.3.1); a float payload is
-    // hashed by hand after the declaration instead.
-    if hash_plan.derive_eq {
+    // hashed by hand after the declaration instead. `Eq: PartialEq` and
+    // `Copy: Clone`, so each follows the trait it depends on off the list
+    // rather than leaving rustc to report the pair (ERRATA E97).
+    if hash_plan.derive_eq && foreign.partial_eq {
         derives.push("Eq");
     }
     if hash_plan.derive_hash {
         derives.push("Hash");
     }
-    if all_copy {
+    if all_copy && foreign.clone {
         derives.push("Copy");
     }
     // A field of enum type with no initializer is seeded with the type's
@@ -1055,17 +984,12 @@ impl crate::RustEmitter {
         // Core lib §K.3), bounded the way a class method's are: `Clone` for
         // the value model, `Display` when a value reaches a format position.
         if !method.generic_params.is_empty() {
-            let displayed = self.fn_displayed_generic_params(method);
             let defaulted = crate::analysis::new_array_element_params(
                 &method.generic_params,
                 &method.body.iter().collect::<Vec<_>>(),
                 &[],
             );
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &method.generic_params,
-                &displayed,
-                &defaulted,
-            );
+            self.emit_generic_params_with_bounds(&method.generic_params, &defaulted);
         }
         self.w.push('(');
         if !is_static {

@@ -1627,7 +1627,7 @@ fn unit_enum_emits_derives_and_display() {
     // Unit-only enums have no payload slots, so every eligibility check
     // is vacuously true and §O.3 grants the full derive set.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(rust.contains("pub enum Color {"), "got: {rust}");
@@ -2014,10 +2014,13 @@ fn primitive_record_lowers_to_struct_and_canonical_ctor() {
     // §O.3 auto-derive pass on top of the baseline three. Default
     // is added because every component (double) is `Default`-able.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Copy, Default)]"),
         "derive line: {rust}",
     );
     assert!(rust.contains("pub struct Vector3 {"), "struct header: {rust}");
+    // `Debug` is written, not derived: it prints the record's string form
+    // (ERRATA E107).
+    assert!(rust.contains("impl std::fmt::Debug for Vector3"), "written Debug: {rust}");
     assert!(rust.contains("pub x: f64,"), "component x: {rust}");
     assert!(rust.contains("pub fn new(x: f64, y: f64, z: f64) -> Self {"), "ctor: {rust}");
     // Canonical constructor body uses the direct `Self { … }` shape
@@ -3392,7 +3395,7 @@ fn int_only_record_gets_full_derive_set() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
 }
@@ -3408,7 +3411,7 @@ fn string_bearing_record_gets_eq_hash_but_not_copy() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains("Copy"), "Copy should be skipped: {rust}");
@@ -3429,7 +3432,7 @@ fn float_bearing_record_drops_eq_and_hash() {
     // nor Hash over an `f64`, so both are written by hand: the float hashes
     // by its bits (§O.3.1), which keeps the record a hash key.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(rust.contains("crate::jux_f64_bits(self.v).hash(state);"), "hand-written Hash: {rust}");
@@ -3448,7 +3451,7 @@ fn user_typed_record_drops_extra_derives() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash)]"),
         "expected identity-hashed derives, got: {rust}",
     );
     assert!(!rust.contains(", Copy"), "Copy should be skipped: {rust}");
@@ -3465,7 +3468,7 @@ fn int_payload_enum_gets_full_derive_set() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
 }
@@ -3481,7 +3484,7 @@ fn string_payload_enum_drops_copy() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Eq, Hash, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains("Copy"), "Copy should be skipped: {rust}");
@@ -3498,7 +3501,7 @@ fn one_float_payload_disqualifies_enum_eq_hash() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
+        rust.contains("#[derive(Clone, PartialEq, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains(", Eq"), "Eq should be skipped: {rust}");
@@ -4144,7 +4147,7 @@ fn record_eq_delete_drops_partial_eq_from_derive() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, Copy, Default)]"),
+        rust.contains("#[derive(Clone, Copy, Default)]"),
         "expected baseline derives minus PartialEq, got: {rust}",
     );
     // Should NOT see Display impl for Unequal either way (PartialEq
@@ -5252,8 +5255,8 @@ fn layout_c_struct_has_default_and_structural_equality() {
     assert!(rust.contains("weight: 1.5"), "initializer: {rust}");
     // Derived from the field types, as a record's are (ERRATA E20): two `int`s
     // compare and hash.
-    assert!(rust.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\nstruct Plain"), "derive: {rust}");
-    assert!(rust.contains("#[derive(Clone, Copy, Debug)]\nstruct Custom"), "operator== wins: {rust}");
+    assert!(rust.contains("#[derive(Clone, Copy, PartialEq, Eq, Hash)]\nstruct Plain"), "derive: {rust}");
+    assert!(rust.contains("#[derive(Clone, Copy)]\nstruct Custom"), "operator== wins: {rust}");
 }
 
 /// `new T[n]` of a type parameter needs `T: Default`, in a free function and
@@ -5536,7 +5539,7 @@ fn layout_c_struct_lowers_to_repr_c_value() {
     assert!(rust.contains("#[repr(C)]"), "missing #[repr(C)]: {rust}");
     assert!(
         // `PartialEq` is its structural `operator==` (Operators §O.1).
-        rust.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]"),
+        rust.contains("#[derive(Clone, Copy, PartialEq, Eq, Hash)]"),
         "value struct should derive Copy: {rust}"
     );
     assert!(rust.contains("struct P {"), "expected a plain struct P: {rust}");

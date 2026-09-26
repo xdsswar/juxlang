@@ -254,6 +254,78 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// `impl Debug` for a Jux class, record or enum, printing the type's own
+    /// string form (§O.7.1) rather than the struct-shaped text a
+    /// `#[derive(Debug)]` would produce.
+    ///
+    /// **Why `Debug` is the canonical renderer (ERRATA E107).** The universal
+    /// show helper picks `Display` or `Debug` by autoref specialization, and
+    /// that choice is made ONCE, where the call is written, against the bounds
+    /// in scope. Inside a generic body the only bound a parameter carries is
+    /// `Clone + Debug`, so every instantiation takes the `Debug` arm. Adding
+    /// `Display` to the parameter was the old answer, and it made `Box<int?>`
+    /// illegal, because `Option` is foreign and no crate of ours may give it a
+    /// `Display` impl (ERRATA E99). Writing `Debug` out so it produces the same
+    /// text `Display` does removes the need for the bound: whichever arm the
+    /// probe takes, a Jux value renders the same.
+    ///
+    /// `body` is the expression that writes the text: `Display::fmt(self, f)`
+    /// for a type whose `Display` needs no more bounds than this impl has, or
+    /// the `operator string` call for one whose `Display` comes from a bridge
+    /// this impl cannot rely on.
+    pub(crate) fn emit_debug_as_string_form(
+        &mut self,
+        type_name: &str,
+        generic_params: &[juxc_ast::TypeParam],
+        body: &str,
+    ) {
+        self.w.emit_indent();
+        self.w.push_str("impl");
+        if !generic_params.is_empty() {
+            // The same baseline bounds the declaration itself carries, and no
+            // more: this impl is what LETS the type satisfy someone else's
+            // `Debug` bound, so a bound of its own would defeat it.
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_bounds(generic_params, &none);
+        }
+        self.w.push_str(" std::fmt::Debug for ");
+        self.w.push_str(type_name);
+        self.emit_generic_params_as_args(generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w
+            .line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        self.w.indent_inc();
+        self.w.line(body);
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
+    /// The `body` argument [`Self::emit_debug_as_string_form`] takes for a type
+    /// that has a `Display` impl with no extra bounds: forward to it.
+    pub(crate) const DEBUG_VIA_DISPLAY: &str = "std::fmt::Display::fmt(self, f)";
+
+    /// The same, for a type whose string form comes from a user-written
+    /// `operator string`. The inherent `__op_string` method is always emitted,
+    /// while the `Display` bridge is not (a generic class gets no operator
+    /// bridges), so calling the method reaches the user's text either way.
+    pub(crate) const DEBUG_VIA_OP_STRING: &str = "f.write_str(&self.__op_string())";
+
+    /// The `body` [`Self::emit_debug_as_string_form`] takes for a type with no
+    /// string form at all: `operator string() = delete;` (§O.3.4) is the program
+    /// asking that the value never render, and an enum with no variants has
+    /// nothing to render. Both print as the type's own name in angle brackets,
+    /// which is what the show helper's bottom tier prints for any value that
+    /// cannot describe itself (ERRATA E97), so one spelling covers all of them.
+    /// Deriving `Debug` instead used to print `OpaqueToken {{ secret: 42 }}` for
+    /// exactly the record that asked not to be printed.
+    pub(crate) fn debug_via_type_name(type_name: &str) -> String {
+        format!("f.write_str(\"<{type_name}>\")")
+    }
+
     /// Identity-format Display (§O.4.1): a class with NO
     /// `operator string` still prints — as `ClassName@<addr>`. The
     /// address is the shared cell for wrapper classes (stable
@@ -274,7 +346,7 @@ impl RustEmitter {
         // satisfy someone else's `Display` bound.
         if !generic_params.is_empty() {
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-            self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+            self.emit_generic_params_with_bounds(generic_params, &none);
         }
         self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(class_name);
@@ -354,7 +426,7 @@ impl RustEmitter {
             self.w.emit_indent();
             self.w.push_str("impl");
             if !generic_params.is_empty() {
-                self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+                self.emit_generic_params_with_bounds(generic_params, &none);
             }
             self.w.push(' ');
             self.w.push_str(trait_path);
@@ -392,7 +464,7 @@ impl RustEmitter {
         self.w.push_str("impl");
         if !generic_params.is_empty() {
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-            self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+            self.emit_generic_params_with_bounds(generic_params, &none);
         }
         self.w.push_str(" crate::JuxIdentity for ");
         self.w.push_str(&to_rust_ident(type_name));

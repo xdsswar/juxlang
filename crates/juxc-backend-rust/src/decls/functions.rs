@@ -517,7 +517,6 @@ impl RustEmitter {
             // `Display`, exactly as a class's does -- otherwise the universal
             // renderer falls back to `Debug` and a `String` prints with
             // quotes. Collected from this function's own body.
-            let displayed = self.fn_displayed_generic_params(fn_decl);
             // `new T[n]` in the body fills its elements with `T`'s default
             // value, so `T` needs `Default` (§T.2.1).
             let defaulted = crate::analysis::new_array_element_params(
@@ -529,11 +528,7 @@ impl RustEmitter {
             // / `Hash` (§T.2.1). Scoped to this signature, so the sets never
             // carry over to the next declaration.
             self.collect_fn_equality_bound_params(fn_decl);
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &combined_generics,
-                &displayed,
-                &defaulted,
-            );
+            self.emit_generic_params_with_bounds(&combined_generics, &defaulted);
             self.eq_bound_params.clear();
             self.hashed_params.clear();
         }

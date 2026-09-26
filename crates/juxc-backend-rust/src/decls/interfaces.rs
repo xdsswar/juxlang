@@ -84,9 +84,8 @@ impl RustEmitter {
             // The trait's own `Display` bounds come along: the impl has to
             // satisfy `Store<T>`, and `Store` declares `T: Display` when a
             // default body formats a `T`.
-            let displayed = self.interface_displayed_generic_params(interface);
             let empty = std::collections::HashSet::new();
-            self.emit_generic_params_bounds_body(&params, &displayed, &empty);
+            self.emit_generic_params_bounds_body(&params, &empty);
         }
         self.w.push_str("> ");
         self.w.push_str(&to_rust_ident(&iface_bare));
@@ -151,98 +150,6 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("}\n");
         self.w.newline();
-    }
-
-    /// The type parameters of `interface` whose values reach a **format
-    /// position** inside one of its `default` method bodies.
-    ///
-    /// `default String describe() { return "store of " + this.load(); }` on
-    /// `interface Store<T>` formats a `T`, so the emitted `format!` needs
-    /// `T: Display` — and the body is emitted on the TRAIT, so the bound has to
-    /// be on the trait. This is the interface counterpart of
-    /// [`Self::class_displayed_generic_params`] and reuses its body scan.
-    ///
-    /// Interfaces this one `extends` are included: `interface Loud<T> extends
-    /// Store<T>` inherits the default, so it inherits the bound. The walk is
-    /// depth-limited and cycle-guarded, and maps each hop's arguments back to
-    /// this interface's own parameter names, so `Loud<V> extends Store<V>`
-    /// marks `V`.
-    pub(crate) fn interface_displayed_generic_params(
-        &self,
-        interface: &juxc_ast::InterfaceDecl,
-    ) -> std::collections::HashSet<String> {
-        let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
-        if interface.generic_params.is_empty() {
-            return out;
-        }
-        let own: std::collections::HashSet<String> = interface
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.clone())
-            .collect();
-        // (interface, param-name → this interface's param name) pairs to scan.
-        let identity: std::collections::HashMap<String, String> =
-            own.iter().map(|p| (p.clone(), p.clone())).collect();
-        let mut queue: Vec<(juxc_ast::InterfaceDecl, std::collections::HashMap<String, String>)> =
-            vec![(interface.clone(), identity)];
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut depth = 0usize;
-        while let Some((decl, subst)) = queue.pop() {
-            if depth > 64 {
-                break;
-            }
-            depth += 1;
-            if !seen.insert(decl.name.text.clone()) {
-                continue;
-            }
-            // A method returning a bare type param makes `this.m()` a read of
-            // that param's value — the same rule the class scan uses for a
-            // generic field or a param-returning method.
-            let mut generic_members: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            for m in &decl.methods {
-                let juxc_ast::ReturnType::Type(t) = &m.return_type else { continue };
-                if !t.generic_args.is_empty()
-                    || t.array_shape.is_some()
-                    || t.fn_shape.is_some()
-                    || t.name.segments.len() != 1
-                {
-                    continue;
-                }
-                if let Some(mapped) = subst.get(t.name.segments[0].text.as_str()) {
-                    generic_members.insert(m.name.text.clone(), mapped.clone());
-                }
-            }
-            if !generic_members.is_empty() {
-                for m in &decl.methods {
-                    if let Some(body) = &m.body {
-                        Self::scan_block_for_displayed_fields(body, &generic_members, &mut out);
-                    }
-                }
-            }
-            // Compose this hop's arguments into the substitution and continue
-            // up the `extends` chain.
-            for parent_ref in &decl.extends {
-                let Some(seg) = parent_ref.name.segments.last() else { continue };
-                let Some(parent) = self.interface_ast_by_bare(&seg.text) else { continue };
-                let mut next: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
-                for (param, arg) in parent.generic_params.iter().zip(parent_ref.generic_args.iter())
-                {
-                    let Some(arg_ty) = arg.as_type() else { continue };
-                    if arg_ty.generic_args.is_empty() && arg_ty.name.segments.len() == 1 {
-                        if let Some(mapped) = subst.get(arg_ty.name.segments[0].text.as_str()) {
-                            next.insert(param.name.text.clone(), mapped.clone());
-                        }
-                    }
-                }
-                if !next.is_empty() {
-                    queue.push((parent.clone(), next));
-                }
-            }
-        }
-        out.retain(|p| own.contains(p));
-        out
     }
 
     /// The interface AST for a bare name, matched exactly or by FQN suffix —
@@ -346,12 +253,7 @@ impl RustEmitter {
         // `Display` is the same rule one step further: a DEFAULT body lives
         // on the trait, so a `T` it formats needs that bound where the
         // `format!` is emitted.
-        let displayed = self.interface_displayed_generic_params(interface);
-        self.emit_generic_params_with_clone_bound_plus_display(
-            &interface.generic_params,
-            &displayed,
-            &std::collections::HashSet::new(),
-        );
+        self.emit_generic_params_with_bounds(&interface.generic_params, &std::collections::HashSet::new());
         // `: std::fmt::Debug` supertrait — interface values lower to
         // `Rc<dyn Trait>`, which is held in `#[derive(Clone, Debug)]`
         // structs (wrapper-class fields, holders). `dyn Trait` is only
@@ -434,17 +336,12 @@ impl RustEmitter {
             if method.generic_params.is_empty() {
                 self.emit_generic_params(&method.generic_params);
             } else {
-                let displayed = self.fn_displayed_generic_params(method);
                 let defaulted = crate::analysis::new_array_element_params(
                     &method.generic_params,
                     &method.body.iter().collect::<Vec<_>>(),
                     &[],
                 );
-                self.emit_generic_params_with_clone_bound_plus_display(
-                    &method.generic_params,
-                    &displayed,
-                    &defaulted,
-                );
+                self.emit_generic_params_with_bounds(&method.generic_params, &defaulted);
             }
             // `&self` — interface methods take a shared receiver so the
             // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
@@ -724,7 +621,6 @@ impl RustEmitter {
         if method.generic_params.is_empty() {
             return;
         }
-        let displayed = self.fn_displayed_generic_params(method);
         let defaulted = crate::analysis::new_array_element_params(
             &method.generic_params,
             &method.body.iter().collect::<Vec<_>>(),
@@ -736,7 +632,7 @@ impl RustEmitter {
         }
         self.collect_key_bound_params(&method.generic_params, declared.iter());
         self.collect_fn_equality_bound_params(method);
-        self.emit_generic_params_with_clone_bound_plus_display(&method.generic_params, &displayed, &defaulted);
+        self.emit_generic_params_with_bounds(&method.generic_params, &defaulted);
         self.hash_key_params.clear();
         self.ord_key_params.clear();
         self.eq_bound_params.clear();

@@ -2241,6 +2241,8 @@ renderer's `Debug` arm produces the same text `Display` would: a hand-written
 overstates what the table guarantees, and this entry is what a reader should
 trust.
 
+**Resolution (2), 2026-09-25: closed by E107,** which does exactly that.
+
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1's closing paragraph is
 corrected to point here. `tests/ui/generic_hash_key_arg.jux` pins the `E0933`.
 
@@ -2796,6 +2798,66 @@ in its name.
 **Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.2.5 carries the validation
 table, §B.15.2 the dependency source list, and `JUX-DIAGNOSTICS-ADDENDUM.md`
 §D.3 / §D.4 the codes.
+
+---
+
+## E107. `Debug` is a Jux value's string form, so no parameter needs `Display`
+
+**Conflict.** E99 part 2, left OPEN: a type parameter whose values reach a
+format position acquired `Display` (§T.2.1), so `Box<int?>` did not compile,
+because `Option` is foreign and the emitted crate may not give it a `Display`.
+Dropping the bound alone is wrong, for the reason E99 records: the universal
+renderer `__jux_show!` chooses `Display` or `Debug` once, in the generic body,
+against the declared bounds, so with only `T: Debug` in scope
+`Wrap<Cell<String>>` printed `wrap(Cell { value: "in" })`.
+
+Two neighbouring defects had the same root, a derive list or a trait answer
+written without asking the payload's own type:
+
+- **Gap 9.** The checker's `user_type_has_default` answered `true` for every
+  foreign type, so `new Holder[3]` over `record Holder(File f)` passed Jux and
+  failed in rustc ("no associated function named `default`"). E97's
+  `@RustDefault` marker already said otherwise.
+- **Gap 10.** An `enum` still derived `Debug, Clone, PartialEq` unconditionally,
+  so a variant holding a `rust.std.File` was two rustc errors. E97 fixed the
+  same list for classes and records only.
+
+**Resolution.** A Jux class, record and enum no longer derives `Debug`. Each
+gets a hand-written `impl Debug` that writes its string form (§O.7.1): through
+its own `Display` when that impl needs no bound the `Debug` impl lacks, through
+its `operator string` when the user wrote one, and as the bare type name when
+`operator string` is deleted, so a deleted operator leaks no payload. Whichever
+arm the renderer takes, a Jux value now renders the same text, and the
+`Display` row of §T.2.1 is removed from every declaration kind: class,
+interface, record, enum, free function and method.
+
+What `Debug` still cannot render the Jux way is a FOREIGN value reached through
+a parameter. Three kinds matter, and the run-time helper `jux_debug_text`
+recognises each by the value's type NAME, which is the real instantiation's
+even where the trait choice was not: a float (`1e21` becomes `1.0E21`), a string
+or char (the quotes and escapes come off), and an `Option` (`None` becomes
+`null`, `Some(5)` becomes `5`, recursively). The last is what makes `Box<int?>`
+print `Box(null)`.
+
+Gap 9: a foreign class or enum has a default exactly when its stub carries
+`@RustDefault`, so `new Holder[3]` is reported as `E0458`. Gap 10: an enum's
+derive list goes through `foreign_derives_of` like a class's, dropping `Clone`,
+`PartialEq` and the traits that depend on them (`Eq`, `Copy`) when a payload's
+type lacks them, and `cases()`, which clones, is emitted only when `Clone` is.
+
+A visible side effect, and an intended one: a record or class printed INSIDE a
+collection used to come out in Rust's struct syntax (`[R { a: 1, b: "y" }]`) and
+now comes out in its Jux form (`[R(a: 1, b: y)]`).
+
+**Still open.** A nullable INSIDE a collection prints Rust's form
+(`[Some(3), None]`): the collection's own `Debug` writes its elements, and the
+name-based normalization only sees the outer type. That was the output before
+this change too.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1 loses its `Display` row
+and its closing paragraph now points here for the nullable argument. `JUX-
+OPERATORS-ADDENDUM.md` §O.7.1 is unchanged: it already says what a value's
+string form is, and this entry only makes `Debug` produce it.
 
 ---
 

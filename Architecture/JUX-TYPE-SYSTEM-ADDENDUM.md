@@ -146,8 +146,7 @@ A Jux type parameter carries the bounds the program writes. The lowering needs a
 
 | Use | Added bound | Why |
 |---|---|---|
-| any type parameter | `Clone + Debug + 'static` | Jux values are owned and copyable at the boundary; every Jux type derives `Debug`. |
-| formatted (`$"${x}"`, `print(x)`, `"…" + x`) | `Display` | Jux renders with `Display`; without it the value falls back to `Debug` and a `String` prints with quotes. |
+| any type parameter | `Clone + Debug + 'static` | Jux values are owned and copyable at the boundary; every Jux type's `Debug` writes its string form (`ERRATA.md` E107). |
 | a `HashMap` / `HashSet` key | `Eq + Hash` | Rust puts those on the container's methods, so a class merely HOLDING a `HashMap<K, V>` fails at the first lookup. |
 | a `BTreeMap` / `BTreeSet` key | `Ord` | Same rule, ordered containers. |
 | compared with `==` / `!=` | `PartialEq` | Every type has `==` (§T.1.3), but Rust asks the parameter to say so. |
@@ -163,7 +162,7 @@ The analysis follows inheritance and nesting: a bound needed by a method inherit
 
 **A type argument must satisfy the bounds its parameter acquired.** Nearly every Jux type does: `Clone` and `Debug` are universal, and every class, record and enum has a string form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1), a generic one and the `dyn` handle a polymorphic base becomes included. That is what makes an inferred bound safe to add at all: a rule the compiler applies on the user's behalf must never make a legal type argument illegal.
 
-**Two bounds in the table above do not hold to that, and `ERRATA.md` E99 is the authority on both.** A nullable argument (`Box<int?>`) does not satisfy the `Display` row, which is an OPEN defect: the program is legal and does not compile. A `double` argument does not satisfy the `Eq + Hash` row, but there the program is genuinely illegal (`double` is not a key at all, `JUX-OPERATORS-ADDENDUM.md` §O.3.1), so the type ARGUMENT is reported as **`E0933`**, in the same words the literal `HashMap<double, int>` gets. A type parameter is assumed hashable where it is declared, and the instantiation is what gets checked.
+**Two bounds in the table above do not hold to that, and `ERRATA.md` E99 is the authority on both.** A nullable argument (`Box<int?>`) did not satisfy the former `Display` row; that row is gone, because a formatted parameter renders through `Debug`, which every Jux type writes as its string form (`ERRATA.md` E107). A `double` argument does not satisfy the `Eq + Hash` row, but there the program is genuinely illegal (`double` is not a key at all, `JUX-OPERATORS-ADDENDUM.md` §O.3.1), so the type ARGUMENT is reported as **`E0933`**, in the same words the literal `HashMap<double, int>` gets. A type parameter is assumed hashable where it is declared, and the instantiation is what gets checked.
 
 ## §T.3 — Overload Resolution
 

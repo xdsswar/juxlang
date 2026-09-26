@@ -141,13 +141,12 @@ impl RustEmitter {
             self.type_param_bounds = prev_type_param_bounds;
             return;
         }
-        // Derive Clone unconditionally. Debug is also derived, EXCEPT
-        // when a field is function-typed (`() -> T`): `dyn Fn()` doesn't
-        // implement Debug, so the derive would fail. Instead we emit a
-        // manual `impl Debug` stub after the struct that prints the class
-        // name — satisfying the marker-trait `Debug` supertrait bound
-        // without requiring Debug on the stored closure.
-        let has_fn_field = class_decl.fields.iter().any(|f| f.ty.as_ref().is_some_and(type_holds_closure));
+        // Derive `Clone` unconditionally. `Debug` is never derived: a class's
+        // debug form IS its string form (§O.7.1, ERRATA E107), so the impl is
+        // written out beside the `Display` it forwards to. That also settles two
+        // cases the derive could not reach on its own, a function-typed field
+        // (`Rc<dyn Fn()>` has no `Debug`) and a field of a foreign type with
+        // none (ERRATA E97): the forwarding body never looks at a field.
         // What the FOREIGN types among the instance fields allow (ERRATA E97).
         // A field of a Rust type that is not `Clone` (`std::fs::File`) or not
         // `Debug` takes that trait off the derive list; a `Debug` the struct
@@ -206,9 +205,6 @@ impl RustEmitter {
             if self.struct_is_copy(class_decl) && foreign.clone {
                 derives.push("Copy");
             }
-            if !has_fn_field && foreign.debug {
-                derives.push("Debug");
-            }
             if !declares_equality && foreign.partial_eq {
                 derives.push("PartialEq");
             }
@@ -225,9 +221,6 @@ impl RustEmitter {
             let mut derives = Vec::new();
             if foreign.clone {
                 derives.push("Clone");
-            }
-            if !has_fn_field && foreign.debug {
-                derives.push("Debug");
             }
             if !derives.is_empty() {
                 self.w.line(&format!("#[derive({})]", derives.join(", ")));
@@ -334,27 +327,6 @@ impl RustEmitter {
         }
         self.w.indent_dec();
         self.w.line("}");
-        // Manual `impl Debug` for classes with function-typed fields —
-        // `dyn Fn()` doesn't implement Debug so `#[derive(Debug)]` would fail.
-        // The stub prints the class name so marker-trait `Debug` supertrait
-        // bounds are satisfied and `throw` lowering can still format the type.
-        //
-        // A field of a FOREIGN type with no `Debug` of its own takes the same
-        // route (ERRATA E97): the derive goes, the trait stays. A class prints
-        // through its own `Display` (`Wrap@0x7ff…`), so the name is all its
-        // `Debug` ever showed anyway, and an interface's `Debug` supertrait,
-        // `throw` formatting and a container of these values keep working.
-        if has_fn_field || !foreign.debug {
-            self.w.emit_indent();
-            self.w.push_str("impl");
-            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-            self.w.push_str(" std::fmt::Debug for ");
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.emit_generic_params_as_args(&class_decl.generic_params);
-            self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
-            self.w.push_str(&to_rust_ident(&class_decl.name.text));
-            self.w.push_str("\") } }\n");
-        }
         // A `@layout(c)` struct's default value (JUX-LANG-V1 §5.5): each field
         // at its initializer, or at its type's own default. Written out rather
         // than derived, because a raw-pointer field (`*mut T`) has no `Default`
@@ -491,16 +463,11 @@ impl RustEmitter {
         // `std::fmt::Display` on the inherent impl so the emitted
         // `format!`/`println!` type-checks. Only the formatted params
         // pick up the bound; purely-stored params keep `Clone + Debug`.
-        let displayed = self.class_displayed_generic_params(class_decl);
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.collect_equality_bound_params(class_decl);
-        self.emit_generic_params_with_clone_bound_plus_display(
-            &class_decl.generic_params,
-            &displayed,
-            &defaulted,
-        );
+        self.emit_generic_params_with_bounds(&class_decl.generic_params, &defaulted);
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -720,6 +687,17 @@ impl RustEmitter {
                 &class_decl.generic_params,
             );
         }
+        // The class's debug form IS that string form (§O.7.1, ERRATA E107).
+        // Emitted right here so it carries exactly the bounds the `Display`
+        // above does. A class with `operator string` goes through the inherent
+        // `__op_string` method rather than through `Display`, because the
+        // `Display` bridge is emitted only for a NON-generic class while this
+        // impl has to hold for every one.
+        self.emit_debug_as_string_form(
+            &to_rust_ident(&class_decl.name.text),
+            &class_decl.generic_params,
+            if has_to_string { Self::DEBUG_VIA_OP_STRING } else { Self::DEBUG_VIA_DISPLAY },
+        );
         let address = self.class_identity_address(&class_decl.name.text, false);
         self.emit_jux_identity_impl(&class_decl.name.text, &class_decl.generic_params, address);
         // A generic class gets the equality, hash and ordering bridges, with
@@ -1102,7 +1080,11 @@ impl RustEmitter {
         } else {
             ("std::rc::Rc<", ">);\n")
         };
-        self.w.line("#[derive(Clone, Debug)]");
+        // `Debug` is not derived on the handle: the class's debug form is its
+        // string form (§O.7.1, ERRATA E107), written out beside its `Display`.
+        // The derived one printed the machinery -- `C(RefCell { value: C_Inner
+        // { v: 1 } })` -- which is what a `Vec<C>` used to show.
+        self.w.line("#[derive(Clone)]");
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
@@ -1130,16 +1112,11 @@ impl RustEmitter {
         // toString/interpolation semantics require a printed generic
         // field's instantiated type to be `Display`. Purely-stored
         // params keep only `Clone + Debug`.
-        let displayed = self.class_displayed_generic_params(class_decl);
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.collect_equality_bound_params(class_decl);
-        self.emit_generic_params_with_clone_bound_plus_display(
-            &class_decl.generic_params,
-            &displayed,
-            &defaulted,
-        );
+        self.emit_generic_params_with_bounds(&class_decl.generic_params, &defaulted);
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(name));
         self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -1400,6 +1377,13 @@ impl RustEmitter {
             self.w.line("}");
             self.w.newline();
         }
+        // The handle's debug form is the same string form (§O.7.1, ERRATA
+        // E107): a `Vec<C>` printed the machinery under the derive.
+        self.emit_debug_as_string_form(
+            &to_rust_ident(name),
+            &class_decl.generic_params,
+            if has_to_string { Self::DEBUG_VIA_OP_STRING } else { Self::DEBUG_VIA_DISPLAY },
+        );
         let address = self.class_identity_address(name, true);
         self.emit_jux_identity_impl(name, &class_decl.generic_params, address);
         // §O.2.6 / §O.4.1: a class that declares no `operator==` compares by
@@ -1870,7 +1854,7 @@ impl RustEmitter {
                 // K.5) forwards with its own type parameters.
                 if !sig.generic_params.is_empty() {
                     let none = std::collections::HashSet::new();
-                    self.emit_generic_params_with_clone_bound_plus_display(&sig.generic_params, &none, &none);
+                    self.emit_generic_params_with_bounds(&sig.generic_params, &none);
                 }
                 self.w.push_str("(&self");
                 for param in &sig.params {
@@ -2398,566 +2382,6 @@ impl RustEmitter {
         out
     }
 
-    /// The class's type parameters that need a `std::fmt::Display` bound on the
-    /// inherent impl — the ones whose values reach a **format position**
-    /// (interpolation, `print(…)`, string concat) somewhere in the class's
-    /// bodies. Jux's `toString`/interpolation semantics render such a value with
-    /// `Display`, so `T` must carry the bound for the emitted `format!` to
-    /// resolve to it rather than falling back to `Debug` (which would print a
-    /// `String` **with quotes**). Purely-stored params keep only `Clone + Debug`.
-    ///
-    /// A parameter's values reach a body two ways, and both count:
-    ///
-    /// - a **field** typed as a bare param (`protected T value;` → `this.value`)
-    /// - a **method** returning a bare param (`public T get()` → `this.get()`)
-    ///
-    /// Both are collected from the class *and its ancestors*, substituted
-    /// through each `extends` hop — `Loud<T> extends Holder<T>` inherits
-    /// `Holder`'s `get()`, and the backend inlines the inherited body into
-    /// `Loud`'s own inherent impl, so `Loud` needs the bound too.
-    /// The type parameters of a FUNCTION that need a `std::fmt::Display`
-    /// bound -- the ones whose values reach a format position in its body.
-    ///
-    /// The class version reasons about members; a function has none, so the
-    /// tracked names are its own parameters and locals whose type is a bare
-    /// type parameter, plus a call returning one. Reusing
-    /// [`Self::scan_block_for_displayed_fields`] keeps the notion of "a format
-    /// position" in one place -- interpolation, `print(...)`, string concat.
-    pub(crate) fn fn_displayed_generic_params(
-        &self,
-        fn_decl: &juxc_ast::FnDecl,
-    ) -> HashSet<String> {
-        let mut displayed: HashSet<String> = HashSet::new();
-        if fn_decl.generic_params.is_empty() {
-            return displayed;
-        }
-        let param_names: HashSet<&str> = fn_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.as_str())
-            .collect();
-        // name -> the type parameter its value has. A VALUE parameter typed
-        // as a bare type parameter (`A a`), and a method whose declared
-        // return is one, are the two ways a `T` reaches the body.
-        let mut generic_members: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let bare_param = |ty: &juxc_ast::TypeRef| -> Option<String> {
-            if !ty.generic_args.is_empty()
-                || ty.array_shape.is_some()
-                || ty.fn_shape.is_some()
-                || ty.name.segments.len() != 1
-            {
-                return None;
-            }
-            let n = ty.name.segments[0].text.as_str();
-            param_names.contains(n).then(|| n.to_string())
-        };
-        for p in &fn_decl.params {
-            if let Some(tp) = bare_param(&p.ty) {
-                generic_members.insert(p.name.text.clone(), tp);
-            }
-        }
-        // A call on a value whose declared type is `C<T>` can return `T`
-        // (`b.get()` on a `Box<T>`), and a field or property read can hold
-        // one (`p.first` on a `Pair<K, V>`), so every such member of a generic
-        // class whose type is that class's own parameter maps to the argument
-        // supplied here. Resolved through the class signature so no name is
-        // guessed.
-        for p in &fn_decl.params {
-            let Some(seg) = p.ty.name.segments.last() else { continue };
-            let Some(cls) = self.lookup_class_by_bare_or_fqn(&seg.text) else { continue };
-            let returns = cls.methods.iter().filter_map(|(name, m)| match &m.return_type {
-                juxc_ast::ReturnType::Type(rt) => Some((name, rt)),
-                _ => None,
-            });
-            let stored = cls
-                .fields
-                .iter()
-                .filter(|(_, f)| !f.is_static)
-                .map(|(name, f)| (name, &f.ty))
-                .chain(cls.properties.iter().filter(|(_, pr)| !pr.is_static).map(|(name, pr)| (name, &pr.ty)));
-            for (mname, rt) in returns.chain(stored) {
-                if !rt.generic_args.is_empty() || rt.name.segments.len() != 1 {
-                    continue;
-                }
-                let ret = rt.name.segments[0].text.as_str();
-                let Some(pos) = cls
-                    .generic_params
-                    .iter()
-                    .position(|gp| gp.name.text == ret)
-                else { continue };
-                let Some(arg) = p.ty.generic_args.get(pos).and_then(|a| a.as_type()) else {
-                    continue;
-                };
-                if let Some(tp) = bare_param(arg) {
-                    // Keyed by receiver AND method: `b.get()`, not any `get()`.
-                    generic_members.insert(format!("{}.{}", p.name.text, mname), tp);
-                }
-            }
-        }
-        // **A Display bound travels in through a signature type too.** An
-        // interface whose default body formats its own `T` declares
-        // `trait Container<T: Display>`, so `render(Container<T> c)` cannot
-        // name that trait unless the FUNCTION's `T` carries the bound as
-        // well -- the same rule the class path applies to its `implements`
-        // list, applied to the positions a signature mentions. Runs before
-        // the early return below: this need has nothing to do with what the
-        // body does.
-        let signature_types = fn_decl.params.iter().map(|p| &p.ty).chain(
-            match &fn_decl.return_type {
-                juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => Some(t),
-                juxc_ast::ReturnType::Void => None,
-            },
-        );
-        let mut from_signature: HashSet<String> = HashSet::new();
-        for ty in signature_types {
-            let Some(seg) = ty.name.segments.last() else { continue };
-            let Some(iface_decl) = self.interface_ast_by_bare(&seg.text).cloned() else {
-                continue;
-            };
-            let bounded = self.interface_displayed_generic_params(&iface_decl);
-            if bounded.is_empty() {
-                continue;
-            }
-            for (p, a) in iface_decl
-                .generic_params
-                .iter()
-                .zip(ty.generic_args.iter())
-            {
-                if !bounded.contains(&p.name.text) {
-                    continue;
-                }
-                let Some(arg_ty) = a.as_type() else { continue };
-                if let Some(tp) = bare_param(arg_ty) {
-                    from_signature.insert(tp);
-                }
-            }
-        }
-        displayed.extend(from_signature);
-        if generic_members.is_empty() {
-            return displayed;
-        }
-        if let Some(body) = &fn_decl.body {
-            Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
-        }
-        displayed
-    }
-
-    /// The type parameters of a RECORD that need a `std::fmt::Display`
-    /// bound -- the ones whose values reach a format position in one of its
-    /// method bodies.
-    ///
-    /// A record's generic members are its COMPONENTS, which are readable both
-    /// as `this.name` and bare. The auto-derived string form is handled
-    /// separately (every component is formatted there by construction); this
-    /// is about what the record's own methods do.
-    pub(crate) fn record_displayed_generic_params(
-        &self,
-        record_decl: &juxc_ast::RecordDecl,
-    ) -> HashSet<String> {
-        let mut displayed: HashSet<String> = HashSet::new();
-        if record_decl.generic_params.is_empty() {
-            return displayed;
-        }
-        let names: HashSet<&str> = record_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.as_str())
-            .collect();
-        let mut generic_members: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for c in &record_decl.components {
-            if c.ty.generic_args.is_empty()
-                && c.ty.array_shape.is_none()
-                && c.ty.fn_shape.is_none()
-                && c.ty.name.segments.len() == 1
-            {
-                let n = c.ty.name.segments[0].text.as_str();
-                if names.contains(n) {
-                    generic_members.insert(c.name.text.clone(), n.to_string());
-                }
-            }
-        }
-        if generic_members.is_empty() {
-            return displayed;
-        }
-        for m in &record_decl.methods {
-            if let Some(body) = &m.body {
-                Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
-            }
-        }
-        for op in &record_decl.operators {
-            if let Some(body) = &op.body {
-                Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
-            }
-        }
-        displayed
-    }
-
-    pub(crate) fn class_displayed_generic_params(
-        &self,
-        class_decl: &juxc_ast::ClassDecl,
-    ) -> HashSet<String> {
-        let mut displayed: HashSet<String> = HashSet::new();
-        if class_decl.generic_params.is_empty() {
-            return displayed;
-        }
-        let param_names: HashSet<&str> = class_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.as_str())
-            .collect();
-        // Resolve a type spelled in some ancestor's vocabulary to a bare param
-        // of THIS class, or `None` when it isn't one (a concrete type, a
-        // container, an ancestor param the child pinned to `int`, …).
-        let resolve = |ty: &juxc_ast::TypeRef,
-                       subst: &std::collections::HashMap<String, juxc_ast::TypeRef>|
-         -> Option<String> {
-            if !ty.generic_args.is_empty()
-                || ty.array_shape.is_some()
-                || ty.fn_shape.is_some()
-                || ty.name.segments.len() != 1
-            {
-                return None;
-            }
-            let name = ty.name.segments[0].text.as_str();
-            let mapped = subst.get(name);
-            let head = match mapped {
-                Some(t) if t.generic_args.is_empty() && t.name.segments.len() == 1 => {
-                    t.name.segments[0].text.as_str()
-                }
-                Some(_) => return None,
-                None => name,
-            };
-            param_names.contains(head).then(|| head.to_string())
-        };
-
-        // Member name → the param of THIS class its value has.
-        let mut generic_members: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        // Bodies to scan: this class's, plus every ancestor's (their methods
-        // are inlined into this class's inherent impl).
-        let mut bodies: Vec<&juxc_ast::ClassDecl> = vec![class_decl];
-
-        let mut cursor = Some(class_decl.name.text.clone());
-        let mut depth = 0usize;
-        while let Some(name) = cursor {
-            if depth > 64 {
-                break;
-            }
-            let subst = if depth == 0 {
-                std::collections::HashMap::new()
-            } else {
-                self.kind_subst_for_ancestor(&class_decl.name.text, &name)
-            };
-            if let Some(sig) = self.lookup_class_by_bare_or_fqn(&name) {
-                for (fname, field) in &sig.fields {
-                    if let Some(param) = resolve(&field.ty, &subst) {
-                        generic_members.insert(fname.clone(), param);
-                    }
-                }
-                for (mname, m) in &sig.methods {
-                    if let juxc_ast::ReturnType::Type(t) = &m.return_type {
-                        if let Some(param) = resolve(t, &subst) {
-                            generic_members.insert(mname.clone(), param);
-                        }
-                    }
-                }
-                // **A Display bound travels in through an interface too.** An
-                // interface whose DEFAULT body formats its own `T` declares
-                // `trait Store<T: Display>`, so a class writing
-                // `implements Store<V>` cannot satisfy that trait unless `V`
-                // carries the bound as well. Map the interface's bounded
-                // positions back through the arguments this class (or an
-                // ancestor, in its own vocabulary) supplied.
-                for iface_ty in &sig.implements {
-                    let Some(seg) = iface_ty.name.segments.last() else { continue };
-                    let Some(iface_decl) = self.interface_ast_by_bare(&seg.text) else {
-                        continue;
-                    };
-                    let iface_decl = iface_decl.clone();
-                    let bounded = self.interface_displayed_generic_params(&iface_decl);
-                    if bounded.is_empty() {
-                        continue;
-                    }
-                    for (p, a) in iface_decl
-                        .generic_params
-                        .iter()
-                        .zip(iface_ty.generic_args.iter())
-                    {
-                        if !bounded.contains(&p.name.text) {
-                            continue;
-                        }
-                        let Some(arg_ty) = a.as_type() else { continue };
-                        if let Some(mine) = resolve(arg_ty, &subst) {
-                            displayed.insert(mine);
-                        }
-                    }
-                }
-            }
-            if depth > 0 {
-                if let Some(cd) = self.class_ast_by_bare(&name) {
-                    bodies.push(cd);
-                }
-            }
-            cursor = self.direct_parent_bare(&name);
-            depth += 1;
-        }
-        if generic_members.is_empty() {
-            return displayed;
-        }
-        for cd in bodies {
-            for m in &cd.methods {
-                if let Some(body) = &m.body {
-                    Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
-                }
-            }
-            for ctor in &cd.constructors {
-                Self::scan_block_for_displayed_fields(
-                    &ctor.body,
-                    &generic_members,
-                    &mut displayed,
-                );
-            }
-            for op in &cd.operators {
-                if let Some(body) = &op.body {
-                    Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
-                }
-            }
-        }
-        displayed
-    }
-
-
-    /// Walk a block looking for **format-position** reads of a generic-typed
-    /// member — a field or a param-returning method (see
-    /// [`Self::class_displayed_generic_params`]). Recurses into nested blocks
-    /// and the format-bearing expression shapes (interpolated strings,
-    /// `print(…)` calls, string concats).
-    pub(crate) fn scan_block_for_displayed_fields(
-        block: &juxc_ast::Block,
-        generic_members: &std::collections::HashMap<String, String>,
-        out: &mut HashSet<String>,
-    ) {
-        use juxc_ast::{Expr, Stmt};
-        // Record a param as displayed if `e` produces a generic member's value.
-        fn mark_field_read(
-            e: &Expr,
-            generic_members: &std::collections::HashMap<String, String>,
-            out: &mut HashSet<String>,
-        ) {
-            match e {
-                // `this.field`
-                Expr::Field(f) => {
-                    if matches!(&*f.object, Expr::This(_)) {
-                        if let Some(param) = generic_members.get(f.field.text.as_str()) {
-                            out.insert(param.clone());
-                        }
-                    }
-                    // `p.first` on a NAMED receiver, keyed `"p.first"` the
-                    // way `b.get()` is below.
-                    if let Expr::Path(rq) = &*f.object {
-                        if rq.segments.len() == 1 {
-                            let key = format!("{}.{}", rq.segments[0].text, f.field.text);
-                            if let Some(param) = generic_members.get(&key) {
-                                out.insert(param.clone());
-                            }
-                        }
-                    }
-                    mark_field_read(&f.object, generic_members, out);
-                }
-                // bare `field` (implicit this inside the body)
-                Expr::Path(qn)
-                    if qn.segments.len() == 1 => {
-                        if let Some(param) = generic_members.get(qn.segments[0].text.as_str()) {
-                            out.insert(param.clone());
-                        }
-                    }
-                // `this.get()` / `super.get()` / bare `get()` — a method whose
-                // return type is a bare param produces that param's value just
-                // as a field read does.
-                Expr::Call(c) => {
-                    let name = match &*c.callee {
-                        Expr::Field(f)
-                            if matches!(&*f.object, Expr::This(_) | Expr::Super(_)) =>
-                        {
-                            Some(f.field.text.as_str())
-                        }
-                        Expr::Path(qn) if qn.segments.len() == 1 => {
-                            Some(qn.segments[0].text.as_str())
-                        }
-                        _ => None,
-                    };
-                    if let Some(param) = name.and_then(|n| generic_members.get(n)) {
-                        out.insert(param.clone());
-                    }
-                    // `recv.method()` on a NAMED receiver, keyed as
-                    // `"recv.method"`. A function's generic parameter usually
-                    // arrives through a value like this (`b.get()` on a
-                    // `Box<T>` param) rather than through `this`. Keying on
-                    // the receiver as well as the method keeps the match tied
-                    // to the value whose type was actually resolved.
-                    if let Expr::Field(fe) = &*c.callee {
-                        if let Expr::Path(rq) = &*fe.object {
-                            if rq.segments.len() == 1 {
-                                let key =
-                                    format!("{}.{}", rq.segments[0].text, fe.field.text);
-                                if let Some(param) = generic_members.get(&key) {
-                                    out.insert(param.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-                // See through the wrappers that do not change WHICH value is
-                // being read. `this.value!!` on a `T?` field still produces a
-                // `T`, and without this arm the field went unnoticed, the
-                // `Display` bound was never added, and a `Slot<String>`
-                // printed its payload through `Debug` -- with quotes.
-                Expr::NotNullAssert(inner, _) | Expr::Await(inner, _) => {
-                    mark_field_read(inner, generic_members, out);
-                }
-                Expr::Cast(c) => mark_field_read(&c.value, generic_members, out),
-                _ => {}
-            }
-        }
-        // Scan a single expression for format positions.
-        fn scan_expr(
-            e: &Expr,
-            generic_members: &std::collections::HashMap<String, String>,
-            out: &mut HashSet<String>,
-        ) {
-            match e {
-                Expr::InterpString(s) => {
-                    for seg in &s.segments {
-                        if let juxc_ast::InterpSegment::Expr(inner) = seg {
-                            mark_field_read(inner, generic_members, out);
-                            scan_expr(inner, generic_members, out);
-                        }
-                    }
-                }
-                Expr::Call(c) => {
-                    // `print(arg)` formats its args.
-                    if let Expr::Path(qn) = &*c.callee {
-                        if qn.segments.len() == 1 && qn.segments[0].text == "print" {
-                            for a in &c.args {
-                                mark_field_read(a, generic_members, out);
-                            }
-                        }
-                    }
-                    scan_expr(&c.callee, generic_members, out);
-                    for a in &c.args {
-                        scan_expr(a, generic_members, out);
-                    }
-                }
-                Expr::Binary(b) => {
-                    // A string concat is a `+` CHAIN, not a pair:
-                    // `a + "|" + b + "|" + c` nests left, so testing only the
-                    // two immediate operands marked `a` (next to a literal) and
-                    // missed `b` and `c`. Flatten the whole chain — if any leaf
-                    // is a string literal the chain formats, so every leaf in it
-                    // is a format position.
-                    fn flatten<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
-                        match e {
-                            Expr::Binary(b) if b.op == juxc_ast::BinaryOp::Add => {
-                                flatten(&b.left, out);
-                                flatten(&b.right, out);
-                            }
-                            other => out.push(other),
-                        }
-                    }
-                    if b.op == juxc_ast::BinaryOp::Add {
-                        let mut leaves: Vec<&Expr> = Vec::new();
-                        flatten(e, &mut leaves);
-                        let formats = leaves.iter().any(|l| {
-                            matches!(
-                                l,
-                                Expr::Literal(juxc_ast::Literal::String(_))
-                                    | Expr::InterpString(_)
-                            )
-                        });
-                        if formats {
-                            for leaf in &leaves {
-                                mark_field_read(leaf, generic_members, out);
-                            }
-                        }
-                    }
-                    scan_expr(&b.left, generic_members, out);
-                    scan_expr(&b.right, generic_members, out);
-                }
-                Expr::Field(f) => scan_expr(&f.object, generic_members, out),
-                Expr::Unary(u) => scan_expr(&u.operand, generic_members, out),
-                // A `switch` EXPRESSION's arms are where an enum method does
-                // its formatting (`case Err(var e) -> "err:" + e`), so the
-                // walk has to descend into them.
-                Expr::Switch(sw) => {
-                    scan_expr(&sw.scrutinee, generic_members, out);
-                    for arm in &sw.arms {
-                        if let Some(g) = &arm.guard {
-                            scan_expr(g, generic_members, out);
-                        }
-                        match &arm.body {
-                            juxc_ast::SwitchBody::Expr(b) => {
-                                mark_field_read(b, generic_members, out);
-                                scan_expr(b, generic_members, out);
-                            }
-                            juxc_ast::SwitchBody::Block(b) => {
-                                RustEmitter::scan_block_for_displayed_fields(b, generic_members, out);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        for stmt in &block.statements {
-            match stmt {
-                Stmt::Expr(e) => scan_expr(e, generic_members, out),
-                Stmt::Return(Some(e), _) => scan_expr(e, generic_members, out),
-                Stmt::VarDecl(v) => {
-                    if let Some(init) = &v.init {
-                        scan_expr(init, generic_members, out);
-                    }
-                }
-                Stmt::Assign(a) => scan_expr(&a.value, generic_members, out),
-                Stmt::If(if_stmt) => {
-                    scan_expr(&if_stmt.condition, generic_members, out);
-                    Self::scan_block_for_displayed_fields(
-                        &if_stmt.then_block,
-                        generic_members,
-                        out,
-                    );
-                    if let Some(eb) = if_stmt.else_branch.as_deref() {
-                        match eb {
-                            juxc_ast::ElseBranch::Block(b) => {
-                                Self::scan_block_for_displayed_fields(b, generic_members, out);
-                            }
-                            juxc_ast::ElseBranch::If(inner) => {
-                                let synth = juxc_ast::Block {
-                                    statements: vec![Stmt::If(inner.clone())],
-                                    span: juxc_source::Span::DUMMY,
-                                };
-                                Self::scan_block_for_displayed_fields(
-                                    &synth,
-                                    generic_members,
-                                    out,
-                                );
-                            }
-                        }
-                    }
-                }
-                Stmt::While(w) => {
-                    scan_expr(&w.condition, generic_members, out);
-                    Self::scan_block_for_displayed_fields(&w.body, generic_members, out);
-                }
-                Stmt::ForEach(f) => {
-                    scan_expr(&f.iter, generic_members, out);
-                    Self::scan_block_for_displayed_fields(&f.body, generic_members, out);
-                }
-                _ => {}
-            }
-        }
-    }
 
     /// Build a bare-named [`TypeRef`] for a type-parameter reference (`T`).
     /// Spans are meaningless here (nothing diagnoses generated types), so the
@@ -3359,7 +2783,7 @@ impl RustEmitter {
             // A raw pointer (`int* data`) has no `Display`; the universal
             // formatter prints its address.
             let shows = field.ty.as_ref().is_some_and(|t| {
-                t.ptr_depth == 0 && crate::analysis::field_supports_display_in(t, &std::collections::HashSet::new())
+                t.ptr_depth == 0 && crate::analysis::field_supports_display(t)
             });
             args.push(if is_float {
                 format!("crate::jux_float({access})")
@@ -3374,7 +2798,7 @@ impl RustEmitter {
         self.w.push_str("impl");
         let none: std::collections::HashSet<String> = std::collections::HashSet::new();
         if !class_decl.generic_params.is_empty() {
-            self.emit_generic_params_with_clone_bound_plus_display(&class_decl.generic_params, &none, &none);
+            self.emit_generic_params_with_bounds(&class_decl.generic_params, &none);
         }
         self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(name));
@@ -4033,20 +3457,14 @@ impl RustEmitter {
 
     /// Emit a `Kind` trait's / `Kind` impl's generic parameter list.
     ///
-    /// Same shape as the class's own inherent impl: `Clone + Debug + 'static`
-    /// plus `Display` for the params whose values reach a format position (see
-    /// [`Self::class_displayed_generic_params`]). The bounds must match,
+    /// Same shape as the class's own inherent impl, `Clone + Debug + 'static`
+    /// and no `Display` (ERRATA E107). The bounds must match,
     /// because a `Kind` impl body calls straight into the inherent method
     /// (`fn get(&self) -> T { Holder::get(self) }`) — a weaker bound here would
     /// fail to satisfy the inherent impl's.
     fn emit_kind_generic_params(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        let displayed = self.class_displayed_generic_params(class_decl);
         let params = class_decl.generic_params.clone();
-        self.emit_generic_params_with_clone_bound_plus_display(
-            &params,
-            &displayed,
-            &HashSet::new(),
-        );
+        self.emit_generic_params_with_bounds(&params, &HashSet::new());
     }
 
     /// Emit a class's marker trait and the transitive marker impls
@@ -4571,10 +3989,9 @@ impl RustEmitter {
         // param whose bound went missing here failed on the first member call).
         if !class_decl.generic_params.is_empty() {
             self.w.push_str(", ");
-            let displayed = self.class_displayed_generic_params(class_decl);
             let defaulted = Self::class_default_bound_params(class_decl);
             let params = class_decl.generic_params.clone();
-            self.emit_generic_params_bounds_body(&params, &displayed, &defaulted);
+            self.emit_generic_params_bounds_body(&params, &defaulted);
         }
         self.w.push_str("> ");
         self.w.push_str(&to_rust_ident(&class_bare));
@@ -4858,13 +4275,12 @@ impl RustEmitter {
     /// LINT, not an error, so the program builds and then overflows its stack at
     /// runtime. Hence: one place to compute the list.
     pub(crate) fn emit_class_impl_generic_params(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        let displayed = self.class_displayed_generic_params(class_decl);
         let defaulted = Self::class_default_bound_params(class_decl);
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.collect_equality_bound_params(class_decl);
         let params = class_decl.generic_params.clone();
-        self.emit_generic_params_with_clone_bound_plus_display(&params, &displayed, &defaulted);
+        self.emit_generic_params_with_bounds(&params, &defaulted);
     }
 
     /// Emit one `impl Interface for Class { … delegating methods … }`
@@ -6296,18 +5712,13 @@ impl RustEmitter {
             // Without it the universal renderer falls back to `Debug` and a
             // `String` prints with quotes. Methods are `FnDecl`, so the same
             // collector the free-function path uses applies unchanged.
-            let displayed = self.fn_displayed_generic_params(method);
             // A method's own `T` in a `new T[n]` needs `Default` (§T.2.1).
             let defaulted = crate::analysis::new_array_element_params(
                 &method.generic_params,
                 &method.body.iter().collect::<Vec<_>>(),
                 &[],
             );
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &combined,
-                &displayed,
-                &defaulted,
-            );
+            self.emit_generic_params_with_bounds(&combined, &defaulted);
         }
         self.w.push('(');
         for (i, param) in method.params.iter().enumerate() {
@@ -6484,18 +5895,13 @@ impl RustEmitter {
             // reach a format position, exactly as a class's does (§T.2.1).
             // Without it the universal renderer falls back to `Debug` and a
             // `String` argument prints with quotes.
-            let displayed = self.fn_displayed_generic_params(method);
             // A method's own `T` in a `new T[n]` needs `Default` (§T.2.1).
             let defaulted = crate::analysis::new_array_element_params(
                 &method.generic_params,
                 &method.body.iter().collect::<Vec<_>>(),
                 &[],
             );
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &combined_method_generics,
-                &displayed,
-                &defaulted,
-            );
+            self.emit_generic_params_with_bounds(&combined_method_generics, &defaulted);
         }
         self.w.push('(');
         // Static methods have no implicit receiver in Rust either —
