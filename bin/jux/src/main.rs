@@ -56,6 +56,10 @@ struct Cli {
     /// Color the `human` format: `auto`, `always` or `never`.
     #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
     color: String,
+    /// When a build fails after the program was accepted, also print cargo's
+    /// and rustc's own report (the full linker command line, for one).
+    #[arg(long, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -336,7 +340,8 @@ fn main() -> Result<ExitCode> {
         // `juxc_driver::big_stack`.
         juxc_driver::big_stack::run(move || {
             juxc_driver::ice::selftest_trip();
-            run_cli(cli)
+            let verbose = cli.verbose;
+            report_build_failure(run_cli(cli), verbose)
         })
     })
 }
@@ -1856,6 +1861,27 @@ fn set_diagnostic_style(format: Option<&str>, color: &str) -> std::result::Resul
         .enabled(terminal);
     let _ = DIAGNOSTIC_STYLE.set((format, color));
     Ok(())
+}
+
+/// A build that failed after the front end accepted the program comes back
+/// from the driver as a [`juxc_driver::BuildFailure`]: print it the way every
+/// other diagnostic is printed and exit with its status (101 when the compiler
+/// is at fault). Any other error passes through.
+fn report_build_failure(result: Result<ExitCode>, verbose: bool) -> Result<ExitCode> {
+    let err = match result {
+        Ok(code) => return Ok(code),
+        Err(err) => err,
+    };
+    match err.downcast::<juxc_driver::BuildFailure>() {
+        Ok(failure) => {
+            print_diagnostics(&failure.diagnostics, &failure.sources);
+            if verbose && !failure.detail.is_empty() {
+                eprintln!("{}", failure.detail.trim_end());
+            }
+            Ok(ExitCode::from(failure.exit_code))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Print diagnostics in the chosen format, in source order and de-duplicated

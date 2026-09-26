@@ -1212,6 +1212,10 @@ pub enum Code {
     /// Frameworks exist only there, and rustc's `-l framework=` is refused
     /// everywhere else.
     E0908_LinkageUnavailable,
+    /// W0906 -- **an `[ffi.*]` entry no `@extern` block names.** It is left
+    /// out of the build script rather than linked for nothing: an unused
+    /// `linkage = "framework"` entry used to fail every non-Apple build.
+    W0906_UnusedFfiEntry,
 }
 
 impl Code {
@@ -1415,6 +1419,7 @@ impl Code {
             Code::E0904_TargetNotInstalled       => "E0904",
             Code::E0906_LinkFailed               => "E0906",
             Code::E0908_LinkageUnavailable       => "E0908",
+            Code::W0906_UnusedFfiEntry           => "W0906",
         }
     }
 }

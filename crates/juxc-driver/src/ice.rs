@@ -60,7 +60,7 @@ pub const ICE_EXIT_CODE: u8 = 101;
 
 /// Where to send a report. Read from the workspace manifest so a fork does not
 /// point people at this repository.
-const ISSUES_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues");
+pub(crate) const ISSUES_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues");
 
 /// Set to any non-empty value to make [`guard`] panic on purpose, so the ICE
 /// path itself can be tested end to end.

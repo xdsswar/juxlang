@@ -718,6 +718,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0901`  | A required `[package]` key is absent and was defaulted (`version` → `0.0.0`, `edition` → `"2026"`) | Build system §B.2.5 / `ERRATA.md` E106 |
 | `W0902`  | An unknown key or table in `jux.toml`: nothing reads it | Build system §B.2.5 / `ERRATA.md` E106 |
 | `W0903`  | A `package.name` that is legal but not reverse-DNS shaped: a dotted name whose first segment holds `_` (a single segment is clean) | Build system §B.2.3 / `ERRATA.md` E106 |
+| `W0906`  | An `[ffi.*]` entry no `@extern` block names; it is not linked | Build system §B.14 / `ERRATA.md` E1XX-PHASE1 |
 | `W0960`  | Mutable static in single-threaded profile *(reserved)*       | Missing-defs §M.12.3           |
 | `W0970`  | `observer<T>` attached but never detached and target has no `drop` *(reserved)*| Properties §P.6         |
 | `W0971`  | Property declared `{ get; set; }` but never observed or bound *(reserved)*| Properties §P.7.2            |

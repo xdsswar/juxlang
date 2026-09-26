@@ -133,6 +133,20 @@ impl SourceMap {
         Self { files }
     }
 
+    /// Build a [`SourceMap`] from in-memory `(crate-relative path, contents)`
+    /// pairs: the same scan as [`Self::from_disk`], for a caller that already
+    /// holds the emitted text (and for tests that feed a canned build).
+    pub(crate) fn from_sources(pairs: &[(&str, &str)]) -> Self {
+        let mut files = HashMap::new();
+        for (path, src) in pairs {
+            let map = MarkerMap::from_emitted_source(src);
+            if !map.is_empty() {
+                files.insert(normalize_path(path), map);
+            }
+        }
+        Self { files }
+    }
+
     /// Look up the Jux location for a rustc anchor `(rust_path, rust_line)`.
     /// Matches the reported path to a known emitted file by normalized exact
     /// match, then by suffix (rustc may report a shorter/longer prefix), so a
@@ -377,6 +391,16 @@ mod tests {
         let rewritten = rewrite_rustc_output(stderr, &map);
         assert!(rewritten.contains("--> app.jux:7:5"), "got: {rewritten}");
         assert!(!rewritten.contains("lib.jux"), "wrong file: {rewritten}");
+    }
+
+    /// `from_sources` scans in-memory text the way `from_disk` scans files, and
+    /// a rustc JSON span's `src\\main.rs` finds the same markers.
+    #[test]
+    fn from_sources_maps_a_json_span_path() {
+        let map = SourceMap::from_sources(&[("src/main.rs", "fn main() {\n// JUX:m.jux:4:9\n    bad\n}")]);
+        let entry = map.lookup("src\\main.rs", 3).expect("mapped");
+        assert_eq!((entry.jux_path.as_str(), entry.jux_line, entry.jux_col), ("m.jux", 4, 9));
+        assert!(map.lookup("src/main.rs", 1).is_none(), "above every marker");
     }
 
     /// Separator-insensitive: a Windows `src\main.rs` arrow still matches a
