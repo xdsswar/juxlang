@@ -1,0 +1,75 @@
+// Class representation, the value tiers: Inline and `Box`
+// (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.2.1, §CR.2.2, §CR.8.1, §CR.8.2;
+// ERRATA E1XX-PHASE8).
+//
+// An object that only ever lives in the local it was made into, and that
+// nothing writes after construction, cannot be told apart from a copy of it.
+// Such a class needs no handle at all:
+//
+// - `Money` objects are made and read in place, so `Money` is a plain struct
+//   that lives in the stack frame (Inline);
+// - `Receipt` objects are returned by `issue` and read by the caller, so a
+//   `Receipt` moves out of the function that made it: one heap allocation,
+//   no refcount (`Box`).
+//
+// `Ledger` looks just as simple, but its objects are passed to `report`, and
+// a `Ledger` given a second name must stay one object: it keeps the shared
+// `Rc` handle. The program prints the same either way.
+
+class Money {
+    private long cents;
+    private String currency;
+
+    public Money(long cents, String currency) {
+        this.cents = cents;
+        this.currency = currency;
+    }
+
+    public long getCents() { return cents; }
+
+    public String format() {
+        return $"${cents / 100}.${cents % 100} ${currency}";
+    }
+}
+
+class Receipt {
+    private String item;
+    private long cents;
+
+    public Receipt(String item, long cents) {
+        this.item = item;
+        this.cents = cents;
+    }
+
+    public String line() { return $"${item}: ${cents}"; }
+    public long getCents() { return cents; }
+}
+
+class Ledger {
+    private String owner;
+    public Ledger(String owner) { this.owner = owner; }
+    public String getOwner() { return owner; }
+}
+
+Receipt issue(String item, long cents) {
+    var r = new Receipt(item, cents);
+    return r;
+}
+
+void report(Ledger l) {
+    print("ledger of " + l.getOwner());
+}
+
+public void main() {
+    var price = new Money(1999, "EUR");
+    print(price.format());
+    print(price.getCents() * 2);
+
+    var receipt = issue("coffee", 350);
+    print(receipt.line());
+    print(issue("tea", 275).getCents() + receipt.getCents());
+
+    var ledger = new Ledger("ada");
+    report(ledger);
+    print(ledger.getOwner());
+}

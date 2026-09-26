@@ -892,19 +892,16 @@ impl RustEmitter {
             // borrow. The bare-`Rc` rep (read-only shared, never mutated) has no
             // cell — `Rc<C_Inner>` derefs straight to the fields, so emit `.0`
             // with no borrow.
-            if self.receiver_is_refcell_class(&f.object) {
-                // An `out` field place needs an exclusive `&mut` into the
-                // interior, so take the mutable borrow; the `RefMut` temporary
-                // lives to the end of the call statement (§M.4).
-                // So does a write THROUGH this field: `h.spot.x = 5.0` changes
-                // a value struct stored inside the object, in place (E20).
-                if self.emitting_out_place || self.emitting_lvalue {
-                    self.w.push_str(".0.borrow_mut()");
-                } else {
-                    self.w.push_str(".0.borrow()");
-                }
+            // An `out` field place needs an exclusive `&mut` into the
+            // interior, so take the mutable borrow; the `RefMut` temporary
+            // lives to the end of the call statement (§M.4).
+            // So does a write THROUGH this field: `h.spot.x = 5.0` changes
+            // a value struct stored inside the object, in place (E20).
+            self.w.push_str(".0");
+            if self.emitting_out_place || self.emitting_lvalue {
+                self.w.push_str(self.recv_write(&f.object));
             } else {
-                self.w.push_str(".0");
+                self.w.push_str(self.recv_read(&f.object));
             }
             for _ in 0..depth {
                 self.w.push_str(".__parent");
@@ -1244,23 +1241,33 @@ impl RustEmitter {
             .unwrap_or(false)
     }
 
-    /// Like [`Self::receiver_is_wrapper_class`] but true only for the
-    /// **interior-mutable** (`Rc<RefCell>`) rep — i.e. the receiver's class
-    /// needs a `.0.borrow()` to reach a field. A bare-`Rc` (read-only shared)
-    /// receiver is a wrapper but NOT refcell: its fields read through plain
-    /// `.0` with no borrow. Gates the borrow rewrite in `emit_field`/`emit_assign`.
-    pub(crate) fn receiver_is_refcell_class(&self, recv: &Expr) -> bool {
+    /// The class name [`Self::cell_read`] / [`Self::cell_write`] take for a
+    /// receiver: the class being emitted for `this`, the receiver's own class
+    /// otherwise.
+    pub(crate) fn receiver_rep_class(&self, recv: &Expr) -> Option<String> {
         if matches!(recv, Expr::This(_)) {
-            return self.emitting_wrapper_class
-                && self
-                    .enclosing_class
-                    .as_deref()
-                    .map(|c| self.is_refcell_class(c))
-                    .unwrap_or(false);
+            return if self.emitting_wrapper_class { self.enclosing_class.clone() } else { None };
         }
         self.receiver_class_key(recv)
-            .map(|bare| self.is_refcell_class(&bare))
-            .unwrap_or(false)
+    }
+
+    /// What follows `recv.0` to read one of its fields (see
+    /// [`Self::cell_read`]). A receiver whose class cannot be named keeps the
+    /// cell's borrow, which every class had before the selector.
+    pub(crate) fn recv_read(&self, recv: &Expr) -> &'static str {
+        match self.receiver_rep_class(recv) {
+            Some(c) => self.cell_read(&c),
+            None => ".borrow()",
+        }
+    }
+
+    /// What follows `recv.0` to write one of its fields (see
+    /// [`Self::cell_write`]).
+    pub(crate) fn recv_write(&self, recv: &Expr) -> &'static str {
+        match self.receiver_rep_class(recv) {
+            Some(c) => self.cell_write(&c),
+            None => ".borrow_mut()",
+        }
     }
 
     /// True when `recv`'s class is the `Box` rep (unique owner, `C(Box<C_Inner>)`).

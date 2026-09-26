@@ -1,0 +1,96 @@
+// Class representation across a hierarchy and a generic class
+// (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.3.4, §CR.3.5, §CR.8.5;
+// ERRATA E1XX-PHASE8).
+//
+// A class and everything it extends or is extended by take ONE
+// representation, the most general one any of them needs: a `Circle` is used
+// where a `Shape` is expected, and the two must agree on how an object is
+// held.
+//
+// - `Shape`, `Circle` and `Square` are written by nothing after construction,
+//   so the whole hierarchy is a plain `Rc`, with no cell, dispatch included.
+// - `Vehicle` is never written, but its subclass `Truck` is (`load`), so the
+//   whole `Vehicle` hierarchy keeps the cell, `Vehicle` included.
+// - `Slot<T>` is written through `Slot<int>` and only read through
+//   `Slot<String>`; a generic class has one representation for all its
+//   arguments, so both keep the cell.
+
+abstract class Shape {
+    private String name;
+    public Shape(String name) { this.name = name; }
+    public String getName() { return name; }
+    public abstract int area();
+}
+
+class Circle extends Shape {
+    private int r;
+    public Circle(int r) {
+        super("circle");
+        this.r = r;
+    }
+    public int area() { return 3 * r * r; }
+}
+
+class Square extends Shape {
+    private int side;
+    public Square(int side) {
+        super("square");
+        this.side = side;
+    }
+    public int area() { return side * side; }
+}
+
+class Vehicle {
+    private int wheels;
+    public Vehicle(int wheels) { this.wheels = wheels; }
+    public int getWheels() { return wheels; }
+}
+
+class Truck extends Vehicle {
+    private int cargo = 0;
+    public Truck() { super(6); }
+    public void load(int n) { cargo += n; }
+    public int getCargo() { return cargo; }
+}
+
+class Slot<T> {
+    private T value;
+    public Slot(T value) { this.value = value; }
+    public T get() { return value; }
+    public void put(T v) { value = v; }
+}
+
+int total(Vec<Shape> shapes) {
+    var sum = 0;
+    for (var s : shapes) {
+        sum += s.area();
+    }
+    return sum;
+}
+
+public void main() {
+    var shapes = new Vec<Shape>();
+    Shape c = new Circle(2);
+    shapes.push(c);
+    shapes.push(new Square(3));
+    print(total(shapes));
+    for (var s : shapes) {
+        print(s.getName() + " " + s.area());
+    }
+    print(shapes[0] === c);
+
+    var t = new Truck();
+    Vehicle v = t;
+    t.load(5);
+    t.load(7);
+    print(t.getCargo());
+    print(v.getWheels());
+
+    var n = new Slot<int>(1);
+    var alias = n;
+    n.put(41);
+    print(alias.get() + 1);
+    var label = new Slot<String>("fixed");
+    var same = label;
+    print(same.get());
+}

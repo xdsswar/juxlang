@@ -1885,11 +1885,8 @@ pub(crate) fn pattern_has_parens(p: &juxc_ast::Pattern) -> bool {
 /// on a different class will also get flagged, which only costs an
 /// unnecessary `mut`. Once tycheck carries receiver types we can do
 /// the precise per-class lookup instead.
-pub(crate) fn collect_user_mut_methods(unit: &CompilationUnit) -> HashSet<String> {
-    collect_user_mut_methods_seeded(unit, &HashSet::new())
-}
-
-/// Like [`collect_user_mut_methods`] but with an additional `extra_seed` of
+///
+/// Takes an additional `extra_seed` of
 /// method names already known to need `&mut self` (e.g. external `@MutSelf`
 /// stub methods). Seeding them BEFORE the fixed-point matters: a user method
 /// that calls such a method on a `this`-rooted receiver (`self.backing.peek()`

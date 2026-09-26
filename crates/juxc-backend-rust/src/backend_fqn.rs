@@ -361,6 +361,103 @@ impl crate::RustEmitter {
         self.resolve_bare_class_fqn(name).is_some_and(|fqn| self.box_classes.contains(&fqn))
     }
 
+    /// What follows `.0` to READ the fields of an object of class `name`
+    /// (ERRATA E1XX-PHASE8): the statement-scoped `.borrow()` of the cell for a
+    /// class that has one (`Rc<JuxCell<..>>`, or the atomic `JuxSync`), nothing
+    /// for one shared through a plain `Rc<C_Inner>`, which derefs straight to
+    /// its fields. Every handle read of a class goes through here, so the
+    /// representation is decided in one place.
+    pub(crate) fn cell_read(&self, name: &str) -> &'static str {
+        if self.is_refcell_class(name) {
+            ".borrow()"
+        } else {
+            ""
+        }
+    }
+
+    /// What follows `.0` to WRITE a field of an object of class `name`: the
+    /// cell's `.borrow_mut()`. A class the selector gave no cell cannot be
+    /// written; asking is recorded as a missed mutation, and the lowering is
+    /// redone with the cell restored (`lower_to_rep_fixpoint`), so the text
+    /// returned here only has to be right for a class that has one.
+    pub(crate) fn cell_write(&self, name: &str) -> &'static str {
+        if let Some(fqn) = self.resolve_bare_class_fqn(name) {
+            if self.wrapper_classes.contains(&fqn) && !self.refcell_classes.contains(&fqn) {
+                self.cell_demands.borrow_mut().insert(fqn);
+            }
+        }
+        ".borrow_mut()"
+    }
+
+    /// The representation the selector chose for class `name`, as the
+    /// `// JUX-REP:` comment spells it (§CR.9 Phase D): `inline`, `box`, `rc`,
+    /// `rc-refcell` or `arc-mutex`. `None` for a class the selector does not
+    /// decide (an exception, a `struct`, an intrinsic).
+    pub(crate) fn class_rep_label(&self, name: &str) -> Option<&'static str> {
+        let fqn = self.resolve_bare_class_fqn(name)?;
+        let rep = self.class_reps.get(&fqn)?;
+        if self.sync_class_fqns.contains(&fqn) && *rep != crate::ClassRep::Arc {
+            return Some("arc-mutex");
+        }
+        Some(match rep {
+            crate::ClassRep::Inline => "inline",
+            crate::ClassRep::Box => "box",
+            crate::ClassRep::Rc => "rc",
+            crate::ClassRep::Arc => "arc",
+            crate::ClassRep::RcRefCell => "rc-refcell",
+            crate::ClassRep::ArcMutex => "arc-mutex",
+        })
+    }
+
+    /// Whether the class being emitted is an Inline value (ERRATA
+    /// E1XX-PHASE8). Nothing writes such a class's objects, so each of its
+    /// methods takes `&self`; the by-name guess that a method mutates (a
+    /// same-named method elsewhere writes its `this`) must not make one
+    /// `&mut self`, which a caller holding the value in a plain `let` could
+    /// not call.
+    pub(crate) fn emitting_inline_class(&self) -> bool {
+        self.enclosing_class.as_deref().is_some_and(|c| self.class_rep_label(c) == Some("inline"))
+    }
+
+    /// Whether the class `name` takes the lock-free atomic handle
+    /// (`JuxArc`, ERRATA E1XX-PHASE8). See [`Self::is_wrapper_class`].
+    pub(crate) fn is_arc_class(&self, name: &str) -> bool {
+        self.resolve_bare_class_fqn(name)
+            .is_some_and(|fqn| self.class_reps.get(&fqn) == Some(&crate::ClassRep::Arc))
+    }
+
+    /// The atomic handle type and its constructor for a worker-shared class:
+    /// `JuxArc` for one nothing writes, `JuxSync` for the rest.
+    pub(crate) fn atomic_handle(&self, name: &str) -> (&'static str, &'static str) {
+        if self.is_arc_class(name) {
+            ("crate::JuxArc<", "crate::JuxArc::new(")
+        } else {
+            ("crate::JuxSync<", "crate::JuxSync::new(")
+        }
+    }
+
+    /// The Rust type of a non-owning reference to an object of class `name`
+    /// (a `weak` field or parameter, §6.5 / §M.14): a `Weak` at whatever the
+    /// handle's `Rc` holds, the cell or the bare inner struct. `inner` is the
+    /// inner struct's spelling (`Node_Inner`, with its type arguments).
+    pub(crate) fn weak_handle_type(&self, name: &str, inner: &str) -> String {
+        if self.is_refcell_class(name) {
+            format!("std::rc::Weak<crate::JuxCell<{inner}>>")
+        } else {
+            format!("std::rc::Weak<{inner}>")
+        }
+    }
+
+    /// The `Rc` a handle of class `name` holds, for the §P.4 binding helpers
+    /// that rebuild a handle from it: the cell or the bare inner struct.
+    pub(crate) fn strong_handle_type(&self, name: &str, inner: &str) -> String {
+        if self.is_refcell_class(name) {
+            format!("std::rc::Rc<crate::JuxCell<{inner}>>")
+        } else {
+            format!("std::rc::Rc<{inner}>")
+        }
+    }
+
     /// Resolve a bare or FQN class name to its [`ClassSig`], package-aware via
     /// [`Self::resolve_bare_class_fqn`]. Used by emission helpers that hold
     /// `self.enclosing_class` (bare in the source) but need the FQN-keyed

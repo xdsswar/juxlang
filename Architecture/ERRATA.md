@@ -3671,6 +3671,161 @@ closing paragraph point here. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains
 
 ---
 
+## E1XX-PHASE8. The representation selector
+
+**Conflict.** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3 specifies a
+selector that picks one of Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` and
+`Arc<Mutex>` per class, and §CR.7 gives it three diagnostics numbered
+`E0950`-`E0952`. The compiler gave every class `Rc<RefCell>` (commit
+`02bc558` removed the earlier tiering because its boundaries were where the
+emitted Rust failed to borrow-check), so the selector was unbuilt (GAPS.md
+gap 23). Its three codes also collided with the free-function operator
+checks `E0950` (orphan operator) and `E0951` (duplicate operator), raised
+since E65, and `E0952` (reserved by §R.3.6).
+
+**Resolution.**
+
+- **Codes.** §D.5.1 forbids reassigning a published code, so the operator
+  checks keep `E0950`-`E0952` and the representation diagnostics become
+  `E0953` (identity across function boundaries on an Inline class), `E0954`
+  (a `weak` target left Inline) and `E0955` (a self-containing class left
+  without a refcount), in §CR.7's order. §D.4 lists them.
+- **Tier `Rc`: a class nothing writes has no cell.** §CR.4.1's `mutated`
+  property is computed per class, by fully-qualified name
+  (`rep_select.rs`). A class is `mutated` when any code writes one of its
+  objects after construction: an assignment, compound assignment, `++`/`--`,
+  `out` argument or `&` whose place is one of its fields (through a receiver
+  typed as the class, `this`, or a bare field name in its own members); a
+  write into a value struct held in one of its fields; a call that mutates a
+  field in place (a known container mutator, a user method that writes
+  `this`, a foreign `@MutSelf` method). A store through a receiver the types
+  do not name as a class (an interface, a type parameter, an unrecorded type)
+  counts against every class with a field of that name, and a write reaches
+  the whole `extends` component. A constructor's or initializer's own stores
+  are construction. Some classes keep the cell whatever is written: one with a
+  `ref` or `observer` field or an observable property (attaching an observer
+  writes its list), one implementing an interface with a settable property,
+  one whose constructor runs against the finished object (it calls a method on
+  `this` or hands `this` to a lambda), and, for now, every member of an
+  `extends` hierarchy and every class that crosses a worker boundary (its
+  handle is the atomic `JuxSync`). Every other wrap-eligible class is
+  `pub struct C(Rc<C_Inner>)`: constructed with `Rc::new`, its fields read as
+  `x.0.f` with no guard, identity still `Rc::ptr_eq`. A `weak` field or
+  parameter aimed at it is `Weak<C_Inner>`. The emitters ask one place how to
+  reach a class's fields (`cell_read`, `cell_write` in `backend_fqn.rs`), and
+  a bound-position or interface accessor for such a class has a getter and no
+  setter.
+- **The emitter checks the selector.** Every mutable borrow the backend emits
+  for a class goes through `cell_write`. If the class was given no cell, the
+  request is recorded and the whole lowering runs again with that class's
+  cell restored, so a write the analysis missed costs a second pass, never a
+  program that does not compile. The classes restored this way are on the
+  result (`RustCrate::rep_fallbacks`), and under `JUX_SELFCHECK=1` each is an
+  `E0900` ("the representation selector judged class `C` never written after
+  construction, and the lowering writes it"): on the corpus the analysis alone
+  must be right, and it is. The borrow self-check needs no change for a class
+  without a cell: it tracks cell guards, and such a class takes none.
+- **Tiers Inline and `Box`: a contained class is a value.** §CR.3.3 gives
+  Inline to a class that neither escapes nor is aliased, and `Box` to one that
+  escapes without being aliased. Both copy the object where the lowering would
+  have shared a handle, so both are sound only when a copy cannot be told from
+  the object. The selector therefore decides them by a whitelist of positions
+  (`compute_contained_classes`), not by a list of the ways an object could be
+  observed: an object of a CONTAINED class appears only as a FRESH local's
+  initializer (`var p = new C(..)` or a call returning `C`, never `var q = p`,
+  and the local declared `var` or `C`), as a whole expression statement, as
+  the receiver of one of the class's own fields or methods (not the universal
+  `operator hash`/`operator string`, which read identity), and as the value of
+  a `return` from a function declared to return exactly `C`; never inside a
+  lambda or an anonymous class, and `C` is named by no field, parameter, record
+  component, enum payload, bound, alias or constant, and by no checked
+  expression type other than exactly `C`. So the object is never passed,
+  stored, compared, printed, hashed, captured or given a second name. A
+  candidate also has no type parameters, no `extends` or subclass, no
+  `implements`, no properties, no `drop` body (a copy would run it twice), no
+  annotation, no `async` or generator method, no `ref`/`weak`/`observer` field,
+  a constructor that builds in place, and fields that are all Jux values,
+  class or interface handles, arrays or collections: a FOREIGN value is out
+  even when it is `Clone`, since its own methods may change it through `&self`
+  where no analysis of the Jux program looks. Every method of an Inline class
+  takes `&self` (nothing writes it, so the by-name guess that a same-named
+  method mutates does not apply). A
+  contained class that nothing writes is Inline (a plain struct, §CR.6.1,
+  exactly §CR.8.1's shape) when no function returns one, and
+  `Box<C_Inner>` (§CR.6.2) when one does. A contained class that IS written
+  stays on the `Rc` tiers: §CR.4.1 lets a unique owner mutate a value in
+  place, but the lowering copies a value where it would have shared a handle,
+  and a write to a copy is lost silently. That restriction is the whole
+  difference from §CR.3.3's table, and it is what makes these tiers sound.
+- **Tiers `Arc` and `Arc<Mutex>`: the worker path, split on `mutated`.** A
+  class whose objects cross a worker boundary (§18.2's capture analysis,
+  closed over fields, unchanged) takes an atomic handle. §CR.4.1's two
+  cross-thread rows now both exist: a class that needs its cell keeps
+  `JuxSync` (`Arc<Mutex<C_Inner>>`), and one nothing writes, whose fields are
+  all Jux values or classes (so the handle is `Sync`), is `JuxArc<C_Inner>`, an
+  `Arc` with no lock that reads its fields through `Deref` and answers the same
+  `new`/`as_ptr`/`ptr_eq` surface. A write the analysis missed falls back to
+  `JuxSync` through the same demand mechanism. The §CR.3.5 roll-up joins
+  representations rather than taking the higher rank: `Arc` joined with
+  `RcRefCell` is `ArcMutex`, the one that both crosses threads and is written.
+
+- **Hierarchies and generics.** A hierarchy no longer keeps the cell as a
+  matter of course: every class of an `extends` component takes the join of
+  what its members need (§CR.3.5), so a hierarchy nothing writes is a plain
+  `Rc` with its `Rc<dyn Kind>` dispatch unchanged, and one written through
+  any member (a subclass's method, a store through a base-typed reference,
+  which the analysis attributes to the whole component) keeps the cell for
+  every member. The slicing upcast, the `Kind` forwarding impls and the
+  bound-position accessors of a leaf follow the representation; a hierarchy
+  without a cell offers no `__set_<f>`. A constructor in a hierarchy that
+  does more than store its parameters runs against the handle (E21) and so
+  keeps the cell. A generic class has one representation for all its
+  arguments (§CR.3.4): the analysis reads every use of every instantiation,
+  so one written `Slot<int>` gives `Slot<String>` its cell too.
+  Per-instantiation selection stays future work, as §CR.9 Phase D says.
+- **`E0953`-`E0955` are the selector's own check.** §CR.7 describes them as
+  firing "before the selector commits" when the program needs something a
+  value representation cannot give. The selector here never commits: its
+  whitelist rules out, before choosing, every class compared with `===`, the
+  target of any `weak` reference, and every class that contains itself. So
+  the three codes are a verification of the finished selection
+  (`verify_selection`), run on every build: a class selected Inline or `Box`
+  that is compared by identity (`E0953`), aimed at by a `weak` field or
+  parameter (`E0954`) or self-containing (`E0955`) is reported as an error
+  naming the class, instead of being lowered into a program that would behave
+  differently from Java. None can fire unless the selector is wrong, which is
+  why the help line calls it a compiler bug. §CR.7's `E0952` wording ("a hard
+  error until the cycle-breaker lands") is not followed literally: a
+  self-containing class takes a refcounted representation (`Rc`, or
+  `Rc<RefCell>` when written), leaking uncollected cycles as §CR.9 Phase C
+  documents, rather than rejecting every linked list.
+- **What is reported.** Each class's representation is written above it in
+  the generated Rust as `// JUX-REP: inline|box|rc|rc-refcell|arc|arc-mutex`
+  (§CR.9 Phase D). §CR.9 asked for `// JUX:rep=...`; `// JUX:` is the
+  source-marker prefix the driver maps lines by, so the spelling differs. On
+  the example corpus (436 programs, the core library's classes left out),
+  the 579 user classes select as: 293 `rc`, 196 `rc-refcell`, 81 `inline`,
+  2 `box`, 2 `arc`, 5 `arc-mutex`. Every program prints exactly what it
+  printed before, the borrow self-check stays clean, and no class needed the
+  fallback.
+
+**Known boundary.** Where this departs from §CR.3.3's table, it is toward
+the more general representation: a contained class that is written stays on
+the `Rc` tiers (Inline and `Box` copy, and a write to a copy is lost); a
+contained class holding a foreign value stays there too; a candidate for a
+value representation must not be generic, in a hierarchy, or implement an
+interface; `Arc` without a lock needs every field to be a Jux value or class.
+§CR.2 and §CR.5.2 still say a `dyn`-dispatched slot forces `Arc`; the
+selector keeps E14's resolution (`Rc`, atomic only across a worker boundary).
+The value tiers are rare by construction: most objects in a Java-shaped
+program are passed somewhere, and a passed object is shared.
+
+**Spec status:** §CR.7 carries the new numbers and a note on the old ones;
+§D.4 has the three rows, implemented. The addendum's status line and §CR.9
+say what is built. GAPS.md gap 23 is closed.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

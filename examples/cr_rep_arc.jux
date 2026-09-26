@@ -1,0 +1,60 @@
+// Class representation across threads: `Arc` and `Arc<Mutex>`
+// (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.2.4, §CR.4.1, §CR.8.4;
+// ERRATA E1XX-PHASE8).
+//
+// A class whose objects a worker takes across takes an atomic handle
+// (JUX-ASYNC-ADDENDUM §18.2). How much it pays depends on whether anything
+// writes it:
+//
+// - `Config` is read by every worker and written by none, so it is an `Arc`
+//   with no lock: workers read its fields in parallel;
+// - `Tally` is written by every worker, so it keeps the lock (`Arc<Mutex>`),
+//   and one `add` at a time lands in the one shared object.
+//
+// Either way it is one object: the caller sees what the workers did, and
+// `===` still compares identity.
+
+class Config {
+    private String name;
+    private int step;
+    public Config(String name, int step) {
+        this.name = name;
+        this.step = step;
+    }
+    public String getName() { return name; }
+    public int getStep() { return step; }
+}
+
+class Tally {
+    private int total = 0;
+    public void add(int n) { total += n; }
+    public int get() { return total; }
+}
+
+public int work(Config c, Tally t, int rounds) {
+    int i = 0;
+    while (i < rounds) {
+        t.add(c.getStep());
+        i = i + 1;
+    }
+    return rounds;
+}
+
+public async int run() {
+    var config = new Config("batch", 3);
+    var tally = new Tally();
+    var a = Worker.spawn(() -> work(config, tally, 100));
+    var b = Worker.spawn(() -> work(config, tally, 200));
+    var done = await a;
+    done = done + await b;
+    print(done);
+    print(tally.get());
+    print(config.getName());
+    var same = config;
+    print(same === config);
+    return done;
+}
+
+public void main() {
+    block_on(run());
+}

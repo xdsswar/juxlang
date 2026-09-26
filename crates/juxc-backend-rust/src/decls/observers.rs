@@ -651,12 +651,12 @@ impl RustEmitter {
                 self.w.split_off_from(mark)
             };
             self.w.indent_inc();
+            let weak = self.weak_handle_type(&name, &format!("{name}_Inner{gargs}"));
+            let strong = self.strong_handle_type(&name, &format!("{name}_Inner{gargs}"));
             self.w.line(&format!(
-                "pub fn __jux_weak(&self) -> std::rc::Weak<crate::JuxCell<{name}_Inner{gargs}>> {{ std::rc::Rc::downgrade(&self.0) }}"
+                "pub fn __jux_weak(&self) -> {weak} {{ std::rc::Rc::downgrade(&self.0) }}"
             ));
-            self.w.line(&format!(
-                "pub fn __jux_from_inner(rc: std::rc::Rc<crate::JuxCell<{name}_Inner{gargs}>>) -> Self {{ Self(rc) }}"
-            ));
+            self.w.line(&format!("pub fn __jux_from_inner(rc: {strong}) -> Self {{ Self(rc) }}"));
             self.w.indent_dec();
             self.w.newline();
         }

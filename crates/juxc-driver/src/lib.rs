@@ -1028,7 +1028,9 @@ pub fn write_crate_with_manifest(
     // from, against the formatted line numbers.
     source_map::write_line_table(crate_dir, &written_rs);
     // The borrow self-check (gap 29), before anything is built or run.
+    borrow_selfcheck::check_rep_violations(&crate_.rep_violations)?;
     if borrow_selfcheck::enabled() {
+        borrow_selfcheck::check_rep_fallbacks(&crate_.rep_fallbacks)?;
         borrow_selfcheck::check_crate(crate_dir, &written_rs)?;
     }
     Ok(written_rs)
@@ -1337,7 +1339,9 @@ pub fn build_emitted_crate(
         .map(|r| crate_dir.join(r))
         .collect();
     source_map::write_line_table(crate_dir, &all_rs);
+    borrow_selfcheck::check_rep_violations(&crate_.rep_violations)?;
     if borrow_selfcheck::enabled() {
+        borrow_selfcheck::check_rep_fallbacks(&crate_.rep_fallbacks)?;
         borrow_selfcheck::check_crate(crate_dir, &all_rs)?;
     }
 

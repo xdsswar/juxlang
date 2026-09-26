@@ -44,6 +44,7 @@ impl RustEmitter {
         // its operator body writes to `this`; emitting `&mut self` on a wrapper forces
         // a `let mut` at the call site that the binding emitter never produces (E0596).
         let needs_mut_self = !self.emitting_wrapper_class
+            && !self.emitting_inline_class()
             && body
                 .map(|b| {
                     body_writes_to_this(b)
@@ -369,6 +370,9 @@ impl RustEmitter {
             // one does it as an inherent method rather than `Rc`'s associated fn.
             if self.sync_classes.contains(class_name) {
                 self.w.push_str("@{:p}\", self.0.as_ptr())
+");
+            } else if self.is_box_class(class_name) {
+                self.w.push_str("@{:p}\", &*self.0 as *const _)
 ");
             } else {
                 self.w.push_str("@{:p}\", std::rc::Rc::as_ptr(&self.0))
