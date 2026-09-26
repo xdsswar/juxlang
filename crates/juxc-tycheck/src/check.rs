@@ -4383,6 +4383,9 @@ impl<'a> Checker<'a> {
             "override", "inline", "noinline", "align", "repr", "export", "extern", "native", "nativemodule",
             "cfg", "entry", "register", "interrupt", "plugininterface", "reflectable", "annotationtype",
             "layout", "target", "retention", "repeatable",
+            // `@lint(allow = "...")` is read by the driver's lint pass
+            // (DIAGNOSTICS §D.5.4), which also reports a malformed one.
+            "lint",
         ];
         let Some(last) = a.name.segments.last() else { return };
         let written = last.text.as_str();

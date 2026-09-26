@@ -861,8 +861,10 @@ pub enum Code {
     W0457_UnannotatedRefCycle,
     /// W0820 -- An `unsafe { }` block with no `// SAFETY:` comment saying why
     /// its obligations hold (Layout-ABI §L.5.5). Raised by the checking entry
-    /// points (`juxc --check`, `jux check`, the editor), not by a build: a
-    /// style lint for review, never an error.
+    /// points (`juxc --check`, `jux check`, the editor); a build raises it only
+    /// when the package's `[lints]` names it, which is how
+    /// `unsafe-without-justification = "deny"` fails a build (DIAGNOSTICS
+    /// §D.5.4). A warning unless a lint level says otherwise.
     W0820_UnsafeWithoutSafetyComment,
     /// W0240 -- `@Derive(...)` does nothing: records, structs and enums derive
     /// their operators without it (MISSING-DEFS §M.3, OPERATORS §O.9).
@@ -871,6 +873,11 @@ pub enum Code {
     /// `annotation`, usually a misspelling (`@Tset`). A warning, not an error:
     /// the annotation has no effect either way (ANNOTATIONS §A.12).
     W0241_UnknownAnnotation,
+    /// W0242 -- `@lint(allow = "...")` (or `warn` / `deny`) names neither a
+    /// lint from DIAGNOSTICS §D.5.4 nor a warning code, so it sets nothing.
+    /// A warning for the reason `W0241` is one: the misspelt name has no effect
+    /// either way, and the author meant it to have one.
+    W0242_UnknownLint,
     /// W0470 -- A method that overrides an inherited one without `@Override`
     /// (JUX-LANG-V1 §7.4.1). The annotation is what makes the intent checkable.
     W0470_MissingOverrideAnnotation,
@@ -1340,6 +1347,7 @@ impl Code {
             Code::W0820_UnsafeWithoutSafetyComment => "W0820",
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
+            Code::W0242_UnknownLint              => "W0242",
             Code::W0470_MissingOverrideAnnotation => "W0470",
             Code::W0490_RefOnReferenceType       => "W0490",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",

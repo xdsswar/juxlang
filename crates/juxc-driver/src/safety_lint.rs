@@ -16,9 +16,11 @@
 //!   `/* ... */` block, with no blank line in between), or
 //! - the comment lines at the very top of the block, right after `{`.
 //!
-//! It is a warning raised by the checking entry points only (`juxc --check`,
+//! It is a warning raised by the checking entry points (`juxc --check`,
 //! `jux check`, the editor): a build stays quiet, the way Rust keeps its
-//! equivalent lint out of `cargo build`.
+//! equivalent lint out of `cargo build`, unless the package's `[lints]` names
+//! it, which is how `unsafe-without-justification = "deny"` fails a build
+//! (DIAGNOSTICS §D.5.4, `crate::finish_lints`).
 
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};

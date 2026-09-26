@@ -1,0 +1,20 @@
+// `[lints]` in this directory's jux.toml decides these levels.
+
+class Base {
+    public void run() { }
+}
+
+class Derived extends Base {
+    // W0470 (no `@Override`) is allowed by the table: nothing reported.
+    public void run() { }
+}
+
+public void main() {
+    // Denied by name: an error.
+    unsafe {
+        print(1);
+    }
+    // Not named, so `warnings-as-errors` makes it one.
+    ref Derived d = new Derived();
+    d.run();
+}

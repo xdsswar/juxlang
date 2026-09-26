@@ -1,0 +1,33 @@
+// `@lint` sets a warning's level for the declaration it sits on (§D.5.4).
+
+@lint(allow = "unsafe-without-justification")
+void quiet() {
+    unsafe {
+        print(1);
+    }
+}
+
+@lint(deny = "W0820")
+void strict() {
+    unsafe {
+        print(2);
+    }
+}
+
+void plain() {
+    unsafe {
+        print(3);
+    }
+}
+
+@lint(forbid = "W0820")
+@lint(allow = "unsafe-without-justifcation")
+@lint(allow = {"E0410", "W0457"})
+void malformed() { }
+
+public void main() {
+    quiet();
+    strict();
+    plain();
+    malformed();
+}

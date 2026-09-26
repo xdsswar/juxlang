@@ -56,6 +56,14 @@ struct Cli {
     /// Color the `human` format: `auto`, `always` or `never`.
     #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
     color: String,
+    /// Report every warning as an error, failing the build
+    /// (JUX-DIAGNOSTICS-ADDENDUM §D.5.4). The same as `-Werror`.
+    #[arg(long, global = true)]
+    deny_warnings: bool,
+    /// `-Werror`: the compiler-flag spelling of `--deny-warnings`. `error` is
+    /// the only value.
+    #[arg(short = 'W', global = true, value_name = "error")]
+    warnings: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -379,6 +387,18 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
         eprintln!("jux: {msg}");
         return Ok(ExitCode::from(2));
     }
+    match cli.warnings.as_deref() {
+        None | Some("error") => {}
+        Some(other) => {
+            eprintln!("jux: `-W{other}` is not a flag; `-Werror` makes every warning an error");
+            return Ok(ExitCode::from(2));
+        }
+    }
+    // `-Werror` travels to the driver the way `--features` does, through the
+    // environment the build facts are computed from (`cfg_facts_for`).
+    if cli.deny_warnings || cli.warnings.is_some() {
+        std::env::set_var("JUX_DENY_WARNINGS", "1");
+    }
     // Resolve the project root once: an explicit `--manifest-path`, else the
     // nearest `jux.toml` walking up from the cwd. `None` when no manifest is
     // found (project-mode commands report their own "no jux.toml" error).
@@ -657,7 +677,8 @@ fn reads_the_manifest(command: &CliCommand) -> bool {
 /// member's diagnostics to the root's `jux.toml`.
 fn report_manifest_checks(root: &Path) -> bool {
     let mut any_error = false;
-    for check in juxc_driver::manifest_check::check_project(root) {
+    for mut check in juxc_driver::manifest_check::check_project(root) {
+        check.apply_lint_levels(juxc_driver::lints::deny_warnings_requested());
         any_error |= check.has_errors();
         if !check.diagnostics.is_empty() {
             print_diagnostics(&check.diagnostics, std::slice::from_ref(&check.source));
@@ -1319,7 +1340,8 @@ fn build_examples(
         return Ok(ExitCode::SUCCESS);
     }
     let (dep_sources, _path_deps) = juxc_driver::project::resolve_package_deps(manifest, emit_root)?;
-    let facts = juxc_driver::project::cfg_facts_for(manifest, release);
+    let facts = juxc_driver::project::cfg_facts_for(manifest, release)
+        .with_checking(matches!(action, Action::Check));
     for example in chosen {
         let build = juxc_driver::project::build_example(
             manifest, &dep_sources, emit_root, release, example, &facts,
@@ -1374,7 +1396,8 @@ fn build_and_act(
         emit_root,
         release,
         target_sel,
-        &juxc_driver::project::cfg_facts_for(manifest, release),
+        &juxc_driver::project::cfg_facts_for(manifest, release)
+            .with_checking(matches!(action, Action::Check)),
     )?;
     print_diagnostics(&build.diagnostics, &build.sources);
     if build.has_errors() {
@@ -1497,7 +1520,7 @@ fn run_workspace(
         // then report). For brevity we reuse build_workspace and just
         // skip running.
     }
-    let ws = juxc_driver::project::build_workspace(root, release)?;
+    let ws = juxc_driver::project::build_workspace(root, release, matches!(action, Action::Check))?;
     for (name, build) in &ws.members {
         print_diagnostics(&build.diagnostics, &build.sources);
         if build.has_errors() {
@@ -1723,7 +1746,7 @@ fn run_source_set(
             .with_context(|| format!("reading {}", f.display()))?;
         sources.push(juxc_source::SourceFile::new(f.clone(), contents));
     }
-    let facts = juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full);
+    let facts = loose_facts(release, action);
     let result = juxc_driver::compile_workspace_cfg(sources, &facts)?;
     finish_compile(result, dir, action, emit_dir_override, release)
 }
@@ -1758,9 +1781,17 @@ fn run_single_file(
     let contents = std::fs::read_to_string(input)
         .with_context(|| format!("reading {}", input.display()))?;
     let source = juxc_source::SourceFile::new(input.to_path_buf(), contents);
-    let facts = juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full);
+    let facts = loose_facts(release, action);
     let result = juxc_driver::compile_workspace_cfg(vec![source], &facts)?;
     finish_compile(result, input, action, emit_dir_override, release)
+}
+
+/// The build facts for files with no manifest: no features and no `[lints]`,
+/// so only `-Werror` and whether this is a check apply.
+fn loose_facts(release: bool, action: Action) -> juxc_driver::CfgFacts {
+    juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full)
+        .with_deny_warnings(juxc_driver::lints::deny_warnings_requested())
+        .with_checking(matches!(action, Action::Check))
 }
 
 /// Report, then build and possibly run - shared by the single-file and

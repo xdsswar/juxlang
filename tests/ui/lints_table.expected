@@ -1,0 +1,2 @@
+lints_table\app.jux:14:5: [W0820] error: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
+lints_table\app.jux:18:9: [W0490] error: `ref` adds nothing here: `Derived` is already a reference type, so every binding of it shares one object (§M.13.2)

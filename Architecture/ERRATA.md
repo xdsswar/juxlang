@@ -2960,6 +2960,68 @@ and `volatile` only, and say where `yield` and `annotation` went.
 
 ---
 
+## E1XX-PHASE5c. Lint levels, `-Werror`, and `W0820` under `jux check`
+
+**Conflict.** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.5.4 specified a `[lints]` table
+(`warnings-as-errors`, `all`, a level per lint) and an `@lint(allow = ...)`
+attribute, and §D.1.2 said a warning "does not fail unless `-Werror`". None of
+it existed. `[lints]` was not among the manifest's known tables, so E106's
+validation answered the spec's own example with `W0902` ("nothing reads it"),
+which was true. Neither `jux` nor `juxc` had a `-Werror`.
+
+§D.5.4 was also silent or wrong where an implementation has to answer: it spoke
+of `L####` lint codes that no catalog allocates, named three lints of which the
+compiler raises one, said nothing about precedence between the table and the
+attribute, nothing about which package's table governs a dependency's files,
+and nothing about what a denied warning looks like once reported.
+
+Separately, `W0820` (an `unsafe` block without `// SAFETY:`) was documented as
+raised by `juxc --check`, `jux check` and the editor, and `jux check` did not
+raise it: the checking entry point `jux` uses is the compile path, and only the
+editor's path called the lint. So "deny unjustified `unsafe`" could not be
+expressed anywhere, not even as a warning on the command line.
+
+**Resolution.** §D.5.4 is rewritten to what is built:
+
+- Every warning is a lint. A key is a lint name or a warning code (`W0820`);
+  there are no `L####` codes, and a name is an alias for its code.
+  `unsafe-without-justification` is `W0820`; `unused-import` and
+  `shadowed-name` are specified and not raised yet, and setting them is a
+  `W0902` that says so rather than an error.
+- Precedence, innermost first: the nearest enclosing `@lint`, the package's
+  per-lint key, its `all`, then `warn`; `warnings-as-errors` and `-Werror` /
+  `--deny-warnings` then promote whatever is still a warning. `allow` beats
+  `-Werror`.
+- A promoted warning keeps its `W` code (as rustc keeps a lint's name under
+  `#[deny]`), is reported as an error, and carries a note naming the setting
+  that promoted it.
+- Each package's table governs its own files, a path dependency's included;
+  `-Werror` governs the build; the manifest's own `W0901`-`W0903` answer to
+  its table.
+- One pass applies the levels, in every compile and check entry point, after
+  the last diagnostic and before the has-errors decision that gates code
+  generation. A level applied after that decision would print `error:` and
+  still build.
+- `@lint` takes `allow` / `warn` / `deny`, each a string or an array. A bad key
+  is `E0448`, a non-string or an error code `E0474`, and an unknown name the
+  new `W0242`.
+- `[lints]` is validated with the rest of the manifest (§B.2.5): a value that
+  is not a level, or an error code as a key, is `E0903`; an unknown key is
+  `W0902`.
+
+`W0820` stays a review lint: every checking entry point now raises it,
+`jux check` included, and a build still does not, the way Rust keeps its
+equivalent out of `cargo build`. The one exception is the point of the gap: a
+package whose `[lints]` names it, by code or by name, gets it in the build as
+well, so `unsafe-without-justification = "deny"` fails `jux build`. An `@lint`
+alone does not make a build raise it.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.5.4 is rewritten in place,
+the §D.4 warnings table gains `W0242` and the `W0820` row states the build
+rule. `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.2.5 gains the two `[lints]` rows.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

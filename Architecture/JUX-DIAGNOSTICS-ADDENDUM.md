@@ -700,6 +700,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0001`  | Doc comment in non-attaching position *(reserved)*          | Grammar §A.1.2                 |
 | `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation | Missing-defs §M.3 / Operators §O.9 |
 | `W0241`  | Unknown annotation: neither built in nor declared (often a misspelling) | Annotations §A.12 |
+| `W0242`  | `@lint(...)` names neither a lint nor a warning code, so it sets nothing | Diagnostics §D.5.4 |
 | `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |
 | `W0490`  | `ref` on a type that is already a reference (class, interface, array, collection) | JUX-MISSING-DEFS §M.13.2, ERRATA E84 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
@@ -709,7 +710,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module *(retired: the check is the error `E0497`, ERRATA E93; the number is not reused)* | Semantics §S.4.2 |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
-| `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor, not by a build) | Layout-ABI §L.5.5 |
+| `W0820`  | `unsafe` block missing `// SAFETY:` justification (raised by `juxc --check`, `jux check` and the editor; by a build only when the package's `[lints]` names it, §D.5.4) | Layout-ABI §L.5.5 |
 | `W0901`  | A required `[package]` key is absent and was defaulted (`version` → `0.0.0`, `edition` → `"2026"`) | Build system §B.2.5 / `ERRATA.md` E106 |
 | `W0902`  | An unknown key or table in `jux.toml`: nothing reads it | Build system §B.2.5 / `ERRATA.md` E106 |
 | `W0903`  | A `package.name` that is legal but not reverse-DNS shaped: a dotted name whose first segment holds `_` (a single segment is clean) | Build system §B.2.3 / `ERRATA.md` E106 |
@@ -781,7 +782,8 @@ Prints the docs page for the named code in the terminal. This works offline (the
 
 ### D.5.4. Lint Configuration
 
-Lint codes (`L####`) are configurable per project:
+Every warning is a lint: its level is configurable per package, per
+declaration, and for a whole build.
 
 ```toml
 # in jux.toml
@@ -791,16 +793,64 @@ all = "warn"                            # default level for unlisted lints
 unused-import = "deny"
 shadowed-name = "warn"
 unsafe-without-justification = "deny"
+W0470 = "allow"                         # any warning code is a key too
 ```
 
-Levels: `allow` (silent), `warn` (emit warning), `deny` (emit error). The level can be overridden per-file via attribute:
+Levels: `allow` (silent), `warn` (emit warning), `deny` (emit error). The level can be overridden for one declaration, and everything inside it, via attribute:
 
 ```jux
 @lint(allow = "shadowed-name")
 public class Builder { ... }
+
+@lint(deny = {"W0820", "W0457"})
+void lowLevel() { ... }
 ```
 
-Lints that ship in v0.1 are listed alongside the catalog; new lints are added with each compiler release at minor-version bumps.
+**Keys.** A key is a lint name from the table below or a warning code
+(`W0820`; written as `juxc explain` accepts it, so `w820` is the same key).
+There are no `L####` codes: a lint reports under its warning code, and the
+name is an alias for it.
+
+| Lint name                      | Code    | Status in v0.1 |
+|--------------------------------|---------|----------------|
+| `unsafe-without-justification` | `W0820` | raised |
+| `unused-import`                | --      | specified, not raised yet |
+| `shadowed-name`                | --      | specified, not raised yet |
+
+**Validation** (with the rest of the manifest, `JUX-BUILD-SYSTEM-ADDENDUM.md`
+§B.2.5). A value that is not a level, a `warnings-as-errors` that is not a
+boolean, and an error code as a key (`E0410 = "allow"`: an error has no level)
+are `E0903`. A key that names nothing is `W0902`, as any unread key is; so is a
+lint named above that is not raised yet, whose setting is legal and has no
+effect. In source, `@lint` takes the keys `allow`, `warn` and `deny`, each a
+string or an array of strings: any other key is `E0448`, a value that is not a
+string (or an error code) is `E0474`, and a string that names no lint is
+`W0242`.
+
+**Precedence**, innermost first: the nearest enclosing `@lint` that names the
+warning, then the per-lint key of the `[lints]` table of the package the file
+belongs to, then that table's `all`, then `warn`. Last, whatever is still a
+warning becomes an error under `warnings-as-errors = true` or the command-line
+`-Werror` (same as `--deny-warnings`, on both `jux` and `juxc`). `allow` wins
+over `-Werror`: a silenced warning is not reported at all.
+
+**What a promoted warning looks like.** It keeps its `W` code, is reported
+with severity `error`, fails the build like any error, and carries a note
+naming the setting that promoted it, so an author who did not know they had
+asked for the error can find out where it came from.
+
+**Scope.** Each package's `[lints]` governs that package's own files; a path
+dependency is governed by its own table, not its consumer's. The manifest's
+own warnings (`W0901`-`W0903`) answer to the table in it. `-Werror` governs
+the whole build. A file under no package has only the defaults.
+
+**Review lints and builds.** `W0820` is a review lint: `juxc --check`, `jux
+check` and the editor raise it, and a build does not -- unless the package's
+`[lints]` names it (by code or by name), because a table that says
+`unsafe-without-justification = "deny"` is asking the build to enforce it. An
+`@lint` alone does not make a build raise it.
+
+New lints are added with each compiler release at minor-version bumps.
 
 ### D.5.5. The Stability Promise
 
