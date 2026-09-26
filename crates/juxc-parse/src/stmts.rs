@@ -199,17 +199,18 @@ impl<'a> Parser<'a> {
                 juxc_ast::FinalKw::Final
             };
             self.advance(); // 'final' | 'const'
+            let final_span = Some(self.consumed_modifier_span());
             if self.at_kw(Keyword::Var) {
                 if self.at_record_destructure() {
                     return self.parse_var_record_destructure(kw);
                 }
-                return self.parse_var_decl_with(kw).map(Stmt::VarDecl);
+                return self.parse_var_decl_with(kw).map(|vd| Stmt::VarDecl(VarDecl { final_span, ..vd }));
             }
             // Otherwise the declaration must take the typed form
             // `Type name [= init];`. We unconditionally dispatch
             // because no other statement form may follow a leading
             // `final`/`const` keyword.
-            return self.parse_typed_local_with(kw).map(Stmt::VarDecl);
+            return self.parse_typed_local_with(kw).map(|vd| Stmt::VarDecl(VarDecl { final_span, ..vd }));
         }
         // `ref` local declaration (§M.13): `ref Type name = init;` — a
         // SHARED reference to a value-typed object. `ref var` is not a
@@ -689,6 +690,7 @@ impl<'a> Parser<'a> {
             juxc_ast::FinalKw::None
         };
         let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
+        let final_span = is_final.then(|| self.consumed_modifier_span());
 
         // `var IDENT :` (inferred) or `TYPE IDENT :` (explicit type).
         let var_type = if self.eat_kw(Keyword::Var) {
@@ -708,6 +710,7 @@ impl<'a> Parser<'a> {
             is_await,
             is_final,
             final_kw,
+            final_span,
             var_type,
             var_name,
             iter,
@@ -1029,6 +1032,7 @@ impl<'a> Parser<'a> {
             init,
             is_final: true,
             final_kw,
+            final_span: None,
             is_ref: false,
             init_error: false,
             span,
@@ -1115,6 +1119,7 @@ impl<'a> Parser<'a> {
                     init: Some(read),
                     is_final,
                     final_kw,
+                    final_span: None,
                     is_ref: false,
                     init_error: false,
                     span: binder.span,
@@ -1129,6 +1134,7 @@ impl<'a> Parser<'a> {
                         init: Some(read),
                         is_final: true,
                         final_kw,
+                        final_span: None,
                         is_ref: false,
                         init_error: false,
                         span: record.span,
@@ -1210,6 +1216,7 @@ impl<'a> Parser<'a> {
                 init: Some(elem_init),
                 is_final: false,
                 final_kw: juxc_ast::FinalKw::None,
+                final_span: None,
                 is_ref: false,
                 init_error: false,
                 span: binder.span,
@@ -1222,6 +1229,7 @@ impl<'a> Parser<'a> {
             init,
             is_final: false,
             final_kw: juxc_ast::FinalKw::None,
+            final_span: None,
             is_ref: false,
             init_error: false,
             span,
@@ -1274,6 +1282,7 @@ impl<'a> Parser<'a> {
             init,
             is_final,
             final_kw,
+            final_span: None,
             is_ref: false,
             init_error: false,
             span: start.join(end),
@@ -1655,6 +1664,7 @@ impl<'a> Parser<'a> {
             init,
             is_final,
             final_kw,
+            final_span: None,
             is_ref: false,
             init_error,
             span: ty_start.join(end),
@@ -1810,6 +1820,7 @@ impl<'a> Parser<'a> {
             // A synthesized loop, so there is no user modifier to carry.
             is_final: false,
             final_kw: juxc_ast::FinalKw::None,
+            final_span: None,
             var_type: None,
             var_name: binder,
             iter: value,

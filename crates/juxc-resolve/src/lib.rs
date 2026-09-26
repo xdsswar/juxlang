@@ -383,7 +383,9 @@ struct Resolver {
     imported_names: HashSet<String>,
     /// Stack of lexical scopes. The top of the stack is the current scope.
     /// Each entry is the set of names declared at that level.
-    scopes: Vec<HashSet<String>>,
+    /// Each name maps to where it was declared, for E0304's "first declared
+    /// here" label (`Span::DUMMY` when the declaring site had no span).
+    scopes: Vec<std::collections::HashMap<String, Span>>,
     /// Per-class member name index: class name → set of member names
     /// (static fields, instance fields, methods) declared on that
     /// class. Used to pre-declare member names into a class body's
@@ -435,7 +437,7 @@ impl Resolver {
 
     /// Push a fresh scope onto the stack. Pair with [`Self::pop_scope`].
     fn push_scope(&mut self) {
-        self.scopes.push(HashSet::new());
+        self.scopes.push(std::collections::HashMap::new());
     }
 
     /// Pop the most recently pushed scope. Names declared inside become
@@ -470,20 +472,22 @@ impl Resolver {
         // bind the name below so later uses don't cascade into E0301.
         self.reject_rust_keyword(name, span);
         if let Some(top) = self.scopes.last_mut() {
-            if top.contains(name) {
-                self.diagnostics.push(
-                    juxc_diagnostics::Diagnostic::error(
-                        code::Code::E0304_DuplicateLocalDeclaration,
-                        format!(
-                            "`{name}` is already declared in this scope; \
-                             rename the local or move it into a nested block",
-                        ),
-                    )
-                    .with_span(span),
-                );
+            if let Some(&first) = top.get(name) {
+                let mut d = juxc_diagnostics::Diagnostic::error(
+                    code::Code::E0304_DuplicateLocalDeclaration,
+                    format!(
+                        "`{name}` is already declared in this scope; \
+                         rename the local or move it into a nested block",
+                    ),
+                )
+                .with_span(span);
+                if first != Span::DUMMY {
+                    d = d.with_label(first, "first declared here");
+                }
+                self.diagnostics.push(d);
                 return;
             }
-            top.insert(name.to_string());
+            top.insert(name.to_string(), span);
         } else {
             self.user_names.insert(name.to_string());
         }
@@ -512,7 +516,7 @@ impl Resolver {
                     }
                 }
             }
-            juxc_ast::Pattern::Bind(name) => self.declare(&name.text),
+            juxc_ast::Pattern::Bind(name) => self.declare_at(&name.text, name.span),
             juxc_ast::Pattern::EnumVariant { args, .. } | juxc_ast::Pattern::Tuple(args, _) => {
                 for sub in args {
                     self.declare_pattern_bindings(sub);
@@ -521,7 +525,7 @@ impl Resolver {
             juxc_ast::Pattern::TypeBind { binder, .. } => {
                 // `case Type ident -> ...` introduces `ident` as
                 // a binding scoped to the arm's body.
-                self.declare(&binder.text);
+                self.declare_at(&binder.text, binder.span);
             }
         }
     }
@@ -783,7 +787,7 @@ impl Resolver {
     /// unit's own declarations win" rule.
     fn is_known(&self, name: &str) -> bool {
         for scope in self.scopes.iter().rev() {
-            if scope.contains(name) {
+            if scope.contains_key(name) {
                 return true;
             }
         }
@@ -866,7 +870,7 @@ impl Resolver {
             }
             self.push_scope();
             for param in &op.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             self.visit_block(body);
             self.pop_scope();
@@ -880,7 +884,7 @@ impl Resolver {
             }
             self.push_scope();
             for param in &method.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             if let Some(body) = &method.body {
                 self.visit_block(body);
@@ -897,7 +901,7 @@ impl Resolver {
             self.push_scope();
             self.declare("this");
             for param in &op.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             self.visit_block(body);
             self.pop_scope();
@@ -910,15 +914,15 @@ impl Resolver {
             self.push_scope();
             self.declare("this");
             for c in &enum_decl.constants {
-                self.declare(&c.name.text);
+                self.declare_at(&c.name.text, c.name.span);
             }
             for f in &enum_decl.fields {
-                self.declare(&f.name.text);
+                self.declare_at(&f.name.text, f.name.span);
             }
             // Parameters in an inner scope, so one may shadow a field.
             self.push_scope();
             for param in &method.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             self.visit_block(body);
             self.pop_scope();
@@ -929,14 +933,14 @@ impl Resolver {
             self.push_scope();
             self.declare("this");
             for c in &enum_decl.constants {
-                self.declare(&c.name.text);
+                self.declare_at(&c.name.text, c.name.span);
             }
             for f in &enum_decl.fields {
-                self.declare(&f.name.text);
+                self.declare_at(&f.name.text, f.name.span);
             }
             self.push_scope();
             for param in &ctor.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             self.visit_block(&ctor.body);
             self.pop_scope();
@@ -1056,7 +1060,7 @@ impl Resolver {
             }
             self.push_scope(); // inner: ctor body locals + params
             for param in &ctor.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             self.visit_block(&ctor.body);
             self.pop_scope();
@@ -1070,14 +1074,14 @@ impl Resolver {
             }
             self.push_scope();
             for param in &method.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             // Method-level const-generic params (`T pick<int K>(…)`)
             // are value names in this body, like the class-level ones
             // already in `member_names`.
             for p in &method.generic_params {
                 if p.is_const() {
-                    self.declare(&p.name.text);
+                    self.declare_at(&p.name.text, p.name.span);
                 }
             }
             if let Some(body) = &method.body {
@@ -1099,7 +1103,7 @@ impl Resolver {
             }
             self.push_scope();
             for param in &op.params {
-                self.declare(&param.name.text);
+                self.declare_at(&param.name.text, param.name.span);
             }
             if let Some(body) = &op.body {
                 self.visit_block(body);
@@ -1130,13 +1134,13 @@ impl Resolver {
         // useful shape; for now hello.jux's main() has none.
         self.push_scope();
         for param in &fn_decl.params {
-            self.declare(&param.name.text);
+            self.declare_at(&param.name.text, param.name.span);
         }
         // Const-generic params (`int cap<int N>()`) are value names in
         // the body; ordinary type params are not.
         for p in &fn_decl.generic_params {
             if p.is_const() {
-                self.declare(&p.name.text);
+                self.declare_at(&p.name.text, p.name.span);
             }
         }
         if let Some(body) = &fn_decl.body {
@@ -1220,7 +1224,7 @@ impl Resolver {
                     // name bound. We don't validate the catch type
                     // (T) here — that's a tycheck concern.
                     self.push_scope();
-                    self.declare(&c.name.text);
+                    self.declare_at(&c.name.text, c.name.span);
                     self.visit_block(&c.body);
                     self.pop_scope();
                 }
@@ -1250,7 +1254,7 @@ impl Resolver {
     fn visit_for_each(&mut self, f: &ForEachStmt) {
         self.visit_expr(&f.iter);
         self.push_scope();
-        self.declare(&f.var_name.text);
+        self.declare_at(&f.var_name.text, f.var_name.span);
         self.visit_block(&f.body);
         self.pop_scope();
     }
@@ -1339,7 +1343,7 @@ impl Resolver {
                 self.pop_scope();
                 for c in &t.catches {
                     self.push_scope();
-                    self.declare(&c.name.text);
+                    self.declare_at(&c.name.text, c.name.span);
                     self.visit_block(&c.body);
                     self.pop_scope();
                 }
@@ -1473,7 +1477,7 @@ impl Resolver {
                         self.declare("this");
                         self.push_scope();
                         for param in &method.params {
-                            self.declare(&param.name.text);
+                            self.declare_at(&param.name.text, param.name.span);
                         }
                         if let Some(body) = &method.body {
                             self.visit_block(body);
@@ -1536,7 +1540,7 @@ impl Resolver {
                 // existing visitors.
                 self.push_scope();
                 for p in &l.params {
-                    self.declare(&p.name.text);
+                    self.declare_at(&p.name.text, p.name.span);
                 }
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(e) => self.visit_expr(e),

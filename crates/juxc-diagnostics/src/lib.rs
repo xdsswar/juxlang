@@ -79,6 +79,9 @@ pub struct Diagnostic {
     pub help: Vec<String>,
     /// `note:` lines — clarifying remarks that aren't actionable themselves.
     pub notes: Vec<String>,
+    /// A fix an editor can apply mechanically (§D.2.3). `None` when the fix
+    /// needs a decision only the programmer can make.
+    pub code_action: Option<CodeAction>,
 }
 
 /// Severity of a diagnostic. Per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.1.2.
@@ -95,6 +98,26 @@ pub enum Severity {
     Note,
     /// A concrete, actionable suggestion.
     Help,
+}
+
+/// A structured fix attached to a diagnostic, per §D.2.3: a title and the
+/// edits that make it. The edits apply together or not at all.
+#[derive(Debug, Clone)]
+pub struct CodeAction {
+    /// What the fix does, as an editor's quick-fix menu shows it.
+    pub title: String,
+    /// The text changes. Each one's span names its own file.
+    pub edits: Vec<TextEdit>,
+}
+
+/// One edit of a [`CodeAction`]: replace the text at `span` with
+/// `replacement`. An empty span inserts; an empty replacement deletes.
+#[derive(Debug, Clone)]
+pub struct TextEdit {
+    /// The source range replaced.
+    pub span: Span,
+    /// The text written in its place.
+    pub replacement: String,
 }
 
 /// A captioned secondary span attached to a diagnostic.
@@ -120,6 +143,7 @@ impl Diagnostic {
             labels: Vec::new(),
             help: Vec::new(),
             notes: Vec::new(),
+            code_action: None,
         }
     }
 
@@ -136,6 +160,7 @@ impl Diagnostic {
             labels: Vec::new(),
             help: Vec::new(),
             notes: Vec::new(),
+            code_action: None,
         }
     }
 
@@ -156,6 +181,12 @@ impl Diagnostic {
     /// Add a captioned secondary label at `span`.
     pub fn with_label(mut self, span: Span, message: impl Into<String>) -> Self {
         self.labels.push(Label { span, message: message.into() });
+        self
+    }
+
+    /// Attach the fix an editor can apply for this diagnostic.
+    pub fn with_code_action(mut self, title: impl Into<String>, edits: Vec<TextEdit>) -> Self {
+        self.code_action = Some(CodeAction { title: title.into(), edits });
         self
     }
 

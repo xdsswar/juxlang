@@ -1071,6 +1071,7 @@ fn record(
             .primary_span
             .iter_mut()
             .chain(diag.labels.iter_mut().map(|l| &mut l.span))
+            .chain(diag.code_action.iter_mut().flat_map(|a| a.edits.iter_mut().map(|e| &mut e.span)))
         {
             if let Some(&to) = remap.get(span.file as usize) {
                 span.file = to as u32;

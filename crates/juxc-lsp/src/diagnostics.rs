@@ -91,8 +91,42 @@ pub fn to_lsp(
         message,
         related_information: if related.is_empty() { None } else { Some(related) },
         tags: None,
-        data: None,
+        data: code_action_data(rope, uri, d, enc, files),
     }
+}
+
+/// The diagnostic's §D.2.3 fix, carried to `textDocument/codeAction` in the
+/// LSP `data` slot: `{"code_action": {"title", "edits": [{"uri", "range",
+/// "newText"}]}}`. The client hands `data` back untouched with the diagnostic,
+/// so the quick fix needs no second compile. An action with an edit in a file
+/// the editor cannot open is dropped whole, since its edits apply together.
+fn code_action_data(
+    rope: &Rope,
+    uri: &Url,
+    d: &JuxDiagnostic,
+    enc: PositionEncoding,
+    files: FileResolver<'_>,
+) -> Option<serde_json::Value> {
+    let action = d.code_action.as_ref()?;
+    let own_file = d.primary_span.map(|s| s.file);
+    let mut edits = Vec::new();
+    for edit in &action.edits {
+        let (edit_uri, range) = if own_file.is_some_and(|f| f != edit.span.file) {
+            let (other_uri, other_rope) = files(edit.span.file)?;
+            (other_uri, span_to_range(&other_rope, edit.span, enc))
+        } else {
+            (uri.clone(), span_to_range(rope, edit.span, enc))
+        };
+        edits.push(serde_json::json!({
+            "uri": edit_uri.as_str(),
+            "range": range,
+            "newText": edit.replacement,
+        }));
+    }
+    if edits.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "code_action": { "title": action.title, "edits": edits } }))
 }
 
 #[cfg(test)]
@@ -209,6 +243,26 @@ mod tests {
         let lsp = to_lsp(&rope, &uri(), &d, U16, &no_files);
         assert!(lsp.message.contains("mismatch"), "{}", lsp.message);
         assert!(lsp.message.contains("help: try casting it"), "{}", lsp.message);
+    }
+
+    /// A §D.2.3 fix rides in `data`, located in LSP positions, so the
+    /// code-action request can offer it without compiling again.
+    #[test]
+    fn a_code_action_travels_in_data() {
+        let rope = Rope::from_str("final int n = 1;\nn = 2;\n");
+        let d = JuxDiagnostic::error(Code::E0464_FinalBindingReassigned, "cannot reassign")
+            .with_span(Span::new(17, 23))
+            .with_code_action(
+                "Remove `final`",
+                vec![juxc_diagnostics::TextEdit { span: Span::new(0, 6), replacement: String::new() }],
+            );
+        let lsp = to_lsp(&rope, &uri(), &d, U16, &no_files);
+        let data = lsp.data.expect("the fix is carried in data");
+        let action = &data["code_action"];
+        assert_eq!(action["title"], "Remove `final`");
+        assert_eq!(action["edits"][0]["newText"], "");
+        assert_eq!(action["edits"][0]["range"]["end"]["character"], 6);
+        assert_eq!(action["edits"][0]["uri"], "file:///t.jux");
     }
 
     /// No labels means no `relatedInformation` key at all, not an empty list —

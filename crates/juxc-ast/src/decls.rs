@@ -846,6 +846,10 @@ pub struct FieldDecl {
     /// it picks the `pub const` over `pub static` shape in the
     /// emitted Rust.
     pub is_final: bool,
+    /// The written `final`/`const` modifier and the whitespace after it:
+    /// exactly the text a "remove `final`" quick fix deletes (§D.2.3).
+    /// `None` when no modifier was written or the node was synthesized.
+    pub final_span: Option<Span>,
     /// True if the field is declared `weak` (§6.5). A weak field does **not**
     /// contribute to the owning class's refcount, so it breaks reference
     /// cycles (the classic `Child` holding a back-reference to `Parent`).
@@ -1013,6 +1017,10 @@ pub struct Param {
     /// Which of the two synonyms the parameter was written with, so a
     /// diagnostic can name the one the programmer used (grammar A.2.2).
     pub final_kw: crate::FinalKw,
+    /// The written `final`/`const` modifier and the whitespace after it:
+    /// exactly the text a "remove `final`" quick fix deletes (§D.2.3).
+    /// `None` when no modifier was written or the node was synthesized.
+    pub final_span: Option<Span>,
     /// `true` when the parameter was a Rust borrow (`&T`) in a bindgen-generated
     /// `.jux.d` stub — the leading `&` marker (§G.9.2). The declared type drops
     /// the `&` (§G.3.4); this flag tells codegen to re-attach the call-site

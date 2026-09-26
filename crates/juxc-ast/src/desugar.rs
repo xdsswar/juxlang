@@ -189,6 +189,7 @@ fn desugar_interface(iface: &mut InterfaceDecl) {
                     ty: prop.ty.clone(),
                     is_final: false,
                     final_kw: crate::FinalKw::None,
+                    final_span: None,
                     is_ref: false,
                     is_mut_ref: false,
                     default: None,
@@ -258,6 +259,7 @@ fn synth_value_struct_ctor(class: &mut ClassDecl) {
             ty,
             is_final: false,
             final_kw: crate::FinalKw::None,
+            final_span: None,
             is_ref: false,
             is_mut_ref: false,
             default: None,
@@ -424,6 +426,7 @@ fn lower_one_property(
             // backend's static-field shape and any final-aware path
             // agree. (Instance `final` is informational today.)
             is_final: prop.setter.as_ref().map_or(true, |s| s.is_init),
+            final_span: None,
             // Property backing fields are never `weak`.
             is_weak: false,
             ty: Some(prop.ty.clone()),
@@ -526,6 +529,7 @@ fn lower_one_property(
             ty: prop.ty.clone(),
             is_final: false,
             final_kw: crate::FinalKw::None,
+            final_span: None,
             is_ref: false,
             is_mut_ref: false,
             default: None,

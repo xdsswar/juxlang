@@ -1353,6 +1353,7 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         let mut is_static = false;
         let mut is_final = false;
+        let mut final_span = None;
         let mut is_weak = false;
         let mut is_ref = false;
         loop {
@@ -1360,6 +1361,7 @@ impl<'a> Parser<'a> {
                 is_static = true;
             } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
                 is_final = true;
+                final_span = Some(self.consumed_modifier_span());
             } else if self.eat_kw(Keyword::Weak) {
                 // `weak` field (§6.5): does not contribute to refcount, read via
                 // `.get()` → `T?`. Validity (class-typed, non-generic, no
@@ -1441,6 +1443,7 @@ impl<'a> Parser<'a> {
             visibility,
             is_static,
             is_final,
+            final_span,
             is_weak,
             is_ref,
             ty,
@@ -3317,6 +3320,7 @@ impl<'a> Parser<'a> {
             juxc_ast::FinalKw::None
         };
         let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
+        let final_mod = is_final.then(|| self.consumed_modifier_span());
         if is_final && !allow_final {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -3481,6 +3485,7 @@ impl<'a> Parser<'a> {
             ty,
             is_final,
             final_kw,
+            final_span: final_mod,
             is_ref,
             is_mut_ref,
             default,
