@@ -1295,59 +1295,60 @@ impl RustEmitter {
         self.w.push('>');
     }
 
-    /// Like [`Self::emit_generic_params_with_clone_bound`] but adds a
-    /// `+ std::fmt::Display` bound to every param whose name is in
-    /// `display_params`. Used on a generic class's **inherent impl**
-    /// when a method formats a value of that type parameter (Jux
-    /// `toString`/interpolation semantics — `$"…${this.left}…"` on an
-    /// `A`-typed field requires `A: Display`). We bound only the
-    /// params actually formatted so a generic class that merely
-    /// *stores* a non-`Display` value stays usable.
-    pub(crate) fn emit_generic_params_with_clone_bound_plus_display(
+    /// Like [`Self::emit_generic_params_with_clone_bound`] but adds the bounds
+    /// a parameter acquires from how the declaration USES it (§T.2.1): the key
+    /// bounds of a hashed or ordered container, the `PartialEq` / `Hash` a body
+    /// asks for, and `Default` for every param in `default_params`.
+    ///
+    /// There is deliberately no `Display` row any more. A parameter whose
+    /// values reach a format position used to acquire `std::fmt::Display`, and
+    /// that bound made a legal type argument illegal: `Box<int?>` lowers the
+    /// argument to `Option<isize>`, which no crate of ours may give a `Display`
+    /// impl. Rendering resolves through the universal `__jux_show!` helper
+    /// instead, whose `Debug` tier is now every Jux value's own string form
+    /// (ERRATA E99, E107).
+    pub(crate) fn emit_generic_params_with_bounds(
         &mut self,
         params: &[juxc_ast::TypeParam],
-        display_params: &std::collections::HashSet<String>,
         default_params: &std::collections::HashSet<String>,
     ) {
         if params.is_empty() {
             return;
         }
         self.w.push('<');
-        self.emit_generic_params_bounds_body(params, display_params, default_params);
+        self.emit_generic_params_bounds_body(params, default_params);
         self.w.push('>');
     }
 
     /// The comma-separated BODY of a generic-parameter list — everything
-    /// [`Self::emit_generic_params_with_clone_bound_plus_display`] puts between
+    /// [`Self::emit_generic_params_with_bounds`] puts between
     /// the angle brackets, without the brackets.
     ///
     /// Callers that need to place another parameter alongside the declaration's
     /// own (the `Rc<T>` forwarding impls, which introduce a handle parameter)
-    /// use this so the real bounds — user-written ones, `Display`, the key
-    /// bounds — are not silently dropped.
+    /// use this so the real bounds, user-written ones and the key
+    /// bounds, are not silently dropped.
     pub(crate) fn emit_generic_params_bounds_body(
         &mut self,
         params: &[juxc_ast::TypeParam],
-        display_params: &std::collections::HashSet<String>,
         default_params: &std::collections::HashSet<String>,
     ) {
         if params.is_empty() {
             return;
         }
-        self.emit_generic_params_bounds_inner(params, display_params, default_params);
+        self.emit_generic_params_bounds_inner(params, default_params);
     }
 
     fn emit_generic_params_bounds_inner(
         &mut self,
         params: &[juxc_ast::TypeParam],
-        display_params: &std::collections::HashSet<String>,
         default_params: &std::collections::HashSet<String>,
     ) {
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            // Const params take no trait bounds — Display included.
+            // Const params take no trait bounds.
             if p.is_const() {
                 self.emit_const_generic_param_decl(p);
                 continue;
@@ -1375,9 +1376,6 @@ impl RustEmitter {
             // struct decl and this inherent impl agree on the param bounds (and
             // a bounded param can coerce into a trait object).
             self.w.push_str("Clone + std::fmt::Debug + 'static");
-            if display_params.contains(&p.name.text) {
-                self.w.push_str(" + std::fmt::Display");
-            }
             // A param used as a fixed-array-field element (`T[N]`)
             // needs `Default` for the `from_fn` construction — see
             // `class_default_bound_params`.

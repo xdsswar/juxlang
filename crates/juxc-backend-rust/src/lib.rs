@@ -4282,8 +4282,10 @@ impl RustEmitter {
         //   nothing is moved out of the temporary `JuxShow` wrapper.
         //
         // Every path returns a `String`, so the `{}` placeholders the emit sites
-        // push stay unchanged. Nullable values are handled at the call site by
-        // matching the `Option` and rendering `None` as `"null"`. The
+        // push stay unchanged. A nullable value is handled at the call site by
+        // matching the `Option` and rendering `None` as `"null"` wherever the
+        // site can see that the value is nullable, and by the `Debug` tier's own
+        // text normalization wherever it cannot (inside a generic body). The
         // `__jux_show!` macro brings both traits into method scope locally, so
         // the call works inside ANY emitted submodule with no per-module `use`.
         // Hidden behind `#[allow(dead_code)]` so programs that never interpolate
@@ -4351,12 +4353,58 @@ impl RustEmitter {
         // escapes `Debug` added are taken off again. `escape_debug` is
         // one-to-one, so undoing it gives back exactly the original text.
         w.push_str(r##"pub fn jux_debug_text<T: std::fmt::Debug + ?Sized>(v: &T) -> String {
-    let text = format!("{:?}", v);
-    let name = std::any::type_name_of_val(v).trim_start_matches('&');
+    jux_debug_as_jux(std::any::type_name_of_val(v), format!("{:?}", v))
+}
+/// Re-lay `Debug`'s text in the form Jux prints a value of that type in.
+///
+/// A value reaching the `Debug` tier at all is one whose type the emit site
+/// could not see: a generic `T`, a `const`, a value behind a reference. Three
+/// kinds of value have a Jux text that Rust's `Debug` spells differently, and
+/// each is recognised from the value's own type NAME, which IS available at run
+/// time where the type is not available to a trait bound:
+///
+///   - a float, because `Debug` writes `1e21` and `inf` where Jux writes
+///     `1.0E21` and `Infinity` (LANG-V1 3.4);
+///   - a string or a char, because `Debug` quotes and escapes it;
+///   - a nullable, because `Debug` writes `None` and `Some(1)` where Jux writes
+///     `null` and `1`.
+///
+/// The nullable row is what closes ERRATA E99. A site that KNOWS its value is
+/// nullable matches the `Option` itself and never arrives here; the site that
+/// cannot know is inside a generic body, where the parameter is opaque, and it
+/// is exactly there that the old `Display` bound made `Box<int?>` illegal. The
+/// TEXT is normalized rather than the trait chosen, because the trait a generic
+/// body uses is chosen ONCE, against the parameter's declared bounds, while the
+/// type name is the real instantiation's.
+fn jux_debug_as_jux(raw_name: &str, text: String) -> String {
+    let name = raw_name.trim_start_matches('&');
+    match name {
+        "f64" => return text.parse::<f64>().map(crate::jux_float).unwrap_or(text),
+        "f32" => return text.parse::<f32>().map(crate::jux_float).unwrap_or(text),
+        _ => {}
+    }
+    if let Some(inner) = jux_option_payload_type(name) {
+        if text == "None" {
+            return String::from("null");
+        }
+        return match text.strip_prefix("Some(").and_then(|r| r.strip_suffix(')')) {
+            Some(rest) => jux_debug_as_jux(inner, rest.to_string()),
+            None => text,
+        };
+    }
     let quoted = matches!(name, "alloc::string::String" | "str" | "char")
         && text.len() >= 2
         && (text.starts_with('"') || text.starts_with('\''));
     if quoted { jux_unescape_debug(&text[1..text.len() - 1]) } else { text }
+}
+/// `core::option::Option<isize>` gives `isize`, and any other type gives `None`.
+/// Matched on the fully qualified name, so a user type of its own called
+/// `Option` with a `Some(..)` debug form is not mistaken for a nullable.
+fn jux_option_payload_type(name: &str) -> Option<&str> {
+    let rest = name
+        .strip_prefix("core::option::Option<")
+        .or_else(|| name.strip_prefix("std::option::Option<"))?;
+    rest.strip_suffix('>')
 }
 /// Undo `escape_debug` on the text between a `Debug` string's quotes.
 fn jux_unescape_debug(inner: &str) -> String {

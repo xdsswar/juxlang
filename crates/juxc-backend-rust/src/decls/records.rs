@@ -142,39 +142,27 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
 
-        // A component of a foreign type with no `Debug` of its own costs the
-        // derive, not the trait (ERRATA E97): the impl is written out here in
-        // the shape the derive would have produced, rendering each component
-        // through the universal show helper. `__jux_show!` prints a value with
-        // neither `Display` nor `Debug` as its type name, so this holds for any
-        // component type and `print(holder)` never stops working.
-        if !foreign.debug {
-            self.w.emit_indent();
-            self.w.push_str("impl");
-            self.emit_generic_params_with_clone_bound(&record_decl.generic_params);
-            self.w.push_str(" std::fmt::Debug for ");
-            self.w.push_str(&to_rust_ident(&record_decl.name.text));
-            self.emit_generic_params_as_args(&record_decl.generic_params);
-            self.w.push_str(" {\n");
-            self.w.indent_inc();
-            self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
-            self.w.indent_inc();
-            let mut format_string = format!("{} {{{{", to_rust_ident(&record_decl.name.text));
-            let mut args = String::new();
-            for (i, comp) in record_decl.components.iter().enumerate() {
-                let field = to_rust_ident(&comp.name.text);
-                format_string.push_str(if i > 0 { ", " } else { " " });
-                format_string.push_str(&format!("{field}: {{}}"));
-                args.push_str(&format!(", crate::__jux_show!(self.{field})"));
+        // A record's `Debug` is its string form (§O.7.1, ERRATA E107), written
+        // out rather than derived. Where that form comes from is the one thing
+        // that varies: the record's own auto-derived `Display` (emitted below),
+        // a user-written `operator string`, or nothing at all when the program
+        // DELETED that operator, in which case the value prints as its type
+        // name and leaks none of its components.
+        let name = to_rust_ident(&record_decl.name.text);
+        let string_op = record_decl
+            .operators
+            .iter()
+            .find(|o| o.kind == OperatorKind::ToString);
+        let type_name_body;
+        let body = match string_op {
+            Some(op) if op.is_deleted => {
+                type_name_body = Self::debug_via_type_name(&record_decl.name.text);
+                type_name_body.as_str()
             }
-            format_string.push_str(" }}");
-            self.w.line(&format!("write!(f, \"{format_string}\"{args})"));
-            self.w.indent_dec();
-            self.w.line("}");
-            self.w.indent_dec();
-            self.w.line("}");
-            self.w.newline();
-        }
+            Some(_) => Self::DEBUG_VIA_OP_STRING,
+            None => Self::DEBUG_VIA_DISPLAY,
+        };
+        self.emit_debug_as_string_form(&name, &record_decl.generic_params, body);
 
         // impl[<T: Clone, U: Clone>] Name<T, U> { pub fn new(…) }
         self.w.emit_indent();
@@ -182,13 +170,8 @@ impl RustEmitter {
         {
             // A parameter formatted in one of the record's methods needs
             // `Display`, exactly as a class's does (§T.2.1).
-            let displayed = self.record_displayed_generic_params(record_decl);
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &record_decl.generic_params,
-                &displayed,
-                &none,
-            );
+            self.emit_generic_params_with_bounds(&record_decl.generic_params, &none);
         }
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(&record_decl.name.text));
@@ -631,18 +614,16 @@ impl RustEmitter {
 ");
     }
 
-    /// Called by [`Self::emit_record_decl`] only when every component is
-    /// displayable (`field_supports_display_in`). A GENERIC record gets the
-    /// impl too, with a `Display` bound on each parameter it uses as a bare
-    /// component type -- without one it could not be another generic's type
-    /// argument, since a formatted parameter carries that bound (§T.2.1).
+    /// Called by [`Self::emit_record_decl`] for every record that does not
+    /// declare its own `operator string`.
+    ///
+    /// A GENERIC record gets the impl with no `Display` bound on any parameter:
+    /// a component typed as a bare `T` renders through the universal show
+    /// helper instead. The bound used to be added here, and it made
+    /// `Cell<int?>` an illegal type argument although `int?` is a legal type
+    /// (ERRATA E99, E107).
     fn emit_record_display_impl(&mut self, record_decl: &juxc_ast::RecordDecl) {
         let name = &record_decl.name.text;
-        let own_params: std::collections::HashSet<String> = record_decl
-            .generic_params
-            .iter()
-            .map(|p| p.name.text.clone())
-            .collect();
         // Build the format string and arg list in one pass — keeping
         // them in lockstep is important so the `{}` count matches the
         // arg count exactly.
@@ -661,12 +642,14 @@ impl RustEmitter {
             let field = to_rust_ident(&comp.name.text);
             if crate::analysis::type_ref_is_float(&comp.ty) {
                 args.push(format!("crate::jux_float(self.{field})"));
-            } else if crate::analysis::field_supports_display_in(&comp.ty, &own_params) {
+            } else if crate::analysis::field_supports_display(&comp.ty) {
                 args.push(format!("self.{field}"));
             } else {
-                // An object, a collection, a nullable: the helper picks the
-                // value's own text where it has one and its debug form
-                // otherwise, which is what `print` does everywhere else.
+                // An object, a collection, a nullable, a type PARAMETER: the
+                // helper picks the value's own text where it has one and its
+                // debug form otherwise, which is what `print` does everywhere
+                // else. A bare `T` lands here, which is what lets the impl
+                // stand without a `Display` bound on the parameter.
                 args.push(format!("crate::__jux_show!(self.{field})"));
             }
         }
@@ -675,16 +658,8 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("impl");
         if !record_decl.generic_params.is_empty() {
-            let displayed = crate::analysis::displayed_bare_params(
-                &record_decl.generic_params,
-                record_decl.components.iter().map(|c| &c.ty),
-            );
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-            self.emit_generic_params_with_clone_bound_plus_display(
-                &record_decl.generic_params,
-                &displayed,
-                &none,
-            );
+            self.emit_generic_params_with_bounds(&record_decl.generic_params, &none);
         }
         self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(name));
@@ -741,13 +716,14 @@ fn record_derive_attribute(
     foreign: crate::analysis::ForeignDerives,
 ) -> String {
     let mut derives: Vec<&str> = Vec::new();
-    // `Debug` and `Clone` are a record's birthright (§O.3.1) and go first,
-    // unless a component's own foreign type has neither. A dropped `Debug` is
-    // written by hand at the declaration; a dropped `Clone` cannot be, since
-    // nothing can copy the value the component holds (ERRATA E97).
-    if foreign.debug {
-        derives.push("Debug");
-    }
+    // `Debug` is never derived. A record's debug form IS its string form
+    // (§O.7.1), so the impl is written out at the declaration, rendering each
+    // component through the universal show helper; that is what lets the
+    // renderer's `Debug` arm stand in for `Display` inside generic code
+    // (ERRATA E107), and it makes a component's own `@RustDebug` marker beside
+    // the point. `Clone` is a record's birthright (§O.3.1) and cannot be
+    // written by hand when a component's foreign type has none, since nothing
+    // can copy the value it holds (ERRATA E97).
     if foreign.clone {
         derives.push("Clone");
     }

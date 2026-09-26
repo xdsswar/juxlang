@@ -106,12 +106,25 @@ fn ty_has_default_in(ty: &Ty, symbols: &SymbolTable, visiting: &mut Vec<String>)
     }
 }
 
+/// Whether a declaration's annotations carry bindgen's `@RustDefault` marker:
+/// the foreign type implements Rust's `Default`, read from its real trait impls
+/// (Bindgen §G.6.4.7). Annotations are case-insensitive in Jux, so both sides
+/// are folded before the compare.
+fn declares_rust_default(annotations: &[juxc_ast::Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustdefault")
+    })
+}
+
 fn user_type_has_default(name: &str, symbols: &SymbolTable, visiting: &mut Vec<String>) -> bool {
     if let Some(class) = symbols.classes.get(name) {
-        // A foreign type's traits are not visible from here; do not report
-        // what cannot be known.
+        // A FOREIGN type answers from its own stub. This used to say `true` for
+        // every external type, with a comment that a foreign type's traits are
+        // not visible from here; ERRATA E97's markers made that false, so
+        // `new Holder[3]` over a `record Holder(File f)` was reported by rustc
+        // ("no associated function named `default`") instead of by Jux.
         if class.is_external {
-            return true;
+            return declares_rust_default(&class.annotations);
         }
         // A value struct (E20) has a default when every field does; a class is
         // a reference and has none.
@@ -129,7 +142,13 @@ fn user_type_has_default(name: &str, symbols: &SymbolTable, visiting: &mut Vec<S
             .all(|c| member_has_default_in(&c.ty, name, symbols, visiting));
     }
     if let Some(enum_sig) = symbols.enums.get(name) {
-        return enum_sig.is_external || enum_sig.variants.values().any(|v| v.payload.is_empty());
+        // A foreign enum is `Default` only where its own impl list says so: Rust
+        // gives an enum no default from having a payload-free variant, which is
+        // what the Jux rule below turns on.
+        if enum_sig.is_external {
+            return declares_rust_default(&enum_sig.annotations);
+        }
+        return enum_sig.variants.values().any(|v| v.payload.is_empty());
     }
     // Interfaces, and anything else a `User` names.
     false
