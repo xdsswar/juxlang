@@ -187,11 +187,11 @@ than echoing the written keyword, now that `FinalKw` exists to ask. `E0203`
 covers only the four non-escapable Rust words, and `E0305`'s text claims "every
 other reserved word is fine", which is false.
 
-**19. The IntelliJ plugin has no E0464 reassignment inspection at all**, so the
+**19. CLOSED 2026-09-26 (`b5e44a1`).** ~~The IntelliJ plugin has no E0464 reassignment inspection at all~~, so the
 `final` for-each binder's meaning is parsed and recorded but nothing in the
 editor consumes it.
 
-**20. `JuxNamesValidator.isIdentifier` rejects any keyword**, so the platform
+**20. CLOSED 2026-09-26 (`b5e44a1`).** ~~`JuxNamesValidator.isIdentifier` rejects any keyword~~, so the platform
 Rename dialog still refuses renaming a package segment to `type` or `record`,
 although ERRATA E78 makes the resulting path legal.
 
@@ -200,7 +200,7 @@ although ERRATA E78 makes the resulting path legal.
 
 ### Deferred by decision, not by oversight
 
-**22. A VS Code extension.** `juxc-lsp` answers 16 LSP methods correctly and no
+**22. CLOSED 2026-09-26 (`b5e44a1`): grammar drift fixed, `jux.tmbundle/Syntaxes/`, an unpublished extension at `editors/vscode/`.** ~~A VS Code extension.~~ `juxc-lsp` answers 16 LSP methods correctly and no
 VS Code user can reach any of it, which contradicts the "one server, many
 editors" architecture. New surface rather than a fix. The TextMate grammar has
 also drifted (`ref`, `typeof`, `weak` unhighlighted) and `jux.tmbundle/` has no
