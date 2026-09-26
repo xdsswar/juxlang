@@ -83,7 +83,7 @@ bound inference in the style of the existing `hash_key_params` /
 `eq_bound_params` passes. `Vec<File>` works, since a foreign generic carries
 its own impls.
 
-**3. `jux.toml` is effectively unvalidated.** `name = "MyApp"`, a missing
+**3. CLOSED 2026-09-25 (`770de4b`, ERRATA E106).** ~~`jux.toml` is effectively unvalidated.~~ `name = "MyApp"`, a missing
 `version`, a missing `edition`, `edition = "2015"` and unknown tables all pass
 `jux check`. Malformed TOML is an `eprintln!` warning and a `None` return
 (`crates/juxc-driver/src/manifest.rs:470`), so a caller cannot tell "no
@@ -91,7 +91,7 @@ manifest" from "bad manifest". §B.2.2 marks all three keys REQUIRED, pins the
 name to `^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$`, and allows only edition
 `"2026"`. No manifest diagnostic code exists; one has to be allocated.
 
-**4. A dependency's entry files leak into the dependent.**
+**4. CLOSED 2026-09-25 (`770de4b`, ERRATA E106).** ~~A dependency's entry files leak into the dependent.~~
 `collect_dependency_sources` (`crates/juxc-driver/src/project.rs:836`) loads a
 dependency's whole `src/` tree including entry files, so a package that
 path-depends on a package having any `[[bin]]` gets the dependency's `main` and
@@ -233,12 +233,13 @@ work. Originally their work was uncommitted in their worktrees under
 can be resumed or re-derived from the notes above. If the worktrees are deleted
 for space, this work is lost and must be redone; nothing of it is on a branch.
 
-**`agent-ab1eca9d85b817d03` (gaps 3 and 4, manifest validation).** Had written
-ERRATA, the build-system addendum, the diagnostics addendum, a new
-`crates/juxc-driver/src/manifest_check.rs`, and edits to `manifest.rs`,
-`project.rs`, `lib.rs`, `bin/jux/src/main.rs` and `multi_bin_project.rs`. Was
-flattening a multi-line TOML parse message when stopped. (It also left a stray
-`jt.txt` and `probe/` in the worktree.)
+**`agent-ab1eca9d85b817d03` (gaps 3 and 4).** Merged as `770de4b`. The gate
+found that `jux new` / `jux init` wrote the directory name verbatim (so
+`jux init` in `clean-init/` produced an `E0903` manifest) and that 100 of the
+102 in-repo manifests lacked `edition`; both fixed. By the owner's decision a
+single-segment `name` is clean and `W0903` covers only a dotted name with `_`
+in its root segment. Gate: 1553 passed, the four failures were those two
+causes and pass on the fixed build, clippy clean.
 
 **`agent-a0f7bb435c16f7698` (gap 5).** Gated and merged as `8c47abb`: 1540
 tests passed, the two failures (`dashboard`, `svg_studio`) were crates.io
