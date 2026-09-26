@@ -1,6 +1,7 @@
 [package]
 name = "demo.desktop"
 version = "0.1.0"
+edition = "2026"
 
 # The windowed front end. It depends on the same three libraries the headless
 # binary does, plus one crates.io crate consumed through the `rust.<crate>`

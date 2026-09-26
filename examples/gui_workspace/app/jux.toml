@@ -1,6 +1,7 @@
 [package]
 name = "demo.app"
 version = "0.1.0"
+edition = "2026"
 
 # Two dependencies, two kinds:
 #   - `demo.ui` is a sibling Jux workspace package (path dep) -- the widget
