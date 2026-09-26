@@ -2861,6 +2861,74 @@ string form is, and this entry only makes `Debug` produce it.
 
 ---
 
+## E1XX-PHASE5a. Record components and lambda parameters: the last two annotation positions
+
+**Conflict.** E104 gave parameters and locals their annotations and left two
+positions behind, one grammatical and unparsed, one ungrammatical and badly
+refused.
+
+`JUX-GRAMMAR-ADDENDUM.md` §A.2.5 has always spelled
+`record-component = annotation* type identifier`, and an enum payload variant
+reuses that `record-component-list`. The parser read a component with
+`parse_type_ref` straight away, so an annotation there was the same five-error
+cascade E104 describes for parameters. And §A.3 had nothing to say about the
+position once it parsed: its eight targets have no `RECORD_COMPONENT`, and a
+component is not any one of the others. It is written once and becomes two
+declarations, a field and the canonical constructor's parameter.
+
+A lambda parameter is the opposite case. §A.2.9 spells
+`lambda-param = type? identifier`, and E104 decided that a lambda parameter takes
+no annotation. The decision was right and the refusal was not:
+
+```java
+var f = (@Tag int a) -> a + 1;
+```
+
+```text
+error[E0200]: expected identifier
+error[E0200]: expected ';' after `var` declaration
+error[E0301]: cannot find `int` in this scope
+error[E0200]: expected ';' after expression statement
+error[E0301]: cannot find `a` in this scope
+...
+```
+
+The lookahead did confirm a lambda; `parse_lambda` then stopped at the `@`, and
+everything after it was read as statements.
+
+**Resolution.** §A.3.2 is new. A record component takes annotations, and it
+takes the ones that fit where it lands, which is Java's rule: an annotation is
+admitted when its `@Target` names `FIELD` or `PARAMETER` (or it names no target
+at all). There is deliberately no `RECORD_COMPONENT` target, because nothing
+could be recorded against one that the field and parameter targets do not
+already say. `METHOD` is not admitted because a Jux record generates no
+accessor method. `@cfg` is `E0470` there, as on a parameter. An enum payload
+slot is under the same rule rather than a second one, since the grammar gives
+both positions one production.
+
+A `RUNTIME` annotation that fits a field is recorded in the §A.8.0 registry as a
+`field` row owned by the record, as it would be on a class field; one that fits
+only `PARAMETER` has no row, like any parameter annotation. An enum payload
+slot's annotations are checked and not recorded.
+
+A lambda parameter's annotation is one `E0470`, "a lambda parameter takes no
+annotation", per parameter. The parser reads past the annotations and parses the
+parameter and the lambda normally, so nothing else is reported.
+
+**Gap 14, closed with no change.** `GAPS.md` recorded that
+`check_annotation_applications` did not recurse into nested types. It does not
+need to: the parser lifts every nested declaration into the unit's items under
+its owner-qualified name (§M.9), and has since before the annotation check was
+written, so a nested type's annotations were always checked.
+`tests/ui/annotation_target_nested_type.jux` now pins it.
+
+**Spec status:** `JUX-ANNOTATIONS-ADDENDUM.md` §A.3 points at the new §A.3.2,
+and §A.3.1's lambda paragraph states the one-diagnostic refusal.
+`JUX-GRAMMAR-ADDENDUM.md` §A.2.5's `record-component` line cross-references
+§A.3.2; the productions are unchanged.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

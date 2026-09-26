@@ -1,0 +1,25 @@
+@Target(METHOD)
+public annotation Loggable { }
+
+@Target(TYPE)
+public annotation Entity { }
+
+// A nested type is checked like a top-level one: its own TYPE, FIELD and
+// METHOD annotations, and the parameters and locals inside its methods.
+class Outer {
+    @Loggable
+    public static class Inner {
+        @Loggable int count = 0;
+
+        @Entity
+        public void run(@Entity int n) {
+            @Loggable var x = n;
+            print(x);
+        }
+
+        @Entity
+        public record Pair(@Loggable int a, int b) { }
+    }
+}
+
+public void main() { new Outer.Inner().run(1); }

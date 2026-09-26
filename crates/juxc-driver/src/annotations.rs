@@ -55,6 +55,11 @@ struct AnnotationType {
     /// §A.4 makes `BINARY` the default, and a binary-retention annotation is
     /// compile-time information that no program asks about at runtime.
     runtime: bool,
+    /// True when the annotation may sit on a field: its `@Target` names
+    /// `FIELD`, or it has no `@Target` at all. A record component's
+    /// annotation is a field row only then (A.3.2): one that targets
+    /// `PARAMETER` alone lands on the constructor parameter, which has no row.
+    fits_field: bool,
 }
 
 /// Generate the `jux.meta.Registry` source for a program.
@@ -99,6 +104,7 @@ fn collect_annotation_types(
                 AnnotationType {
                     params,
                     runtime: retention_is_runtime(&decl.annotations),
+                    fits_field: targets_field(&decl.annotations),
                 },
             );
         }
@@ -119,6 +125,24 @@ fn retention_is_runtime(annotations: &[Annotation]) -> bool {
                     if qn.segments.last().is_some_and(|s| s.text == "RUNTIME"))
             })
     })
+}
+
+/// Whether an annotation declaration may be applied to a field: its
+/// `@Target` lists `FIELD`, or it writes no `@Target`, which admits every kind.
+fn targets_field(annotations: &[Annotation]) -> bool {
+    let mut targets = annotations
+        .iter()
+        .filter(|a| a.name.segments.last().is_some_and(|s| s.text == "Target"))
+        .flat_map(|a| a.args.iter())
+        .map(|arg| match arg {
+            AnnotationArg::Positional(e) => e,
+            AnnotationArg::Named { value, .. } => value,
+        })
+        .peekable();
+    targets.peek().is_none()
+        || targets.any(|e| {
+            matches!(e, Expr::Path(qn) if qn.segments.last().is_some_and(|s| s.text == "FIELD"))
+        })
 }
 
 /// Walk one unit's declarations, recording every runtime annotation applied.
@@ -145,6 +169,23 @@ fn collect_entries(
                 record(&r.annotations, types, "class", "", &r.name.text, out);
                 for m in &r.methods {
                     record(&m.annotations, types, "method", &r.name.text, &m.name.text, out);
+                }
+                // A component is the record's field (A.3.2), so an annotation
+                // that fits a field is recorded as one.
+                for comp in &r.components {
+                    let on_field: Vec<Annotation> = comp
+                        .annotations
+                        .iter()
+                        .filter(|a| {
+                            a.name
+                                .segments
+                                .last()
+                                .and_then(|s| types.get(&s.text))
+                                .is_some_and(|t| t.fits_field)
+                        })
+                        .cloned()
+                        .collect();
+                    record(&on_field, types, "field", &r.name.text, &comp.name.text, out);
                 }
             }
             TopLevelDecl::Enum(e) => {

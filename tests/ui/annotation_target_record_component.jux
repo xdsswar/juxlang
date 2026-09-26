@@ -1,0 +1,17 @@
+@Target(METHOD)
+public annotation Loggable { }
+
+@Target(FIELD)
+public annotation Column { String value(); }
+
+@Target(PARAMETER)
+public annotation NotBlank { }
+
+// A component lands as a field and as a constructor parameter, so FIELD and
+// PARAMETER both fit it; METHOD does not, and neither does `@cfg`.
+record User(@Column("id") int id, @NotBlank String name, @Loggable String email, @cfg(test) int age) { }
+
+// An enum payload slot is a record component too.
+enum Shape { Circle(@Column("r") double radius), Square(@Loggable double side) }
+
+public void main() { print(new User(1, "a", "b", 2).name); }

@@ -1859,6 +1859,29 @@ impl<'a> Parser<'a> {
             let mut out = Vec::new();
             if !self.at(&TokenKind::RParen) {
                 loop {
+                    // An annotation on a lambda parameter (A.3.1): §A.2.9
+                    // spells `lambda-param = type? identifier`, because a
+                    // lambda has no declaration a framework could look up.
+                    // Read the annotations past and say so once, so the
+                    // parameter itself still parses and the lambda survives;
+                    // stopping at the `@` cascaded into five unrelated errors.
+                    if self.at(&TokenKind::At) {
+                        let a_start = self.peek_span();
+                        let annotations = self.parse_annotations();
+                        if !annotations.is_empty() {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0470_AnnotationTargetMismatch,
+                                    "a lambda parameter takes no annotation (A.3.1)",
+                                )
+                                .with_span(a_start.join(self.last_consumed_span()))
+                                .with_help(
+                                    "annotate the parameter of a named function or method \
+                                     instead, and pass that function where the lambda went",
+                                ),
+                            );
+                        }
+                    }
                     let p_start = self.peek_span();
                     // Optional type prefix. We look two tokens
                     // ahead: `ident ident` (or `ident ('<' or '[')

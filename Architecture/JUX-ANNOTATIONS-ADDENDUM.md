@@ -108,6 +108,9 @@ public annotation Loggable { }
 
 Applying an annotation outside its declared target set is `E0470` (`annotation target mismatch`).
 
+A record component, and an enum payload slot, has no target of its own: an
+annotation there is admitted by `FIELD` or by `PARAMETER` (§A.3.2).
+
 ### A.3.1. Where a `PARAMETER` or `LOCAL_VARIABLE` annotation is written
 
 The two targets that sit inside a function body, rather than on a declaration of
@@ -129,11 +132,13 @@ public User createUser(@Body final CreateUserRequest req) { ... }
 
 A lambda parameter is NOT a `param`: §A.2.9 spells it `lambda-param = type?
 identifier`, with no annotation, because a lambda has no declaration a framework
-could look up. Because a lambda's parentheses look like a parameter list until
-the `->` arrives, an annotation written there leaves fragments that reach the
-statement rule: the `E0470` below is therefore withheld whenever reading the
-statement reported a diagnostic of its own, so the author is not told about
-statement targets when what they wrote was a lambda.
+could look up. An annotation written there is one `E0470` per parameter,
+"a lambda parameter takes no annotation", at the annotations; the parser reads
+past them and the parameter and the rest of the lambda parse normally, so
+nothing else is reported for it. The statement rule below still withholds its
+own `E0470` whenever reading the statement reported a diagnostic of its own,
+so the author is never told about statement targets when what they wrote was
+something that failed to parse.
 
 **On a local variable.** In statement position an annotation applies to the
 statement that follows, per §A.2.8 `statement = ... | annotation+ statement`.
@@ -167,6 +172,51 @@ therefore checked but not reachable from `jux.meta.Registry`; the framework
 patterns in §A.11 that bind parameters do so with an annotation processor (§A.9).
 Extending the registry to parameters (`kind() == "parameter"`, `owner()` the
 function, `target()` the parameter name) is a later pass.
+
+### A.3.2. Record components and enum payload slots
+
+`JUX-GRAMMAR-ADDENDUM.md` §A.2.5 spells a record header as
+`record-component = annotation* type identifier`, and an enum payload variant
+reuses the same `record-component-list`. Both positions take annotations,
+written before the type.
+
+A component is written once and becomes two declarations: the record's field
+and the canonical constructor's parameter (JUX-LANG-V1 §7.6). There is
+deliberately no `RECORD_COMPONENT` target. The rule is Java's: **an annotation
+on a component lands where the component lands**, so it is admitted when its
+`@Target` names `FIELD` or `PARAMETER` (or it declares no `@Target`, which
+admits every kind). Any other target set is `E0470`, and the message calls the
+position a "record component". `METHOD` is not in the set because a Jux record
+generates no accessor method: a component is read as `r.name`, with no call.
+
+```java
+@Target(FIELD)
+@Retention(RUNTIME)
+public annotation Column { String value(); }
+
+@Target(PARAMETER)
+public annotation NotBlank { }
+
+record User(@Column("user_id") int id, @NotBlank @Column("user_name") String name) { }
+
+enum Shape { Circle(@Column("radius") double r), Square(double side) }
+```
+
+An enum payload slot is under the same rule. It is a field of its variant and a
+parameter of the variant's constructor in exactly the sense a component is, and
+giving the one production two rules would make the grammar's sharing a trap.
+
+`@cfg` on a component or a slot is `E0470`, for the reason §A.3.1 gives for a
+parameter: the component is part of the canonical constructor's signature, which
+every `new` already wrote.
+
+**Retention.** A `RUNTIME` annotation on a record component that fits a field
+(its `@Target` names `FIELD`, or it has none) is recorded in the §A.8.0 registry
+as a `field` row, `owner()` the record and `target()` the component name,
+exactly as it would be on a class field. One that fits only `PARAMETER` lands on
+the constructor parameter and, like any parameter annotation (§A.3.1), has no
+row. An enum payload slot's annotations are checked but not recorded: the
+registry has no row for an enum's fields of any kind.
 
 ---
 

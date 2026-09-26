@@ -4187,6 +4187,11 @@ impl<'a> Checker<'a> {
     /// Built-in annotations (`@Override`, `@Deprecated`, `@Cfg`, the meta
     /// annotations) are not declared with `annotation`, so they are not in the
     /// table and are left to their own checks.
+    ///
+    /// A nested type needs no recursion here: the parser lifts every nested
+    /// declaration into `unit.items` under its owner-qualified name (§M.9),
+    /// so it is reached as a top-level item with all of its members
+    /// (`tests/ui/annotation_target_nested_type.jux`).
     fn check_annotation_applications(&mut self, unit: &CompilationUnit) {
         // A generated crate stub carries binding markers (`@rust`, `@MutSelf`)
         // that are not annotations a program writes.
@@ -4233,6 +4238,9 @@ impl<'a> Checker<'a> {
                 }
                 TopLevelDecl::Record(r) => {
                     self.check_applied_annotations(&r.annotations, "TYPE");
+                    for comp in &r.components {
+                        self.check_applied_annotations(&comp.annotations, "RECORD_COMPONENT");
+                    }
                     for m in &r.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
                         self.check_callable_annotations(&m.params, m.body.as_ref());
@@ -4246,6 +4254,10 @@ impl<'a> Checker<'a> {
                 }
                 TopLevelDecl::Enum(e) => {
                     self.check_applied_annotations(&e.annotations, "TYPE");
+                    // A payload slot is a `record-component` (§A.2.5).
+                    for slot in e.variants.iter().flat_map(|v| v.payload.iter()) {
+                        self.check_applied_annotations(&slot.annotations, "RECORD_COMPONENT");
+                    }
                     for m in &e.methods {
                         self.check_applied_annotations(&m.annotations, "METHOD");
                         self.check_callable_annotations(&m.params, m.body.as_ref());
@@ -4416,7 +4428,9 @@ impl<'a> Checker<'a> {
     }
 
     /// Check one declaration's annotation list, where the declaration is of
-    /// the §A.3 target `kind`.
+    /// the §A.3 target `kind`. `RECORD_COMPONENT` is not a target a
+    /// declaration names but the position of A.3.2: a record component, or an
+    /// enum payload slot, which admits a `FIELD` or a `PARAMETER` annotation.
     fn check_applied_annotations(&mut self, annotations: &[juxc_ast::Annotation], kind: &str) {
         let mut seen: Vec<(String, bool)> = Vec::new();
         for a in annotations {
@@ -4426,7 +4440,9 @@ impl<'a> Checker<'a> {
             // would read as if it were selecting code. Conditional compilation
             // inside a body is the `if cfg(...)` statement, and a parameter
             // cannot be compiled out of a signature its callers already wrote.
-            if matches!(kind, "PARAMETER" | "LOCAL_VARIABLE")
+            // A record component is the canonical constructor's parameter
+            // (A.3.2), so the same holds for it.
+            if matches!(kind, "PARAMETER" | "LOCAL_VARIABLE" | "RECORD_COMPONENT")
                 && a.name.segments.len() == 1
                 && a.name.segments[0].text.eq_ignore_ascii_case("cfg")
             {
@@ -4434,12 +4450,13 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0470_AnnotationTargetMismatch,
                         format!(
-                            "`@cfg` cannot be applied to a {} (A.3.1)",
+                            "`@cfg` cannot be applied to a {} ({})",
                             target_kind_noun(kind),
+                            if kind == "RECORD_COMPONENT" { "A.3.2" } else { "A.3.1" },
                         ),
                     )
                     .with_span(a.span)
-                    .with_help(if kind == "PARAMETER" {
+                    .with_help(if kind != "LOCAL_VARIABLE" {
                         "a parameter is part of a signature the callers already wrote; \
                          put the `@cfg` on the whole declaration instead"
                     } else {
@@ -4471,18 +4488,23 @@ impl<'a> Checker<'a> {
             seen.push((key, sig.repeatable));
 
             // E0470: the declaration kind must be one `@Target` names.
-            if !sig.targets.is_empty() && !sig.targets.iter().any(|t| t == kind) {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0470_AnnotationTargetMismatch,
-                        format!(
-                            "`@{name}` cannot be applied to a {} -- its `@Target` allows {} (§A.3)",
-                            target_kind_noun(kind),
-                            sig.targets.join(", "),
-                        ),
-                    )
-                    .with_span(a.span),
-                );
+            if !sig.targets.is_empty() && !sig.targets.iter().any(|t| target_admits(kind, t)) {
+                let mut diagnostic = Diagnostic::error(
+                    code::Code::E0470_AnnotationTargetMismatch,
+                    format!(
+                        "`@{name}` cannot be applied to a {} -- its `@Target` allows {} (§A.3)",
+                        target_kind_noun(kind),
+                        sig.targets.join(", "),
+                    ),
+                )
+                .with_span(a.span);
+                if kind == "RECORD_COMPONENT" {
+                    diagnostic = diagnostic.with_help(
+                        "a component becomes a field and a constructor parameter, so it takes an \r
+                         annotation whose `@Target` names `FIELD` or `PARAMETER` (A.3.2)",
+                    );
+                }
+                self.diagnostics.push(diagnostic);
             }
 
             // Bind each argument to its parameter: by name, else by position.
@@ -14798,7 +14820,22 @@ fn target_kind_noun(kind: &str) -> &'static str {
         "LOCAL_VARIABLE" => "local variable",
         "MODULE" => "module",
         "ANNOTATION" => "annotation",
+        "RECORD_COMPONENT" => "record component",
         _ => "declaration",
+    }
+}
+
+/// Whether an annotation whose `@Target` names `target` may be written at a
+/// declaration of kind `kind`.
+///
+/// Every kind but one is its own target. A record component (or an enum
+/// payload slot) has none: it lands as a field AND as the canonical
+/// constructor's parameter, so an annotation for either position fits it
+/// (A.3.2, Java's rule for record components).
+fn target_admits(kind: &str, target: &str) -> bool {
+    match kind {
+        "RECORD_COMPONENT" => matches!(target, "FIELD" | "PARAMETER"),
+        _ => target == kind,
     }
 }
 

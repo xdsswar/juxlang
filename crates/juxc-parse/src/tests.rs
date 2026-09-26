@@ -2252,6 +2252,69 @@ fn record_decl_without_body_parses() {
     assert_eq!(decl.components.len(), 2);
 }
 
+/// `record-component = annotation* type identifier` (§A.2.5, A.3.2): each
+/// component keeps its own annotations, and an unannotated one keeps none.
+#[test]
+fn record_component_annotations_parse() {
+    let ast = parse_clean(
+        "public record User(@Column(\"id\") @NotBlank int id, String name, @Column(name = \"e\") String email) {}",
+    );
+    let TopLevelDecl::Record(decl) = &ast.items[0] else { panic!() };
+    assert_eq!(decl.components.len(), 3);
+    let names = |i: usize| -> Vec<String> {
+        decl.components[i]
+            .annotations
+            .iter()
+            .map(|a| a.name.segments[0].text.clone())
+            .collect()
+    };
+    assert_eq!(names(0), ["Column", "NotBlank"]);
+    assert!(names(1).is_empty());
+    assert_eq!(names(2), ["Column"]);
+    assert_eq!(decl.components[0].name.text, "id");
+    assert_eq!(decl.components[2].ty.name.segments[0].text, "String");
+}
+
+/// An enum payload is a `record-component-list` (§A.2.5), so a slot takes
+/// annotations too, and a leading `@` still reads as a payload rather than
+/// constructor arguments.
+#[test]
+fn enum_payload_annotations_parse() {
+    let ast = parse_clean("enum Shape { Circle(@Unit(\"cm\") double radius), Dot }");
+    let TopLevelDecl::Enum(decl) = &ast.items[0] else { panic!() };
+    let slot = &decl.variants[0].payload[0];
+    assert_eq!(slot.annotations.len(), 1);
+    assert_eq!(slot.annotations[0].name.segments[0].text, "Unit");
+    assert_eq!(slot.name.as_ref().unwrap().text, "radius");
+    assert!(decl.variants[0].args.is_empty());
+}
+
+/// An annotation on a lambda parameter is ONE E0470 (A.3.1), and the lambda
+/// still parses with its parameter: stopping at the `@` used to cascade into
+/// five parse errors that never mentioned an annotation.
+#[test]
+fn lambda_parameter_annotation_is_one_e0470() {
+    let src = "void f() { var g = (@Tag int a, @Tag b) -> a + b; }";
+    let sf = SourceFile::new("test.jux", src);
+    let parsed = parse(&lex(&sf).tokens);
+    let codes: Vec<_> = parsed.diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(
+        codes,
+        [
+            juxc_diagnostics::code::Code::E0470_AnnotationTargetMismatch,
+            juxc_diagnostics::code::Code::E0470_AnnotationTargetMismatch,
+        ],
+    );
+    let TopLevelDecl::Function(f) = &parsed.ast.items[0] else { panic!() };
+    let body = f.body.as_ref().unwrap();
+    let juxc_ast::Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(juxc_ast::Expr::Lambda(l)) = &v.init else { panic!() };
+    assert_eq!(l.params.len(), 2);
+    assert_eq!(l.params[0].name.text, "a");
+    assert!(l.params[0].ty.is_some());
+    assert_eq!(l.params[1].name.text, "b");
+}
+
 /// Generic record `Pair<A, B>(A first, B second)` parses with generic
 /// params captured.
 #[test]

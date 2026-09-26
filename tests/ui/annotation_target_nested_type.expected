@@ -1,0 +1,6 @@
+annotation_target_nested_type.jux:10:5: [E0470] error: `@Loggable` cannot be applied to a type -- its `@Target` allows METHOD (§A.3)
+annotation_target_nested_type.jux:12:9: [E0470] error: `@Loggable` cannot be applied to a field or property -- its `@Target` allows METHOD (§A.3)
+annotation_target_nested_type.jux:14:9: [E0470] error: `@Entity` cannot be applied to a method or function -- its `@Target` allows TYPE (§A.3)
+annotation_target_nested_type.jux:15:25: [E0470] error: `@Entity` cannot be applied to a parameter -- its `@Target` allows TYPE (§A.3)
+annotation_target_nested_type.jux:16:13: [E0470] error: `@Loggable` cannot be applied to a local variable -- its `@Target` allows METHOD (§A.3)
+annotation_target_nested_type.jux:21:28: [E0470] error: `@Loggable` cannot be applied to a record component -- its `@Target` allows METHOD (§A.3)

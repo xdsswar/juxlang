@@ -1,0 +1,10 @@
+@Target(PARAMETER)
+public annotation Tag { }
+
+public void main() {
+    // A lambda parameter is `type? identifier` (A.2.9): one E0470 each, and
+    // the lambda still parses, so nothing else is reported.
+    var f = (@Tag int a) -> a + 1;
+    var g = (@Tag @Tag b, int c) -> b + c;
+    print(f(1) + g(2, 3));
+}

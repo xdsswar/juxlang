@@ -365,7 +365,7 @@ record-decl       = visibility? binding-immut? 'record' identifier generic-param
                     ( 'implements' type-list )?
                     record-body?
 record-component-list = record-component ( ',' record-component )*
-record-component  = annotation* type identifier
+record-component  = annotation* type identifier                         -- targets: ANNOTATIONS §A.3.2
 record-body       = '{' record-member* '}'
 record-member     = annotation* ( function-decl | static-init-block
                                 | compact-constructor | constructor-decl )

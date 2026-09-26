@@ -1,0 +1,2 @@
+annotation_on_lambda_parameter.jux:7:14: [E0470] error: a lambda parameter takes no annotation (A.3.1)
+annotation_on_lambda_parameter.jux:8:14: [E0470] error: a lambda parameter takes no annotation (A.3.1)
