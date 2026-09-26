@@ -1407,9 +1407,11 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
             // Resolved in the unit that WROTE the call, so a library unit's own
             // `f(…)` never picks up a user function of that name (§M.16).
-            if let Some((fqn, only)) =
-                symbols.lookup_function_in(name, &env.current_package.join("."))
-            {
+            if let Some((fqn, only)) = symbols.lookup_function_for(
+                name,
+                &env.current_package.join("."),
+                Some(&env.unqualified),
+            ) {
                 // `assertThrows<E>(f)` returns what it caught, typed as `E`
                 // (§TS.3). The library function itself is not generic.
                 if fqn == TYPED_ASSERT_THROWS_FQN && c.explicit_generic_args.len() == 1 {

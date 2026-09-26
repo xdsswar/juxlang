@@ -212,7 +212,7 @@ the single largest scoring hole (§CR at 44%), but it is a performance promise,
 not correctness, and §CR.9 sequences it as a later phase. It also means
 `E0950`-`E0952` are unreachable and should be marked so.
 
-**24. User-package-to-user-package bare-name capture.** A bare name in
+**24. CLOSED 2026-09-26 (phase 4 merge, ERRATA E117).** ~~User-package-to-user-package bare-name capture.~~ A bare name in
 `package a;` can still reach a type in an unrelated `package b;` through the
 cross-package fallback. Left deliberately in E96: it is what makes `E0416` fire
 at all for user code. §M.16's ladder is written so tightening it later is a

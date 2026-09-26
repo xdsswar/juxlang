@@ -3271,6 +3271,82 @@ program:
 **Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 carries `E0707`, `E0900`,
 `E0904`, `E0906`, `E0908` and `W0906`, and §D.3's note on the build's band names
 them. `JUX-ASYNC-ADDENDUM-v2.md` §18.1.4 says a task yields its result once.
+## E117. A bare name does not reach another user package
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16 lists four rungs for a bare
+name (a generic parameter, the unit's own package and imports, a nested type,
+the implicit prelude of `jux.std.*` and `rust.std`) and says a name that
+reaches none of them is `E0417`. The compiler had a fifth, unwritten rung: a
+workspace-wide scan by last segment. So in
+
+```java
+// b/Widget.jux
+package b;
+public class Widget { public int v = 3; public static int make() { return 4; } }
+
+// a/Use.jux
+package a;
+public class Use {
+    public Widget mk() { return null; }       // compiled: meant b.Widget
+    public int st() { return Widget.make(); } // compiled: meant b.Widget
+}
+```
+
+`package a;` used `b.Widget` without importing it, which Java does not allow
+and §M.16 does not describe. E96 kept the scan deliberately (GAPS 24): it was
+also the road by which a package-private type of another package reached the
+`E0416` check. The same scan backed constant folding (E113 kept a "unique
+match anywhere" rung "in line with gap 24"), the free-function lookup's last
+rung, the static-call head check and the record/enum receiver lookup.
+
+**Resolution.** The scan is gone for user code. A bare name written in a user
+package reaches, without an `import`:
+
+- its own package (and, before that, whatever its imports bind);
+- the **root package**, whose declarations are keyed by their bare names and
+  which no `import` can name;
+- the **library realm** (`jux.std.*`, `jux.meta`, `rust.*`, crate gating per
+  §G.6.5 unchanged).
+
+Never another user package, and a dependency's package is a user package. A
+unit of the library realm still reaches the library realm only (§M.16.1), now
+including for constants of the root package.
+
+- A type name that reaches nothing is `E0417` (a signature slot, a local, the
+  type of `new`, a cast, ...). When another user package declares a type of
+  that name the diagnostic carries a help: `add import b.Widget;` for one
+  package, the list of packages for several.
+- An `extends` / `implements` head that names no visible type is `E0417` too
+  (same help). It used to reach rustc as "cannot find trait", for an
+  un-imported supertype and for a name declared nowhere alike.
+- `Widget.make()` with the head un-imported is `E0301` "cannot find `Widget`",
+  with the same help. A qualified `b.Widget.make()` is unchanged.
+- `E0416` for a TYPE is still reported, through the import that names it
+  (`import a.Hidden;` or `import a.*;` over a package-private `a.Hidden`).
+  The import is now the only way to reach another package's type, so it is the
+  only way to that diagnostic.
+- A constant of another user package folds only through an import. An
+  initializer written in another package is evaluated with ITS unit's imports
+  (it used to get none), so `b.DOUBLE = BASE * 2` with `import c.BASE;` in
+  `b` still folds when `a` reads `DOUBLE`.
+- A free function of another user package is found through the unit's import
+  in the checker and the backend alike; the resolver already reported an
+  un-imported call as `E0301`.
+- The backend's bare-type, bare-class and free-function lookups PREFER what
+  the rule reaches inside a unit, so a same-named library type is never
+  displaced by an unrelated user package's. They keep the open scan behind
+  that preference, because the emitter also asks about names it carries over
+  from another unit's signature (`Readout(.., Aggregate<int> summary)` written
+  where `Aggregate` was imported, emitted at a call site that did not import
+  it); every name a program wrote has already been vetted by the checker.
+
+Expressions were already right: the resolver's known-name set is the unit's
+own declarations, its imports and its package's siblings, so `new Widget()`
+without the import was `E0301` before this entry. What changed is every TYPE
+position and every lookup behind the resolver.
+
+**Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16 states the root-package
+rule and the import help; GAPS 24 is closed by this entry.
 
 ---
 

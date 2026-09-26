@@ -1458,7 +1458,15 @@ unit that wrote it**, and nowhere else. The ladder, in order:
    §G.6.5 scopes the foreign half to `rust.std`).
 
 A name that reaches none of those rungs is `E0417`, not a silent match somewhere
-else in the workspace.
+else in the workspace. In particular a type, function or constant declared in
+another **user** package (a dependency's included) is on no rung until an
+`import` binds it: `Widget` in `package a;` does not mean `b.Widget`. When some
+other user package does declare the name, the `E0417` (or, for a static-call
+head such as `Widget.make()`, the `E0301`) carries a help naming the import to
+add. The one exception is the **root package**: its declarations are keyed by
+their simple names and no `import` can name them, so every unit reaches them as
+if they were on rung 2. `E0416` for a package-private type is reported through
+the import that names it (ERRATA E117).
 
 ### M.16.1. The standard library does not import your program
 

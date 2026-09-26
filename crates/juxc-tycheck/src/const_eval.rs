@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use juxc_ast::{BinaryOp, Block, Expr, Literal, Stmt, UnaryOp};
 
-use crate::symbol_table::SymbolTable;
+use crate::symbol_table::{bare_name_reaches, SymbolTable};
 
 /// A reduced compile-time value.
 ///
@@ -202,7 +202,7 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
                     Some((p, _)) => p.split('.').map(str::to_string).collect(),
                     None => Vec::new(),
                 };
-                return eval_in(&sig.init, f, fqn, &package, None);
+                return eval_in(&sig.init, f, fqn, fqn, &package, None);
             }
             // A `static const` FIELD of a class, named bare from inside the
             // class that declares it (`FULL = NAME + SUFFIX`). There is no
@@ -216,7 +216,7 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
                     return eval_field(field, f, name);
                 }
             }
-            if let Some(field) = lookup_static_const_field_by_bare(f.ctx.symbols, name) {
+            if let Some(field) = lookup_static_const_field_by_bare(f.ctx.symbols, f.ctx.package, name) {
                 return eval_field(field, f, name);
             }
             Err(ConstEvalError::NonConst(format!(
@@ -626,25 +626,37 @@ fn exec_if(i: &juxc_ast::IfStmt, f: &mut Frame) -> Result<Flow, ConstEvalError> 
 /// unique program-wide.
 ///
 /// The initializer's own names mean what they mean where it was WRITTEN: in
-/// `package`, with `enclosing_class`'s constants in scope. The caller's imports
-/// carry over only when the initializer lives in the caller's own package; a
-/// unit's imports are its own, and another package's unit is not this one.
+/// `package`, with `enclosing_class`'s constants in scope, through the imports
+/// of the unit that declares `decl` (a const's or a class's FQN). The caller's
+/// imports stand in only when that unit is unknown and the initializer lives
+/// in the caller's own package; a unit's imports are its own. Since gap 24
+/// closed, an initializer in another package can reach a third package's
+/// constant ONLY through its own unit's `import`, so those imports must be the
+/// ones in force.
 fn eval_in(
     init: &Expr,
     f: &mut Frame,
     key: &str,
+    decl: &str,
     package: &[String],
     enclosing_class: Option<&str>,
 ) -> Result<ConstVal, ConstEvalError> {
     if let Some(v) = f.memo.get(key) {
         return Ok(v.clone());
     }
+    let symbols: &SymbolTable = f.ctx.symbols;
+    let declaring_imports = symbols
+        .decl_unit
+        .get(decl)
+        .and_then(|&u| symbols.units.get(u))
+        .map(|u| &u.unqualified);
     let ctx = ConstCtx {
-        symbols: f.ctx.symbols,
+        symbols,
         generic_param_names: f.ctx.generic_param_names,
         enclosing_class,
         package,
-        imports: if package == f.ctx.package { f.ctx.imports } else { None },
+        imports: declaring_imports
+            .or(if package == f.ctx.package { f.ctx.imports } else { None }),
     };
     let v = {
         let mut sub = Frame {
@@ -671,7 +683,7 @@ struct ConstField<'a> {
 /// Evaluate `field` in its declaring class, memoized as `Class::member`.
 fn eval_field(field: ConstField, f: &mut Frame, member: &str) -> Result<ConstVal, ConstEvalError> {
     let key = format!("{}::{member}", field.class_fqn);
-    eval_in(field.init, f, &key, field.package, Some(field.class_fqn))
+    eval_in(field.init, f, &key, field.class_fqn, field.package, Some(field.class_fqn))
 }
 
 /// `member` of the class `(fqn, sig)`, when it is a constant field with an
@@ -699,8 +711,10 @@ fn qualify(package: &[String], name: &str) -> String {
 /// The constant field `Owner.member`, where `Owner` is a class named bare or in
 /// full. A bare owner is looked for as the writing unit would name it: fully
 /// qualified, in its own package, through its imports, and only then by last
-/// segment anywhere, a user class ahead of a library one and ties broken by
-/// FQN so the answer does not follow `HashMap` order.
+/// segment among the packages a bare name reaches (§M.16: the root package and
+/// the library realm, never another user package), a user class ahead of a
+/// library one and ties broken by FQN so the answer does not follow `HashMap`
+/// order.
 fn lookup_static_const_field<'a>(
     ctx: &ConstCtx<'a>,
     owner: &str,
@@ -708,6 +722,7 @@ fn lookup_static_const_field<'a>(
 ) -> Option<ConstField<'a>> {
     let symbols: &'a SymbolTable = ctx.symbols;
     let classes = &symbols.classes;
+    let here = ctx.package.join(".");
     let class = classes
         .get_key_value(owner)
         .or_else(|| classes.get_key_value(&qualify(ctx.package, owner)))
@@ -719,19 +734,26 @@ fn lookup_static_const_field<'a>(
             classes
                 .iter()
                 .filter(|(k, _)| k.rsplit('.').next().unwrap_or(k) == owner)
+                .filter(|(_, c)| bare_name_reaches(&here, &c.package.join(".")))
                 .min_by(|a, b| a.1.is_external.cmp(&b.1.is_external).then_with(|| a.0.cmp(b.0)))
         })?;
     const_field(class, member)
 }
 
-/// The constant field named `bare`, when exactly one class in the program
-/// declares one by that name. Ambiguity yields `None`: folding the wrong
-/// constant would be worse than not folding at all.
+/// The constant field named `bare`, when exactly one class a bare name written
+/// in `package` reaches (§M.16) declares one by that name. Ambiguity yields
+/// `None`: folding the wrong constant would be worse than not folding at all.
 fn lookup_static_const_field_by_bare<'a>(
     symbols: &'a SymbolTable,
+    package: &[String],
     bare: &str,
 ) -> Option<ConstField<'a>> {
-    let mut hits = symbols.classes.iter().filter_map(|class| const_field(class, bare));
+    let here = package.join(".");
+    let mut hits = symbols
+        .classes
+        .iter()
+        .filter(|(_, c)| bare_name_reaches(&here, &c.package.join(".")))
+        .filter_map(|class| const_field(class, bare));
     match (hits.next(), hits.next()) {
         (Some(field), None) => Some(field),
         _ => None,
@@ -751,9 +773,11 @@ fn unique_const<'a>(
 /// Resolve a bare constant NAME to `(fqn, &ConstSig)` the way the writing unit
 /// sees it (§M.16): its own package's constant first, then one its imports
 /// name, then the library realm's (when exactly one package there declares
-/// it). Past those, the root package's constant and then a unique match
-/// anywhere, which is how a bare name reached across user packages before
-/// (GAPS 24 keeps that open for types too).
+/// it), then the root package's. Nothing past that: a constant of another
+/// user package needs its `import`, exactly as a type does (§M.16, gap 24).
+/// The "unique match anywhere" rung that used to follow is gone -- it let a
+/// bare `MAX` in `package a;` fold `b.MAX` with no import in sight. A unit of
+/// the library realm (checked from its own side) still sees only the realm.
 fn lookup_const<'a>(
     ctx: &ConstCtx<'a>,
     name: &str,
@@ -762,6 +786,7 @@ fn lookup_const<'a>(
     let consts = &symbols.consts;
     let exact = |fqn: &str| consts.get_key_value(fqn).map(|(k, c)| (k.as_str(), c));
     let suffix = format!(".{name}");
+    let here_is_library = crate::symbol_table::is_library_realm_package(&ctx.package.join("."));
     exact(&qualify(ctx.package, name))
         .or_else(|| exact(ctx.imports?.get(name)?))
         .or_else(|| {
@@ -770,8 +795,7 @@ fn lookup_const<'a>(
                     .is_some_and(crate::symbol_table::is_library_realm_package)
             }))
         })
-        .or_else(|| exact(name))
-        .or_else(|| unique_const(consts.iter().filter(|(k, _)| k.ends_with(&suffix))))
+        .or_else(|| if here_is_library { None } else { exact(name) })
 }
 
 #[cfg(test)]
@@ -829,9 +853,43 @@ mod tests {
         let in_b = ConstCtx { package: &b, ..ConstCtx::new(&symbols, &none) };
         assert_eq!(eval_const_int(&name("MAX"), &in_a).ok(), Some(10));
         assert_eq!(eval_const_int(&name("MAX"), &in_b).ok(), Some(7));
-        // Nowhere in particular, the name is ambiguous and does not fold.
+        // From the root package with no import, neither is reached (§M.16).
         let root = ConstCtx::new(&symbols, &none);
         assert!(eval_const_int(&name("MAX"), &root).is_err());
+    }
+
+    /// A constant only ONE user package declares is still not reached from
+    /// another package without its import (gap 24): the "unique anywhere"
+    /// rung is gone. The root package's own constants are reached from
+    /// everywhere, as its types are.
+    #[test]
+    fn a_unique_constant_of_another_package_needs_its_import() {
+        let symbols = table(&["package b;\npublic const int ONLY = 4;", "const int ROOTED = 6;"]);
+        let none = HashSet::new();
+        let c = pkg("c");
+        let in_c = ConstCtx { package: &c, ..ConstCtx::new(&symbols, &none) };
+        assert!(eval_const_int(&name("ONLY"), &in_c).is_err());
+        assert_eq!(eval_const_int(&name("ROOTED"), &in_c).ok(), Some(6));
+        let imports: HashMap<String, String> =
+            [("ONLY".to_string(), "b.ONLY".to_string())].into_iter().collect();
+        let imported = ConstCtx { package: &c, imports: Some(&imports), ..ConstCtx::new(&symbols, &none) };
+        assert_eq!(eval_const_int(&name("ONLY"), &imported).ok(), Some(4));
+    }
+
+    /// An initializer in another package reads a third package's constant
+    /// through ITS OWN unit's import, not the caller's.
+    #[test]
+    fn an_initializer_uses_its_own_units_imports() {
+        let symbols = table(&[
+            "package c;\npublic const int BASE = 5;",
+            "package b;\nimport c.BASE;\npublic const int DOUBLE = BASE * 2;",
+        ]);
+        let none = HashSet::new();
+        let a = pkg("a");
+        let imports: HashMap<String, String> =
+            [("DOUBLE".to_string(), "b.DOUBLE".to_string())].into_iter().collect();
+        let in_a = ConstCtx { package: &a, imports: Some(&imports), ..ConstCtx::new(&symbols, &none) };
+        assert_eq!(eval_const_int(&name("DOUBLE"), &in_a).ok(), Some(10));
     }
 
     /// A constant's initializer reads its OWN package's names, and one
