@@ -1078,6 +1078,17 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxRefBindingInspection"/>
+    <!-- A `final`/`const` parameter, local or for-each binder stored into
+         again (MISSING-DEFS sec. M.14.2, ERRATA E95), mirrored from the
+         compiler's E0464 with the keyword the user wrote. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxFinalReassignment"
+        displayName="'final' binding reassigned (E0464)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxFinalReassignmentInspection"/>
     <!-- 0.1.5: a bound a foreign method puts on its own type parameters
          (`@RustBounds("T: Ord")`, Bindgen sec. G.6.4.4, ERRATA E77), checked
          at the call as E0446 instead of leaking rustc's E0277. -->
