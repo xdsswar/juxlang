@@ -1149,6 +1149,7 @@ impl<'a> Checker<'a> {
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         self.reject_align_on(&enum_decl.annotations, "an enum", &enum_decl.name.text);
+        self.check_supertype_heads(enum_decl.implements.iter(), &[]);
         // `sealed enum X permits A, B` (ERRATA E33): an enum is sealed by
         // default, so the list may only restate its variants, all of them.
         if !enum_decl.permits.is_empty() {
@@ -2964,6 +2965,7 @@ impl<'a> Checker<'a> {
         for tp in &class.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_supertype_heads(class.extends.iter().chain(&class.implements), &class.generic_params);
         // Const-generic params (`<int N>`) additionally read as VALUES
         // inside every body (`return N;`) — declare them with their
         // value type so expressions over `N` type-check as ints/bools.
@@ -3547,6 +3549,12 @@ impl<'a> Checker<'a> {
     /// Only single-segment names are checked. A written FQN (`a.b.C`) is
     /// deliberate and rare, and resolving one here would duplicate the import
     /// machinery for no gain.
+    ///
+    /// Since gap 24 closed, a bare name reaches another user package only
+    /// through an `import` (single-type or wildcard), so that is the one road
+    /// to this diagnostic: `import a.Hidden;` or `import a.*;` naming a
+    /// package-private `a.Hidden`. Without the import the name reaches nothing
+    /// and is `E0417`, with a help naming the import.
     fn check_type_visibility(&mut self, tref: &TypeRef) {
         self.check_type_name_visibility(&tref.name, tref.span);
     }
@@ -3664,19 +3672,21 @@ impl<'a> Checker<'a> {
         self.check_type_visibility(tref);
         if self.sig_head_unresolved(tref, extra) {
             let bare = &tref.name.segments[0].text;
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0417_UnknownType,
-                    format!(
-                        "unknown type `{bare}` -- no primitive, in-scope generic parameter, or \
-                         class/record/enum/interface of that name is visible here. If this \
-                         overrides a member of a generic supertype, name the concrete type \
-                         argument it was bound to (e.g. `Object` under `implements \
-                         Holder<Object>`), not the supertype's type-parameter name",
-                    ),
-                )
-                .with_span(tref.span),
-            );
+            let mut diag = Diagnostic::error(
+                code::Code::E0417_UnknownType,
+                format!(
+                    "unknown type `{bare}` -- no primitive, in-scope generic parameter, or \
+                     class/record/enum/interface of that name is visible here. If this \
+                     overrides a member of a generic supertype, name the concrete type \
+                     argument it was bound to (e.g. `Object` under `implements \
+                     Holder<Object>`), not the supertype's type-parameter name",
+                ),
+            )
+            .with_span(tref.span);
+            if let Some(help) = self.import_hint(bare) {
+                diag = diag.with_help(help);
+            }
+            self.diagnostics.push(diag);
             return; // bogus head — don't descend into its (also bogus) args
         }
         // Head resolves — validate each concrete generic argument too, so
@@ -4679,6 +4689,7 @@ impl<'a> Checker<'a> {
     /// including the abstract ones it is written against.
     fn check_interface(&mut self, iface: &juxc_ast::InterfaceDecl) {
         self.reject_align_on(&iface.annotations, "an interface", &iface.name.text);
+        self.check_supertype_heads(iface.extends.iter(), &iface.generic_params);
         let has_bodies = iface.methods.iter().any(|m| m.body.is_some());
         if !has_bodies {
             return;
@@ -5118,6 +5129,7 @@ impl<'a> Checker<'a> {
         for tp in &record.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_supertype_heads(record.implements.iter(), &record.generic_params);
         self.declare_const_generic_params(&record.generic_params);
         self.check_layout_c_record(record);
         let comp_tys: Vec<&juxc_ast::TypeRef> = record.components.iter().map(|c| &c.ty).collect();
@@ -8675,14 +8687,23 @@ impl<'a> Checker<'a> {
                 return Some(("enum", fqn.clone()));
             }
         }
+        // Only in a package a bare name reaches (§M.16, gap 24).
         let suffix = format!(".{written}");
+        let here = self.env.current_package.join(".");
+        let hit = |k: &&String| {
+            k.ends_with(&suffix)
+                && crate::symbol_table::bare_name_reaches(
+                    &here,
+                    crate::symbol_table::fqn_package(k).unwrap_or(""),
+                )
+        };
         let mut hits = self
             .symbols
             .records
             .keys()
-            .filter(|k| k.ends_with(&suffix))
+            .filter(hit)
             .map(|k| ("record", k.clone()))
-            .chain(self.symbols.enums.keys().filter(|k| k.ends_with(&suffix)).map(|k| ("enum", k.clone())));
+            .chain(self.symbols.enums.keys().filter(hit).map(|k| ("enum", k.clone())));
         match (hits.next(), hits.next()) {
             (Some(one), None) => Some(one),
             _ => None,
@@ -8846,7 +8867,19 @@ impl<'a> Checker<'a> {
         }
         let dotted = format!("{name}.");
         let suffix = format!(".{name}");
-        let names_it = |k: &String| k == name || k.starts_with(&dotted) || k.ends_with(&suffix);
+        // A last-segment match counts only in a package a bare name reaches
+        // (§M.16, gap 24): `b.Widget` is not `Widget` in `package a;` without
+        // its import. A package HEAD (`b` of `b.Widget.make()`) still is.
+        let here = self.env.current_package.join(".");
+        let names_it = |k: &String| {
+            k == name
+                || k.starts_with(&dotted)
+                || (k.ends_with(&suffix)
+                    && crate::symbol_table::bare_name_reaches(
+                        &here,
+                        crate::symbol_table::fqn_package(k).unwrap_or(""),
+                    ))
+        };
         self.symbols.classes.keys().any(names_it)
             || self.symbols.records.keys().any(names_it)
             || self.symbols.enums.keys().any(names_it)
@@ -8957,16 +8990,19 @@ impl<'a> Checker<'a> {
         }
         if self.sig_head_unresolved(tref, &[]) {
             let bare = tref.name.segments[0].text.clone();
-            let hint = self.nearest_type_hint(&bare);
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0417_UnknownType,
-                    format!(
-                        "unknown type `{bare}`: no class, record, enum, interface or primitive of that name is visible here{hint}"
-                    ),
-                )
-                .with_span(tref.span),
-            );
+            let import = self.import_hint(&bare);
+            let hint = if import.is_some() { String::new() } else { self.nearest_type_hint(&bare) };
+            let mut diag = Diagnostic::error(
+                code::Code::E0417_UnknownType,
+                format!(
+                    "unknown type `{bare}`: no class, record, enum, interface or primitive of that name is visible here{hint}"
+                ),
+            )
+            .with_span(tref.span);
+            if let Some(help) = import {
+                diag = diag.with_help(help);
+            }
+            self.diagnostics.push(diag);
             return false;
         }
         let mut known = true;
@@ -9017,6 +9053,60 @@ impl<'a> Checker<'a> {
     /// or a prelude type is a likely misspelling of `wanted`; empty otherwise.
     /// Ranked by edit distance first: `Strng` is one letter from `String` and
     /// two from `Stream`, and a typo is what an unknown type name usually is.
+    /// `E0417` for an `extends` / `implements` head that names no visible
+    /// type. Such a name used to reach rustc as "cannot find trait" (or type),
+    /// and since gap 24 closed it is also where an un-imported supertype of
+    /// another user package lands: `class Sub extends Widget` in `package a;`
+    /// with `b.Widget` not imported. Only the head is checked; generic
+    /// arguments are the signature checks' business.
+    fn check_supertype_heads<'t>(
+        &mut self,
+        heads: impl Iterator<Item = &'t TypeRef>,
+        generic_params: &[TypeParam],
+    ) {
+        for tref in heads {
+            if !self.sig_head_unresolved(tref, generic_params) {
+                continue;
+            }
+            let bare = tref.name.segments[0].text.clone();
+            let import = self.import_hint(&bare);
+            let hint = if import.is_some() { String::new() } else { self.nearest_type_hint(&bare) };
+            let mut diag = Diagnostic::error(
+                code::Code::E0417_UnknownType,
+                format!(
+                    "unknown type `{bare}`: no class or interface of that name is visible here{hint}"
+                ),
+            )
+            .with_span(tref.span);
+            if let Some(help) = import {
+                diag = diag.with_help(help);
+            }
+            self.diagnostics.push(diag);
+        }
+    }
+
+    /// The `help` for an `E0417` whose name another user package DOES declare:
+    /// a bare name does not reach an unrelated user package (§M.16, gap 24),
+    /// so the fix is an `import`, not a spelling change. `None` when no other
+    /// user package declares a type of that name.
+    fn import_hint(&self, bare: &str) -> Option<String> {
+        let pkgs = self
+            .symbols
+            .user_packages_declaring_type(bare, &self.env.current_package.join("."));
+        match pkgs.as_slice() {
+            [] => None,
+            [one] => Some(format!(
+                "`{bare}` is declared in package `{one}`, and a bare name does not reach another \
+                 package (§M.16): add `import {one}.{bare};`"
+            )),
+            many => Some(format!(
+                "`{bare}` is declared in packages {}, and a bare name does not reach another \
+                 package (§M.16): import the one you mean",
+                many.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", "),
+            )),
+        }
+    }
+
     fn nearest_type_hint(&self, wanted: &str) -> String {
         let mut names: Vec<String> = juxc_lex::PRIMITIVE_TYPE_NAMES.iter().map(|s| s.to_string()).collect();
         names.extend(juxc_lex::grammar_spec::BUILTIN_NAMES.iter().map(|s| s.to_string()));
@@ -11283,7 +11373,12 @@ impl<'a> Checker<'a> {
                 Some(help) => format!("cannot find `{head}` in this scope -- {help}"),
                 None => format!("cannot find `{head}` in this scope"),
             };
-            self.diagnostics.push(Diagnostic::error(code::Code::E0301_NameNotFound, message).with_span(span));
+            let mut diag = Diagnostic::error(code::Code::E0301_NameNotFound, message).with_span(span);
+            // `Widget.make()` in `package a;` with `b.Widget` un-imported.
+            if let Some(help) = self.import_hint(&head) {
+                diag = diag.with_help(help);
+            }
+            self.diagnostics.push(diag);
             for arg in &c.args {
                 self.check_expr(arg);
             }
@@ -15446,6 +15541,11 @@ mod tests {
         );
         let mut diags = Vec::new();
         let mut checker = Checker::new(&symbols, &mut diags);
+        // The main unit's imports, as `typecheck_workspace` seeds them. Its
+        // `import demo.stub.Sink;` used to be unnecessary here: a bare `Sink`
+        // reached `demo.stub` through the cross-package fallback (gap 24).
+        let ctx = &symbols.units[1];
+        checker.seed_unit_context(&ctx.package, &ctx.unqualified);
         checker.check_unit(&main_ast);
         diags
     }
@@ -16009,6 +16109,99 @@ mod tests {
             "package b; import a.*; public class U { public int go() { Mod m = new Mod(); return m.x; } }",
         );
         assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    // --- §M.16 / gap 24: a bare name does not reach another user package ---
+
+    /// `Widget` in `package a;` used to bind to `b.Widget` through the
+    /// cross-package fallback, with no import in sight. It reaches no rung of
+    /// the ladder, so it is E0417, and the help names the import.
+    #[test]
+    fn bare_type_of_another_user_package_is_e0417_with_the_import() {
+        let d = run_two(
+            "package b; public class Widget { public int v = 3; }",
+            "package a; public class U { public int go() { Widget w = null; return 1; } \
+             public Widget mk() { return null; } }",
+        );
+        let unknown: Vec<_> = d.iter().filter(|x| x.code == code::Code::E0417_UnknownType).collect();
+        assert_eq!(unknown.len(), 2, "{d:?}");
+        for x in unknown {
+            assert!(x.help.iter().any(|h| h.contains("import b.Widget;")), "{x:?}");
+        }
+    }
+
+    /// The same name through its import is fine.
+    #[test]
+    fn imported_type_of_another_user_package_resolves() {
+        let d = run_two(
+            "package b; public class Widget { public int v = 3; }",
+            "package a; import b.Widget; public class U { public int go() { Widget w = new Widget(); return w.v; } }",
+        );
+        assert!(!has(&d, code::Code::E0417_UnknownType), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    /// A bare static-call receiver is the same question: `Widget.make()` with
+    /// `b.Widget` un-imported names nothing here.
+    #[test]
+    fn bare_static_receiver_of_another_user_package_is_not_found() {
+        let d = run_two(
+            "package b; public class Widget { public static int make() { return 4; } }",
+            "package a; public class U { public int go() { return Widget.make(); } }",
+        );
+        let missing: Vec<_> = d.iter().filter(|x| x.code == code::Code::E0301_NameNotFound).collect();
+        assert_eq!(missing.len(), 1, "{d:?}");
+        assert!(missing[0].help.iter().any(|h| h.contains("import b.Widget;")), "{d:?}");
+    }
+
+    /// A supertype head is the same question, and used to reach rustc as
+    /// "cannot find trait" even for a name declared nowhere.
+    #[test]
+    fn unimported_supertype_of_another_user_package_is_e0417() {
+        let d = run_two(
+            "package b; public class Widget { } public interface Shape { int area(); }",
+            "package a; public class Sub extends Widget { } \
+             public class Sq implements Shape { public int area() { return 1; } } \
+             public class Nope implements Zork { }",
+        );
+        let unknown: Vec<_> = d.iter().filter(|x| x.code == code::Code::E0417_UnknownType).collect();
+        assert_eq!(unknown.len(), 3, "{d:?}");
+        assert!(unknown.iter().any(|x| x.help.iter().any(|h| h.contains("import b.Widget;"))), "{d:?}");
+        assert!(unknown.iter().any(|x| x.help.iter().any(|h| h.contains("import b.Shape;"))), "{d:?}");
+    }
+
+    /// E0416 for a type still fires, through the import that names it: the
+    /// import is now the only road to another package's type.
+    #[test]
+    fn package_private_type_through_a_single_import_is_e0416() {
+        let d = run_two(
+            "package a; class Hidden { public int x = 1; }",
+            "package b; import a.Hidden; public class U { public int go() { Hidden h = new Hidden(); return h.x; } }",
+        );
+        assert!(has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    /// The root package is not an "other" package: its declarations are keyed
+    /// by their bare names and no `import` can name them, so a named package
+    /// still reaches them.
+    #[test]
+    fn a_root_package_type_is_reached_from_a_named_package() {
+        let d = run_two(
+            "public class Root { public int v = 1; }",
+            "package a; public class U { public int go() { Root r = new Root(); return r.v; } }",
+        );
+        assert!(!has(&d, code::Code::E0417_UnknownType), "{d:?}");
+    }
+
+    /// An imported free function of another user package is found, and typed:
+    /// the call used to be found only by the "unique anywhere" rung.
+    #[test]
+    fn imported_function_of_another_user_package_is_typed() {
+        let d = run_two(
+            "package b; public int helper() { return 5; }",
+            "package a; import b.helper; public class U { public int go() { String s = helper(); return 1; } }",
+        );
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
     // --- JLS §6.6.1 access control: nesting and `protected` ---

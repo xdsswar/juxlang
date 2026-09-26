@@ -250,8 +250,23 @@ impl crate::RustEmitter {
         &self,
         name: &str,
     ) -> Option<(&str, &juxc_tycheck::symbol_table::FunctionSig)> {
-        self.symbols
-            .lookup_function_in(name, &self.current_package_path())
+        // The unit's own name map first: since gap 24 closed, a function of
+        // another user package is reached only through its `import`.
+        let unqualified = self
+            .current_unit_idx
+            .and_then(|i| self.symbols.units.get(i))
+            .map(|u| &u.unqualified);
+        let pkg = self.current_package_path();
+        self.symbols.lookup_function_for(name, &pkg, unqualified).or_else(|| {
+            // A name carried over from another unit (see
+            // `resolve_bare_type_fqn`): the checker vetted the call where it
+            // was written, so a unique match in a user package still stands --
+            // but never from the library realm's side (§M.16.1).
+            if juxc_tycheck::symbol_table::is_library_realm_package(&pkg) {
+                return None;
+            }
+            self.symbols.lookup_function(name)
+        })
     }
 
     /// The FQN a bare TYPE name -- class, record, enum, interface or alias --
@@ -276,6 +291,17 @@ impl crate::RustEmitter {
         if let Some(ctx) = self.current_unit_idx.and_then(|i| self.symbols.units.get(i)) {
             if let Some(fqn) = ctx.unqualified.get(name).filter(|f| is_type(f)) {
                 return Some(fqn.clone());
+            }
+            // Inside a unit, the checker's preference first (§M.16, gap 24): a
+            // bare name the program WROTE here does not reach an unrelated user
+            // package, so a same-named library type wins over it. The open
+            // scan stays behind it, because the emitter also asks about names
+            // it carries over from ANOTHER unit's signature (a callee's
+            // `Aggregate<int>` parameter, written where `Aggregate` was
+            // imported), and the checker has already vetted every name a
+            // program wrote.
+            if let Some(fqn) = self.symbols.find_reachable_fqn_by_bare_in(name, &pkg) {
+                return Some(fqn);
             }
         }
         self.symbols.find_fqn_by_bare_in(name, &pkg)
@@ -549,10 +575,24 @@ pub(crate) fn resolve_class_name(
     if symbols.classes.contains_key(name) {
         return Some(name.to_string());
     }
+    // Inside a unit, a class the bare name REACHES wins (§M.16, gap 24: never
+    // an unrelated user package ahead of the library's class of that name).
+    // Any other class of the name stays behind it, for names the emitter
+    // carries over from another unit's signatures; outside a unit there is no
+    // writer to ask, so every class counts alike.
+    let reaches = |class: &juxc_tycheck::symbol_table::ClassSig| {
+        ctx.is_none()
+            || juxc_tycheck::symbol_table::bare_name_reaches(pkg, &class.package.join("."))
+    };
     symbols
         .classes
         .iter()
         .filter(|(k, _)| fqn_bare(k) == name)
-        .min_by(|a, b| a.1.is_external.cmp(&b.1.is_external).then_with(|| a.0.cmp(b.0)))
+        .min_by(|a, b| {
+            reaches(b.1)
+                .cmp(&reaches(a.1))
+                .then_with(|| a.1.is_external.cmp(&b.1.is_external))
+                .then_with(|| a.0.cmp(b.0))
+        })
         .map(|(k, _)| k.clone())
 }

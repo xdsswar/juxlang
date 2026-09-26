@@ -294,14 +294,58 @@ impl SymbolTable {
     /// With `rust.chrono` bound, a bare `Duration` silently became chrono's
     /// `TimeDelta`, and a bare `NaiveDate` resolved with no import at all
     /// (B26).
+    ///
+    /// **A user package does not see another user package by bare name**
+    /// (§M.16, gap 24). The ladder's last rung is the implicit prelude, which
+    /// is the library realm; a declaration in an unrelated user package is on
+    /// no rung at all, so the name is `E0417` there and needs its `import`.
+    /// See [`bare_name_reaches`].
     pub fn find_visible_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
-        let visible = |fqn: &str| match crate_package_of(fqn) {
-            Some(krate) => {
-                krate == "rust.std" || prefer_pkg == krate || prefer_pkg.starts_with(&format!("{krate}."))
-            }
-            None => true,
+        let visible = |fqn: &str| {
+            let crate_ok = match crate_package_of(fqn) {
+                Some(krate) => {
+                    krate == "rust.std"
+                        || prefer_pkg == krate
+                        || prefer_pkg.starts_with(&format!("{krate}."))
+                }
+                None => true,
+            };
+            crate_ok && bare_name_reaches(prefer_pkg, fqn_package(fqn).unwrap_or(""))
         };
         self.find_fqn_by_bare_where(name, prefer_pkg, &visible)
+    }
+
+    /// [`Self::find_fqn_by_bare_in`] restricted to the packages a bare name
+    /// written in `prefer_pkg` reaches without an import
+    /// ([`bare_name_reaches`]), with no crate-level gate. The backend's mirror
+    /// of the checker's rule: its callers consult the unit's imports first.
+    pub fn find_reachable_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
+        let reach = |fqn: &str| bare_name_reaches(prefer_pkg, fqn_package(fqn).unwrap_or(""));
+        self.find_fqn_by_bare_where(name, prefer_pkg, &reach)
+    }
+
+    /// The user packages (outside the unit's own) that declare a type whose
+    /// simple name is `name`, sorted. What a bare name that reached no rung of
+    /// §M.16 would have captured before gap 24 closed, so a diagnostic can say
+    /// which `import` the author meant.
+    pub fn user_packages_declaring_type(&self, name: &str, prefer_pkg: &str) -> Vec<String> {
+        let mut pkgs: Vec<String> = self
+            .classes
+            .iter()
+            .filter(|(_, c)| !c.is_external)
+            .map(|(k, _)| k)
+            .chain(self.records.keys())
+            .chain(self.enums.keys())
+            .chain(self.interfaces.keys())
+            .chain(self.aliases.keys())
+            .filter(|k| fqn_bare(k) == name)
+            .filter_map(|k| fqn_package(k))
+            .filter(|p| !p.is_empty() && *p != prefer_pkg && !is_library_realm_package(p))
+            .map(str::to_string)
+            .collect();
+        pkgs.sort();
+        pkgs.dedup();
+        pkgs
     }
 
     fn find_fqn_by_bare_where(
@@ -1046,8 +1090,10 @@ impl SymbolTable {
     }
 
     /// [`Self::lookup_function`] resolved **from a package** (§M.16): the
-    /// referring unit's own package first, then a unique bare-name match that
-    /// the library realm gates.
+    /// referring unit's own package first, then a unique bare-name match in a
+    /// package the name reaches without an import ([`bare_name_reaches`]).
+    /// An imported function is the caller's to find first, through the unit's
+    /// own name map; see [`Self::lookup_function_for`].
     ///
     /// The context-free version answers with the same function in every unit,
     /// and that is what turned a program's own declaration into a bug report
@@ -1082,18 +1128,43 @@ impl SymbolTable {
         if let Some((k, f)) = self.functions.get_key_value(&own) {
             return Some((k.as_str(), f));
         }
-        // (B) A unique match anywhere else, minus whatever the realm hides.
-        let here_is_library = is_library_realm_package(prefer_pkg);
+        // (B) A unique match among the packages a bare name reaches: the root
+        //     package and the library realm, never another user package (a
+        //     function there needs its `import`, which the caller consults
+        //     through the unit's name map before asking this; §M.16, gap 24).
+        //     A library unit reaches the library realm only.
         let suffix = format!(".{name}");
         let mut hits = self.functions.iter().filter(|(k, _)| {
             (k.as_str() == name || k.ends_with(&suffix))
-                && (!here_is_library
-                    || is_library_realm_package(fqn_package(k).unwrap_or("")))
+                && bare_name_reaches(prefer_pkg, fqn_package(k).unwrap_or(""))
         });
         match (hits.next(), hits.next()) {
             (Some((k, f)), None) => Some((k.as_str(), f)),
             _ => None,
         }
+    }
+
+    /// The free function a bare callee `name` means in a unit whose bare-name
+    /// map is `unqualified` (its same-package siblings and imports) and whose
+    /// package is `prefer_pkg`: the map first, then
+    /// [`Self::lookup_function_in`]. The one entry point for a call a program
+    /// wrote, so an imported function of another user package is found and an
+    /// un-imported one is not (§M.16, gap 24).
+    pub fn lookup_function_for<'a>(
+        &'a self,
+        name: &str,
+        prefer_pkg: &str,
+        unqualified: Option<&HashMap<String, String>>,
+    ) -> Option<(&'a str, &'a FunctionSig)> {
+        if !name.contains('.') {
+            if let Some(hit) = unqualified
+                .and_then(|m| m.get(name))
+                .and_then(|fqn| self.functions.get_key_value(fqn.as_str()))
+            {
+                return Some((hit.0.as_str(), hit.1));
+            }
+        }
+        self.lookup_function_in(name, prefer_pkg)
     }
 
     /// Walk `class_name`'s `extends` chain looking for a field named
@@ -2831,6 +2902,30 @@ pub fn is_library_realm_package(pkg: &str) -> bool {
         || pkg == "jux.meta"
         || pkg == "rust"
         || pkg.starts_with("rust.")
+}
+
+/// Whether a bare name written in a unit of `from_pkg` may bind, WITHOUT an
+/// `import`, to a declaration of `decl_pkg` (§M.16, gap 24).
+///
+/// - the unit's own package: always (rung 2; its imports are consulted before
+///   this is asked);
+/// - the library realm (`jux.std.*`, `jux.meta`, `rust.*`): always -- that is
+///   the implicit prelude of rung 4 (crate-level gating is the caller's);
+/// - the root package: always. A root-package declaration is keyed by its
+///   bare name, no `import` can name it, and every exact-key lookup already
+///   reaches it; treating it as foreign here would make the fallback disagree
+///   with the lookup in front of it;
+/// - any other user package: never. That is the capture gap 24 closed:
+///   `package a;` naming `b.Widget` as `Widget` with no `import b.Widget;`.
+///   A dependency's package is a user package too.
+///
+/// A unit of the library realm reaches the library realm only (§M.16.1), the
+/// root package included.
+pub fn bare_name_reaches(from_pkg: &str, decl_pkg: &str) -> bool {
+    if is_library_realm_package(from_pkg) {
+        return is_library_realm_package(decl_pkg);
+    }
+    decl_pkg == from_pkg || decl_pkg.is_empty() || is_library_realm_package(decl_pkg)
 }
 
 /// The bound crate's package a foreign name belongs to: `rust.chrono` for
@@ -6231,6 +6326,26 @@ mod tests {
             table.find_fqn_by_bare_in("Foo", "b").as_deref(),
             Some("b.Foo")
         );
+    }
+
+    /// Gap 24: the program-written lookup does not cross into an unrelated
+    /// user package, from a named package or from the root; it still reaches
+    /// the root package and the library realm.
+    #[test]
+    fn a_bare_name_does_not_reach_another_user_package() {
+        let a = parse_unit("package a; public class Widget { public int x; }");
+        let root = parse_unit("public class Rooted { public int y; }");
+        let mut diags = Vec::new();
+        let table = build_workspace(&[a, root], &mut diags);
+        assert_eq!(table.find_visible_fqn_by_bare_in("Widget", "b"), None);
+        assert_eq!(table.find_visible_fqn_by_bare_in("Widget", ""), None);
+        assert_eq!(table.find_visible_fqn_by_bare_in("Widget", "a").as_deref(), Some("a.Widget"));
+        assert_eq!(table.find_visible_fqn_by_bare_in("Rooted", "b").as_deref(), Some("Rooted"));
+        assert_eq!(table.user_packages_declaring_type("Widget", "b"), vec!["a".to_string()]);
+        assert!(bare_name_reaches("b", "jux.std.collections"));
+        assert!(bare_name_reaches("b", ""));
+        assert!(!bare_name_reaches("b", "a"));
+        assert!(!bare_name_reaches("jux.std.collections", ""));
     }
 
     /// E0307: two unaliased imports binding the same simple name to different
