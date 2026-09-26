@@ -1,0 +1,6 @@
+7 ada ada@example.com
+column user_id -> User.id
+column user_name -> User.name
+audited: 1
+not blanks recorded: 0
+Circle(r: 2.0)

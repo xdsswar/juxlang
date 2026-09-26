@@ -349,7 +349,10 @@ impl WorkspaceBuild {
 /// that sibling's public sources prepended (resolution) and a Cargo
 /// path-dependency wired to the sibling's emitted library crate (linking
 /// seam). See the module docs for the first-cut limitation.
-pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild> {
+///
+/// `checking` marks a `jux check`, which raises the review lints a build
+/// leaves out (`CfgFacts::with_checking`).
+pub fn build_workspace(root: &Manifest, release: bool, checking: bool) -> Result<WorkspaceBuild> {
     // Load every member manifest, keyed by package name. The member directory
     // each name came from is kept so `default-members` (written as
     // directories) can be mapped onto package names.
@@ -381,7 +384,7 @@ pub fn build_workspace(root: &Manifest, release: bool) -> Result<WorkspaceBuild>
     // built once, so every member compiled against it must see the same
     // features it was built with.
     let roots: Vec<&Manifest> = members.values().collect();
-    let facts = cfg_facts_for_packages(&roots, release, root.profile);
+    let facts = cfg_facts_for_packages(&roots, release, root.profile).with_checking(checking);
 
     let mut built: Vec<(String, PackageBuild)> = Vec::new();
     for name in &order {
@@ -497,9 +500,14 @@ pub fn cfg_facts_for_packages(
             }
         }
     }
-    packages.values().fold(crate::cfg::CfgFacts::new(release, profile), |facts, (m, requested, defaults)| {
+    // `-Werror` governs the whole build; each package's `[lints]` governs its
+    // own files, a dependency's included (DIAGNOSTICS §D.5.4).
+    let facts = crate::cfg::CfgFacts::new(release, profile)
+        .with_deny_warnings(crate::lints::deny_warnings_requested());
+    packages.values().fold(facts, |facts, (m, requested, defaults)| {
         facts
             .with_package_features(m.project_root.clone(), m.enabled_features(requested, *defaults))
+            .with_package_lints(m.project_root.clone(), m.lints.clone())
             // Each package's `[[bin]] path = "…"` entry files travel with the
             // build facts so §B.1.1's package check can tell an entry point
             // apart from a member of the package tree (`src/bin/server.jux` is

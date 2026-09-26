@@ -54,7 +54,8 @@ use crate::manifest::{Manifest, ManifestError};
 /// manifest names none.
 pub const CURRENT_EDITION: &str = "2026";
 
-/// Top-level tables `jux.toml` may hold (§B.2.2, §B.8.1, §B.9, §B.14).
+/// Top-level tables `jux.toml` may hold (§B.2.2, §B.8.1, §B.9, §B.14, and
+/// DIAGNOSTICS §D.5.4's `[lints]`).
 ///
 /// Several of these are specified ahead of their implementation (`publish`, the
 /// `[ffi.<name>]` sub-tables), which is exactly why an unknown key is a warning
@@ -74,6 +75,7 @@ const KNOWN_TABLES: &[&str] = &[
     "profile",
     "ffi",
     "publish",
+    "lints",
 ];
 
 /// Keys `[package]` may hold (§B.2.2's full schema).
@@ -116,6 +118,18 @@ impl ManifestCheck {
     /// True when at least one diagnostic is an error, so the caller must stop.
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+    }
+
+    /// Apply this manifest's own `[lints]` (and `-Werror` when `deny_warnings`)
+    /// to what validating it found, so `all = "deny"` or `W0902 = "allow"`
+    /// governs the manifest's warnings as it governs the package's sources
+    /// (DIAGNOSTICS §D.5.4). Call before [`ManifestCheck::has_errors`].
+    pub fn apply_lint_levels(&mut self, deny_warnings: bool) {
+        let config = toml::from_str::<toml::Value>(self.source.contents())
+            .ok()
+            .and_then(|v| v.get("lints").map(crate::lints::LintConfig::from_toml))
+            .unwrap_or_default();
+        crate::lints::apply_to_manifest(&mut self.diagnostics, &config, deny_warnings);
     }
 }
 
@@ -254,6 +268,10 @@ fn validate(project_root: &Path, path: &Path, text: String) -> ManifestCheck {
         }
     }
 
+    // ---- [lints] (DIAGNOSTICS §D.5.4) ------------------------------------
+    // Before `[package]`, because a virtual workspace manifest may carry one.
+    check_lints(&source, table, &mut diagnostics);
+
     // ---- [package] -------------------------------------------------------
     let Some(package) = table.get("package").and_then(|p| p.as_table()) else {
         // A manifest holding only `[workspace]` is a VIRTUAL manifest: it
@@ -301,6 +319,109 @@ fn validate(project_root: &Path, path: &Path, text: String) -> ManifestCheck {
     // File order, so a manifest with several problems reads top to bottom.
     diagnostics.sort_by_key(|d| d.primary_span.map_or(0, |s| s.start));
     ManifestCheck { source, diagnostics }
+}
+
+/// `[lints]` (DIAGNOSTICS §D.5.4): every level a level, every key a lint.
+///
+/// A value the build cannot honour is `E0903`, by the rule at the top of this
+/// module: `unsafe-without-justification = "forbid"` asks for something the
+/// compiler does not do, and quietly treating it as `warn` would let an
+/// unjustified `unsafe` through a build its author believed was guarded. A key
+/// that names nothing is `W0902`, as any unread key is. So is a lint §D.5.4
+/// names that this compiler does not raise yet: its setting is legal and has
+/// no effect, and the author should know the second part.
+fn check_lints(
+    source: &SourceFile,
+    table: &toml::map::Map<String, toml::Value>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(value) = table.get("lints") else { return };
+    let Some(lints) = value.as_table() else {
+        out.push(
+            Diagnostic::error(Code::E0903_ManifestInvalidValue, "`lints` must be a table: `[lints]`")
+                .with_span(key_span(source, None, "lints"))
+                .with_file(0),
+        );
+        return;
+    };
+    let level_help = "a level is \"allow\", \"warn\" or \"deny\"";
+    for (key, value) in lints {
+        let span = key_span(source, Some("lints"), key);
+        let bad_level = || value.as_str().and_then(crate::lints::LintLevel::parse).is_none();
+        match key.as_str() {
+            "warnings-as-errors" => {
+                if value.as_bool().is_none() {
+                    out.push(
+                        Diagnostic::error(
+                            Code::E0903_ManifestInvalidValue,
+                            format!("`[lints] warnings-as-errors = {value}` must be `true` or `false`"),
+                        )
+                        .with_span(span)
+                        .with_file(0),
+                    );
+                }
+                continue;
+            }
+            "all" => {
+                if bad_level() {
+                    out.push(
+                        Diagnostic::error(
+                            Code::E0903_ManifestInvalidValue,
+                            format!("`[lints] all = {value}` is not a lint level"),
+                        )
+                        .with_span(span)
+                        .with_file(0)
+                        .with_help(level_help),
+                    );
+                }
+                continue;
+            }
+            _ => {}
+        }
+        match crate::lints::lint_key(key) {
+            crate::lints::LintKey::Warning(_) | crate::lints::LintKey::NotRaised if bad_level() => {
+                out.push(
+                    Diagnostic::error(
+                        Code::E0903_ManifestInvalidValue,
+                        format!("`[lints] {key} = {value}` is not a lint level"),
+                    )
+                    .with_span(span)
+                    .with_file(0)
+                    .with_help(level_help),
+                );
+            }
+            crate::lints::LintKey::Warning(_) => {}
+            crate::lints::LintKey::NotRaised => out.push(
+                Diagnostic::warning(
+                    Code::W0902_ManifestUnknownKey,
+                    format!(
+                        "lint `{key}` is specified (DIAGNOSTICS §D.5.4) but this compiler does not \
+                         raise it yet, so its level has no effect"
+                    ),
+                )
+                .with_span(span)
+                .with_file(0),
+            ),
+            crate::lints::LintKey::Error(code) => out.push(
+                Diagnostic::error(
+                    Code::E0903_ManifestInvalidValue,
+                    format!("`{code}` is an error, and an error has no lint level"),
+                )
+                .with_span(span)
+                .with_file(0)
+                .with_help("only warnings (`W....`) and the named lints of §D.5.4 take a level"),
+            ),
+            crate::lints::LintKey::Unknown => out.push(
+                Diagnostic::warning(
+                    Code::W0902_ManifestUnknownKey,
+                    format!("unknown lint `{key}` in `[lints]`: nothing reads it"),
+                )
+                .with_span(span)
+                .with_file(0)
+                .with_help(crate::lints::lint_names_help()),
+            ),
+        }
+    }
 }
 
 /// `package.name`: present, a string, legally spelled (`E0902` / `E0903`), and
@@ -739,6 +860,45 @@ mod tests {
         assert_eq!(no_name, vec!["E0902"]);
         assert!(codes_for("[workspace]\nmembers = [\"a\"]\n").is_empty());
         assert_eq!(codes_for("[features]\nfast = []\n"), vec!["E0902"]);
+    }
+
+    /// `[lints]` (DIAGNOSTICS §D.5.4): a known table, its levels checked, its
+    /// keys checked, and the spec's own example accepted.
+    #[test]
+    fn the_lints_table_is_validated() {
+        let head = "[package]\nname = \"com.example.app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[lints]\n";
+        let clean = codes_for(&format!(
+            "{head}warnings-as-errors = false\nall = \"warn\"\nunsafe-without-justification = \"deny\"\nW0470 = \"allow\"\n"
+        ));
+        assert!(clean.is_empty(), "{clean:?}");
+        // Specified by §D.5.4 but not raised yet: legal, with no effect.
+        assert_eq!(codes_for(&format!("{head}unused-import = \"deny\"\n")), vec!["W0902"]);
+        assert_eq!(codes_for(&format!("{head}no-such-lint = \"deny\"\n")), vec!["W0902"]);
+        assert_eq!(codes_for(&format!("{head}W0820 = \"forbid\"\n")), vec!["E0903"]);
+        assert_eq!(codes_for(&format!("{head}all = 3\n")), vec!["E0903"]);
+        assert_eq!(codes_for(&format!("{head}warnings-as-errors = \"yes\"\n")), vec!["E0903"]);
+        assert_eq!(codes_for(&format!("{head}E0410 = \"allow\"\n")), vec!["E0903"]);
+        // A virtual workspace manifest may carry one too.
+        assert_eq!(codes_for("[workspace]\nmembers = []\n\n[lints]\nbogus = \"deny\"\n"), vec!["W0902"]);
+    }
+
+    /// A manifest's own warnings answer to its `[lints]` and to `-Werror`.
+    #[test]
+    fn the_manifests_own_warnings_take_its_levels() {
+        let dir = std::env::temp_dir().join(format!("jux-manifest-lints-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write_and_check = |toml: &str, deny: bool| {
+            std::fs::write(dir.join("jux.toml"), toml).expect("write manifest");
+            let mut c = check(&dir).expect("a manifest is present");
+            c.apply_lint_levels(deny);
+            (c.has_errors(), c.diagnostics.len())
+        };
+        let base = "[package]\nname = \"com.example.app\"\n\n[nonsense]\n";
+        assert_eq!(write_and_check(base, false), (false, 2), "W0901 + W0902, both warnings");
+        assert_eq!(write_and_check(base, true), (true, 2), "-Werror promotes both");
+        assert_eq!(write_and_check(&format!("{base}\n[lints]\nall = \"allow\"\n"), true), (false, 0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,0 +1,10 @@
+[package]
+name = "lintstable"
+version = "0.1.0"
+edition = "2026"
+
+# DIAGNOSTICS §D.5.4: a package's lint levels.
+[lints]
+unsafe-without-justification = "deny"
+W0470 = "allow"
+warnings-as-errors = true

@@ -1,0 +1,9 @@
+// A `const` field is `final` under its other spelling (grammar A.2.2), and
+// the diagnostic names the word that was written.
+
+class Limits {
+    public const int max = 10;
+    public void raise() { this.max = 11; }
+}
+
+public void main() { new Limits().raise(); }

@@ -1395,6 +1395,8 @@ pub struct FieldSig {
     /// fields, picks `pub const` over `pub static` in the emitted
     /// Rust.
     pub is_final: bool,
+    /// Which synonym was written (`final` or `const`), for E0465's message.
+    pub final_kw: juxc_ast::FinalKw,
     /// True if the field is declared `weak` (§6.5). Drives the
     /// `Weak<RefCell<…>>` storage lowering, the `.get()` → `T?` typing,
     /// the downgrade-on-store, and the definite-assignment exemption.
@@ -5375,6 +5377,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         visibility: field.visibility,
         is_static: field.is_static,
         is_final: field.is_final,
+        final_kw: field.final_kw,
         is_weak: field.is_weak,
         is_ref: field.is_ref,
         // Resolved type: the written type, or one inferred from the

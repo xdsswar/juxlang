@@ -43,10 +43,11 @@ pub enum Code {
     /// the way Java's §3.10.1 does it, so the magnitude `9223372036854775808`
     /// is in range exactly when it is negated.
     E0202_NumericLiteralOutOfRange,
-    /// E0210 — `super(...)` or `this(...)` not first statement.
-    /// A keyword the language reserves, and the spec documents, that Phase 1
-    /// does not implement: the `move` call-site operator, the `volatile` field
-    /// modifier, `yield`.
+    /// E0203 — A keyword the language reserves, and the spec documents, that
+    /// this phase does not implement. Two sites raise it: the `move`
+    /// call-site operator and the `volatile` field modifier. (`yield` and
+    /// `annotation` were once here too; both have productions now, and a
+    /// `yield` outside a generator is `E0990`.)
     ///
     /// Reserving a word without recognizing it is the worst of both: the
     /// program cannot use the name as an identifier AND the error blames
@@ -54,6 +55,7 @@ pub enum Code {
     /// once, and the parser then skips the construct so nothing cascades.
     E0203_ReservedNotImplemented,
 
+    /// E0210 — `super(...)` or `this(...)` not first statement.
     E0210_ConstructorCallNotFirst,
     /// E0144: A **colon type annotation** on a local, `var x: int = 5;`.
     /// Jux writes the type first, the Java way (JUX-LANG-V1 §5.6): the
@@ -859,8 +861,10 @@ pub enum Code {
     W0457_UnannotatedRefCycle,
     /// W0820 -- An `unsafe { }` block with no `// SAFETY:` comment saying why
     /// its obligations hold (Layout-ABI §L.5.5). Raised by the checking entry
-    /// points (`juxc --check`, `jux check`, the editor), not by a build: a
-    /// style lint for review, never an error.
+    /// points (`juxc --check`, `jux check`, the editor); a build raises it only
+    /// when the package's `[lints]` names it, which is how
+    /// `unsafe-without-justification = "deny"` fails a build (DIAGNOSTICS
+    /// §D.5.4). A warning unless a lint level says otherwise.
     W0820_UnsafeWithoutSafetyComment,
     /// W0240 -- `@Derive(...)` does nothing: records, structs and enums derive
     /// their operators without it (MISSING-DEFS §M.3, OPERATORS §O.9).
@@ -869,6 +873,11 @@ pub enum Code {
     /// `annotation`, usually a misspelling (`@Tset`). A warning, not an error:
     /// the annotation has no effect either way (ANNOTATIONS §A.12).
     W0241_UnknownAnnotation,
+    /// W0242 -- `@lint(allow = "...")` (or `warn` / `deny`) names neither a
+    /// lint from DIAGNOSTICS §D.5.4 nor a warning code, so it sets nothing.
+    /// A warning for the reason `W0241` is one: the misspelt name has no effect
+    /// either way, and the author meant it to have one.
+    W0242_UnknownLint,
     /// W0470 -- A method that overrides an inherited one without `@Override`
     /// (JUX-LANG-V1 §7.4.1). The annotation is what makes the intent checkable.
     W0470_MissingOverrideAnnotation,
@@ -1338,6 +1347,7 @@ impl Code {
             Code::W0820_UnsafeWithoutSafetyComment => "W0820",
             Code::W0240_DeriveNoOp               => "W0240",
             Code::W0241_UnknownAnnotation        => "W0241",
+            Code::W0242_UnknownLint              => "W0242",
             Code::W0470_MissingOverrideAnnotation => "W0470",
             Code::W0490_RefOnReferenceType       => "W0490",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",

@@ -83,6 +83,17 @@ fn catalog_row(code: &str) -> Option<(String, String)> {
     None
 }
 
+/// Whether this compiler has a `code` it can raise: a variant named
+/// `<code>_...` in the code table. A code the catalog only reserves is not one,
+/// so a lint level for it could never take effect (§D.5.4).
+pub(crate) fn is_known_code(code: &str) -> bool {
+    let prefix = format!("{code}_");
+    CODES.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with(&prefix) && t.ends_with(',') && !t.contains("=>")
+    })
+}
+
 /// The doc comment of the enum variant for `code` in `code.rs`: the `///`
 /// lines right above a variant named `<code>_...`, with the leading
 /// `E0414 — ` taken off the first line.

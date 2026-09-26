@@ -1,0 +1,5 @@
+lint_attribute.jux:12:5: [W0820] error: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
+lint_attribute.jux:18:5: [W0820] warning: this `unsafe` block has no `// SAFETY:` comment -- say why its obligations hold (the pointer is valid, the memory is not aliased, ...) (§L.5.5)
+lint_attribute.jux:23:7: [E0448] error: `@lint` has no parameter `forbid`; it declares `allow`, `warn`, `deny`
+lint_attribute.jux:24:7: [W0242] warning: `@lint` names `unsafe-without-justifcation`, which is neither a lint nor a warning code
+lint_attribute.jux:25:7: [E0474] error: `E0410` is an error, and an error has no lint level

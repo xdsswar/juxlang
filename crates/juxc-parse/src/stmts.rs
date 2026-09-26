@@ -107,12 +107,13 @@ impl<'a> Parser<'a> {
             let annotations = self.parse_annotations();
             // Where the statement behind the annotations did not parse, the
             // target question is unanswerable and the answer would be wrong:
-            // `(@Tag int a) -> a + 1` is an annotation inside a LAMBDA's
-            // parentheses, which A.2.9 does not admit, and the fragments it
-            // leaves behind reach here looking like an expression statement.
-            // Telling the author about statement targets there would point at
-            // the wrong construct, so E0470 is held back whenever reading the
-            // statement reported anything of its own.
+            // the fragments of a construct that failed to parse reach here
+            // looking like an expression statement, and telling the author
+            // about statement targets there would point at the wrong
+            // construct. So E0470 is held back whenever reading the statement
+            // reported anything of its own. (A lambda parameter's annotation,
+            // the case that first showed this, is now read and refused by
+            // `parse_lambda` itself.)
             let errors_before = self.diagnostics.len();
             let stmt = self.parse_stmt_inner()?;
             let statement_read_cleanly = self.diagnostics.len() == errors_before;

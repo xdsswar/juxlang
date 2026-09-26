@@ -161,6 +161,9 @@ pub struct Manifest {
     /// other features, or `dep:<name>` optional dependencies. `default` is the
     /// set a build gets when nobody says otherwise.
     pub features: std::collections::BTreeMap<String, Vec<String>>,
+    /// `[lints]` (DIAGNOSTICS §D.5.4): this package's lint levels. The
+    /// default table when the manifest has none.
+    pub lints: crate::lints::LintConfig,
 }
 
 /// One resolved `[ffi.<name>]` binding (§B.14). Search paths are resolved to
@@ -416,6 +419,10 @@ struct RawManifest {
     /// declared by `@extern(lib = "…") unsafe native { … }` blocks (§L.7).
     #[serde(default)]
     ffi: std::collections::BTreeMap<String, RawFfi>,
+    /// `[lints]` (DIAGNOSTICS §D.5.4), kept as a plain value: a level the
+    /// build cannot read is the validator's to report with its line (`E0903`),
+    /// not a reason to refuse the whole manifest as malformed.
+    lints: Option<toml::Value>,
 }
 
 /// Serde shape for one `[ffi.<name>]` table (§B.14.1). Every field is optional
@@ -573,6 +580,7 @@ impl Manifest {
             }
         };
         let features = raw.features.clone();
+        let lints = raw.lints.as_ref().map(crate::lints::LintConfig::from_toml).unwrap_or_default();
         let raw_pkg = raw.package.unwrap_or_default();
 
         // Resolve a relative icon path against the project root. An
@@ -839,6 +847,7 @@ impl Manifest {
             profiles,
             ffi,
             features,
+            lints,
         })
     }
 

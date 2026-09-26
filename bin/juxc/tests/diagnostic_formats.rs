@@ -108,3 +108,40 @@ fn explain_prints_the_bundled_docs() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a diagnostic code"));
 }
+
+/// `-Werror` and `--deny-warnings` (§D.5.4): a warning is reported as an
+/// error, keeps its code, says why in a note, and fails the check.
+#[test]
+fn werror_turns_a_warning_into_a_failing_error() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .join("target")
+        .join("it-diag-formats-werror");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("creating dir");
+    let file = dir.join("warn.jux");
+    std::fs::write(&file, "public void main() {\n    unsafe {\n        print(1);\n    }\n}\n").expect("writing file");
+
+    let plain = Command::new(juxc()).arg("--check").arg(&file).output().expect("running juxc");
+    assert!(plain.status.success(), "a warning alone must not fail the check");
+    assert!(String::from_utf8_lossy(&plain.stderr).contains("[W0820] warning:"));
+
+    for flag in [&["-Werror"][..], &["--deny-warnings"][..], &["-W", "error"][..]] {
+        let out = Command::new(juxc())
+            .arg("--check")
+            .arg(&file)
+            .args(flag)
+            .args(["--diagnostic-format", "human", "--color", "never"])
+            .output()
+            .expect("running juxc");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{flag:?} must fail the check:\n{err}");
+        assert!(err.starts_with("error[W0820]:"), "{flag:?}:\n{err}");
+        assert!(err.contains("because of `-Werror` / `--deny-warnings`"), "{flag:?}:\n{err}");
+    }
+
+    let bad = Command::new(juxc()).arg("--check").arg(&file).arg("-Wall").output().expect("running juxc");
+    assert!(!bad.status.success(), "`-Wall` is not a flag juxc has");
+}

@@ -2861,6 +2861,167 @@ string form is, and this entry only makes `Debug` produce it.
 
 ---
 
+## E1XX-PHASE5a. Record components and lambda parameters: the last two annotation positions
+
+**Conflict.** E104 gave parameters and locals their annotations and left two
+positions behind, one grammatical and unparsed, one ungrammatical and badly
+refused.
+
+`JUX-GRAMMAR-ADDENDUM.md` §A.2.5 has always spelled
+`record-component = annotation* type identifier`, and an enum payload variant
+reuses that `record-component-list`. The parser read a component with
+`parse_type_ref` straight away, so an annotation there was the same five-error
+cascade E104 describes for parameters. And §A.3 had nothing to say about the
+position once it parsed: its eight targets have no `RECORD_COMPONENT`, and a
+component is not any one of the others. It is written once and becomes two
+declarations, a field and the canonical constructor's parameter.
+
+A lambda parameter is the opposite case. §A.2.9 spells
+`lambda-param = type? identifier`, and E104 decided that a lambda parameter takes
+no annotation. The decision was right and the refusal was not:
+
+```java
+var f = (@Tag int a) -> a + 1;
+```
+
+```text
+error[E0200]: expected identifier
+error[E0200]: expected ';' after `var` declaration
+error[E0301]: cannot find `int` in this scope
+error[E0200]: expected ';' after expression statement
+error[E0301]: cannot find `a` in this scope
+...
+```
+
+The lookahead did confirm a lambda; `parse_lambda` then stopped at the `@`, and
+everything after it was read as statements.
+
+**Resolution.** §A.3.2 is new. A record component takes annotations, and it
+takes the ones that fit where it lands, which is Java's rule: an annotation is
+admitted when its `@Target` names `FIELD` or `PARAMETER` (or it names no target
+at all). There is deliberately no `RECORD_COMPONENT` target, because nothing
+could be recorded against one that the field and parameter targets do not
+already say. `METHOD` is not admitted because a Jux record generates no
+accessor method. `@cfg` is `E0470` there, as on a parameter. An enum payload
+slot is under the same rule rather than a second one, since the grammar gives
+both positions one production.
+
+A `RUNTIME` annotation that fits a field is recorded in the §A.8.0 registry as a
+`field` row owned by the record, as it would be on a class field; one that fits
+only `PARAMETER` has no row, like any parameter annotation. An enum payload
+slot's annotations are checked and not recorded.
+
+A lambda parameter's annotation is one `E0470`, "a lambda parameter takes no
+annotation", per parameter. The parser reads past the annotations and parses the
+parameter and the lambda normally, so nothing else is reported.
+
+**Gap 14, closed with no change.** `GAPS.md` recorded that
+`check_annotation_applications` did not recurse into nested types. It does not
+need to: the parser lifts every nested declaration into the unit's items under
+its owner-qualified name (§M.9), and has since before the annotation check was
+written, so a nested type's annotations were always checked.
+`tests/ui/annotation_target_nested_type.jux` now pins it.
+
+**Spec status:** `JUX-ANNOTATIONS-ADDENDUM.md` §A.3 points at the new §A.3.2,
+and §A.3.1's lambda paragraph states the one-diagnostic refusal.
+`JUX-GRAMMAR-ADDENDUM.md` §A.2.5's `record-component` line cross-references
+§A.3.2; the productions are unchanged.
+
+---
+
+## E1XX-PHASE5b. Three diagnostics that said something untrue
+
+**Conflict.** Grammar A.2.2 makes `final` and `const` synonyms and says the
+compiler echoes the spelling that was written. E95 did that for `E0464`, the
+local binding, by carrying a `FinalKw` on locals and parameters. Its sibling for
+fields, `E0465`, still answered every final field with "it is a `final`/`const`
+field ... Drop `final`/`const`", because `FieldDecl` kept only a `bool`.
+
+`E0305`, raised for the four Rust words with no raw-identifier form, ended with
+"Every other reserved word is fine". That is true of Rust's reserved words and
+false of Jux's: `ref`, `move`, `yield` and the rest of Jux's own keywords stay
+reserved (`JUX-GRAMMAR-ADDENDUM.md` §A.4.1.1 says so in as many words), so the
+message invited exactly the rename that would fail next.
+
+`E0203`'s catalog row listed `annotation` among the reserved-but-unimplemented
+keywords, and its doc in the code table listed `yield`. Both have productions
+now; the only live sites are `move` and `volatile`.
+
+**Resolution.** `FieldDecl` and the symbol table's `FieldSig` carry the written
+`FinalKw` beside `is_final`, as `VarDecl` and `Param` already did, and `E0465`
+names it: "it is a `const` field ... Drop `const`". An auto-property's backing
+slot records no keyword, since none was written. `E0305` lists the four words,
+says a Rust-only word such as `loop` is escaped and fine, and says Jux's own
+keywords stay reserved, citing §A.4.1.1. `E0203`'s row and prose name `move`
+and `volatile` only, and say where `yield` and `annotation` went.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0203` row and the
+"Reserved But Not Implemented" section are corrected in place.
+
+---
+
+## E1XX-PHASE5c. Lint levels, `-Werror`, and `W0820` under `jux check`
+
+**Conflict.** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.5.4 specified a `[lints]` table
+(`warnings-as-errors`, `all`, a level per lint) and an `@lint(allow = ...)`
+attribute, and §D.1.2 said a warning "does not fail unless `-Werror`". None of
+it existed. `[lints]` was not among the manifest's known tables, so E106's
+validation answered the spec's own example with `W0902` ("nothing reads it"),
+which was true. Neither `jux` nor `juxc` had a `-Werror`.
+
+§D.5.4 was also silent or wrong where an implementation has to answer: it spoke
+of `L####` lint codes that no catalog allocates, named three lints of which the
+compiler raises one, said nothing about precedence between the table and the
+attribute, nothing about which package's table governs a dependency's files,
+and nothing about what a denied warning looks like once reported.
+
+Separately, `W0820` (an `unsafe` block without `// SAFETY:`) was documented as
+raised by `juxc --check`, `jux check` and the editor, and `jux check` did not
+raise it: the checking entry point `jux` uses is the compile path, and only the
+editor's path called the lint. So "deny unjustified `unsafe`" could not be
+expressed anywhere, not even as a warning on the command line.
+
+**Resolution.** §D.5.4 is rewritten to what is built:
+
+- Every warning is a lint. A key is a lint name or a warning code (`W0820`);
+  there are no `L####` codes, and a name is an alias for its code.
+  `unsafe-without-justification` is `W0820`; `unused-import` and
+  `shadowed-name` are specified and not raised yet, and setting them is a
+  `W0902` that says so rather than an error.
+- Precedence, innermost first: the nearest enclosing `@lint`, the package's
+  per-lint key, its `all`, then `warn`; `warnings-as-errors` and `-Werror` /
+  `--deny-warnings` then promote whatever is still a warning. `allow` beats
+  `-Werror`.
+- A promoted warning keeps its `W` code (as rustc keeps a lint's name under
+  `#[deny]`), is reported as an error, and carries a note naming the setting
+  that promoted it.
+- Each package's table governs its own files, a path dependency's included;
+  `-Werror` governs the build; the manifest's own `W0901`-`W0903` answer to
+  its table.
+- One pass applies the levels, in every compile and check entry point, after
+  the last diagnostic and before the has-errors decision that gates code
+  generation. A level applied after that decision would print `error:` and
+  still build.
+- `@lint` takes `allow` / `warn` / `deny`, each a string or an array. A bad key
+  is `E0448`, a non-string or an error code `E0474`, and an unknown name the
+  new `W0242`.
+- `[lints]` is validated with the rest of the manifest (§B.2.5): a value that
+  is not a level, or an error code as a key, is `E0903`; an unknown key is
+  `W0902`.
+
+`W0820` stays a review lint: every checking entry point now raises it,
+`jux check` included, and a build still does not, the way Rust keeps its
+equivalent out of `cargo build`. The one exception is the point of the gap: a
+package whose `[lints]` names it, by code or by name, gets it in the build as
+well, so `unsafe-without-justification = "deny"` fails `jux build`. An `@lint`
+alone does not make a build raise it.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.5.4 is rewritten in place,
+the §D.4 warnings table gains `W0242` and the `W0820` row states the build
+rule. `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.2.5 gains the two `[lints]` rows.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

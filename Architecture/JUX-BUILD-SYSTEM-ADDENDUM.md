@@ -317,6 +317,8 @@ The `edition` field selects the language edition. v0.1 supports only `"2026"`. L
 | `edition` present and not `"2026"` | error | `E0903` | nothing is built |
 | an unknown top-level table, or an unknown key in `[package]` | warning | `W0902` | builds; the key is ignored |
 | `key.workspace = true` that no workspace root defines | warning | (uncoded) | builds; the key is dropped (§B.7.2a) |
+| in `[lints]`: a value that is not a level, a non-boolean `warnings-as-errors`, or an error code as a key | error | `E0903` | nothing is built |
+| in `[lints]`: a key that names no lint, or a lint not raised yet | warning | `W0902` | builds; the key has no effect (DIAGNOSTICS §D.5.4) |
 
 A manifest holding only `[workspace]` is a *virtual* manifest: it declares no package, so the `[package]` rows do not apply to it. This is the shape `jux new --workspace` writes and the shape every workspace root in this repository uses.
 

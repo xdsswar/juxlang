@@ -75,6 +75,16 @@ pub struct CfgFacts {
     /// listed: that key states the entry's package, so the file must declare it
     /// and the §B.1.1 rule is what checks the two agree.
     bin_entries: Vec<PathBuf>,
+    /// Each package's `[lints]` table, by the package's root directory, the
+    /// way `features` is kept: a file takes the table of the deepest root that
+    /// contains it (DIAGNOSTICS §D.5.4). Carried here for the reason
+    /// `bin_entries` is: every entry point already threads these facts.
+    lints: Vec<(PathBuf, crate::lints::LintConfig)>,
+    /// `-Werror` / `--deny-warnings`: every warning of the build is an error.
+    deny_warnings: bool,
+    /// The build is a CHECK (`jux check`), not a build, so the review lints
+    /// that a build leaves out (`W0820`) are raised.
+    checking: bool,
 }
 
 impl Default for CfgFacts {
@@ -110,6 +120,9 @@ impl CfgFacts {
             profile: juxc_tycheck::Profile::Full,
             features: Vec::new(),
             bin_entries: Vec::new(),
+            lints: Vec::new(),
+            deny_warnings: false,
+            checking: false,
         }
     }
 
@@ -182,6 +195,9 @@ impl CfgFacts {
             profile: juxc_tycheck::Profile::Full,
             features: Vec::new(),
             bin_entries: Vec::new(),
+            lints: Vec::new(),
+            deny_warnings: false,
+            checking: false,
         }
     }
 
@@ -207,6 +223,45 @@ impl CfgFacts {
     /// The `[[bin]]` entry files of this build, for §B.1.1's package check.
     pub fn bin_entries(&self) -> &[PathBuf] {
         &self.bin_entries
+    }
+
+    /// Apply `lints`, a `[lints]` table, to the package rooted at `root`.
+    pub fn with_package_lints(mut self, root: PathBuf, lints: crate::lints::LintConfig) -> Self {
+        self.lints.push((root, lints));
+        self
+    }
+
+    /// Make every warning of this build an error (`-Werror`).
+    pub fn with_deny_warnings(mut self, deny: bool) -> Self {
+        self.deny_warnings = deny;
+        self
+    }
+
+    /// Mark this as a check rather than a build, so the review lints run.
+    pub fn with_checking(mut self, checking: bool) -> Self {
+        self.checking = checking;
+        self
+    }
+
+    /// Whether `-Werror` is in force.
+    pub fn deny_warnings(&self) -> bool {
+        self.deny_warnings
+    }
+
+    /// Whether this is a check rather than a build.
+    pub fn checking(&self) -> bool {
+        self.checking
+    }
+
+    /// The `[lints]` table governing the file at `path`, if its package has one.
+    pub fn lints_for(&self, path: &Path) -> Option<&crate::lints::LintConfig> {
+        let path = lexically_normal(path);
+        self.lints
+            .iter()
+            .map(|(root, lints)| (lexically_normal(root), lints))
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, lints)| lints)
     }
 
     /// The features enabled for the file at `path`.

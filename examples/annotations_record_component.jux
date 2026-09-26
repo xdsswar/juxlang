@@ -1,0 +1,53 @@
+// Annotations on record components (JUX-ANNOTATIONS-ADDENDUM §A.3.2).
+//
+// A record component is written once and becomes two declarations: the
+// record's field and the canonical constructor's parameter. So a component
+// has no target of its own; an annotation written there lands where the
+// component does, and fits when its `@Target` names FIELD or PARAMETER. That
+// is Java's rule for record components, and it is what lets one `@Column`
+// describe both the stored value and the argument that fills it.
+//
+// An enum payload is spelled with the same `record-component-list`, so its
+// slots follow the same rule.
+
+import jux.meta.Registry;
+
+/// A field annotation, the ORM shape. RUNTIME, so it reaches the registry.
+@Target(FIELD)
+@Retention(RUNTIME)
+public annotation Column {
+    String value();
+}
+
+/// A parameter annotation, the validation shape.
+@Target(PARAMETER)
+@Retention(RUNTIME)
+public annotation NotBlank { }
+
+/// No `@Target` at all: it fits every kind, a component included.
+@Retention(RUNTIME)
+public annotation Audited { }
+
+record User(@Column("user_id") int id, @NotBlank @Column("user_name") String name, @Audited String email) { }
+
+enum Shape {
+    Circle(@Column("radius") double r),
+    Square(double side)
+}
+
+public void main() {
+    var u = new User(7, "ada", "ada@example.com");
+    print(u.id + " " + u.name + " " + u.email);
+
+    // The component IS the field, so a FIELD-fitting annotation is recorded
+    // as a field row owned by the record. `@NotBlank` targets PARAMETER only:
+    // it lands on the constructor parameter, which has no registry row.
+    for (var c : Registry.annotated("Column")) {
+        print("column " + c.get("value")!! + " -> " + c.owner() + "." + c.target());
+    }
+    print("audited: " + Registry.annotated("Audited").len());
+    print("not blanks recorded: " + Registry.annotated("NotBlank").len());
+
+    var s = Shape.Circle(2.0);
+    print(s);
+}

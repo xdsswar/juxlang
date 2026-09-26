@@ -1353,13 +1353,18 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         let mut is_static = false;
         let mut is_final = false;
+        let mut final_kw = juxc_ast::FinalKw::None;
         let mut is_weak = false;
         let mut is_ref = false;
         loop {
             if self.eat_kw(Keyword::Static) {
                 is_static = true;
-            } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+            } else if self.eat_kw(Keyword::Final) {
                 is_final = true;
+                final_kw = juxc_ast::FinalKw::Final;
+            } else if self.eat_kw(Keyword::Const) {
+                is_final = true;
+                final_kw = juxc_ast::FinalKw::Const;
             } else if self.eat_kw(Keyword::Weak) {
                 // `weak` field (§6.5): does not contribute to refcount, read via
                 // `.get()` → `T?`. Validity (class-typed, non-generic, no
@@ -1441,6 +1446,7 @@ impl<'a> Parser<'a> {
             visibility,
             is_static,
             is_final,
+            final_kw,
             is_weak,
             is_ref,
             ty,
@@ -1884,10 +1890,13 @@ impl<'a> Parser<'a> {
         if !self.at(&TokenKind::RParen) {
             loop {
                 let comp_start = self.peek_span();
+                // `record-component = annotation* type identifier` (A.3.2).
+                let comp_annotations = self.parse_annotations();
                 let ty = self.parse_type_ref()?;
                 let comp_name = self.parse_decl_name()?;
                 let comp_end = self.last_consumed_span();
                 components.push(RecordComponent {
+                    annotations: comp_annotations,
                     ty,
                     name: comp_name,
                     span: comp_start.join(comp_end),
@@ -2289,7 +2298,8 @@ impl<'a> Parser<'a> {
                 let simple = !variant.payload.is_empty()
                     && variant.args.is_empty()
                     && variant.payload.iter().all(|slot| {
-                        slot.name.is_none()
+                        slot.annotations.is_empty()
+                            && slot.name.is_none()
                             && slot.ty.name.segments.len() == 1
                             && slot.ty.generic_args.is_empty()
                             && slot.ty.array_shape.is_none()
@@ -2366,6 +2376,9 @@ impl<'a> Parser<'a> {
             if !self.at(&TokenKind::RParen) {
                 loop {
                     let slot_start = self.peek_span();
+                    // A payload is a `record-component-list` (§A.2.5), so a
+                    // slot takes annotations as a record component does.
+                    let slot_annotations = self.parse_annotations();
                     let ty = self.parse_type_ref()?;
                     // Optional payload name: `int status` → name=status.
                     let slot_name = if matches!(self.peek(), TokenKind::Ident(_)) {
@@ -2375,6 +2388,7 @@ impl<'a> Parser<'a> {
                     };
                     let slot_end = self.last_consumed_span();
                     slots.push(EnumPayload {
+                        annotations: slot_annotations,
                         ty,
                         name: slot_name,
                         span: slot_start.join(slot_end),
@@ -2409,6 +2423,11 @@ impl<'a> Parser<'a> {
             return true;
         }
         loop {
+            // An annotation cannot begin an argument, so it marks a slot. The
+            // caller rewinds either way, so what this reports is discarded.
+            if self.at(&TokenKind::At) {
+                self.parse_annotations();
+            }
             // A type starts with a name (or a primitive keyword the lexer
             // gives as one); a literal, `-`, `new` or `(` cannot.
             let starts_type = matches!(self.peek(), TokenKind::Ident(_));

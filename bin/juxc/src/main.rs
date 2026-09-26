@@ -122,6 +122,16 @@ struct Cli {
     /// `always`, or `never`.
     #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
     color: ColorArg,
+
+    /// Report every warning as an error: exit non-zero and, in an emit mode,
+    /// emit nothing (JUX-DIAGNOSTICS-ADDENDUM §D.5.4). The same as `-Werror`.
+    #[arg(long)]
+    deny_warnings: bool,
+
+    /// `-Werror`: the compiler-flag spelling of `--deny-warnings`. `error` is
+    /// the only value.
+    #[arg(short = 'W', value_name = "error", value_parser = ["error"])]
+    warnings: Option<String>,
 }
 
 fn main() -> Result<ExitCode> {
@@ -188,6 +198,9 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         Some(m) => juxc_driver::project::cfg_facts_for(m, cli.release),
         None => juxc_driver::CfgFacts::new(cli.release, profile),
     };
+    // `-Werror` on top of whatever the project's `[lints]` says.
+    let deny = cli.deny_warnings || cli.warnings.is_some() || facts.deny_warnings();
+    let facts = facts.with_deny_warnings(deny);
 
     // Check-only mode (editor tooling / CI lint): run the front end, report
     // diagnostics, and stop — no crate is emitted and `cargo` is never

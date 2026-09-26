@@ -243,6 +243,7 @@ pub mod explain;
 pub mod git_deps;
 pub mod grammar_export;
 pub mod ice;
+pub mod lints;
 pub mod manifest;
 pub mod manifest_check;
 mod package_check;
@@ -441,6 +442,8 @@ where
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
     all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
+    // Where the user's own files start in the list: only they are linted.
+    let user_start = all_sources.len();
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -490,6 +493,10 @@ where
     // isn't blocked (and the user isn't spammed) by complaints about std/crate
     // stubs that the real crate already compiles cleanly.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
+
+    // W0820 and the lint levels, which have to be settled before anything
+    // asks whether there were errors (DIAGNOSTICS §D.5.4).
+    finish_lints(&mut diagnostics, &sources, &units, user_start, cfg);
 
     let has_errors = diagnostics
         .iter()
@@ -541,6 +548,8 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     // ordering to map a diagnostic's file index back to the file a person
     // actually opened.
     all_sources.push(crate::annotations::synthesize_registry(&sources, cfg));
+    // Where the user's own files start in the list: only they are linted.
+    let user_start = all_sources.len();
     all_sources.extend(sources);
     // Stamp each file with its position in this list. Every token lexed from it
     // carries that index in its span, which is what keeps the analysis maps —
@@ -569,6 +578,8 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
     // Trusted foreign-API stubs are never validated — drop their diagnostics.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
+    // W0820 and the lint levels, as in the main compile path.
+    finish_lints(&mut diagnostics, &sources, &units, user_start, cfg);
     let has_errors = diagnostics
         .iter()
         .any(|d| matches!(d.severity, Severity::Error));
@@ -718,16 +729,16 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
 
-    // W0820 (§L.5.5): an `unsafe` block without a `// SAFETY:` comment. A
-    // review lint, so the checking path raises it and a build does not.
-    for source in sources.iter().skip(user_start) {
-        diagnostics.extend(safety_lint::check_safety_comments(source));
-    }
-
     // Trusted foreign-API stubs are never validated (see
     // `stubs::drop_external_diagnostics`): the LSP must not surface false errors
     // about std/crate stubs, while still serving completion/hover from them.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
+
+    // W0820 and the lint levels. This is the checking path, so the review
+    // lint always runs, whatever `cfg` says; the editor shows a denied warning
+    // as the error the build will report.
+    let checking = cfg.clone().with_checking(true);
+    finish_lints(&mut diagnostics, &sources, &units, user_start, &checking);
 
     CheckResult {
         diagnostics,
@@ -735,6 +746,31 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
         expr_types: typed.expr_types,
         sources,
     }
+}
+
+/// The last step of every front-end entry point: raise the review lints this
+/// run is for, then apply the lint levels (`lints::apply`).
+///
+/// W0820 (§L.5.5), an `unsafe` block without a `// SAFETY:` comment, is a
+/// review lint. A check raises it (`juxc --check`, `jux check`, the editor)
+/// and a build does not, the way Rust keeps its equivalent out of `cargo
+/// build` -- unless the package's `[lints]` names it, because a table saying
+/// `unsafe-without-justification = "deny"` is asking for the build to enforce
+/// it (DIAGNOSTICS §D.5.4).
+fn finish_lints(
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: &[SourceFile],
+    units: &[juxc_ast::CompilationUnit],
+    user_start: usize,
+    cfg: &cfg::CfgFacts,
+) {
+    for source in sources.iter().skip(user_start) {
+        let named = cfg.lints_for(source.path()).is_some_and(|l| l.names("W0820"));
+        if cfg.checking() || named {
+            diagnostics.extend(safety_lint::check_safety_comments(source));
+        }
+    }
+    lints::apply(diagnostics, sources, units, cfg);
 }
 
 /// Single-document convenience wrapper over [`check_workspace`].

@@ -27,7 +27,9 @@ bash tools/java-differential/run.sh generic  # cases whose name contains "generi
 ```
 
 Needs `java` on PATH (17+; the single-file source launcher runs `Main.java`
-with no `javac` step) and a built `jux` at `target/release`.
+with no `javac` step) and a built `jux`. The script looks in
+`$CARGO_TARGET_DIR/release` when that is set, else in `target/release`;
+`JUX_BIN` (the binary) and `JUX_HOME` (its directory) override either.
 
 Results land in `results.txt` next to the script; emitted crates and compiler
 diagnostics go under `emit/`.

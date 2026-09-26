@@ -16,11 +16,16 @@
 set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 # Resolve the built compiler from the repo this script lives in, so the
-# harness works from any checkout and any working directory.
+# harness works from any checkout and any working directory. `cargo build`
+# puts it under CARGO_TARGET_DIR when one is set (a target dir shared across
+# worktrees, say), so that is where to look first; the default below then
+# reuses the same variable for the cases' own builds, so it is read here,
+# before it is reassigned.
 REPO="$(cd "$ROOT/../.." && pwd)"
-JUX="${JUX_BIN:-$REPO/target/release/jux}"
+BUILT="${CARGO_TARGET_DIR:-$REPO/target}/release"
+JUX="${JUX_BIN:-$BUILT/jux}"
 [ -x "$JUX" ] || JUX="$JUX.exe"
-export JUX_HOME="${JUX_HOME:-$REPO/target/release}"
+export JUX_HOME="${JUX_HOME:-$BUILT}"
 # One shared target dir: the dependency tree compiles once for all cases
 # instead of once per case.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/shared}"

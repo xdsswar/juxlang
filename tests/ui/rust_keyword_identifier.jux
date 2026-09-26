@@ -1,0 +1,8 @@
+// Only the four Rust words with no raw form are refused (§A.4.1.1); the
+// other Rust-only words are escaped by the backend and are ordinary names.
+public void main() {
+    int crate = 1;
+    int loop = 2;
+    int impl = 3;
+    print(crate + loop + impl);
+}
