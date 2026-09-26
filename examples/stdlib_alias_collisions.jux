@@ -77,6 +77,13 @@ public void main() {
     aliased.push(6);
     print($"alias: ${(int) aliased.len()}");
 
+    // An INDEX read and write, and a read whose Rust result BORROWS the
+    // receiver (`first()` is `Option<&T>`), reached through the alias. Both
+    // are the §6.5.1 handle again: the index is on the sequence inside the
+    // cell, and the borrowed result has to be cloned out of the guard.
+    aliased[0] = 50;
+    print($"alias reads: ${aliased[0]} ${aliased.first() ?? -1} ${aliased.first()!!}");
+
     // The FULLY-QUALIFIED name reaches the same type in the same unit, and
     // indexing it reaches through the same guard.
     rust.std.Vec<int> qualified = new rust.std.Vec<int>();
@@ -106,6 +113,11 @@ public void main() {
     rust.std.HashMap<String, int> qmap = new rust.std.HashMap<String, int>();
     qmap.insert("three", 3);
     print($"qmap: ${(int) qmap.len()} ${qmap.get("three") ?? 0}");
+
+    // The map's own two shapes past its shadow: indexing by a borrowed key,
+    // and `get`'s borrowed result asserted with `!!`.
+    qmap["three"] = 33;
+    print($"qmap reads: ${qmap["three"]} ${qmap.get("three")!!}");
 
     // A foreign type that is NOT a collection takes no handle, and is reached
     // past its shadow the same two ways.

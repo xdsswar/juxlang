@@ -1049,3 +1049,39 @@ fn foreign_value_fields() {
         ],
     );
 }
+
+/// Reading a collection through the name that reached it (§M.16.6, ERRATA
+/// E102): an index read, an index write and a borrowed-result read, each
+/// written three times -- bare, through an `import ... as` alias, and fully
+/// qualified.
+///
+/// The alias spelling failed on two of those three with no user class in sight.
+/// The backend lowered a local's written type with no unit context, so `RVec`
+/// -- the last segment of nothing -- resolved to no type at all, and the
+/// decisions that need the resolved type got no answer: `v[0]` came out with no
+/// `.borrow()` (rustc E0608) and `d.front() ?? 0` with no `.cloned()` (rustc
+/// E0308), while the slot itself still carried the §6.5.1 handle.
+///
+/// What the output pins is the property, not the arithmetic: the three
+/// spellings name ONE type, so their three lines have to read the same.
+#[test]
+fn stdlib_alias_reads() {
+    common::expect_output(
+        "stdlib_alias_reads",
+        "stdlib-alias-reads",
+        &[
+            "bare list: 1 20 1 1",
+            "alias list: 1 20 1 1",
+            "qualified list: 1 20 1 1",
+            "bare map: 11 11 11",
+            "alias map: 11 11 11",
+            "qualified map: 11 11 11",
+            "bare deque: 7 7",
+            "alias deque: 7 7",
+            "qualified deque: 7 7",
+            "array: 4 4 3",
+            "passed: 1 7",
+            "field: 5",
+        ],
+    );
+}

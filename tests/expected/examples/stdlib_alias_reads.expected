@@ -1,0 +1,12 @@
+bare list: 1 20 1 1
+alias list: 1 20 1 1
+qualified list: 1 20 1 1
+bare map: 11 11 11
+alias map: 11 11 11
+qualified map: 11 11 11
+bare deque: 7 7
+alias deque: 7 7
+qualified deque: 7 7
+array: 4 4 3
+passed: 1 7
+field: 5

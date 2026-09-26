@@ -2467,6 +2467,21 @@ declaration does not shadow either. Concretely:
 This is a representation and routing rule, not a new restriction: no name is
 reserved, and nothing tells an author to rename (§M.16.1).
 
+**Two reads followed.** This entry fixed the member CALL and deliberately left
+an INDEX read and a `@RustRefOut` read alone, because both failed through an
+alias with NO user class present and so had a cause of their own rather than a
+shadow test asking the wrong question. They did, and it was this rule one step
+earlier: the backend lowered a local's written type with no unit context, so the
+alias `RVec` (the last segment of nothing) resolved to no type at all, `v[0]`
+came out with no `.borrow()` (rustc E0608) and `d.front() ?? 0` with no
+`.cloned()` (rustc E0308), while the slot itself still carried the handle. The
+index's KEY shape was a third site of the original mistake, measured by last
+segment, so `qmap["three"] = 33` beside a program's own `class HashMap` was
+emitted as an `Index` store instead of an `insert` (rustc E0594). All three are
+closed, under this entry and §M.16.6: no new rule was needed.
+`examples/stdlib_alias_reads.jux` runs the matrix with no collision in sight and
+`examples/stdlib_alias_collisions.jux` runs it beside one.
+
 **Spec status:** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.6 carries the rule.
 
 ---

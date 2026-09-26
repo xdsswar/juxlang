@@ -6,23 +6,38 @@ use juxc_ast::{Expr, IndexExpr, Literal, NewArrayExpr, NewArrayLitExpr};
 use crate::RustEmitter;
 
 impl RustEmitter {
-    /// Does `bare` name a class whose Rust `Index` impl takes a
-    /// BORROWED key (`Index<&K>`, map-style)? Reads the bindgen
-    /// `@RustIndexRef` marker off the class AST — discovered from the
-    /// library's real trait impls, never a name list.
-    pub(crate) fn class_indexes_by_ref(&self, bare: &str) -> bool {
-        // A USER class carries the marker on its AST…
-        if let Some(cd) = self.class_ast_by_bare(bare) {
-            if cd.annotations.iter().any(is_index_ref) {
-                return true;
-            }
+    /// Does `name` -- bare as the author wrote it, or the FQN it resolved to
+    /// -- name a class whose Rust `Index` impl takes a BORROWED key
+    /// (`Index<&K>`, map-style)? Reads the bindgen `@RustIndexRef` marker off
+    /// the class, discovered from the library's real trait impls, never a name
+    /// list.
+    pub(crate) fn class_indexes_by_ref(&self, name: &str) -> bool {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        // A USER class carries the marker on its AST -- and a user class is the
+        // whole answer when `name` IS the program's type, marker or not.
+        //
+        // Asked of the RESOLVED name, not of its last segment. `class_asts` is
+        // keyed by simple name, so a program's own `class HashMap` answered for
+        // `rust.std.HashMap` here: the library map lost its borrowed-key
+        // routing, and `qmap["three"] = 33` was emitted as an `Index` store
+        // instead of an `insert` -- rustc E0594, `IndexMut` is not implemented
+        // for `HashMap`. A shadow test only means something when both sides
+        // name the SAME type (ERRATA E102).
+        if self.name_is_user_type(name) {
+            return self
+                .class_ast_by_bare(bare)
+                .is_some_and(|cd| cd.annotations.iter().any(is_index_ref));
         }
         // …and a SCANNED class carries it on its signature. The AST map holds
         // user classes only, so without this half every question about a
         // `rust.std` type missed and the caller fell back to naming the two
         // types it knew about — which is how `HashMap`/`BTreeMap` came to be
         // hardcoded next to a marker that already said the same thing.
-        self.lookup_class_by_bare_or_fqn(bare)
+        //
+        // By the written name first, so a qualified one reaches its own class;
+        // the bare retry covers a spelling `symbols.classes` has no key for.
+        self.lookup_class_by_bare_or_fqn(name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(bare))
             .is_some_and(|sig| sig.annotations.iter().any(is_index_ref))
     }
     /// Lower `arr[index]` to Rust `arr[index_as_usize]`.
@@ -278,10 +293,15 @@ impl RustEmitter {
     /// True when indexing `array` uses a BORROWED key (`map[&k]`) rather than
     /// the sequence cast. Discovered from the container's `@RustIndexRef`.
     pub(crate) fn index_takes_ref_key(&self, array: &Expr) -> bool {
-        match self.expr_types.get(&crate::exprs::expr_span_of(array)) {
-            Some(juxc_tycheck::Ty::User { name, .. }) => {
-                let bare = name.rsplit('.').next().unwrap_or(name);
-                self.class_indexes_by_ref(bare)
+        // The same type the handle question is asked of
+        // ([`Self::expr_is_collection_handle`]), so the two halves of one index
+        // decision cannot disagree: the borrow that reaches the sequence and
+        // the shape of the key that indexes it are one choice. Span-keyed
+        // `expr_types` alone also missed an interpolated receiver, whose
+        // re-parsed expression carries a synthesized span.
+        match self.narrowed_receiver_ty_of(array) {
+            Some(juxc_tycheck::Ty::User { ref name, .. }) => {
+                self.class_indexes_by_ref(name)
             }
             _ => false,
         }

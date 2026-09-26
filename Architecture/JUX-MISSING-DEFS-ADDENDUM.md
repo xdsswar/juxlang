@@ -1538,8 +1538,10 @@ Resolving a name is not the end of it. Every later question the compiler asks
 about the type is asked of the type the name RESOLVED to, never of the last
 segment of that name: whether the type is a reference type carrying the §6.5.1
 shared handle, which guard a member call on it takes, whether a method mutates
-its receiver. Two types may end with the same segment, and when they do, an
-answer about one is not an answer about the other.
+its receiver, how an index read or an index write reaches the sequence inside
+the handle, and whether a result that borrows its receiver has to be cloned out
+of it. Two types may end with the same segment, and when they do, an answer
+about one is not an answer about the other.
 
 Shadowing is the other half of the same rule. §M.16.1 gives a declaration in the
 unit precedence over a prelude type of the same name, and that is a question
@@ -1571,6 +1573,18 @@ declared `RVec<int>` carried the §6.5.1 handle, because the slot was decided
 from the written name, while `b.push(5)` on it was emitted as a call on the
 handle itself, because the member call was decided from the last segment of the
 resolved one. (ERRATA E102)
+
+The rule binds where nothing is shadowed at all. An alias binds a simple name
+that is the last segment of nothing, so a written type lowered WITHOUT the
+unit's own imports in view resolves to no type whatsoever, and every decision
+that needs the resolved type then has nothing to go on. That is one step
+earlier than the collision and it fails the same way: `RVec<int> v = new
+RVec<int>(); v[0]` lost the §6.5.1 borrow that reaches the sequence, and
+`RDeque<int> d = ...; d.front() ?? 0` lost the clone-out that a result
+borrowing its receiver needs, in programs that declare nothing of their own. A
+written type is therefore resolved IN THE UNIT THAT WROTE IT, which is what
+§M.16.5 already says for an `implements` name and §G.6.5 for a member
+signature. (ERRATA E102)
 
 ---
 

@@ -409,7 +409,7 @@ impl RustEmitter {
     /// A narrowed name is exactly one whose declared type is nullable and
     /// which is no longer in `nullable_locals`: that set is what the guard
     /// removes it from, and what the enclosing block puts back.
-    fn narrowed_receiver_ty_of(&self, e: &Expr) -> Option<juxc_tycheck::Ty> {
+    pub(crate) fn narrowed_receiver_ty_of(&self, e: &Expr) -> Option<juxc_tycheck::Ty> {
         let ty = self.receiver_ty_of(e)?;
         let juxc_tycheck::Ty::Nullable(inner) = &ty else {
             return Some(ty);
@@ -467,6 +467,35 @@ impl RustEmitter {
         } else {
             ".borrow()"
         })
+    }
+
+    /// The semantic type of a type reference AS WRITTEN IN THE CURRENT UNIT.
+    ///
+    /// [`juxc_tycheck::ty_from_ref_in_env`] resolves a name with an EMPTY
+    /// environment, so it cannot see the unit's own imports: it knows the
+    /// bare names the tables key directly and the ones some FQN ends with,
+    /// and nothing else. An `import rust.std.Vec as RVec;` binds the simple
+    /// name `RVec`, which is the last segment of nothing, so `RVec<int> v`
+    /// was recorded as `Ty::Unknown` -- and from there every question asked
+    /// of `v`'s type got no answer at all. The slot still carried the
+    /// §6.5.1 handle (that decision reads the WRITTEN path, which
+    /// `external_class_real_path` does resolve through the unit), so the two
+    /// halves disagreed exactly as they did in ERRATA E102: `v[0]` was
+    /// emitted with no `.borrow()` (rustc E0608) and `d.front() ?? 0` with no
+    /// `.cloned()` (rustc E0308), while the same programs spelled `Vec<int>`
+    /// or `rust.std.Vec<int>` were correct.
+    ///
+    /// `declaring_unit` is the field the checker itself uses for this (a
+    /// member signature is lowered in the imports of the file that wrote it,
+    /// §G.6.5), and pointing it at the unit being emitted makes the backend
+    /// ask the same question the checker did. Nothing else is seeded: the
+    /// unit's `unqualified` map already holds its same-package siblings, and
+    /// the primitive / `String` / generic-parameter shortcuts are decided
+    /// before any of it is consulted, so an import can never rename those.
+    pub(crate) fn ty_from_written_ref(&self, t: &juxc_ast::TypeRef) -> juxc_tycheck::Ty {
+        let mut env = juxc_tycheck::TypeEnv::new();
+        env.declaring_unit = self.current_unit_idx;
+        juxc_tycheck::ty::ty_from_ref(t, &env, &self.symbols)
     }
 
     /// Whether `name` -- bare as the author wrote it, or the FQN the checker
@@ -2938,7 +2967,7 @@ impl RustEmitter {
             .iter()
             .filter_map(|p| {
                 let ty = match &p.ty {
-                    Some(t) => juxc_tycheck::ty_from_ref_in_env(t, &self.symbols),
+                    Some(t) => self.ty_from_written_ref(t),
                     None => self.expr_types.get(&p.name.span)?.clone(),
                 };
                 Some((p.name.text.clone(), ty))
@@ -3756,7 +3785,7 @@ impl RustEmitter {
             let scope: std::collections::HashMap<String, juxc_tycheck::Ty> = method
                 .params
                 .iter()
-                .map(|p| (p.name.text.clone(), juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols)))
+                .map(|p| (p.name.text.clone(), self.ty_from_written_ref(&p.ty)))
                 .collect();
             self.local_types.push(scope);
             self.emit_fn_body_at(body, &method.return_type);
