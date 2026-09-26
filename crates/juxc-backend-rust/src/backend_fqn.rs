@@ -362,7 +362,7 @@ impl crate::RustEmitter {
     }
 
     /// What follows `.0` to READ the fields of an object of class `name`
-    /// (ERRATA E1XX-PHASE8): the statement-scoped `.borrow()` of the cell for a
+    /// (ERRATA E121): the statement-scoped `.borrow()` of the cell for a
     /// class that has one (`Rc<JuxCell<..>>`, or the atomic `JuxSync`), nothing
     /// for one shared through a plain `Rc<C_Inner>`, which derefs straight to
     /// its fields. Every handle read of a class goes through here, so the
@@ -410,7 +410,7 @@ impl crate::RustEmitter {
     }
 
     /// Whether the class being emitted is an Inline value (ERRATA
-    /// E1XX-PHASE8). Nothing writes such a class's objects, so each of its
+    /// E121). Nothing writes such a class's objects, so each of its
     /// methods takes `&self`; the by-name guess that a method mutates (a
     /// same-named method elsewhere writes its `this`) must not make one
     /// `&mut self`, which a caller holding the value in a plain `let` could
@@ -420,7 +420,7 @@ impl crate::RustEmitter {
     }
 
     /// Whether the class `name` takes the lock-free atomic handle
-    /// (`JuxArc`, ERRATA E1XX-PHASE8). See [`Self::is_wrapper_class`].
+    /// (`JuxArc`, ERRATA E121). See [`Self::is_wrapper_class`].
     pub(crate) fn is_arc_class(&self, name: &str) -> bool {
         self.resolve_bare_class_fqn(name)
             .is_some_and(|fqn| self.class_reps.get(&fqn) == Some(&crate::ClassRep::Arc))

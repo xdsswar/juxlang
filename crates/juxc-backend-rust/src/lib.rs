@@ -80,7 +80,7 @@ pub struct RustCrate {
     pub sources: Vec<(String, String)>,
     /// Classes the representation selector judged immutable but the emitter
     /// found written, so the lowering was redone with their cell restored
-    /// (ERRATA E1XX-PHASE8). Empty when the selector was right, which the
+    /// (ERRATA E121). Empty when the selector was right, which the
     /// corpus's self-check (`JUX_SELFCHECK`) requires.
     pub rep_fallbacks: Vec<String>,
     /// Value representations the selector committed to that §CR.7 forbids
@@ -232,7 +232,7 @@ pub fn lower_workspace_with_entry(
 }
 
 /// Run a lowering pass until the representation selector and the emitter
-/// agree (ERRATA E1XX-PHASE8).
+/// agree (ERRATA E121).
 ///
 /// The selector decides from the program text which classes need their cell
 /// ([`rep_select`]); every place the emitter takes a mutable borrow of an
@@ -2703,7 +2703,7 @@ impl ClassRep {
 }
 
 /// Pick a [`ClassRep`] per wrap-eligible class (§CR.3.3 + §CR.4.1; ERRATA
-/// E1XX-PHASE8). Keyed by FQN.
+/// E121). Keyed by FQN.
 ///
 /// - **`RcRefCell`** (`Rc<JuxCell<C_Inner>>`): the class needs its cell. Its
 ///   objects are written after construction, or its lowering updates them in
@@ -4644,7 +4644,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
 ",
         );
         // The atomic handle of a worker-shared class that nothing writes
-        // (ERRATA E1XX-PHASE8): an `Arc` with no lock, answering the same
+        // (ERRATA E121): an `Arc` with no lock, answering the same
         // `new` / `as_ptr` / `ptr_eq` surface as `JuxSync`, and reaching its
         // fields through `Deref` as a plain `Rc` handle does.
         w.push_str(concat!(

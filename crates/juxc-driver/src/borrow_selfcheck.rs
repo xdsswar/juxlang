@@ -121,7 +121,7 @@ pub(crate) fn check_crate(crate_dir: &Path, rs_files: &[PathBuf]) -> Result<(), 
 }
 
 /// Report the classes the representation selector had to give their cell back
-/// (ERRATA E1XX-PHASE8). The selector decides from the program text which
+/// (ERRATA E121). The selector decides from the program text which
 /// classes are never written after construction and drops their cell; when
 /// the emitter nonetheless needs to write one, the backend lowers the program
 /// again with that class's cell restored, so the user's program is right
@@ -149,7 +149,7 @@ pub(crate) fn check_rep_fallbacks(rep_fallbacks: &[String]) -> Result<(), BuildF
         d.notes.push(
             "the class was given back its interior-mutable cell and the program lowered again, \
              so it runs correctly; the self-check reports the missed write so the selector \
-             can be fixed (ERRATA E1XX-PHASE8)"
+             can be fixed (ERRATA E121)"
                 .to_string(),
         );
         failure.detail.push_str(&format!("representation fallback: {class}\n"));
@@ -162,7 +162,7 @@ pub(crate) fn check_rep_fallbacks(rep_fallbacks: &[String]) -> Result<(), BuildF
 }
 
 /// Report the value representations the selector committed to that §CR.7
-/// forbids (`E0953`-`E0955`, ERRATA E1XX-PHASE8). Unlike a fallback this is
+/// forbids (`E0953`-`E0955`, ERRATA E121). Unlike a fallback this is
 /// checked on every build: lowering such a class would give a program that
 /// behaves differently from Java, so it is refused instead. The selector rules
 /// each case out before it chooses, so this reports a selector bug.
@@ -1015,7 +1015,7 @@ mod tests {
         assert_eq!(hits.len(), 1, "{hits:?}");
     }
 
-    /// A class the selector gave no cell (ERRATA E1XX-PHASE8) is read as
+    /// A class the selector gave no cell (ERRATA E121) is read as
     /// `x.0.n`, a plain field of the `Rc`'s payload: there is no guard, so a
     /// mutating call in the same statement conflicts with nothing.
     #[test]

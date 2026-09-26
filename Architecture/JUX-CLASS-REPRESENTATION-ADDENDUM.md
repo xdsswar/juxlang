@@ -1,6 +1,6 @@
 # Jux Spec Addendum — Class Representation (Draft)
 
-**Implementation status (ERRATA E1XX-PHASE8):** the selector is built.
+**Implementation status (ERRATA E121):** the selector is built.
 Every class takes one of Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` (the
 prelude's `JuxArc`) or `Arc<Mutex>` (`JuxSync`), decided per class by
 fully-qualified name; each is marked `// JUX-REP: <rep>` in the generated
@@ -742,7 +742,7 @@ carries over unchanged. The wrapper type's `Deref` impl makes
 | `E0954`   | A weak ref is taken against a class the selector decided was Inline. The user's `weak C` declaration forces a refcount-based representation; the selector escalates and re-runs. If escalation fails, this fires. |
 | `E0955`   | A cyclic class hierarchy (class field that transitively contains the class itself) is selected as anything other than Arc + Weak. Phase 1 doesn't auto-break cycles; the user has to insert `weak` manually. Until that lands, this is a hard error. |
 
-**Numbering (ERRATA E1XX-PHASE8).** An earlier draft numbered these three
+**Numbering (ERRATA E121).** An earlier draft numbered these three
 `E0950`-`E0952`. Those numbers were taken first by the free-function operator
 checks of `JUX-RUNTIME-ABI-ADDENDUM.md` §R.3 (`E0950` orphan operator, `E0951`
 duplicate operator, `E0952` reserved), which the compiler has raised since
@@ -755,7 +755,7 @@ should never produce a diagnostic on the user's own code. The E095x
 codes above only fire when the user does something the selector
 can't make sound.
 
-**As implemented (ERRATA E1XX-PHASE8).** The selector escalates before it
+**As implemented (ERRATA E121).** The selector escalates before it
 chooses: a class compared by identity, aimed at by a `weak` reference or
 containing itself is never a candidate for Inline or `Box`. So `E0953`-`E0955`
 check the finished selection on every build and fire only if the selector is
@@ -916,7 +916,7 @@ cost where sharing isn't needed. (This supersedes the original
 
 ### Phase B — Escape-analysis selector (the "fast tier")
 
-*Built (ERRATA E1XX-PHASE8).* `mutated` is `rep_select::compute_cell_classes`;
+*Built (ERRATA E121).* `mutated` is `rep_select::compute_cell_classes`;
 `escapes`/`aliased` are decided together by a whitelist of positions
 (`compute_contained_classes`); a write the analysis misses is caught by the
 emitter and lowered again with the cell restored.

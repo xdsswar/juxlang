@@ -1,5 +1,5 @@
 // Class representation, the `Rc` tier (JUX-CLASS-REPRESENTATION-ADDENDUM
-// §CR.4.1, ERRATA E1XX-PHASE8).
+// §CR.4.1, ERRATA E121).
 //
 // A class whose objects are never written after construction is shared
 // through a plain `Rc`: no cell, no borrow flag, nothing that can be "in use".

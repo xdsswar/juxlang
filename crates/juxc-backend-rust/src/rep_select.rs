@@ -1,6 +1,6 @@
 //! The class representation selector's `mutated` property
 //! (`Architecture/JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3.2, §CR.4.1;
-//! ERRATA E1XX-PHASE8).
+//! ERRATA E121).
 //!
 //! A class needs the interior-mutable cell (`Rc<JuxCell<C_Inner>>`) exactly
 //! when something writes into one of its objects after the object exists.
@@ -1113,7 +1113,7 @@ pub(crate) fn fields_are_jux_values(units: &[juxc_ast::CompilationUnit], symbols
 // ---------------------------------------------------------------------------
 
 /// A value representation (Inline or `Box`) the program cannot have (§CR.7,
-/// ERRATA E1XX-PHASE8). The selector escalates past each of these on its own
+/// ERRATA E121). The selector escalates past each of these on its own
 /// (the whitelist of [`compute_contained_classes`] rules every one of them
 /// out), so a violation means the selector was wrong about a class, and it is
 /// reported rather than lowered into a program that would behave differently

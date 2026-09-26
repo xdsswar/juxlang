@@ -863,7 +863,7 @@ impl RustEmitter {
     /// so no class could hold an open file: the answer now comes from the
     /// type's own stub, uniformly for `std` and for every bound crate.
     /// Whether a class's objects can be held by value (§CR.2.1, §CR.2.2;
-    /// ERRATA E1XX-PHASE8), as far as its fields go. Where a handle would be
+    /// ERRATA E121), as far as its fields go. Where a handle would be
     /// shared, a value is copied, so every field must copy, and copy without
     /// anything to tell the copies apart: a Jux value, a Jux class or
     /// interface handle, an array or a collection handle (whose copy shares).
@@ -1358,7 +1358,7 @@ impl RustEmitter {
                     self.w.push_str(parent_bare);
                     // The parent slice takes the PARENT class's handle shape, and
                     // is read out of the child the way the child's fields are
-                    // (ERRATA E1XX-PHASE8: a hierarchy nothing writes has no cell).
+                    // (ERRATA E121: a hierarchy nothing writes has no cell).
                     let (open, close) = if self.sync_classes.contains(parent_bare) {
                         (self.atomic_handle(parent_bare).1, ")")
                     } else if self.is_refcell_class(parent_bare) {
@@ -3617,7 +3617,7 @@ impl RustEmitter {
     /// The signatures do not mention the depth; the bodies
     /// ([`Self::emit_accessor_impl_methods_at`]) do.
     ///
-    /// `setters` is false for a class without a cell (ERRATA E1XX-PHASE8):
+    /// `setters` is false for a class without a cell (ERRATA E121):
     /// nothing writes its objects, so it has no `__set_<f>` to offer, and a
     /// write through the bound would have given it one (the selector marks
     /// every class a bound-typed store can reach).

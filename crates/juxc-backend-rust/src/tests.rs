@@ -2127,7 +2127,7 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
     // Wrapper shape for a generic class: an inner `Box_Inner<T>` field
     // struct behind the handle, here a plain `Rc` because nothing writes a
-    // `Box` after construction (ERRATA E1XX-PHASE8). `T` is only stored by
+    // `Box` after construction (ERRATA E121). `T` is only stored by
     // the declaration, so the headers carry `'static` alone and the `Clone +
     // Debug` moves to the one member that reads a `T` by value (gap 2,
     // ERRATA E118).
@@ -2197,7 +2197,7 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
 /// An ALIASED class (a second binding) shares one instance through its `Rc`
 /// handle: `var q = p` clones the `Rc` (refcount bump), so both names see one
 /// object. `Point` is never written after construction, so the selector drops
-/// its cell (ERRATA E1XX-PHASE8): the handle is a plain `Rc<Point_Inner>`.
+/// its cell (ERRATA E121): the handle is a plain `Rc<Point_Inner>`.
 #[test]
 fn aliased_immutable_class_shares_through_plain_rc() {
     let rust = emit(
@@ -2233,7 +2233,7 @@ fn aliased_immutable_class_shares_through_plain_rc() {
 
 /// A class that ESCAPES (returned from a function) but is never aliased and
 /// never written after construction takes the unique `Box<C_Inner>` handle
-/// (§CR.2.2, ERRATA E1XX-PHASE8).
+/// (§CR.2.2, ERRATA E121).
 #[test]
 fn escaping_immutable_class_lowers_to_box() {
     let rust = emit(
@@ -6793,7 +6793,7 @@ fn observable_property_drop_and_array_keep_the_baseline() {
 }
 
 // ----------------------------------------------------------------------
-// Representation selector (ERRATA E1XX-PHASE8)
+// Representation selector (ERRATA E121)
 // ----------------------------------------------------------------------
 
 /// A write the selector missed costs a second lowering pass with the class's

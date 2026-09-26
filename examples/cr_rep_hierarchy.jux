@@ -1,6 +1,6 @@
 // Class representation across a hierarchy and a generic class
 // (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.3.4, §CR.3.5, §CR.8.5;
-// ERRATA E1XX-PHASE8).
+// ERRATA E121).
 //
 // A class and everything it extends or is extended by take ONE
 // representation, the most general one any of them needs: a `Circle` is used

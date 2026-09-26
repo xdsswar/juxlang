@@ -1117,7 +1117,7 @@ pub enum Code {
     /// as a value representation, Inline or `Box` (Class representation
     /// §CR.7): a copied value has no stable address to compare. The selector
     /// escalates past this on its own; the code reports a selector that did
-    /// not (ERRATA E1XX-PHASE8).
+    /// not (ERRATA E121).
     E0953_ValueRepIdentity,
     /// E0954 -- A `weak` field or parameter targets a class selected as a
     /// value representation (§CR.7): a `Weak` needs a refcount.

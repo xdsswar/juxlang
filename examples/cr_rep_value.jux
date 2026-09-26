@@ -1,6 +1,6 @@
 // Class representation, the value tiers: Inline and `Box`
 // (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.2.1, §CR.2.2, §CR.8.1, §CR.8.2;
-// ERRATA E1XX-PHASE8).
+// ERRATA E121).
 //
 // An object that only ever lives in the local it was made into, and that
 // nothing writes after construction, cannot be told apart from a copy of it.

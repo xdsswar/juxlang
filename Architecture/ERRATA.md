@@ -3671,7 +3671,7 @@ closing paragraph point here. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains
 
 ---
 
-## E1XX-PHASE8. The representation selector
+## E121. The representation selector
 
 **Conflict.** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3 specifies a
 selector that picks one of Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` and

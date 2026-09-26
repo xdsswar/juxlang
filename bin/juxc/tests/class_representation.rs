@@ -1,5 +1,5 @@
 //! Which Rust representation the selector gives each class
-//! (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.3, §CR.4.1; ERRATA E1XX-PHASE8).
+//! (JUX-CLASS-REPRESENTATION-ADDENDUM §CR.3, §CR.4.1; ERRATA E121).
 //!
 //! The representation is invisible to a program: `examples/cr_rep_*.jux` pin
 //! that each one still prints what Java would. These cases pin the other half,
