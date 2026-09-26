@@ -1353,13 +1353,18 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         let mut is_static = false;
         let mut is_final = false;
+        let mut final_kw = juxc_ast::FinalKw::None;
         let mut is_weak = false;
         let mut is_ref = false;
         loop {
             if self.eat_kw(Keyword::Static) {
                 is_static = true;
-            } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+            } else if self.eat_kw(Keyword::Final) {
                 is_final = true;
+                final_kw = juxc_ast::FinalKw::Final;
+            } else if self.eat_kw(Keyword::Const) {
+                is_final = true;
+                final_kw = juxc_ast::FinalKw::Const;
             } else if self.eat_kw(Keyword::Weak) {
                 // `weak` field (§6.5): does not contribute to refcount, read via
                 // `.get()` → `T?`. Validity (class-typed, non-generic, no
@@ -1441,6 +1446,7 @@ impl<'a> Parser<'a> {
             visibility,
             is_static,
             is_final,
+            final_kw,
             is_weak,
             is_ref,
             ty,

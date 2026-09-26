@@ -43,10 +43,11 @@ pub enum Code {
     /// the way Java's §3.10.1 does it, so the magnitude `9223372036854775808`
     /// is in range exactly when it is negated.
     E0202_NumericLiteralOutOfRange,
-    /// E0210 — `super(...)` or `this(...)` not first statement.
-    /// A keyword the language reserves, and the spec documents, that Phase 1
-    /// does not implement: the `move` call-site operator, the `volatile` field
-    /// modifier, `yield`.
+    /// E0203 — A keyword the language reserves, and the spec documents, that
+    /// this phase does not implement. Two sites raise it: the `move`
+    /// call-site operator and the `volatile` field modifier. (`yield` and
+    /// `annotation` were once here too; both have productions now, and a
+    /// `yield` outside a generator is `E0990`.)
     ///
     /// Reserving a word without recognizing it is the worst of both: the
     /// program cannot use the name as an identifier AND the error blames
@@ -54,6 +55,7 @@ pub enum Code {
     /// once, and the parser then skips the construct so nothing cascades.
     E0203_ReservedNotImplemented,
 
+    /// E0210 — `super(...)` or `this(...)` not first statement.
     E0210_ConstructorCallNotFirst,
     /// E0144: A **colon type annotation** on a local, `var x: int = 5;`.
     /// Jux writes the type first, the Java way (JUX-LANG-V1 §5.6): the

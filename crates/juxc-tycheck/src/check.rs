@@ -6272,14 +6272,17 @@ impl<'a> Checker<'a> {
                         )),
                     );
                 }
-                if let Some(field) = self.final_field_assign_violation(&a.target) {
+                if let Some((field, kw)) = self.final_field_assign_violation(&a.target) {
+                    // The keyword echoed is the one written (grammar A.2.2),
+                    // as E0464 does for a local.
+                    let word = kw.word();
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0465_FinalFieldReassigned,
                             format!(
-                                "cannot assign to `{field}`: it is a `final`/`const` field \
+                                "cannot assign to `{field}`: it is a `{word}` field \
                                  and may only be set in its declaration or a constructor \
-                                 (§5.6). Drop `final`/`const`, or move the assignment into \
+                                 (§5.6). Drop `{word}`, or move the assignment into \
                                  the constructor.",
                             ),
                         )
@@ -8347,7 +8350,8 @@ impl<'a> Checker<'a> {
     }
 
     /// When `target` is a **disallowed** write to a `final`/`const` field,
-    /// return that field's name to flag (E0465); otherwise `None`.
+    /// return that field's name and the keyword it was declared with, to flag
+    /// (E0465); otherwise `None`.
     ///
     /// A `final` field is assign-once: legal only in its declaration initializer
     /// (not an assignment statement, so never seen here) or in a constructor /
@@ -8365,8 +8369,11 @@ impl<'a> Checker<'a> {
     /// positives on legitimate construction-time writes. A `static final` field
     /// has no per-instance constructor, so it is settable only in a `static`
     /// init block.
-    fn final_field_assign_violation(&self, target: &juxc_ast::Expr) -> Option<String> {
-        let (name, is_final, is_weak, is_static, recv_is_this) = match target {
+    fn final_field_assign_violation(
+        &self,
+        target: &juxc_ast::Expr,
+    ) -> Option<(String, juxc_ast::FinalKw)> {
+        let (name, is_final, final_kw, is_weak, is_static, recv_is_this) = match target {
             Expr::Field(f) => {
                 // Resolve the declaring class — instance (`obj.x` / `this.x`) or
                 // static (`ClassName.x`) — the same way property-write
@@ -8389,6 +8396,7 @@ impl<'a> Checker<'a> {
                 (
                     f.field.text.clone(),
                     fs.is_final,
+                    fs.final_kw,
                     fs.is_weak,
                     fs.is_static,
                     matches!(&*f.object, Expr::This(_)),
@@ -8403,7 +8411,7 @@ impl<'a> Checker<'a> {
                 }
                 let class = self.env.current_class.clone()?;
                 let (fs, _) = self.symbols.lookup_field(&class, &nm)?;
-                (nm, fs.is_final, fs.is_weak, fs.is_static, true)
+                (nm, fs.is_final, fs.final_kw, fs.is_weak, fs.is_static, true)
             }
             _ => return None,
         };
@@ -8418,7 +8426,7 @@ impl<'a> Checker<'a> {
         if allowed {
             None
         } else {
-            Some(name)
+            Some((name, final_kw))
         }
     }
 

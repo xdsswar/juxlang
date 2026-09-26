@@ -1,0 +1,1 @@
+const_field_reassigned.jux:6:27: [E0465] error: cannot assign to `max`: it is a `const` field and may only be set in its declaration or a constructor (§5.6). Drop `const`, or move the assignment into the constructor.

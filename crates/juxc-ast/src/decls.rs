@@ -855,6 +855,11 @@ pub struct FieldDecl {
     /// it picks the `pub const` over `pub static` shape in the
     /// emitted Rust.
     pub is_final: bool,
+    /// Which of the two synonyms was written, so a diagnostic about the field
+    /// (E0465) names the one the programmer used (grammar A.2.2).
+    /// [`Self::is_final`] says whether the field is final; this says what to
+    /// call it.
+    pub final_kw: crate::FinalKw,
     /// True if the field is declared `weak` (§6.5). A weak field does **not**
     /// contribute to the owning class's refcount, so it breaks reference
     /// cycles (the classic `Child` holding a back-reference to `Parent`).

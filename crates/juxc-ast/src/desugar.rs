@@ -424,6 +424,9 @@ fn lower_one_property(
             // backend's static-field shape and any final-aware path
             // agree. (Instance `final` is informational today.)
             is_final: prop.setter.as_ref().map_or(true, |s| s.is_init),
+            // No keyword was written: a property's writes are checked by its
+            // own rules (§M.7.2), so no diagnostic names this slot's.
+            final_kw: crate::FinalKw::None,
             // Property backing fields are never `weak`.
             is_weak: false,
             ty: Some(prop.ty.clone()),

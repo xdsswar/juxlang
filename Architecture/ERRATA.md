@@ -2929,6 +2929,37 @@ and §A.3.1's lambda paragraph states the one-diagnostic refusal.
 
 ---
 
+## E1XX-PHASE5b. Three diagnostics that said something untrue
+
+**Conflict.** Grammar A.2.2 makes `final` and `const` synonyms and says the
+compiler echoes the spelling that was written. E95 did that for `E0464`, the
+local binding, by carrying a `FinalKw` on locals and parameters. Its sibling for
+fields, `E0465`, still answered every final field with "it is a `final`/`const`
+field ... Drop `final`/`const`", because `FieldDecl` kept only a `bool`.
+
+`E0305`, raised for the four Rust words with no raw-identifier form, ended with
+"Every other reserved word is fine". That is true of Rust's reserved words and
+false of Jux's: `ref`, `move`, `yield` and the rest of Jux's own keywords stay
+reserved (`JUX-GRAMMAR-ADDENDUM.md` §A.4.1.1 says so in as many words), so the
+message invited exactly the rename that would fail next.
+
+`E0203`'s catalog row listed `annotation` among the reserved-but-unimplemented
+keywords, and its doc in the code table listed `yield`. Both have productions
+now; the only live sites are `move` and `volatile`.
+
+**Resolution.** `FieldDecl` and the symbol table's `FieldSig` carry the written
+`FinalKw` beside `is_final`, as `VarDecl` and `Param` already did, and `E0465`
+names it: "it is a `const` field ... Drop `const`". An auto-property's backing
+slot records no keyword, since none was written. `E0305` lists the four words,
+says a Rust-only word such as `loop` is escaped and fine, and says Jux's own
+keywords stay reserved, citing §A.4.1.1. `E0203`'s row and prose name `move`
+and `volatile` only, and say where `yield` and `annotation` went.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0203` row and the
+"Reserved But Not Implemented" section are corrected in place.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

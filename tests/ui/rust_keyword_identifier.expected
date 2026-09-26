@@ -1,0 +1,1 @@
+rust_keyword_identifier.jux:4:9: [E0305] error: `crate` can't be used as a Jux name: it is one of the four Rust reserved words with no escaped form (`self`, `Self`, `crate`, `super`), and Jux lowers to Rust -- rename it. A Rust-only word such as `loop` or `impl` is fine, because the backend escapes it; Jux's own keywords stay reserved (§A.4.1.1)

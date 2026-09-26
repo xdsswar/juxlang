@@ -122,11 +122,12 @@ Three errors, none of them about the thing that is wrong.
 
 `E0203` says the true thing once. It names the construct, says where the
 construct IS specified, and says it is not implemented here. Each site then
-consumes the construct so nothing cascades behind it: an `annotation`
-declaration skips its brace-balanced body, `volatile` is dropped from the
-modifier list and the field parses as a field, `move` reports and then parses
-its operand. (`yield` was on this list until generators landed, Missing-defs
-§M.2; a `yield` outside a generator is now `E0990`.)
+consumes the construct so nothing cascades behind it: `volatile` is dropped
+from the modifier list and the field parses as a field, `move` reports and
+then parses its operand. (`yield` was on this list until generators landed,
+Missing-defs §M.2, and a `yield` outside a generator is now `E0990`;
+`annotation` left it when annotation declarations got their production,
+JUX-ANNOTATIONS-ADDENDUM §A.2.)
 
 ```
 error[E0203]: the `move` operator is not implemented yet
@@ -397,7 +398,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
 | `E0202`  | Numeric literal out of range for its storage: beyond 64 bits, or not fitting the integer slot it flows into (`byte b = 300;`, `u32 x = -1;`) | Grammar §A.1.4 / Semantics §S.2.6 |
-| `E0203`  | Reserved keyword that this phase does not implement (`annotation`, `move`, `volatile`) | see below |
+| `E0203`  | Reserved keyword that this phase does not implement (`move`, `volatile`) | see below |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
