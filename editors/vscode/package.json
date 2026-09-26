@@ -1,0 +1,88 @@
+{
+  "name": "jux",
+  "displayName": "Jux",
+  "description": "Jux language support: highlighting from the shared TextMate grammar, and everything else from juxc-lsp.",
+  "version": "0.1.0",
+  "publisher": "xdsswar",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xdsswar/juxlang"
+  },
+  "private": true,
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/jux.toml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jux",
+        "aliases": [
+          "Jux",
+          "jux"
+        ],
+        "extensions": [
+          ".jux"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jux",
+        "scopeName": "source.jux",
+        "path": "./syntaxes/jux.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Jux",
+      "properties": {
+        "jux.server.path": {
+          "type": "string",
+          "default": "juxc-lsp",
+          "markdownDescription": "The `juxc-lsp` language server to launch: a bare name is looked up on `PATH`, or give an absolute path. Takes effect on **Jux: Restart Language Server**."
+        },
+        "jux.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the JSON-RPC traffic with juxc-lsp to the Jux output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "jux.restartServer",
+        "title": "Restart Language Server",
+        "category": "Jux"
+      }
+    ]
+  },
+  "scripts": {
+    "sync-grammar": "node scripts/sync-grammar.js",
+    "compile": "npm run sync-grammar && tsc -p .",
+    "watch": "tsc -watch -p .",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}

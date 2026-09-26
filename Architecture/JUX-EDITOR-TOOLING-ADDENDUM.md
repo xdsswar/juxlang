@@ -12,24 +12,30 @@
 
 ---
 
-## Current Status (2026-09-15)
+## Current Status (2026-09-26)
 
 > **Read this first.** The plan below was written before most of the editor
 > work happened. Here is where the editor-side pieces actually stand.
 
 ### What is in the repository
 
-- `editors/jux.tmLanguage.json` exists and is the only TextMate grammar.
-- `editors/jux.tmbundle/` contains only `info.plist`. There is no
-  `Syntaxes/` folder, so it does not match the layout §E.5 describes and
-  carries no grammar for a TextMate-bundle host to load.
-- The grammar has fallen behind the lexer. The compiler's keyword list,
-  exported to `ide/intellij-plugin/grammar/jux-tokens.json`, has 58
-  keywords; `jux.tmLanguage.json` is missing three of them: `ref`, `typeof`
-  and `weak`. (The "53 reserved keywords" count in §E.2 is also stale.)
-- There is no VS Code extension, no Zed extension, and no setup
-  documentation for Neovim, Helix or Sublime Text. The editor matrix in §E.4
-  is a plan, not a description.
+- `editors/jux.tmLanguage.json` is the one TextMate grammar, still written
+  by hand. It highlights all 58 keywords the compiler's keyword list
+  (exported to `ide/intellij-plugin/grammar/jux-tokens.json`) holds, `ref`,
+  `typeof` and `weak` included, and no longer paints `match`, which is a
+  Rust word and not a Jux one.
+- `editors/jux.tmbundle/` has the §E.5 layout: `info.plist` plus
+  `Syntaxes/jux.tmLanguage.json`, a byte-for-byte copy of the shared grammar.
+- The IntelliJ plugin's test suite pins both: `JuxTextMateGrammarDriftTest`
+  fails when a lexer keyword goes unhighlighted, when a keyword scope paints
+  a word the lexer does not reserve, or when the bundle's copy differs from
+  `editors/jux.tmLanguage.json`. That is the CI check the §E.2 update
+  protocol and the Open Questions asked for; it runs with `./gradlew test`.
+- `editors/vscode/` is a VS Code extension, built locally and not published
+  (see "The VS Code extension" below).
+- There is no Zed extension, and no setup documentation for Neovim, Helix or
+  Sublime Text. Those rows of the editor matrix in §E.4 are a plan, not a
+  description.
 - IntelliJ is served by a native PSI plugin, not by the TextMate bundle. It
   generates its token types from `jux-tokens.json` and runs a hybrid engine
   with `juxc-lsp`; see "Current State" in `JUX-INTELLIJ-PLUGIN-ADDENDUM.md`.
@@ -39,16 +45,36 @@
 
 1. **Generate the TextMate grammar from `jux-tokens.json`** instead of
    editing it by hand, the same way the IntelliJ plugin's token types are
-   generated. This replaces the manual "mirror the keyword list" rule in §E.2
-   and the CI check proposed under Open Questions, and closes the `ref` /
-   `typeof` / `weak` gap for good.
-2. **Add `Syntaxes/jux.tmLanguage.json` to `editors/jux.tmbundle/`** (written
-   by the same generator) so the bundle loads in any TextMate-bundle host.
-3. **A VS Code extension** that ships the generated grammar, registers
-   `*.jux` as `source.jux`, and launches `juxc-lsp`.
-4. **A Zed extension** that registers the grammar and `juxc-lsp`.
-5. **Setup documentation for Neovim, Helix and Sublime Text**: filetype
+   generated, and write the bundle's `Syntaxes/` copy from the same
+   generator. Until then the drift test above is what keeps the hand-written
+   file honest.
+2. **A Zed extension** that registers the grammar and `juxc-lsp`.
+3. **Setup documentation for Neovim, Helix and Sublime Text**: filetype
    registration and the `juxc-lsp` server entry for each.
+
+### The VS Code extension
+
+`editors/vscode/` is a minimal extension, deliberately without language
+logic of its own:
+
+- `package.json` contributes the `jux` language for `*.jux`, with
+  `language-configuration.json` for comments, brackets and auto-closing
+  pairs, and the `source.jux` grammar at `syntaxes/jux.tmLanguage.json`.
+- That grammar file is **copied** from `editors/jux.tmLanguage.json` by
+  `scripts/sync-grammar.js`, which `npm run compile` (and so
+  `vscode:prepublish`) runs first. `vsce package` cannot reach a file outside
+  the extension folder, so a copy is unavoidable; it is gitignored, so there
+  is no committed copy to drift and every `.vsix` carries the current
+  grammar. The same script copies the repository `LICENSE`.
+- `src/extension.ts` starts `juxc-lsp` with `vscode-languageclient` over
+  stdio. The server takes no arguments. The binary comes from the
+  `jux.server.path` setting, `juxc-lsp` on `PATH` by default; a
+  **Jux: Restart Language Server** command picks up a changed setting, and a
+  server that fails to start leaves highlighting working and says which
+  setting to fix. `jux.toml` edits are forwarded as watched-file events.
+- Build, package and local-install steps are in `editors/vscode/README.md`:
+  `npm install`, `npm run compile`, `npm run package` (`vsce package`), then
+  `code --install-extension jux-0.1.0.vsix`. It is not on the Marketplace.
 
 ---
 
@@ -117,12 +143,12 @@ The grammar MUST handle, at minimum:
 - **Comments**: `// line` and `/* block */`.
 - **All five string flavors** from `JUX-GRAMMAR-ADDENDUM.md` §A.1.5: `"…"`, `"""…"""`, `$"…"`, `$"""…"""`, `'…'`.
 - **Numeric literals** with all radix prefixes (`0x`, `0b`, `0o`) and all suffixes documented in §A.1.4 (`L`, `f`, `d`, `u`, `i8`/`i16`/…/`i128`, `u8`/…/`u128`, `f32`, `f64`).
-- **All 53 reserved keywords** from `juxc-lex/src/token.rs` `Keyword` enum, grouped semantically:
+- **All 58 reserved keywords** from `juxc-lex/src/token.rs` `Keyword` enum, grouped semantically:
   - Declaration: `class`, `interface`, `enum`, `record`, `struct`, `annotation`, `package`, `import`, `type`
-  - Modifier: `public`, `private`, `protected`, `internal`, `abstract`, `final`, `sealed`, `static`, `const`, `volatile`, `native`, `async`, `unsafe`, `var`
+  - Modifier: `public`, `private`, `protected`, `internal`, `abstract`, `final`, `sealed`, `static`, `const`, `volatile`, `native`, `async`, `unsafe`, `var`, `ref`, `weak`
   - Inheritance: `extends`, `implements`, `permits`, `throws`
   - Control: `if`, `else`, `switch`, `case`, `default`, `when`, `for`, `while`, `do`, `break`, `continue`, `yield`, `try`, `catch`, `finally`, `throw`, `return`, `await`, `drop`, `move`
-  - Other: `this`, `super`, `new`, `init`, `as`, `sizeof`, `operator`
+  - Other: `this`, `super`, `new`, `init`, `as`, `sizeof`, `typeof`, `operator`
 - **Literals**: `true`, `false`, `null` (NOT keywords per §A.2.9; mapped to `constant.language`).
 - **Primitive types**: `bool`, `byte`, `ubyte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `float`, `double`, `char`, `void`, plus width-explicit `i8`/…/`i128`, `u8`/…/`u128`, `f32`, `f64`, `isize`, `usize`, and the built-in reference type `String`.
 - **Annotations**: `@Name` prefix (per `JUX-ANNOTATIONS-ADDENDUM.md`).
@@ -135,7 +161,7 @@ TextMate grammars are regular: they cannot disambiguate identifier kinds (variab
 
 ### Update protocol
 
-Any change to the keyword list in `juxc-lex/src/token.rs` MUST be mirrored in `editors/jux.tmLanguage.json` in the same commit. A CI check (future work) will compare the two lists.
+Any change to the keyword list in `juxc-lex/src/token.rs` MUST be mirrored in `editors/jux.tmLanguage.json` in the same commit, and the grammar copied to `editors/jux.tmbundle/Syntaxes/`. The IntelliJ plugin's `JuxTextMateGrammarDriftTest` compares the grammar with the exported `jux-tokens.json` and the bundle copy with the grammar, so a missed mirror fails `./gradlew test`.
 
 ---
 
@@ -151,7 +177,7 @@ This addendum stays focused on the **editor-side concerns** — coloring, packag
 
 | Editor                | Coloring (TextMate) | LSP client              | Plugin/extension needed?           |
 |-----------------------|---------------------|-------------------------|------------------------------------|
-| VS Code               | Yes (`.tmLanguage.json` shipped in extension) | Built-in        | Thin extension (≈30 LOC) that registers the grammar and launches `juxc-lsp` |
+| VS Code               | Yes (`.tmLanguage.json` shipped in extension) | Built-in        | `editors/vscode/`: registers the grammar and launches `juxc-lsp` (built locally, unpublished) |
 | IntelliJ Ultimate     | Yes (TextMate Bundles, built-in)             | Built-in (2023.2+) | None for highlighting; tiny `.idea`/LSP-server registration for semantics |
 | IntelliJ Community    | Yes (TextMate Bundles, built-in)             | Via **LSP4IJ** plugin | LSP4IJ from JetBrains Marketplace; configure `juxc-lsp` as a server   |
 | Zed                   | Yes (`.tmLanguage.json` consumable)          | Built-in              | Zed extension registering the grammar + LSP                            |
@@ -169,8 +195,8 @@ This addendum stays focused on the **editor-side concerns** — coloring, packag
 > an LSP registration. The project instead ships a native IntelliJ plugin
 > with its own PSI parser (`ide/intellij-plugin`), which registers the file
 > type, highlights natively and launches `juxc-lsp` itself. The notes below
-> apply only to someone loading the bare TextMate bundle, which currently has
-> no `Syntaxes/` folder and so no grammar in it (see "Current Status").
+> apply only to someone loading the bare TextMate bundle, which now has the
+> `Syntaxes/` folder shown below (see "Current Status").
 
 ### Bundle layout
 
@@ -215,5 +241,5 @@ Phases 2 and 3 are independent of the LSP-server phases — the editor packaging
 
 ## Open Questions
 
-- **Auto-sync of the keyword list.** A CI check that diffs `juxc-lex::Keyword::as_str` against the keyword arrays in `jux.tmLanguage.json` would catch drift. Probably a five-line `cargo xtask` job; queued.
+- **Auto-sync of the keyword list.** The check exists (`JuxTextMateGrammarDriftTest`, against the exported `jux-tokens.json`); generating the grammar so there is nothing to check is still open (see "Planned fixes").
 - **Marketplace publishing identity.** The VS Code Marketplace publisher and the JetBrains Marketplace vendor name should be reserved early to avoid squatting. Owner: `xdsswar` / `XTREME SOFTWARE SOLUTIONS`.
