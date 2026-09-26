@@ -230,6 +230,26 @@ collection's own `Debug` writes its elements, and E107's run-time
 normalization only sees the outer type's name. Not a regression: the output
 was the same before E107. Recorded under E107's "Still open".
 
+### Rust leaking through the abstraction (added 2026-09-26)
+
+**27. rustc's borrow errors reach the user verbatim.** When the backend emits
+invalid Rust, `cargo_build` / `build_emitted_crate` (`crates/juxc-driver/src/lib.rs`)
+bail with rustc's text. `source_map.rs` remaps the `-->` arrow to the `.jux`
+line, but the message stays `error[E0502]: cannot borrow ... as mutable`, it is
+not a `Diagnostic` (so `--diagnostic-format json` never sees it), and the exit
+code is 1, not the ICE's 101. Every such error is a compiler bug (ERRATA E23),
+and should say so in Jux terms.
+
+**28. A missed hoist panics with Rust's `already borrowed`.** Class handles are
+`Rc<std::cell::RefCell<..>>`; when the backend misses one of the §CR.4.1 hoists
+the program dies with `thread 'main' panicked at src\main.rs:L:C: already
+borrowed: BorrowMutError`, naming an emitted-Rust line and no Jux type.
+
+**29. Nothing catches those conflict shapes before a user does.** Per E23 Jux
+has no user-visible borrow checker and is not getting one, so the fix is a
+compiler self-check over the emitted code, run in the test gate, not a user
+diagnostic.
+
 ---
 
 ## 4. Three streams stopped mid-flight
