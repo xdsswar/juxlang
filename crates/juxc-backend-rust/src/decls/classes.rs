@@ -1019,9 +1019,8 @@ impl RustEmitter {
                 // `Target_Inner`.
                 let target =
                     fty.name.segments.last().map_or("", |s| s.text.as_str());
-                self.w.push_str("std::rc::Weak<crate::JuxCell<");
-                self.w.push_str(target);
-                self.w.push_str("_Inner>>");
+                let weak = self.weak_handle_type(target, &format!("{target}_Inner"));
+                self.w.push_str(&weak);
             } else if field.is_ref {
                 // `ref` field (§M.13): a SHARED reference cell.
                 self.w.push_str("std::rc::Rc<crate::JuxCell<");
@@ -3437,7 +3436,7 @@ impl RustEmitter {
     ///   ([`Self::class_chain_accessor_fields`]), so reading through
     ///   `? extends Container<int>` gives an `int`.
     pub(crate) fn carries_bound_position_accessors(&self, bare: &str) -> bool {
-        self.is_refcell_class(bare)
+        self.is_wrapper_class(bare)
             && (self.carries_bound_position_members(bare)
                 || (self.takes_generic_bound_marker(bare) && !self.class_is_extended(bare)))
     }
@@ -3570,7 +3569,8 @@ impl RustEmitter {
             .into_iter()
             .map(|(n, t)| (n, t, 0))
             .collect();
-        self.emit_accessor_trait_sigs_at(&fields);
+        let setters = self.is_refcell_class(owner_bare);
+        self.emit_accessor_trait_sigs_at(&fields, setters);
     }
 
     /// [`Self::emit_accessor_trait_sigs`] over a field list gathered with each
@@ -3581,7 +3581,12 @@ impl RustEmitter {
     /// accessors for the whole `extends` chain and the depths differ per field.
     /// The signatures do not mention the depth; the bodies
     /// ([`Self::emit_accessor_impl_methods_at`]) do.
-    fn emit_accessor_trait_sigs_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)]) {
+    ///
+    /// `setters` is false for a class without a cell (ERRATA E1XX-PHASE8):
+    /// nothing writes its objects, so it has no `__set_<f>` to offer, and a
+    /// write through the bound would have given it one (the selector marks
+    /// every class a bound-typed store can reach).
+    fn emit_accessor_trait_sigs_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)], setters: bool) {
         for (name, ty, _) in fields {
             self.w.emit_indent();
             self.w.push_str("fn __get_");
@@ -3591,6 +3596,9 @@ impl RustEmitter {
             let clause = self.value_copy_where(ty);
             self.w.push_str(&clause);
             self.w.push_str(";\n");
+            if !setters {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str("fn __set_");
             self.w.push_str(&to_rust_ident(name));
@@ -3610,13 +3618,19 @@ impl RustEmitter {
             .into_iter()
             .map(|(n, t)| (n, t, depth))
             .collect();
-        self.emit_accessor_impl_methods_at(&fields);
+        self.emit_accessor_impl_methods_at(&fields, impl_class_bare);
     }
 
     /// [`Self::emit_accessor_impl_methods`] over a field list carrying its own
     /// per-field `__parent` hop count -- the bound-position chain form (ERRATA
     /// E100), where one impl block covers fields declared at several levels.
-    fn emit_accessor_impl_methods_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)]) {
+    ///
+    /// `impl_class_bare` is the class the impl is for: its representation
+    /// decides how the getter reaches the field and whether there is a setter
+    /// (see [`Self::emit_accessor_trait_sigs_at`]).
+    fn emit_accessor_impl_methods_at(&mut self, fields: &[(String, juxc_ast::TypeRef, usize)], impl_class_bare: &str) {
+        let read = self.cell_read(impl_class_bare);
+        let setters = self.is_refcell_class(impl_class_bare);
         for (name, ty, depth) in fields {
             // getter — clone out of the borrow guard before it drops.
             self.w.emit_indent();
@@ -3626,13 +3640,17 @@ impl RustEmitter {
             self.emit_value_type_as_rust(ty);
             let clause = self.value_copy_where(ty);
             self.w.push_str(&clause);
-            self.w.push_str(" { self.0.borrow()");
+            self.w.push_str(" { self.0");
+            self.w.push_str(read);
             for _ in 0..*depth {
                 self.w.push_str(".__parent");
             }
             self.w.push('.');
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str(".clone() }\n");
+            if !setters {
+                continue;
+            }
             // setter — scoped `borrow_mut()` write.
             self.w.emit_indent();
             self.w.push_str("fn __set_");
@@ -3871,7 +3889,8 @@ impl RustEmitter {
             for (name, sig) in &bound_methods {
                 self.emit_kind_trait_method_sig(name, sig);
             }
-            self.emit_accessor_trait_sigs_at(&bound_accessors);
+            let setters = self.is_refcell_class(&class_bare);
+            self.emit_accessor_trait_sigs_at(&bound_accessors, setters);
             if has_observer_sigs {
                 self.emit_observer_trait_sigs(&class_bare);
             }
@@ -3976,7 +3995,7 @@ impl RustEmitter {
                 for (name, sig) in &bound_methods {
                     self.emit_kind_delegating_method(&class_bare, name, sig);
                 }
-                self.emit_accessor_impl_methods_at(&bound_accessors);
+                self.emit_accessor_impl_methods_at(&bound_accessors, &class_bare);
                 if has_observer_sigs {
                     self.emit_observer_impl_methods(&class_bare, &class_bare);
                 }
@@ -4389,7 +4408,8 @@ impl RustEmitter {
             self.w.push_str(&clause);
             self.w.push_str(";\n");
         }
-        self.emit_accessor_trait_sigs_at(&accessors);
+        let setters = self.is_refcell_class(class_bare);
+        self.emit_accessor_trait_sigs_at(&accessors, setters);
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
@@ -4447,7 +4467,7 @@ impl RustEmitter {
             }
             self.w.push_str(") }\n");
         }
-        self.emit_accessor_impl_methods_at(&accessors);
+        self.emit_accessor_impl_methods_at(&accessors, class_bare);
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
@@ -4978,7 +4998,12 @@ impl RustEmitter {
                             .property_contract_field(class_decl, method_name, method, &methods)
                             .unwrap_or_default();
                         let write = !method.params.is_empty();
-                        self.w.push_str(if write { "self.0.borrow_mut()" } else { "self.0.borrow()" });
+                        self.w.push_str("self.0");
+                        self.w.push_str(if write {
+                            self.cell_write(&class_decl.name.text)
+                        } else {
+                            self.cell_read(&class_decl.name.text)
+                        });
                         for _ in 0..depth {
                             self.w.push_str(".__parent");
                         }

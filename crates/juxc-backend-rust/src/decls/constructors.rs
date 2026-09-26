@@ -832,7 +832,7 @@ impl RustEmitter {
     /// Both spellings count: the explicit `this.init()` and the bare `init()`
     /// that means the same thing. A `static` method does not - it needs no
     /// receiver, so the inner builder can call it perfectly well.
-    fn ctor_calls_method_on_this(
+    pub(crate) fn ctor_calls_method_on_this(
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
     ) -> bool {

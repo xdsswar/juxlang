@@ -4344,7 +4344,8 @@ impl RustEmitter {
                 self.emit_expr(&tf.object);
                 self.emitting_method_receiver = false;
                 if let Some(d) = depth {
-                    self.w.push_str(".0.borrow()");
+                    self.w.push_str(".0");
+                    self.w.push_str(self.recv_read(&tf.object));
                     for _ in 0..d {
                         self.w.push_str(".__parent");
                     }
@@ -4569,7 +4570,8 @@ impl RustEmitter {
                     }
                     self.w.push_str("; ");
                     self.emit_expr(&tf.object);
-                    self.w.push_str(".0.borrow_mut()");
+                    self.w.push_str(".0");
+                    self.w.push_str(self.recv_write(&tf.object));
                     for _ in 0..depth {
                         self.w.push_str(".__parent");
                     }
@@ -4642,7 +4644,8 @@ impl RustEmitter {
                 // LHS place expression with a MUTABLE borrow.
                 let place_mark = self.w.mark();
                 self.emit_expr(&tf.object);
-                self.w.push_str(".0.borrow_mut()");
+                self.w.push_str(".0");
+                self.w.push_str(self.recv_write(&tf.object));
                 for _ in 0..depth {
                     self.w.push_str(".__parent");
                 }
@@ -4721,10 +4724,11 @@ impl RustEmitter {
                     self.emitting_method_receiver = true;
                     self.emit_expr(&af.object);
                     self.emitting_method_receiver = false;
+                    self.w.push_str(".0");
                     self.w.push_str(if handle {
-                        ".0.borrow()"
+                        self.recv_read(&af.object)
                     } else {
-                        ".0.borrow_mut()"
+                        self.recv_write(&af.object)
                     });
                     for _ in 0..depth {
                         self.w.push_str(".__parent");

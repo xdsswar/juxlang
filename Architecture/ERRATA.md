@@ -3690,6 +3690,41 @@ since E65, and `E0952` (reserved by §R.3.6).
   `E0953` (identity across function boundaries on an Inline class), `E0954`
   (a `weak` target left Inline) and `E0955` (a self-containing class left
   without a refcount), in §CR.7's order. §D.4 lists them.
+- **Tier `Rc`: a class nothing writes has no cell.** §CR.4.1's `mutated`
+  property is computed per class, by fully-qualified name
+  (`rep_select.rs`). A class is `mutated` when any code writes one of its
+  objects after construction: an assignment, compound assignment, `++`/`--`,
+  `out` argument or `&` whose place is one of its fields (through a receiver
+  typed as the class, `this`, or a bare field name in its own members); a
+  write into a value struct held in one of its fields; a call that mutates a
+  field in place (a known container mutator, a user method that writes
+  `this`, a foreign `@MutSelf` method). A store through a receiver the types
+  do not name as a class (an interface, a type parameter, an unrecorded type)
+  counts against every class with a field of that name, and a write reaches
+  the whole `extends` component. A constructor's or initializer's own stores
+  are construction. Some classes keep the cell whatever is written: one with a
+  `ref` or `observer` field or an observable property (attaching an observer
+  writes its list), one implementing an interface with a settable property,
+  one whose constructor runs against the finished object (it calls a method on
+  `this` or hands `this` to a lambda), and, for now, every member of an
+  `extends` hierarchy and every class that crosses a worker boundary (its
+  handle is the atomic `JuxSync`). Every other wrap-eligible class is
+  `pub struct C(Rc<C_Inner>)`: constructed with `Rc::new`, its fields read as
+  `x.0.f` with no guard, identity still `Rc::ptr_eq`. A `weak` field or
+  parameter aimed at it is `Weak<C_Inner>`. The emitters ask one place how to
+  reach a class's fields (`cell_read`, `cell_write` in `backend_fqn.rs`), and
+  a bound-position or interface accessor for such a class has a getter and no
+  setter.
+- **The emitter checks the selector.** Every mutable borrow the backend emits
+  for a class goes through `cell_write`. If the class was given no cell, the
+  request is recorded and the whole lowering runs again with that class's
+  cell restored, so a write the analysis missed costs a second pass, never a
+  program that does not compile. The classes restored this way are on the
+  result (`RustCrate::rep_fallbacks`), and under `JUX_SELFCHECK=1` each is an
+  `E0900` ("the representation selector judged class `C` never written after
+  construction, and the lowering writes it"): on the corpus the analysis alone
+  must be right, and it is. The borrow self-check needs no change for a class
+  without a cell: it tracks cell guards, and such a class takes none.
 
 **Spec status:** §CR.7 carries the new numbers and a note on the old ones;
 §D.4 has the three rows.

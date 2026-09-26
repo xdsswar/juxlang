@@ -120,6 +120,47 @@ pub(crate) fn check_crate(crate_dir: &Path, rs_files: &[PathBuf]) -> Result<(), 
     Err(failure)
 }
 
+/// Report the classes the representation selector had to give their cell back
+/// (ERRATA E1XX-PHASE8). The selector decides from the program text which
+/// classes are never written after construction and drops their cell; when
+/// the emitter nonetheless needs to write one, the backend lowers the program
+/// again with that class's cell restored, so the user's program is right
+/// either way. Under the self-check a fallback is a finding: it means the
+/// selector's analysis missed a kind of write, and the corpus holds it to
+/// finding every one on its own.
+pub(crate) fn check_rep_fallbacks(rep_fallbacks: &[String]) -> Result<(), BuildFailure> {
+    if rep_fallbacks.is_empty() {
+        return Ok(());
+    }
+    let mut failure = BuildFailure {
+        diagnostics: Vec::new(),
+        sources: Vec::new(),
+        detail: String::new(),
+        exit_code: crate::ice::ICE_EXIT_CODE,
+    };
+    for class in rep_fallbacks {
+        let mut d = Diagnostic::error(
+            Code::E0900_BackendEmittedInvalidRust,
+            format!(
+                "internal compiler error: the representation selector judged class `{class}` \
+                 never written after construction, and the lowering writes it"
+            ),
+        );
+        d.notes.push(
+            "the class was given back its interior-mutable cell and the program lowered again, \
+             so it runs correctly; the self-check reports the missed write so the selector \
+             can be fixed (ERRATA E1XX-PHASE8)"
+                .to_string(),
+        );
+        failure.detail.push_str(&format!("representation fallback: {class}\n"));
+        failure.diagnostics.push(d.with_help(format!(
+            "please report it at {}, with the source that triggered it",
+            crate::ice::ISSUES_URL
+        )));
+    }
+    Err(failure)
+}
+
 /// Check emitted `(crate-relative path, contents)` pairs. A file that does not
 /// parse is skipped: rustc will say why, and that is `E0900` already.
 pub(crate) fn check_sources(sources: &[(&str, &str)]) -> Vec<Hit> {
@@ -938,6 +979,24 @@ mod tests {
         assert!(check("let v = self.0.borrow().n + 1; self.0.borrow_mut().n = v;").is_empty());
         let hits = check("let x = self.0.borrow().n + { self.0.borrow_mut().n = 2; 2 };");
         assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    /// A class the selector gave no cell (ERRATA E1XX-PHASE8) is read as
+    /// `x.0.n`, a plain field of the `Rc`'s payload: there is no guard, so a
+    /// mutating call in the same statement conflicts with nothing.
+    #[test]
+    fn a_read_through_a_handle_without_a_cell_takes_no_guard() {
+        assert!(check("println!(\"{}\", self.0.n + self.bump());").is_empty());
+        assert!(check("match self.0.n { 0 => self.bump(), _ => {} }").is_empty());
+    }
+
+    #[test]
+    fn a_representation_fallback_is_an_internal_error() {
+        assert!(check_rep_fallbacks(&[]).is_ok());
+        let failure = check_rep_fallbacks(&["app.Point".to_string()]).expect_err("a fallback is a finding");
+        assert_eq!(failure.exit_code, crate::ice::ICE_EXIT_CODE);
+        assert_eq!(failure.diagnostics.len(), 1);
+        assert!(failure.diagnostics[0].message.contains("`app.Point`"), "{:?}", failure.diagnostics[0].message);
     }
 
     #[test]

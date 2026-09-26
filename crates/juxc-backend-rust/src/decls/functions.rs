@@ -586,9 +586,8 @@ impl RustEmitter {
                 // slot is a `Weak<RefCell<T_Inner>>`, matching the weak-field
                 // storage (E0455 guarantees `T` is a plain class).
                 let cls = param.ty.name.segments.last().map_or("", |s| s.text.as_str());
-                self.w.push_str("std::rc::Weak<crate::JuxCell<");
-                self.w.push_str(cls);
-                self.w.push_str("_Inner>>");
+                let weak = self.weak_handle_type(cls, &format!("{cls}_Inner"));
+                self.w.push_str(&weak);
             } else if param.is_shared_ref {
                 // `ref T` (§M.13) — shared reference to a value object.
                 self.w.push_str("std::rc::Rc<crate::JuxCell<");

@@ -1147,7 +1147,8 @@ impl RustEmitter {
                             .wrapper_field_parent_depth(&wf.object, &wf.field.text)
                             .unwrap_or(0);
                         self.emit_expr(&wf.object);
-                        self.w.push_str(".0.borrow()");
+                        self.w.push_str(".0");
+                        self.w.push_str(self.recv_read(&wf.object));
                         for _ in 0..depth {
                             self.w.push_str(".__parent");
                         }

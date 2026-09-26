@@ -1584,12 +1584,13 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
         }
         "#,
     );
-    // Wrapper shape: inner field struct + `Rc<RefCell<…>>` newtype, owned
-    // `String` field on the inner struct.
+    // Wrapper shape: inner field struct + `Rc` newtype (no cell: nothing
+    // writes a `User` after construction), owned `String` field on the inner
+    // struct.
     assert!(rust.contains("pub struct User_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct User(pub std::rc::Rc<crate::JuxCell<User_Inner>>);"),
-        "Rc<RefCell> newtype: {rust}",
+        rust.contains("pub struct User(pub std::rc::Rc<User_Inner>);"),
+        "plain Rc newtype: {rust}",
     );
     assert!(rust.contains("name: String,"), "field type: {rust}");
     assert!(rust.contains("pub fn new(name: String)"), "param: {rust}");
@@ -1597,20 +1598,20 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
     // `User_Inner { name }`).
     assert!(rust.contains("User_Inner { name }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("name: name"), "no longhand: {rust}");
-    // Value-consuming context — `return this.name;` — reads through a
-    // borrow guard and clones so the field doesn't move out of the cell.
+    // Value-consuming context — `return this.name;` — reads through the
+    // handle and clones so the field doesn't move out of the object.
     assert!(
-        rust.contains("self.0.borrow().name.clone()"),
-        "value-position read should borrow + clone: {rust}",
+        rust.contains("self.0.name.clone()"),
+        "value-position read should clone: {rust}",
     );
-    // Format-arg context — `println!("{}", u.name)` — borrows the field
-    // through the guard, no clone needed.
+    // Format-arg context — `println!("{}", u.name)` — borrows the field,
+    // no clone needed.
     assert!(
-        rust.contains(r#"println!("{}", u.0.borrow().name)"#),
+        rust.contains(r#"println!("{}", u.0.name)"#),
         "format-arg read should borrow without clone: {rust}",
     );
     assert!(
-        !rust.contains("u.0.borrow().name.clone()"),
+        !rust.contains("u.0.name.clone()"),
         "stale clone in format arg: {rust}",
     );
 }
@@ -2120,15 +2121,16 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "#,
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
-    // Uniform wrapper shape for a generic class: an inner `Box_Inner<T>`
-    // field struct behind `Rc<RefCell<…>>`. `T` is only stored by the
-    // declaration, so the headers carry `'static` alone and the `Clone +
+    // Wrapper shape for a generic class: an inner `Box_Inner<T>` field
+    // struct behind the handle, here a plain `Rc` because nothing writes a
+    // `Box` after construction (ERRATA E1XX-PHASE8). `T` is only stored by
+    // the declaration, so the headers carry `'static` alone and the `Clone +
     // Debug` moves to the one member that reads a `T` by value (gap 2,
     // ERRATA E118).
     assert!(rust.contains("pub struct Box_Inner<T: 'static> {"), "inner struct header: {rust}");
     assert!(
-        rust.contains("pub struct Box<T: 'static>(pub std::rc::Rc<crate::JuxCell<Box_Inner<T>>>);"),
-        "Rc<RefCell> newtype: {rust}",
+        rust.contains("pub struct Box<T: 'static>(pub std::rc::Rc<Box_Inner<T>>);"),
+        "plain Rc newtype: {rust}",
     );
     assert!(
         rust.contains("impl<T: 'static> Clone for Box<T> { fn clone(&self) -> Self { Self(self.0.clone()) } }"),
@@ -2146,8 +2148,8 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     // Inner literal uses field shorthand (`Box_Inner { value }`).
     assert!(rust.contains("Box_Inner { value }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("value: value"), "no longhand: {rust}");
-    // Method body reads the generic field through the borrow guard + clones.
-    assert!(rust.contains("self.0.borrow().value.clone()"), "borrow-guarded field read+clone: {rust}");
+    // Method body reads the generic field straight through the `Rc` + clones.
+    assert!(rust.contains("self.0.value.clone()"), "direct field read+clone: {rust}");
 }
 
 /// A generic wrapper class shares mutation through its `Rc<RefCell>`:
@@ -2188,11 +2190,12 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     assert!(rust.contains("borrow_mut()"), "scoped write: {rust}");
 }
 
-/// Uniform lowering: an ALIASED class (a second binding) shares the same
-/// instance through the `Rc<RefCell<C_Inner>>` wrapper — `var q = p` clones
-/// the `Rc` (refcount bump), not the cell, so both names see one instance.
+/// An ALIASED class (a second binding) shares one instance through its `Rc`
+/// handle: `var q = p` clones the `Rc` (refcount bump), so both names see one
+/// object. `Point` is never written after construction, so the selector drops
+/// its cell (ERRATA E1XX-PHASE8): the handle is a plain `Rc<Point_Inner>`.
 #[test]
-fn aliased_class_shares_through_rc_refcell() {
+fn aliased_immutable_class_shares_through_plain_rc() {
     let rust = emit(
         r#"
         public class Point {
@@ -2207,25 +2210,27 @@ fn aliased_class_shares_through_rc_refcell() {
         }
         "#,
     );
-    // Uniform `Rc<RefCell>` newtype.
+    // A plain `Rc` newtype: no cell.
     assert!(
-        rust.contains("pub struct Point(pub std::rc::Rc<crate::JuxCell<Point_Inner>>);"),
-        "expected Rc<RefCell> newtype: {rust}",
+        rust.contains("pub struct Point(pub std::rc::Rc<Point_Inner>);"),
+        "expected plain Rc newtype: {rust}",
     );
-    // Constructor wraps the inner in `Rc::new(RefCell::new(…))`.
+    // Constructor wraps the inner in `Rc::new(…)`.
     assert!(
-        rust.contains("std::rc::Rc::new(crate::JuxCell::new(Self::new_inner"),
-        "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
+        rust.contains("Self(std::rc::Rc::new(Self::new_inner(x)))"),
+        "ctor wraps in Rc::new(…): {rust}",
     );
+    // Fields read straight through the `Rc`, with no borrow.
+    assert!(rust.contains("self.0.x"), "direct field read: {rust}");
+    assert!(!rust.contains("self.0.borrow().x"), "no borrow of a cell: {rust}");
     // Aliasing shares via an `Rc` clone (pointer bump, not deep copy).
     assert!(rust.contains("q = p.clone()"), "alias rebind via Rc clone: {rust}");
 }
 
-/// Uniform lowering: a class that ESCAPES (returned from a function) takes the
-/// same `Rc<RefCell<C_Inner>>` wrapper as every other class — no special
-/// escape-tier `Box` shape.
+/// A class that ESCAPES (returned from a function) and is never written after
+/// construction takes the plain `Rc<C_Inner>` handle (ERRATA E1XX-PHASE8).
 #[test]
-fn escaping_class_lowers_to_rc_refcell() {
+fn escaping_immutable_class_lowers_to_plain_rc() {
     let rust = emit(
         r#"
         public class Token {
@@ -2240,12 +2245,12 @@ fn escaping_class_lowers_to_rc_refcell() {
         "#,
     );
     assert!(
-        rust.contains("pub struct Token(pub std::rc::Rc<crate::JuxCell<Token_Inner>>);"),
-        "expected Rc<RefCell> newtype: {rust}",
+        rust.contains("pub struct Token(pub std::rc::Rc<Token_Inner>);"),
+        "expected plain Rc newtype: {rust}",
     );
     assert!(
-        rust.contains("std::rc::Rc::new(crate::JuxCell::new(Self::new_inner"),
-        "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
+        rust.contains("Self(std::rc::Rc::new(Self::new_inner(id)))"),
+        "ctor wraps in Rc::new(…): {rust}",
     );
 }
 
@@ -2292,11 +2297,12 @@ fn simple_constructor_emits_direct_inner_literal() {
         }
         "#,
     );
-    // Wrapper shape: inner field struct + `Rc<RefCell>` newtype.
+    // Wrapper shape: inner field struct + `Rc` newtype (nothing writes a
+    // `Pair` after construction, so no cell).
     assert!(rust.contains("pub struct Pair_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct Pair(pub std::rc::Rc<crate::JuxCell<Pair_Inner>>);"),
-        "Rc<RefCell> newtype: {rust}",
+        rust.contains("pub struct Pair(pub std::rc::Rc<Pair_Inner>);"),
+        "plain Rc newtype: {rust}",
     );
     // No `__self` builder — the simple-ctor path emits the inner literal
     // directly with field shorthand.
@@ -2305,10 +2311,10 @@ fn simple_constructor_emits_direct_inner_literal() {
         rust.contains("pub fn new(a: isize, b: isize) -> Self {"),
         "public new signature: {rust}",
     );
-    // The public `new` wraps the inner in `Rc::new(RefCell::new(…))`.
+    // The public `new` wraps the inner in `Rc::new(…)`.
     assert!(
-        rust.contains("Self(std::rc::Rc::new(crate::JuxCell::new(Self::new_inner(a, b))))"),
-        "ctor wraps inner in Rc<RefCell>: {rust}",
+        rust.contains("Self(std::rc::Rc::new(Self::new_inner(a, b)))"),
+        "ctor wraps inner in Rc: {rust}",
     );
     // Inner literal with field shorthand.
     assert!(rust.contains("Pair_Inner { a, b }"), "inner literal shorthand: {rust}");
@@ -2983,12 +2989,12 @@ fn string_returning_method_returns_owned_with_field_clone() {
         rust.contains("pub fn getName(&self) -> String {"),
         "return type should be owned String: {rust}",
     );
-    // Uniform Rc<RefCell> lowering: every class is the wrapper shape, so
-    // `this.name` reads through a statement-scoped `self.0.borrow()` and
-    // auto-clones the String so the value outlives the borrow guard.
+    // `User` is never written after construction, so its handle is a plain
+    // `Rc` and `this.name` reads straight through it, cloning the String so
+    // the value outlives `&self`.
     assert!(
-        rust.contains("self.0.borrow().name.clone()"),
-        "borrow-guarded field clone missing: {rust}",
+        rust.contains("self.0.name.clone()"),
+        "direct field clone missing: {rust}",
     );
 }
 
@@ -6721,4 +6727,54 @@ fn observable_property_drop_and_array_keep_the_baseline() {
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Obs<T> {"), "Obs: {rust}");
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Guard<T> {"), "Guard: {rust}");
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Shelf<T> {"), "Shelf: {rust}");
+}
+
+// ----------------------------------------------------------------------
+// Representation selector (ERRATA E1XX-PHASE8)
+// ----------------------------------------------------------------------
+
+/// A write the selector missed costs a second lowering pass with the class's
+/// cell restored, and the class is reported on the result.
+#[test]
+fn a_missed_write_is_lowered_again_with_the_cell_restored() {
+    let mut passes = 0;
+    let produced = lower_to_rep_fixpoint(|demanded| {
+        passes += 1;
+        let missed: HashSet<String> = if demanded.contains("app.C") {
+            HashSet::new()
+        } else {
+            std::iter::once("app.C".to_string()).collect()
+        };
+        (RustCrate { cargo_toml: String::new(), sources: Vec::new(), rep_fallbacks: Vec::new() }, missed)
+    });
+    assert_eq!(passes, 2);
+    assert_eq!(produced.rep_fallbacks, vec!["app.C".to_string()]);
+}
+
+/// The selector's `mutated` property over the shapes it must see.
+#[test]
+fn the_selector_keeps_the_cell_exactly_for_written_classes() {
+    let rust = emit(
+        r#"
+        class Frozen { public int n; public Frozen(int n) { this.n = n; } }
+        class Bumped { private int n = 0; public void bump() { n += 1; } }
+        class Stored { public Frozen f = new Frozen(1); }
+        class Holder { public int[] xs = new int[]{1}; }
+        public void main() {
+            var s = new Stored();
+            s.f = new Frozen(2);
+            var h = new Holder();
+            h.xs[0] = 5;
+            var b = new Bumped();
+            b.bump();
+            print(s.f.n + h.xs[0]);
+        }
+        "#,
+    );
+    assert!(rust.contains("struct Frozen(std::rc::Rc<Frozen_Inner>);"), "{rust}");
+    assert!(rust.contains("struct Bumped(std::rc::Rc<crate::JuxCell<Bumped_Inner>>);"), "{rust}");
+    assert!(rust.contains("struct Stored(std::rc::Rc<crate::JuxCell<Stored_Inner>>);"), "{rust}");
+    // Writing an element of an array field writes the array's own cell,
+    // which is conservative here: the owner keeps its cell too.
+    assert!(rust.contains("struct Holder(std::rc::Rc<crate::JuxCell<Holder_Inner>>);"), "{rust}");
 }
