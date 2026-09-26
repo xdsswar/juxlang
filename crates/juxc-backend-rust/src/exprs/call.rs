@@ -851,6 +851,31 @@ impl RustEmitter {
         self.w.push('}');
     }
 
+    /// A fully-qualified static call, `rust.std.File.open(p)`, re-shaped so its
+    /// receiver is the class PATH it names rather than a field chain, or `None`
+    /// when the callee is not such a chain.
+    ///
+    /// Every question asked of a call -- does it return a foreign `Result`, a
+    /// bare collection, a borrowed slice -- looks the receiver up as a class,
+    /// and a field chain `((rust).std).File` names no class. Asking them of the
+    /// re-shaped call is what makes the qualified spelling behave exactly like
+    /// the imported `File.open(p)` (gap 6).
+    pub(crate) fn reshape_qualified_static_call(&self, call: &CallExpr) -> Option<CallExpr> {
+        let Expr::Field(f) = &*call.callee else {
+            return None;
+        };
+        if matches!(&*f.object, Expr::Path(_)) {
+            return None;
+        }
+        let qn = self.field_chain_class_path(&f.object)?;
+        let mut callee = f.clone();
+        callee.object = Box::new(Expr::Path(qn));
+        Some(CallExpr {
+            callee: Box::new(Expr::Field(callee)),
+            ..call.clone()
+        })
+    }
+
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
         // §O.2.7: `x.operator hash()` / `x.operator string()`.
         if juxc_tycheck::infer::named_operator_call_type(call).is_some() {
@@ -911,18 +936,8 @@ impl RustEmitter {
         // A fully-qualified static call, `demo.pkg.Crate.make()`, arrives as a
         // field chain. Re-shape the receiver into the class path it names, so
         // every static-call path below sees what it sees for `Crate.make()`.
-        if let Expr::Field(f) = &*call.callee {
-            if !matches!(&*f.object, Expr::Path(_)) {
-                if let Some(qn) = self.field_chain_class_path(&f.object) {
-                    let mut callee = f.clone();
-                    callee.object = Box::new(Expr::Path(qn));
-                    let reshaped = CallExpr {
-                        callee: Box::new(Expr::Field(callee)),
-                        ..call.clone()
-                    };
-                    return self.emit_call(&reshaped);
-                }
-            }
+        if let Some(reshaped) = self.reshape_qualified_static_call(call) {
+            return self.emit_call(&reshaped);
         }
         // `assertThrows<E>(f)` (§TS.3): the checker resolved the call and
         // recorded `E`; the dispatch it needs is written out here.

@@ -1,0 +1,33 @@
+// A library static called by its fully-qualified name behaves exactly like the
+// same call through an import (gap 6). `rust.std.File.open(p)` is a foreign
+// `Result`, so the call hands back the `File` or throws, and the slot receiving
+// it -- here a nullable one -- sees the `File`, not the `Result`.
+
+import jux.std.io.File as Files;
+
+/** Where the probe file goes. Written first, so the example needs no setup. */
+public const String PATH = "qualified_static_calls.tmp";
+
+public void main() {
+    Files.writeText(PATH, "hello");
+
+    rust.std.File? f = rust.std.File.open(PATH);
+    print($"opened: ${f != null}");
+
+    rust.std.File g = rust.std.File.open(PATH);
+    print($"opened again: ${g.metadata().len()} bytes");
+
+    // A missing file throws, as the imported spelling does.
+    try {
+        rust.std.File h = rust.std.File.open("no/such/qualified_static_calls.tmp");
+        print("never");
+    } catch (rust.std.Error e) {
+        print($"missing: ${e.kind()}");
+    }
+
+    // A qualified static with a fallible `String` result, same rule.
+    String s = rust.std.String.from_utf8(Files.readText(PATH).into_bytes());
+    print($"text: ${s}");
+
+    Files.delete(PATH);
+}
