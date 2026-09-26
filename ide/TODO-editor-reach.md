@@ -1,6 +1,9 @@
 # Editor reach — VSCode, Zed, and one generated grammar
 
-**Status:** planned, not started. Deferred deliberately: language correctness
+**Status:** §2 has a minimal first cut in `editors/vscode/` (grammar copied
+at compile time, `juxc-lsp` over stdio, unpublished), and a drift test stands
+in for §1's generator (`JuxTextMateGrammarDriftTest` in the IntelliJ plugin).
+The rest is planned, not started. Deferred deliberately: language correctness
 comes first, and the compiler is where the bugs are. This file exists so the
 design is not re-derived when it does come up.
 

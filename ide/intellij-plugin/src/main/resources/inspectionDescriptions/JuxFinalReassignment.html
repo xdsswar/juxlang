@@ -1,0 +1,15 @@
+<html>
+<body>
+Reports a store into a <code>final</code> or <code>const</code> binding (E0464).
+<!-- tooltip end -->
+<p>A <code>final</code> or <code>const</code> parameter, local, <code>for</code> init
+variable or for-each binder (<code>for (final String? note : notes)</code>) is immutable.
+A plain <code>x = e</code>, a compound <code>x += e</code> and <code>x++</code> /
+<code>--x</code> on it are all errors, exactly as the compiler reports them.</p>
+<p>A <code>final ref</code> or <code>weak</code> binding is not reported: there
+<code>x = v</code> stores through the shared cell rather than rebinding the name.
+A plain binding of the same name in an inner scope shadows the <code>final</code> one and
+may be assigned freely.</p>
+<p>Quick-fix: drop the <code>final</code> / <code>const</code> keyword from the declaration.</p>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+out/
+# Copied from ../jux.tmLanguage.json and ../../LICENSE by `npm run compile`;
+# never committed, so the extension cannot drift from the shared grammar.
+syntaxes/
+LICENSE
+*.vsix
