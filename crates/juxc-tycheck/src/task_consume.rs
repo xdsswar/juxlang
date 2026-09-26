@@ -99,11 +99,7 @@ impl Walk<'_> {
     fn stmt(&mut self, s: &Stmt) {
         match s {
             Stmt::Expr(e) | Stmt::Yield(e, _) | Stmt::Throw(e, _) => self.expr(e),
-            Stmt::Return(e, _) => {
-                if let Some(e) = e {
-                    self.expr(e);
-                }
-            }
+            Stmt::Return(Some(e), _) => self.expr(e),
             Stmt::VarDecl(v) => {
                 if let Some(init) = &v.init {
                     self.expr(init);

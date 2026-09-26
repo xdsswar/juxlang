@@ -299,7 +299,7 @@ impl RustEmitter {
             }
             // `ref` field (§M.13): the slot is a SHARED reference cell.
             if field.is_ref {
-                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.w.push_str("std::rc::Rc<crate::JuxCell<");
                 self.emit_field_type_as_rust(&fty);
                 self.w.push_str(">>,\n");
                 continue;
@@ -820,10 +820,10 @@ impl RustEmitter {
     /// #[derive(Clone, Debug)]
     /// pub struct C_Inner { pub v: isize }
     /// #[derive(Clone, Debug)]
-    /// pub struct C(std::rc::Rc<std::cell::RefCell<C_Inner>>);
+    /// pub struct C(std::rc::Rc<crate::JuxCell<C_Inner>>);
     /// impl C {
     ///     pub fn new(v: isize) -> C {
-    ///         C(std::rc::Rc::new(std::cell::RefCell::new(C_Inner { v })))
+    ///         C(std::rc::Rc::new(crate::JuxCell::new(C_Inner { v })))
     ///     }
     ///     pub fn set(&self, v: isize) { self.0.borrow_mut().v = v; }
     /// }
@@ -1011,12 +1011,12 @@ impl RustEmitter {
                 // `Target_Inner`.
                 let target =
                     fty.name.segments.last().map_or("", |s| s.text.as_str());
-                self.w.push_str("std::rc::Weak<std::cell::RefCell<");
+                self.w.push_str("std::rc::Weak<crate::JuxCell<");
                 self.w.push_str(target);
                 self.w.push_str("_Inner>>");
             } else if field.is_ref {
                 // `ref` field (§M.13): a SHARED reference cell.
-                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.w.push_str("std::rc::Rc<crate::JuxCell<");
                 self.emit_field_type_as_rust(&fty);
                 self.w.push_str(">>");
             } else {
@@ -1085,7 +1085,7 @@ impl RustEmitter {
         } else if is_box {
             ("std::boxed::Box<", ">);\n")
         } else if refcell {
-            ("std::rc::Rc<std::cell::RefCell<", ">>);\n")
+            ("std::rc::Rc<crate::JuxCell<", ">>);\n")
         } else {
             ("std::rc::Rc<", ">);\n")
         };
@@ -1305,7 +1305,7 @@ impl RustEmitter {
                         "(crate::JuxSync::new(v.0.borrow().__parent.clone())) } }
 "
                     } else {
-                        "(std::rc::Rc::new(std::cell::RefCell::new(v.0.borrow().__parent.clone()))) } }
+                        "(std::rc::Rc::new(crate::JuxCell::new(v.0.borrow().__parent.clone()))) } }
 "
                     });
                     self.w.newline();
@@ -5439,9 +5439,9 @@ impl RustEmitter {
             self.w.push_str(class_name);
             self.w.push('_');
             self.w.push_str(&to_rust_ident(&field.name.text));
-            self.w.push_str(": std::rc::Rc<std::cell::RefCell<");
+            self.w.push_str(": std::rc::Rc<crate::JuxCell<");
             self.emit_field_type_as_rust(&ty);
-            self.w.push_str(">> = std::rc::Rc::new(std::cell::RefCell::new(");
+            self.w.push_str(">> = std::rc::Rc::new(crate::JuxCell::new(");
             if let Some(init) = &field.default {
                 self.emit_expr(init);
             } else {
@@ -5969,7 +5969,7 @@ impl RustEmitter {
             }
             if param.is_shared_ref {
                 // `ref T` (§M.13) — shared reference to a value object.
-                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.w.push_str("std::rc::Rc<crate::JuxCell<");
                 self.emit_value_type_as_rust(&lifted_param_tys[i]);
                 self.w.push_str(">>");
             } else {

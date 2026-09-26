@@ -181,6 +181,63 @@ impl SourceMap {
     }
 }
 
+/// The line of the emitted prelude that holds the marker table.
+const LINE_TABLE_DECL: &str = "pub static __JUX_LINES: JuxLines = ";
+
+/// Fill in the emitted prelude's `__JUX_LINES` table from the `// JUX:`
+/// markers of every emitted file, so a run-time borrow conflict can name the
+/// `.jux` line it happened on (ERRATA E1XX-PHASE1, gap 28).
+///
+/// Run AFTER rustfmt, on the files as they sit on disk: the table maps the
+/// line numbers rustc will compile, which is what `Location::caller()` reports
+/// at run time. The table replaces the one line that declares it, however
+/// long it gets, so no other line of the file moves. It is recomputed on every
+/// build and written only when it changed: the incremental emit leaves an
+/// unchanged prelude file alone while other files' lines shift under it.
+pub(crate) fn write_line_table(crate_dir: &Path, rs_files: &[PathBuf]) {
+    let mut table: Vec<(String, Vec<MarkerEntry>)> = Vec::new();
+    let mut holder: Option<(PathBuf, String)> = None;
+    for full in rs_files {
+        let Ok(src) = std::fs::read_to_string(full) else { continue };
+        let map = MarkerMap::from_emitted_source(&src);
+        if !map.is_empty() {
+            let key = full
+                .strip_prefix(crate_dir)
+                .map(|rel| normalize_path(&rel.to_string_lossy()))
+                .unwrap_or_else(|_| normalize_path(&full.to_string_lossy()));
+            table.push((key, map.entries));
+        }
+        if holder.is_none() && src.lines().any(|l| l.trim_start().starts_with(LINE_TABLE_DECL)) {
+            holder = Some((full.clone(), src));
+        }
+    }
+    let Some((path, src)) = holder else { return };
+    table.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut line = String::from(LINE_TABLE_DECL);
+    line.push_str("&[");
+    for (file, entries) in &table {
+        line.push_str(&format!("({file:?}, &["));
+        for e in entries {
+            line.push_str(&format!("({}, {:?}, {}, {}),", e.emitted_line, e.jux_path, e.jux_line, e.jux_col));
+        }
+        line.push_str("]),");
+    }
+    line.push_str("];");
+    let mut out = String::with_capacity(src.len() + line.len());
+    for piece in src.split_inclusive('\n') {
+        let body = piece.trim_end_matches(['\r', '\n']);
+        if body.trim_start().starts_with(LINE_TABLE_DECL) {
+            out.push_str(&line);
+            out.push_str(&piece[body.len()..]);
+        } else {
+            out.push_str(piece);
+        }
+    }
+    if out != src {
+        let _ = std::fs::write(&path, out);
+    }
+}
+
 /// Rewrite rustc's stderr so file-anchor lines (`--> src/main.rs:N:M`)
 /// point at the original `.jux` source location instead of the
 /// emitted Rust. The snippet lines below the arrow stay as-is — they
@@ -391,6 +448,31 @@ mod tests {
         let rewritten = rewrite_rustc_output(stderr, &map);
         assert!(rewritten.contains("--> app.jux:7:5"), "got: {rewritten}");
         assert!(!rewritten.contains("lib.jux"), "wrong file: {rewritten}");
+    }
+
+    /// The marker table is written into its one declaring line, so no line of
+    /// the file moves, and a second pass over an unchanged crate is a no-op.
+    #[test]
+    fn the_line_table_fills_its_own_line_and_moves_nothing() {
+        let dir = std::env::temp_dir().join(format!("jux-line-table-{}", std::process::id()));
+        let src_dir = dir.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let main = src_dir.join("main.rs");
+        let other = src_dir.join("app.rs");
+        std::fs::write(&main, "pub static __JUX_LINES: JuxLines = &[/*jux-lines*/];\nfn main() {\n// JUX:m.jux:2:5\n    go();\n}\n").unwrap();
+        std::fs::write(&other, "fn go() {\n    // JUX:C:\\p\\a.jux:7:9\n    x();\n}\n").unwrap();
+        let files = vec![main.clone(), other.clone()];
+        write_line_table(&dir, &files);
+        let text = std::fs::read_to_string(&main).unwrap();
+        assert_eq!(text.lines().count(), 5, "{text}");
+        let first = text.lines().next().unwrap();
+        assert_eq!(
+            first,
+            r#"pub static __JUX_LINES: JuxLines = &[("src/app.rs", &[(2, "C:\\p\\a.jux", 7, 9),]),("src/main.rs", &[(3, "m.jux", 2, 5),]),];"#
+        );
+        write_line_table(&dir, &files);
+        assert_eq!(std::fs::read_to_string(&main).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `from_sources` scans in-memory text the way `from_disk` scans files, and

@@ -982,6 +982,9 @@ pub fn write_crate_with_manifest(
     // purely a readability upgrade. We swallow the error and continue
     // so users without rustfmt on `PATH` aren't blocked.
     run_rustfmt(&written_rs);
+    // Then the marker table a run-time borrow conflict reads its `.jux` line
+    // from, against the formatted line numbers.
+    source_map::write_line_table(crate_dir, &written_rs);
     Ok(written_rs)
 }
 
@@ -1272,17 +1275,20 @@ pub fn build_emitted_crate(
 
     run_rustfmt(&written_rs);
 
-    // Run `cargo build`. A failure maps back to `.jux` sites via the `// JUX:`
-    // markers in EVERY emitted `.rs`: the full `keep` set, not just the files
-    // written this run. The incremental cache skips rewriting unchanged files,
-    // but their on-disk (formatted) copy is still what rustc compiled and may
-    // carry the failing span.
-    let (profile_args, profile_dir) = cargo_profile_args(release);
+    // Every emitted `.rs`, the full `keep` set rather than just the files
+    // written this run: the incremental cache skips rewriting unchanged files,
+    // but their on-disk (formatted) copy is still what rustc compiles. The
+    // marker table a run-time borrow conflict reads is built from all of them,
+    // and so is the map a build failure is traced back through.
     let all_rs: Vec<PathBuf> = keep
         .iter()
         .filter(|r| r.ends_with(".rs"))
         .map(|r| crate_dir.join(r))
         .collect();
+    source_map::write_line_table(crate_dir, &all_rs);
+
+    // Run `cargo build`.
+    let (profile_args, profile_dir) = cargo_profile_args(release);
     run_cargo_build(crate_dir, &profile_args, &all_rs)?;
 
     // Compute the produced-artifact path (cross targets add their

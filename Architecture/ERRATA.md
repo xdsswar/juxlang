@@ -2861,6 +2861,113 @@ string form is, and this entry only makes `Debug` produce it.
 
 ---
 
+## E1XX-PHASE1. Jux never prints raw Rust
+
+**Conflict.** E23 makes every rustc rejection of the emitted crate a compiler
+bug, and §D.1 promises that every failure a user sees is a coded diagnostic.
+Five places broke both promises, all after the front end had accepted the
+program:
+
+- **rustc's own errors reached the user verbatim** (gap 27). A backend bug
+  surfaced as `error[E0502]: cannot borrow ... as mutable`, rustc's snippet of
+  generated Rust, and only the `-->` arrow rewritten to the `.jux` line. It was
+  not a `Diagnostic`, so `--diagnostic-format json` never saw it, and it exited
+  1, where §D and `ice.rs` reserve 101 for "the compiler broke".
+- **Linking and target selection leaked cargo** (gap 15). An unlinkable
+  `@extern(lib = "c")` printed the whole `link.exe` command line; `--target`
+  for a triple that was not installed printed rustc's `E0463` once per crate in
+  the build; and an `[ffi.*]` entry with `linkage = "framework"` that no
+  `@extern` used still went into the build script and failed every non-Apple
+  build.
+- **A missed borrow hoist died with Rust's panic** (gap 28): `thread 'main'
+  panicked at src\main.rs:L:C: already borrowed: BorrowMutError`, naming a
+  line of generated Rust and no Jux type.
+- **A task used twice leaked `E0382`** (gap 8). §18.1.4 calls `Task<T>` a
+  refcounted handle, but a task yields its result once: `await t`,
+  `t.blockingGet()` and `Task.all`/`any`/`race`/`allSettled` each take it, and
+  `Task.any(a, b)` followed by `Task.allSettled(a, b)` was rustc's "use of
+  moved value". Alongside it, a failed task's `Result` printed
+  `Err(Exception@0x6318..)`: an exception had no string form, so the §O.4.1
+  identity form stood in for its message.
+- **Diagnostics had nowhere to point back** (gap 17). §D.1.3 and §D.2.1 specify
+  secondary labels ("first declared here") and §D.2.3 a `code_action`; the
+  schema and both renderers had them, and no diagnostic produced either.
+
+**Resolution.** Each failure becomes a diagnostic, rendered like every other.
+
+- **`E0900`** (the catalog's "backend cannot lower construct", now raised).
+  cargo runs with `--message-format=json`, and every rustc error in the
+  emitted crate becomes one `E0900` at the `.jux` line its `// JUX:` marker
+  names. The message is Jux-worded by rustc code: `E0382`/`E0505` "value used
+  after it was moved", `E0499`/`E0502` "object borrowed twice",
+  `E0597`/`E0716` "temporary dropped while in use", anything else "the Rust
+  generated for this code does not compile". Notes carry the rustc code and
+  message, and the ICE's "this is a bug in the Jux compiler, not in your
+  program" (citing E23 for the borrow family); the help line is the issues URL.
+  The exit status is 101, the ICE's. rustc's full report is shown under a new
+  `--verbose` flag on `jux` and `juxc`. A cargo failure with no compiler error
+  in it (a registry out of reach) is not a compiler bug and still passes
+  cargo's text through.
+- **`E0904`**: `--target` is checked before cargo runs, with `rustc --print
+  target-libdir --target <triple>`. A triple rustc does not know, or one whose
+  standard library is missing, is a single diagnostic with the `rustup target
+  add <triple>` hint. rustc's `E0463` for `std` maps to the same code in case
+  the check is ever bypassed.
+- **`E0906`**: a failed link names the library (`could not link library
+  `nosuchlib``) and quotes the one line of the linker's output that says why
+  (`LNK1181`, `cannot find -lfoo`, `library not found for -lfoo`). The command
+  line stays behind `--verbose`. A missing library is the environment's fault,
+  not the compiler's, so the status is 1.
+- **`E0908`**, until now reserved for dynamic linkage in the `core` profile,
+  covers the other linkage a target cannot provide: `linkage = "framework"` on
+  a target that is not Apple's. **`W0906`**: an `[ffi.*]` entry no `@extern`
+  block names is left out of the build script, with a warning, rather than
+  linked for nothing.
+- **The borrow conflict names Jux.** A class handle is now
+  `Rc<crate::JuxCell<C_Inner>>` rather than `Rc<RefCell<C_Inner>>`, and so is
+  every `ref` cell (§M.13); `JuxCell` is the newtype the collections already
+  used. Its inherent `#[track_caller]` `borrow` and `borrow_mut` take
+  precedence over the `Deref` to `RefCell`, so the emitted `.0.borrow_mut()`
+  text is unchanged, and on a conflict they panic with
+  `internal error: object of type Box was already in use at app.jux:24:9.
+  This is a bug in the Jux compiler (ERRATA E23)`. The `.jux` line comes from a
+  table the driver writes into the prelude once rustfmt has run: the `// JUX:`
+  markers of every emitted file, keyed by the formatted line numbers
+  `Location::caller()` reports, written into the one line that declares the
+  table so no other line moves. A crate built without the driver keeps the
+  empty table and names the Rust line instead. `E0900` still covers a conflict
+  rustc can see; this one it cannot, which is why phase 7 of the gap plan adds
+  a self-check (gap 29).
+- **`E0707`**: a use of a task local after something consumed it, with a label
+  on the consuming site. The check follows the body in order, the way rustc's
+  move check does: a task consumed on either branch is consumed after the
+  branch, `t = spawn(...)` re-arms `t`, a declaration of the same name shadows
+  it, and a lambda that awaits a task consumes it where the lambda is written.
+  It does not follow a loop's back edge; rustc still catches a task consumed on
+  every turn of a loop. `Task<T>` stays a refcounted handle in the sense that
+  matters for sharing a *result*: keep the value the first `await` gives.
+- **An exception's string form is its message.** `Throwable` declares
+  `operator string` as `getMessage()`, and an exception class inherits it
+  (§O.2.9, now honoured by the inline class shape exceptions use as well as by
+  the shared handle), so `print(e)` prints `boom` and a failed task's settlement
+  prints `Err(boom)`.
+- **Labels and fixes have producers.** "First declared here" labels on `E0400`
+  (top level, annotations, `drop` blocks, overloads), `E0401`, `E0402`,
+  `E0403`, `E0303`, `E0304` and `E0951`; "declared `final` here" on `E0420`,
+  `E0421`, `E0464` and `E0465`. The labels show in the `human`, `compact` and
+  `json` formats; the one-line `line` format, which the UI tests pin, has no
+  room for them and is unchanged. `Diagnostic` gains `code_action` (§D.2.3),
+  rendered in JSON and carried through the language server's `data` slot to a
+  quick fix. The first two: removing the `final`/`const` an `E0464`/`E0465`
+  names (the parser now records the modifier's span), and replacing a mistyped
+  import with the path its "did you mean" suggests.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 carries `E0707`, `E0900`,
+`E0904`, `E0906`, `E0908` and `W0906`, and §D.3's note on the build's band names
+them. `JUX-ASYNC-ADDENDUM-v2.md` §18.1.4 says a task yields its result once.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

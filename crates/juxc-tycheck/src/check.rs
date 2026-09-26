@@ -2535,7 +2535,7 @@ impl<'a> Checker<'a> {
         self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
         self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&fn_decl.params, body);
-        crate::task_consume::check_body(body, &self.expr_types, &mut self.diagnostics);
+        crate::task_consume::check_body(body, &self.expr_types, self.diagnostics);
         self.check_missing_return(
             &fn_decl.return_type,
             body,
@@ -3529,7 +3529,7 @@ impl<'a> Checker<'a> {
         self.check_out_params_assigned(&method.params, body, &method.name.text);
         self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&method.params, body);
-        crate::task_consume::check_body(body, &self.expr_types, &mut self.diagnostics);
+        crate::task_consume::check_body(body, &self.expr_types, self.diagnostics);
         self.check_missing_return(
             &method.return_type,
             body,
