@@ -71,7 +71,8 @@ public void main() {
     var colors = new String[]{"red", "green"};
     var warm = new Palette("warm", colors);
     colors[0] = "orange";
-    print(warm.describe());
+    var shown = warm;
+    print(shown.describe());
 
     // A mutable object keeps its cell, and a write through one alias is seen
     // through the other.

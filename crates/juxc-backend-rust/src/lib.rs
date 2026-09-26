@@ -305,11 +305,25 @@ fn lower_workspace_pass(
     // Phase B (§CR.3.3): only wrap classes that are BOTH wrap-eligible
     // AND provably aliased — non-aliased eligible classes demote to the
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
-    e.class_reps = compute_class_reps(units, &e.expr_types, symbols, 0, &e.extern_mut_methods, demanded);
-    // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
-    // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
-    // that the `.0.borrow()` / `RefCell::new` sites gate on.
-    e.wrapper_classes = e.class_reps.keys().cloned().collect();
+    e.class_reps = compute_class_reps(
+        units,
+        &e.expr_types,
+        symbols,
+        0,
+        &e.extern_mut_methods,
+        demanded,
+        &|cd| e.inner_is_clone(cd),
+    );
+    // `wrapper_classes` = every newtype-handle class (`Box`, bare `Rc` OR
+    // `Rc<RefCell>`) — the `.0` newtype shape. `refcell_classes` is the
+    // interior-mutable subset that the `.0.borrow()` / `RefCell::new` sites
+    // gate on. An `Inline` class is a plain struct and in none of them.
+    e.wrapper_classes = e
+        .class_reps
+        .iter()
+        .filter(|(_, r)| **r != ClassRep::Inline)
+        .map(|(n, _)| n.clone())
+        .collect();
     e.refcell_classes = e
         .class_reps
         .iter()
@@ -506,11 +520,25 @@ fn lower_workspace_test_pass(
     e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
-    e.class_reps = compute_class_reps(units, &e.expr_types, symbols, 0, &e.extern_mut_methods, demanded);
-    // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
-    // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
-    // that the `.0.borrow()` / `RefCell::new` sites gate on.
-    e.wrapper_classes = e.class_reps.keys().cloned().collect();
+    e.class_reps = compute_class_reps(
+        units,
+        &e.expr_types,
+        symbols,
+        0,
+        &e.extern_mut_methods,
+        demanded,
+        &|cd| e.inner_is_clone(cd),
+    );
+    // `wrapper_classes` = every newtype-handle class (`Box`, bare `Rc` OR
+    // `Rc<RefCell>`) — the `.0` newtype shape. `refcell_classes` is the
+    // interior-mutable subset that the `.0.borrow()` / `RefCell::new` sites
+    // gate on. An `Inline` class is a plain struct and in none of them.
+    e.wrapper_classes = e
+        .class_reps
+        .iter()
+        .filter(|(_, r)| **r != ClassRep::Inline)
+        .map(|(n, _)| n.clone())
+        .collect();
     e.refcell_classes = e
         .class_reps
         .iter()
@@ -2605,12 +2633,9 @@ pub(crate) fn compute_wrapped_set(
 /// struct — semantically identical to [`ClassRep::Inline`]; the map only lists
 /// wrap-*eligible* classes, so the emitters treat "absent" as Inline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-// Under the uniform-`Rc<RefCell>` lowering, `compute_class_reps` only ever
-// constructs `RcRefCell`; `Inline`/`Box`/`Rc` are no longer produced. They (and
-// the aliasing/escape/mutation analysis that selects between them) are retained
-// deliberately: a future "optimizations as a verified pass" effort re-introduces
-// the tighter tiers on top of the borrow-safe baseline. `#[allow(dead_code)]`
-// keeps that infrastructure without warning rather than deleting and rebuilding it.
+// `ArcMutex` is carried by `sync_classes` rather than constructed here: a
+// worker-shared class is `RcRefCell` in this map and takes the atomic handle
+// from that set.
 #[allow(dead_code)]
 pub(crate) enum ClassRep {
     /// Plain owned struct — never escapes, never aliased. Zero indirection.
@@ -2661,8 +2686,18 @@ impl ClassRep {
 ///   once built, so they are shared through the refcount alone: no borrow
 ///   flag, no guard, and nothing that can be "already in use".
 ///
+/// - **`Inline`** (a plain struct, §CR.2.1) and **`Box`** (`Box<C_Inner>`,
+///   §CR.2.2): the class is CONTAINED ([`rep_select::compute_contained_classes`]):
+///   each of its objects is only ever reached through the one local it was
+///   made into, and nothing writes it after construction, so a copy of it
+///   cannot be told from it. `Inline` when no function returns one; `Box`
+///   when one is returned (it moves into the caller's local). Either needs an
+///   inner struct that can be copied (`inner_clone`), since the lowering
+///   copies where it would have shared a handle.
+///
 /// A class in an `extends` hierarchy keeps the cell for now; §CR.3.5's
 /// roll-up then raises every member of a component to its most general rep.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_class_reps(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
@@ -2670,6 +2705,7 @@ pub(crate) fn compute_class_reps(
     unit_offset: usize,
     extern_mut_methods: &HashSet<String>,
     demanded: &HashSet<String>,
+    inner_clone: &dyn Fn(&juxc_ast::ClassDecl) -> bool,
 ) -> HashMap<String, ClassRep> {
     // Wrap-eligibility gate: classes excluded here (intrinsic / exception …)
     // stay on their plain-struct path and never appear in the rep map.
@@ -2678,12 +2714,49 @@ pub(crate) fn compute_class_reps(
     let worker_shared = worker::compute_worker_shared_class_fqns(units, expr_types, symbols);
     let adjacency = fqn_extends_adjacency(units, symbols, unit_offset);
     let in_hierarchy = |n: &String| adjacency.get(n).is_some_and(|v| !v.is_empty());
+    let contained = rep_select::compute_contained_classes(units, expr_types);
+    // The declarations of the contained classes, for the checks only a
+    // declaration answers.
+    let mut contained_decls: HashMap<String, &juxc_ast::ClassDecl> = HashMap::new();
+    for unit in units.iter().filter(|u| !u.is_external) {
+        let pkg: String = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let fqn = if pkg.is_empty() { cd.name.text.clone() } else { format!("{pkg}.{}", cd.name.text) };
+                if contained.contains_key(&fqn) {
+                    contained_decls.insert(fqn, cd);
+                }
+            }
+        }
+    }
 
     let mut reps: HashMap<String, ClassRep> = HashMap::new();
     for n in &eligible {
         let needs_cell =
             cells.contains(n) || demanded.contains(n) || worker_shared.contains(n) || in_hierarchy(n);
-        reps.insert(n.clone(), if needs_cell { ClassRep::RcRefCell } else { ClassRep::Rc });
+        let mut rep = if needs_cell { ClassRep::RcRefCell } else { ClassRep::Rc };
+        if let (Some(how), Some(cd)) = (contained.get(n), contained_decls.get(n)) {
+            // A constructor that runs against the finished object needs a
+            // handle to run against.
+            let builds_in_place = !cd
+                .constructors
+                .iter()
+                .any(|c| crate::RustEmitter::ctor_calls_method_on_this(cd, c));
+            let value_ok = !worker_shared.contains(n) && !demanded.contains(n) && builds_in_place && inner_clone(cd);
+            // Only an object nothing writes: a copy of one that is written
+            // could be told apart from it wherever the lowering copies.
+            if value_ok && !needs_cell {
+                rep = match how {
+                    rep_select::Containment::Local => ClassRep::Inline,
+                    rep_select::Containment::Returned => ClassRep::Box,
+                };
+            }
+        }
+        reps.insert(n.clone(), rep);
     }
 
     // §CR.3.5 inheritance roll-up: a connected `extends` component takes the
@@ -5892,9 +5965,12 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                 self.current_unit_idx.unwrap_or(0),
                 &self.extern_mut_methods,
                 &self.rep_demanded,
+                &|cd| self.inner_is_clone(cd),
             );
             for (n, rep) in reps {
-                self.wrapper_classes.insert(n.clone());
+                if rep != ClassRep::Inline {
+                    self.wrapper_classes.insert(n.clone());
+                }
                 if rep == ClassRep::RcRefCell {
                     self.refcell_classes.insert(n.clone());
                 }

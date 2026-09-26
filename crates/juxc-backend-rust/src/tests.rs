@@ -1581,6 +1581,8 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
         public void main() {
             var u = new User("Ada");
             print(u.name);
+            var shared = u;
+            print(shared.label());
         }
         "#,
     );
@@ -2227,10 +2229,11 @@ fn aliased_immutable_class_shares_through_plain_rc() {
     assert!(rust.contains("q = p.clone()"), "alias rebind via Rc clone: {rust}");
 }
 
-/// A class that ESCAPES (returned from a function) and is never written after
-/// construction takes the plain `Rc<C_Inner>` handle (ERRATA E1XX-PHASE8).
+/// A class that ESCAPES (returned from a function) but is never aliased and
+/// never written after construction takes the unique `Box<C_Inner>` handle
+/// (§CR.2.2, ERRATA E1XX-PHASE8).
 #[test]
-fn escaping_immutable_class_lowers_to_plain_rc() {
+fn escaping_immutable_class_lowers_to_box() {
     let rust = emit(
         r#"
         public class Token {
@@ -2245,13 +2248,65 @@ fn escaping_immutable_class_lowers_to_plain_rc() {
         "#,
     );
     assert!(
-        rust.contains("pub struct Token(pub std::rc::Rc<Token_Inner>);"),
-        "expected plain Rc newtype: {rust}",
+        rust.contains("pub struct Token(pub std::boxed::Box<Token_Inner>);"),
+        "expected Box newtype: {rust}",
     );
     assert!(
-        rust.contains("Self(std::rc::Rc::new(Self::new_inner(id)))"),
-        "ctor wraps in Rc::new(…): {rust}",
+        rust.contains("Self(std::boxed::Box::new(Self::new_inner(id)))"),
+        "ctor wraps in Box::new(…): {rust}",
     );
+    assert!(rust.contains("self.0.id"), "fields read straight through the Box: {rust}");
+}
+
+/// A class whose objects never leave the local they were made into, and are
+/// never written, is a plain struct (§CR.2.1, §CR.8.1): no handle, no heap.
+#[test]
+fn a_local_immutable_class_is_inline() {
+    let rust = emit(
+        r#"
+        public class Point {
+            public int x;
+            public int y;
+            public Point(int x, int y) { this.x = x; this.y = y; }
+            public int sum() { return x + y; }
+        }
+        public void main() {
+            var p = new Point(3, 4);
+            print(p.x + p.y);
+            print(p.sum());
+        }
+        "#,
+    );
+    assert!(rust.contains("// JUX-REP: inline"), "{rust}");
+    assert!(rust.contains("pub struct Point {"), "a plain struct: {rust}");
+    assert!(!rust.contains("Point_Inner"), "no inner struct behind a handle: {rust}");
+    assert!(rust.contains("p.x + p.y"), "direct field reads: {rust}");
+}
+
+/// Each of these puts a second name on an object, or observes its identity,
+/// so the class stays a shared handle even though nothing writes it.
+#[test]
+fn an_observed_or_shared_object_is_never_a_value() {
+    for (tag, use_) in [
+        ("alias", "var q = p; print(q.x);"),
+        ("argument", "show(p);"),
+        ("identity", "print(p === p);"),
+        ("printed", "print($\"${p}\");"),
+        ("stored", "var xs = new Vec<Point>(); xs.push(p);"),
+        ("captured", "var f = () -> p.x; print(f());"),
+        ("hashed", "print(p.operator hash() == 0);"),
+    ] {
+        let src = format!(
+            "public class Point {{ public int x; public Point(int x) {{ this.x = x; }} }}\n\
+             public void show(Point p) {{ print(p.x); }}\n\
+             public void main() {{ var p = new Point(1); {use_} }}\n"
+        );
+        let rust = emit(&src);
+        assert!(
+            rust.contains("pub struct Point(pub std::rc::Rc<Point_Inner>);"),
+            "{tag}: expected the shared Rc handle:\n{rust}",
+        );
+    }
 }
 
 /// Explicit construction `new Box<int>(7)` lowers to the Rust
@@ -2293,7 +2348,8 @@ fn simple_constructor_emits_direct_inner_literal() {
         }
         public void main() {
             var p = new Pair(1, 2);
-            print(p.a);
+            var shared = p;
+            print(shared.a);
         }
         "#,
     );
@@ -2981,7 +3037,8 @@ fn string_returning_method_returns_owned_with_field_clone() {
         }
         public void main() {
             var u = new User("Ada");
-            print(u.getName());
+            var shared = u;
+            print(shared.getName());
         }
         "#,
     );
@@ -3799,7 +3856,11 @@ fn class_without_operators_emits_no_op_method() {
             public int x;
             public Plain(int x) { this.x = x; }
         }
-        public void main() {}
+        public void main() {
+            var a = new Plain(1);
+            var b = a;
+            print(a == b);
+        }
         "#,
     );
     assert!(!rust.contains("__op_"), "unexpected __op_* method: {rust}");

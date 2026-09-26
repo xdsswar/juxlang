@@ -109,10 +109,10 @@ fn an_immutable_class_is_a_plain_rc_and_a_mutable_one_keeps_its_cell() {
 }
 
 /// Writes the selector has to see: through a field typed as the class, through
-/// `this` in a method, through a bare field name, through an interface-typed
-/// receiver, and into a value struct held in a field. Each class below is
-/// written exactly one of those ways and must keep its cell; `Untouched` is
-/// written by none and must not.
+/// `this` in a method, through a bare field name, and into a value struct held
+/// in a field. Each class below is written exactly one of those ways and must
+/// keep its cell. `Untouched` is written by none, and since its one object
+/// never leaves its local either, it is not even a handle.
 #[test]
 fn every_kind_of_write_keeps_the_cell() {
     let rust = emit(&case_dir(
@@ -134,5 +134,32 @@ fn every_kind_of_write_keeps_the_cell() {
     for class in ["ByField", "ByThis", "ByBareName", "ByValueField"] {
         assert_handle(&rust, class, &format!("std::rc::Rc<crate::JuxCell<{class}_Inner>>"));
     }
-    assert_handle(&rust, "Untouched", "std::rc::Rc<Untouched_Inner>");
+    assert_inline(&rust, "Untouched");
+}
+
+/// An Inline class is a plain struct: no `_Inner`, no handle.
+fn assert_inline(rust: &str, class: &str) {
+    assert!(
+        handle_of(rust, class).is_none() && !rust.contains(&format!("{class}_Inner")),
+        "`{class}` should be a plain struct, the emitted Rust has a handle for it:\n{rust}",
+    );
+    assert!(
+        rust.contains(&format!("// JUX-REP: inline\n#[derive(Clone)]\npub(crate) struct {class} {{")),
+        "`{class}` should be marked and emitted as a plain struct:\n{rust}",
+    );
+}
+
+/// Tier Inline / `Box`: a class whose objects stay in the local they were
+/// made into is a value; one that is also returned is a `Box`; one that is
+/// passed anywhere stays a shared handle.
+#[test]
+fn contained_classes_are_values_and_a_passed_one_is_not() {
+    let rust = emit(&example_case("cr_rep_value"));
+    assert_inline(&rust, "Money");
+    assert_handle(&rust, "Receipt", "std::boxed::Box<Receipt_Inner>");
+    assert!(
+        rust.contains("Self(std::boxed::Box::new(Self::new_inner(item, cents)))"),
+        "Receipt is built straight into a Box:\n{rust}",
+    );
+    assert_handle(&rust, "Ledger", "std::rc::Rc<Ledger_Inner>");
 }

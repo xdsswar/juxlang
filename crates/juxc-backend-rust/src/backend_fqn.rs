@@ -389,6 +389,35 @@ impl crate::RustEmitter {
         ".borrow_mut()"
     }
 
+    /// The representation the selector chose for class `name`, as the
+    /// `// JUX-REP:` comment spells it (§CR.9 Phase D): `inline`, `box`, `rc`,
+    /// `rc-refcell` or `arc-mutex`. `None` for a class the selector does not
+    /// decide (an exception, a `struct`, an intrinsic).
+    pub(crate) fn class_rep_label(&self, name: &str) -> Option<&'static str> {
+        let fqn = self.resolve_bare_class_fqn(name)?;
+        let rep = self.class_reps.get(&fqn)?;
+        if self.sync_class_fqns.contains(&fqn) {
+            return Some("arc-mutex");
+        }
+        Some(match rep {
+            crate::ClassRep::Inline => "inline",
+            crate::ClassRep::Box => "box",
+            crate::ClassRep::Rc => "rc",
+            crate::ClassRep::RcRefCell => "rc-refcell",
+            crate::ClassRep::ArcMutex => "arc-mutex",
+        })
+    }
+
+    /// Whether the class being emitted is an Inline value (ERRATA
+    /// E1XX-PHASE8). Nothing writes such a class's objects, so each of its
+    /// methods takes `&self`; the by-name guess that a method mutates (a
+    /// same-named method elsewhere writes its `this`) must not make one
+    /// `&mut self`, which a caller holding the value in a plain `let` could
+    /// not call.
+    pub(crate) fn emitting_inline_class(&self) -> bool {
+        self.enclosing_class.as_deref().is_some_and(|c| self.class_rep_label(c) == Some("inline"))
+    }
+
     /// The Rust type of a non-owning reference to an object of class `name`
     /// (a `weak` field or parameter, §6.5 / §M.14): a `Weak` at whatever the
     /// handle's `Rc` holds, the cell or the bare inner struct. `inner` is the

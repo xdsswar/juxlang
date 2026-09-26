@@ -3725,6 +3725,38 @@ since E65, and `E0952` (reserved by §R.3.6).
   construction, and the lowering writes it"): on the corpus the analysis alone
   must be right, and it is. The borrow self-check needs no change for a class
   without a cell: it tracks cell guards, and such a class takes none.
+- **Tiers Inline and `Box`: a contained class is a value.** §CR.3.3 gives
+  Inline to a class that neither escapes nor is aliased, and `Box` to one that
+  escapes without being aliased. Both copy the object where the lowering would
+  have shared a handle, so both are sound only when a copy cannot be told from
+  the object. The selector therefore decides them by a whitelist of positions
+  (`compute_contained_classes`), not by a list of the ways an object could be
+  observed: an object of a CONTAINED class appears only as a FRESH local's
+  initializer (`var p = new C(..)` or a call returning `C`, never `var q = p`,
+  and the local declared `var` or `C`), as a whole expression statement, as
+  the receiver of one of the class's own fields or methods (not the universal
+  `operator hash`/`operator string`, which read identity), and as the value of
+  a `return` from a function declared to return exactly `C`; never inside a
+  lambda or an anonymous class, and `C` is named by no field, parameter, record
+  component, enum payload, bound, alias or constant, and by no checked
+  expression type other than exactly `C`. So the object is never passed,
+  stored, compared, printed, hashed, captured or given a second name. A
+  candidate also has no type parameters, no `extends` or subclass, no
+  `implements`, no properties, no `drop` body (a copy would run it twice), no
+  annotation, no `async` or generator method, no `ref`/`weak`/`observer` field,
+  a constructor that builds in place, and fields that are all Jux values,
+  class or interface handles, arrays or collections: a FOREIGN value is out
+  even when it is `Clone`, since its own methods may change it through `&self`
+  where no analysis of the Jux program looks. Every method of an Inline class
+  takes `&self` (nothing writes it, so the by-name guess that a same-named
+  method mutates does not apply). A
+  contained class that nothing writes is Inline (a plain struct, §CR.6.1,
+  exactly §CR.8.1's shape) when no function returns one, and
+  `Box<C_Inner>` (§CR.6.2) when one does. A contained class that IS written
+  stays on the `Rc` tiers: §CR.4.1 lets a unique owner mutate a value in
+  place, but the lowering copies a value where it would have shared a handle,
+  and a write to a copy is lost silently. That restriction is the whole
+  difference from §CR.3.3's table, and it is what makes these tiers sound.
 
 **Spec status:** §CR.7 carries the new numbers and a note on the old ones;
 §D.4 has the three rows.

@@ -132,6 +132,12 @@ impl RustEmitter {
         // needed here. Both leaf simple classes AND
         // hierarchy members (incl. abstract parents) flow into
         // `emit_wrapper_class_decl`, which branches on `extends`.
+        // Which representation the selector gave the class (§CR.9 Phase D),
+        // for a reader of the generated Rust. Not `// JUX:`, which is the
+        // source-marker prefix the driver maps lines by.
+        if let Some(label) = self.class_rep_label(&class_decl.name.text) {
+            self.w.line(&format!("// JUX-REP: {label}"));
+        }
         if self.is_wrapper_class(&class_decl.name.text) {
             self.emit_wrapper_class_decl(class_decl);
             self.enclosing_class = prev_enclosing;
@@ -856,6 +862,32 @@ impl RustEmitter {
     /// which assumed every `rust.std` type is `Clone`. `std::fs::File` is not,
     /// so no class could hold an open file: the answer now comes from the
     /// type's own stub, uniformly for `std` and for every bound crate.
+    /// Whether a class's objects can be held by value (§CR.2.1, §CR.2.2;
+    /// ERRATA E1XX-PHASE8), as far as its fields go. Where a handle would be
+    /// shared, a value is copied, so every field must copy, and copy without
+    /// anything to tell the copies apart: a Jux value, a Jux class or
+    /// interface handle, an array or a collection handle (whose copy shares).
+    /// A FOREIGN value is out even when it is `Clone`: its own methods may
+    /// change it through `&self` (a `Cell`, an atomic), which no analysis of
+    /// the Jux program sees, and then two copies would differ.
+    pub(crate) fn inner_is_clone(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        fn foreign(e: &crate::RustEmitter, t: &juxc_ast::TypeRef) -> bool {
+            if t.fn_shape.is_some() || t.ptr_depth > 0 {
+                return true;
+            }
+            let head = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            let external = head != "String"
+                && !e.bare_name_is_user_type(head)
+                && e.lookup_class_by_bare_or_fqn(head).is_some_and(|c| c.is_external)
+                && !e.collection_name_is_handle(head);
+            external
+                || t.generic_args.iter().any(|a| a.as_type().is_some_and(|inner| foreign(e, inner)))
+        }
+        let fields: Vec<&juxc_ast::TypeRef> =
+            class_decl.fields.iter().filter(|f| !f.is_static).filter_map(|f| f.ty.as_ref()).collect();
+        !fields.iter().any(|t| foreign(self, t)) && self.foreign_derives_of(fields.into_iter()).clone
+    }
+
     fn wrapper_inner_derives(
         &self,
         class_decl: &juxc_ast::ClassDecl,
@@ -6062,6 +6094,7 @@ impl RustEmitter {
             .unwrap_or_default();
         let param_names: HashSet<String> = method.params.iter().map(|p| p.name.text.clone()).collect();
         let needs_mut_self = !self.emitting_wrapper_class
+            && !self.emitting_inline_class()
             && (has_self_aliasing_byref
                 || body
                     .map(|b| {

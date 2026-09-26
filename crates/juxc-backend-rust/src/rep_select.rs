@@ -496,3 +496,569 @@ fn collect_places<'a>(n: Node<'a>, user_mut: &HashSet<String>, out: &mut Vec<&'a
         _ => {}
     }
 }
+
+// ---------------------------------------------------------------------------
+// §CR.3.2's `aliased` and `escapes`: classes whose objects stay where they
+// were made.
+// ---------------------------------------------------------------------------
+
+/// How the objects of a CONTAINED class move (see [`compute_contained_classes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Containment {
+    /// Every object lives and dies in the local it was made into (§CR.2.1).
+    Local,
+    /// Some objects are returned from the function that made them, and move
+    /// into the caller's local (§CR.2.2): they escape, and are still never
+    /// aliased.
+    Returned,
+}
+
+/// The classes whose objects can be held by value without anything the
+/// program does telling the difference (§CR.3.3's `Inline` and `Box` rows).
+///
+/// The question is decided by a whitelist of positions, not by a list of the
+/// ways an object could be observed: an object of a contained class `C`
+/// appears ONLY
+///
+/// - as the initializer of a local variable, when it is fresh there
+///   (`var p = new C(..)`, or the result of a function returning `C`; never
+///   `var q = p`),
+/// - as a whole expression statement (`new C(..);`),
+/// - as the receiver of a field read, a field write or a method call
+///   (`p.x`, `p.x = 1`, `p.m()`), `this` included, and
+/// - as the value of a `return` (the object escapes, into the caller's local),
+///
+/// never inside a lambda or an anonymous class, and `C` is named by no field,
+/// parameter, record component, enum payload, type bound, alias or constant,
+/// and by no expression type other than exactly `C`. So an object is never
+/// passed, stored, compared, printed, hashed, captured, put in an array or a
+/// collection, or given a second name: at every point exactly one binding
+/// reaches it, and a copy of it would be indistinguishable from it. Java's
+/// sharing (§CR.4.1) and identity (§CR.4) cannot be observed, which is the
+/// condition §CR.2.1 and §CR.2.2 state for the value representations.
+///
+/// A receiver may only be asked for one of the class's own fields or methods
+/// (the universal `operator hash` / `operator string` read its identity); a
+/// local's initializer only counts when the local is `var` or declared as the
+/// class itself; a `return` only when the function is declared to return the
+/// class itself; and a closure inside the class's own members may not name
+/// one of its instance members (it would reach `this`).
+///
+/// A class is a candidate at all only when its lowering has nothing a value
+/// cannot carry: no type parameters, no `extends`, no subclass, no
+/// `implements`, not abstract, no properties, no `drop` body (a copy would run
+/// it twice), no annotation (the registry may hold its objects), no `async`
+/// or generator method (its future holds the receiver), no `ref`, `weak` or
+/// `observer` field.
+pub(crate) fn compute_contained_classes(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashMap<String, Containment> {
+    // Candidates by bare name → their FQNs. A type is matched on its bare
+    // name, so two same-named classes are ruled out together.
+    let mut candidates: HashMap<String, Vec<String>> = HashMap::new();
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut instance_members: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut extended: HashSet<String> = HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            if let TopLevelDecl::Class(cd) = item {
+                if let Some(seg) = cd.extends.as_ref().and_then(|t| t.name.segments.last()) {
+                    extended.insert(simple_name(&seg.text));
+                }
+            }
+        }
+    }
+    for unit in units {
+        if unit.is_external {
+            continue;
+        }
+        let pkg = unit_package(unit);
+        for item in &unit.items {
+            let TopLevelDecl::Class(cd) = item else { continue };
+            let plain = !cd.is_struct
+                && !cd.is_abstract
+                && cd.generic_params.is_empty()
+                && cd.extends.is_none()
+                && !extended.contains(&simple_name(&cd.name.text))
+                && cd.implements.is_empty()
+                && cd.properties.is_empty()
+                && cd.drop_blocks.is_empty()
+                && cd.annotations.is_empty()
+                && cd.nested_types.is_empty()
+                && !cd.methods.iter().any(suspends)
+                && !cd.fields.iter().any(|f| {
+                    f.is_ref
+                        || f.is_weak
+                        || f.ty.as_ref().is_some_and(|t| t.name.segments.len() == 1 && t.name.segments[0].text == "observer")
+                });
+            if plain {
+                let fqn = if pkg.is_empty() { cd.name.text.clone() } else { format!("{pkg}.{}", cd.name.text) };
+                let simple = simple_name(&cd.name.text);
+                candidates.entry(simple.clone()).or_default().push(fqn);
+                let own = members.entry(simple.clone()).or_default();
+                let inst = instance_members.entry(simple).or_default();
+                for f in &cd.fields {
+                    own.insert(f.name.text.clone());
+                    if !f.is_static {
+                        inst.insert(f.name.text.clone());
+                    }
+                }
+                for m in &cd.methods {
+                    own.insert(m.name.text.clone());
+                    if !m.modifiers.contains(&juxc_ast::FnModifier::Static) {
+                        inst.insert(m.name.text.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut scan = Containments {
+        candidates: &candidates,
+        members: &members,
+        instance_members: &instance_members,
+        ruled_out: HashSet::new(),
+        returned: HashSet::new(),
+    };
+    for unit in units {
+        for item in &unit.items {
+            scan.decl(item, expr_types);
+        }
+    }
+    let mut out = HashMap::new();
+    for (bare, fqns) in &candidates {
+        if scan.ruled_out.contains(bare) {
+            continue;
+        }
+        let how = if scan.returned.contains(bare) { Containment::Returned } else { Containment::Local };
+        for f in fqns {
+            out.insert(f.clone(), how);
+        }
+    }
+    out
+}
+
+/// The body being judged: the class whose member it is, and the exact class
+/// name its declared return type is.
+#[derive(Clone, Copy)]
+struct Frame<'a> {
+    class: Option<&'a str>,
+    returns: Option<&'a str>,
+}
+
+/// Whether a method's body runs later than its call: an `async` method or a
+/// generator (`yield`) keeps its receiver in the future or iterator it
+/// returns, which a value lowering would copy there.
+fn suspends(m: &juxc_ast::FnDecl) -> bool {
+    if matches!(m.return_type, juxc_ast::ReturnType::AsyncType(_)) || m.modifiers.contains(&juxc_ast::FnModifier::Async) {
+        return true;
+    }
+    let mut yields = false;
+    if let Some(b) = &m.body {
+        for_each_node(b, &mut |n| yields |= matches!(n, Node::Stmt(Stmt::Yield(..))));
+    }
+    yields
+}
+
+struct Containments<'a> {
+    candidates: &'a HashMap<String, Vec<String>>,
+    /// Candidate bare name → the names of its fields and methods: what a
+    /// receiver of that class may be asked for. Anything else (the universal
+    /// `operator hash`, `operator string`) reads the object's identity.
+    members: &'a HashMap<String, HashSet<String>>,
+    /// Candidate bare name → its instance fields and methods, which a bare
+    /// name inside a closure in its own members reaches through `this`.
+    instance_members: &'a HashMap<String, HashSet<String>>,
+    /// Bare names of candidates some position rules out.
+    ruled_out: HashSet<String>,
+    /// Bare names of candidates some function returns.
+    returned: HashSet<String>,
+}
+
+impl Containments<'_> {
+    /// Rule out every candidate a written type mentions anywhere in it.
+    fn type_ref(&mut self, t: &juxc_ast::TypeRef) {
+        let mut names = Vec::new();
+        type_ref_names(t, &mut names);
+        for n in names {
+            if self.candidates.contains_key(&n) {
+                self.ruled_out.insert(n);
+            }
+        }
+    }
+
+    /// A declared return type: exactly `C` marks `C` as returned and is the
+    /// body's frame; anything else that mentions a candidate rules it out.
+    fn return_type(&mut self, r: &juxc_ast::ReturnType) -> Option<String> {
+        let t = match r {
+            juxc_ast::ReturnType::Void => return None,
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,
+        };
+        let async_ = matches!(r, juxc_ast::ReturnType::AsyncType(_));
+        match exact_name(t) {
+            Some(n) if !async_ && self.candidates.contains_key(&n) => {
+                self.returned.insert(n.clone());
+                Some(n)
+            }
+            _ => {
+                self.type_ref(t);
+                None
+            }
+        }
+    }
+
+    fn function(&mut self, f: &juxc_ast::FnDecl, class: Option<&str>, et: &HashMap<Span, Ty>) {
+        let returns = self.return_type(&f.return_type);
+        for p in &f.params {
+            self.type_ref(&p.ty);
+        }
+        for tp in &f.generic_params {
+            for b in &tp.bounds {
+                self.type_ref(b);
+            }
+        }
+        if let Some(b) = &f.body {
+            self.body(b, Frame { class, returns: returns.as_deref() }, et);
+        }
+    }
+
+    fn decl(&mut self, item: &TopLevelDecl, et: &HashMap<Span, Ty>) {
+        let plain = Frame { class: None, returns: None };
+        match item {
+            TopLevelDecl::Function(f) => self.function(f, None, et),
+            TopLevelDecl::Class(cd) => {
+                let simple = simple_name(&cd.name.text);
+                let own = Some(simple.as_str());
+                let member = Frame { class: own, returns: None };
+                for tp in &cd.generic_params {
+                    for b in &tp.bounds {
+                        self.type_ref(b);
+                    }
+                }
+                for t in cd.extends.iter().chain(cd.implements.iter()) {
+                    self.type_ref(t);
+                }
+                for f in &cd.fields {
+                    if let Some(t) = &f.ty {
+                        self.type_ref(t);
+                    }
+                    if let Some(d) = &f.default {
+                        self.expr_body(d, member, et);
+                    }
+                }
+                for p in &cd.properties {
+                    self.type_ref(&p.ty);
+                }
+                for m in &cd.methods {
+                    self.function(m, own, et);
+                }
+                for c in &cd.constructors {
+                    for p in &c.params {
+                        self.type_ref(&p.ty);
+                    }
+                    self.body(&c.body, member, et);
+                }
+                for op in &cd.operators {
+                    let returns = self.return_type(&op.return_type);
+                    for p in &op.params {
+                        self.type_ref(&p.ty);
+                    }
+                    if let Some(b) = &op.body {
+                        self.body(b, Frame { class: own, returns: returns.as_deref() }, et);
+                    }
+                }
+                for b in cd.init_blocks.iter().chain(&cd.drop_blocks) {
+                    self.body(b, member, et);
+                }
+                for b in &cd.static_init_blocks {
+                    self.body(b, plain, et);
+                }
+                for nt in &cd.nested_types {
+                    self.decl(nt, et);
+                }
+            }
+            TopLevelDecl::Record(rd) => {
+                for c in &rd.components {
+                    self.type_ref(&c.ty);
+                }
+                for m in &rd.methods {
+                    self.function(m, None, et);
+                }
+            }
+            TopLevelDecl::Enum(ed) => {
+                for v in &ed.variants {
+                    for p in &v.payload {
+                        self.type_ref(&p.ty);
+                    }
+                    for a in &v.args {
+                        self.expr_body(a, plain, et);
+                    }
+                }
+                for f in &ed.fields {
+                    if let Some(t) = &f.ty {
+                        self.type_ref(t);
+                    }
+                }
+                for m in &ed.methods {
+                    self.function(m, None, et);
+                }
+            }
+            TopLevelDecl::Interface(id) => {
+                for f in &id.fields {
+                    if let Some(t) = &f.ty {
+                        self.type_ref(t);
+                    }
+                }
+                for m in &id.methods {
+                    self.function(m, None, et);
+                }
+            }
+            TopLevelDecl::TypeAlias(a) => self.type_ref(&a.target),
+            TopLevelDecl::Const(c) => {
+                if let Some(t) = &c.ty {
+                    self.type_ref(t);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn body(&mut self, b: &Block, frame: Frame<'_>, et: &HashMap<Span, Ty>) {
+        let mut places = Positions::default();
+        for_each_node(b, &mut |n| places.note(n));
+        let mut seen: Vec<Seen> = Vec::new();
+        for_each_node(b, &mut |n| note_seen(n, et, &mut seen, &mut places));
+        self.judge(&places, &seen, frame);
+    }
+
+    fn expr_body(&mut self, e: &Expr, frame: Frame<'_>, et: &HashMap<Span, Ty>) {
+        let mut places = Positions::default();
+        for_each_node_in(e, &mut |n| places.note(n));
+        let mut seen: Vec<Seen> = Vec::new();
+        for_each_node_in(e, &mut |n| note_seen(n, et, &mut seen, &mut places));
+        // A field or variant initializer is no local's initializer, and no
+        // statement: a candidate object made here is stored.
+        self.judge(&places, &seen, frame);
+    }
+
+    fn judge(&mut self, places: &Positions, seen: &[Seen], frame: Frame<'_>) {
+        // A closure in a candidate's own member that names one of its
+        // instance members reaches `this` without writing it.
+        if let Some(c) = frame.class {
+            if let Some(inst) = self.instance_members.get(c) {
+                if places.closure_names.iter().any(|n| inst.contains(n)) {
+                    self.ruled_out.insert(c.to_string());
+                }
+            }
+        }
+        for s in seen {
+            if s.is_this {
+                // `this` is an object of the class being walked: it may only
+                // be a receiver, and never inside a closure.
+                if let Some(c) = frame.class {
+                    if self.candidates.contains_key(c) && !self.receives(places, s.span, c) {
+                        self.ruled_out.insert(c.to_string());
+                    }
+                }
+                continue;
+            }
+            let Some(ty) = &s.ty else { continue };
+            let mut names = Vec::new();
+            ty_names(ty, &mut names);
+            for n in names {
+                if !self.candidates.contains_key(&n) {
+                    continue;
+                }
+                let exact = matches!(ty, Ty::User { name, generic_args } if generic_args.is_empty() && bare_of(name) == n);
+                let allowed = exact
+                    && (self.receives(places, s.span, &n)
+                        || places.local_init.get(&s.span).is_some_and(|declared| {
+                            declared.as_deref().map_or(true, |d| d == n)
+                        })
+                        || places.statement.contains(&s.span)
+                        || (places.returned.contains(&s.span) && frame.returns == Some(n.as_str())));
+                if !allowed || places.inside_closure.contains(&s.span) {
+                    self.ruled_out.insert(n);
+                }
+            }
+        }
+    }
+
+    /// Whether the expression at `span` is the receiver of one of candidate
+    /// `c`'s own members, outside any closure.
+    fn receives(&self, places: &Positions, span: Span, c: &str) -> bool {
+        !places.inside_closure.contains(&span)
+            && places
+                .receiver
+                .get(&span)
+                .is_some_and(|member| self.members.get(c).is_some_and(|m| m.contains(member)))
+    }
+}
+
+/// One expression the judge looks at.
+struct Seen {
+    span: Span,
+    ty: Option<Ty>,
+    is_this: bool,
+}
+
+fn note_seen(n: Node<'_>, et: &HashMap<Span, Ty>, seen: &mut Vec<Seen>, places: &mut Positions) {
+    let Node::Expr(e) = n else { return };
+    let span = crate::exprs::expr_span_of(e);
+    seen.push(Seen { span, ty: et.get(&span).cloned(), is_this: matches!(e, Expr::This(_)) });
+    // An anonymous subclass of a class is an object of that class made in a
+    // place no local holds.
+    if let Expr::NewObject(no) = e {
+        if no.anonymous_body.is_some() {
+            if let Some(seg) = no.class_name.segments.last() {
+                seen.push(Seen {
+                    span: no.span,
+                    ty: Some(Ty::User { name: seg.text.clone(), generic_args: Vec::new() }),
+                    is_this: false,
+                });
+                places.inside_closure.insert(no.span);
+            }
+        }
+    }
+}
+
+/// The positions a contained object may take, by the span of the expression
+/// in them.
+#[derive(Default)]
+struct Positions {
+    /// A receiver, with the member it is asked for.
+    receiver: HashMap<Span, String>,
+    /// A local's initializer, with the class name the local is declared as
+    /// (`None` for `var`).
+    local_init: HashMap<Span, Option<String>>,
+    statement: HashSet<Span>,
+    returned: HashSet<Span>,
+    /// Every expression inside a lambda or an anonymous class body.
+    inside_closure: HashSet<Span>,
+    /// Every single-segment name written inside a lambda or an anonymous
+    /// class body.
+    closure_names: HashSet<String>,
+}
+
+impl Positions {
+    fn note(&mut self, n: Node<'_>) {
+        match n {
+            Node::Expr(Expr::Field(f)) => {
+                self.receiver.insert(crate::exprs::expr_span_of(&f.object), f.field.text.clone());
+            }
+            Node::Stmt(Stmt::VarDecl(v)) => {
+                // Only a FRESH object may start a local: a `new`, or what a
+                // call returns. `var b = a;` would give the object a second
+                // name.
+                let fresh = |e: &Expr| {
+                    matches!(e, Expr::Call(_)) || matches!(e, Expr::NewObject(no) if no.anonymous_body.is_none())
+                };
+                if let Some(init) = v.init.as_ref().filter(|e| fresh(e)) {
+                    let declared = match &v.ty {
+                        None => Some(None),
+                        Some(t) => exact_name(t).map(Some),
+                    };
+                    if let Some(declared) = declared {
+                        self.local_init.insert(crate::exprs::expr_span_of(init), declared);
+                    }
+                }
+            }
+            Node::Stmt(Stmt::Expr(e)) => {
+                self.statement.insert(crate::exprs::expr_span_of(e));
+            }
+            Node::Stmt(Stmt::Return(Some(e), _)) => {
+                self.returned.insert(crate::exprs::expr_span_of(e));
+            }
+            Node::Expr(Expr::Lambda(l)) => match &l.body {
+                juxc_ast::LambdaBody::Expr(b) => for_each_node_in(b, &mut |m| self.note_closure(m)),
+                juxc_ast::LambdaBody::Block(b) => for_each_node(b, &mut |m| self.note_closure(m)),
+            },
+            Node::Expr(Expr::NewObject(no)) => {
+                if let Some(body) = &no.anonymous_body {
+                    for b in &body.init_blocks {
+                        for_each_node(b, &mut |m| self.note_closure(m));
+                    }
+                    for m in &body.methods {
+                        if let Some(b) = &m.body {
+                            for_each_node(b, &mut |m| self.note_closure(m));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn note_closure(&mut self, m: Node<'_>) {
+        if let Node::Expr(e) = m {
+            self.inside_closure.insert(crate::exprs::expr_span_of(e));
+            if let Expr::Path(qn) = e {
+                if let [only] = qn.segments.as_slice() {
+                    self.closure_names.insert(only.text.clone());
+                }
+            }
+        }
+    }
+}
+
+fn bare_of(name: &str) -> String {
+    simple_name(backend_fqn::fqn_bare(name))
+}
+
+/// A class's name as a written type names it: a nested class is lifted to
+/// `Outer__Inner` and written `Inner` (or `Outer.Inner`), so candidates,
+/// written types and checked types all meet on the last component. Two
+/// classes that share it are decided together.
+fn simple_name(name: &str) -> String {
+    name.rsplit("__").next().unwrap_or(name).to_string()
+}
+
+/// The bare name a written type is, when it is exactly one plain class name:
+/// no type arguments, not nullable, not an array, not a function or pointer.
+fn exact_name(t: &juxc_ast::TypeRef) -> Option<String> {
+    if t.nullable || t.array_shape.is_some() || t.fn_shape.is_some() || t.ptr_depth > 0 || !t.generic_args.is_empty() {
+        return None;
+    }
+    t.name.segments.last().map(|s| simple_name(&s.text))
+}
+
+/// Every bare type name a written type mentions, its arguments and function
+/// shape included.
+fn type_ref_names(t: &juxc_ast::TypeRef, out: &mut Vec<String>) {
+    if let Some(s) = t.name.segments.last() {
+        out.push(simple_name(&s.text));
+    }
+    for a in &t.generic_args {
+        if let Some(inner) = a.as_type() {
+            type_ref_names(inner, out);
+        }
+    }
+    if let Some(shape) = &t.fn_shape {
+        for p in &shape.params {
+            type_ref_names(p, out);
+        }
+        type_ref_names(&shape.return_type, out);
+    }
+}
+
+/// Every bare class name a checked type mentions.
+fn ty_names(t: &Ty, out: &mut Vec<String>) {
+    match t {
+        Ty::User { name, generic_args } => {
+            out.push(bare_of(name));
+            for a in generic_args {
+                ty_names(a, out);
+            }
+        }
+        Ty::Nullable(inner) => ty_names(inner, out),
+        Ty::Array { element, .. } => ty_names(element, out),
+        Ty::Wildcard(juxc_tycheck::ty::Wildcard::Extends(b) | juxc_tycheck::ty::Wildcard::Super(b)) => ty_names(b, out),
+        Ty::Fn { params, return_type, .. } | Ty::FnPtr { params, return_type, .. } => {
+            for p in params {
+                ty_names(p, out);
+            }
+            ty_names(return_type, out);
+        }
+        _ => {}
+    }
+}
