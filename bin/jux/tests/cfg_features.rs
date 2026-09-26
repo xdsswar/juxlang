@@ -55,6 +55,7 @@ fn features_select_code_across_a_workspace() {
         r#"[package]
 name = "com.test.codec"
 version = "0.1.0"
+edition = "2026"
 
 [lib]
 name = "codec"
@@ -100,6 +101,7 @@ public String formats() {
         r#"[package]
 name = "com.test.app"
 version = "0.1.0"
+edition = "2026"
 
 [dependencies]
 "com.test.codec" = { path = "../codec", features = ["yaml"] }

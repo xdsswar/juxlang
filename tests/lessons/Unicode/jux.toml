@@ -1,6 +1,7 @@
 [package]
 name = "lessons.unicode"
 version = "0.1.0"
+edition = "2026"
 
 # The crate is published as `unicode-segmentation`; a Jux (and Rust) path
 # cannot spell the hyphen, so the dependency is named with an underscore and

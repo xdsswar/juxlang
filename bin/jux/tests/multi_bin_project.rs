@@ -354,3 +354,107 @@ public class Helper {
         "the declared entry file was asked for a package anyway:\n{out}",
     );
 }
+
+/// A dependency's entry files are not part of what it gives a dependent
+/// (§B.15.2's dependency row, ERRATA E106).
+///
+/// The dependency loader took the whole `src/` tree, so a package that
+/// path-depended on a package having any `[[bin]]` -- an explicit one, or the
+/// `src/main.jux` a bin package gets by default -- saw the dependency's `main`
+/// beside its own and failed with the error reported against ITS file:
+///
+/// ```text
+/// src/main.jux:3:8: [E0400] `main` is declared more than once at the top level
+/// ```
+///
+/// The obvious one-line filter was wrong, because `jux doc` called the same
+/// function on its OWN package to collect doc items: filtering there would have
+/// silently dropped every item declared in `src/main.jux` from the generated
+/// site. So the second half of this test documents the dependency and looks for
+/// an item that only its entry file declares.
+#[test]
+fn a_dependency_does_not_lend_its_entry_files_to_a_dependent() {
+    let dir = TempDir::new("pathdep");
+    let root = dir.path();
+
+    // The dependency: a library AND a binary, which is the shape that broke.
+    let dep = root.join("dep");
+    write(
+        &dep,
+        "jux.toml",
+        "\
+[package]
+name = \"com.example.dep\"
+version = \"0.1.0\"
+edition = \"2026\"
+
+[lib]
+name = \"dep\"
+",
+    );
+    write(&dep, "src/lib.jux", "// Library root for `com.example.dep`.\n");
+    write(&dep, "src/com/example/dep/Greeter.jux", "\
+package com.example.dep;
+
+public class Greeter {
+    public static String greet(String who) {
+        return \"hello, \" + who;
+    }
+}
+");
+    // The dependency's own entry file, carrying a DOCUMENTED free function so
+    // the `jux doc` half of this test has something only this file declares.
+    write(&dep, "src/main.jux", "\
+import com.example.dep.Greeter;
+
+/// Only `src/main.jux` declares this.
+public String entryNote() {
+    return \"from main.jux\";
+}
+
+public void main() {
+    print(Greeter.greet(\"dep\"));
+    print(entryNote());
+}
+");
+
+    // The dependent: a plain `path` dependency, no workspace involved.
+    let app = root.join("app");
+    write(
+        &app,
+        "jux.toml",
+        "\
+[package]
+name = \"com.example.app\"
+version = \"0.1.0\"
+edition = \"2026\"
+
+[dependencies]
+\"com.example.dep\" = { path = \"../dep\" }
+",
+    );
+    write(&app, "src/main.jux", "\
+import com.example.dep.Greeter;
+
+public void main() {
+    print(Greeter.greet(\"app\"));
+}
+");
+
+    let (ok, out) = jux(&app, &["check"]);
+    assert!(ok, "the dependent did not check clean:\n{out}");
+    assert!(
+        !out.contains("[E0400]"),
+        "the dependency's `main` leaked into the dependent:\n{out}",
+    );
+
+    // And the dependency still documents its own entry file's items.
+    let (ok, out) = jux(&dep, &["doc", "--no-doctests"]);
+    assert!(ok, "`jux doc` failed in the dependency:\n{out}");
+    let site = std::fs::read_to_string(dep.join("target/doc/root.html"))
+        .expect("the dependency's doc site");
+    assert!(
+        site.contains("entryNote"),
+        "`jux doc` dropped the items declared in `src/main.jux`",
+    );
+}

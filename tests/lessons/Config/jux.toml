@@ -1,6 +1,7 @@
 [package]
 name = "lessons.config"
 version = "0.1.0"
+edition = "2026"
 
 # A feature the lesson tests with `if cfg(feature = "verbose")`. Off unless a
 # build asks for it with `--features verbose`.

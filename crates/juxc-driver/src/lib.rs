@@ -244,6 +244,7 @@ pub mod git_deps;
 pub mod grammar_export;
 pub mod ice;
 pub mod manifest;
+pub mod manifest_check;
 mod package_check;
 mod safety_lint;
 pub mod project;
@@ -257,7 +258,7 @@ pub mod workspace;
 
 pub use cfg::CfgFacts;
 pub use juxc_tycheck::Profile;
-pub use manifest::Manifest;
+pub use manifest::{Manifest, ManifestError};
 pub use project::{ensure_project_stubs, StubSyncReport};
 
 /// Top-level compile result.

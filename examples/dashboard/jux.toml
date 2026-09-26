@@ -1,6 +1,7 @@
 [package]
 name = "demo.dashboard"
 version = "0.1.0"
+edition = "2026"
 
 # The dashboard paints itself into a plain pixel buffer, so the rendering half
 # needs nothing but the language. `minifb` is here only to put that buffer in

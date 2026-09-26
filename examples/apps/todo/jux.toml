@@ -7,3 +7,4 @@
 [package]
 name = "apps.todo"
 version = "0.1.0"
+edition = "2026"
