@@ -2849,10 +2849,9 @@ A visible side effect, and an intended one: a record or class printed INSIDE a
 collection used to come out in Rust's struct syntax (`[R { a: 1, b: "y" }]`) and
 now comes out in its Jux form (`[R(a: 1, b: y)]`).
 
-**Still open.** A nullable INSIDE a collection prints Rust's form
-(`[Some(3), None]`): the collection's own `Debug` writes its elements, and the
-name-based normalization only sees the outer type. That was the output before
-this change too.
+**Formerly open, closed by E1XX-PHASE2b.** A nullable INSIDE a collection
+printed Rust's form (`[Some(3), None]`): the collection's own `Debug` writes its
+elements, and the name-based normalization only saw the outer type.
 
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1 loses its `Display` row
 and its closing paragraph now points here for the nullable argument. `JUX-

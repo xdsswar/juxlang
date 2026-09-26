@@ -1,0 +1,56 @@
+// A nullable INSIDE a collection prints the Jux way (GAPS 26).
+//
+// A collection prints through its elements' own text, and a nullable element
+// is an `Option` underneath. Printed as-is that read `[Some(3), None]`; the
+// Jux form is `[3, null]`, at any depth. A string element keeps its quotes, as
+// it does in any printed collection, and a string whose text happens to be
+// `None` stays a string.
+//
+// Expected output:
+//   [3, null]
+//   ["a", null, "None"]
+//   [[1, null], [], [null]]
+//   {"k": null}
+//   {"k": 7}
+//   n=[3, null]
+//   [2.5, null]
+
+public void main() {
+    var ints = new Vec<int?>();
+    ints.push(3);
+    ints.push(null);
+    print(ints);
+
+    var strs = new Vec<String?>();
+    strs.push("a");
+    strs.push(null);
+    strs.push("None");
+    print(strs);
+
+    var nested = new Vec<Vec<int?>>();
+    var first = new Vec<int?>();
+    first.push(1);
+    first.push(null);
+    nested.push(first);
+    nested.push(new Vec<int?>());
+    var third = new Vec<int?>();
+    third.push(null);
+    nested.push(third);
+    print(nested);
+
+    // One key per map: a HashMap has no order of its own to print in.
+    var missing = new HashMap<String, int?>();
+    missing.insert("k", null);
+    print(missing);
+    var present = new HashMap<String, int?>();
+    present.insert("k", 7);
+    print(present);
+
+    // Interpolated, the same text.
+    print($"n=${ints}");
+
+    var doubles = new Vec<double?>();
+    doubles.push(2.5);
+    doubles.push(null);
+    print(doubles);
+}

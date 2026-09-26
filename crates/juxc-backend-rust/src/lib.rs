@@ -4393,8 +4393,101 @@ fn jux_debug_as_jux(raw_name: &str, text: String) -> String {
             None => text,
         },
         _ if quoted => jux_unescape_debug(&text[1..text.len() - 1]),
+        _ if jux_debug_nests_option(name) => jux_debug_strip_options(&text),
         _ => text,
     }
+}
+/// Whether `name` holds a nullable somewhere INSIDE it, and is built only from
+/// types whose `Debug` text is known: primitives, `String`, the collections and
+/// the handles around them (this prelude's own `JuxCell` included, which lives
+/// in the `__jux_rt` module of whatever crate it was emitted into).
+/// `Vec<Option<isize>>` qualifies, so its elements'
+/// `Some(3)` and `None` can be re-laid out as `3` and `null` (GAPS 26).
+///
+/// The list is what keeps that rewrite honest. Since ERRATA E107 a Jux class's
+/// `Debug` is its own string form, which may well contain the text `Some(`, and
+/// a foreign type's `Debug` is whatever its author wrote. A type name naming
+/// anything off the list is left exactly as `Debug` wrote it.
+fn jux_debug_nests_option(name: &str) -> bool {
+    let known = |path: &str| {
+        matches!(
+            path,
+            "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
+                | "usize" | "u8" | "u16" | "u32" | "u64" | "u128"
+                | "f32" | "f64" | "bool" | "char" | "str"
+                | "alloc::string::String"
+                | "core::option::Option" | "std::option::Option"
+                | "alloc::vec::Vec" | "alloc::alloc::Global"
+                | "alloc::collections::vec_deque::VecDeque"
+                | "std::collections::hash::map::HashMap"
+                | "std::collections::hash::set::HashSet"
+                | "std::hash::random::RandomState"
+                | "std::collections::hash::map::RandomState"
+                | "alloc::collections::btree::map::BTreeMap"
+                | "alloc::collections::btree::set::BTreeSet"
+                | "alloc::rc::Rc"
+        ) || path.ends_with("::__jux_rt::JuxCell")
+    };
+    name.contains("::option::Option<")
+        && name
+            .split(|c: char| matches!(c, '<' | '>' | ',' | ' ' | '&'))
+            .filter(|path| !path.is_empty())
+            .all(known)
+}
+/// `Debug`'s text with every `None` written `null` and every `Some(x)` written
+/// `x`, at any depth. Quoted spans are copied untouched, escapes included, so a
+/// string element that happens to read `"None"` keeps its text.
+fn jux_debug_strip_options(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    // One entry per open parenthesis: `true` when it was a `Some(` whose
+    // closing parenthesis is dropped along with it.
+    let mut parens: Vec<bool> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            out.push(c);
+            i += 1;
+            while i < chars.len() {
+                let d = chars[i];
+                out.push(d);
+                i += 1;
+                if d == '\\' && i < chars.len() {
+                    out.push(chars[i]);
+                    i += 1;
+                } else if d == c {
+                    break;
+                }
+            }
+        } else if c.is_alphanumeric() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            if word == "None" {
+                out.push_str("null");
+            } else if word == "Some" && chars.get(i) == Some(&'(') {
+                parens.push(true);
+                i += 1;
+            } else {
+                out.push_str(&word);
+            }
+        } else {
+            match c {
+                '(' => parens.push(false),
+                ')' if parens.pop().unwrap_or(false) => {
+                    i += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
 }
 /// `core::option::Option<isize>` gives `isize`, and any other type gives `None`.
 /// Matched on the fully qualified name, so a user type of its own called
