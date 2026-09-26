@@ -2303,7 +2303,8 @@ class, so the surface reachable through it is that class's surface.
    and a GENERIC class's inherited field types are written in its parent's
    type-parameter vocabulary, which the bound surface does not substitute
    through. So reading a field through `? extends Container<int>` is still
-   unsupported; calling a method through it is not.
+   unsupported; calling a method through it is not. (Closed since by
+   E1XX-PHASE2e, which substitutes through the `extends` chain.)
 
    The one class none of this applies to is a base that is extended but is not a
    polymorphic base (a `sealed` one): its subclasses emit
@@ -2857,6 +2858,153 @@ elements, and the name-based normalization only saw the outer type.
 and its closing paragraph now points here for the nullable argument. `JUX-
 OPERATORS-ADDENDUM.md` §O.7.1 is unchanged: it already says what a value's
 string form is, and this entry only makes `Debug` produce it.
+
+---
+
+## E1XX-PHASE2a. A fully-qualified library static is the same call as the imported one
+
+**Conflict.** `JUX-MISSING-DEFS-ADDENDUM.md` §M.16.6 (ERRATA E102) says a
+qualified name and an import name the same declaration and every later question
+is asked of that declaration. A fully-qualified static CALL did not get that
+treatment. `rust.std.File.open(p)` is a foreign `Result` (§G.5.4), so the call
+has to unwrap it, and it did, spelled `File.open(p)` after an import. Spelled in
+full it reached rustc as the raw `Result` in a `rust.std.File?` slot (E0308).
+
+The call arrives as a field chain, `((rust).std).File.open`. The lowering of the
+call itself already re-shaped that chain into the class path it names, but the
+questions asked around it (does it return a foreign `Result`, a bare collection,
+a borrowed slice) were asked of the chain first, and a chain names no class.
+
+**Resolution.** The re-shape happens once, before any question is asked, and
+every question is asked of the re-shaped call. No new rule: this is E102's, at
+one more site. `examples/qualified_static_calls.jux` opens a file both ways,
+catches the missing-file case, and calls a fallible `rust.std.String` static.
+
+**Spec status:** nothing to change; §M.16.6 already says it.
+
+---
+
+## E1XX-PHASE2b. A nullable inside a collection prints as `null` or its value
+
+**Conflict.** E107's run-time normalization turns `Debug`'s `None` and
+`Some(5)` into `null` and `5`, but it recognises a nullable by the value's own
+type NAME, so it only ever saw the outer type. `Vec<int?>` holding `3` and
+`null` printed `[Some(3), None]`, which is Rust's text, not the value's string
+form (`JUX-OPERATORS-ADDENDUM.md` §O.7.1).
+
+**Resolution.** When the type name nests an `Option` anywhere, `Debug`'s text
+is re-laid out token by token: `None` becomes `null`, `Some(x)` becomes `x` at
+any depth, and a quoted span is copied untouched, escapes and all, so a string
+element whose text is `None` stays a string. A string element keeps its quotes,
+as it does in any printed collection.
+
+The rewrite runs ONLY when every path in the type name is one whose `Debug`
+text is known: the primitives, `String`, `Option`, `Vec`, `VecDeque`, the hash
+and B-tree maps and sets, `Rc`, and the prelude's own `JuxCell`. Since E107 a
+Jux class's `Debug` is its own string form, which may contain the text `Some(`,
+and a foreign type's `Debug` is whatever its author wrote, so a collection
+naming any other type prints exactly as `Debug` wrote it.
+`examples/nullable_in_collections.jux` prints `[3, null]`, `["a", null, "None"]`,
+a nested `[[1, null], [], [null]]`, maps and a `double?` list.
+
+**Spec status:** nothing to change; §O.7.1 already says what a value's string
+form is. E107's "Still open" note now points here.
+
+---
+
+## E1XX-PHASE2c. A constant's name is resolved in the package that wrote it
+
+**Conflict.** The compile-time evaluator (§T.11) looked a bare constant name up
+program-wide: an exact key, then a unique last-segment match, and memoized the
+value under the bare name. That contradicts §M.16's rule that a bare name means
+the writing unit's own declaration first. Two packages each declaring
+`const int MAX` made `MAX` unfoldable from either, and the memo was worse than
+the lookup: `A.K + B.K`, two classes' `static final int K`, folded as `2 * A.K`
+because both were memoized as `K`. It could not bite through `jux.std`, which
+declares no constants, and it did bite between user packages.
+
+**Resolution.** The evaluator's context carries the writing unit's package and
+its imports. A bare name resolves to that package's constant, then to one the
+unit imports, then to a library-realm constant when exactly one package there
+declares it, and only then to the old root-package and unique-anywhere rungs
+(the cross-package capture GAPS 24 deliberately keeps for types). A constant's
+initializer is evaluated in ITS package, not the reader's, and the memo is keyed
+by FQN (a class constant by `Class::member`). Unit tests in `const_eval.rs` pin
+two packages declaring the same names, an import, and the two-class memo.
+
+**Spec status:** nothing to change; §M.16 already says it.
+
+---
+
+## E1XX-PHASE2d. The rest of `Task<T>`'s surface
+
+**Conflict.** §18.1.4 lists `Task.completed(v)`, `Task.failed(e)`,
+`t.map(f)`, `t.flatMap(f)`, `t.isCancelled()` and `t.isResolved()`. None was
+implemented; since E87 each was an honest `E0413` rather than a rustc leak, but
+a documented surface that answers "no such member" is still not there.
+
+**Resolution.** All six, with these semantics where the section is silent:
+
+- `completed(v)` and `failed(e)` are tasks settled at birth. Nothing runs, so
+  nothing is spawned; a failure is parked exactly where a task that threw `e`
+  parks its exception, so awaiting it re-throws `e`, and dropping it unawaited
+  is an unhandled rejection (LANG-V1 §10.1.8), as for any failed task.
+- `map(f)` and `flatMap(f)` CONSUME the task, as `await` does, and are tasks of
+  their own on the one event loop. A failure of the source, or its
+  cancellation, reaches the derived task as the exception it is, and `f` does
+  not run. `flatMap` awaits the task `f` hands back.
+- `isResolved()` is true once the task has an outcome, a value or a failure;
+  a spawned task is not resolved until the loop has run it.
+  `isCancelled()` is true once `cancel()` was called, whether or not the task
+  has reached a suspension point since.
+
+`map`'s and `flatMap`'s result is typed from the lambda's body, as `spawn`'s is;
+a body computing from the parameter is `Unknown`, which fits any slot.
+`examples/task_surface.jux` runs every case, including a failure through `map`
+and a cancellation seen through `isCancelled` and `blockingGet`.
+
+**Spec status:** nothing to change; §18.1.4 already lists the members.
+
+---
+
+## E1XX-PHASE2e. A field read through a bound that names a generic class
+
+**Conflict.** E100 rule 1 left reading a field through `? extends
+Container<int>` unsupported, because a generic class's inherited fields are
+typed in its parent's type-parameter vocabulary. Checking it found a second,
+wider hole with the same symptom: a LEAF of a polymorphic hierarchy (a class
+that extends something, generic or not, and that nothing extends) had an EMPTY
+marker, so `? extends Tagged` then `t.weight` was rustc E0609 and a method
+`Tagged` itself introduced was E0599, while the fields and methods it inherited
+resolved through the parent's marker. Every class with a parent is in such a
+hierarchy, so this was the common case for a subclass, not a corner.
+
+**Resolution.** Rule 1's surface, extended to both shapes.
+
+- A **generic** class on the element-parameterized marker (`ContainerKind<T>`)
+  that nothing extends gets the `__get_<f>` / `__set_<f>` pair for every
+  non-private instance field on its `extends` chain, beside its methods.
+- Every accessor on a chain is typed in the class's OWN vocabulary: an
+  inherited `U item` on `Holder<U>` is written through what the class passed for
+  `U` (`Holder<T>`, `Holder<int>`). That substitution applies to the non-generic
+  bound surface too, which had the same latent fault for a class extending a
+  generic parent.
+- A **leaf** of a polymorphic hierarchy in bound position declares, on its own
+  marker, the accessors for the fields it declares and the methods whose names
+  no ancestor declares. What it inherits already resolves through the parent's
+  marker, its supertrait; declaring it again would make the call ambiguous
+  (rustc E0034). A field that shadows an ancestor's of the same name keeps
+  direct access rather than read the ancestor's field.
+
+One predicate per shape is consulted by both the marker synthesis and the
+field-read rewrite, so a read is rewritten exactly when the accessor it names
+exists. `examples/wildcard_generic_bound_fields.jux` reads through
+`? extends Crate<int>`, a declared `<C extends Crate<String>>`, a generic leaf
+of a generic parent (`? extends Bin<int>`, inherited `item` as an `int`) and a
+plain leaf (`Tagged extends Named<String>`).
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.8's bound-surface rule
+already covers it; E100's scoping note now points here.
 
 ---
 
