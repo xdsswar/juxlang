@@ -348,8 +348,8 @@ fn check_name(
             .with_span(span)
             .with_file(0)
             .with_help(
-                "§B.2.3: reverse-DNS, lowercase, dot-separated, matching \
-                 `^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_]*)+$`",
+                "§B.2.3: lowercase, dot-separated, matching \
+                 `^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$`",
             ),
         ),
         Some(NameProblem::Shape(what)) => out.push(
@@ -529,13 +529,11 @@ fn name_problem(name: &str) -> Option<NameProblem> {
             )));
         }
     }
-    if segments.len() < 2 {
-        return Some(NameProblem::Shape(format!(
-            "`{name}` is a single segment, and a reverse-DNS name has at least two \
-             (`com.example.{name}`)"
-        )));
-    }
-    if segments[0].contains('_') {
+    // A single segment is a legal, unambiguous name, and it is what `jux new
+    // myapp` writes (§B.15.1), so it is not warned about (ERRATA E106). The
+    // shape rule is the regex's other half: in a DOTTED name, the first
+    // segment is the reverse-DNS root and takes no `_`.
+    if segments.len() >= 2 && segments[0].contains('_') {
         return Some(NameProblem::Shape(
             "the first segment holds an `_`, which §B.2.3's grammar allows only in later \
              segments"
@@ -749,10 +747,17 @@ mod tests {
     }
 
     #[test]
-    fn a_single_segment_name_warns_and_an_illegal_one_errors() {
-        let one =
-            codes_for("[package]\nname = \"linalg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n");
-        assert_eq!(one, vec!["W0903"]);
+    fn a_single_segment_name_is_clean_and_an_illegal_one_errors() {
+        // What `jux new myapp` and `jux new my-app` write.
+        for one in ["linalg", "my_app"] {
+            let codes = codes_for(&format!(
+                "[package]\nname = \"{one}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n"
+            ));
+            assert!(codes.is_empty(), "`{one}` should be clean, got {codes:?}");
+        }
+        let root_underscore =
+            codes_for("[package]\nname = \"my_co.app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n");
+        assert_eq!(root_underscore, vec!["W0903"]);
         for bad in ["My.App", "my-app", "com.Example", "0com.app", ".com.app", "com..app"] {
             let codes = codes_for(&format!(
                 "[package]\nname = \"{bad}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n"

@@ -249,7 +249,7 @@ url = "https://registry.internal.example.com"
 
 ### B.2.3. Field Semantics
 
-**`package.name`**. Reverse-DNS, lowercase, dot-separated. Must match the regex `^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$`. The package name is what consumers reference in their `[dependencies]` section. It is also the default top-level package path for files under `src/`.
+**`package.name`**. Lowercase, dot-separated. Must match the regex `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`. A single segment (`myapp`) is a complete name and is what `jux new` writes (§B.15.1); a library meant to be published should be reverse-DNS (`com.example.geometry`), and in a dotted name the first segment, the reverse-DNS root, takes no `_` (`W0903`, ERRATA E106). The package name is what consumers reference in their `[dependencies]` section. It is also the default top-level package path for files under `src/`.
 
 **`package.version`**. SemVer 2.0. Pre-release identifiers (`0.1.0-alpha.1`) and build metadata (`0.1.0+build.123`) are permitted.
 
@@ -310,7 +310,7 @@ The `edition` field selects the language edition. v0.1 supports only `"2026"`. L
 | no `[package]` table, and no `[workspace]` table either | error | `E0902` | nothing is built |
 | `[package]` with no `name` | error | `E0902` | nothing is built |
 | `name` holds a character the package grammar forbids (an upper-case letter, `-`, a space, a leading digit, an empty segment, `_` starting a segment) | error | `E0903` | nothing is built |
-| `name` is legal but not reverse-DNS shaped: one segment, or `_` in the first segment | warning | `W0903` | builds; the name is used as written |
+| `name` is dotted and its first segment holds `_` (`my_co.app`) | warning | `W0903` | builds; the name is used as written |
 | `version` absent | warning | `W0901` | builds as version `0.0.0` |
 | `version` present and not SemVer 2.0 | error | `E0903` | nothing is built |
 | `edition` absent | warning | `W0901` | builds as edition `"2026"` |

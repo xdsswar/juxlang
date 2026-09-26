@@ -1173,12 +1173,11 @@ pub enum Code {
     /// happened to have no effect.
     W0902_ManifestUnknownKey,
     /// W0903 -- A `package.name` that is **legal but not reverse-DNS shaped**
-    /// (BUILD-SYSTEM §B.2.3's regex): a single segment (`utils`), or an
-    /// underscore in the first segment.
+    /// (BUILD-SYSTEM §B.2.3): a dotted name whose first segment, the
+    /// reverse-DNS root, holds an underscore (`my_co.app`).
     ///
-    /// A one-segment name resolves unambiguously and builds correctly, so this
-    /// is the convention that keeps two unrelated packages from claiming the
-    /// same name, not a rule the compiler needs met. Illegal characters are
+    /// A single segment (`myapp`, `my_app`) is not warned about: it resolves
+    /// unambiguously, and it is what `jux new` writes. Illegal characters are
     /// the error (`E0903`); the wrong shape is this warning.
     W0903_ManifestNameNotReverseDns,
 }

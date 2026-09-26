@@ -2733,11 +2733,18 @@ present value the compiler cannot honour is an error.**
   forward-compatible by design (`[publish]`, `[package.sign]` and the
   `[ffi.<name>]` sub-tables are all specified ahead of their implementations),
   so an unknown key may not be an error; but it may not be silent either.
-- `W0903` -- a `name` that is legal but not reverse-DNS shaped, such as the
-  single-segment `linalg`. §B.2.3 states the shape as a requirement, and it is
-  the convention that keeps two unrelated packages from claiming one name, but
-  a one-segment name resolves unambiguously and builds correctly. Illegal
-  characters are the error; the wrong shape is the warning.
+- `W0903` -- a dotted `name` whose first segment, the reverse-DNS root, holds
+  an `_` (`my_co.app`). Illegal characters are the error; the wrong shape is
+  the warning. A SINGLE segment is not warned about, and §B.2.3's regex now
+  admits one: §B.15.1's own `jux new myapp` template writes `name = "myapp"`,
+  so a warning there would fire on the first build of every project the tool
+  creates. Reverse-DNS remains the convention for a library meant to be
+  published.
+
+`jux new` and `jux init` used to write the directory name verbatim, so
+`jux init` in a directory called `clean-init` wrote a manifest the very next
+command refused (`E0903`). Both now write the spellable segment: `clean_init`,
+and `app_3d` for `3d`.
 
 The repository's own manifests were brought up to the table rather than the
 table down to them: 98 of them predated `edition` and now declare it, and
