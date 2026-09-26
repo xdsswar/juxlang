@@ -1,0 +1,135 @@
+// Invoices: the list, and the editor one of them opens into.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Rect;
+import leaker.model.Invoice;
+import leaker.model.InvoiceStatus;
+import leaker.model.Date;
+import leaker.model.Percent;
+import leaker.pdf.InvoicePdf;
+
+public class InvoicesScreen {
+    private Session session;
+    private Table table;
+    private int selected = -1;
+    /** 0 all, 1 draft, 2 sent, 3 paid, 4 overdue. */
+    private int filter = 0;
+    private InvoiceEditor editor;
+    private bool editing = false;
+
+    public InvoicesScreen(Session session) {
+        this.session = session;
+        this.editor = new InvoiceEditor(session);
+        this.table = new Table()
+            .column("Number", 1.1f, false)
+            .column("Customer", 2.4f, false)
+            .column("Issued", 1.1f, false)
+            .column("Due", 1.1f, false)
+            .column("Status", 0.9f, false)
+            .column("Total", 1.3f, true);
+        this.table.statusColumn = 4;
+    }
+
+    /** Opens the editor on an invoice, by number. Used by --screen editor too. */
+    public void open(String number) {
+        var inv = session.store.findInvoice(number);
+        if (inv != null) {
+            editor.load(inv!!);
+            editing = true;
+        }
+    }
+
+    public void show(Ui ui, Rect area) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        if (editing) {
+            var ed = editor;
+            if (!ed.show(ui, area)) {
+                editing = false;
+                selected = -1;
+            }
+            return;
+        }
+        showList(ui, area);
+    }
+
+    private void showList(Ui ui, Rect area) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
+        Gui.heading(top, "Invoices");
+        top.add_space(16.0f);
+        if (Gui.primaryButton(top, "+ New invoice")) {
+            createInvoice();
+            return;
+        }
+
+        // Status filter, as a row of toggle buttons.
+        var bar = Gui.row(ui, Gui.rect(area.min.x, area.min.y + 42.0f, area.width(), 30.0f));
+        var names = new Vec<String>();
+        names.push("All");
+        names.push("Draft");
+        names.push("Sent");
+        names.push("Paid");
+        names.push("Overdue");
+        int i = 0;
+        for (var n : names) {
+            String caption = i == filter ? $"[ ${n} ]" : $"${n}";
+            if (Gui.button(bar, caption)) {
+                filter = i;
+                selected = -1;
+            }
+            i++;
+        }
+        bar.add_space(20.0f);
+        Gui.muted(bar, "Click a row to open it.");
+
+        var shown = new Vec<Invoice>();
+        for (var inv : session.store.invoices) {
+            if (matches(inv)) {
+                shown.push(inv);
+            }
+        }
+        var rows = new Vec<Vec<String>>();
+        for (var inv : shown) {
+            var row = new Vec<String>();
+            row.push(inv.number);
+            row.push(inv.customer.name);
+            row.push(inv.issueDate.iso());
+            row.push(inv.dueDate.iso());
+            row.push(inv.isOverdue(session.today) ? "Overdue" : inv.status.label());
+            row.push(inv.totals().total.display());
+            rows.push(row);
+        }
+
+        float listY = area.min.y + 82.0f;
+        var t = table;
+        int sel = selected;
+        int clicked = t.show(ui, Gui.rect(area.min.x, listY, area.width(), area.max.y - listY), rows, sel);
+        if (clicked >= 0) {
+            selected = clicked;
+            editor.load(shown[clicked]);
+            editing = true;
+        }
+    }
+
+    private bool matches(Invoice inv) {
+        return switch (filter) {
+            case 1 -> inv.status == InvoiceStatus.Draft;
+            case 2 -> inv.status == InvoiceStatus.Sent;
+            case 3 -> inv.status == InvoiceStatus.Paid;
+            case 4 -> inv.isOverdue(session.today);
+            default -> true;
+        };
+    }
+
+    private void createInvoice() {
+        if (session.store.customers.len() == 0) {
+            session.error("Add a customer first: an invoice needs someone to bill.");
+            return;
+        }
+        var inv = session.store.createInvoice(session.store.customers[0], session.today);
+        editor.load(inv);
+        editing = true;
+        session.info($"Created ${inv.number} as a draft. Pick the customer and add lines.");
+    }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "leaker"
+version = "0.1.0"
+edition = "2026"
+authors = ["xdsswar"]
+license = "Apache-2.0"
+[build]
+profile = "full"
+target = "native"
+optimization = "release"
+[dependencies]
+"rust.eframe" = "0.36"
+"rust.egui" = "0.36"
+"rust.emath" = "0.36"
+"rust.epaint" = "0.36"
+"rust.ecolor" = "0.36"

@@ -1,0 +1,54 @@
+// An invoice: who, when, what, and how much.
+package leaker.model;
+
+public class Invoice {
+    public String number;
+    public Customer customer;
+    public Date issueDate;
+    public Date dueDate;
+    public Vec<LineItem> lines = new Vec<LineItem>();
+    public InvoiceStatus status = InvoiceStatus.Draft;
+    public String notes = "";
+
+    public Invoice(String number, Customer customer, Date issueDate, Date dueDate) {
+        this.number = number;
+        this.customer = customer;
+        this.issueDate = issueDate;
+        this.dueDate = dueDate;
+    }
+
+    public LineItem addLine(Product product, long quantity) {
+        var line = new LineItem(product, quantity);
+        lines.push(line);
+        return line;
+    }
+
+    public void removeLine(int index) {
+        if (index >= 0 && index < lines.len()) {
+            lines.remove(index);
+        }
+    }
+
+    /**
+     * Subtotal is the sum of the gross line amounts, discount the sum of the
+     * line discounts, tax is computed per line on the discounted amount (so
+     * lines with different rates are each taxed at their own), and the total
+     * is what the customer pays.
+     */
+    public InvoiceTotals totals() {
+        var subtotal = Money.zero();
+        var discount = Money.zero();
+        var tax = Money.zero();
+        for (var line : lines) {
+            subtotal = subtotal + line.gross();
+            discount = discount + line.discountAmount();
+            tax = tax + line.tax();
+        }
+        var total = subtotal - discount + tax;
+        return new InvoiceTotals(subtotal, discount, tax, total);
+    }
+
+    public bool isOverdue(Date today) {
+        return status != InvoiceStatus.Paid && dueDate.isBefore(today);
+    }
+}

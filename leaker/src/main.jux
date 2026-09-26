@@ -1,0 +1,84 @@
+// Leaker: an invoicing desktop app written in Jux.
+//
+//   jux run                   -- the desktop app (egui via eframe)
+//   jux run -- --demo-pdf     -- no window: seed the demo data, write one PDF
+//                                to invoices/, print its path, exit
+//   jux run -- --demo-pdf --long -- the same with a 30-line, two-page invoice
+//   jux run -- --screen customers|products|invoices|overview|INV-0003
+//   jux run -- --size 800x600
+import leaker.model.Company;
+import leaker.model.Date;
+import leaker.service.Store;
+import leaker.service.DemoData;
+import leaker.pdf.InvoicePdf;
+import leaker.ui.App;
+import leaker.ui.Session;
+import rust.eframe.NativeOptions;
+import rust.eframe.ViewportBuilder;
+import rust.eframe.Vec2;
+import rust.eframe.run_ui_native;
+
+public void main(String[] args) {
+    bool demoPdf = false;
+    bool bigInvoice = false;
+    String screen = "overview";
+    float width = 1180.0f;
+    float height = 760.0f;
+    int i = 0;
+    while (i < args.length) {
+        if (args[i] == "--demo-pdf") {
+            demoPdf = true;
+        } else if (args[i] == "--long") {
+            bigInvoice = true;
+        } else if (args[i] == "--screen" && i + 1 < args.length) {
+            screen = args[i + 1];
+            i++;
+        } else if (args[i] == "--size" && i + 1 < args.length) {
+            var dims = args[i + 1].split("x");
+            if (dims.length == 2) {
+                try {
+                    width = dims[0].parse<float>();
+                    height = dims[1].parse<float>();
+                } catch (Exception e) {
+                    print($"ignoring --size ${args[i + 1]}: expected WIDTHxHEIGHT");
+                }
+            }
+            i++;
+        }
+        i++;
+    }
+
+    var store = new Store();
+    DemoData.seed(store, Date.today());
+
+    if (demoPdf) {
+        var exporter = new InvoicePdf(Company.demo());
+        var invoice = store.invoices[0];
+        if (bigInvoice) {
+            // Enough lines to spill onto a second page, to exercise paging.
+            invoice = store.createInvoice(store.customers[1], Date.today());
+            int n = 0;
+            while (n < 30) {
+                var product = store.products[n % (int) store.products.len()];
+                var line = invoice.addLine(product, (long) (n + 1));
+                line.discount = (n % 4) * 250;
+                n++;
+            }
+            invoice.notes = "A long invoice, generated to check that the table continues on the next page with its header repeated.";
+        }
+        var path = exporter.save(invoice, "invoices");
+        print($"wrote ${path} (${invoice.lines.len()} lines, total ${invoice.totals().total.display()})");
+        return;
+    }
+
+    var app = new App(new Session(store, Company.demo(), Date.today()));
+    app.start(screen);
+    var options = new NativeOptions();
+    options.viewport = new ViewportBuilder()
+        .with_title("Leaker - Invoicing")
+        .with_inner_size(new Vec2(width, height))
+        .with_min_inner_size(new Vec2(640.0f, 460.0f));
+    run_ui_native("Leaker", options, (ui, frame) -> {
+        app.frame(ui);
+    });
+}

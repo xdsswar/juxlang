@@ -1,0 +1,47 @@
+// One line of an invoice.
+//
+// The price and the tax rate are SNAPSHOTS taken when the line is added: an
+// invoice that has been sent must not change because the catalogue did.
+package leaker.model;
+
+public class LineItem {
+    public Product product;
+    public String description;
+    public long quantity;
+    public Money unitPrice;
+    /** Discount in basis points: 1000 is 10% off this line. */
+    public int discount;
+    /** Tax rate in basis points, copied from the product. */
+    public int taxRate;
+
+    public LineItem(Product product, long quantity) {
+        this.product = product;
+        this.description = product.name;
+        this.quantity = quantity;
+        this.unitPrice = product.unitPrice;
+        this.discount = 0;
+        this.taxRate = product.taxRate;
+    }
+
+    /** Quantity times unit price, before discount and tax. */
+    public Money gross() {
+        return unitPrice.times(quantity);
+    }
+
+    public Money discountAmount() {
+        return gross().percent(discount);
+    }
+
+    /** What the line costs before tax: gross less discount. */
+    public Money net() {
+        return gross() - discountAmount();
+    }
+
+    public Money tax() {
+        return net().percent(taxRate);
+    }
+
+    public Money total() {
+        return net() + tax();
+    }
+}

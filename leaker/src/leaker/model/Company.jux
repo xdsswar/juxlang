@@ -1,0 +1,14 @@
+// The business sending the invoices.
+package leaker.model;
+
+public record Company(String name, String address, String email, String taxId, String bank) {
+
+    public static Company demo() {
+        return new Company(
+            "Leaker Software Ltd",
+            "1 Rust Row, Suite 404, Cambridge CB1 1JX, United Kingdom",
+            "accounts@leaker.example",
+            "GB 987 6543 21",
+            "IBAN GB29 NWBK 6016 1331 9268 19  BIC NWBKGB2L");
+    }
+}

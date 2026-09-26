@@ -1,0 +1,40 @@
+// What every screen shares: the data, the seller's details, and the status
+// line at the bottom of the window.
+package leaker.ui;
+
+import leaker.model.Company;
+import leaker.model.Date;
+import leaker.service.Store;
+
+public class Session {
+    public Store store;
+    public Company company;
+    public Date today;
+
+    public String status = "Ready.";
+    public bool statusIsError = false;
+    public long statusAt = 0;
+
+    public Session(Store store, Company company, Date today) {
+        this.store = store;
+        this.company = company;
+        this.today = today;
+    }
+
+    public void info(String message) {
+        status = message;
+        statusIsError = false;
+        statusAt = Clock.nowMs();
+    }
+
+    public void error(String message) {
+        status = message;
+        statusIsError = true;
+        statusAt = Clock.nowMs();
+    }
+
+    /** Seconds since the last message, for fading it out. */
+    public long statusAgeSeconds() {
+        return (Clock.nowMs() - statusAt) / 1000;
+    }
+}

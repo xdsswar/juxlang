@@ -1,0 +1,188 @@
+// Customers: a list on one side, the selected customer's form on the other.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Rect;
+import leaker.model.Customer;
+
+public class CustomersScreen {
+    private Session session;
+    private Table table;
+    private int selected = -1;
+
+    // The form edits these buffers, not the customer, so Cancel means cancel.
+    private int editingId = 0;
+    private String name = "";
+    private String email = "";
+    private String address = "";
+    private String taxId = "";
+    private String nameError = "";
+    private String emailError = "";
+
+    public CustomersScreen(Session session) {
+        this.session = session;
+        this.table = new Table()
+            .column("#", 0.5f, true)
+            .column("Name", 2.4f, false)
+            .column("Email", 2.4f, false)
+            .column("Tax ID", 1.7f, false);
+    }
+
+    public void show(Ui ui, Rect area) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        var customers = session.store.customers;
+
+        // Title bar with the actions that do not need a selection.
+        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
+        Gui.heading(top, "Customers");
+        top.add_space(16.0f);
+        Gui.muted(top, $"${customers.len()} on file");
+        top.add_space(16.0f);
+        if (Gui.primaryButton(top, "+ New customer")) {
+            startNew();
+        }
+
+        // Wide windows put the form beside the list, narrow ones below it.
+        float bodyY = area.min.y + 46.0f;
+        float bodyH = area.max.y - bodyY;
+        bool wide = area.width() >= 900.0f;
+        float formW = wide ? 380.0f : area.width();
+        float formH = 330.0f;
+        var listRect = wide
+            ? Gui.rect(area.min.x, bodyY, area.width() - formW - Palette.PAD, bodyH)
+            : Gui.rect(area.min.x, bodyY, area.width(), bodyH - formH - Palette.PAD);
+        var formRect = wide
+            ? Gui.rect(area.max.x - formW, bodyY, formW, formH)
+            : Gui.rect(area.min.x, area.max.y - formH, area.width(), formH);
+
+        var rows = new Vec<Vec<String>>();
+        for (var c : customers) {
+            var r = new Vec<String>();
+            r.push($"${c.id}");
+            r.push(c.name);
+            r.push(c.email);
+            r.push(c.taxId);
+            rows.push(r);
+        }
+        // Calling through the field would hoist `ui` into a temporary and
+        // move it (L14); a local receiver does not.
+        var t = table;
+        int sel = selected;
+        int clicked = t.show(ui, listRect, rows, sel);
+        if (clicked >= 0) {
+            select(clicked);
+        }
+
+        showForm(ui, formRect);
+    }
+
+    private void showForm(Ui ui, Rect bounds) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        Gui.card(ui, bounds);
+        var inner = bounds.shrink(Palette.PAD);
+        var title = Gui.row(ui, Gui.rect(inner.min.x, inner.min.y, inner.width(), 24.0f));
+        Gui.strong(title, editingId == 0 ? "New customer" : $"Edit customer #${editingId}", Palette.ink(), 15.0f);
+
+        var form = new Form(Gui.rect(inner.min.x, inner.min.y + 36.0f, inner.width(), inner.height() - 36.0f), 80.0f);
+        // Fields are copied to locals before the calls: an argument list that
+        // reads a field makes the compiler hoist every argument into a
+        // temporary, and the hoist MOVES `ui` instead of reborrowing it (L14).
+        String n = name;
+        String ne = nameError;
+        String e = email;
+        String ee = emailError;
+        String a = address;
+        String t = taxId;
+        name = form.checkedField(ui, "Name", n, ne);
+        email = form.checkedField(ui, "Email", e, ee);
+        address = form.field(ui, "Address", a);
+        taxId = form.field(ui, "Tax ID", t);
+        var hint = Gui.row(ui, Gui.rect(inner.min.x + 80.0f, form.cursorY() - 6.0f, inner.width() - 80.0f, 16.0f));
+        Gui.muted(hint, "Separate address lines with a comma.");
+        form.skip(12.0f);
+
+        var buttons = form.buttons(ui);
+        if (Gui.primaryButton(buttons, editingId == 0 ? "Add customer" : "Save changes")) {
+            save();
+        }
+        if (Gui.button(buttons, "Clear")) {
+            startNew();
+        }
+        if (editingId != 0) {
+            buttons.add_space(24.0f);
+            if (Gui.dangerButton(buttons, "Delete")) {
+                delete();
+            }
+        }
+    }
+
+    private void startNew() {
+        selected = -1;
+        editingId = 0;
+        name = "";
+        email = "";
+        address = "";
+        taxId = "";
+        nameError = "";
+        emailError = "";
+    }
+
+    private void select(int index) {
+        var c = session.store.customers[index];
+        selected = index;
+        editingId = c.id;
+        name = c.name;
+        email = c.email;
+        address = c.address;
+        taxId = c.taxId;
+        nameError = "";
+        emailError = "";
+    }
+
+    private bool validate() {
+        nameError = name.trim().length() == 0 ? "A name is required." : "";
+        String e = email.trim();
+        emailError = e.length() > 0 && (!e.contains("@") || !e.contains(".")) ? "That does not look like an email address." : "";
+        return nameError.length() == 0 && emailError.length() == 0;
+    }
+
+    private void save() {
+        if (!validate()) {
+            session.error("Please fix the highlighted fields.");
+            return;
+        }
+        if (editingId == 0) {
+            var c = session.store.addCustomer(name.trim(), email.trim(), address.trim(), taxId.trim());
+            select(session.store.customers.len() - 1);
+            session.info($"Added customer ${c.name}.");
+            return;
+        }
+        var existing = session.store.findCustomer(editingId);
+        if (existing == null) {
+            session.error("That customer no longer exists.");
+            startNew();
+            return;
+        }
+        var c = existing!!;
+        c.name = name.trim();
+        c.email = email.trim();
+        c.address = address.trim();
+        c.taxId = taxId.trim();
+        session.info($"Saved ${c.name}.");
+    }
+
+    private void delete() {
+        var existing = session.store.findCustomer(editingId);
+        if (existing == null) {
+            startNew();
+            return;
+        }
+        String who = existing!!.name;
+        if (session.store.deleteCustomer(editingId)) {
+            session.info($"Deleted customer ${who}.");
+            startNew();
+        } else {
+            session.error($"${who} still has invoices; delete those first.");
+        }
+    }
+}

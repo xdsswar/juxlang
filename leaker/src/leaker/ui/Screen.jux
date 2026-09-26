@@ -1,0 +1,18 @@
+// The sections of the side navigation.
+package leaker.ui;
+
+public enum Screen {
+    Dashboard,
+    Customers,
+    Products,
+    Invoices;
+
+    public String title() {
+        return switch (this) {
+            case Screen.Dashboard -> "Overview";
+            case Screen.Customers -> "Customers";
+            case Screen.Products -> "Products";
+            case Screen.Invoices -> "Invoices";
+        };
+    }
+}

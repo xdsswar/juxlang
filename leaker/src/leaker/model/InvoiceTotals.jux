@@ -1,0 +1,5 @@
+// The four numbers at the bottom of an invoice.
+package leaker.model;
+
+public record InvoiceTotals(Money subtotal, Money discount, Money tax, Money total) {
+}

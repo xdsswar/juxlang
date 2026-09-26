@@ -1,0 +1,23 @@
+// Something we sell, at a list price and a tax rate.
+package leaker.model;
+
+public class Product {
+    public int id;
+    public String sku;
+    public String name;
+    public Money unitPrice;
+    /** Tax rate in basis points: 2000 is 20%. */
+    public int taxRate;
+
+    public Product(int id, String sku, String name, Money unitPrice, int taxRate) {
+        this.id = id;
+        this.sku = sku;
+        this.name = name;
+        this.unitPrice = unitPrice;
+        this.taxRate = taxRate;
+    }
+
+    public String operator string() {
+        return $"${sku} ${name}";
+    }
+}

@@ -1,0 +1,211 @@
+// Products: the catalogue, and a form to add or change an entry.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Rect;
+import leaker.model.Money;
+import leaker.model.Percent;
+
+public class ProductsScreen {
+    private Session session;
+    private Table table;
+    private int selected = -1;
+
+    private int editingId = 0;
+    private String sku = "";
+    private String name = "";
+    private String price = "";
+    private String taxRate = "20%";
+    private String skuError = "";
+    private String nameError = "";
+    private String priceError = "";
+    private String taxError = "";
+
+    public ProductsScreen(Session session) {
+        this.session = session;
+        this.table = new Table()
+            .column("SKU", 1.4f, false)
+            .column("Name", 2.6f, false)
+            .column("Unit price", 1.2f, true)
+            .column("Tax", 0.8f, true);
+    }
+
+    public void show(Ui ui, Rect area) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        var products = session.store.products;
+
+        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
+        Gui.heading(top, "Products");
+        top.add_space(16.0f);
+        Gui.muted(top, $"${products.len()} in the catalogue");
+        top.add_space(16.0f);
+        if (Gui.primaryButton(top, "+ New product")) {
+            startNew();
+        }
+
+        float bodyY = area.min.y + 46.0f;
+        float bodyH = area.max.y - bodyY;
+        bool wide = area.width() >= 900.0f;
+        float formW = wide ? 380.0f : area.width();
+        float formH = 320.0f;
+        var listRect = wide
+            ? Gui.rect(area.min.x, bodyY, area.width() - formW - Palette.PAD, bodyH)
+            : Gui.rect(area.min.x, bodyY, area.width(), bodyH - formH - Palette.PAD);
+        var formRect = wide
+            ? Gui.rect(area.max.x - formW, bodyY, formW, formH)
+            : Gui.rect(area.min.x, area.max.y - formH, area.width(), formH);
+
+        var rows = new Vec<Vec<String>>();
+        for (var p : products) {
+            var row = new Vec<String>();
+            row.push(p.sku);
+            row.push(p.name);
+            row.push(p.unitPrice.format());
+            row.push(Percent.format(p.taxRate));
+            rows.push(row);
+        }
+        var t = table;
+        int sel = selected;
+        int clicked = t.show(ui, listRect, rows, sel);
+        if (clicked >= 0) {
+            select(clicked);
+        }
+
+        showForm(ui, formRect);
+    }
+
+    private void showForm(Ui ui, Rect bounds) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        Gui.card(ui, bounds);
+        var inner = bounds.shrink(Palette.PAD);
+        var title = Gui.row(ui, Gui.rect(inner.min.x, inner.min.y, inner.width(), 24.0f));
+        Gui.strong(title, editingId == 0 ? "New product" : $"Edit product #${editingId}", Palette.ink(), 15.0f);
+
+        var form = new Form(Gui.rect(inner.min.x, inner.min.y + 36.0f, inner.width(), inner.height() - 36.0f), 90.0f);
+        String s = sku;
+        String se = skuError;
+        String n = name;
+        String ne = nameError;
+        String p = price;
+        String pe = priceError;
+        String tr = taxRate;
+        String te = taxError;
+        sku = form.checkedField(ui, "SKU", s, se);
+        name = form.checkedField(ui, "Name", n, ne);
+        price = form.checkedField(ui, "Unit price", p, pe);
+        taxRate = form.checkedField(ui, "Tax rate", tr, te);
+
+        // A live preview of what one unit costs with tax, as the user types.
+        var parsedPrice = Money.parse(price);
+        var parsedRate = Percent.parse(taxRate);
+        if (parsedPrice != null && parsedRate != null) {
+            var net = parsedPrice!!;
+            var gross = net + net.percent(parsedRate!!);
+            var preview = Gui.row(ui, Gui.rect(inner.min.x + 90.0f, form.cursorY() - 4.0f, inner.width() - 90.0f, 18.0f));
+            Gui.muted(preview, $"One unit with tax: ${gross.display()}");
+        }
+        form.skip(18.0f);
+
+        var buttons = form.buttons(ui);
+        if (Gui.primaryButton(buttons, editingId == 0 ? "Add product" : "Save changes")) {
+            save();
+        }
+        if (Gui.button(buttons, "Clear")) {
+            startNew();
+        }
+        if (editingId != 0) {
+            buttons.add_space(24.0f);
+            if (Gui.dangerButton(buttons, "Delete")) {
+                delete();
+            }
+        }
+    }
+
+    private void startNew() {
+        selected = -1;
+        editingId = 0;
+        sku = "";
+        name = "";
+        price = "";
+        taxRate = "20%";
+        clearErrors();
+    }
+
+    private void clearErrors() {
+        skuError = "";
+        nameError = "";
+        priceError = "";
+        taxError = "";
+    }
+
+    private void select(int index) {
+        var p = session.store.products[index];
+        selected = index;
+        editingId = p.id;
+        sku = p.sku;
+        name = p.name;
+        price = p.unitPrice.format();
+        taxRate = Percent.format(p.taxRate);
+        clearErrors();
+    }
+
+    private void save() {
+        clearErrors();
+        String cleanSku = sku.trim().to_uppercase();
+        if (cleanSku.length() == 0) {
+            skuError = "A SKU is required.";
+        }
+        for (var other : session.store.products) {
+            if (other.sku == cleanSku && other.id != editingId) {
+                skuError = $"${cleanSku} is already used by ${other.name}.";
+            }
+        }
+        if (name.trim().length() == 0) {
+            nameError = "A name is required.";
+        }
+        var parsedPrice = Money.parse(price);
+        if (parsedPrice == null || parsedPrice!!.isNegative()) {
+            priceError = "Enter an amount such as 49.90.";
+        }
+        var parsedRate = Percent.parse(taxRate);
+        if (parsedRate == null) {
+            taxError = "Enter a rate between 0% and 100%.";
+        }
+        if (skuError.length() > 0 || nameError.length() > 0 || priceError.length() > 0 || taxError.length() > 0) {
+            session.error("Please fix the highlighted fields.");
+            return;
+        }
+
+        if (editingId == 0) {
+            var p = session.store.addProduct(cleanSku, name.trim(), parsedPrice!!, parsedRate!!);
+            select(session.store.products.len() - 1);
+            session.info($"Added ${p.sku} ${p.name}.");
+            return;
+        }
+        var existing = session.store.findProduct(editingId);
+        if (existing == null) {
+            session.error("That product no longer exists.");
+            startNew();
+            return;
+        }
+        var p = existing!!;
+        p.sku = cleanSku;
+        p.name = name.trim();
+        p.unitPrice = parsedPrice!!;
+        p.taxRate = parsedRate!!;
+        sku = cleanSku;
+        session.info($"Saved ${p.sku}. Existing invoice lines keep the price they were billed at.");
+    }
+
+    private void delete() {
+        var existing = session.store.findProduct(editingId);
+        if (existing == null) {
+            startNew();
+            return;
+        }
+        String what = existing!!.sku;
+        session.store.deleteProduct(editingId);
+        session.info($"Deleted ${what}. Invoices that used it are unchanged.");
+        startNew();
+    }
+}

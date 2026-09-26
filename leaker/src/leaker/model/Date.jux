@@ -1,0 +1,94 @@
+// A calendar date with no time and no zone, like java.time.LocalDate.
+//
+// Stored as year/month/day and converted through a day count since
+// 1970-01-01, which makes "30 days later" a plain addition.
+package leaker.model;
+
+public record Date(int year, int month, int day) {
+
+    /** Today's date in UTC, from the system clock. */
+    public static Date today() {
+        long days = Clock.nowMs() / 86400000;
+        return Date.ofEpochDay(days);
+    }
+
+    /** Days-from-civil (H. Hinnant), valid for the proleptic Gregorian calendar. */
+    public long toEpochDay() {
+        long y = (long) year;
+        long m = (long) month;
+        long d = (long) day;
+        if (m <= 2) {
+            y = y - 1;
+        }
+        long era = (y >= 0 ? y : y - 399) / 400;
+        long yoe = y - era * 400;
+        long mp = m > 2 ? m - 3 : m + 9;
+        long doy = (153 * mp + 2) / 5 + d - 1;
+        long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + doe - 719468;
+    }
+
+    public static Date ofEpochDay(long epochDay) {
+        long z = epochDay + 719468;
+        long era = (z >= 0 ? z : z - 146096) / 146097;
+        long doe = z - era * 146097;
+        long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        long y = yoe + era * 400;
+        long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        long mp = (5 * doy + 2) / 153;
+        long d = doy - (153 * mp + 2) / 5 + 1;
+        long m = mp < 10 ? mp + 3 : mp - 9;
+        if (m <= 2) {
+            y = y + 1;
+        }
+        return new Date((int) y, (int) m, (int) d);
+    }
+
+    public Date plusDays(long days) {
+        return Date.ofEpochDay(toEpochDay() + days);
+    }
+
+    public long daysUntil(Date other) {
+        return other.toEpochDay() - toEpochDay();
+    }
+
+    public bool isBefore(Date other) {
+        return toEpochDay() < other.toEpochDay();
+    }
+
+    /** ISO form, `2026-09-26`. */
+    public String iso() {
+        String m = month < 10 ? $"0${month}" : $"${month}";
+        String d = day < 10 ? $"0${day}" : $"${day}";
+        return $"${year}-${m}-${d}";
+    }
+
+    /** Reads `2026-09-26`. Null when the text is not a valid date. */
+    public static Date? parse(String text) {
+        var parts = text.trim().split("-");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            int y = parts[0].trim().parse<int>();
+            int m = parts[1].trim().parse<int>();
+            int d = parts[2].trim().parse<int>();
+            if (m < 1 || m > 12 || d < 1 || d > 31) {
+                return null;
+            }
+            var date = new Date(y, m, d);
+            // A round trip through the day count rejects 2026-02-31.
+            var back = Date.ofEpochDay(date.toEpochDay());
+            if (back.month != m || back.day != d) {
+                return null;
+            }
+            return date;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public String operator string() {
+        return iso();
+    }
+}

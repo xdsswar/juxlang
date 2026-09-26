@@ -1,0 +1,409 @@
+// Creating and editing one invoice: customer, dates, lines, live totals,
+// status, and the PDF.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Rect;
+import leaker.model.Invoice;
+import leaker.model.InvoiceStatus;
+import leaker.model.LineItem;
+import leaker.model.Date;
+import leaker.model.Percent;
+import leaker.pdf.InvoicePdf;
+
+public class InvoiceEditor {
+    private Session session;
+    private Invoice? invoice = null;
+    private Vec<LineDraft> drafts = new Vec<LineDraft>();
+    private ScrollPane lineScroll = new ScrollPane();
+
+    private int customerIndex = 0;
+    private int productIndex = 0;
+    private String issueText = "";
+    private String dueText = "";
+    private String notes = "";
+    private String dateError = "";
+    private String lastPdf = "";
+
+    public InvoiceEditor(Session session) {
+        this.session = session;
+    }
+
+    public void load(Invoice inv) {
+        invoice = inv;
+        drafts = new Vec<LineDraft>();
+        for (var line : inv.lines) {
+            drafts.push(new LineDraft(line));
+        }
+        customerIndex = 0;
+        int i = 0;
+        for (var c : session.store.customers) {
+            if (c.id == inv.customer.id) {
+                customerIndex = i;
+            }
+            i++;
+        }
+        productIndex = 0;
+        issueText = inv.issueDate.iso();
+        dueText = inv.dueDate.iso();
+        notes = inv.notes;
+        dateError = "";
+        lastPdf = "";
+        lineScroll.scrollToTop();
+    }
+
+    /** Draws the editor. Returns false once the user asked to go back. */
+    public bool show(Ui ui, Rect area) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        if (invoice == null) {
+            return false;
+        }
+        var inv = invoice!!;
+        bool editable = inv.status.isEditable();
+
+        // ---- title bar ---------------------------------------------------
+        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
+        if (Gui.button(top, "< Back")) {
+            return false;
+        }
+        top.add_space(12.0f);
+        Gui.heading(top, $"Invoice ${inv.number}");
+        top.add_space(12.0f);
+        Gui.strong(top, inv.isOverdue(session.today) ? "Overdue" : inv.status.label(),
+            Table.statusColor(inv.isOverdue(session.today) ? "Overdue" : inv.status.label()), 15.0f);
+
+        // Narrow windows move the actions to a row of their own.
+        bool roomy = area.width() >= 1000.0f;
+        float actionsY = roomy ? area.min.y : area.min.y + 40.0f;
+        var actions = Gui.rowRight(ui, Gui.rect(area.min.x, actionsY, area.width(), 34.0f));
+        if (Gui.primaryButton(actions, "Generate PDF")) {
+            generatePdf(inv);
+        }
+        if (inv.status != InvoiceStatus.Paid) {
+            String next = inv.status.next().label();
+            if (Gui.button(actions, $"Mark as ${next}")) {
+                inv.status = inv.status.next();
+                session.info($"${inv.number} is now ${inv.status.label()}.");
+            }
+        }
+        if (inv.status != InvoiceStatus.Draft) {
+            if (Gui.button(actions, "Back to draft")) {
+                inv.status = InvoiceStatus.Draft;
+                session.info($"${inv.number} is a draft again and can be edited.");
+            }
+        }
+        if (Gui.dangerButton(actions, "Delete")) {
+            String number = inv.number;
+            session.store.deleteInvoice(number);
+            session.info($"Deleted ${number}.");
+            invoice = null;
+            return false;
+        }
+
+        // ---- header fields, left; totals, right --------------------------
+        float y0 = area.min.y + (roomy ? 48.0f : 86.0f);
+        bool wide = area.width() >= 900.0f;
+        float totalsW = wide ? 300.0f : 0.0f;
+        float leftW = area.width() - (wide ? totalsW + Palette.PAD : 0.0f);
+        var headRect = Gui.rect(area.min.x, y0, leftW, 176.0f);
+        Gui.card(ui, headRect);
+        showHeader(ui, headRect.shrink(Palette.PAD), inv, editable);
+
+        float linesY = y0 + 176.0f + Palette.PAD;
+        float footH = wide ? 0.0f : 190.0f;
+        var linesRect = Gui.rect(area.min.x, linesY, leftW, area.max.y - linesY - footH);
+        showLines(ui, linesRect, inv, editable);
+
+        var totalsRect = wide
+            ? Gui.rect(area.max.x - totalsW, y0, totalsW, 290.0f)
+            : Gui.rect(area.min.x, area.max.y - footH + Palette.PAD, area.width(), footH - Palette.PAD);
+        showTotals(ui, totalsRect, inv);
+        return true;
+    }
+
+    private void showHeader(Ui ui, Rect bounds, Invoice inv, bool editable) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        float half = (bounds.width() - Palette.PAD) / 2.0f;
+
+        // Customer picker.
+        var cl = Gui.row(ui, Gui.rect(bounds.min.x, bounds.min.y, 90.0f, Palette.FIELD_HEIGHT));
+        Gui.text(cl, "Bill to", Palette.muted(), 13.0f);
+        var cr = Gui.row(ui, Gui.rect(bounds.min.x + 90.0f, bounds.min.y, half - 90.0f, Palette.FIELD_HEIGHT));
+        if (editable) {
+            var names = new Vec<String>();
+            for (var c : session.store.customers) {
+                names.push(c.name);
+            }
+            int before = customerIndex;
+            customerIndex = Gui.combo(cr, " ", names, before, half - 100.0f);
+            if (customerIndex != before && customerIndex < session.store.customers.len()) {
+                inv.customer = session.store.customers[customerIndex];
+            }
+        } else {
+            Gui.strong(cr, inv.customer.name, Palette.ink(), 14.0f);
+        }
+        var addr = Gui.area(ui, Gui.rect(bounds.min.x + 90.0f, bounds.min.y + 32.0f, half - 90.0f, 80.0f));
+        for (var part : inv.customer.addressLines()) {
+            Gui.text(addr, part, Palette.muted(), 12.5f);
+        }
+        Gui.text(addr, inv.customer.email, Palette.muted(), 12.5f);
+
+        // Dates.
+        var form = new Form(Gui.rect(bounds.min.x + half + Palette.PAD, bounds.min.y, half, bounds.height()), 90.0f);
+        if (editable) {
+            String it = issueText;
+            String dt = dueText;
+            String de = dateError;
+            issueText = form.field(ui, "Issue date", it);
+            dueText = form.checkedField(ui, "Due date", dt, de);
+            applyDates(inv);
+        } else {
+            // Arguments computed first: an argument that reads an object makes
+            // the compiler hoist all of them, and the hoist moves `ui` (L14).
+            String issued = inv.issueDate.iso();
+            String due = inv.dueDate.iso();
+            form.value(ui, "Issue date", issued);
+            form.value(ui, "Due date", due);
+        }
+        long days = inv.issueDate.daysUntil(inv.dueDate);
+        form.value(ui, "Terms", $"${days} days");
+
+        // Notes, across the bottom.
+        var nl = Gui.row(ui, Gui.rect(bounds.min.x, bounds.max.y - 44.0f, 90.0f, Palette.FIELD_HEIGHT));
+        Gui.text(nl, "Notes", Palette.muted(), 13.0f);
+        var nf = Gui.row(ui, Gui.rect(bounds.min.x + 90.0f, bounds.max.y - 44.0f, bounds.width() - 90.0f, Palette.FIELD_HEIGHT));
+        if (editable) {
+            String n = notes;
+            notes = Gui.textFieldWidth(nf, n, bounds.width() - 96.0f);
+            inv.notes = notes;
+        } else {
+            Gui.text(nf, inv.notes, Palette.ink(), 13.0f);
+        }
+    }
+
+    private void applyDates(Invoice inv) {
+        var issue = Date.parse(issueText);
+        var due = Date.parse(dueText);
+        if (issue == null || due == null) {
+            dateError = "Dates are YYYY-MM-DD.";
+            return;
+        }
+        if (due!!.isBefore(issue!!)) {
+            dateError = "Due date is before the issue date.";
+            return;
+        }
+        dateError = "";
+        inv.issueDate = issue!!;
+        inv.dueDate = due!!;
+    }
+
+    private void showLines(Ui ui, Rect bounds, Invoice inv, bool editable) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        Gui.card(ui, bounds);
+        float x0 = bounds.min.x + 10.0f;
+        float w = bounds.width() - 30.0f;
+        // Column widths, as fractions of the row.
+        float cDesc = w * 0.34f;
+        float cQty = w * 0.16f;
+        float cPrice = w * 0.14f;
+        float cDisc = w * 0.10f;
+        float cTax = w * 0.07f;
+        float cTotal = w * 0.13f;
+        float cDel = w * 0.06f;
+
+        var head = Gui.rect(bounds.min.x + 1.0f, bounds.min.y + 1.0f, bounds.width() - 2.0f, Palette.ROW_HEIGHT);
+        Gui.fill(ui, head, Palette.headerBg());
+        float hx = x0;
+        headerCell(ui, hx, head.min.y, cDesc, "Item", false);
+        hx += cDesc;
+        headerCell(ui, hx, head.min.y, cQty, "Qty", false);
+        hx += cQty;
+        headerCell(ui, hx, head.min.y, cPrice, "Unit price", false);
+        hx += cPrice;
+        headerCell(ui, hx, head.min.y, cDisc, "Disc %", false);
+        hx += cDisc;
+        headerCell(ui, hx, head.min.y, cTax, "Tax", true);
+        hx += cTax;
+        headerCell(ui, hx, head.min.y, cTotal, "Line total", true);
+
+        // The add-line bar sits at the bottom of the card.
+        float addH = editable ? 44.0f : 0.0f;
+        var view = Gui.rect(bounds.min.x + 1.0f, head.max.y + 1.0f, bounds.width() - 2.0f, bounds.height() - Palette.ROW_HEIGHT - addH - 3.0f);
+        float rowH = 34.0f;
+        var sp = lineScroll;
+        float contentH = (float) inv.lines.len() * rowH;
+        var body = sp.begin(ui, view, contentH);
+        float y = body.max_rect().min.y;
+
+        int removeAt = -1;
+        int i = 0;
+        for (var line : inv.lines) {
+            var draft = drafts[i];
+            float rx = x0;
+            var d = Gui.area(body, Gui.rect(rx, y + 2.0f, cDesc - 8.0f, rowH - 4.0f));
+            Gui.text(d, line.description, Palette.ink(), 13.5f);
+            Gui.text(d, line.product.sku, Palette.muted(), 11.0f);
+            rx += cDesc;
+            if (editable) {
+                // Quantity: a text field between a minus and a plus button.
+                var q = Gui.row(body, Gui.rect(rx, y, cQty - 6.0f, rowH));
+                if (Gui.button(q, "-") && line.quantity > 1) {
+                    line.quantity = line.quantity - 1;
+                    draft.quantity = $"${line.quantity}";
+                }
+                String qt = draft.quantity;
+                draft.quantity = Gui.textFieldWidth(q, qt, cQty - 70.0f);
+                if (Gui.button(q, "+")) {
+                    line.quantity = line.quantity + 1;
+                    draft.quantity = $"${line.quantity}";
+                }
+                rx += cQty;
+                var p = Gui.row(body, Gui.rect(rx, y, cPrice - 6.0f, rowH));
+                String pt = draft.unitPrice;
+                draft.unitPrice = Gui.textFieldWidth(p, pt, cPrice - 10.0f);
+                rx += cPrice;
+                var ds = Gui.row(body, Gui.rect(rx, y, cDisc - 6.0f, rowH));
+                String dt = draft.discount;
+                draft.discount = Gui.textFieldWidth(ds, dt, cDisc - 10.0f);
+                rx += cDisc;
+                draft.applyTo(line);
+            } else {
+                var q = Gui.row(body, Gui.rect(rx, y, cQty - 6.0f, rowH));
+                Gui.text(q, $"${line.quantity}", Palette.ink(), 13.5f);
+                rx += cQty;
+                var p = Gui.row(body, Gui.rect(rx, y, cPrice - 6.0f, rowH));
+                Gui.text(p, line.unitPrice.format(), Palette.ink(), 13.5f);
+                rx += cPrice;
+                var ds = Gui.row(body, Gui.rect(rx, y, cDisc - 6.0f, rowH));
+                Gui.text(ds, line.discount == 0 ? "-" : Percent.format(line.discount), Palette.ink(), 13.5f);
+                rx += cDisc;
+            }
+            var tx = Gui.rowRight(body, Gui.rect(rx, y, cTax - 6.0f, rowH));
+            Gui.text(tx, Percent.format(line.taxRate), Palette.muted(), 13.0f);
+            rx += cTax;
+            var tt = Gui.rowRight(body, Gui.rect(rx, y, cTotal - 6.0f, rowH));
+            if (draft.valid) {
+                Gui.strong(tt, line.total().format(), Palette.ink(), 13.5f);
+            } else {
+                Gui.text(tt, "check input", Palette.danger(), 12.0f);
+            }
+            rx += cTotal;
+            if (editable) {
+                var del = Gui.row(body, Gui.rect(rx + 4.0f, y, cDel, rowH));
+                if (Gui.button(del, "x")) {
+                    removeAt = i;
+                }
+            }
+            Gui.hline(body, bounds.min.x + 1.0f, bounds.max.x - 12.0f, y + rowH - 1.0f, Palette.border());
+            y += rowH;
+            i++;
+        }
+        if (inv.lines.len() == 0) {
+            var empty = Gui.row(body, Gui.rect(x0, y, w, rowH));
+            Gui.muted(empty, editable ? "No lines yet: pick a product below and add it." : "No lines.");
+        }
+        if (removeAt >= 0) {
+            var gone = inv.lines[removeAt];
+            inv.removeLine(removeAt);
+            drafts.remove(removeAt);
+            session.info($"Removed ${gone.description}.");
+        }
+
+        if (editable) {
+            var bar = Gui.row(ui, Gui.rect(bounds.min.x + 10.0f, bounds.max.y - addH + 6.0f, bounds.width() - 20.0f, 32.0f));
+            Gui.text(bar, "Add", Palette.muted(), 13.0f);
+            bar.add_space(6.0f);
+            var names = new Vec<String>();
+            for (var p : session.store.products) {
+                names.push($"${p.sku}  ${p.name}  ${p.unitPrice.display()}");
+            }
+            int pi = productIndex;
+            productIndex = Gui.combo(bar, "  ", names, pi, 320.0f);
+            bar.add_space(8.0f);
+            if (Gui.primaryButton(bar, "Add line")) {
+                addLine(inv);
+            }
+        }
+    }
+
+    private void headerCell(Ui ui, float x, float y, float w, String text, bool right) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        var cell = Gui.rect(x, y, w - 6.0f, Palette.ROW_HEIGHT);
+        var c = right ? Gui.rowRight(ui, cell) : Gui.row(ui, cell);
+        Gui.strong(c, text, Palette.muted(), 12.5f);
+    }
+
+    private void addLine(Invoice inv) {
+        if (session.store.products.len() == 0) {
+            session.error("The catalogue is empty; add a product first.");
+            return;
+        }
+        if (productIndex < 0 || productIndex >= session.store.products.len()) {
+            productIndex = 0;
+        }
+        var product = session.store.products[productIndex];
+        // Adding a product that is already on the invoice bumps its quantity.
+        int i = 0;
+        for (var line : inv.lines) {
+            if (line.product.id == product.id) {
+                line.quantity = line.quantity + 1;
+                drafts[i].quantity = $"${line.quantity}";
+                session.info($"${product.name}: quantity is now ${line.quantity}.");
+                return;
+            }
+            i++;
+        }
+        var line = inv.addLine(product, 1);
+        drafts.push(new LineDraft(line));
+        session.info($"Added ${product.name}.");
+    }
+
+    private void showTotals(Ui ui, Rect bounds, Invoice inv) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        Gui.card(ui, bounds);
+        var t = inv.totals();
+        var inner = bounds.shrink(Palette.PAD);
+        var title = Gui.row(ui, Gui.rect(inner.min.x, inner.min.y, inner.width(), 24.0f));
+        Gui.strong(title, "Totals", Palette.ink(), 15.0f);
+        float y = inner.min.y + 34.0f;
+        y = totalRow(ui, inner, y, "Subtotal", t.subtotal.display(), false);
+        y = totalRow(ui, inner, y, "Discount", "-" + t.discount.display(), false);
+        y = totalRow(ui, inner, y, "Tax", t.tax.display(), false);
+        Gui.hline(ui, inner.min.x, inner.max.x, y + 2.0f, Palette.border());
+        y = totalRow(ui, inner, y + 8.0f, "Total due", t.total.display(), true);
+        if (lastPdf.length() > 0) {
+            var saved = Gui.area(ui, Gui.rect(inner.min.x, y + 10.0f, inner.width(), 60.0f));
+            Gui.text(saved, "Last PDF:", Palette.muted(), 12.0f);
+            Gui.text(saved, lastPdf, Palette.accent(), 12.0f);
+        }
+    }
+
+    private float totalRow(Ui ui, Rect inner, float y, String label, String value, bool big) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        float h = big ? 30.0f : 24.0f;
+        var l = Gui.row(ui, Gui.rect(inner.min.x, y, inner.width() / 2.0f, h));
+        Gui.text(l, label, big ? Palette.ink() : Palette.muted(), big ? 15.0f : 13.5f);
+        var v = Gui.rowRight(ui, Gui.rect(inner.min.x + inner.width() / 2.0f, y, inner.width() / 2.0f, h));
+        if (big) {
+            Gui.strong(v, value, Palette.accent(), 18.0f);
+        } else {
+            Gui.text(v, value, Palette.ink(), 13.5f);
+        }
+        return y + h;
+    }
+
+    private void generatePdf(Invoice inv) {
+        if (inv.lines.len() == 0) {
+            session.error("Add at least one line before generating a PDF.");
+            return;
+        }
+        try {
+            var exporter = new InvoicePdf(session.company);
+            String path = exporter.save(inv, "invoices");
+            lastPdf = path;
+            session.info($"Saved ${path}");
+        } catch (Exception e) {
+            session.error($"Could not write the PDF: ${e.getMessage()}");
+        }
+    }
+}

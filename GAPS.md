@@ -252,6 +252,14 @@ has no user-visible borrow checker and is not getting one, so the fix is a
 compiler self-check over the emitted code, run in the test gate, not a user
 diagnostic.
 
+### Found by the leaker app (added 2026-09-26, see `leaker/LEAKS.md`)
+
+**30. Borrowed foreign parameters and closures (L1, L8, L9, L10, L12, L14, L15).** A Jux lambda passed to an egui container receives a clone of `&mut Ui`; how a `Ui` parameter is passed depends on what the body calls; a field lent to a `&mut` parameter is a temporary copy; writes through `@RustRefOut` accessors are lost; hoisting moves `&mut` handles and Strings.
+
+**31. Bindgen type mapping (L2-L7, L11, L13, L16-L21).** `impl Into<T>` and blanket-impl traits, trait-object parameters (non-existent emitted path), erased `Arc`s, associated constants, tuple structs, struct-like enum variants, `HashMap`/`BTreeMap` parameters, keyword-named fields corrupting a stub, collection and `Path` conversion, duplicate/mislabelled types, re-exported crates, stale stubs after removing a dependency.
+
+**32. Language and diagnostics found along the way (L22-L28).** Parse-error recovery inside a class, `usize` counts, a record's unqualified static call, a user class shadowed by a foreign type in codegen, a parameter named `r` lowered as a collection, a terse E0900 without `--verbose`, Rust naming showing through.
+
 ---
 
 ## 4. Three streams stopped mid-flight

@@ -1,0 +1,83 @@
+// A vertical scroll area, built by hand.
+//
+// `egui::ScrollArea::show` takes a closure over `&mut Ui` and so cannot be
+// called from Jux (L1). This one keeps its own offset: the content is drawn
+// into a child `Ui` shifted up by the offset and clipped to the viewport, the
+// mouse wheel moves it, and a thumb on the right can be dragged.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Rect;
+import rust.eframe.UiBuilder;
+import rust.eframe.Layout;
+import rust.eframe.Align;
+import rust.eframe.Sense;
+import rust.eframe.CornerRadius;
+
+public class ScrollPane {
+    public float offset = 0.0f;
+    private float viewport = 0.0f;
+    private float content = 0.0f;
+
+    /**
+     * Starts a frame. `contentHeight` is how tall the content will be; the
+     * returned child is where it goes, already shifted and clipped.
+     */
+    public Ui begin(Ui ui, Rect view, float contentHeight) {
+        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+        viewport = view.height();
+        content = contentHeight;
+        float maxOffset = maxOffset();
+
+        if (ui.rect_contains_pointer(view)) {
+            // `ctx().input(...)` hands its lambda a clone of the input state.
+            // For reading one number that is harmless, just wasteful.
+            float wheel = ui.ctx().input((i) -> i.smooth_scroll_delta.y);
+            offset = offset - wheel;
+        }
+
+        if (maxOffset > 0.0f) {
+            var track = Gui.rect(view.max.x - 8.0f, view.min.y, 8.0f, view.height());
+            float thumbH = view.height() * view.height() / contentHeight;
+            if (thumbH < 24.0f) {
+                thumbH = 24.0f;
+            }
+            float thumbY = view.min.y + (view.height() - thumbH) * (offset / maxOffset);
+            var thumb = Gui.rect(view.max.x - 7.0f, thumbY, 6.0f, thumbH);
+            var id = ui.next_auto_id();
+            ui.skip_ahead_auto_ids((uint) 1);
+            var drag = ui.interact(track, id, Sense.drag());
+            float dy = drag.drag_delta().y;
+            if (dy != 0.0f) {
+                offset = offset + dy * contentHeight / view.height();
+            }
+            var color = drag.hovered() ? Palette.muted() : Palette.border();
+            ui.painter().rect_filled(thumb, CornerRadius.same((ubyte) 3), color);
+        }
+
+        clamp();
+        var shifted = Gui.rect(view.min.x, view.min.y - offset, view.width() - 10.0f, contentHeight + 1.0f);
+        var inner = ui.new_child(new UiBuilder().max_rect(shifted).layout(Layout.top_down(Align.Min)));
+        inner.set_clip_rect(view.intersect(ui.clip_rect()));
+        return inner;
+    }
+
+    public float maxOffset() {
+        float m = content - viewport;
+        return m > 0.0f ? m : 0.0f;
+    }
+
+    public void clamp() {
+        float m = maxOffset();
+        if (offset > m) {
+            offset = m;
+        }
+        if (offset < 0.0f) {
+            offset = 0.0f;
+        }
+    }
+
+    public void scrollToTop() {
+        offset = 0.0f;
+    }
+}

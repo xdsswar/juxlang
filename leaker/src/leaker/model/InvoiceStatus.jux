@@ -1,0 +1,29 @@
+// Where an invoice is in its life.
+package leaker.model;
+
+public enum InvoiceStatus {
+    Draft,
+    Sent,
+    Paid;
+
+    public String label() {
+        return switch (this) {
+            case InvoiceStatus.Draft -> "Draft";
+            case InvoiceStatus.Sent -> "Sent";
+            case InvoiceStatus.Paid -> "Paid";
+        };
+    }
+
+    /** The status a "mark as ..." button moves to; Paid stays Paid. */
+    public InvoiceStatus next() {
+        return switch (this) {
+            case InvoiceStatus.Draft -> InvoiceStatus.Sent;
+            case InvoiceStatus.Sent -> InvoiceStatus.Paid;
+            case InvoiceStatus.Paid -> InvoiceStatus.Paid;
+        };
+    }
+
+    public bool isEditable() {
+        return this == InvoiceStatus.Draft;
+    }
+}

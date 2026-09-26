@@ -1,0 +1,30 @@
+// Someone we bill.
+//
+// A class, not a record: a customer is edited in place from the Customers
+// screen, and every invoice that points at it sees the change.
+package leaker.model;
+
+public class Customer {
+    public int id;
+    public String name;
+    public String email;
+    public String address;
+    public String taxId;
+
+    public Customer(int id, String name, String email, String address, String taxId) {
+        this.id = id;
+        this.name = name;
+        this.email = email;
+        this.address = address;
+        this.taxId = taxId;
+    }
+
+    /** The address as separate lines; the form stores them joined by ", ". */
+    public String[] addressLines() {
+        return address.split(", ");
+    }
+
+    public String operator string() {
+        return $"#${id} ${name}";
+    }
+}

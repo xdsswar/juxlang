@@ -1,0 +1,36 @@
+// Percentages as basis points: 1% is 100, 20% is 2000, 12.5% is 1250.
+//
+// A static helper rather than a value type, since a rate is only ever read,
+// formatted and parsed; it never takes part in arithmetic on its own.
+package leaker.model;
+
+public class Percent {
+
+    /** `1250` formats as `12.5%`, `2000` as `20%`. */
+    public static String format(int basisPoints) {
+        int whole = basisPoints / 100;
+        int frac = basisPoints % 100;
+        if (frac == 0) {
+            return $"${whole}%";
+        }
+        if (frac % 10 == 0) {
+            return $"${whole}.${frac / 10}%";
+        }
+        String f = frac < 10 ? $"0${frac}" : $"${frac}";
+        return $"${whole}.${f}%";
+    }
+
+    /** Reads `20`, `20%`, `12.5`, `7.25 %`. Null when the text is not a rate. */
+    public static int? parse(String text) {
+        String t = text.trim().replace("%", "").trim();
+        var m = Money.parse(t);
+        if (m == null) {
+            return null;
+        }
+        long bp = m!!.cents;
+        if (bp < 0 || bp > 10000) {
+            return null;
+        }
+        return (int) bp;
+    }
+}

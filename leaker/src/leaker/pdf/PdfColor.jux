@@ -1,0 +1,27 @@
+// An RGB color for the PDF writer, each channel 0..255.
+package leaker.pdf;
+
+public record PdfColor(int r, int g, int b) {
+
+    public static PdfColor black() { return new PdfColor(0, 0, 0); }
+    public static PdfColor ink() { return new PdfColor(33, 37, 41); }
+    public static PdfColor muted() { return new PdfColor(108, 117, 125); }
+    public static PdfColor rule() { return new PdfColor(206, 212, 218); }
+    public static PdfColor accent() { return new PdfColor(37, 99, 235); }
+    public static PdfColor band() { return new PdfColor(241, 245, 249); }
+    public static PdfColor white() { return new PdfColor(255, 255, 255); }
+
+    /** `rg` sets the fill color, which is also the color text is painted in. */
+    public String fillOp() {
+        return $"${PdfColor.channel(this.r)} ${PdfColor.channel(this.g)} ${PdfColor.channel(this.b)} rg";
+    }
+
+    /** `RG` sets the stroke color, used by lines and outlines. */
+    public String strokeOp() {
+        return $"${PdfColor.channel(this.r)} ${PdfColor.channel(this.g)} ${PdfColor.channel(this.b)} RG";
+    }
+
+    private static String channel(int v) {
+        return PdfPage.num((double) v / 255.0);
+    }
+}

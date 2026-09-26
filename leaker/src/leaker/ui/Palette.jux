@@ -1,0 +1,49 @@
+// Colors and sizes, in one place.
+package leaker.ui;
+
+import rust.egui.Color32;
+import rust.eframe.Visuals;
+import rust.eframe.Stroke;
+
+public class Palette {
+    public static const float NAV_MIN = 150.0f;
+    public static const float NAV_MAX = 320.0f;
+    public static const float ROW_HEIGHT = 28.0f;
+    public static const float FIELD_HEIGHT = 26.0f;
+    public static const float PAD = 14.0f;
+    public static const float STATUS_HEIGHT = 30.0f;
+
+    public static Color32 rgb(int r, int g, int b) {
+        return Color32.from_rgb((ubyte) r, (ubyte) g, (ubyte) b);
+    }
+
+    public static Color32 navBg() { return rgb(24, 32, 46); }
+    public static Color32 navText() { return rgb(203, 213, 225); }
+    public static Color32 navActive() { return rgb(37, 99, 235); }
+    public static Color32 pageBg() { return rgb(246, 248, 251); }
+    public static Color32 card() { return rgb(255, 255, 255); }
+    public static Color32 border() { return rgb(223, 228, 236); }
+    public static Color32 ink() { return rgb(30, 41, 59); }
+    public static Color32 muted() { return rgb(100, 116, 139); }
+    public static Color32 accent() { return rgb(37, 99, 235); }
+    public static Color32 headerBg() { return rgb(241, 245, 249); }
+    public static Color32 rowHover() { return rgb(239, 246, 255); }
+    public static Color32 rowSelected() { return rgb(219, 234, 254); }
+    public static Color32 danger() { return rgb(220, 38, 38); }
+    public static Color32 success() { return rgb(22, 163, 74); }
+    public static Color32 warning() { return rgb(217, 119, 6); }
+    public static Color32 white() { return rgb(255, 255, 255); }
+
+    /**
+     * egui's light theme, with inputs that are visible on a white card: a
+     * one-pixel border on idle widgets and a faint fill inside text fields.
+     */
+    public static Visuals visuals() {
+        var v = Visuals.light();
+        v.text_edit_bg_color = rgb(250, 251, 253);
+        v.widgets.inactive.bg_stroke = new Stroke(1.0f, rgb(203, 213, 225));
+        v.widgets.inactive.weak_bg_fill = rgb(241, 245, 249);
+        v.widgets.hovered.bg_stroke = new Stroke(1.0f, accent());
+        return v;
+    }
+}

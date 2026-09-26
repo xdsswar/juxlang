@@ -1,0 +1,137 @@
+// An amount of money, held as a whole number of cents.
+//
+// There is no floating point anywhere near an amount: 0.1 + 0.2 must be 0.30,
+// and a rounding rule is something a program states, not something the FPU
+// decides. Percentages are basis points (1% = 100 bp), so 20% VAT is 2000.
+package leaker.model;
+
+public record Money(long cents) {
+
+    public static Money zero() {
+        return new Money(0);
+    }
+
+    public static Money ofCents(long cents) {
+        return new Money(cents);
+    }
+
+    public Money operator+(Money other) {
+        return new Money(cents + other.cents);
+    }
+
+    public Money operator-(Money other) {
+        return new Money(cents - other.cents);
+    }
+
+    public Money times(long quantity) {
+        return new Money(cents * quantity);
+    }
+
+    /**
+     * This amount scaled by `basisPoints` / 10000, rounded half away from
+     * zero to the nearest cent: the rule an accountant expects.
+     */
+    public Money percent(int basisPoints) {
+        long raw = cents * (long) basisPoints;
+        long q = raw / 10000;
+        long r = raw % 10000;
+        if (r >= 5000) {
+            q = q + 1;
+        } else if (r <= -5000) {
+            q = q - 1;
+        }
+        return new Money(q);
+    }
+
+    public bool isZero() {
+        return cents == 0;
+    }
+
+    public bool isNegative() {
+        return cents < 0;
+    }
+
+    /** `1234567` cents formats as `12,345.67`. */
+    public String format() {
+        long abs = cents < 0 ? -cents : cents;
+        long whole = abs / 100;
+        long frac = abs % 100;
+        String digits = $"${whole}";
+        String grouped = "";
+        int n = (int) digits.length();
+        int i = 0;
+        for (var ch : digits.chars()) {
+            if (i > 0 && (n - i) % 3 == 0) {
+                grouped += ",";
+            }
+            grouped += $"${ch}";
+            i++;
+        }
+        String fracText = frac < 10 ? $"0${frac}" : $"${frac}";
+        String sign = cents < 0 ? "-" : "";
+        return $"${sign}${grouped}.${fracText}";
+    }
+
+    /** The amount with its currency symbol, `$12,345.67`. */
+    public String display() {
+        if (cents < 0) {
+            return "-$" + new Money(-cents).format();
+        }
+        return "$" + format();
+    }
+
+    /**
+     * Reads what a person types: `12`, `12.5`, `12.50`, `1,234.56`, `$9.99`.
+     * Returns null when the text is not an amount.
+     */
+    public static Money? parse(String text) {
+        String t = text.trim().replace(",", "").replace("$", "");
+        if (t.length() == 0) {
+            return null;
+        }
+        bool negative = false;
+        if (t.starts_with("-")) {
+            negative = true;
+            t = t.substring(1);
+        }
+        long whole = 0;
+        long frac = 0;
+        int fracDigits = 0;
+        bool seenDot = false;
+        bool any = false;
+        for (var ch : t.chars()) {
+            if (ch == '.') {
+                if (seenDot) {
+                    return null;
+                }
+                seenDot = true;
+            } else if (ch >= '0' && ch <= '9') {
+                any = true;
+                long d = (long) (ch - '0');
+                if (seenDot) {
+                    if (fracDigits >= 2) {
+                        return null;
+                    }
+                    frac = frac * 10 + d;
+                    fracDigits++;
+                } else {
+                    whole = whole * 10 + d;
+                }
+            } else {
+                return null;
+            }
+        }
+        if (!any) {
+            return null;
+        }
+        if (fracDigits == 1) {
+            frac = frac * 10;
+        }
+        long total = whole * 100 + frac;
+        return new Money(negative ? -total : total);
+    }
+
+    public String operator string() {
+        return display();
+    }
+}

@@ -1,0 +1,148 @@
+// The in-memory repository: customers, products, invoices, and the counters
+// that number them.
+package leaker.service;
+
+import leaker.model.Customer;
+import leaker.model.Product;
+import leaker.model.Invoice;
+import leaker.model.Money;
+import leaker.model.Date;
+
+public class Store {
+    public Vec<Customer> customers = new Vec<Customer>();
+    public Vec<Product> products = new Vec<Product>();
+    public Vec<Invoice> invoices = new Vec<Invoice>();
+
+    private int nextCustomerId = 1;
+    private int nextProductId = 1;
+    private int nextInvoiceNumber = 1;
+
+    /** Days between issue and due date on a new invoice. */
+    public int paymentTermsDays = 30;
+
+    // ---- customers -------------------------------------------------------
+
+    public Customer addCustomer(String name, String email, String address, String taxId) {
+        var c = new Customer(nextCustomerId, name, email, address, taxId);
+        nextCustomerId++;
+        customers.push(c);
+        return c;
+    }
+
+    public Customer? findCustomer(int id) {
+        for (var c : customers) {
+            if (c.id == id) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /** Removes the customer. Refused (false) while an invoice still bills them. */
+    public bool deleteCustomer(int id) {
+        for (var inv : invoices) {
+            if (inv.customer.id == id) {
+                return false;
+            }
+        }
+        int i = 0;
+        for (var c : customers) {
+            if (c.id == id) {
+                customers.remove(i);
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    // ---- products --------------------------------------------------------
+
+    public Product addProduct(String sku, String name, Money unitPrice, int taxRate) {
+        var p = new Product(nextProductId, sku, name, unitPrice, taxRate);
+        nextProductId++;
+        products.push(p);
+        return p;
+    }
+
+    public Product? findProduct(int id) {
+        for (var p : products) {
+            if (p.id == id) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Removes the product from the catalogue. Invoices keep their lines: a
+     * line holds its own snapshot of the price, so it does not need the
+     * catalogue entry any more.
+     */
+    public bool deleteProduct(int id) {
+        int i = 0;
+        for (var p : products) {
+            if (p.id == id) {
+                products.remove(i);
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    // ---- invoices --------------------------------------------------------
+
+    /** The number the next invoice will get, without taking it. */
+    public String peekInvoiceNumber() {
+        return formatNumber(nextInvoiceNumber);
+    }
+
+    public static String formatNumber(int n) {
+        String digits = $"${n}";
+        while (digits.length() < 4) {
+            digits = "0" + digits;
+        }
+        return "INV-" + digits;
+    }
+
+    public Invoice createInvoice(Customer customer, Date issueDate) {
+        var number = formatNumber(nextInvoiceNumber);
+        nextInvoiceNumber++;
+        var inv = new Invoice(number, customer, issueDate, issueDate.plusDays((long) paymentTermsDays));
+        invoices.push(inv);
+        return inv;
+    }
+
+    public Invoice? findInvoice(String number) {
+        for (var inv : invoices) {
+            if (inv.number == number) {
+                return inv;
+            }
+        }
+        return null;
+    }
+
+    public bool deleteInvoice(String number) {
+        int i = 0;
+        for (var inv : invoices) {
+            if (inv.number == number) {
+                invoices.remove(i);
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    /** Everything not yet paid, across all invoices. */
+    public Money outstanding() {
+        var sum = Money.zero();
+        for (var inv : invoices) {
+            if (inv.status != leaker.model.InvoiceStatus.Paid) {
+                sum = sum + inv.totals().total;
+            }
+        }
+        return sum;
+    }
+}

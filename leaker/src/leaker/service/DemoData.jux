@@ -1,0 +1,47 @@
+// A believable starting point, so the app is not empty on first launch.
+package leaker.service;
+
+import leaker.model.Money;
+import leaker.model.Date;
+import leaker.model.InvoiceStatus;
+
+public class DemoData {
+
+    public static void seed(Store store, Date today) {
+        var acme = store.addCustomer("Acme Industrial Ltd", "ap@acme.example",
+            "12 Foundry Lane, Sheffield S1 2AB, United Kingdom", "GB123456789");
+        var north = store.addCustomer("Northwind Traders", "billing@northwind.example",
+            "400 Harbor Blvd, Seattle WA 98101, USA", "US-EIN 91-1234567");
+        var blue = store.addCustomer("Blue Heron Studio", "hello@blueheron.example",
+            "Keizersgracht 221, 1016 DV Amsterdam, Netherlands", "NL001234567B01");
+        store.addCustomer("Cedar & Stone Architects", "office@cedarstone.example",
+            "88 Queen St W, Toronto ON M5H 2M9, Canada", "CA 12345 6789 RT0001");
+
+        var consult = store.addProduct("SRV-CONSULT", "Consulting (hour)", Money.ofCents(15000), 2000);
+        var design = store.addProduct("SRV-DESIGN", "UI design (day)", Money.ofCents(72000), 2000);
+        var support = store.addProduct("SUB-SUPPORT", "Support plan (month)", Money.ofCents(49900), 2000);
+        var license = store.addProduct("LIC-SEAT", "Software licence (seat)", Money.ofCents(12900), 2000);
+        var book = store.addProduct("BK-MANUAL", "Printed manual", Money.ofCents(2450), 500);
+        store.addProduct("HW-DONGLE", "USB security key", Money.ofCents(3999), 2000);
+
+        var a = store.createInvoice(acme, today.plusDays(-40));
+        a.addLine(consult, 12);
+        var l = a.addLine(license, 25);
+        l.discount = 1000;
+        a.addLine(book, 3);
+        a.status = InvoiceStatus.Sent;
+        a.notes = "Thank you for your business. Payment by bank transfer within 30 days.";
+
+        var b = store.createInvoice(north, today.plusDays(-12));
+        b.addLine(design, 4);
+        b.addLine(support, 1);
+        b.status = InvoiceStatus.Paid;
+        b.notes = "Paid in full. Reference PO-7781.";
+
+        var c = store.createInvoice(blue, today);
+        c.addLine(consult, 6);
+        var d = c.addLine(design, 2);
+        d.discount = 1500;
+        c.notes = "Draft: first milestone of the rebrand project.";
+    }
+}
