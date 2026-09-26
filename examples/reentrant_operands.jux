@@ -5,7 +5,7 @@
 // borrow were still held when `inc` ran, the program would stop with "object
 // of type Counter was already in use" (ERRATA E23 calls that a compiler bug,
 // never the program's). The backend binds such an operand to a temporary
-// before the call runs (ERRATA E1XX-PHASE7), in Java's left-to-right order,
+// before the call runs (ERRATA E119), in Java's left-to-right order,
 // so each operand still sees the value Java would give it.
 
 class Counter {

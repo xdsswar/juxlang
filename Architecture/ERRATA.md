@@ -3437,7 +3437,7 @@ entry leaves on the baseline.
 
 ---
 
-## E1XX-PHASE7. The compiler checks its own borrow discipline
+## E119. The compiler checks its own borrow discipline
 
 **Conflict.** E23 stands: Jux has no user-visible borrow checker, and the
 reserved `E0500`-`E0505` stay reserved. What E23 leaves to the compiler is

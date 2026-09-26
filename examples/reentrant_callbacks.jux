@@ -5,7 +5,7 @@
 // ordinary, and they are in Jux (ERRATA E23). Each object sits in a cell, and
 // the backend never keeps the cell borrowed while Jux code runs, so the call
 // that comes back finds the object free (JUX-CLASS-REPRESENTATION §CR.4.1,
-// ERRATA E1XX-PHASE7).
+// ERRATA E119).
 
 interface Listener {
     void onClick(Button b);

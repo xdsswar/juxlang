@@ -639,7 +639,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0900`  | Backend cannot lower construct: rustc rejected the Rust the backend emitted. An internal compiler error, reported at the Jux line with the rustc code as a note, exit status 101. Also raised, under `JUX_SELFCHECK=1`, by the borrow self-check for a cell conflict it finds in the emitted Rust ("the compiler would emit a borrow conflict here") | Pipeline §C.9.4 / `ERRATA.md` E116, E1XX-PHASE7 |
+| `E0900`  | Backend cannot lower construct: rustc rejected the Rust the backend emitted. An internal compiler error, reported at the Jux line with the rustc code as a note, exit status 101. Also raised, under `JUX_SELFCHECK=1`, by the borrow self-check for a cell conflict it finds in the emitted Rust ("the compiler would emit a borrow conflict here") | Pipeline §C.9.4 / `ERRATA.md` E116, E119 |
 | `E0901`  | The project's `jux.toml` cannot be read, or is not valid TOML | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0902`  | The manifest has no `[package]` table, or a `[package]` with no `name` (a `[workspace]`-only manifest is exempt) | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0903`  | A `[package]` value this compiler cannot honour: a `name` with a character the package grammar forbids, a non-SemVer `version`, or an `edition` other than `"2026"` | Build system §B.2.5 / `ERRATA.md` E106 |

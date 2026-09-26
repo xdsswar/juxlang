@@ -4595,7 +4595,7 @@ impl RustEmitter {
                 // the field after it, so `n += inc()` with an `inc` that bumps
                 // `n` added to the new value. When the right side may run Jux
                 // code, the old value is bound first and stored back just
-                // before the operator applies (ERRATA E1XX-PHASE7).
+                // before the operator applies (ERRATA E119).
                 let keep_old = a.op.is_some()
                     && matches!(&*tf.object, Expr::This(_) | Expr::Path(_))
                     && self.operand_may_run_jux_code(&a.value);

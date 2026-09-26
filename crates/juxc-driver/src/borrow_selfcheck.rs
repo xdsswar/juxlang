@@ -1,4 +1,4 @@
-//! The compiler's check on its own borrow discipline (ERRATA E1XX-PHASE7,
+//! The compiler's check on its own borrow discipline (ERRATA E119,
 //! gap 29).
 //!
 //! Jux has no borrow checker a program can fail (ERRATA E23). A class object

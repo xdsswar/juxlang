@@ -245,7 +245,7 @@ and should say so in Jux terms.
 the program dies with `thread 'main' panicked at src\main.rs:L:C: already
 borrowed: BorrowMutError`, naming an emitted-Rust line and no Jux type.
 
-**29. CLOSED 2026-09-26 (phase 7, ERRATA E1XX-PHASE7).** ~~Nothing catches those conflict shapes before a user does.~~ Per E23 Jux
+**29. CLOSED 2026-09-26 (phase 7, ERRATA E119).** ~~Nothing catches those conflict shapes before a user does.~~ Per E23 Jux
 has no user-visible borrow checker and is not getting one, so the fix is a
 compiler self-check over the emitted code, run in the test gate, not a user
 diagnostic.

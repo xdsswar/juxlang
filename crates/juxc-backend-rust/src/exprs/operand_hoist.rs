@@ -1,5 +1,5 @@
 //! Operand pre-hoist: no cell guard is alive while Jux code runs
-//! (JUX-CLASS-REPRESENTATION §CR.4.1; ERRATA E1XX-PHASE7, gap 29).
+//! (JUX-CLASS-REPRESENTATION §CR.4.1; ERRATA E119, gap 29).
 //!
 //! A field read of a shared object is `a.0.borrow().n`, and the guard that
 //! `borrow()` returns is a temporary: Rust keeps it alive to the end of the

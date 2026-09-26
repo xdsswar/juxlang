@@ -3784,7 +3784,7 @@ impl RustEmitter {
     /// called in place, `(self.task)(args)`.
     ///
     /// A shared object's field is read into a temp first (§CR.4.1, ERRATA
-    /// E1XX-PHASE7):
+    /// E119):
     ///
     ///   ({ let __jux_callee = self.0.borrow().hook.clone(); __jux_callee(args) })
     ///
