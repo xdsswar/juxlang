@@ -665,6 +665,9 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0950`  | Orphan free-function operator: no operand (nor a record/struct/enum result) is declared by this program | Runtime/ABI §R.3.1, ERRATA E65 |
 | `E0951`  | The same free-function operator declared twice for the same operand types | Runtime/ABI §R.3.3, ERRATA E65 |
 | `E0952`  | Orphan free-function operator definition *(reserved: a free `operator hash`/`string` cannot be written, ERRATA E65)* | Runtime/ABI §R.3.6 |
+| `E0953`  | A class compared by identity (`===`) across function boundaries was selected as Inline *(reserved: representation-selector sanity check)* | Class representation §CR.7 / `ERRATA.md` E1XX-PHASE8 |
+| `E0954`  | A `weak` reference targets a class the selector decided was Inline, and escalation failed *(reserved: representation-selector sanity check)* | Class representation §CR.7 / `ERRATA.md` E1XX-PHASE8 |
+| `E0955`  | A class whose fields transitively contain itself was selected without a refcounted representation *(reserved: representation-selector sanity check)* | Class representation §CR.7 / `ERRATA.md` E1XX-PHASE8 |
 | `E0961`  | Mutable static requires thread-safe wrapper *(reserved)*     | Missing-defs §M.12.3           |
 | `E0970`  | Write to a read-only or computed (get-only) property outside its settable window | Missing-defs §M.7.2 / Properties §P.1.5 |
 | `E0972`  | Property accessor visibility violation (setter more visible than getter; `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 / Properties §P.1.3 / §P.3.5 |

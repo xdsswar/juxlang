@@ -3671,6 +3671,31 @@ closing paragraph point here. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains
 
 ---
 
+## E1XX-PHASE8. The representation selector
+
+**Conflict.** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3 specifies a
+selector that picks one of Inline, `Box`, `Rc`, `Rc<RefCell>`, `Arc` and
+`Arc<Mutex>` per class, and §CR.7 gives it three diagnostics numbered
+`E0950`-`E0952`. The compiler gave every class `Rc<RefCell>` (commit
+`02bc558` removed the earlier tiering because its boundaries were where the
+emitted Rust failed to borrow-check), so the selector was unbuilt (GAPS.md
+gap 23). Its three codes also collided with the free-function operator
+checks `E0950` (orphan operator) and `E0951` (duplicate operator), raised
+since E65, and `E0952` (reserved by §R.3.6).
+
+**Resolution.**
+
+- **Codes.** §D.5.1 forbids reassigning a published code, so the operator
+  checks keep `E0950`-`E0952` and the representation diagnostics become
+  `E0953` (identity across function boundaries on an Inline class), `E0954`
+  (a `weak` target left Inline) and `E0955` (a self-containing class left
+  without a refcount), in §CR.7's order. §D.4 lists them.
+
+**Spec status:** §CR.7 carries the new numbers and a note on the old ones;
+§D.4 has the three rows.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

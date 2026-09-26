@@ -730,9 +730,17 @@ carries over unchanged. The wrapper type's `Deref` impl makes
 
 | Code      | Trigger                                                                         |
 |-----------|---------------------------------------------------------------------------------|
-| `E0950`   | A class with `===` compared across function boundaries was selected as Inline, but the comparison observably requires a stable address. Hint: the cycle/aliasing analysis demoted the class to Inline; the user can force Box/Rc/Arc by adding a side use that triggers escape. (This rule should fire **before** the selector commits to Inline — it's a sanity check.) |
-| `E0951`   | A weak ref is taken against a class the selector decided was Inline. The user's `weak C` declaration forces a refcount-based representation; the selector escalates and re-runs. If escalation fails, this fires. |
-| `E0952`   | A cyclic class hierarchy (class field that transitively contains the class itself) is selected as anything other than Arc + Weak. Phase 1 doesn't auto-break cycles; the user has to insert `weak` manually. Until that lands, this is a hard error. |
+| `E0953`   | A class with `===` compared across function boundaries was selected as Inline, but the comparison observably requires a stable address. Hint: the cycle/aliasing analysis demoted the class to Inline; the user can force Box/Rc/Arc by adding a side use that triggers escape. (This rule should fire **before** the selector commits to Inline — it's a sanity check.) |
+| `E0954`   | A weak ref is taken against a class the selector decided was Inline. The user's `weak C` declaration forces a refcount-based representation; the selector escalates and re-runs. If escalation fails, this fires. |
+| `E0955`   | A cyclic class hierarchy (class field that transitively contains the class itself) is selected as anything other than Arc + Weak. Phase 1 doesn't auto-break cycles; the user has to insert `weak` manually. Until that lands, this is a hard error. |
+
+**Numbering (ERRATA E1XX-PHASE8).** An earlier draft numbered these three
+`E0950`-`E0952`. Those numbers were taken first by the free-function operator
+checks of `JUX-RUNTIME-ABI-ADDENDUM.md` §R.3 (`E0950` orphan operator, `E0951`
+duplicate operator, `E0952` reserved), which the compiler has raised since
+ERRATA E65, and §D.5.1 forbids reassigning a published code. The
+representation diagnostics therefore take the next free numbers, `E0953`-`E0955`,
+in the same order.
 
 The selector itself is **silent** by design — picking Inline vs Arc
 should never produce a diagnostic on the user's own code. The E095x
@@ -912,7 +920,8 @@ cost where sharing isn't needed. (This supersedes the original
 
 - Per-instantiation rep selection for generics; interproc escape for
   return-then-consume.
-- `E0950` / `E0951` / `E0952` diagnostic surfaces.
+- `E0953` / `E0954` / `E0955` diagnostic surfaces (§CR.7; numbered
+  `E0950`-`E0952` in an earlier draft).
 - `// JUX:rep=rc-refcell` comment in emitted Rust so users debugging
   generated code know which lowering they're looking at.
 

@@ -210,7 +210,9 @@ also drifted (`ref`, `typeof`, `weak` unhighlighted) and `jux.tmbundle/` has no
 `Rc<RefCell>`, including the spec's own "zero heap allocation" example. This is
 the single largest scoring hole (§CR at 44%), but it is a performance promise,
 not correctness, and §CR.9 sequences it as a later phase. It also means
-`E0950`-`E0952` are unreachable and should be marked so.
+`E0950`-`E0952` are unreachable and should be marked so. (Phase 8, tier 1:
+those numbers belong to the free-operator checks; §CR.7's diagnostics are now
+`E0953`-`E0955`, ERRATA E1XX-PHASE8.)
 
 **24. CLOSED 2026-09-26 (phase 4 merge, ERRATA E117).** ~~User-package-to-user-package bare-name capture.~~ A bare name in
 `package a;` can still reach a type in an unrelated `package b;` through the
