@@ -1,0 +1,135 @@
+/**
+ * Reading a collection THROUGH the name that reached it (§M.16.6, ERRATA E102).
+ *
+ * ERRATA E102 settled that a resolved name keeps its package and that every
+ * later question is asked of the type the name resolved to. It fixed the member
+ * CALL and left two neighbouring reads, because those two failed with no user
+ * class in sight and so were a different root cause than the shadow test:
+ *
+ *     import rust.std.Vec as RVec;
+ *     RVec<int> v = new RVec<int>();
+ *     v.push(5);
+ *     print($"${v[0]}");        // error[E0608]: cannot index into a value of
+ *                               // type Rc<JuxCell<Vec<isize>>>
+ *
+ *     import rust.std.VecDeque as RDeque;
+ *     RDeque<int> d = new RDeque<int>();
+ *     d.push_back(5);
+ *     print($"${d.front() ?? 0}");   // error[E0308]: expected &isize, found
+ *                                    // integer -- the `.cloned()` is missing
+ *
+ * Both were the same omission one step earlier than E102's. The backend lowered
+ * a local's WRITTEN type with no unit context at all, so the alias `RVec` (which
+ * is the last segment of nothing) resolved to no type whatsoever, and a decision
+ * that needs the resolved type got nothing to go on: the index read skipped the
+ * §6.5.1 `.borrow()` and the borrowed-result read skipped its `.cloned()`. The
+ * slot itself still carried the handle, because that half does resolve the
+ * written path, so the two halves disagreed exactly as they did in E102.
+ *
+ * Every shape below is therefore written three times -- bare, aliased and fully
+ * qualified -- because the three spellings name ONE type and a read through any
+ * of them has to behave identically. `stdlib_alias_collisions.jux` is the same
+ * matrix with a user class of each name in scope.
+ */
+
+import rust.std.Vec as RVec;
+import rust.std.HashMap as RMap;
+import rust.std.VecDeque as RDeque;
+
+/** The aliased list as a PARAMETER: a read through a name it was passed under. */
+int headOf(RVec<int> v) {
+    return v[0];
+}
+
+/** The aliased deque's borrowed-result read behind a call boundary. */
+int frontOf(RDeque<int> d) {
+    return d.front() ?? -1;
+}
+
+/** A class holding the aliased list in a FIELD, indexed through the handle. */
+class Bucket {
+    public RVec<int> items = new RVec<int>();
+
+    public int at(int i) {
+        return this.items[i];
+    }
+}
+
+public void main() {
+    // ---------------------------------------------------------------- the list
+    // The BARE spelling, which resolves through the auto-prelude.
+    Vec<int> bare = new Vec<int>();
+    bare.push(1);
+    bare.push(2);
+    int bareRead = bare[0];
+    bare[1] = 20;
+    print($"bare list: ${bareRead} ${bare[1]} ${bare.first() ?? -1} ${bare.first()!!}");
+
+    // The ALIAS. Same type, same reads, and the two that used to be wrong are
+    // the index and the `first()` whose Rust result borrows the receiver.
+    RVec<int> aliased = new RVec<int>();
+    aliased.push(1);
+    aliased.push(2);
+    int aliasRead = aliased[0];
+    aliased[1] = 20;
+    int? aliasFirst = aliased.first();
+    print($"alias list: ${aliasRead} ${aliased[1]} ${aliasFirst ?? -1} ${aliased.first()!!}");
+
+    // The FULLY-QUALIFIED name.
+    rust.std.Vec<int> qualified = new rust.std.Vec<int>();
+    qualified.push(1);
+    qualified.push(2);
+    int qualRead = qualified[0];
+    qualified[1] = 20;
+    print($"qualified list: ${qualRead} ${qualified[1]} ${qualified.first() ?? -1} ${qualified.first()!!}");
+
+    // ----------------------------------------------------------------- the map
+    // A map indexes by a BORROWED key, so it is a second `Index` shape, and
+    // `get` is a second borrowed-result read.
+    HashMap<String, int> bareMap = new HashMap<String, int>();
+    bareMap.insert("a", 1);
+    bareMap["a"] = 11;
+    print($"bare map: ${bareMap["a"]} ${bareMap.get("a") ?? -1} ${bareMap.get("a")!!}");
+
+    RMap<String, int> aliasMap = new RMap<String, int>();
+    aliasMap.insert("a", 1);
+    aliasMap["a"] = 11;
+    int? aliasGot = aliasMap.get("a");
+    print($"alias map: ${aliasMap["a"]} ${aliasGot ?? -1} ${aliasMap.get("a")!!}");
+
+    rust.std.HashMap<String, int> qualMap = new rust.std.HashMap<String, int>();
+    qualMap.insert("a", 1);
+    qualMap["a"] = 11;
+    print($"qualified map: ${qualMap["a"]} ${qualMap.get("a") ?? -1} ${qualMap.get("a")!!}");
+
+    // --------------------------------------------------------------- the deque
+    // `front()` returns `Option<&T>` in Rust, which is the shape that needs the
+    // `.cloned()` appended to it.
+    VecDeque<int> bareDeque = new VecDeque<int>();
+    bareDeque.push_back(7);
+    print($"bare deque: ${bareDeque.front() ?? -1} ${bareDeque.front()!!}");
+
+    RDeque<int> aliasDeque = new RDeque<int>();
+    aliasDeque.push_back(7);
+    int? aliasFront = aliasDeque.front();
+    print($"alias deque: ${aliasFront ?? -1} ${aliasDeque.front()!!}");
+
+    rust.std.VecDeque<int> qualDeque = new rust.std.VecDeque<int>();
+    qualDeque.push_back(7);
+    print($"qualified deque: ${qualDeque.front() ?? -1} ${qualDeque.front()!!}");
+
+    // --------------------------------------------------------------- the array
+    // An array is a reference type on the same terms (§6.5.2) and has only one
+    // spelling, so it is the control: it reaches the same `Index` routing
+    // without an import being involved at all.
+    int[] arr = new int[3];
+    arr[0] = 4;
+    int arrRead = arr[0];
+    print($"array: ${arrRead} ${arr[0]} ${arr.length}");
+
+    // ------------------------------------------------- past a call or a field
+    print($"passed: ${headOf(aliased)} ${frontOf(aliasDeque)}");
+    Bucket b = new Bucket();
+    b.items.push(5);
+    print($"field: ${b.at(0)}");
+}
