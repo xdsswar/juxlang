@@ -101,7 +101,7 @@ call the same function on their own package, so filtering would silently drop
 `load_src_tree_without_entries(manifest, keep)` from the E103 work is the filter
 to reuse.
 
-**5. Index and `@RustRefOut` reads through an alias import.** Same family as
+**5. CLOSED 2026-09-25 (`8c47abb`, under ERRATA E102).** ~~Index and `@RustRefOut` reads through an alias import.~~ Same family as
 E102 but a different root cause: these fail with NO user class present.
 ```jux
 import rust.std.Vec as RVec;
@@ -226,7 +226,10 @@ is ever added, `ConstCtx` needs a package.
 
 ## 4. Three streams stopped mid-flight
 
-Their work is uncommitted in their worktrees under `.claude/worktrees/`. Each
+Update 2026-09-25: all three are now committed on their worktree branches
+(`worktree-agent-<id>`), so deleting a worktree directory no longer loses
+work. Originally their work was uncommitted in their worktrees under
+`.claude/worktrees/`. Each
 can be resumed or re-derived from the notes above. If the worktrees are deleted
 for space, this work is lost and must be redone; nothing of it is on a branch.
 
@@ -237,10 +240,9 @@ ERRATA, the build-system addendum, the diagnostics addendum, a new
 flattening a multi-line TOML parse message when stopped. (It also left a stray
 `jt.txt` and `probe/` in the worktree.)
 
-**`agent-a0f7bb435c16f7698` (gap 5, alias index and ref-out).** Had edits to
-`exprs/array.rs`, `exprs/mod.rs`, `stmts.rs`, the missing-defs addendum and
-ERRATA, plus a new `examples/stdlib_alias_reads.jux` with a hand-written
-expectation. Was entering its gate when stopped, so it is the closest to done.
+**`agent-a0f7bb435c16f7698` (gap 5).** Gated and merged as `8c47abb`: 1540
+tests passed, the two failures (`dashboard`, `svg_studio`) were crates.io
+download errors and pass on rerun, clippy clean. The worktree can go.
 
 **`agent-aaba5147cd3b13715` (gaps 1, 9 and 10).** The largest: edits across
 `decls/{classes,enums,functions,interfaces,operators,records}.rs`,
