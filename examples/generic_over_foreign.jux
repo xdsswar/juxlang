@@ -1,9 +1,15 @@
-// A Jux generic class instantiated with a Rust type that is not `Clone`
-// (GAPS.md gap 2). `std::fs::File` cannot be copied, so a parameter that
-// only STORES its value, or hands it to a foreign method in place, carries
-// no `Clone` bound; a member that reads a `T` by value asks for it in a
-// `where` clause of its own, so the same classes still work over `int`
-// and `String`.
+// A Jux generic instantiated with a Rust type that is not `Clone`
+// (GAPS.md gap 2, ERRATA E118 and E120). `std::fs::File` cannot be
+// copied, so a parameter that only STORES its value, or hands it to a foreign
+// method in place, carries no `Clone` bound; a member that reads a `T` by
+// value asks for it in a `where` clause of its own, so the same declarations
+// still work over `int` and `String`. Calling such a member over `File` is
+// the checker's E0457 (tests/ui/type_argument_*.jux), never a rustc error.
+//
+// Every declaration shape takes part: standalone classes, a hierarchy used
+// through its base, an interface and its implementer, an abstract class, a
+// class with a property, an operator, an initializer block and a `drop`
+// body, a record and an enum.
 import rust.std.File;
 import rust.std.PathBuf;
 import rust.std.temp_dir;
@@ -46,6 +52,77 @@ class Shelf<U> {
     public Cell<U> cell() { return slot; }
 }
 
+// A hierarchy. `get` is virtual: through a `Holder<File>` it could reach any
+// override, so it asks what every override asks. `describe` calls `kind`,
+// which asks nothing, so neither does it.
+class Holder<T> {
+    public T item;
+    public Holder(T item) { this.item = item; }
+    public T get() { return item; }
+    public String kind() { return "holder"; }
+    public String describe() { return "a " + kind(); }
+}
+
+class Counted<T> extends Holder<T> {
+    private int hits = 0;
+    public Counted(T item) { super(item); }
+    @Override
+    public String kind() { return "counted"; }
+    public int bump() { hits = hits + 1; return hits; }
+}
+
+// An interface and a class implementing it.
+interface Store<T> {
+    int size();
+    T take();
+    default String summary() { return "store of " + size(); }
+}
+
+class OneStore<T> implements Store<T> {
+    private T only;
+    public OneStore(T only) { this.only = only; }
+    public int size() { return 1; }
+    public T take() { return only; }
+}
+
+// An abstract class.
+abstract class Source<T> {
+    public abstract T produce();
+    public String name() { return "source"; }
+}
+
+class ConstSource<T> extends Source<T> {
+    private T v;
+    public ConstSource(T v) { this.v = v; }
+    public T produce() { return v; }
+}
+
+// A property, an operator, an initializer block and a `drop` body, none of
+// which reads the `T`.
+class Tagged<T> {
+    public String Label { get; set; }
+    private T payload;
+    private int base = 0;
+    init { base = 10; }
+    public Tagged(T payload, String label) {
+        this.payload = payload;
+        this.Label = label;
+    }
+    public int operator +(int k) { return base + k; }
+    public T peek() { return payload; }
+    drop { print("dropped " + base); }
+}
+
+// A record and an enum.
+record Named<T>(String name, T value) {
+    public String title() { return "named " + name; }
+}
+
+enum Slot<T> {
+    Empty,
+    Full(T value)
+}
+
 void main() {
     final PathBuf path = temp_dir().join("jux_generic_over_foreign.txt");
 
@@ -65,7 +142,30 @@ void main() {
     Shelf<File> s = new Shelf<File>(c);
     print(s.cell().label());
 
-    // The same classes over ordinary Jux types keep every member.
+    Counted<File> counted = new Counted<File>(File.open(path));
+    print(counted.bump());
+    Holder<File> holder = counted;
+    print(holder.describe());
+
+    Store<File> store = new OneStore<File>(File.open(path));
+    print(store.summary());
+
+    Source<File> source = new ConstSource<File>(File.open(path));
+    print(source.name());
+
+    Tagged<File> tagged = new Tagged<File>(File.open(path), "log");
+    print(tagged.Label);
+    tagged.Label = "log2";
+    print(tagged + 5);
+
+    Named<File> named = new Named<File>("cfg", File.open(path));
+    print(named.title());
+    print(named.name);
+
+    Slot<File> slot = Slot.Full(File.open(path));
+    print(slot.name());
+
+    // The same declarations over ordinary Jux types keep every member.
     Cell<int> n = new Cell<int>(5);
     n.set(n.get() + 2);
     print(n.get());
@@ -76,6 +176,19 @@ void main() {
     print($"${q.first} ${q.getSecond()}");
     Shelf<int> shelf = new Shelf<int>(n);
     print(shelf.cell().get());
+
+    Holder<int> hi = new Counted<int>(3);
+    print($"${hi.describe()} ${hi.get()}");
+    Store<String> ss = new OneStore<String>("one");
+    print($"${ss.summary()} ${ss.take()}");
+    Source<int> si = new ConstSource<int>(8);
+    print(si.produce());
+    Tagged<int> ti = new Tagged<int>(4, "num");
+    print(ti.peek());
+    Named<int> ni = new Named<int>("n", 9);
+    print(ni);
+    Slot<String> ns = Slot.Full("x");
+    print(ns);
 
     remove_file(path);
 }

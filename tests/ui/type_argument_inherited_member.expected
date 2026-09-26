@@ -1,0 +1,1 @@
+type_argument_inherited_member.jux:12:23: [E0457] error: `LogCell` extends `Cell<File>` and so gets `Cell.get()`, which copies its `T`, but `File` cannot be copied

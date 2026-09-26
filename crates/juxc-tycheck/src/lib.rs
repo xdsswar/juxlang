@@ -42,6 +42,8 @@ use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
 pub mod check;
+pub mod clone_needs;
+pub(crate) mod clone_uses;
 pub mod const_eval;
 pub(crate) mod definite_assign;
 pub mod defaults;
@@ -366,6 +368,16 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     symbols.record_patterns = all_record_patterns;
     symbols.free_operator_calls = all_free_operator_calls;
     symbols.operator_selections = all_operator_selections;
+    // Gap 2 (ERRATA E118, E120): where each generic declaration's
+    // `Clone + Debug` goes. It reads the expression types the walk above
+    // recorded, so it runs after it; the backend writes its `where` clauses
+    // from the result and `E0457` checks every use against the same table.
+    symbols.clone_needs = clone_needs::compute(units, &symbols, &all_expr_types);
+    // `E0457`: every use checked against that table, so the checker, not
+    // rustc, reports a member used over a type argument that cannot meet it.
+    for (idx, d) in clone_uses::check_uses(units, &symbols, &all_expr_types) {
+        tc.diagnostics.push(d.with_file(idx));
+    }
     TypeCheckResult {
         diagnostics: tc.diagnostics,
         symbols,

@@ -74,7 +74,7 @@ route E99 names: make `Debug` canonical for Jux values, emitting a hand-written
 (§O.7.1). E97 already has a worked example of writing that impl rather than
 deriving it, in `decls/classes.rs`.
 
-**2. PARTLY FIXED 2026-09-26 (phase 3 merge, ERRATA E118): a standalone generic class moves `Clone + Debug` to the members that need it. Still open: hierarchies, interface implementers, and classes with properties/operators/init blocks/`drop` keep the baseline, and calling a member whose bound the argument cannot meet is reported by rustc, not the checker.** `Cell<File>` over a Jux generic. The blanket `Clone + Debug + 'static`
+**2. CLOSED 2026-09-26 (E118, E120).** Every generic class, interface, record and enum moves `Clone + Debug` to the members that copy a `T`; a parameter keeps it on the whole declaration only for a stated rule, and a use the argument cannot meet is the checker's `E0457`, not rustc's. What stays out is listed in the entry's known boundary (a record or enum VALUE over a non-`Clone` type is itself not copyable, as E97's non-generic record is). ~~`Cell<File>` over a Jux generic.~~ The blanket `Clone + Debug + 'static`
 on every generic declaration. Dropping it wholesale breaks the core library
 (`Iterable.reduce<U>` clones its accumulator; `LazyIterable.chain` needs
 `T: Clone`); dropping it only from the struct emitter leaves the inherent

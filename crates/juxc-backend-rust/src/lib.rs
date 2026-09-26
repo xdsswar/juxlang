@@ -1232,17 +1232,15 @@ struct RustEmitter {
     /// non-generic declaration. See `emit_operator_impl_head`.
     pub(crate) op_impl_class: Option<juxc_ast::ClassDecl>,
     pub(crate) hashed_params: std::collections::HashSet<String>,
-    /// Relaxed type parameters per class FQN (gap 2): those whose
-    /// `Clone + Debug` moves from the headers to the members that need it.
-    /// Computed once, on first use, by `compute_relaxed_class_params`.
-    pub(crate) relaxed_params_by_fqn: Option<std::collections::HashMap<String, Vec<String>>>,
-    /// Parameters the header being written declares with `'static` alone
-    /// rather than the `Clone + Debug + 'static` baseline. Set around the
-    /// specific headers of a relaxed class and cleared straight after.
-    pub(crate) relaxed_header_params: std::collections::HashSet<String>,
-    /// The relaxed class whose inherent impl is being written: each
-    /// constructor and method takes its `where` clause from it.
-    pub(crate) relaxed_class: Option<crate::decls::clone_bounds::RelaxedClass>,
+    /// The relaxed parameters of the declaration being emitted (gap 2,
+    /// `decls::clone_bounds`): every header written while it is set carries
+    /// `'static` alone for them, and every function item states the
+    /// `Clone + Debug` its member needs in a `where` clause.
+    pub(crate) relaxed_scope: crate::decls::clone_bounds::RelaxedScope,
+    /// While an inherited member is copied into a subclass (or a parent's
+    /// body becomes a `super` shim), the parent-parameter to subclass-type
+    /// map its `where` clause is read through.
+    pub(crate) relaxed_member_subst: Option<std::collections::HashMap<String, juxc_ast::TypeRef>>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -6149,9 +6147,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             eq_bound_params: std::collections::HashSet::new(),
             op_impl_class: None,
             hashed_params: std::collections::HashSet::new(),
-            relaxed_params_by_fqn: None,
-            relaxed_header_params: std::collections::HashSet::new(),
-            relaxed_class: None,
+            relaxed_scope: crate::decls::clone_bounds::RelaxedScope::default(),
+            relaxed_member_subst: None,
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),

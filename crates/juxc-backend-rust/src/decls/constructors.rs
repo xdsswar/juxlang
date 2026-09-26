@@ -1037,7 +1037,17 @@ impl RustEmitter {
         // (JUX-LANG-V1 §7.3.1, ERRATA E21). Run inside the inner builder
         // instead, a parent's body ran in the middle of its child's field
         // setup, and a child's body ran before its parent's.
-        if self.class_in_hierarchy(class_decl) {
+        //
+        // A body that only hands its parameters on (`super(p)` and
+        // `this.f = p;`, `juxc_tycheck::clone_needs::ctor_is_pure_store`)
+        // has no effect beyond the values it stores, so when it runs is
+        // unobservable and it stays in the builder: replaying it would use
+        // each parameter twice, which copies it, and a hierarchy over a type
+        // that cannot be copied could not be constructed at all (gap 2). The
+        // checker's `where` clauses read the same predicate.
+        if self.class_in_hierarchy(class_decl)
+            && !juxc_tycheck::clone_needs::ctor_is_pure_store(ctor, class_decl)
+        {
             return true;
         }
         let mut current = ctor;
@@ -1224,9 +1234,8 @@ impl RustEmitter {
             self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push_str(") -> Self");
-        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(ctor.span)) {
-            self.w.push_str(&clause);
-        }
+        let clause = self.relaxed_where(ctor.span, None);
+        self.w.push_str(&clause);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.emit_static_init_trigger();
@@ -1428,9 +1437,8 @@ impl RustEmitter {
         // `C_Inner { … }` literal in the body needs no turbofish — Rust
         // infers the args from the field initializers.
         self.emit_generic_params_as_args(&class_decl.generic_params);
-        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(ctor.span)) {
-            self.w.push_str(&clause);
-        }
+        let clause = self.relaxed_where(ctor.span, None);
+        self.w.push_str(&clause);
         self.w.push_str(" {\n");
         self.w.indent_inc();
 
@@ -1519,6 +1527,15 @@ impl RustEmitter {
                 self.w.push_str("let ");
                 self.w.push_str(&seeded[&seed.field]);
                 self.w.push_str(" = ");
+                // A parameter the body names nowhere else is MOVED into its
+                // seed (gap 2): copying it would ask a `Clone` of a `T` the
+                // program only stores (`juxc_tycheck::clone_needs` treats this
+                // store the same way).
+                if let Some(param) = juxc_tycheck::clone_needs::seed_moves_param(ctor, class_decl, &seed.field) {
+                    self.w.push_str(&to_rust_ident(param));
+                    self.w.push_str(";\n");
+                    continue;
+                }
                 let value_mark = self.w.mark();
                 self.emit_ctor_field_init(field_ty.as_ref(), &seed.value);
                 // A parameter stored into its field and read again later in
@@ -1860,11 +1877,10 @@ impl RustEmitter {
         // Thread generic params onto the inner return type, same as the
         // explicit-ctor path (`pub fn new_inner() -> Box_Inner<T>`).
         self.emit_generic_params_as_args(&class_decl.generic_params);
-        // A relaxed class's synthesized constructor asks for every relaxed
-        // parameter's `Clone + Debug` (gap 2): its field defaults are not
-        // analysed member by member.
-        let relaxed_where =
-            self.relaxed_class.as_ref().map(|r| r.where_clause(class_decl.span)).unwrap_or_default();
+        // A relaxed class's synthesized constructor states what its field
+        // initializers and its parent's constructor need (gap 2): the
+        // checker keys it by the class's own span.
+        let relaxed_where = self.relaxed_where(class_decl.span, None);
         self.w.push_str(&relaxed_where);
         self.w.push_str(" {\n");
         self.w.indent_inc();

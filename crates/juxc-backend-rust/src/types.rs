@@ -1305,13 +1305,17 @@ impl RustEmitter {
     }
 
     /// The bound every type parameter carries: `Clone + std::fmt::Debug +
-    /// 'static`, or `'static` alone for a parameter of a relaxed class while
-    /// one of its relaxed headers is written (gap 2, see
-    /// `decls::clone_bounds`). The members of such a class state the
-    /// `Clone + Debug` they need in `where` clauses of their own.
+    /// 'static`, or `'static` alone for a relaxed parameter of the declaration
+    /// being emitted (gap 2, see `decls::clone_bounds`), `std::fmt::Debug +
+    /// 'static` for a record's or enum's. The members of such a declaration
+    /// state the `Clone + Debug` they need in `where` clauses of their own.
     fn emit_baseline_bound(&mut self, param: &str) {
-        if self.relaxed_header_params.contains(param) {
-            self.w.push_str("'static");
+        if self.relaxed_scope.set.contains(param) {
+            if self.relaxed_scope.keep_debug {
+                self.w.push_str("std::fmt::Debug + 'static");
+            } else {
+                self.w.push_str("'static");
+            }
         } else {
             self.w.push_str("Clone + std::fmt::Debug + 'static");
         }

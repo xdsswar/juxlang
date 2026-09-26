@@ -1,0 +1,18 @@
+// E0457 at an `extends` clause: a class receives a copy of every member it
+// inherits, so `LogCell extends Cell<File>` gets `get()`, which copies its
+// `T`. Keeping the parameter (`class LogCell<T> extends Cell<T>`) is legal.
+import rust.std.File;
+
+class Cell<T> {
+    private T value;
+    public Cell(T value) { this.value = value; }
+    public T get() { return value; }
+}
+
+class LogCell extends Cell<File> {
+    public LogCell(File f) { super(f); }
+}
+
+public void main() {
+    LogCell c = new LogCell(File.open("app.log"));
+}

@@ -92,6 +92,11 @@ impl RustEmitter {
                 self.emit_return_type_as_rust(t);
             }
         }
+        // Gap 2: the operator's `Clone + Debug`, like any member's; an
+        // inherited operator reads its declaring class's answer through the
+        // map `emit_inherited_operator_methods` sets.
+        let clause = self.relaxed_where(op.span, self.relaxed_member_subst.as_ref());
+        self.w.push_str(&clause);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         if let Some(body) = body {

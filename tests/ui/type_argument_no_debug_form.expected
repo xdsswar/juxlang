@@ -1,0 +1,1 @@
+type_argument_no_debug_form.jux:14:11: [E0457] error: `(int) -> int` has no debug form, and `Box<(int) -> int>.get()` needs one for `T`

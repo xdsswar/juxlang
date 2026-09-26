@@ -145,6 +145,12 @@ pub struct SymbolTable {
     /// `.jux.d` stub. Every kind (class, record, enum, interface, function,
     /// alias, const) is recorded.
     pub decl_unit: HashMap<String, usize>,
+    /// Which type parameters of each generic declaration go without
+    /// `Clone + Debug`, and what each member needs back (gap 2, ERRATA E118,
+    /// E120). Computed AFTER the check walk, from its expression
+    /// types; the backend writes its `where` clauses from this table and the
+    /// checker's `E0457` reads the same one.
+    pub clone_needs: crate::clone_needs::CloneNeeds,
 }
 
 /// Per-unit name-resolution context built once during

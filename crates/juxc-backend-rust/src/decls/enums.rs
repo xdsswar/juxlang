@@ -114,6 +114,18 @@ impl RustEmitter {
         // concept for Phase 2 of the backend-split work.** See git
         // history for the pattern notes.
 
+        // Gap 2: a relaxed parameter keeps `Debug` (the enum's string form
+        // prints its payloads) and moves `Clone` to the members that need it
+        // (`juxc_tycheck::clone_needs`).
+        let enum_fqn = {
+            let pkg = self.current_package_path();
+            if pkg.is_empty() {
+                enum_decl.name.text.clone()
+            } else {
+                format!("{pkg}.{}", enum_decl.name.text)
+            }
+        };
+        let prev_scope = self.enter_relaxed_scope(Some(&enum_fqn));
         // `#[derive(...)] pub enum Name {` — deletion-aware just like
         // records (`record_derive_attribute` shape).
         let hash_plan = self.enum_hash_plan(enum_decl);
@@ -343,6 +355,7 @@ impl RustEmitter {
         if hash_plan.eq_marker {
             self.emit_value_eq_marker(&enum_decl.name.text, &enum_decl.generic_params);
         }
+        self.leave_relaxed_scope(prev_scope);
     }
 
     /// The enum's `Eq` / `Hash` plan: the payloads are its components.
@@ -1011,6 +1024,9 @@ impl crate::RustEmitter {
                 self.emit_return_type_as_rust(t);
             }
         }
+        // Gap 2: the method's own `Clone + Debug`.
+        let clause = self.relaxed_where(method.span, None);
+        self.w.push_str(&clause);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         if let Some(body) = body {

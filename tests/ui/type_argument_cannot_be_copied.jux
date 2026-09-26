@@ -1,0 +1,18 @@
+// E0457: `Cell<File>` is a legal type, since `Cell` only STORES its `T`, but
+// `get()` returns a copy of the `T` and `File` cannot be copied. The checker
+// reports the call; before gap 2 closed rustc reported a `where` clause the
+// program never wrote (ERRATA E118, E120).
+import rust.std.File;
+
+class Cell<T> {
+    private T value;
+    public Cell(T value) { this.value = value; }
+    public T get() { return value; }
+    public String label() { return "cell"; }
+}
+
+public void main() {
+    Cell<File> c = new Cell<File>(File.open("app.log"));
+    print(c.label());
+    File f = c.get();
+}

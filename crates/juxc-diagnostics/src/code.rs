@@ -555,6 +555,16 @@ pub enum Code {
     /// in its elements before the program writes them. `new T[]{…}` lists
     /// them; a `Vec<T>` grows as they are made.
     E0458_ArrayElementHasNoDefault,
+    /// E0457 -- A **type argument lacks a capability** the generic
+    /// declaration asks of it (Type system §T.2.1, ERRATA E118,
+    /// E120). A generic class, interface, record or enum asks for
+    /// `Clone + Debug` only in the members that copy or print a `T`, so
+    /// `Cell<File>` is a legal type; calling `get()` on it, which returns a
+    /// copy of the `T`, is not, because `File` cannot be copied. Also raised
+    /// for a parameter that keeps the bound for the whole declaration (the
+    /// reason is named), for an `extends` / `implements` clause whose
+    /// inherited members need it, and for a field read that copies one.
+    E0457_TypeArgumentLacksCapability,
     /// E0513 -- A function given where a **function pointer** is expected does
     /// not fit it (Layout-ABI §L.6.4): it is a method rather than a free
     /// function, it is generic or overloaded, it declares `throws`, or its
@@ -1319,6 +1329,7 @@ impl Code {
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0460_MissingReturn            => "E0460",
             Code::E0458_ArrayElementHasNoDefault => "E0458",
+            Code::E0457_TypeArgumentLacksCapability => "E0457",
             Code::E0513_FunctionDoesNotFitPointer => "E0513",
             Code::E0514_CapturingLambdaAsPointer => "E0514",
             Code::E0515_MethodThroughClassPointer => "E0515",

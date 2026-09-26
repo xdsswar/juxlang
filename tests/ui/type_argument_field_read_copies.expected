@@ -1,0 +1,1 @@
+type_argument_field_read_copies.jux:14:17: [E0457] error: `File` cannot be copied, and reading `Cell<File>.value` copies the `T` out of the object

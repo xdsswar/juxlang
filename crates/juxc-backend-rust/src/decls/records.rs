@@ -32,7 +32,20 @@ impl RustEmitter {
         // Inside a record's methods and operators `this` is `&Self`; see
         // `in_record_body`.
         let prev = std::mem::replace(&mut self.in_record_body, true);
+        // Gap 2: a relaxed parameter keeps `Debug` (the record's string form
+        // prints its components) and moves `Clone` to the members that need
+        // it (`juxc_tycheck::clone_needs`).
+        let fqn = {
+            let pkg = self.current_package_path();
+            if pkg.is_empty() {
+                record_decl.name.text.clone()
+            } else {
+                format!("{pkg}.{}", record_decl.name.text)
+            }
+        };
+        let prev_scope = self.enter_relaxed_scope(Some(&fqn));
         self.emit_record_decl_inner(record_decl);
+        self.leave_relaxed_scope(prev_scope);
         self.in_record_body = prev;
     }
 
@@ -208,7 +221,12 @@ impl RustEmitter {
             // the bare trait name did not compile (rustc E0782).
             self.emit_value_type_as_rust(&comp.ty);
         }
-        self.w.push_str(") -> Self {\n");
+        self.w.push_str(") -> Self");
+        // Gap 2: the canonical constructor moves its components; only a
+        // compact body can ask for `Clone + Debug` (keyed by the record).
+        let clause = self.relaxed_where(record_decl.span, None);
+        self.w.push_str(&clause);
+        self.w.push_str(" {\n");
         self.w.indent_inc();
         if let Some(compact) = record_decl.compact_ctor.clone() {
             let params: Vec<juxc_ast::Param> = record_decl
@@ -281,7 +299,10 @@ impl RustEmitter {
                 self.w.push_str(": ");
                 self.emit_type_as_rust(&p.ty);
             }
-            self.w.push_str(") -> Self {\n");
+            self.w.push_str(") -> Self");
+            let clause = self.relaxed_where(ctor.span, None);
+            self.w.push_str(&clause);
+            self.w.push_str(" {\n");
             self.w.indent_inc();
             // The delegation, with each argument shaped for the parameter
             // it lands in (a `T?` slot wraps a plain value).

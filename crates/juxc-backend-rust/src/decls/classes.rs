@@ -891,12 +891,13 @@ impl RustEmitter {
         let name = &class_decl.name.text;
         let inner = format!("{name}_Inner");
         // Gap 2: the parameters whose `Clone + Debug` moves from this class's
-        // headers to the members that need it (`decls::clone_bounds`).
-        let relaxed: Vec<String> = match self.resolve_bare_class_fqn(name) {
-            Some(fqn) => self.relaxed_class_params(&fqn),
-            None => Vec::new(),
-        };
-        let relaxed_set: HashSet<String> = relaxed.iter().cloned().collect();
+        // headers to the members that need it (`decls::clone_bounds`). The
+        // scope covers everything this class emits, so every header carries
+        // `'static` alone for them and every function item states its own
+        // clause.
+        let class_fqn = self.resolve_bare_class_fqn(name);
+        let prev_scope = self.enter_relaxed_scope(class_fqn.as_deref());
+        let relaxed: Vec<String> = self.relaxed_scope.order.clone();
 
         // ---- C_Inner: the instance fields ----
         // Debug joins Clone so the newtype's derived Debug resolves
@@ -943,9 +944,7 @@ impl RustEmitter {
         // when its params do). Non-generic classes emit no `<…>` at all.
         self.w.push_str("pub struct ");
         self.w.push_str(&inner);
-        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-        self.relaxed_header_params.clear();
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // **Inheritance embed (§CR.3.5 / §CR.5.1).** When this wrapper
@@ -1063,9 +1062,7 @@ impl RustEmitter {
         if inner_blocks_debug {
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.relaxed_header_params = relaxed_set.clone();
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-            self.relaxed_header_params.clear();
             self.w.push_str(" std::fmt::Debug for ");
             self.w.push_str(&inner);
             self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -1114,9 +1111,7 @@ impl RustEmitter {
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
         self.w.push_str(&to_rust_ident(name));
-        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-        self.relaxed_header_params.clear();
         // The newtype's single field carries the SAME visibility as the struct.
         // A `public` class is consumed from OTHER crates (a workspace path
         // dependency), and every lowered field/method access reaches the handle
@@ -1131,9 +1126,7 @@ impl RustEmitter {
         if !relaxed.is_empty() {
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.relaxed_header_params = relaxed_set.clone();
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-            self.relaxed_header_params.clear();
             self.w.push_str(" Clone for ");
             self.w.push_str(&to_rust_ident(name));
             self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -1154,18 +1147,11 @@ impl RustEmitter {
         let declared = Self::class_declared_types(class_decl);
         self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.collect_equality_bound_params(class_decl);
-        self.relaxed_header_params = relaxed_set.clone();
         self.emit_generic_params_with_bounds(&class_decl.generic_params, &defaulted);
-        self.relaxed_header_params.clear();
         self.w.push(' ');
         self.w.push_str(&to_rust_ident(name));
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
-        let prev_relaxed = self.relaxed_class.take();
-        if !relaxed.is_empty() {
-            let member_needs = self.relaxed_member_needs(class_decl, &relaxed);
-            self.relaxed_class = Some(crate::decls::clone_bounds::RelaxedClass { params: relaxed.clone(), member_needs });
-        }
 
         // Static `final` fields → `pub const` associated items, same
         // as the legacy path.
@@ -1291,7 +1277,6 @@ impl RustEmitter {
             self.emit_inherited_operator_methods(class_decl);
         }
         self.emitting_wrapper_class = prev_wrapper;
-        self.relaxed_class = prev_relaxed;
         self.w.line("}");
         self.w.newline();
 
@@ -1331,6 +1316,10 @@ impl RustEmitter {
                     self.w.push_str("> for ");
                     self.w.push_str(parent_bare);
                     self.emit_parent_newtype_generic_args(parent_ty);
+                    // The slice is copied out of the child (gap 2): the
+                    // conversion holds where the parent's state can be.
+                    let all = self.relaxed_where_all();
+                    self.w.push_str(&all);
                     self.w.push_str(" { fn from(v: ");
                     self.w.push_str(&to_rust_ident(name));
                     self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -1400,9 +1389,8 @@ impl RustEmitter {
         let has_to_string = effective_ops
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
-        // The identity impls print and compare the handle's address, so a
-        // relaxed class writes them over its relaxed parameters too.
-        self.relaxed_header_params = relaxed_set.clone();
+        // The identity impls print and compare the handle's address, so they
+        // hold for every type argument (the relaxed scope is still set).
         if !has_to_string {
             self.emit_identity_display(name, true, &class_decl.generic_params);
         } else if !class_decl.generic_params.is_empty() {
@@ -1442,7 +1430,6 @@ impl RustEmitter {
         if !self.class_chain_declares_equality(class_decl) {
             self.emit_identity_eq_hash(name, &class_decl.generic_params);
         }
-        self.relaxed_header_params.clear();
         let generic = !class_decl.generic_params.is_empty();
         self.op_impl_class = generic.then(|| class_decl.clone());
         for op in &effective_ops {
@@ -1476,8 +1463,10 @@ impl RustEmitter {
         // Generic-class static methods → module-scope free functions
         // (`<Class>_<method>`), so a `Class.method(args)` static call doesn't
         // require inferring the class's K/V/N (E0284) — see
-        // `emit_generic_class_static_fns`.
-        self.emit_generic_class_static_fns(class_decl);
+        // `emit_generic_class_static_fns`. A static names no instance, so its
+        // lifted parameters keep the full baseline.
+        self.with_baseline_scope(|e| e.emit_generic_class_static_fns(class_decl));
+        self.leave_relaxed_scope(prev_scope);
     }
 
     /// Emit the parent's generic args as a `<…>` suffix on its **inner**
@@ -1694,12 +1683,16 @@ impl RustEmitter {
                 if let Some(k) = self.merged_overload_suffix(&class_decl.name.text, m) {
                     self.pending_decl_suffix = Some(k);
                 }
+                // Its `where` clause is the ancestor's, read through the same
+                // map (gap 2, `decls::clone_bounds`).
+                let prev_subst = self.relaxed_member_subst.replace(subst.clone());
                 if subst.is_empty() {
                     self.emit_method(m);
                 } else {
                     let substituted = substitute_fn_signature(m, &subst);
                     self.emit_method(&substituted);
                 }
+                self.relaxed_member_subst = prev_subst;
             }
             cursor = parent_extends;
             depth += 1;
@@ -1923,6 +1916,9 @@ impl RustEmitter {
                         self.emit_return_type_as_rust(&rsub);
                     }
                 }
+                // Gap 2: the default's own `Clone + Debug`, as its trait states it.
+                let mut forwarder_bounds = forwarder_bounds;
+                forwarder_bounds.extend(self.relaxed_where_parts(sig.span, Some(&type_subst)));
                 if !forwarder_bounds.is_empty() {
                     self.w.push_str(" where ");
                     self.w.push_str(&forwarder_bounds.join(", "));
@@ -2121,7 +2117,9 @@ impl RustEmitter {
                 renamed.name = juxc_ast::Ident { text: shim_name, span: m.name.span };
                 let prev_depth = self.super_shim_depth;
                 self.super_shim_depth = Some(depth);
+                let prev_subst = self.relaxed_member_subst.replace(subst.clone());
                 self.emit_method(&renamed);
+                self.relaxed_member_subst = prev_subst;
                 self.super_shim_depth = prev_depth;
                 depth_by_method.insert(member, depth + 1);
             }
@@ -2877,7 +2875,12 @@ impl RustEmitter {
         let inherited: Vec<juxc_ast::OperatorDecl> =
             self.class_effective_operators(class_decl).into_iter().skip(own).collect();
         for op in &inherited {
+            // The declaring ancestor's parameters, in this class's types, for
+            // the copied operator's `where` clause (gap 2).
+            let subst = self.ancestor_member_subst(class_decl, op.span);
+            let prev_subst = std::mem::replace(&mut self.relaxed_member_subst, subst);
             self.emit_operator_as_method(op);
+            self.relaxed_member_subst = prev_subst;
         }
         if let Some(owner) = self.equality_share_owner(&class_decl.name.text) {
             let ty = Self::param_type_ref(&owner, class_decl.name.span);
@@ -2932,6 +2935,9 @@ impl RustEmitter {
                 }
             }
         }
+        // Gap 2: the member's `Clone + Debug`, joined over every override.
+        let clause = self.kind_member_where(name, sig);
+        self.w.push_str(&clause);
         self.w.push_str(";\n");
     }
 
@@ -2977,6 +2983,8 @@ impl RustEmitter {
                 }
             }
         }
+        let clause = self.kind_member_where(name, sig);
+        self.w.push_str(&clause);
         self.w.push_str(" { ");
         // An async delegate returns the boxed future the trait promises.
         if is_async {
@@ -3580,6 +3588,8 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self) -> ");
             self.emit_value_type_as_rust(ty);
+            let clause = self.value_copy_where(ty);
+            self.w.push_str(&clause);
             self.w.push_str(";\n");
             self.w.emit_indent();
             self.w.push_str("fn __set_");
@@ -3614,6 +3624,8 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self) -> ");
             self.emit_value_type_as_rust(ty);
+            let clause = self.value_copy_where(ty);
+            self.w.push_str(&clause);
             self.w.push_str(" { self.0.borrow()");
             for _ in 0..*depth {
                 self.w.push_str(".__parent");
@@ -4208,6 +4220,8 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str("(&self) -> ");
             self.emit_value_type_as_rust(&ty);
+            let clause = self.value_copy_where(&ty);
+            self.w.push_str(&clause);
             self.w.push_str(" { ");
             self.emit_forwarding_qualifier(&class_bare, &own_args);
             self.w.push_str("__get_");
@@ -4280,6 +4294,8 @@ impl RustEmitter {
                 }
             }
         }
+        let clause = self.kind_member_where(name, sig);
+        self.w.push_str(&clause);
         self.w.push_str(" { ");
         self.emit_forwarding_qualifier(class_bare, own_args);
         self.w.push_str(&to_rust_ident(name));
@@ -4369,6 +4385,8 @@ impl RustEmitter {
                     self.emit_return_type_as_rust(t);
                 }
             }
+            let clause = self.relaxed_where(m.span, None);
+            self.w.push_str(&clause);
             self.w.push_str(";\n");
         }
         self.emit_accessor_trait_sigs_at(&accessors);
@@ -4412,6 +4430,8 @@ impl RustEmitter {
             // fully-qualified `Container::<T…>::peek(self, args)` path so it
             // resolves to the inherent impl (not this trait method, which
             // would recurse). The turbofish keeps the generic args explicit.
+            let clause = self.relaxed_where(m.span, None);
+            self.w.push_str(&clause);
             self.w.push_str(" { ");
             self.w.push_str(class_bare);
             if !class_decl.generic_params.is_empty() {
@@ -4929,6 +4949,11 @@ impl RustEmitter {
                 //     `<crate::pkg::Parent>::X(self, args)` to
                 //     bypass the trait method (which is this
                 //     impl's own — using `self.X()` would recurse).
+                //
+                // Gap 2: the interface member's `Clone + Debug`, read through
+                // the interface-to-class map, exactly as the trait states it.
+                let clause = self.relaxed_where(method.span, Some(&type_subst));
+                self.w.push_str(&clause);
                 self.w.push_str(" {\n");
                 self.w.indent_inc();
                 self.w.emit_indent();
@@ -6177,11 +6202,11 @@ impl RustEmitter {
                 self.emit_return_type_as_rust(t);
             }
         }
-        // A relaxed class's method states the `Clone + Debug` it needs
-        // (gap 2, `decls::clone_bounds`).
-        if let Some(clause) = self.relaxed_class.as_ref().map(|r| r.where_clause(method.span)) {
-            self.w.push_str(&clause);
-        }
+        // A relaxed declaration's method states the `Clone + Debug` it needs
+        // (gap 2, `decls::clone_bounds`); a copy of an ancestor's method reads
+        // the ancestor's answer through the ancestor-to-this-class map.
+        let clause = self.relaxed_where(method.span, self.relaxed_member_subst.as_ref());
+        self.w.push_str(&clause);
         self.w.push_str(" {\n");
         // Body sits at depth 2 — push one more level so
         // `emit_fn_body_at` sees the writer at the body depth.

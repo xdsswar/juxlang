@@ -120,7 +120,9 @@ impl RustEmitter {
                     self.w.push_str("> + '_>>");
                 }
             }
-            let bounds = crate::decls::functions::where_bounds(&m.wheres);
+            let mut bounds = crate::decls::functions::where_bounds(&m.wheres);
+            // Gap 2: the member's `Clone + Debug`, as the trait states it.
+            bounds.extend(self.relaxed_where_parts(m.span, None));
             if !bounds.is_empty() {
                 self.w.push_str(" where ");
                 self.w.push_str(&bounds.join(", "));
@@ -235,6 +237,19 @@ impl RustEmitter {
     /// up the body so implementing classes can omit the method
     /// to inherit the default, or override it by re-declaring.
     pub(crate) fn emit_interface_decl(&mut self, interface: &juxc_ast::InterfaceDecl) {
+        // Gap 2: a relaxed parameter carries `'static` alone on the trait and
+        // its `Rc` forwarding impl, and each member states the `Clone + Debug`
+        // it needs, joined over every implementation
+        // (`juxc_tycheck::clone_needs`).
+        let iface_fqn = {
+            let pkg = self.current_package_path();
+            if pkg.is_empty() {
+                interface.name.text.clone()
+            } else {
+                format!("{pkg}.{}", interface.name.text)
+            }
+        };
+        let prev_scope = self.enter_relaxed_scope(Some(&iface_fqn));
         // (Migrated to Writer indent-aware API)
         self.w.emit_indent();
         self.emit_visibility(interface.visibility);
@@ -385,6 +400,7 @@ impl RustEmitter {
                 bounds.push("Self: Sized + Clone + 'static".to_string());
             }
             bounds.extend(crate::decls::functions::where_bounds(&method.wheres));
+            bounds.extend(self.relaxed_where_parts(method.span, None));
             if !bounds.is_empty() {
                 self.w.push_str(" where ");
                 self.w.push_str(&bounds.join(", "));
@@ -501,6 +517,8 @@ impl RustEmitter {
         if interface.generic_params.is_empty() {
             self.emit_dyn_identity_eq_hash(&interface.name.text);
         }
+        // Static methods and constants name no instance: the full baseline.
+        self.leave_relaxed_scope(prev_scope);
 
         // Static interface methods: free functions named
         // `<Interface>_<method>`. The call-site dispatch in

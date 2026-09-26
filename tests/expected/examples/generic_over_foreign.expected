@@ -5,8 +5,25 @@ box of files
 42
 true
 cell
+1
+a counted
+store of 1
+source
+log
+15
+named cfg
+cfg
+Full
 7
 2
 box of words: hello
 pi 3.5
 7
+a counted 3
+store of 1 one
+8
+4
+Named(name: n, value: 9)
+Full(value: x)
+dropped 10
+dropped 10

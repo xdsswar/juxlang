@@ -1,0 +1,15 @@
+// E0457 for a parameter that KEEPS `Clone + Debug` for the whole
+// declaration: `Shelf` holds its `T` in an array, and an array copies its
+// elements, so `Shelf<File>` cannot be formed at all. The message says why.
+import rust.std.File;
+
+class Shelf<T> {
+    private T[] items;
+    public Shelf(T[] items) { this.items = items; }
+    public int count() { return items.length; }
+}
+
+public void main() {
+    Shelf<File>? s = null;
+    print(s == null);
+}

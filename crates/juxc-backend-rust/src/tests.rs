@@ -2064,9 +2064,10 @@ fn string_component_record_uses_owned_string_throughout() {
     );
 }
 
-/// Generic record `Pair<A, B>` lowers to a Rust generic struct with
-/// the `Clone`-bounded impl and the auto-clone-on-read for
-/// generic-typed components.
+/// Generic record `Pair<A, B>` lowers to a Rust generic struct whose impl
+/// keeps `Debug` on each parameter (the record's string form prints it) and
+/// moves `Clone` to the members that copy one (gap 2, ERRATA
+/// E120), and the auto-clone-on-read for generic-typed components.
 #[test]
 fn generic_record_emits_clone_bound_and_generic_fields() {
     let rust = emit(
@@ -2080,7 +2081,9 @@ fn generic_record_emits_clone_bound_and_generic_fields() {
     );
     assert!(rust.contains("pub struct Pair<A, B> {"), "generic header: {rust}");
     assert!(rust.contains("pub first: A,"), "generic field: {rust}");
-    assert!(rust.contains("impl<A: Clone + std::fmt::Debug + 'static, B: Clone + std::fmt::Debug + 'static> Pair<A, B> {"), "bound: {rust}");
+    assert!(rust.contains("impl<A: std::fmt::Debug + 'static, B: std::fmt::Debug + 'static> Pair<A, B> {"), "bound: {rust}");
+    // The canonical constructor moves both components: no clause.
+    assert!(rust.contains("pub fn new(first: A, second: B) -> Self {"), "new: {rust}");
     // Generic-component read in format-arg context borrows, no clone.
     assert!(
         rust.contains(r#"println!("{}", p.first)"#),
@@ -6507,7 +6510,8 @@ fn stored_only_param_moves_clone_bound_to_the_members_that_read_it() {
 
 /// Gap 2, the other half: a parameter that reaches a type whose own
 /// declaration asks for `Clone` (here a collection field) stays on the
-/// baseline, as does a class the relaxation does not cover.
+/// baseline. An interface implementer is relaxed like any other class
+/// (ERRATA E120): `Tag` only stores its `T`.
 #[test]
 fn cloned_or_forwarded_param_keeps_the_baseline() {
     let rust = emit(
@@ -6532,6 +6536,189 @@ fn cloned_or_forwarded_param_keeps_the_baseline() {
         "#,
     );
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Bag<T> {"), "Bag: {rust}");
-    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Tag<T> {"), "Tag: {rust}");
+    assert!(rust.contains("impl<T: 'static> Tag<T> {"), "Tag: {rust}");
+    assert!(rust.contains("impl<T: 'static> Named for Tag<T> {"), "Tag's interface impl: {rust}");
     assert!(!rust.contains(" where T: Clone + std::fmt::Debug"), "no member clauses: {rust}");
+}
+
+/// [`emit`] after the driver's property desugaring, for a class that
+/// declares a property.
+fn emit_desugared(src: &str) -> String {
+    let sf = SourceFile::new("test.jux", src);
+    let lex_result = lex(&sf);
+    assert!(lex_result.diagnostics.is_empty());
+    let parse_result = parse(&lex_result.tokens);
+    assert!(parse_result.diagnostics.is_empty());
+    let mut ast = parse_result.ast;
+    juxc_ast::desugar_properties(&mut ast);
+    let crate_ = lower(&ast);
+    crate_.sources.into_iter().next().unwrap().1
+}
+
+/// Gap 2 across a hierarchy (ERRATA E120): the parent's and the
+/// child's `T` are both relaxed; the `Kind` trait declares each member with
+/// the bound it needs, joined over every override; a constructor that only
+/// hands its parameter on stays in the builder and moves it; and `describe`,
+/// which calls `kind`, needs only what `kind` needs.
+#[test]
+fn hierarchy_moves_the_bound_to_its_members() {
+    let rust = emit(
+        r#"
+        public class Holder<T> {
+            public T item;
+            public Holder(T item) { this.item = item; }
+            public T get() { return item; }
+            public String kind() { return "holder"; }
+            public String describe() { return "a " + kind(); }
+        }
+        public class Counted<T> extends Holder<T> {
+            public Counted(T item) { super(item); }
+            @Override
+            public String kind() { return "counted"; }
+        }
+        public void main() {
+            Holder<int> h = new Counted<int>(1);
+            print(h.describe());
+            print(h.get());
+        }
+        "#,
+    );
+    assert!(rust.contains("pub struct Holder_Inner<T: 'static> {"), "parent inner: {rust}");
+    assert!(rust.contains("pub struct Counted_Inner<T: 'static> {"), "child inner: {rust}");
+    assert!(rust.contains("trait HolderKind<T: 'static>"), "Kind trait header: {rust}");
+    assert!(rust.contains("fn get(&self) -> T where T: Clone + std::fmt::Debug;"), "Kind get: {rust}");
+    assert!(rust.contains("fn kind(&self) -> String;"), "Kind kind: {rust}");
+    assert!(rust.contains("fn describe(&self) -> String;"), "Kind describe: {rust}");
+    assert!(rust.contains("impl<T: 'static> HolderKind<T> for Counted<T> {"), "child's Kind impl: {rust}");
+    // The pure constructors move their parameter; nothing is replayed.
+    assert!(rust.contains("pub fn new(item: T) -> Self {"), "pure new: {rust}");
+    assert!(rust.contains("__parent: Holder::new_inner(item)"), "parent slice built in place: {rust}");
+    assert!(!rust.contains("new_inner(item.clone())"), "no replay copy: {rust}");
+}
+
+/// Gap 2 for an interface and its implementer: the trait's parameter is
+/// relaxed, each member states what it (and every implementation) needs,
+/// and the implementer's trait impl repeats the member's clause.
+#[test]
+fn interface_and_implementer_move_the_bound_to_their_members() {
+    let rust = emit(
+        r#"
+        public interface Store<T> {
+            int size();
+            T take();
+            default String summary() { return "store of " + size(); }
+        }
+        public class OneStore<T> implements Store<T> {
+            private T only;
+            public OneStore(T only) { this.only = only; }
+            public int size() { return 1; }
+            public T take() { return only; }
+        }
+        public void main() {
+            Store<int> s = new OneStore<int>(3);
+            print(s.summary());
+            print(s.take());
+        }
+        "#,
+    );
+    assert!(rust.contains("trait Store<T: 'static>"), "trait header: {rust}");
+    assert!(rust.contains("fn size(&self) -> isize;"), "size: {rust}");
+    assert!(rust.contains("fn take(&self) -> T where T: Clone + std::fmt::Debug;"), "take: {rust}");
+    assert!(rust.contains("impl<T: 'static> Store<T> for OneStore<T> {"), "implementer impl: {rust}");
+    assert!(rust.contains("fn take(&self) -> T where T: Clone + std::fmt::Debug {"), "impl take: {rust}");
+    assert!(!rust.contains("fn summary(&self) -> String where"), "summary asks nothing: {rust}");
+}
+
+/// Gap 2 for a class with a property that does not mention `T`, an
+/// operator, an initializer block and a `drop` body: all relaxed, and the
+/// `Drop` impl repeats the struct's own bounds.
+#[test]
+fn property_operator_init_and_drop_keep_the_parameter_relaxed() {
+    let rust = emit_desugared(
+        r#"
+        public class Tagged<T> {
+            public String Label { get; set; }
+            private T payload;
+            private int base = 0;
+            init { base = 10; }
+            public Tagged(T payload, String label) {
+                this.payload = payload;
+                this.Label = label;
+            }
+            public int operator +(int k) { return base + k; }
+            public T peek() { return payload; }
+            drop { print("dropped"); }
+        }
+        public void main() {
+            var t = new Tagged<int>(1, "a");
+            print(t + 2);
+            print(t.peek());
+        }
+        "#,
+    );
+    assert!(rust.contains("impl<T: 'static> Tagged<T> {"), "inherent impl: {rust}");
+    assert!(rust.contains("pub fn __op_add(&self, k: isize) -> isize {"), "operator: {rust}");
+    assert!(rust.contains("pub fn peek(&self) -> T where T: Clone + std::fmt::Debug {"), "peek: {rust}");
+    assert!(rust.contains("Drop for Tagged_Inner<T>"), "drop impl: {rust}");
+    // The initializer block sends the constructor down the general path,
+    // which moves the stored parameter into its seed.
+    assert!(rust.contains("let __jux_seed_payload = payload;"), "moved seed: {rust}");
+}
+
+/// Gap 2 for a record and an enum: `Clone` moves to the members that copy
+/// a `T`, and `Debug` stays on the headers, since the value's string form
+/// prints its components.
+#[test]
+fn record_and_enum_keep_debug_and_move_clone() {
+    let rust = emit(
+        r#"
+        public record Named<T>(String name, T value) {
+            public String title() { return "named " + name; }
+            public T get() { return value; }
+        }
+        public enum Slot<T> {
+            Empty,
+            Full(T value)
+        }
+        public void main() {
+            var n = new Named<int>("x", 1);
+            print(n.title());
+            print(n.get());
+            Slot<int> s = Slot.Full(2);
+            print(s);
+        }
+        "#,
+    );
+    assert!(rust.contains("impl<T: std::fmt::Debug + 'static> Named<T> {"), "record impl: {rust}");
+    assert!(rust.contains("pub fn new(name: String, value: T) -> Self {"), "record new: {rust}");
+    assert!(rust.contains("pub fn title(&self) -> String {"), "title: {rust}");
+    assert!(rust.contains("pub fn get(&self) -> T where T: Clone + std::fmt::Debug {"), "get: {rust}");
+    assert!(rust.contains("impl<T: std::fmt::Debug + 'static> std::fmt::Display for Slot<T> {"), "enum display: {rust}");
+}
+
+/// The rules that keep a parameter on the baseline, each for its stated
+/// reason: an observable property of type `T`, a `drop` body that reads a
+/// `T`, and an array of `T`.
+#[test]
+fn observable_property_drop_and_array_keep_the_baseline() {
+    let rust = emit_desugared(
+        r#"
+        public class Obs<T> {
+            public T Val { get; set; }
+        }
+        public class Guard<T> {
+            private T res;
+            public Guard(T res) { this.res = res; }
+            drop { print(res); }
+        }
+        public class Shelf<T> {
+            private T[] items;
+            public Shelf(T[] items) { this.items = items; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Obs<T> {"), "Obs: {rust}");
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Guard<T> {"), "Guard: {rust}");
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Shelf<T> {"), "Shelf: {rust}");
 }

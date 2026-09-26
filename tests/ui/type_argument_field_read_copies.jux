@@ -1,0 +1,15 @@
+// E0457 for a FIELD read: reading `c.value` copies the `T` out of the object,
+// and `File` cannot be copied. A method called on the field in place
+// (`c.value.metadata()`) copies nothing and stays legal.
+import rust.std.File;
+
+class Cell<T> {
+    public T value;
+    public Cell(T value) { this.value = value; }
+}
+
+public void main() {
+    Cell<File> c = new Cell<File>(File.open("app.log"));
+    print(c.value.metadata().is_file());
+    File copy = c.value;
+}

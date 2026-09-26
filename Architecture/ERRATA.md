@@ -2081,8 +2081,9 @@ and not a small one: the core library's own `Iterable.reduce<U>` calls
 `initial.clone()` in its body, so the bound is load-bearing well beyond the
 aggregate rule this entry settles. Until then the limit stands as written.
 (Narrowed by E118: a standalone generic class now moves the bound to
-the members that need it, so `Cell<File>` compiles; the limit stands for the
-declaration shapes that entry leaves on the baseline.)
+the members that need it, so `Cell<File>` compiles. Closed by E120 for
+every declaration shape: a parameter keeps the bound only for a stated reason,
+and a use that needs it is `E0457`.)
 
 **Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.6.4.7 carries the markers and
 their discovery; `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.5.8 carries the
@@ -3429,7 +3430,9 @@ qualifying shape (a hierarchy, an interface implementation, a class with a
 property or an operator) keeps the baseline, so `Cell<File>` for such a class
 is still refused in rustc. `examples/generic_over_foreign.jux` pins both
 halves: the classes over `File`, and the same classes over `int` and `String`
-keeping every member.
+keeping every member. (Both halves closed by E120: every generic
+declaration shape now moves the bound, and the checker reports a use the
+argument cannot meet as `E0457`.)
 
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1's first table row now
 points here; E97's "known boundary" paragraph is narrowed to the shapes this
@@ -3524,6 +3527,147 @@ read rule already says a borrow is never held across a method call); the
 lowering above is how the backend meets it for stored functions and for
 operands. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0900` row names the
 self-check as a second source.
+## E120. Every generic declaration moves `Clone + Debug` to its members, and the checker says what they need
+
+**Conflict.** E118 moved the bound for one shape only: a standalone generic
+class. A class that extended another or was extended, implemented an
+interface, was abstract, or declared a property, an operator, an
+initializer block or a `drop` body kept `Clone + std::fmt::Debug + 'static`
+on every parameter, and so did every interface, record and enum. `Cell<File>`
+compiled; `Holder<File>` over the same body did not, the moment some class
+extended `Holder`. §T.2.1 promises that a bound the compiler adds never makes
+a legal type argument illegal, and that promise held for one declaration
+shape out of six.
+
+The other half was E116's: a use of a member whose `where` clause the argument
+could not meet (`Cell<File>.get()`, which returns a copy of the `T`) reached
+rustc as `E0277` against a clause the program never wrote, then as `E0900`.
+
+**Resolution.** One table, computed by the checker and read by both phases.
+
+- **Where it lives.** `juxc_tycheck::clone_needs` runs after the check walk
+  (it reads the expression types) and stores its answer on the symbol table.
+  The backend writes every `where` clause from it, and the checker's new
+  `E0457` checks every use against it, so "the checker accepts it" and "the
+  emitted bounds hold" are the same statement. The two lowering predicates
+  both phases depend on (`ctor_is_pure_store`, `seed_moves_param`, below) are
+  defined there too and called by the backend.
+- **Which declarations.** Every generic class, interface, record and enum of
+  the program, except the core library (`jux.std`, `jux.meta`, whose members
+  copy their values), the shapes that lower to a plain value rather than the
+  shared handle (a `struct`, a `@layout(c)` record, a class in an `extends`
+  component that contains an exception or a thrown/caught class), and a record
+  or enum that implements an interface (its interface impl hands out copies of
+  the value).
+- **Which parameters keep the baseline.** A parameter is relaxed unless one of
+  six rules keeps it, and each kept parameter records its reason, which
+  `E0457` quotes:
+  1. a declared bound passes it on as a type argument (`K extends
+     Comparable<K>`);
+  2. an instance field, record component or enum payload holds it other than
+     bare (`T`, `T?`) or forwarded bare into a relaxed parameter of another
+     declaration of the program (`Cell<T>`); an array (`T[]`), a function
+     type, a `ref`/`weak` slot, or a type the program does not declare keeps
+     it;
+  3. an `extends`/`implements` clause, or an interface's `extends`, passes it
+     other than bare into a relaxed parameter;
+  4. a settable or computed property's type mentions it: firing its observers
+     compares and copies old and new values;
+  5. the class's `drop` body, or its `operator string`, `==`, `hash` or `<=>`,
+     reads it. Those run where no call names a type (scope end, printing, a
+     map key, a sort), so a member clause could not be checked where they run;
+  6. a member that overrides or implements a member of a parent or interface,
+     or inherits one that hands `this` on, needs it while the declaration does
+     not pass it to that parent or interface: the call through the base could
+     not state the bound.
+  The rules are a greatest fixpoint over the whole program, re-run until no
+  parameter moves.
+- **What a relaxed parameter carries.** On a class's or interface's headers
+  (struct, handle, inherent impl, trait declaration, every trait impl,
+  identity impls) `'static` alone; on a record's or enum's, `std::fmt::Debug +
+  'static`, because its string form prints its components and every container
+  and interface of it relies on that form. The class handle's `Clone` is
+  written by hand (an `Rc` bump). Every function item the declaration emits
+  states `where T: Clone + std::fmt::Debug` for the relaxed parameters its
+  member needs: constructors, methods, operators, property accessors, the
+  copies of inherited members and `super` shims (read through the
+  parent-to-child map), the `Kind` trait's members, its `Rc` forwarding impl,
+  its field accessors and its delegating impls, an interface's members and
+  default bodies and every implementer's trait impl (read through the
+  interface-to-class map). The one impl made conditional as a whole is the
+  slicing upcast `From<Child> for Parent` of a non-polymorphic parent, which
+  copies the parent slice. A static method lifted out of a generic class keeps
+  the baseline: it names no instance.
+- **What a member needs.** E118's walk, with four changes. A call of a method
+  on the same object (`m()`, `this.m()`) needs what that method needs, not
+  every parameter; only `this` handed on as a value, `super`, and a method
+  reference still need all of them. A virtual member needs what every override
+  and implementation needs, joined through the `extends` and `implements`
+  maps, since a call through the base reaches any of them. A class's
+  field initializers and initializer blocks join every constructor, and the
+  constructor a class that declares none is given is analysed the same way
+  (keyed by the class's own span). A constructor in an `extends` hierarchy
+  needs every parameter unless it is PURE (below).
+- **Two lowering changes that make the relaxation usable.** A constructor in
+  a hierarchy used to run its body a second time against the finished object
+  (ERRATA E21), which uses each parameter twice and copies it, so no hierarchy
+  over `File` could be constructed. A PURE constructor, one whose body is an
+  optional `super(args)` of parameters or literals followed by stores of this
+  class's own fields from parameters or literals, in a class with no
+  initializer block, has no effect but the values it stores, so when it runs
+  is unobservable: it now stays in the builder and moves each parameter once.
+  And the general constructor path, which lifts the leading field stores into
+  the struct literal ("seeds"), moves a parameter the body names once into a
+  field typed as a bare type parameter instead of copying it, so a class with
+  an initializer block can take a `T` it only stores.
+- **`E0457`.** Every use is checked against the table: a method call (the
+  member's clause read through the receiver's arguments, an inherited member
+  through the `extends` chain, an interface default through `implements`), a
+  constructor, a property read or write (its accessor), an operator, a field
+  read that copies a relaxed parameter's value out of the object (a method
+  called on the field in place copies nothing), a written or inferred type
+  whose class or interface keeps the baseline on an argument that lacks it,
+  an `extends B<X>` / `implements I<X>` clause (the class gets a copy of every
+  member it inherits, so each one's needs apply to `X`), and any member of a
+  record or enum (its impls bound a relaxed parameter on `Debug`, a kept one
+  on both). Capabilities: a class or interface value is a handle that copies
+  by refcount and prints its string form; a primitive, `String` or array
+  copies; a record or enum copies when its components do; a foreign type has
+  what its stub's `@RustClone` / `@RustDebug` say, its arguments included; a
+  function value copies but has no debug form. The message names the
+  argument, the member and the parameter: "`File` cannot be copied, and
+  `Cell<File>.get()` returns a copy of `T`"; for a kept parameter it quotes
+  the rule that kept it.
+
+`examples/generic_over_foreign.jux` now covers a hierarchy used through its
+base, an interface implementer used through the interface, an abstract class,
+a class with a property, an operator, an initializer block and a `drop` body,
+a record and an enum, all over `File`, and the same declarations over `int`
+and `String` keeping every member. `tests/ui/type_argument_*.jux` pin the
+diagnostic's five forms.
+
+**Known boundary.** What stays outside the table, stated so nobody mistakes
+it for coverage:
+
+- A record or enum over a type that cannot be copied is itself a value that
+  cannot be copied. A copy of the VALUE the backend inserts (passing it twice,
+  reading it out of another object) is the same case as E97's non-generic
+  `record Holder(File f)` and still reaches rustc. So does binding a payload
+  out of such an enum in a `switch`, which copies it.
+- Printing a record or enum whose relaxed argument has no debug form (a
+  function type) is not checked at the print site.
+- A static method of a generic class keeps the baseline; a static call whose
+  inferred class argument cannot meet it reaches rustc.
+- An overloaded method call the checker recorded no selection for, with two
+  candidates of the same arity, is not checked.
+- The analysis is conservative where it cannot see: a virtual member needs
+  what any override needs, a hierarchy constructor that does more than store
+  its parameters copies them, and a settable property over `T` keeps `T` on
+  the baseline. Each of those is a rule with a reason, reported as such.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1's first row and its
+closing paragraph point here. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains
+`E0457`. GAPS.md gap 2 is closed.
 
 ---
 

@@ -1,0 +1,15 @@
+// E0457 for the OTHER capability: a function value can be copied but has no
+// debug form, and `get()` states `Clone + Debug` for its `T`. Storing the
+// function and calling a member that does not read it stay legal.
+class Box<T> {
+    private T item;
+    public Box(T item) { this.item = item; }
+    public T get() { return item; }
+    public String name() { return "box"; }
+}
+
+public void main() {
+    Box<(int) -> int> b = new Box<(int) -> int>((int x) -> x + 1);
+    print(b.name());
+    print(b.get()(4));
+}

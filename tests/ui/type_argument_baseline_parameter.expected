@@ -1,0 +1,1 @@
+type_argument_baseline_parameter.jux:13:5: [E0457] error: `Shelf<File>`: `File` cannot be copied, and `Shelf` needs its `T` to be copyable because field `items` holds it as `T[]`: an array copies its elements

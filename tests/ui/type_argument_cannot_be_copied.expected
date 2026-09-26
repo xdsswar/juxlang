@@ -1,0 +1,1 @@
+type_argument_cannot_be_copied.jux:17:14: [E0457] error: `File` cannot be copied, and `Cell<File>.get()` returns a copy of `T`
