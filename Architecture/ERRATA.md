@@ -3826,7 +3826,7 @@ say what is built. GAPS.md gap 23 is closed.
 
 ---
 
-## E1XX-GAP32a. A parse error inside a type body stays inside it
+## E122. A parse error inside a type body stays inside it
 
 **Conflict.** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.1 asks for a diagnostic at the
 place that is wrong, and `JUX-ENTRY-POINTS-ADDENDUM.md` has top-level
@@ -3876,7 +3876,7 @@ grammar leaves to the implementation.
 
 ---
 
-## E1XX-GAP32b. A Rust length stays a `uint`
+## E123. A Rust length stays a `uint`
 
 **Conflict.** LEAKS L23: `String.len()` and `Vec.len()` are Rust's `usize`,
 which `JUX-BINDGEN-ADDENDUM.md` §G.3.1 maps to `uint`, and
@@ -3908,7 +3908,7 @@ A Java programmer expects `int` sizes, and JUX-LANG-V1's older examples
 
 ---
 
-## E1XX-GAP32c. What a bare name means inside a type, in the backend too
+## E124. What a bare name means inside a type, in the backend too
 
 **Conflict.** ERRATA E102 and E117 settled that a name keeps the meaning the
 unit it was written in gives it, and that a program's own declaration is
@@ -3958,7 +3958,7 @@ already say this.
 
 ---
 
-## E1XX-GAP32d. An `E0900` names its rustc error in every format
+## E125. An `E0900` names its rustc error in every format
 
 **Conflict.** ERRATA E116 made a rustc rejection of the emitted crate an
 `E0900` in Jux words, with rustc's code and message as a note and the full
@@ -3985,7 +3985,7 @@ rendering. E116's `E0900` bullet is refined by this entry.
 
 ---
 
-## E1XX-GAP32e. How much Rust shows through a crate's API
+## E126. How much Rust shows through a crate's API
 
 **Conflict.** LEAKS L28 lists what a Java developer meets when using a Rust
 crate: snake_case member names, borrow markers and machine annotations in the
