@@ -2560,6 +2560,13 @@ impl RustEmitter {
                                 && self.foreign_arg_handle_lend(&call.callee, i, arg).is_none()
                             {
                                 self.w.push_str("&mut ");
+                                // A field is lent through its owner's cell;
+                                // read as a receiver it was a copy, and
+                                // `TextEdit.singleline(name)` edited the copy.
+                                if self.arg_is_field_place(arg) {
+                                    self.emit_mut_lent_place(arg);
+                                    continue;
+                                }
                                 self.emitting_method_receiver = true;
                                 self.emit_expr(arg);
                                 self.emitting_method_receiver = false;
@@ -3741,7 +3748,9 @@ impl RustEmitter {
             }
             // A field or element is lent through its owner's cell, the place
             // itself (LEAKS L8); read as a receiver it was a copy.
-            if matches!(arg, Expr::Field(_) | Expr::Index(_)) && place_path_of(arg).is_some() {
+            // So is a field named bare (`ui.text_edit_singleline(name)` in a
+            // method, or in a lambda there).
+            if self.arg_is_field_place(arg) {
                 self.emit_mut_lent_place(arg);
                 return;
             }
@@ -4755,6 +4764,50 @@ impl RustEmitter {
         self.emitting_comparison_operand = prev_cmp;
     }
 
+    /// Whether a `&mut` argument is a FIELD place, lent through its owner's
+    /// cell: `line.quantity`, `xs[i]`, or a field named bare in a method
+    /// (`name` for `this.name`), also inside a lambda written there.
+    pub(crate) fn arg_is_field_place(&self, arg: &Expr) -> bool {
+        match arg {
+            Expr::Field(_) | Expr::Index(_) => place_path_of(arg).is_some(),
+            Expr::Path(qn) => qn.segments.len() == 1 && self.bare_name_is_instance_member(&qn.segments[0].text),
+            _ => false,
+        }
+    }
+
+    /// Whether `e` builds a foreign value that holds a `&mut` borrow of a
+    /// place: a foreign call or constructor lending a field or local to a
+    /// `&mut` slot (`TextEdit.singleline(name)`, `new DragValue(line.qty)`),
+    /// possibly under builder calls (`.desired_width(200.0f)`).
+    pub(crate) fn expr_lends_place_to_foreign(&self, e: &Expr) -> bool {
+        let is_place = |a: &Expr| match a {
+            Expr::Path(qn) => qn.segments.len() == 1,
+            Expr::Field(_) => place_path_of(a).is_some(),
+            Expr::Index(_) => true,
+            _ => false,
+        };
+        match e {
+            Expr::Call(c) => {
+                c.args
+                    .iter()
+                    .enumerate()
+                    .any(|(i, a)| is_place(a) && self.callee_param_borrow_prefix(&c.callee, i) == "&mut ")
+                    || matches!(c.callee.as_ref(), Expr::Field(f) if self.expr_lends_place_to_foreign(&f.object))
+            }
+            Expr::NewObject(n) => n
+                .class_name
+                .segments
+                .last()
+                .and_then(|s| self.lookup_class_by_bare_or_fqn(&s.text))
+                .filter(|c| c.is_external)
+                .and_then(|c| c.constructors.iter().find(|ct| ct.params.len() == n.args.len()).cloned())
+                .is_some_and(|ctor| {
+                    n.args.iter().zip(ctor.params.iter()).any(|(a, p)| p.is_mut_ref && is_place(a))
+                }),
+            _ => false,
+        }
+    }
+
     /// Store each copied-in `&mut` argument back into its place after the
     /// call, the call's value held in `__jux_ret` meanwhile.
     fn emit_mut_lend_writebacks(&mut self, call: &CallExpr, lends: &[MutLend]) {
@@ -4814,6 +4867,33 @@ impl RustEmitter {
         } else {
             call.eval_order.clone()
         };
+        // A lambda written at the call is built at its slot, not bound to a
+        // temp first: `let t = |ui| ...;` has no expected type, so rustc
+        // cannot infer the parameter of a closure an egui container lends a
+        // `&mut Ui` to (E0282). Building a closure has no side effect, so
+        // this keeps evaluation order as long as nothing after it in binding
+        // order is itself bound -- only then is the lambda left in place.
+        // The same holds for a value that lends a field to a foreign `&mut`
+        // slot (`ui.add(TextEdit.singleline(name))`): the widget holds that
+        // borrow, which a `let` would end before the call that uses it
+        // (E0716). With a receiver that reads no object, nothing else holds
+        // the object's cell while the call runs.
+        let inline_lambda: Vec<bool> = {
+            let mut keep = vec![false; call.args.len()];
+            let mut later_bound = false;
+            for &i in bind_order.iter().rev() {
+                let Some(arg) = call.args.get(i) else { continue };
+                let bound = !(self.arg_is_byref(call, i) || lends[i] == MutLend::InPlace);
+                let in_place = matches!(arg, Expr::Lambda(_))
+                    || (receiver_ok && self.expr_lends_place_to_foreign(arg));
+                if bound && in_place && lends[i] == MutLend::None && !later_bound {
+                    keep[i] = true;
+                } else if bound {
+                    later_bound = true;
+                }
+            }
+            keep
+        };
         for &i in &bind_order {
             let Some(arg) = call.args.get(i) else {
                 continue;
@@ -4822,7 +4902,7 @@ impl RustEmitter {
             // caller's PLACE at the call slot, not a hoisted value temp
             // (a `&mut` into a temp would lose the caller's mutation).
             // Skip binding it here.
-            if self.arg_is_byref(call, i) || lends[i] == MutLend::InPlace {
+            if self.arg_is_byref(call, i) || lends[i] == MutLend::InPlace || inline_lambda[i] {
                 continue;
             }
             self.w.push_str(if lends[i] == MutLend::WriteBack { "let mut __jux_arg" } else { "let __jux_arg" });
@@ -4830,6 +4910,17 @@ impl RustEmitter {
             self.w.push_str(" = ");
             if lends[i] == MutLend::WriteBack {
                 // The copy that is lent, and stored back after the call.
+                self.emit_expr(arg);
+            } else if matches!(arg, Expr::Path(qn) if qn.segments.len() == 1
+                && self.byref_param_names.contains(&qn.segments[0].text)
+                && self.local_types.iter().rev().find_map(|scope| scope.get(&qn.segments[0].text))
+                    .is_some_and(|ty| self.ty_is_foreign_object(ty)))
+                && self.callee_param_borrow_prefix(&call.callee, i) != "&mut "
+            {
+                // A borrowed local (a `Ui` parameter, or the one a lambda was
+                // lent) is reborrowed into the temp: `let t = ui;` MOVED it,
+                // and the next use of `ui` in the same body failed (E0382).
+                self.w.push_str("&mut *");
                 self.emit_expr(arg);
             } else {
                 self.emit_call_arg_value(call, i, arg);
@@ -4881,6 +4972,14 @@ impl RustEmitter {
             if lends.get(i) == Some(&MutLend::InPlace) {
                 if let Some(arg) = call.args.get(i) {
                     self.emit_mut_lent_place(arg);
+                }
+                continue;
+            }
+            if inline_lambda.get(i).copied().unwrap_or(false) {
+                if let Some(arg) = call.args.get(i) {
+                    let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+                    self.emit_call_arg_value(call, i, arg);
+                    self.emitting_format_arg = prev_fmt;
                 }
                 continue;
             }

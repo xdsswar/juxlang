@@ -1216,9 +1216,21 @@ impl RustEmitter {
         // the elided tail left the `Ref` alive past `c`'s drop. Any operand,
         // argument or branch that reads through a borrow is enough to keep the
         // explicit `return`.
+        // A collection local handed to a call is lent through its cell,
+        // `doc.save(&opts, &mut warnings.borrow_mut())`: the same guard.
+        let lends_owned_collection = |e: &juxc_ast::Expr| -> bool {
+            let juxc_ast::Expr::Call(c) = e else { return false };
+            c.args.iter().any(|a| {
+                matches!(a, juxc_ast::Expr::Path(qn) if qn.segments.len() == 1)
+                    && matches!(
+                        self.expr_types.get(&crate::exprs::expr_span_of(a)),
+                        Some(juxc_tycheck::Ty::User { name, .. }) if self.collection_name_is_handle(name)
+                    )
+            })
+        };
         let mut found = false;
         crate::worker::walk_expr(e, &mut |sub| {
-            if !found && reads_owned_wrapper(sub) {
+            if !found && (reads_owned_wrapper(sub) || lends_owned_collection(sub)) {
                 found = true;
             }
             // A shared-cell local (a `ref` binding, or a local a closure

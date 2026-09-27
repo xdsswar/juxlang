@@ -1202,6 +1202,17 @@ impl RustEmitter {
         let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
             if ctor_param_is_mut_ref.get(i).copied().unwrap_or(false) {
                 this.w.push_str("&mut ");
+                // A field (`line.quantity`, or `quantity` in a method) is lent
+                // through its owner's cell, mutably, like an `out` place: read
+                // as a receiver it was `&mut line.0.borrow().quantity`.
+                if this.arg_is_field_place(arg) {
+                    let prev_lv = std::mem::replace(&mut this.emitting_lvalue, true);
+                    let prev_out = std::mem::replace(&mut this.emitting_out_place, true);
+                    this.emit_expr(arg);
+                    this.emitting_lvalue = prev_lv;
+                    this.emitting_out_place = prev_out;
+                    return;
+                }
                 this.emitting_method_receiver = true;
                 this.emit_expr(arg);
                 this.emitting_method_receiver = false;
@@ -2019,7 +2030,15 @@ impl RustEmitter {
             self.emitting_nullable_target = prev;
             return;
         }
-        let wrap_each_arm = self.emitting_nullable_target;
+        // A `null` arm makes the whole ternary an `Option` (`None`), so the
+        // other arm is `Some(..)` wherever the value goes -- also where no
+        // nullable target was announced (a lambda's `return` into a foreign
+        // `-> double?` slot came out as `if .. { None } else { x }`).
+        let null_arm = [&t.then_branch, &t.else_branch]
+            .iter()
+            .any(|a| matches!(a.as_ref(), Expr::Literal(juxc_ast::Literal::Null)))
+            && matches!(self.expr_types.get(&t.span), Some(juxc_tycheck::Ty::Nullable(_)));
+        let wrap_each_arm = self.emitting_nullable_target || null_arm;
         let prev = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
         // The slot's own numeric type wins over the meet of the arms.
@@ -3181,10 +3200,34 @@ impl RustEmitter {
                     opened = true;
                 }
                 let n = to_rust_ident(&p.name.text);
-                self.w.push_str(&format!("let {n} = {n}.clone(); "));
+                // A `String` argument a crate lends as `&str` (egui's
+                // `custom_parser(|text: &str| ..)`) is an owned `String` in the
+                // body; `.clone()` on the `&str` stayed a `&str`.
+                let is_string = self
+                    .local_types
+                    .last()
+                    .and_then(|scope| scope.get(&p.name.text))
+                    .is_some_and(|ty| matches!(ty, juxc_tycheck::Ty::String));
+                let own = if is_string { "to_string" } else { "clone" };
+                self.w.push_str(&format!("let {n} = {n}.{own}(); "));
             }
             if !opened {
                 self.w.push_str("{ ");
+            }
+        } else if bare {
+            // A crate function's closure (`run_ui_native(.., (ui, frame) -> ..)`)
+            // is lent its foreign objects too, whether or not the signature
+            // says so: the parameter is a borrowed local, reborrowed when it
+            // is lent on (`app.frame(&mut *ui)`), never `&mut ui`.
+            for p in &l.params {
+                let foreign = self
+                    .local_types
+                    .last()
+                    .and_then(|scope| scope.get(&p.name.text))
+                    .is_some_and(|ty| self.ty_is_foreign_object(ty));
+                if foreign {
+                    self.byref_param_names.insert(p.name.text.clone());
+                }
             }
         }
         if l.is_async {

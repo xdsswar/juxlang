@@ -1,0 +1,34 @@
+// A field initializer is an expression like any other (LEAKS L31, L32): a
+// `!!` in it asserts, and a `static final` whose value comes from a call is
+// computed when it is first read, whatever its type.
+
+enum Level {
+    Low,
+    High;
+
+    public static Level of(int n) {
+        return n > 5 ? Level.High : Level.Low;
+    }
+}
+
+class Lookup {
+    public static String? find(String key) {
+        return key == "a" ? "alpha" : null;
+    }
+}
+
+class Settings {
+    // A call into an enum-typed `static final`: was a Rust `const` (E0015).
+    public static final Level LEVEL = Level.of(7);
+    // `!!` in a static and in an instance initializer: was dropped (E0308).
+    public static String first = Lookup.find("a")!!;
+    public String name = Lookup.find("a")!!;
+    public int size = Lookup.find("a")!!.length();
+}
+
+public void main() {
+    print(Settings.LEVEL == Level.High);
+    print(Settings.first);
+    var s = new Settings();
+    print($"${s.name} ${s.size}");
+}
