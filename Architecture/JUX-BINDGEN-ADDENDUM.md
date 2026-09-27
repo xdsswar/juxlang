@@ -120,7 +120,7 @@ Every body is `;`. The file is valid Jux. The resolver loads it; `juxc-tycheck` 
 | `char`                        | `char`                             | Unicode scalar, 32-bit (§5.1)                      |
 | `String`, `&str`              | `String`                           | §8.2                                               |
 | `Vec<T>`                      | `Vec<T>` — the same name, kept     | §8.2                                               |
-| `HashMap<K, V>`, `BTreeMap<K,V>` | `HashMap<K, V>`, `BTreeMap<K, V>` | kept, like `Vec`, so the value can be built (ERRATA E1XX-GAP31) |
+| `HashMap<K, V>`, `BTreeMap<K,V>` | `HashMap<K, V>`, `BTreeMap<K, V>` | kept, like `Vec`, so the value can be built (ERRATA E128) |
 | `HashSet<T>`, `BTreeSet<T>`   | `HashSet<T>`, `BTreeSet<T>`        | kept, as above                                     |
 | `Option<T>`                   | `T?`                               | §8.2; nullable type                                |
 | `Result<T, E>`                | return type `T throws E`           | §8.2; see §G.5.4                                   |
@@ -529,7 +529,7 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 **Rust's `Iterator` trait is `RustIterator`.** It is the one `core` trait the stub declares, since its adaptors (`count`, `sum`, `max`, `map`, `filter`, `position`, `fold`, `collect`, ...) are what a program calls on an iterator; it is renamed so that K.5's `Iterator<T>`, the protocol a program writes, keeps its name alone. The adaptor types its methods return (`Filter`, `Map`, `Zip`) are surfaced with it.
 
-**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. Which of those arguments are lent read-only (`&T`, not `&mut T`) is recorded per slot, `@RustClosureShared("0:0")`, and a lambda that writes through one, by assignment or a `@MutSelf` call, is `E0488` (ERRATA E1XX-GAP31). A FOREIGN object in that slot is the exception: an egui container calls its closure with `&mut Ui`, and the lambda's parameter is that borrow, used in place and lent on (§G.3.4). `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
+**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. Which of those arguments are lent read-only (`&T`, not `&mut T`) is recorded per slot, `@RustClosureShared("0:0")`, and a lambda that writes through one, by assignment or a `@MutSelf` call, is `E0488` (ERRATA E128). A FOREIGN object in that slot is the exception: an egui container calls its closure with `&mut Ui`, and the lambda's parameter is that borrow, used in place and lent on (§G.3.4). `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
 
 A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
 
@@ -612,7 +612,7 @@ Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures di
 
 §6.5.1 makes a collection a REFERENCE type: a value of one is a shared handle, so `var a = obj.getItems(); a.push(v)` reaches the object's collection rather than a copy. Applying that to a foreign type needs an answer to "is this a collection?", and the answer is **discovered from the type's own trait impls**, like every other binder question.
 
-A type is a collection when it implements **`Extend` or `FromIterator`**, and also `IntoIterator` (a collection gives back what it holds; genpdf's `Style` merges styles into itself through `Extend` and is a value, ERRATA E1XX-GAP31), Rust's own way of saying "you can build one of these from elements, and add more". `Vec`, `String`, `VecDeque`, `HashMap`/`HashSet`, `BTreeMap`/`BTreeSet`, `BinaryHeap`, `LinkedList`, `OsString` and `PathBuf` all do; a response object, a cursor and a set of file permissions do not. The marker is rendered on the stub as `@RustCollection`.
+A type is a collection when it implements **`Extend` or `FromIterator`**, and also `IntoIterator` (a collection gives back what it holds; genpdf's `Style` merges styles into itself through `Extend` and is a value, ERRATA E128), Rust's own way of saying "you can build one of these from elements, and add more". `Vec`, `String`, `VecDeque`, `HashMap`/`HashSet`, `BTreeMap`/`BTreeSet`, `BinaryHeap`, `LinkedList`, `OsString` and `PathBuf` all do; a response object, a cursor and a set of file permissions do not. The marker is rendered on the stub as `@RustCollection`.
 
 Two restrictions make the reading exact:
 

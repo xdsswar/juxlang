@@ -4140,7 +4140,7 @@ E119 self-check; `examples/lent_foreign_closure.jux` runs one through
 
 ---
 
-## E1XX-GAP31. A crate's API as the crate's users reach it
+## E128. A crate's API as the crate's users reach it
 
 **Conflict.** LEAKS L2-L7, L11, L13 and L16-L21: bindgen's type map (§G.3.1)
 folded away facts a call needs. `impl Into<WidgetText>` was surfaced as

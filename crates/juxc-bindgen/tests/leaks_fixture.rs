@@ -1,5 +1,5 @@
 //! Bindgen type mapping for the shapes the leaker app ran into (LEAKS L2-L21,
-//! ERRATA E1XX-GAP31, Bindgen §G.3.6, §G.3.7, §G.6.6).
+//! ERRATA E128, Bindgen §G.3.6, §G.3.7, §G.6.6).
 //!
 //! The fixture is REAL rustdoc JSON: `fixtures/leaks-src/lib.rs` documented
 //! with `cargo +nightly rustdoc -- -Z unstable-options --output-format json`.

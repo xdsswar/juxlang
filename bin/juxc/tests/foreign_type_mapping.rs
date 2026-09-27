@@ -1,5 +1,5 @@
 //! What a program may pass to a crate, and the Rust each call lowers to
-//! (Bindgen §G.3.6, §G.3.7, ERRATA E1XX-GAP31, LEAKS L2-L21).
+//! (Bindgen §G.3.6, §G.3.7, ERRATA E128, LEAKS L2-L21).
 //!
 //! The stub below is the one bindgen writes for
 //! `crates/juxc-bindgen/tests/fixtures/leaks-src/lib.rs`, with its paths

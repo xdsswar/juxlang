@@ -402,7 +402,7 @@ pub enum Code {
     /// the closure slot's Rust signature passes that argument as `&T`, not
     /// `&mut T` (bindgen records which, `@RustClosureShared`). Assigning to one
     /// of its fields or calling a mutating method on it is refused here rather
-    /// than by rustc (ERRATA E1XX-GAP31).
+    /// than by rustc (ERRATA E128).
     E0488_LentReadOnlyWritten,
     /// E0443 — A malformed **explicit call-site type-argument list** —
     /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:
@@ -1256,7 +1256,7 @@ pub enum Code {
     /// binding generator, reported against the stub with the line it went wrong
     /// at; the declarations from that line on are left out, and nothing of the
     /// stub is mistaken for the program's own `main` (Bindgen G.12, ERRATA
-    /// E1XX-GAP31).
+    /// E128).
     E0907_StubBody,
     /// E0908 -- **a linkage the target cannot provide**: an `[ffi.*]` entry
     /// with `linkage = "framework"` built for a target that is not Apple's.
