@@ -90,8 +90,25 @@ impl RustEmitter {
             Expr::NewArrayLit(a) => operands.extend(a.elements.iter()),
             _ => return None,
         }
-        let last_code = operands.iter().rposition(|e| self.operand_may_run_jux_code(e))?;
-        if !operands[..last_code].iter().any(|e| self.operand_leaves_guard(e)) {
+        // A constructor with named arguments has its own evaluation order,
+        // which the binding below would not keep.
+        let safe = self.safe_at(expr_span_of(expr))
+            && !matches!(expr, Expr::NewObject(n) if !n.eval_order.is_empty());
+        let last_code = if safe {
+            // The safe lowering level (GAPS.md gap 34): bind every operand
+            // that reads a cell or runs Jux code, whenever there are two.
+            let qualifying = operands
+                .iter()
+                .filter(|e| self.operand_leaves_guard(e) || self.operand_may_run_jux_code(e))
+                .count();
+            if qualifying < 2 {
+                return None;
+            }
+            operands.len()
+        } else {
+            operands.iter().rposition(|e| self.operand_may_run_jux_code(e))?
+        };
+        if !safe && !operands[..last_code].iter().any(|e| self.operand_leaves_guard(e)) {
             return None;
         }
         let bound: Vec<Expr> = operands[..last_code]

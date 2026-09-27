@@ -261,7 +261,7 @@ fn missing_std(message: &serde_json::Value) -> Diagnostic {
 /// The primary span of a rustc message, as `(file, line, column)`. A span
 /// inside a macro expansion is reported at the macro's call site, which is
 /// where the emitted code is.
-fn primary_span(message: &serde_json::Value) -> Option<(String, u32, u32)> {
+pub(crate) fn primary_span(message: &serde_json::Value) -> Option<(String, u32, u32)> {
     let spans = message.get("spans")?.as_array()?;
     let span = spans.iter().find(|s| s.get("is_primary").and_then(|p| p.as_bool()) == Some(true))?;
     let file = span.get("file_name")?.as_str()?.to_string();

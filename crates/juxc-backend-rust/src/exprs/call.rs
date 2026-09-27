@@ -4143,6 +4143,9 @@ impl RustEmitter {
     }
 
     fn call_needs_borrow_hoist(&self, call: &CallExpr) -> bool {
+        if self.safe_call_hoist(call) {
+            return true;
+        }
         // An argument that reads a wrapper FIELD (`n.bump(n.value)`,
         // `f(n, n.value)`) emits a `.0.borrow()` whose `Ref` guard is a
         // call-expression temporary, alive until the whole call

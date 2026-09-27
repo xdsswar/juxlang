@@ -49,6 +49,8 @@ mod exprs;
 mod interp;
 mod lastuse;
 mod literals;
+mod lowering_level;
+pub use lowering_level::{function_regions, region_at, with_lowering_plan, FnRegion, LoweringPlan};
 mod patterns;
 mod rep_select;
 pub use rep_select::RepViolation;
@@ -87,6 +89,30 @@ pub struct RustCrate {
     /// (`E0953`-`E0955`). Empty unless the selector is wrong; the driver
     /// reports each as an error.
     pub rep_violations: Vec<RepViolation>,
+    /// The lowering levels this crate was lowered with (GAPS.md gap 34):
+    /// which functions are at the safe level. All fast unless the driver
+    /// asked otherwise through [`with_lowering_plan`].
+    pub plan: LoweringPlan,
+    /// Every Jux function of the program with the source it spans, so an
+    /// error in the emitted Rust can be traced to the function that emitted
+    /// it ([`region_at`]). Filled in by a caller that can lower again.
+    pub fn_regions: Vec<FnRegion>,
+    /// Lower the same program again under another [`LoweringPlan`]. Set by
+    /// the driver, which keeps the checked program alive for it; `None` for
+    /// a crate nothing can lower again.
+    pub relower: Option<Relower>,
+}
+
+/// A way to lower the program a [`RustCrate`] came from again, at other
+/// lowering levels (GAPS.md gap 34).
+#[derive(Clone)]
+pub struct Relower(pub std::rc::Rc<dyn Fn(&LoweringPlan) -> RustCrate>);
+
+impl Relower {
+    /// The program lowered under `plan`.
+    pub fn lower(&self, plan: &LoweringPlan) -> RustCrate {
+        (self.0)(plan)
+    }
 }
 
 /// The fixed crate name for the emitted Rust crate. The driver knows to
@@ -1317,6 +1343,10 @@ struct RustEmitter {
     /// read and clones only at the reads listed here — the same choice a Rust
     /// programmer makes by hand.
     pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
+    /// The lowering level of each part of the program (GAPS.md gap 34, see
+    /// [`crate::lowering_level`]), read from the active plan when the
+    /// emitter is made.
+    pub(crate) level: lowering_level::ActiveLevel,
     /// `T[N]` local declarations (by span) whose value flows into a
     /// runtime-sized `T[]` slot later in their block, with, per dimension
     /// (outermost first), whether that slot makes it runtime-sized. Such a
@@ -2764,6 +2794,9 @@ pub(crate) fn compute_class_reps(
     let adjacency = fqn_extends_adjacency(units, symbols, unit_offset);
     let contained = rep_select::compute_contained_classes(units, expr_types);
     let arc_fields_ok = |fqn: &String| rep_select::fields_are_jux_values(units, symbols, fqn);
+    // The safe lowering level's classes take the most general representation
+    // (GAPS.md gap 34). Not a fallback: the plan asked for them.
+    let forced = lowering_level::forced_cell_classes(&eligible, expr_types);
     // The declarations of the contained classes, for the checks only a
     // declaration answers.
     let mut contained_decls: HashMap<String, &juxc_ast::ClassDecl> = HashMap::new();
@@ -2785,7 +2818,7 @@ pub(crate) fn compute_class_reps(
 
     let mut reps: HashMap<String, ClassRep> = HashMap::new();
     for n in &eligible {
-        let needs_cell = cells.contains(n) || demanded.contains(n);
+        let needs_cell = cells.contains(n) || demanded.contains(n) || forced.contains(n);
         let mut rep = if needs_cell { ClassRep::RcRefCell } else { ClassRep::Rc };
         // A class whose objects cross a worker boundary takes the atomic
         // handle: `JuxSync` (`Arc<Mutex>`) when it needs its cell, `JuxArc`
@@ -6250,6 +6283,7 @@ mod jux_stack_overflow {
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
+            level: lowering_level::ActiveLevel::from_thread(),
             fixed_array_dynamic_decls: std::collections::HashMap::new(),
             reassigned_var_decls: std::collections::HashSet::new(),
             captures_read_again: std::collections::HashMap::new(),
@@ -8382,6 +8416,9 @@ mod jux_stack_overflow {
             sources,
             rep_fallbacks: Vec::new(),
             rep_violations: std::mem::take(&mut self.rep_violations),
+            plan: lowering_level::current_plan(),
+            fn_regions: Vec::new(),
+            relower: None,
         }
     }
 }

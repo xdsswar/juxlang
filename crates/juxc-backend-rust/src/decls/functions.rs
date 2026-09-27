@@ -1417,6 +1417,8 @@ impl RustEmitter {
             &mut self.captures_read_again,
             crate::lastuse::captures_read_again(body, &self.current_fn_params),
         );
+        // The safe lowering level copies every read (GAPS.md gap 34).
+        self.apply_safe_last_use(body);
         let mut cell_locals =
             crate::analysis::collect_captured_mutated_locals(body, &self.current_fn_params);
         // §M.13.2 / ERRATA E90: a local or parameter that a `ref` binding
@@ -1454,6 +1456,7 @@ impl RustEmitter {
         if juxc_tycheck::generators::body_yields(body) {
             self.emit_generator_body(body, return_type);
         } else {
+            self.emit_test_break(body);
             self.emit_body_statements(body, return_type);
         }
         for n in &cell_locals {

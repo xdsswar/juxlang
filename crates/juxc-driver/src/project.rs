@@ -211,7 +211,7 @@ pub fn build_package_selected(
         let result = crate::compile_workspace_as_cfg(
             sources,
             move |u, s, e, src| {
-                juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, entry_pkg)
+                juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, entry_pkg.clone())
             },
             cfg,
         )?;
