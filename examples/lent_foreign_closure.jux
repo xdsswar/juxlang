@@ -1,0 +1,39 @@
+// A foreign object a crate lends to a lambda is used in place (ERRATA
+// E1XX-GAP30, LEAKS.md L1).
+//
+// `Once.call_once_force` calls its closure with `&OnceState`, and `OnceState`
+// has no `Clone`: the lambda's `state` is that reference, not a copy of it.
+// The locals and objects the lambda changes are the caller's own.
+
+import rust.std.Once;
+import rust.std.OnceState;
+
+class Log {
+    public Vec<String> lines = new Vec<String>();
+    public void add(String s) { lines.push(s); }
+}
+
+class Report {
+    // Handed a lent object, the method borrows it too.
+    public static String describe(OnceState state) {
+        return state.is_poisoned() ? "poisoned" : "clean";
+    }
+}
+
+public void main() {
+    var once = new Once();
+    var log = new Log();
+    int runs = 0;
+    once.call_once_force((state) -> {
+        log.add($"first run, ${Report.describe(state)}");
+        runs++;
+    });
+    once.call_once_force((state) -> {
+        log.add("never printed");
+        runs++;
+    });
+    for (var line : log.lines) {
+        print(line);
+    }
+    print($"runs: ${runs}, completed: ${once.is_completed()}");
+}

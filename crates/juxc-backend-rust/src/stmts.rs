@@ -3384,7 +3384,23 @@ impl RustEmitter {
                     self.emitting_nullable_target = true;
                 }
                 self.arm_void_lambda_slot(var.ty.as_ref(), init);
+                // `var s = ui.spacing_mut();` keeps the `&mut Spacing` the
+                // accessor lends, so `s.item_spacing = v` reaches the `Ui`
+                // (LEAKS L10). A copy took every write and dropped it.
+                let keeps_borrow = self.init_is_mut_accessor(init);
+                let prev_keep = std::mem::replace(
+                    &mut self.keep_mut_accessor_borrow,
+                    keeps_borrow.then(|| crate::exprs::expr_span_of(init)),
+                );
                 self.emit_expr(init);
+                self.keep_mut_accessor_borrow = prev_keep;
+                // `var u = ui;` where `ui` is a borrow makes `u` the same
+                // borrow, lent on the same way (`&mut *u`).
+                let aliases_borrow = matches!(init, Expr::Path(qn)
+                    if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text));
+                if keeps_borrow || aliases_borrow {
+                    self.byref_param_names.insert(var.name.text.clone());
+                }
                 self.emitting_nullable_target = prev_nullable_target;
                 self.restore_array_target(saved_array_target);
                 // **Wrapper-class share-on-assignment (§CR.4.1).** When the

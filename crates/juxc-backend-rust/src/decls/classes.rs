@@ -6236,6 +6236,12 @@ impl RustEmitter {
             .map(|cls| format!("m::{cls}::{}", method.name.text))
             .and_then(|k| self.byref_params.get(&k).cloned())
             .unwrap_or_default();
+        let byref_shared = self
+            .enclosing_class
+            .as_ref()
+            .map(|cls| format!("m::{cls}::{}", method.name.text))
+            .and_then(|k| self.shared_byref_params.get(&k).cloned())
+            .unwrap_or_default();
         for (i, param) in method.params.iter().enumerate() {
             if !first_param {
                 self.w.push_str(", ");
@@ -6255,7 +6261,9 @@ impl RustEmitter {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
             }
             if is_byref {
-                self.w.push_str("&mut "); // C6: foreign collection by exclusive ref
+                // C6: foreign collection by exclusive ref; a borrowed foreign
+                // object the method only reads is shared (E1XX-GAP30).
+                self.w.push_str(if byref_shared.contains(&i) { "&" } else { "&mut " });
             }
             if param.is_shared_ref {
                 // `ref T` (§M.13) — shared reference to a value object.

@@ -392,6 +392,12 @@ pub enum Code {
     /// `E0431_InvalidMethodModifiers`; renumbered to the catalog's
     /// reserved §T.4.2 slot — see DIAGNOSTICS §D.4's collision note.)
     E0453_GenericInferenceNoSolution,
+    /// E0454 — A foreign object that a crate LENDS to a lambda (a closure
+    /// slot marked `@RustClosureRefs` whose parameter is a foreign class with
+    /// no `Clone`, like egui's `Ui`) is kept past the call: returned, stored
+    /// in a field or an element, or passed to a constructor. It exists only
+    /// while the crate's call runs (ERRATA E1XX-GAP30).
+    E0454_LentObjectKept,
     /// E0443 — A malformed **explicit call-site type-argument list** —
     /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:
     /// the callee isn't generic (no type params to apply the args to),
@@ -1317,6 +1323,7 @@ impl Code {
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0439_PatternShapeMismatch     => "E0439",
             Code::E0453_GenericInferenceNoSolution => "E0453",
+            Code::E0454_LentObjectKept           => "E0454",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",

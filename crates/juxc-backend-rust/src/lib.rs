@@ -835,6 +835,10 @@ struct RustEmitter {
     /// extended; the predicate is deterministic, so re-running over a
     /// unit is idempotent.
     byref_params: std::collections::HashMap<String, HashSet<usize>>,
+    /// The entries of `byref_params` that are SHARED borrows, `&T`: a
+    /// foreign object with no `Clone` that the body only reads, and lends
+    /// to nothing that writes (ERRATA E1XX-GAP30). Same keys.
+    shared_byref_params: std::collections::HashMap<String, HashSet<usize>>,
     /// **C6 runtime set.** Names of the parameters in the body currently
     /// being emitted that were lowered to `&mut T` (the per-call-site
     /// `&mut` from `byref_params`). Seeded at each body-emission site
@@ -846,6 +850,9 @@ struct RustEmitter {
     ///   owned slot (`(*v).clone()`),
     /// - deref on reassignment (`*v = expr;`).
     byref_param_names: HashSet<String>,
+    /// Set while a local's initializer is a foreign `&mut` accessor
+    /// (`ui.spacing_mut()`) whose borrow the local keeps (LEAKS L10).
+    pub(crate) keep_mut_accessor_borrow: Option<juxc_source::Span>,
     /// True while we're emitting the LHS of an assignment statement —
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
@@ -5845,7 +5852,9 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             user_mut_methods: extern_mut_methods.clone(),
             extern_mut_methods,
             byref_params: std::collections::HashMap::new(),
+            shared_byref_params: std::collections::HashMap::new(),
             byref_param_names: HashSet::new(),
+            keep_mut_accessor_borrow: None,
             emitting_lvalue: false,
             emitting_raw_place: false,
             signed_slot_target: None,

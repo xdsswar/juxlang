@@ -1328,6 +1328,27 @@ pub(crate) fn lvalue_base_name(e: &Expr) -> Option<String> {
 ///
 /// We only need a yes/no answer; the method body's per-local mutation
 /// analysis (`mutated_in_fn`) is unaffected.
+/// `name` and every local that aliases it, `var u = ui;` (followed through
+/// chains of such aliases): a borrow handed to a local is the same borrow.
+pub(crate) fn borrow_aliases(body: &Block, name: &str) -> HashSet<String> {
+    let mut names: HashSet<String> = HashSet::from([name.to_string()]);
+    loop {
+        let before = names.len();
+        juxc_ast::visit::for_each_node(body, &mut |n| {
+            if let juxc_ast::visit::Node::Stmt(Stmt::VarDecl(v)) = n {
+                if let Some(Expr::Path(qn)) = &v.init {
+                    if qn.segments.len() == 1 && names.contains(&qn.segments[0].text) {
+                        names.insert(v.name.text.clone());
+                    }
+                }
+            }
+        });
+        if names.len() == before {
+            return names;
+        }
+    }
+}
+
 pub(crate) fn body_writes_to_this(block: &Block) -> bool {
     for stmt in &block.statements {
         match stmt {
@@ -3693,6 +3714,386 @@ impl crate::RustEmitter {
                 }
             }
         }
+        self.populate_borrowed_foreign_params(units);
+    }
+
+    /// LEAKS L9: a parameter whose type is a foreign object the crate never
+    /// lets out of a borrow is a BORROW, whatever the body happens to call.
+    ///
+    /// The rule, for a method or function parameter of a foreign class with
+    /// no `@RustClone` (egui's `Ui`, `std::fs::File`): it lowers to `&mut T`,
+    /// and every use lends it on, unless the body KEEPS it -- returns it,
+    /// stores it in a field, an array or a new object, hands it to a slot
+    /// that takes ownership (a foreign by-value parameter, or a Jux parameter
+    /// that keeps it in turn), or lets a closure that may outlive the call
+    /// capture it. A kept parameter is owned, as before.
+    ///
+    /// Before this, a `Ui` parameter was `&mut Ui` only when the body called
+    /// a `&mut self` method on it directly. Handing it on, or calling only
+    /// `&self` methods, made it by-value, which no caller holding egui's
+    /// `&mut Ui` could satisfy; programs started every such method with a
+    /// no-op mutating call to force the borrow.
+    ///
+    /// A type that IS `Clone` keeps its old convention: passing a copy is
+    /// what a value type means, and the body mutating it (C6) still makes it
+    /// a borrow.
+    ///
+    /// Whether a parameter is kept can depend on another method's answer
+    /// (`a(ui)` passes it to `b(ui)`, which stores it), so the candidates
+    /// start as borrows and each one found kept is withdrawn until nothing
+    /// changes. Withdrawing only ever makes more parameters kept, so this
+    /// ends.
+    fn populate_borrowed_foreign_params(&mut self, units: &[juxc_ast::CompilationUnit]) {
+        struct Candidate<'a> {
+            key: String,
+            idx: usize,
+            name: String,
+            body: &'a Block,
+            class: Option<String>,
+            locals: std::rc::Rc<std::collections::HashMap<String, String>>,
+        }
+        let mut candidates: Vec<Candidate<'_>> = Vec::new();
+        for unit in units.iter().filter(|u| !u.is_external) {
+            for item in &unit.items {
+                match item {
+                    juxc_ast::TopLevelDecl::Function(f) => {
+                        let Some(body) = &f.body else { continue };
+                        let generics: HashSet<String> =
+                            f.generic_params.iter().map(|g| g.name.text.clone()).collect();
+                        let key = format!("fn::{}", f.name.text);
+                        let locals = std::rc::Rc::new(self.body_local_classes(&f.params, body, None));
+                        for (i, p) in f.params.iter().enumerate() {
+                            if self.param_is_borrowed_foreign(p, &generics) {
+                                candidates.push(Candidate {
+                                    key: key.clone(),
+                                    idx: i,
+                                    name: p.name.text.clone(),
+                                    body,
+                                    class: None,
+                                    locals: locals.clone(),
+                                });
+                            }
+                        }
+                    }
+                    juxc_ast::TopLevelDecl::Class(c) => {
+                        let class_generics: HashSet<String> =
+                            c.generic_params.iter().map(|g| g.name.text.clone()).collect();
+                        for m in &c.methods {
+                            let Some(body) = &m.body else { continue };
+                            let mut generics = class_generics.clone();
+                            generics.extend(m.generic_params.iter().map(|g| g.name.text.clone()));
+                            let key = format!("m::{}::{}", c.name.text, m.name.text);
+                            let locals = std::rc::Rc::new(self.body_local_classes(&m.params, body, Some(&c.name.text)));
+                            for (i, p) in m.params.iter().enumerate() {
+                                if self.param_is_borrowed_foreign(p, &generics) {
+                                    candidates.push(Candidate {
+                                        key: key.clone(),
+                                        idx: i,
+                                        name: p.name.text.clone(),
+                                        body,
+                                        class: Some(c.name.text.clone()),
+                                        locals: locals.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A parameter already a borrow (the body mutates it, C6) stays one.
+        candidates.retain(|c| !self.byref_params.get(&c.key).is_some_and(|s| s.contains(&c.idx)));
+        if candidates.is_empty() {
+            return;
+        }
+        for c in &candidates {
+            self.byref_params.entry(c.key.clone()).or_default().insert(c.idx);
+        }
+        loop {
+            let mut changed = false;
+            for c in &candidates {
+                if !self.byref_params.get(&c.key).is_some_and(|s| s.contains(&c.idx)) {
+                    continue;
+                }
+                if self.borrowed_param_is_kept(c.body, &c.name, c.class.as_deref(), &c.locals) {
+                    if let Some(set) = self.byref_params.get_mut(&c.key) {
+                        set.remove(&c.idx);
+                    }
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.byref_params.retain(|_, s| !s.is_empty());
+        // Which of the borrows are shared. Every surviving candidate starts
+        // as `&T`, and one that the body lends to a `&mut` slot (a foreign
+        // `&mut T` parameter, or a Jux parameter that is `&mut` in turn) is
+        // made `&mut T`, until nothing changes. A crate may lend its object
+        // shared (`Once.call_once_force` passes `&OnceState`), and a helper
+        // that only reads it has to accept that.
+        let survivors: Vec<&Candidate<'_>> = candidates
+            .iter()
+            .filter(|c| self.byref_params.get(&c.key).is_some_and(|s| s.contains(&c.idx)))
+            .collect();
+        for c in &survivors {
+            self.shared_byref_params.entry(c.key.clone()).or_default().insert(c.idx);
+        }
+        loop {
+            let mut changed = false;
+            for c in &survivors {
+                if !self.shared_byref_params.get(&c.key).is_some_and(|s| s.contains(&c.idx)) {
+                    continue;
+                }
+                if self.borrowed_param_lent_mutably(c.body, &c.name, c.class.as_deref(), &c.locals) {
+                    if let Some(set) = self.shared_byref_params.get_mut(&c.key) {
+                        set.remove(&c.idx);
+                    }
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.shared_byref_params.retain(|_, s| !s.is_empty());
+    }
+
+    /// Whether the body lends `name` to a slot that writes through it: a
+    /// foreign `&mut T` parameter, a Jux by-reference parameter that is not
+    /// shared, or the receiver of a foreign `&mut self` method.
+    fn borrowed_param_lent_mutably(
+        &self,
+        body: &Block,
+        name: &str,
+        class: Option<&str>,
+        locals: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        let names = borrow_aliases(body, name);
+        let is_name = |e: &Expr| matches!(e, Expr::Path(qn) if qn.segments.len() == 1 && names.contains(&qn.segments[0].text));
+        let mut mutably = false;
+        crate::analysis::for_each_call(body, &mut |call| {
+            if mutably {
+                return;
+            }
+            for (i, a) in call.args.iter().enumerate() {
+                if !is_name(a) {
+                    continue;
+                }
+                if let Some(p) = self.foreign_callee_param(&call.callee, i) {
+                    if p.is_mut_ref {
+                        mutably = true;
+                    }
+                    continue;
+                }
+                let Some(key) = self.prepass_callee_key(call, class, locals) else { continue };
+                let byref = self.byref_params.get(&key).is_some_and(|s| s.contains(&i));
+                let shared = self.shared_byref_params.get(&key).is_some_and(|s| s.contains(&i));
+                if byref && !shared {
+                    mutably = true;
+                }
+            }
+            if let Expr::Field(f) = call.callee.as_ref() {
+                if is_name(&f.object) {
+                    if let Some(juxc_tycheck::Ty::User { name: ty, .. }) =
+                        self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
+                    {
+                        let bare = ty.rsplit('.').next().unwrap_or(ty);
+                        if self.external_method_mutates_receiver(bare, &f.field.text) {
+                            mutably = true;
+                        }
+                    }
+                }
+            }
+        });
+        mutably
+    }
+
+    /// A parameter [`Self::populate_borrowed_foreign_params`] considers: an
+    /// ordinary binding of a foreign class with no `Clone`.
+    fn param_is_borrowed_foreign(&self, p: &juxc_ast::Param, generics: &HashSet<String>) -> bool {
+        if p.is_final || p.is_out || p.is_shared_ref || p.is_weak || p.is_varargs {
+            return false;
+        }
+        if !self.param_type_is_external(&p.ty, generics) {
+            return false;
+        }
+        let Some(last) = p.ty.name.segments.last() else { return false };
+        !self.class_is_rust_clone(&last.text)
+    }
+
+    /// Whether the body KEEPS the parameter `name` rather than using it in
+    /// place (see [`Self::populate_borrowed_foreign_params`]). `class` is the
+    /// class whose method this is, for bare calls to its other methods.
+    fn borrowed_param_is_kept(
+        &self,
+        body: &Block,
+        name: &str,
+        class: Option<&str>,
+        locals: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        let names = borrow_aliases(body, name);
+        let is_name = |e: &Expr| matches!(e, Expr::Path(qn) if qn.segments.len() == 1 && names.contains(&qn.segments[0].text));
+        // The closures a crate calls during the call they are passed to: a
+        // borrow may be captured by those, never by one that is kept.
+        let mut lent_closures: HashSet<Span> = HashSet::new();
+        crate::analysis::for_each_call(body, &mut |call| {
+            for (i, a) in call.args.iter().enumerate() {
+                if let Expr::Lambda(l) = a {
+                    if self.callee_param_is_foreign_fn(&call.callee, i) {
+                        lent_closures.insert(l.span);
+                    }
+                }
+            }
+        });
+        let field_named = |target: &str| {
+            class.is_some_and(|c| self.lookup_class_field_ty_in_chain(c, target).is_some())
+        };
+        let mut kept = false;
+        juxc_ast::visit::for_each_node(body, &mut |n| {
+            if kept {
+                return;
+            }
+            match n {
+                juxc_ast::visit::Node::Stmt(Stmt::Return(Some(e), _))
+                | juxc_ast::visit::Node::Stmt(Stmt::Yield(e, _)) => kept = is_name(e),
+                juxc_ast::visit::Node::Stmt(Stmt::Assign(a)) if is_name(&a.value) => {
+                    // A store into a field or an element keeps it; a local
+                    // named the same as nothing else is an alias of the borrow.
+                    kept = match &a.target {
+                        Expr::Path(qn) if qn.segments.len() == 1 => field_named(&qn.segments[0].text),
+                        _ => true,
+                    };
+                }
+                juxc_ast::visit::Node::Expr(Expr::Call(c)) => {
+                    kept = c
+                        .args
+                        .iter()
+                        .enumerate()
+                        .any(|(i, a)| is_name(a) && !self.call_slot_lends(c, i, class, locals));
+                }
+                juxc_ast::visit::Node::Expr(Expr::NewObject(o)) => kept = o.args.iter().any(is_name),
+                juxc_ast::visit::Node::Expr(Expr::NewArrayLit(a)) => kept = a.elements.iter().any(is_name),
+                juxc_ast::visit::Node::Expr(Expr::TupleLit(items, _)) => kept = items.iter().any(is_name),
+                juxc_ast::visit::Node::Expr(Expr::Ternary(t)) => {
+                    kept = is_name(&t.then_branch) || is_name(&t.else_branch);
+                }
+                juxc_ast::visit::Node::Expr(Expr::Elvis(e)) => kept = is_name(&e.value) || is_name(&e.fallback),
+                juxc_ast::visit::Node::Expr(Expr::Lambda(l)) if !lent_closures.contains(&l.span) => {
+                    let shadows = l.params.iter().any(|p| names.contains(&p.name.text));
+                    if !shadows {
+                        let mut captures = false;
+                        let mut look = |e: &Expr| captures |= is_name(e);
+                        match &l.body {
+                            juxc_ast::LambdaBody::Expr(e) => juxc_ast::visit::for_each_expr_in(e, &mut look),
+                            juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_expr(b, &mut look),
+                        }
+                        kept = captures;
+                    }
+                }
+                _ => {}
+            }
+        });
+        kept
+    }
+
+    /// Whether argument `i` of `call` is a slot that only BORROWS its value:
+    /// a foreign `&T` / `&mut T` parameter, or a Jux parameter that is itself
+    /// a borrow. Anything else (a by-value slot, an unknown callee) takes it.
+    fn call_slot_lends(
+        &self,
+        call: &juxc_ast::CallExpr,
+        i: usize,
+        class: Option<&str>,
+        locals: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        if let Some(p) = self.foreign_callee_param(&call.callee, i) {
+            return p.is_ref || p.is_mut_ref;
+        }
+        self.prepass_callee_key(call, class, locals)
+            .and_then(|k| self.byref_params.get(&k))
+            .is_some_and(|s| s.contains(&i))
+    }
+
+    /// The `byref_params` key of a Jux callee, from a body the pre-pass
+    /// reads with no emission scope: a bare call is first a method of
+    /// `class`, and a method called on a local or parameter is looked up by
+    /// the class `locals` records for it (see [`Self::body_local_classes`]).
+    fn prepass_callee_key(
+        &self,
+        call: &juxc_ast::CallExpr,
+        class: Option<&str>,
+        locals: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        match call.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                if let Some(class) = class {
+                    let key = format!("m::{class}::{}", qn.segments[0].text);
+                    if self.byref_params.contains_key(&key) {
+                        return Some(key);
+                    }
+                }
+                self.callee_byref_key(&call.callee)
+            }
+            Expr::Field(f) => match f.object.as_ref() {
+                Expr::Path(qn) if qn.segments.len() == 1 && locals.contains_key(&qn.segments[0].text) => {
+                    Some(format!("m::{}::{}", locals[&qn.segments[0].text], f.field.text))
+                }
+                _ => self.callee_byref_key(&call.callee),
+            },
+            _ => self.callee_byref_key(&call.callee),
+        }
+    }
+
+    /// The bare class of each parameter and local of one body whose type is
+    /// known without an emission scope: a parameter's declared type, and a
+    /// local's declared type or, for `var`, its initializer's recorded type
+    /// (a field of `class` read by its bare name, `var t = table;`, by the
+    /// field's declared type).
+    fn body_local_classes(
+        &self,
+        params: &[juxc_ast::Param],
+        body: &Block,
+        class: Option<&str>,
+    ) -> std::collections::HashMap<String, String> {
+        let bare = |name: &str| name.rsplit('.').next().unwrap_or(name).to_string();
+        let mut out = std::collections::HashMap::new();
+        for p in params {
+            if let Some(last) = p.ty.name.segments.last() {
+                out.insert(p.name.text.clone(), last.text.clone());
+            }
+        }
+        juxc_ast::visit::for_each_node(body, &mut |n| {
+            let juxc_ast::visit::Node::Stmt(Stmt::VarDecl(v)) = n else { return };
+            let class = match (&v.ty, &v.init) {
+                (Some(t), _) => t.name.segments.last().map(|s| s.text.clone()),
+                (None, Some(init)) => match self.expr_types.get(&crate::exprs::expr_span_of(init)) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => Some(bare(name)),
+                    _ => match (init, class) {
+                        (Expr::Path(qn), Some(class)) if qn.segments.len() == 1 => self
+                            .lookup_class_field_ty_in_chain(class, &qn.segments[0].text)
+                            .and_then(|t| match t {
+                                juxc_tycheck::Ty::User { name, .. } => Some(bare(&name)),
+                                _ => None,
+                            }),
+                        (Expr::Field(fe), Some(class)) if matches!(fe.object.as_ref(), Expr::This(_)) => self
+                            .lookup_class_field_ty_in_chain(class, &fe.field.text)
+                            .and_then(|t| match t {
+                                juxc_tycheck::Ty::User { name, .. } => Some(bare(&name)),
+                                _ => None,
+                            }),
+                        _ => None,
+                    },
+                },
+                _ => None,
+            };
+            if let Some(class) = class {
+                out.insert(v.name.text.clone(), class);
+            }
+        });
+        out
     }
 
     /// C6 follow-up: after [`Self::populate_byref_params`] has built the
@@ -3903,13 +4304,40 @@ impl crate::RustEmitter {
         if self.byref_params.is_empty() {
             return false;
         }
+        self.callee_byref_key(callee)
+            .and_then(|k| self.byref_params.get(&k))
+            .is_some_and(|s| s.contains(&arg_idx))
+    }
+
+    /// Whether by-reference parameter `arg_idx` of `callee` is a SHARED
+    /// borrow, `&T`: a foreign object with no `Clone` that the callee only
+    /// reads (ERRATA E1XX-GAP30). Every other by-reference parameter is
+    /// `&mut T`.
+    pub(crate) fn callee_byref_is_shared(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        if self.shared_byref_params.is_empty() {
+            return false;
+        }
+        self.callee_byref_key(callee)
+            .and_then(|k| self.shared_byref_params.get(&k))
+            .is_some_and(|s| s.contains(&arg_idx))
+    }
+
+    /// The `byref_params` key of the function or method `callee` names:
+    /// `fn::name` or `m::Class::method`, keyed by the BARE class name.
+    fn callee_byref_key(&self, callee: &juxc_ast::Expr) -> Option<String> {
         match callee {
-            // Free function `name(args)`.
-            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => self
-                .byref_params
-                .get(&format!("fn::{}", qn.segments[0].text))
-                .map(|s| s.contains(&arg_idx))
-                .unwrap_or(false),
+            // A bare call in a class names one of its own methods first
+            // (`helper(ui)` inside the class that declares `helper`), then a
+            // free function `name(args)`.
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = &qn.segments[0].text;
+                let own = self.enclosing_class.as_deref().and_then(|class| {
+                    let bare = class.rsplit('.').next().unwrap_or(class);
+                    let key = format!("m::{bare}::{name}");
+                    self.byref_params.contains_key(&key).then_some(key)
+                });
+                Some(own.unwrap_or_else(|| format!("fn::{name}")))
+            }
             // Method / static call `recv.method(args)`.
             juxc_ast::Expr::Field(f) => {
                 let method = f.field.text.as_str();
@@ -3926,25 +4354,15 @@ impl crate::RustEmitter {
                         .map(|fqn| fqn.rsplit('.').next().unwrap_or(&fqn).to_string())
                         .or_else(|| qn.segments.last().map(|s| s.text.clone()));
                     if let Some(bare) = bare {
-                        return self
-                            .byref_params
-                            .get(&format!("m::{bare}::{method}"))
-                            .map(|s| s.contains(&arg_idx))
-                            .unwrap_or(false);
+                        return Some(format!("m::{bare}::{method}"));
                     }
                 }
                 // Instance `recv.method(...)`: resolve the receiver's class.
-                if let Some(bare) = self.receiver_class_bare(&f.object) {
-                    let bare = bare.rsplit('.').next().unwrap_or(&bare).to_string();
-                    return self
-                        .byref_params
-                        .get(&format!("m::{bare}::{method}"))
-                        .map(|s| s.contains(&arg_idx))
-                        .unwrap_or(false);
-                }
-                false
+                let bare = self.receiver_class_bare(&f.object)?;
+                let bare = bare.rsplit('.').next().unwrap_or(&bare).to_string();
+                Some(format!("m::{bare}::{method}"))
             }
-            _ => false,
+            _ => None,
         }
     }
 

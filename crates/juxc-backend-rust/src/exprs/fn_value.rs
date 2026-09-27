@@ -126,7 +126,11 @@ impl RustEmitter {
                 self.w.push_str(", ");
             }
             if byref.contains(&i) {
-                self.w.push_str("&mut ");
+                let shared = self
+                    .shared_byref_params
+                    .get(&format!("fn::{name}"))
+                    .is_some_and(|s| s.contains(&i));
+                self.w.push_str(if shared { "&" } else { "&mut " });
             }
             self.w.push_str(&format!("__a{i}"));
         }

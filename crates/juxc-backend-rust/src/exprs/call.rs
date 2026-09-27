@@ -2273,16 +2273,42 @@ impl RustEmitter {
                     self.w.push('(');
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
+                    // The arguments are those of `Class.m(args)`, the same
+                    // call spelled with its class: every question about a
+                    // parameter (by-`&mut`, a foreign borrow, a copy of a
+                    // value read again) is asked of that callee. Emitted raw,
+                    // `color(text)` MOVED a `String` the next line read
+                    // (LEAKS L15) and a borrowed `Ui` went by value (L9).
+                    let class_bare = class_name.rsplit('.').next().unwrap_or(&class_name).to_string();
+                    let as_class_call = CallExpr {
+                        callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                            object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                                segments: vec![juxc_ast::Ident { text: class_bare, span: qn.span }],
+                                span: qn.span,
+                            })),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: qn.span,
+                        })),
+                        ..call.clone()
+                    };
                     for (i, arg) in call.args.iter().enumerate() {
                         if i > 0 {
                             self.w.push_str(", ");
                         }
-                        self.emit_expr(arg);
                         // `poke(this)`: the method takes the object by
                         // value, and `self` is a reference to it -- share
                         // the handle, as `Node.poke(this)` does.
                         if matches!(arg, Expr::This(_)) {
+                            self.emit_expr(arg);
                             self.w.push_str(".clone()");
+                            continue;
+                        }
+                        self.w.push_str(self.callee_param_borrow_prefix(&as_class_call.callee, i));
+                        if self.arg_is_byref(&as_class_call, i) {
+                            self.emit_byref_arg(&as_class_call.callee, i, arg);
+                        } else {
+                            self.emit_call_arg_value(&as_class_call, i, arg);
                         }
                     }
                     self.emitting_format_arg = prev;
@@ -2521,7 +2547,7 @@ impl RustEmitter {
                             // disagreed and every static method with a
                             // mutated foreign parameter failed to compile.
                             if self.arg_is_byref(call, i) {
-                                self.emit_byref_arg(arg);
+                                self.emit_byref_arg(&call.callee, i, arg);
                                 continue;
                             }
                             // An integer argument converts to the parameter's
@@ -2768,7 +2794,7 @@ impl RustEmitter {
             // borrows cover the common `f(v)` shape; an arg that re-reads
             // the receiver is hoisted by `call_needs_borrow_hoist`.
             if self.arg_is_byref(call, i) {
-                self.emit_byref_arg(arg);
+                self.emit_byref_arg(&call.callee, i, arg);
             } else {
                 self.emit_call_arg_value(call, i, arg);
             }
@@ -2884,8 +2910,10 @@ impl RustEmitter {
     /// cleared and the lvalue flag SET, so `emit_field` / `emit_path`
     /// emit the bare place (`more`, `self.items`, `g[i]`) with no
     /// auto-`.clone()`.
-    pub(crate) fn emit_byref_arg(&mut self, arg: &Expr) {
-        self.w.push_str("&mut ");
+    pub(crate) fn emit_byref_arg(&mut self, callee: &Expr, i: usize, arg: &Expr) {
+        // A borrowed foreign object the callee only reads is lent shared
+        // (ERRATA E1XX-GAP30).
+        self.w.push_str(if self.callee_byref_is_shared(callee, i) { "&" } else { "&mut " });
         if let Expr::Path(qn) = arg {
             if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text) {
                 // Reborrow an inherited `&mut T` param.
@@ -3360,7 +3388,7 @@ impl RustEmitter {
             if taken.iter().any(|(ti, _)| *ti == i) {
                 self.w.push_str(&format!("&mut __jux_byref{i}"));
             } else if self.arg_is_byref(call, i) {
-                self.emit_byref_arg(arg);
+                self.emit_byref_arg(&call.callee, i, arg);
             } else {
                 self.emit_call_arg_value(call, i, arg);
             }
@@ -3579,6 +3607,21 @@ impl RustEmitter {
         if self.callee_param_borrow_prefix(&call.callee, i) == "&mut "
             && self.foreign_arg_handle_lend(&call.callee, i, arg).is_none()
         {
+            // A local that already IS a `&mut` borrow (a by-`&mut` parameter,
+            // a foreign object a closure was lent) is lent on by reborrowing
+            // it, `&mut *ui`. `&mut ui` needed a `mut` binding that a
+            // parameter does not have (LEAKS L9).
+            if let Expr::Path(qn) = arg {
+                if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text) {
+                    self.w.push('*');
+                }
+            }
+            // A field or element is lent through its owner's cell, the place
+            // itself (LEAKS L8); read as a receiver it was a copy.
+            if matches!(arg, Expr::Field(_) | Expr::Index(_)) && place_path_of(arg).is_some() {
+                self.emit_mut_lent_place(arg);
+                return;
+            }
             self.emitting_method_receiver = true;
             self.emit_expr(arg);
             self.emitting_method_receiver = false;
@@ -4486,7 +4529,132 @@ impl RustEmitter {
     /// borrow that follows is the only live one. Mirrors the regular
     /// path's callee flag discipline, turbofish, by-ref `&`, and the
     /// `pop()`-unwrap special.
+    /// How argument `i` of `call` reaches a FOREIGN `&mut` parameter when the
+    /// call's arguments are hoisted (LEAKS L8, L14).
+    ///
+    /// A hoisted argument is bound to a `let` first, which is right for a
+    /// value and wrong for a place the callee writes through: the write went
+    /// into the temporary (`text_edit_singleline(&mut __jux_arg0)` edited a
+    /// copy of the field), and a local that is itself a borrow was MOVED into
+    /// it (`let __jux_arg0 = ui;`), so the next use of `ui` failed.
+    ///
+    /// - A local is lent where it stands.
+    /// - A field or element is lent in place, through its owner's cell, when
+    ///   nothing else in the call can run Jux code while the cell is borrowed
+    ///   (§CR.4.1): no closure or function value among the other arguments,
+    ///   and a receiver that reads no cell (`in_place_receiver_ok`).
+    /// - Otherwise it is copied in, lent, and written back after the call,
+    ///   which is what Java would show a program that looks at the field
+    ///   afterwards.
+    fn foreign_mut_lend(&self, call: &CallExpr, i: usize, arg: &Expr, in_place_receiver_ok: bool) -> MutLend {
+        if self.callee_param_borrow_prefix(&call.callee, i) != "&mut "
+            || self.foreign_arg_handle_lend(&call.callee, i, arg).is_some()
+        {
+            return MutLend::None;
+        }
+        let place = match arg {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                if !self.reads_own_field_by_bare_name(arg) {
+                    return MutLend::InPlace;
+                }
+                true
+            }
+            Expr::Field(_) | Expr::Index(_) => place_path_of(arg).is_some() || matches!(arg, Expr::Index(_)),
+            _ => false,
+        };
+        if !place {
+            return MutLend::None;
+        }
+        let runs_code = call.args.iter().enumerate().any(|(j, a)| {
+            j != i
+                && (matches!(a, Expr::Lambda(_) | Expr::MethodRef(_))
+                    || matches!(
+                        self.expr_types.get(&crate::exprs::expr_span_of(a)),
+                        Some(juxc_tycheck::Ty::Fn { .. })
+                    ))
+        });
+        if in_place_receiver_ok && !runs_code {
+            MutLend::InPlace
+        } else {
+            MutLend::WriteBack
+        }
+    }
+
+    /// Whether the receiver of `call` reads no cell, so an argument may hold
+    /// a cell's guard across the call (see [`Self::foreign_mut_lend`]): a free
+    /// or static call, or a method on a plain local.
+    fn receiver_reads_no_cell(&self, call: &CallExpr) -> bool {
+        match call.callee.as_ref() {
+            Expr::Path(_) => true,
+            Expr::Field(f) => match f.object.as_ref() {
+                Expr::Path(qn) if qn.segments.len() == 1 => !self.reads_own_field_by_bare_name(&f.object),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Emit a place for a `&mut` slot whose `&mut ` is already written: a
+    /// local that is itself a borrow reborrows (`*ui`), anything else is the
+    /// place as an lvalue (`self.0.borrow_mut().name`).
+    fn emit_mut_lent_place(&mut self, arg: &Expr) {
+        if let Expr::Path(qn) = arg {
+            if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text) {
+                self.w.push('*');
+            }
+        }
+        let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        self.emit_expr(arg);
+        self.emitting_lvalue = prev_lval;
+        self.emitting_format_arg = prev_fmt;
+        self.emitting_comparison_operand = prev_cmp;
+    }
+
+    /// Store each copied-in `&mut` argument back into its place after the
+    /// call, the call's value held in `__jux_ret` meanwhile.
+    fn emit_mut_lend_writebacks(&mut self, call: &CallExpr, lends: &[MutLend]) {
+        for (i, lend) in lends.iter().enumerate() {
+            if *lend != MutLend::WriteBack {
+                continue;
+            }
+            let Some(arg) = call.args.get(i) else { continue };
+            self.w.push_str(" ");
+            let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
+            self.emit_expr(arg);
+            self.emitting_lvalue = prev_lval;
+            self.w.push_str(&format!(" = __jux_arg{i};"));
+        }
+    }
+
+    /// Whether `init` calls a foreign accessor that lends its receiver's
+    /// insides mutably (`@MutSelf @RustRefOut`, `ui.spacing_mut()`) and
+    /// yields a foreign object: a local bound to it keeps that borrow rather
+    /// than a copy (LEAKS L10).
+    pub(crate) fn init_is_mut_accessor(&self, init: &Expr) -> bool {
+        let Expr::Call(call) = init else { return false };
+        let Expr::Field(f) = call.callee.as_ref() else { return false };
+        let Some(juxc_tycheck::Ty::User { name, .. }) = self.receiver_ty_of(&f.object) else {
+            return false;
+        };
+        if self.collection_name_is_handle(&name) {
+            return false;
+        }
+        self.external_method_returns_borrow(&name, &f.field.text)
+            && self.external_method_mutates_receiver(&name, &f.field.text)
+            && self.expr_types.get(&call.span).is_some_and(|t| self.ty_is_foreign_object(t))
+    }
+
     fn emit_call_with_hoisted_args(&mut self, call: &CallExpr) {
+        let receiver_ok = self.receiver_reads_no_cell(call);
+        let lends: Vec<MutLend> = call
+            .args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| self.foreign_mut_lend(call, i, a, receiver_ok))
+            .collect();
+        let writes_back = lends.contains(&MutLend::WriteBack);
         self.w.push_str("{ ");
         let prev_args_fmt = self.emitting_format_arg;
         self.emitting_format_arg = false;
@@ -4511,16 +4679,24 @@ impl RustEmitter {
             // caller's PLACE at the call slot, not a hoisted value temp
             // (a `&mut` into a temp would lose the caller's mutation).
             // Skip binding it here.
-            if self.arg_is_byref(call, i) {
+            if self.arg_is_byref(call, i) || lends[i] == MutLend::InPlace {
                 continue;
             }
-            self.w.push_str("let __jux_arg");
+            self.w.push_str(if lends[i] == MutLend::WriteBack { "let mut __jux_arg" } else { "let __jux_arg" });
             self.w.push_str(&i.to_string());
             self.w.push_str(" = ");
-            self.emit_call_arg_value(call, i, arg);
+            if lends[i] == MutLend::WriteBack {
+                // The copy that is lent, and stored back after the call.
+                self.emit_expr(arg);
+            } else {
+                self.emit_call_arg_value(call, i, arg);
+            }
             self.w.push_str("; ");
         }
         self.emitting_format_arg = prev_args_fmt;
+        if writes_back {
+            self.w.push_str("let __jux_ret = ");
+        }
         let prev_callee = self.emitting_call_callee;
         self.emitting_call_callee = true;
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
@@ -4555,7 +4731,13 @@ impl RustEmitter {
             // NOT hoisted into a temp above).
             if self.arg_is_byref(call, i) {
                 if let Some(arg) = call.args.get(i) {
-                    self.emit_byref_arg(arg);
+                    self.emit_byref_arg(&call.callee, i, arg);
+                }
+                continue;
+            }
+            if lends.get(i) == Some(&MutLend::InPlace) {
+                if let Some(arg) = call.args.get(i) {
+                    self.emit_mut_lent_place(arg);
                 }
                 continue;
             }
@@ -4568,6 +4750,11 @@ impl RustEmitter {
         // the intrinsic the scan says nothing about is unwrapped here.
         if self.pop_needs_intrinsic_unwrap(call) {
             self.w.push_str(".unwrap()");
+        }
+        if writes_back {
+            self.w.push(';');
+            self.emit_mut_lend_writebacks(call, &lends);
+            self.w.push_str(" __jux_ret");
         }
         self.w.push_str(" }");
     }
@@ -4658,6 +4845,14 @@ impl RustEmitter {
         // of `{ … } == 0`, where Rust parses a leading `{` as a block stmt and
         // chokes on the `==`). `({ … })` is a valid expression everywhere,
         // including standalone-statement position.
+        // The receiver is bound first, so it holds no cell while the call
+        // runs: a place lent to a foreign `&mut` slot may stay in place.
+        let lends: Vec<MutLend> = if hoist_args {
+            call.args.iter().enumerate().map(|(i, a)| self.foreign_mut_lend(call, i, a, true)).collect()
+        } else {
+            vec![MutLend::None; call.args.len()]
+        };
+        let writes_back = lends.contains(&MutLend::WriteBack);
         self.w.push_str("({ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing
         // an owned handle and dropping the `borrow()` temporary at the `;`.
@@ -4672,7 +4867,13 @@ impl RustEmitter {
             for (i, arg) in call.args.iter().enumerate() {
                 // C6 by-ref arg: borrow the place at the call slot, never
                 // hoist it into a value temp (see emit_call_with_hoisted_args).
-                if self.arg_is_byref(call, i) {
+                if self.arg_is_byref(call, i) || lends[i] == MutLend::InPlace {
+                    continue;
+                }
+                if lends[i] == MutLend::WriteBack {
+                    self.w.push_str(&format!("let mut __jux_arg{i} = "));
+                    self.emit_expr(arg);
+                    self.w.push_str("; ");
                     continue;
                 }
                 self.w.push_str("let __jux_arg");
@@ -4682,6 +4883,9 @@ impl RustEmitter {
                 self.w.push_str("; ");
             }
             self.emitting_format_arg = prev_args_fmt;
+        }
+        if writes_back {
+            self.w.push_str("let __jux_ret = ");
         }
         // Same handle rule as `emit_field`: `__jux_recv` holds the collection
         // HANDLE and the method is on the interior (§6.5.1). The guard gets a
@@ -4728,10 +4932,12 @@ impl RustEmitter {
             self.w.push_str(borrow);
             // C6 by-ref arg: borrow the place directly (not hoisted).
             if self.arg_is_byref(call, i) {
-                self.emit_byref_arg(arg);
+                self.emit_byref_arg(&call.callee, i, arg);
                 continue;
             }
-            if hoist_args {
+            if lends[i] == MutLend::InPlace {
+                self.emit_mut_lent_place(arg);
+            } else if hoist_args {
                 self.w.push_str("__jux_arg");
                 self.w.push_str(&i.to_string());
             } else {
@@ -4742,6 +4948,11 @@ impl RustEmitter {
         self.w.push(')');
         if self.pop_needs_intrinsic_unwrap(call) {
             self.w.push_str(".unwrap()");
+        }
+        if writes_back {
+            self.w.push(';');
+            self.emit_mut_lend_writebacks(call, &lends);
+            self.w.push_str(" __jux_ret");
         }
         self.w.push_str(" })");
     }
@@ -5344,7 +5555,15 @@ impl RustEmitter {
                     // `Clone` to copy it out with; the caller in `emit_expr`
                     // takes it into its owned form instead (B29), nullable or
                     // not, so nothing is appended for one here.
-                    if !self.external_returns_borrowed_view(name, method) {
+                    // Except where the program writes THROUGH the result:
+                    // `ui.spacing_mut().item_spacing = v` assigns into the
+                    // `&mut Spacing` the accessor lends, and on a copy the
+                    // write was silently lost (LEAKS L10).
+                    let writes_through = (self.emitting_lvalue
+                        || self.emitting_method_receiver
+                        || self.keep_mut_accessor_borrow == Some(call.span))
+                        && self.external_method_mutates_receiver(name, method);
+                    if !self.external_returns_borrowed_view(name, method) && !writes_through {
                         self.w.push_str(if nullable { ".cloned()" } else { ".clone()" });
                     }
                     return true;
@@ -7440,4 +7659,16 @@ pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
         }
         _ => None,
     }
+}
+
+/// How an argument reaches a foreign `&mut` slot in a hoisted call; see
+/// [`RustEmitter::foreign_mut_lend`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MutLend {
+    /// Not a place lent to a foreign `&mut` slot: hoisted as a value.
+    None,
+    /// Lent where it stands, `&mut self.0.borrow_mut().name` / `&mut *ui`.
+    InPlace,
+    /// Copied in, lent, and stored back after the call.
+    WriteBack,
 }
