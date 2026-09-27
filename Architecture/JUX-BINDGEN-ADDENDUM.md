@@ -120,8 +120,8 @@ Every body is `;`. The file is valid Jux. The resolver loads it; `juxc-tycheck` 
 | `char`                        | `char`                             | Unicode scalar, 32-bit (§5.1)                      |
 | `String`, `&str`              | `String`                           | §8.2                                               |
 | `Vec<T>`                      | `Vec<T>` — the same name, kept     | §8.2                                               |
-| `HashMap<K, V>`, `BTreeMap<K,V>` | `Map<K, V>`                     | §8.2 (both map to the one canonical `Map`)         |
-| `HashSet<T>`, `BTreeSet<T>`   | `Set<T>`                           | §8.2                                               |
+| `HashMap<K, V>`, `BTreeMap<K,V>` | `HashMap<K, V>`, `BTreeMap<K, V>` | kept, like `Vec`, so the value can be built (ERRATA E1XX-GAP31) |
+| `HashSet<T>`, `BTreeSet<T>`   | `HashSet<T>`, `BTreeSet<T>`        | kept, as above                                     |
 | `Option<T>`                   | `T?`                               | §8.2; nullable type                                |
 | `Result<T, E>`                | return type `T throws E`           | §8.2; see §G.5.4                                   |
 | `Box<T>`, `Rc<T>`, `Arc<T>`   | `T`                                | refcount managed by Jux (§8.2)                     |
@@ -190,6 +190,24 @@ Both spellings keep the element/pointee types visible in signatures, hover, and 
 A Rust tuple is written as a Jux tuple: `(TcpStream, SocketAddr)`, the form grammar A.2.7 gives. It was once surfaced as a nominal `Tuple<A, B>`, from before the parser had tuple types, and the difference is not cosmetic: a nominal type has no elements to index, so `var (stream, addr) = listener.accept();` bound `stream` to the whole pair, and every question the compiler later asked about that receiver got the wrong answer silently.
 
 The two degenerate arities keep the nominal, because neither parses as a tuple: the unit `()` is reserved with no v1 meaning (and `Result`'s unit error is folded away before it reaches here), and `(T)` needs at least two elements.
+
+### G.3.6. Generic Parameters: `impl Into<T>`, `impl Trait`, `&dyn Trait`
+
+A Rust parameter that is not one type but any type meeting a bound is marked `@RustImpl` on the stub. Its Jux type names what the bound is about: the class a conversion targets (`impl Into<WidgetText>` is `@RustImpl WidgetText`), or the trait (`impl Widget` is `@RustImpl Widget`). The slot accepts a value when the stubs prove it fits, from what bindgen read off the crate's impls:
+
+- the target class's own `From` impls, `@RustFrom("RichText,String")` (a borrowed string source counts: a Jux `String` lends `&str`), and its blanket `impl<T: Into<Y>> From<T>`, `@RustFromInto("Y")`;
+- a trait's implementors: an `implements` clause, a type its impls name directly (`impl TextBuffer for String` is `@RustImplementedBy("String")` on the trait), or the bound of a blanket impl, `@RustBlanket("Into<Atom>")` / `@RustBlanket("Hash + Debug")`, where the standard traits are answered by `@RustHash`, `@RustDebug`, `@RustClone`, `@RustPartialEq`, `@RustDefault` and by the built-in types;
+- text for a borrowed view (`impl AsRef<Path>`: `str` and `String` are `AsRef<Path>`).
+
+Anything else is `E0410` at the call, as before. The value is passed as it is; Rust converts it. A method's own type parameter (`fn new<T: Into<Id>>(v: T)`) stays a type parameter, which already takes any value.
+
+A slot whose Rust type is `Arc<T>`, `Rc<T>` or `Box<T>` of a value (§G.3.1 erases the pointer) is marked `@RustArc` / `@RustRc` / `@RustBox`, on a parameter or on an enum payload component (`RichText(@RustArc RichText)`), and the call wraps the argument. A method returning one, or a reference to one (`ui.style()` is `&Arc<Style>`), is marked `@RustDerefOut`: the result is the pointee, copied out, which the program may change and hand back.
+
+### G.3.7. Constants, Tuple Structs and Named-Field Variants
+
+- A type's public associated constants are `static final` fields: `Color32.RED`, `Vec2.ZERO`.
+- A tuple struct whose fields are all public (`pub struct Mm(pub f32)`) is `@RustTuple`: a constructor taking its fields, marked `@RustTuple` and lowered to the struct expression `Mm(x)`, and fields `_0`, `_1`, ... lowered to `.0`, `.1`.
+- An enum variant with named fields keeps them as its payload; the enum's `@RustStructVariants("SetFillColor:col;MoveTo:x,y")` records the names, and `Op.SetFillColor(c)` lowers to `Op::SetFillColor { col: c }`.
 
 ## §G.4 — Naming Transforms
 
@@ -426,6 +444,16 @@ The Rust standard library is auto-loaded into every compile and editor analysis 
 
 A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) items; items it merely re-exports from a lower layer appear as external references and are skipped. Rust's std is layered `core` ⊂ `alloc` ⊂ `std` — `Vec`, `String`, `Box`, `Rc`/`Arc`, `BTreeMap` are *defined* in `alloc` and only re-exported by `std` — so ingesting `std` alone misses them. `bindgen` therefore ingests each crate's JSON in turn (each as the local crate) and merges the results into one package, keyed by item name with **first-definition-wins** (crates supplied most-fundamental-first). Deduplication also collapses the platform-duplicated names std ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that would otherwise collide as duplicate Jux declarations (`E0400`).
 
+### G.6.2.4. Crate Families
+
+A crate's public API is routinely made of other crates: `eframe` is `pub use egui;`, `egui` re-exports `emath::Rect` and `ecolor::Color32`, and a program that binds `rust.eframe` links `eframe` alone. The stub of a bound crate therefore describes its FAMILY:
+
+- **Members.** The crates it re-exports from, and then, for up to two rounds, the crates that define a type the stub mentions without declaring, as far as the host publishes them (reached through at most two module re-exports, or re-exported by name). A graphics backend's own dependencies stay out even when a signature deep inside mentions them.
+- **Shared names.** A name several members declare means the definition the family PUBLISHES under it (`egui` re-exports `emath::Rect`, so `accesskit::Rect` does not win), then the member closest to the host.
+- **Paths.** Every `@rust` path is written through the host: `eframe::egui::Color32`.
+- **One Rust type, one Jux type.** A member the program also binds in its own right (`rust.egui` beside `rust.eframe`) is declared once, by the dependency whose family holding it is smallest, and every other stub declares its types as aliases of that declaration (`public type Ui = rust.egui.Ui;`). An `import` of such an alias is a `use` of the real path.
+
+The stub's second line records the family (`// family: eframe egui emath ...`), and its cache marker records the program's other bound crates, so binding or dropping one regenerates the stubs it affects.
 ### G.6.2.3. Only What the Build Toolchain Accepts
 
 The rustdoc JSON of the standard library ships only with the nightly toolchain, so it describes nightly's `std`, unstable APIs included (`Path::is_empty`, `<[f64]>::sort_floats`, the integer `funnel_shl`). A program is built with the user's own toolchain, where calling one is rustc `E0658`, and the JSON does not record stability. So the generator asks that compiler: every item and method of the surface is named once in a probe crate, the probe is checked by the default `rustc`, and whatever it rejects as unstable is left out of the stub. A generic type is probed with a few type arguments, since a method may exist for only some of them. The probe only ever removes: a line that fails for any other reason keeps its item. Calling an unstable API is then an ordinary juxc error (`E0413`), not a rustc one.
@@ -501,7 +529,7 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 **Rust's `Iterator` trait is `RustIterator`.** It is the one `core` trait the stub declares, since its adaptors (`count`, `sum`, `max`, `map`, `filter`, `position`, `fold`, `collect`, ...) are what a program calls on an iterator; it is renamed so that K.5's `Iterator<T>`, the protocol a program writes, keeps its name alone. The adaptor types its methods return (`Filter`, `Map`, `Zip`) are surfaced with it.
 
-**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. A FOREIGN object in that slot is the exception: an egui container calls its closure with `&mut Ui`, and the lambda's parameter is that borrow, used in place and lent on (§G.3.4). `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
+**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. Which of those arguments are lent read-only (`&T`, not `&mut T`) is recorded per slot, `@RustClosureShared("0:0")`, and a lambda that writes through one, by assignment or a `@MutSelf` call, is `E0488` (ERRATA E1XX-GAP31). A FOREIGN object in that slot is the exception: an egui container calls its closure with `&mut Ui`, and the lambda's parameter is that borrow, used in place and lent on (§G.3.4). `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
 
 A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
 
@@ -584,7 +612,7 @@ Per §8.2 Layer 3, the long-term path is the compiler reading Rust signatures di
 
 §6.5.1 makes a collection a REFERENCE type: a value of one is a shared handle, so `var a = obj.getItems(); a.push(v)` reaches the object's collection rather than a copy. Applying that to a foreign type needs an answer to "is this a collection?", and the answer is **discovered from the type's own trait impls**, like every other binder question.
 
-A type is a collection when it implements **`Extend` or `FromIterator`**, Rust's own way of saying "you can build one of these from elements, and add more". `Vec`, `String`, `VecDeque`, `HashMap`/`HashSet`, `BTreeMap`/`BTreeSet`, `BinaryHeap`, `LinkedList`, `OsString` and `PathBuf` all do; a response object, a cursor and a set of file permissions do not. The marker is rendered on the stub as `@RustCollection`.
+A type is a collection when it implements **`Extend` or `FromIterator`**, and also `IntoIterator` (a collection gives back what it holds; genpdf's `Style` merges styles into itself through `Extend` and is a value, ERRATA E1XX-GAP31), Rust's own way of saying "you can build one of these from elements, and add more". `Vec`, `String`, `VecDeque`, `HashMap`/`HashSet`, `BTreeMap`/`BTreeSet`, `BinaryHeap`, `LinkedList`, `OsString` and `PathBuf` all do; a response object, a cursor and a set of file permissions do not. The marker is rendered on the stub as `@RustCollection`.
 
 Two restrictions make the reading exact:
 
@@ -770,7 +798,7 @@ Because stubs have no bodies, the borrow checker never analyzes foreign code —
 
 ### G.9.4. Where Stubs Are Found
 
-The resolver discovers `.jux.d` files through the dependency table of `jux.toml` (§G.11). A `rust.serde_json` dependency points the resolver at `serde_json.jux.d`; a `c.sqlite3` dependency points it at `sqlite3.jux.d`. Stubs not named by a dependency are not loaded (they cost nothing if unused — §2.5).
+The resolver discovers `.jux.d` files through the dependency table of `jux.toml` (§G.11). A `rust.serde_json` dependency points the resolver at `serde_json.jux.d`; a `c.sqlite3` dependency points it at `sqlite3.jux.d`. Stubs not named by a dependency are not loaded (they cost nothing if unused — §2.5). A generated stub whose dependency was removed from `jux.toml` is deleted; a hand-vendored one is left on disk and not read.
 
 ---
 
@@ -859,7 +887,7 @@ The two places `bindgen` cannot infer a decision — C-pointer ownership (§G.7.
 | `E0306` | error  | Stub declaration name collides with a user declaration in the same package |
 | `W0305` | warning | Two foreign symbols transformed to the same Jux name; second renamed with suffix (§G.4.1) |
 | `W0306` | warning | C-pointer ownership defaulted to `borrow`; specify `ownership` in `jux.toml` to silence (§G.7.5) |
-| `E0907` | error  | A `.jux.d` declaration has a non-elided body (stubs must be signature-only) |
+| `E0907` | error  | A `.jux.d` declaration has a non-elided body, or the stub reads as statements (stubs must be signature-only) |
 | `E0909` | error  | A C++ template was referenced without an explicit `instantiate` entry (§G.8.4) |
 | `W0307` | warning | A foreign item was skipped (Rust macro, un-mappable type); listed for visibility (§8.2) |
 
@@ -869,7 +897,7 @@ The two places `bindgen` cannot infer a decision — C-pointer ownership (§G.7.
 
 **Stub diagnostics are suppressed, except the ones that mean the stub did not load.** A stub is a trusted, signature-only view of an API the real crate already compiles, so a resolution or type-check complaint about the stub itself is noise: an unknown referenced type the scan did not pull in, a `uint?` Jux's value rules reject. Suppressing those is what lets a stub that is 95% well-formed contribute its 95%.
 
-That argument does not extend to a **lex or syntax error**, because there is no 95%: a malformed token sequence stops the parse and the whole unit contributes nothing. Suppressed as well, the only thing the user sees is `E0301 unresolved import` against a crate sitting right there in `.jux-stubs/`: a binder bug reported as a user's typo. Lexical and syntax errors from a stub are therefore REPORTED.
+That argument does not extend to a **lex or syntax error**, because there is no 95%: a malformed token sequence stops the parse and the whole unit contributes nothing. Suppressed as well, the only thing the user sees is `E0301 unresolved import` against a crate sitting right there in `.jux-stubs/`: a binder bug reported as a user's typo. Lexical and syntax errors from a stub are therefore REPORTED. So is text the parser read as top-level STATEMENTS (the script mode of §E.1.1): a stub holds declarations only, so that text is dropped and reported as `E0907` against the stub and the line it starts at, never as a second `main` of the program.
 
 ---
 
