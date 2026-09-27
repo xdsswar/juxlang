@@ -613,17 +613,23 @@ impl LanguageServer for Backend {
             Ok(ws) => build_completions(&doc, &ws, &uri, offset),
             Err(_) => build_completions(&doc, &Workspace::default(), &uri, offset),
         };
-        Ok(Some(CompletionResponse::Array(items)))
+        let text = doc.rope.to_string();
+        Ok(Some(CompletionResponse::Array(crate::leak_guard::completions(items, &[&text]))))
     }
 
     async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
+        // The documentation a resolve adds is a declaration's own doc comment,
+        // the user's text; the detail is checked when the list goes out.
         Ok(resolve_item(item, &|uri| self.snapshot(uri)))
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        Ok(self.docs.get(&uri).and_then(|doc| crate::calls::signature_help(&doc, pos)))
+        Ok(self.docs.get(&uri).and_then(|doc| {
+            let text = doc.rope.to_string();
+            crate::leak_guard::signature_help(crate::calls::signature_help(&doc, pos), &[&text])
+        }))
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {

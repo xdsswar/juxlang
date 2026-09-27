@@ -657,6 +657,29 @@ mod tests {
         assert!(colored.contains("\x1b[1;31merror[E0410]"), "{colored}");
     }
 
+    /// The leak guard (gap 33) reads the program: a name the program chose is
+    /// its own, whatever it spells.
+    #[test]
+    fn the_programs_own_names_are_not_a_leak() {
+        let text = "public void main() { int cargo = 1; }\n";
+        let src = SourceFile::new(std::path::PathBuf::from("src/main.jux"), text.to_string());
+        let start = text.find("cargo").unwrap() as u32;
+        let mut d = Diagnostic::warning(Code::E0410_TypeMismatch, "variable `cargo` is never read")
+            .with_span(Span { start, end: start + 5, file: 0 });
+        d.file = Some(0);
+        let out = render_text(std::slice::from_ref(&d), std::slice::from_ref(&src), DiagnosticFormat::Line, false);
+        assert!(out.contains("variable `cargo` is never read"), "{out}");
+        assert!(render_json(&[d], &[src], 0).contains("never read"));
+    }
+
+    /// Under test a diagnostic that shows Rust panics, so it cannot be pinned.
+    #[test]
+    #[should_panic(expected = "shows Rust to the user")]
+    fn a_diagnostic_that_shows_rust_fails_the_test_that_made_it() {
+        let d = Diagnostic::error(Code::E0410_TypeMismatch, "expected `std::string::String`, found `i64`");
+        let _ = render_text(&[d], &[], DiagnosticFormat::Human, false);
+    }
+
     #[test]
     fn one_line_formats() {
         let (d, s) = sample();

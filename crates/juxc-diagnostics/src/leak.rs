@@ -447,9 +447,9 @@ fn structural_at(text: &str, at: usize, end: usize) -> Option<(usize, &'static s
         }
     }
     // Lifetimes: `'static`, and `'a` right after `&` or `<`, or before `>`.
-    if rest.starts_with('\'') {
-        let name: String = rest[1..].chars().take_while(|c| is_ident(*c)).collect();
-        let after = rest[1 + name.len()..].chars().next();
+    if let Some(tail) = rest.strip_prefix('\'') {
+        let name: String = tail.chars().take_while(|c| is_ident(*c)).collect();
+        let after = tail[name.len()..].chars().next();
         let char_literal = after == Some('\'');
         let lifetime_start = name.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_');
         if !name.is_empty() && lifetime_start && !char_literal {

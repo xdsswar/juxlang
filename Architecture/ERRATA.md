@@ -4216,6 +4216,132 @@ recorded markers prove.
 of `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is no longer reserved.
 
 ---
+
+## E1XX-GAP33. Rust never reaches the user: one detector, a guard at every exit
+
+**Conflict.** E116 promised that Jux never prints raw Rust, and gaps 27-32
+kept that promise one leak at a time, each found by someone reading output.
+Nothing made a new leak impossible to ship. Probing every exit found more:
+
+- **Run-time failures printed the Rust runtime's text.** The emitted program's
+  hook printed `panic: ` and Rust's message as it stood: `index out of
+  bounds: the len is 3 but the index is 5` (a negative index read
+  `18446744073709551615`), `attempt to add with overflow`, `no entry found for
+  key`, `called Option::unwrap() on a None value` for an empty array's
+  `pop()`, and an `assert` with no message named the condition as the
+  generated code spelled it, `assertion failed: v.borrow().len() > 0`. A stack
+  overflow printed `thread 'main' has overflowed its stack`. A failed
+  `File.readText` was an `unwrap` on an `Err` carrying the OS error's Rust
+  `Debug`. No report named the `.jux` line, and a borrow conflict with no
+  source marker named `src/main.rs:L:C of the generated Rust`.
+- **Compiler text named Rust.** `E0436` explained itself with `Rc<dyn
+  Trait>`; `E0900`'s help and `E0904`'s note said `rustc`; the self-check's
+  `E0900` note gave a `.rs` location; a build that failed with no compiler
+  error in it (a registry out of reach) passed cargo's report through behind
+  "`cargo build` failed for the emitted Rust crate"; a missing toolchain said
+  "`cargo` is not installed"; the crash report of an internal compiler error
+  showed the compiler's `.rs` location, Rust's panic text and
+  `RUST_BACKTRACE`; `juxc --help` and `jux --help` talked about `cargo build`,
+  `rustc` and `rustup target`.
+- **A foreign value printed its Rust `Debug`**: `print(new Mutex<int>(5))` was
+  `Mutex { data: 5, poisoned: false, .. }`.
+
+**Resolution.** Leaks are prevented where the text is made; one detector
+guards every exit as the safety net, and the test suite runs it over
+everything pinned.
+
+- **One detector**, `juxc_diagnostics::leak::find_rust_leak` (and
+  `find_rust_leak_quoting`, told what the program's own text is). It knows
+  Rust paths (`std::`, `core::`, `alloc::`), `&mut `, `Rc<`, `Arc<`,
+  `RefCell`, `Box<dyn`, `dyn Trait`, `impl Trait`, lifetimes in type position,
+  rustc's `error[E0502]` inside a sentence, `.rs` locations, `cargo`,
+  `rustc`, `Cargo.toml`, the emitted crate's `__jux` names and `JuxCell`, and
+  the runtime's panic phrases. It skips what the programmer wrote: backtick
+  and double-quote spans (examined only when the program does not contain
+  them), fenced blocks, `N |` source frames, and any match the program's text
+  contains. Jux's own `Type::method`, `Map<String, int>`, `'a'` and the
+  `error[E0410]:` header are not hits.
+- **Exits and their guards.** Each is marked *at source* (the text can no
+  longer be produced) or *at exit* (the guard catches what is left).
+  - Diagnostics, `human`/`compact`/`short`/`line`/`json`
+    (`render::guard_leaks`): *at exit*. A diagnostic whose message, label,
+    note, help or fix title shows Rust becomes an `E0900` internal compiler
+    error at the same place, naming the code it replaces ("its wording named
+    the code the program is compiled to"), with the original text under
+    `--verbose`. The one exemption is `E0900`'s documented rustc note (E116,
+    E125). Under `JUX_SELFCHECK=1` and in unit tests the guard panics instead;
+    the UI harness now sets the variable, so a leaking diagnostic fails its
+    case. The texts above are fixed *at source*.
+  - Errors that are not diagnostics (`ice::report_error`, both binaries):
+    *at exit*; replaced by a sentence pointing at `--verbose`, status 1.
+  - The build with no compiler error: *at source*, now `E0905` "a dependency
+    of the program could not be fetched or built", with the first `error:`
+    line when it reads as Jux and the report under `--verbose`.
+  - The internal-compiler-error report: *at source*; the message in Jux words
+    (`leak::jux_panic_wording`), the site as the compiler module
+    (`juxc-tycheck/src/check:1204:9`), `JUX_BACKTRACE=1` (the runtime's own
+    variable still works).
+  - The language server (`juxc-lsp/src/leak_guard.rs`): hover, completion
+    label/detail/documentation, signature help, *at exit* (withheld on a hit);
+    published diagnostics through the compiler's guard, *at exit*. A doc
+    comment copied from a declaration is that file's own text.
+  - The emitted program, *at source*: an array, `Vec` or `VecDeque` position
+    is the prelude's `JuxIx`, whose `Index`/`IndexMut` throw
+    `IndexOutOfBoundsException("Index 5 out of bounds for length 3")`, a
+    negative position included, as do `get`, `set`, `first` and `last`; an
+    empty array's `pop()` throws `NoSuchElementException("the array is
+    empty")`; `new T[n]` with a negative `n` throws
+    `IllegalArgumentException("Negative array size: -2")`; a failed `File`
+    operation throws `FileNotFoundException` or `IOException` with the
+    system's reason; `assert` with no message says `assertion failed`; the
+    `!!` and cast exceptions no longer repeat their class name in the message.
+  - The emitted program, *at exit*: every entry point runs under the
+    prelude's `jux_install_panic_hook`. A Rust panic left over (integer
+    overflow in a debug build, a missing map key, a `Vec` `remove`/`insert`
+    position, a raw cell conflict) prints `panic: <Jux wording>` and `    at
+    <file>.jux:<line>:<col>` from `__JUX_LINES`; an uncaught exception prints
+    `Exception in thread "main" <fqn>: <message>` and the same `at` line
+    (helpers that throw carry `#[track_caller]`, so the line is the
+    program's), and an instance of a generic exception class, which had no
+    report at all, says so. The status of an uncaught failure stays 101, as
+    before. On Windows a stack overflow is reported by a vectored exception
+    handler, `panic: stack overflow: a method called itself too many times
+    without finishing`, status 101.
+  - `print` of a foreign value with no `Display` (`jux_debug_as_jux`), *at
+    source*: a type from outside the program has its cells printed as their
+    value (`RefCell`, `Cell`, `Mutex`, `RwLock`), `Some(x)` as `x`, and a
+    field's `None` as `null`.
+- **CI.** `bin/juxc/tests/leak_sweep.rs` runs the detector over every
+  `tests/ui/*.expected` and `tests/expected/examples/*.expected`, told each
+  case's own source; `tests/leak-allowlist.txt` is empty and a stale entry
+  fails. `bin/jux/tests/runtime_failures.rs` runs
+  `examples/runtime_index_out_of_bounds.jux`, `runtime_integer_overflow`,
+  `runtime_assert_failed`, `runtime_missing_map_key` (all four also pinned
+  word for word by the corpus) and `runtime_stack_overflow` and holds their
+  output to the detector with nothing excused.
+
+**Not guarded.** A stack overflow off Windows still prints the runtime's
+report: it never reaches a panic hook, and the signal handler that would see
+it needs per-platform `sigaction` layouts the prelude does not carry. A
+foreign type's `Display`, and `Debug` text other than cells and nullables
+(`OnceLock(<uninit>)`), is the crate author's. A foreign `Err` is reported
+under its Rust type name (`ParseFloatError`, Bindgen G.5.4). A crate's doc
+comments shown on hover are the stub's own text. `juxc explain` prints the
+specification's prose, which discusses the Rust lowering. Informational lines
+the `jux` tool prints itself (`jux: ...`) do not pass the detector; the
+corpus sweep covers the ones that are pinned. `--verbose` output is the
+build tools' report, by design.
+
+**Spec status:** `JUX-SEMANTICS-ADDENDUM.md` §S.7 listed an array bounds
+violation among the panics and said the report "follows the Rust std"; an
+array or list position outside the sequence now throws
+`IndexOutOfBoundsException`, as a `String` position already did (§K.7) and
+integer division by zero does (E1), and the report is the one above. §S.7.1
+is otherwise unchanged: overflow and a failed `assert` are still panics, not
+catchable. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4: `E0905` is raised, and the
+`E0900` row names the leak guard as a third source. GAPS.md gap 33 is closed.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 

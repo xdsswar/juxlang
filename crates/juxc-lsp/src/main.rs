@@ -21,6 +21,7 @@ mod hover;
 mod imports;
 mod inlay;
 mod intel;
+mod leak_guard;
 mod position;
 mod references;
 mod roots;

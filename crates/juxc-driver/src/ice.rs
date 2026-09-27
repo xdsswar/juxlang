@@ -60,7 +60,7 @@ pub const ICE_EXIT_CODE: u8 = 101;
 
 /// Where to send a report. Read from the workspace manifest so a fork does not
 /// point people at this repository.
-pub(crate) const ISSUES_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues");
+pub const ISSUES_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues");
 
 /// Set to any non-empty value to make [`guard`] panic on purpose, so the ICE
 /// path itself can be tested end to end.
@@ -150,8 +150,9 @@ where
 /// the exit status. This is the last exit a message can leave by, so it
 /// passes the leak guard too (GAPS.md gap 33): an error whose text shows Rust
 /// (the build tools' own report, a Rust type) is replaced by a sentence that
-/// says the compiler could not explain it, with the text itself under
-/// `--verbose`, and the status is the ICE's. Under the self-check it panics.
+/// says so, with the text itself under `--verbose`. The status stays 1: such
+/// an error is as often the environment's (a crate that cannot be fetched)
+/// as the compiler's. Under the self-check it panics.
 pub fn report_error(tool: &str, err: &anyhow::Error, verbose: bool) -> ExitCode {
     let mut text = format!("{tool}: error: {err}");
     for cause in err.chain().skip(1) {
@@ -167,15 +168,15 @@ pub fn report_error(tool: &str, err: &anyhow::Error, verbose: bool) -> ExitCode 
                 panic!("{tool}'s error shows Rust to the user: {hit}\n{text}");
             }
             eprintln!(
-                "{tool}: error: internal compiler error: the build stopped with a report the compiler \
-                 could not put in Jux terms; this is a bug in the Jux compiler, please report it at \
-                 {ISSUES_URL}{}",
-                if verbose { "" } else { " (`--verbose` shows the report)" }
+                "{tool}: error: the build could not finish, and the build tools' report is not \
+                 in Jux terms{}; if the program and its dependencies are in order, this is a bug \
+                 in the Jux compiler, please report it at {ISSUES_URL}",
+                if verbose { " (it follows)" } else { " (`--verbose` shows it)" }
             );
             if verbose {
                 eprintln!("{text}");
             }
-            ExitCode::from(ICE_EXIT_CODE)
+            ExitCode::FAILURE
         }
     }
 }

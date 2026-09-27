@@ -1,0 +1,7 @@
+caught: Index 3 out of bounds for length 3
+caught: Index -1 out of bounds for length 3
+caught: the array is empty
+the last one is not caught
+Exception in thread "main" jux.std.exceptions.IndexOutOfBoundsException: Index 5 out of bounds for length 3
+    at examples/runtime_index_out_of_bounds.jux:32:5
+[exit: 101]

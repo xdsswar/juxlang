@@ -1,0 +1,16 @@
+// Recursion that never stops overflows the stack. On Windows the report is
+// in Jux terms (GAPS.md gap 33); elsewhere the runtime's own report still
+// stands. `bin/jux/tests/runtime_failures.rs` runs it; the output corpus
+// does not, since it differs by platform.
+
+int depth(int n) {
+    if (n < 0) {
+        return 0;
+    }
+    return depth(n + 1) + 1;
+}
+
+public void main() {
+    print("recursing");
+    print(depth(0));
+}

@@ -1,0 +1,15 @@
+// Integer overflow in a debug build stops the program (JUX-SEMANTICS §S.2.1:
+// panic in debug, wrap in release). The report is in Jux terms, at the
+// `.jux` line of the addition (GAPS.md gap 33); it used to be the Rust
+// runtime's own message, at a line of the generated code.
+
+int biggest() {
+    return 9223372036854775807;
+}
+
+public void main() {
+    int x = biggest();
+    print("adding one to the largest int");
+    print(x + 1);
+    print("not reached");
+}

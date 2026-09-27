@@ -1,0 +1,13 @@
+// Reading a key a map does not hold stops the program with a report in Jux
+// terms at the `.jux` line of the read (GAPS.md gap 33), where it used to be
+// the Rust runtime's own message, at a line of the generated code.
+
+import rust.std.HashMap;
+
+public void main() {
+    HashMap<String, int> stock = new HashMap<String, int>();
+    stock.insert("apples", 3);
+    print(stock["apples"]);
+    print(stock["pears"]);
+    print("not reached");
+}

@@ -1,0 +1,4 @@
+adding one to the largest int
+panic: integer overflow in addition
+    at examples/runtime_integer_overflow.jux:13:5
+[exit: 101]
