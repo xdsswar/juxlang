@@ -262,6 +262,46 @@ diagnostic.
 
 **33. CLOSED 2026-09-27 (ERRATA E129).** ~~Make a Rust leak impossible to ship, with one guard at every exit.~~ One detector (`juxc_diagnostics::leak`) guards the diagnostic renderers, the binaries' error exit, the language server and the ICE report; the emitted program throws Jux exceptions for out-of-range positions, empty-array `pop()`, negative array sizes and failed `File` operations, and its panic hook reports what is left (`panic: ...` / `Exception in thread "main" ...` with the `.jux` line; a stack overflow on Windows too). `E0905` replaces the cargo passthrough; `E0436`, `E0900`, `E0904`, the self-check note, the ICE report and `--help` no longer name Rust tools or types. `bin/juxc/tests/leak_sweep.rs` holds every pinned output to the detector (allowlist empty), and `bin/jux/tests/runtime_failures.rs` runs five deliberately failing programs. Not guarded: a stack overflow off Windows, foreign `Display`/`Debug` text beyond cells and nullables.
 
+**37. OPEN (found 2026-09-27 by the idiomatic rewrite, LEAKS L29, L39).**
+
+- **L29: egui's `Frame` cannot be named from `rust.eframe`.** `eframe::Frame`
+  and `egui::Frame` share a name within one crate family, and the host's item
+  wins (`FamilyPaths::rank`). So `egui::Frame` is dropped, and
+  `Panel.frame(..)`, `CentralPanel.frame(..)`, `TextEdit.frame(..)` and
+  `Ui.dnd_drop_zone(..)` name eframe's type. A panel cannot get its own fill
+  or margins. The fix needs a second Jux name for the losing type (a nested
+  package or a renamed type).
+- **L39: deprecated crate methods are not marked.** A stub does not mark them
+  (`Panel.show_inside`, renamed `show` in egui 0.36), and only rustc warns,
+  under `--verbose`.
+
+**36. CLOSED 2026-09-27 (branch `leaker-idiomatic`, LEAKS L30-L38).** ~~The shapes the idiomatic rewrite hit.~~
+
+- **L30:** a lambda argument bound to a `let` by argument hoisting lost its
+  parameter type (E0282).
+- **L31:** a `static final` of a non-class type computed by a call became a
+  Rust `const` (E0015).
+- **L32:** field initializers were never type-checked, so `!!` in one emitted
+  nothing.
+- **L33:** a field lent to a crate's static function or constructor
+  (`TextEdit.singleline(name)`, `new DragValue(line.qty)`) was a copy or a
+  shared borrow, the representation selector did not count it as a write, and
+  hoisting ended the widget's borrow early.
+- **L34:** a lent `Ui` was moved into an argument temporary.
+- **L35:** a crate closure's `&str` argument stayed `&str`, and `c ? null : x`
+  did not wrap `x` without an announced nullable target.
+- **L36:** a trailing `return` lending a collection kept its guard past the
+  local (E0597).
+- **L37:** the borrow self-check took a crate method named like a Jux method
+  for the Jux one.
+- **L38:** `local.method(ui)` passed `ui` by value because the one-name
+  receiver was read as a class name. A crate function's closure type (such as
+  `run_ui_native`'s `(Ui, Frame)`) was also read only in the caller's imports,
+  so it left the lambda's parameters untyped.
+
+Tests: `bin/juxc/tests/leaker_idioms.rs` and
+`examples/field_initializer_calls.jux`.
+
 ---
 
 ## 4. Three streams stopped mid-flight

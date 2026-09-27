@@ -1,0 +1,114 @@
+// One page of printpdf drawing operations, with a top-left origin.
+//
+// printpdf measures from the bottom-left corner of the page in points; the
+// invoice layout reads top to bottom, so y here grows downward and is flipped
+// as each operation is added.
+package leaker.pdf;
+
+import rust.printpdf.Op;
+import rust.printpdf.Mm;
+import rust.printpdf.Pt;
+import rust.printpdf.Point;
+import rust.printpdf.Rect;
+import rust.printpdf.PaintMode;
+import rust.printpdf.Color;
+import rust.printpdf.Rgb;
+import rust.printpdf.TextItem;
+import rust.printpdf.PdfFontHandle;
+import rust.printpdf.BuiltinFont;
+import rust.printpdf.ParsedFont;
+import rust.printpdf.PdfPage;
+
+public class PdfCanvas {
+    /** A4, in points. */
+    public static final double WIDTH = 595.28;
+    public static final double HEIGHT = 841.89;
+
+    private static final ParsedFont REGULAR = BuiltinFont.Helvetica.get_parsed_font()!!;
+    private static final ParsedFont BOLD = BuiltinFont.HelveticaBold.get_parsed_font()!!;
+
+    private Vec<Op> ops = new Vec<Op>();
+
+    /** Text with its baseline at (x, y). */
+    public void text(double x, double y, String text, double size, bool bold, Color color) {
+        ops.push(Op.StartTextSection);
+        ops.push(Op.SetFillColor(color));
+        ops.push(Op.SetFont(PdfFontHandle.Builtin(bold ? BuiltinFont.HelveticaBold : BuiltinFont.Helvetica), new Pt((float) size)));
+        ops.push(Op.SetTextCursor(new Point(mm(x), mm(HEIGHT - y))));
+        var items = new Vec<TextItem>();
+        items.push(TextItem.Text(text));
+        ops.push(Op.ShowText(items));
+        ops.push(Op.EndTextSection);
+    }
+
+    /** Text whose right edge is at `right`. */
+    public void textRight(double right, double y, String text, double size, bool bold, Color color) {
+        text(right - textWidth(text, size, bold), y, text, size, bold, color);
+    }
+
+    /** The width of `text` in points, from the font's own glyph advances. */
+    public double textWidth(String text, double size, bool bold) {
+        var font = bold ? BOLD : REGULAR;
+        long units = 0;
+        for (var ch : text.chars()) {
+            var glyph = font.lookup_glyph_index((uint) ch);
+            if (glyph != null) {
+                units += (long) font.get_horizontal_advance(glyph!!);
+            }
+        }
+        return (double) units * size / (double) font.get_font_metrics().units_per_em;
+    }
+
+    /**
+     * Text wrapped to `maxWidth`, one line every `leading` points. Returns the
+     * y of the line after the last one written.
+     */
+    public double paragraph(double x, double y, double maxWidth, String text, double size, double leading, Color color) {
+        double cy = y;
+        String line = "";
+        for (var word : text.split(" ")) {
+            String candidate = line.length() == 0 ? word : line + " " + word;
+            if (line.length() > 0 && textWidth(candidate, size, false) > maxWidth) {
+                text(x, cy, line, size, false, color);
+                cy += leading;
+                line = word;
+            } else {
+                line = candidate;
+            }
+        }
+        if (line.length() > 0) {
+            text(x, cy, line, size, false, color);
+            cy += leading;
+        }
+        return cy;
+    }
+
+    /** A filled rectangle whose top-left corner is (x, y). */
+    public void fillRect(double x, double y, double w, double h, Color color) {
+        var rect = Rect.from_xywh(pt(x), pt(HEIGHT - y - h), pt(w), pt(h));
+        rect.mode = PaintMode.Fill;
+        ops.push(Op.SetFillColor(color));
+        ops.push(Op.DrawRectangle(rect));
+    }
+
+    /** A horizontal rule. */
+    public void rule(double x1, double x2, double y, double thickness, Color color) {
+        fillRect(x1, y - thickness / 2.0, x2 - x1, thickness, color);
+    }
+
+    public PdfPage toPage() {
+        return new PdfPage(new Mm(210.0f), new Mm(297.0f), ops);
+    }
+
+    public static Color rgb(int r, int g, int b) {
+        return Color.Rgb(new Rgb((float) r / 255.0f, (float) g / 255.0f, (float) b / 255.0f, null));
+    }
+
+    private static Pt pt(double points) {
+        return new Pt((float) points);
+    }
+
+    private static Mm mm(double points) {
+        return new Mm((float) (points * 25.4 / 72.0));
+    }
+}

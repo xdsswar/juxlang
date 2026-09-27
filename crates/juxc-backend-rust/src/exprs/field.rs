@@ -720,7 +720,7 @@ impl RustEmitter {
                         // thread_local (Rust `const` can't run the
                         // wrapper ctor), so they fall through to the
                         // thread_local read below.
-                        if field.is_final && !self.final_static_needs_runtime_init(&field.ty, field.default.is_some()) {
+                        if field.is_final && !self.final_static_needs_runtime_init(&field.ty, field.default.as_ref()) {
                             // A `const String` is stored as `&'static str`: a
                             // Rust `const` cannot allocate, and link-time data
                             // should not. A READ of one is an ordinary Jux
@@ -1190,7 +1190,7 @@ impl RustEmitter {
         let field_sig = self
             .lookup_class_by_bare_or_fqn(class_name)
             .and_then(|c| c.fields.get(field_name))
-            .map(|fs| (fs.ty.clone(), fs.default.is_some()));
+            .map(|fs| (fs.ty.clone(), fs.default.clone()));
         let field_ty = field_sig.as_ref().map(|(ty, _)| ty.clone());
         let is_ref = self
             .lookup_class_by_bare_or_fqn(class_name)
@@ -1203,7 +1203,7 @@ impl RustEmitter {
         let final_runtime = is_final
             && field_sig
                 .as_ref()
-                .map(|(ty, has_init)| self.final_static_needs_runtime_init(ty, *has_init))
+                .map(|(ty, init)| self.final_static_needs_runtime_init(ty, init.as_ref()))
                 .unwrap_or(false);
         if is_final && !final_runtime && !is_thread_local {
             // Same ownership rule as the qualified `Class.NAME` form: a

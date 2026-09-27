@@ -883,7 +883,13 @@ impl<'a> Walker<'a> {
         let mutates = self.mutating.contains(name);
         let recv_obj = recv.and_then(|r| self.obj(r));
         let through_field = recv.is_some_and(|r| self.read_out_of_field(r, false));
-        let arg_objs: Vec<String> = args.filter_map(|a| self.obj(a)).collect();
+        // An argument that IS a guard's value (`&mut w.borrow_mut()`) lends
+        // the cell's interior to a crate's `&mut` slot, which is how a
+        // collection meets foreign code (`doc.save(&opts, &mut warnings..)`);
+        // a Jux function is handed the handle, never a guard, so such a call
+        // is foreign whatever its name.
+        let arg_objs: Vec<String> =
+            args.filter(|a| !self.is_guarded_value(a)).filter_map(|a| self.obj(a)).collect();
         let mut found: Option<String> = None;
         for g in &self.live {
             if !(g.exclusive || mutates) {
@@ -966,6 +972,13 @@ mod tests {
         let hits = check("println!(\"{}\", self.0.borrow().n + self.bump());");
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert!(hits[0].what.contains("`self` is still borrowed while `bump`"), "{hits:?}");
+    }
+
+    /// A collection's interior lent to a crate's `&mut` slot is not a Jux
+    /// call, even when a Jux method has the crate method's name (`bump`).
+    #[test]
+    fn a_guard_lent_to_a_same_named_foreign_method_is_clean() {
+        assert!(check("let w = crate::jux_arr(Vec::new()); return doc.bump(&opts, &mut w.borrow_mut());").is_empty());
     }
 
     #[test]

@@ -1,0 +1,17 @@
+// Grid cells the screens share.
+package leaker.ui;
+
+import rust.eframe.Ui;
+import rust.eframe.Vec2;
+import rust.eframe.Layout;
+import rust.eframe.Align;
+import rust.eframe.RichText;
+
+public class Cells {
+    /** A number in a table column: right-aligned in a column `width` wide. */
+    public static void amount(Ui ui, float width, RichText text) {
+        ui.allocate_ui_with_layout(new Vec2(width, ui.spacing().interact_size.y), Layout.right_to_left(Align.Center), (cell) -> {
+            cell.label(text);
+        });
+    }
+}

@@ -487,6 +487,11 @@ pub(crate) struct Checker<'a> {
     /// returns `Ordering` (a comparator, Operators §O.2.1): its result must
     /// be an integer or an `Ordering`. Take-and-cleared by the lambda arm.
     pub(crate) lambda_is_comparator: bool,
+    /// The free function whose arguments are being checked, by its table key:
+    /// a closure parameter type is also read in that function's package, so a
+    /// crate function's `(Ui, Frame)` types the lambda where the caller did not
+    /// import `Ui` or `Frame`.
+    pub(crate) callee_fn_key: Option<String>,
     /// True while checking a for-each header's iterable expression —
     /// the one position a `step` range is legal in Phase 1.
     pub(crate) in_foreach_iter: bool,
@@ -626,6 +631,7 @@ impl<'a> Checker<'a> {
             unsafe_block_depth: 0,
             lambda_slot_params: None,
             lambda_is_comparator: false,
+            callee_fn_key: None,
             in_foreach_iter: false,
             in_static: false,
             in_interface_super_call: false,
@@ -868,6 +874,7 @@ impl<'a> Checker<'a> {
                 Expr::Unary(u) => has_call(&u.operand),
                 Expr::Ternary(t) => has_call(&t.condition) || has_call(&t.then_branch) || has_call(&t.else_branch),
                 Expr::Cast(c) => has_call(&c.value),
+                Expr::NotNullAssert(inner, _) => has_call(inner),
                 _ => false,
             }
         }
@@ -3244,6 +3251,21 @@ impl<'a> Checker<'a> {
         // types, so `x` is a `double` in the body and prints as `5.0`, and
         // the body's own mistakes are reported. `this` is in scope, as in an
         // `init` block, since the initializer runs during construction.
+        // Any other initializer is an expression like any other: checked,
+        // so what it calls and asserts (`font()!!`) has the types the backend
+        // lowers it by. It was never visited, and `!!` there emitted nothing.
+        for field in &class.fields {
+            let Some(default) = &field.default else { continue };
+            if matches!(default, Expr::Lambda(_)) {
+                continue;
+            }
+            self.env.push_scope();
+            if !field.is_static {
+                self.env.declare("this", this_ty.clone());
+            }
+            self.check_expr(default);
+            self.env.pop_scope();
+        }
         for field in &class.fields {
             let (Some(default @ Expr::Lambda(_)), Some(fty)) = (&field.default, &field.ty) else {
                 continue;
@@ -11922,6 +11944,7 @@ impl<'a> Checker<'a> {
                         &format!("function `{name}`"),
                         c.span,
                     );
+                    let prev_callee_fn = self.callee_fn_key.replace(fqn.clone());
                     if callee_c_variadic && c.args.len() > params.len() {
                         // C-variadic call with extra args: the fixed prefix gets
                         // the normal per-slot type checks; each trailing arg (the
@@ -11953,6 +11976,7 @@ impl<'a> Checker<'a> {
                             &subst_args,
                         );
                     }
+                    self.callee_fn_key = prev_callee_fn;
                     return;
                 }
                 // Unknown bare callee — walk args silently. The
@@ -14018,6 +14042,16 @@ impl<'a> Checker<'a> {
                     None => ty_from_ref(&param.ty, &self.env, self.symbols),
                 };
                 let slot = substitute(&slot_raw, subst_params, subst_args);
+                // A free function's closure type may name types the caller
+                // never imported (`run_ui_native`'s `(Ui, Frame)` in a file
+                // that imports neither): read it again in the function's own
+                // package, as a member's signature is read in its class's.
+                let slot = match (&slot, declaring_class, self.callee_fn_key.as_deref()) {
+                    (Ty::Fn { params: ps, .. }, None, Some(key)) if !ps.iter().all(ty_is_concrete) => {
+                        substitute(&lower_member_type(&param.ty, key, self.symbols), subst_params, subst_args)
+                    }
+                    _ => slot,
+                };
                 if let Ty::Fn { params: slot_params, .. } = &slot {
                     if slot_params.iter().all(ty_is_concrete) {
                         self.lambda_slot_params = Some(slot_params.clone());
