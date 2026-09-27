@@ -3038,6 +3038,12 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        // The safe lowering level writes a primitive's or a String's type out
+        // (GAPS.md gap 34).
+        if let Some(typed) = self.safe_typed_var(var) {
+            self.emit_var_decl(&typed);
+            return;
+        }
         self.declared_local_names.insert((self.current_unit_idx, var.name.text.clone()));
         // A `T[N]` local that some later statement hands to a `T[]` slot:
         // store it as that slot's runtime-sized handle (the rest of the

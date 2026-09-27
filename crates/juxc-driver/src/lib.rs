@@ -250,6 +250,7 @@ pub mod manifest;
 pub mod manifest_check;
 mod package_check;
 mod safety_lint;
+mod self_heal;
 pub mod project;
 pub mod render;
 mod source_map;
@@ -392,12 +393,13 @@ pub fn compile_workspace_as<F>(
     profile: juxc_tycheck::Profile,
 ) -> Result<CompileResult>
 where
-    F: FnOnce(
-        &[juxc_ast::CompilationUnit],
-        &juxc_tycheck::SymbolTable,
-        &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
-        &[SourceFile],
-    ) -> RustCrate,
+    F: Fn(
+            &[juxc_ast::CompilationUnit],
+            &juxc_tycheck::SymbolTable,
+            &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+            &[SourceFile],
+        ) -> RustCrate
+        + 'static,
 {
     compile_workspace_as_cfg(sources, lower, &cfg::CfgFacts::new(false, profile))
 }
@@ -416,12 +418,13 @@ pub fn compile_workspace_as_cfg<F>(
     cfg: &cfg::CfgFacts,
 ) -> Result<CompileResult>
 where
-    F: FnOnce(
-        &[juxc_ast::CompilationUnit],
-        &juxc_tycheck::SymbolTable,
-        &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
-        &[SourceFile],
-    ) -> RustCrate,
+    F: Fn(
+            &[juxc_ast::CompilationUnit],
+            &juxc_tycheck::SymbolTable,
+            &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+            &[SourceFile],
+        ) -> RustCrate
+        + 'static,
 {
     let profile = cfg.profile();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -519,7 +522,9 @@ where
         // wrapped in its package modules. The first source file's
         // path drives source-map markers for the `main` unit; the
         // others get their own markers via per-unit source refs.
-        Some(lower(&units, &typed.symbols, &typed.expr_types, &sources))
+        // The crate keeps the checked program, so the build can lower a
+        // function again at the safe level if rustc refuses it (gap 34).
+        Some(self_heal::lower_healable(units, typed.symbols, typed.expr_types, &sources, lower))
     };
 
     Ok(CompileResult { crate_, diagnostics, sources })
@@ -596,11 +601,12 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     let crate_ = if has_errors {
         None
     } else {
-        Some(juxc_backend_rust::lower_workspace_test(
-            &units,
-            &typed.symbols,
-            &typed.expr_types,
+        Some(self_heal::lower_healable(
+            units,
+            typed.symbols,
+            typed.expr_types,
             &sources,
+            juxc_backend_rust::lower_workspace_test,
         ))
     };
     Ok(CompileResult { crate_, diagnostics, sources })
@@ -854,7 +860,11 @@ pub fn build(
 /// post-rustfmt files so line numbers match what rustc saw. A failure rustc
 /// had no part in (a registry out of reach) still passes cargo's own text
 /// through, arrows rewritten.
-fn run_cargo_build(crate_dir: &Path, profile_args: &[String], rs_files: &[PathBuf]) -> Result<()> {
+///
+/// Split in two for the self-healing build (gap 34, `self_heal.rs`): [`run_cargo`]
+/// runs the build and hands back cargo's output when it fails, and
+/// [`cargo_failure`] turns that output into what the user sees.
+fn run_cargo(crate_dir: &Path, profile_args: &[String]) -> Result<Option<(String, String)>> {
     let triple = cross_target();
     if let Some(triple) = &triple {
         build_failure::preflight_target(triple, crate_dir)?;
@@ -868,17 +878,24 @@ fn run_cargo_build(crate_dir: &Path, profile_args: &[String], rs_files: &[PathBu
     cmd.current_dir(crate_dir);
     let output = spawn_toolchain(cmd, "building a Jux program needs it")?;
     if output.status.success() {
-        return Ok(());
+        return Ok(None);
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let map = source_map::SourceMap::from_disk(crate_dir, rs_files);
-    if let Some(mut failure) = build_failure::from_messages(&stdout, &map) {
-        failure.detail.push_str(&stderr);
-        return Err(failure.into());
+    Ok(Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )))
+}
+
+/// The error a failed build of the emitted crate is reported as: `E0900`
+/// and its kin when rustc said anything, `E0905` when it did not. `map`
+/// traces rustc's spans back to the `.jux` lines.
+fn cargo_failure(stdout: &str, stderr: &str, map: &source_map::SourceMap) -> anyhow::Error {
+    if let Some(mut failure) = build_failure::from_messages(stdout, map) {
+        failure.detail.push_str(stderr);
+        return failure.into();
     }
-    let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
-    Err(dependency_failure(&rewritten).into())
+    let rewritten = source_map::rewrite_rustc_output(stderr, map);
+    dependency_failure(&rewritten).into()
 }
 
 /// `E0905`: the build of an accepted program failed and rustc said nothing,
@@ -931,9 +948,18 @@ pub fn build_with_manifest(
     release: bool,
     manifest: Option<&Manifest>,
 ) -> Result<BuildArtifact> {
-    let written_rs = write_crate_with_manifest(crate_, crate_dir, crate_name, manifest)?;
     let bin = cargo_bin_name(crate_, crate_dir, crate_name);
-    cargo_build(crate_dir, crate_name, &bin, release, &written_rs)
+    let (profile_args, _) = cargo_profile_args(release);
+    // Built fast; a function rustc refuses is lowered again at the safe
+    // level and the crate rebuilt (gap 34, `self_heal.rs`).
+    self_heal::build(
+        crate_,
+        crate_dir,
+        &mut |c| write_crate_with_manifest(c, crate_dir, crate_name, manifest),
+        &mut || run_cargo(crate_dir, &profile_args),
+        &cargo_failure,
+    )?;
+    cargo_build(crate_dir, crate_name, &bin, release)
 }
 
 /// Write the emitted crate to disk -- sources, `Cargo.toml`, any build script
@@ -1069,24 +1095,11 @@ pub fn write_crate_with_manifest(
     Ok(written_rs)
 }
 
-/// Run `cargo build` in an already-written crate directory and locate the
-/// produced binary. `written_rs` is what the writer produced, used to map a
-/// rustc error back to the `.jux` line it came from.
-fn cargo_build(
-    crate_dir: &Path,
-    crate_name: &str,
-    bin: &str,
-    release: bool,
-    written_rs: &[std::path::PathBuf],
-) -> Result<BuildArtifact> {
-    // Run cargo build inside the emitted crate. `--quiet` suppresses
-    // cargo's "compiling/finished" lines; we surface anything that
-    // actually went wrong via the captured stderr. When `release` is
-    // set we also pass `--release` so the emitted program is built
-    // with optimizations (and lands under `target/release/`).
+/// Locate the binary `cargo build` produced in an already-built crate
+/// directory (the build itself is [`self_heal::build`]'s).
+fn cargo_build(crate_dir: &Path, crate_name: &str, bin: &str, release: bool) -> Result<BuildArtifact> {
     // `--release`, `--profile <name>`, or nothing for the dev profile.
-    let (profile_args, profile_dir) = cargo_profile_args(release);
-    run_cargo_build(crate_dir, &profile_args, written_rs)?;
+    let (_, profile_dir) = cargo_profile_args(release);
 
     // Compute the binary path. Cargo's default target dir is
     // `target/debug/{name}{exe-suffix}` (or `target/release/...`
@@ -1238,6 +1251,54 @@ pub fn build_emitted_crate(
     path_deps: &[juxc_backend_rust::PathDep],
     in_workspace: bool,
 ) -> Result<BuildArtifact> {
+    // Built fast; a function rustc refuses is lowered again at the safe
+    // level and the crate rebuilt (gap 34, `self_heal.rs`).
+    let (profile_args, profile_dir) = cargo_profile_args(release);
+    self_heal::build(
+        crate_,
+        crate_dir,
+        &mut |c| write_emitted_crate(c, crate_dir, target, manifest, path_deps, in_workspace),
+        &mut || run_cargo(crate_dir, &profile_args),
+        &cargo_failure,
+    )?;
+
+    // Compute the produced-artifact path (cross targets add their
+    // triple segment: `target/<triple>/<profile>/...`).
+    let mut out_dir = cargo_target_dir(crate_dir);
+    if let Some(triple) = cross_target() {
+        out_dir = out_dir.join(triple);
+    }
+    let out_dir = out_dir.join(&profile_dir);
+    let binary_path = match target {
+        juxc_backend_rust::CrateTarget::Bin { name } => {
+            let bin = cargo_bin_name(crate_, crate_dir, name);
+            let built = out_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+            if &bin == name {
+                built
+            } else {
+                publish_binary(&built, crate_dir, &profile_dir, name)?
+            }
+        }
+        juxc_backend_rust::CrateTarget::Lib { name, .. } => {
+            // Best-effort: the rlib Cargo produces is `lib<name>.rlib`.
+            // Callers usually only check that the build succeeded.
+            out_dir.join(format!("lib{}.rlib", sanitize_crate(name)))
+        }
+    };
+
+    Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+}
+
+/// Write one lowering of the crate [`build_emitted_crate`] builds, run the
+/// pre-build checks on it, and return every emitted `.rs` file.
+fn write_emitted_crate(
+    crate_: &RustCrate,
+    crate_dir: &Path,
+    target: &juxc_backend_rust::CrateTarget,
+    manifest: Option<&Manifest>,
+    path_deps: &[juxc_backend_rust::PathDep],
+    in_workspace: bool,
+) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(crate_dir.join("src"))
         .with_context(|| format!("creating emitted crate dir {}", crate_dir.display()))?;
 
@@ -1377,36 +1438,7 @@ pub fn build_emitted_crate(
         borrow_selfcheck::check_rep_fallbacks(&crate_.rep_fallbacks)?;
         borrow_selfcheck::check_crate(crate_dir, &all_rs)?;
     }
-
-    // Run `cargo build`.
-    let (profile_args, profile_dir) = cargo_profile_args(release);
-    run_cargo_build(crate_dir, &profile_args, &all_rs)?;
-
-    // Compute the produced-artifact path (cross targets add their
-    // triple segment: `target/<triple>/<profile>/...`).
-    let mut out_dir = cargo_target_dir(crate_dir);
-    if let Some(triple) = cross_target() {
-        out_dir = out_dir.join(triple);
-    }
-    let out_dir = out_dir.join(&profile_dir);
-    let binary_path = match target {
-        juxc_backend_rust::CrateTarget::Bin { name } => {
-            let bin = cargo_bin_name(crate_, crate_dir, name);
-            let built = out_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
-            if &bin == name {
-                built
-            } else {
-                publish_binary(&built, crate_dir, &profile_dir, name)?
-            }
-        }
-        juxc_backend_rust::CrateTarget::Lib { name, .. } => {
-            // Best-effort: the rlib Cargo produces is `lib<name>.rlib`.
-            // Callers usually only check that the build succeeded.
-            out_dir.join(format!("lib{}.rlib", sanitize_crate(name)))
-        }
-    };
-
-    Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+    Ok(all_rs)
 }
 
 /// Sanitize a name for use in a Cargo library file-name lookup: Cargo

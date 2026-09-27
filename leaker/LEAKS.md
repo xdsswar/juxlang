@@ -16,13 +16,31 @@ this code does not compile`. The rustc text after it only shows up with
 `jux --verbose build`. The program *type-checks* in every E0900 case, so the
 failure is in lowering, not in the user's code.
 
-Summary of the outcome:
+## Where it stands now (2026-09-27, second round)
+
+Gaps 30, 31 and 32 fixed L1 to L28, and the app was then **rewritten the way
+a Java programmer would write it, with every workaround removed** (branch
+`leaker-idiomatic`). The rewrite found ten more leaks, L29 to L39, listed
+under "Round 2" below. Eight of them were fixed in the compiler on the same
+branch, each with a test. Two are still open:
+
+- **L29** (annoying): egui's `Frame` cannot be named, so a panel cannot be
+  given its own fill or margins. The app styles everything through `Visuals`
+  instead, which is why the side navigation is no longer dark.
+- **L39** (cosmetic): a crate's deprecated methods are not marked in the stubs.
+
+How the app is written now:
 
 | Area | Result |
 |---|---|
-| egui via eframe | **Works**, but only through `run_ui_native` and **hand-made layout**. None of egui's closure-based containers can be used (L1), and neither can `ui.button`/`ui.add` (L3). The app builds its own layout primitives (`Gui`, `ScrollPane`, `Table`, `Form`) from `ui.new_child(UiBuilder.max_rect(..))`. |
-| PDF via a Rust crate | **Blocked** for all three crates tried: printpdf 0.12 (L19), lopdf 0.45 (L20), genpdf 0.2 (L21). Fallback: a ~250-line PDF 1.4 writer in pure Jux (`src/leaker/pdf`). The PDFs it writes pass `pypdf` strict parsing and render in MuPDF. |
-| Domain model / services | Clean. Records, enums with `switch`, operator overloading on `Money`, nullable returns, `try/catch` around `parse<int>()`, and collections with reference semantics all behaved the way a Java developer expects. The few bugs I hit there are L15, L22, L23 and L24. |
+| egui via eframe | **Idiomatic.** It uses `Panel.left`/`Panel.bottom`/`Panel.right`, `CentralPanel`, `ScrollArea`, `Grid`, `ui.horizontal`/`vertical`/`group`, `ComboBox.show_ui`, `ui.button`, `ui.add(new Button(..).fill(..))`, `TextEdit.singleline(field)`, `new DragValue(line.quantity)` with a `custom_formatter`/`custom_parser`, `RichText`, `Color32` constants, and `selectable_value(filter, f, ..)` over a Jux enum. Lambdas change fields and captured locals directly. There are no `skip_ahead_auto_ids` lines, no `$"${x}"` copies, no values hoisted into locals for the compiler's sake, and no home-made toolkit. Wide windows put forms and totals in a side panel, and narrow ones put them below. |
+| PDF via a Rust crate | **printpdf 0.12**, built-in Helvetica. `PdfCanvas` wraps a page's `Vec<Op>` with a top-left origin, and it measures text with the font's own glyph advances (`BuiltinFont.get_parsed_font()`). `InvoicePdf` does the layout: multi-page tables with repeated headers and "Page n of m" footers. printpdf was chosen over genpdf because genpdf needs TTF files on disk, embeds them (660 KB for one page), and its text comes out of `pypdf` letter-spaced. The PDFs pass `pypdf` strict parsing and render in PDFium. |
+| Domain model / services | Unchanged. Only one construct is still not what Java writes: `n % list.len()` needs `(int)`, which is the spec's decision (L23). |
+
+The first round's summary, for the record: egui worked only through
+`run_ui_native` and a hand-made layout toolkit (L1, L3); all three PDF crates
+were blocked (L19 to L21), so a PDF 1.4 writer was written in pure Jux; and
+the domain model was clean apart from L15 and L22 to L24.
 
 ---
 
@@ -612,21 +630,243 @@ user who is not supposed to know Rust, E0900 is where the abstraction ends.
   (`options.viewport = ...`, `v.widgets.inactive.bg_stroke = ...`), and
   `Result`-returning std functions turning into exceptions (`create_dir_all`).
 
-## Workaround inventory (where to look in the code)
+## Workaround inventory
 
-| Finding | Where it is worked around |
-|---|---|
-| L1 | `ui/Gui.jux` (`area`, `row`, `rowRight`), `ui/ScrollPane.jux`, `ui/Table.jux`, `ui/App.jux` (splitter) |
-| L2, L11 | `Gui.label/text/strong/heading` |
-| L3, L4 | `Gui.button/primaryButton/dangerButton`, `Gui.clickedIn`, `Gui.combo` labels |
-| L8 | `Gui.textField`, `Gui.textFieldWidth`, `Gui.combo` |
-| L9 | every `ui.skip_ahead_auto_ids((uint) 0);` and every `var u = ui;` |
-| L10, L16 | `Gui.textFieldWidth`, `Palette.visuals()` |
-| L12 | `Gui.combo` (`count`) |
-| L14 | locals before calls in `CustomersScreen`, `ProductsScreen`, `InvoiceEditor`, `App.frame` |
-| L15 | `PdfPage.paragraph` (`$"${word}"`), `Table.show` (`$"${text}"`) |
-| L18 | `ui/LineDraft.jux` and the quantity/price/discount fields in `InvoiceEditor` |
-| L19-L21 | `pdf/*.jux` (pure-Jux PDF writer) |
-| L24 | `PdfColor.fillOp` (`PdfColor.channel(...)`) |
-| L25 | `ui/Palette.jux` (was `Theme`) |
-| L26 | `Rect bounds` parameters in `Gui.jux` |
+None is left. Before the second round, the app worked around L1 to L26 with:
+
+- 45 `ui.skip_ahead_auto_ids((uint) 0)` lines;
+- 4 `var u = ui;` rebinds;
+- 3 `next_auto_id` id tricks;
+- 11 locals standing in for field receivers;
+- 23 field-to-local copies before calls;
+- 3 `$"${x}"` String copies;
+- the write-back helpers and `uint count` in `Gui`;
+- 3 `Button.opt_image_and_text(..).atom_ui(..)` buttons;
+- whitespace combo box labels;
+- a home-made layout toolkit (`Gui`, `Form`, `Table`, `ScrollPane`: 488 lines);
+- text fields parsed into numbers (`LineDraft`);
+- a pure-Jux PDF writer (`PdfDocument`, `PdfPage`, `PdfColor`, `FontMetrics`: 299 lines).
+
+The rewrite deleted all of it. The first round's code is in the history up to
+`c16f909c`.
+
+---
+
+## Round 2: the idiomatic rewrite (2026-09-27)
+
+These were found by writing the app with no workarounds, against the compiler
+at `c16f909c` (gaps 30 to 32 closed). L30 to L38 are fixed on branch
+`leaker-idiomatic`, and each fix has a test:
+
+- `bin/juxc/tests/leaker_idioms.rs` builds and runs a program with every
+  shape against a small crate that has egui's and printpdf's signatures,
+  under the borrow self-check.
+- `examples/field_initializer_calls.jux` covers L31 and L32 in pure Jux.
+
+### L29. egui's `Frame` cannot be named. **annoying** (open)
+
+eframe declares its own `eframe::Frame` (the window's surroundings), and egui
+declares `egui::Frame` (a panel's or group's fill, stroke and margins). The
+eframe crate family has one Jux name per type, and the host's own item wins
+(`FamilyPaths::rank`). So `egui::Frame` is dropped from the stub, and every
+egui signature that takes one is read as eframe's:
+```jux
+import rust.eframe.Frame;
+Panel.left(new Id("nav")).frame(new Frame().fill(Color32.DARK_GRAY)).show(ui, (nav) -> nav.label("x"));
+```
+```
+[E0413] error: no method `fill` on type `rust.eframe.Frame`
+```
+`Panel.frame(Frame)`, `CentralPanel.frame(Frame)`, `TextEdit.frame(Frame)` and
+`Ui.dnd_drop_zone(Frame, ..)` all name the wrong type. A stub cannot spell
+two types called `Frame` from one family. A fix needs a second Jux name for
+the losing type, such as a nested `rust.eframe.egui.Frame`, or a renamed
+`EguiFrame` with a note on hover. Listing `rust.egui` as a dependency of its
+own does not help, because the eframe signatures still name eframe's `Frame`.
+**Workaround:** none. The app styles panels only through `Visuals`, so the
+side navigation is no longer dark.
+
+### L30. A lambda argument lost its parameter type when the call's arguments were hoisted. **blocker** (fixed)
+
+```jux
+Panel.bottom(new Id("status")).show(ui, (bar) -> {
+    bar.colored_label(color, session.status);      // the body reads a field
+});
+```
+```
+[E0900] ... (rustc reported error[E0282]: type annotations needed)
+   let __jux_arg1 = { let __jux_this = self.clone(); move |bar| { ... bar.colored_label(..) } };
+```
+When any argument reads an object, every argument of the call is first bound
+to a `let` (L14's machinery). A closure in a `let` has no expected type, so
+rustc cannot learn that `bar` is the `&mut Ui` egui lends. This happened in
+nearly every container call of the rewrite. **Fix:** a lambda is built at its
+own slot when nothing after it is bound. Building a closure has no side
+effect, so the evaluation order does not change.
+
+### L31. A `static final` computed by a call became a Rust `const`. **annoying** (fixed)
+
+```jux
+private static final Color INK = PdfCanvas.rgb(30, 41, 59);   // printpdf's Color enum
+```
+```
+[E0900] ... (rustc reported error[E0015]: cannot call non-const associated function `pdfcanvas::PdfCanvas::rgb` in constants)
+```
+Only fields of a Jux class or record type were initialized at run time; a
+field typed as a crate's enum or a Jux enum became a `const`. **Fix:** an
+initializer that is a call (or a `new`, or a `!!` or cast of a call) makes
+the static lazily initialized, whatever its type. A `static final` number,
+bool or String still has to fold at compile time (§T.11.1, `E0841`).
+
+### L32. A field initializer was never type-checked, and `!!` in one did nothing. **annoying** (fixed)
+
+```jux
+private static final ParsedFont REGULAR = BuiltinFont.Helvetica.get_parsed_font()!!;
+public String name = Lookup.find("a")!!;
+```
+```
+[E0900] ... (rustc reported error[E0308]: mismatched types: expected `ParsedFont`, found `Option<ParsedFont>`)
+```
+Only lambda initializers were checked. Any other initializer was never
+visited, so none of its types were recorded. The `!!` lowering asks for the
+operand's type, and without it emitted the operand unchanged. **Fix:** every
+field initializer is checked. A `static final String X = f()!!;` is now
+reported as `E0841`, like any other call that does not fold.
+
+### L33. A field lent to a widget builder was a copy. **blocker, silent** (fixed)
+
+```jux
+ui.add(TextEdit.singleline(name).desired_width(240.0f));   // name is a field
+grid.add(new DragValue(line.quantity).range(1..=9999));      // a field of another object
+```
+```
+[E0900] ... temporary dropped while in use (rustc reported error[E0716]: temporary value dropped while borrowed)
+   let __jux_arg0 = TextEdit::singleline(&mut __jux_this.0.borrow().name.clone()).desired_width(240.0);
+   cell.add(__jux_arg0)
+```
+Gap 30 lent a field in place to a `&mut` slot of an *instance* method. A
+static crate function (`TextEdit.singleline`) and a crate constructor
+(`new DragValue(..)`) still lent either a copy, `&mut x.borrow().name.clone()`,
+or `&mut` through a shared `borrow()`. This went wrong in three ways:
+
+- Once it compiled, the typing still went into the copy.
+- The representation selector did not count these lends as writes, so it
+  could give the class a representation with no cell
+  (`E0900: the representation selector judged class ... never written`).
+- Hoisting `ui.add(...)`'s argument into a `let` ended the widget's borrow
+  before `add` ran.
+
+**Fix:**
+
+- Fields are lent through their owner's cell,
+  `&mut __jux_this.0.borrow_mut().name`, on all three paths.
+- Such a lend counts as a write of the class.
+- An argument that builds a value holding a lent place stays at its slot.
+
+### L34. A lent `Ui` was moved into an argument temporary. **blocker** (fixed)
+
+```jux
+ui.horizontal_wrapped((row) -> {
+    tile(row, $"Overdue (${overdueCount})", overdue, Palette.DANGER);
+    tile(row, "Drafts", draft, Palette.WARNING);
+});
+```
+```
+[E0900] ... (rustc reported error[E0382]: borrow of moved value: `row`)
+   let __jux_arg0 = row;
+```
+This is L14 again, but for the `Ui` a lambda is lent rather than a parameter.
+**Fix:** a borrowed foreign local is reborrowed into the temporary,
+`&mut *row`.
+
+### L35. A crate closure that takes `&str` and returns an `Option`. **annoying** (fixed)
+
+```jux
+new DragValue(cents).custom_parser((text) -> {
+    var m = Money.parse(text);
+    return m == null ? null : (double) m!!.cents;
+});
+```
+```
+error[E0308]: mismatched types: expected `String`, found `&str`      (Money.parse(text.clone()))
+error[E0308]: mismatched types: expected `Option<f64>`, found `f64`  (if m.is_none() { None } else { .. as f64 })
+```
+There were two problems:
+
+- egui lends `custom_parser` a `&str`. The lambda re-bound it with
+  `.clone()`, so it stayed a `&str`.
+- `c ? null : x` only wrapped `x` in `Some` when the context announced a
+  nullable target. A lambda returning into a crate's `-> double?` slot did
+  not announce one.
+
+**Fix:** a `String` argument is owned with `.to_string()`, and a ternary
+with a `null` arm whose type is nullable wraps its other arm.
+
+### L36. A trailing `return` that lends a collection outlived it. **annoying** (fixed)
+
+```jux
+var warnings = new Vec<PdfWarnMsg>();
+return doc.save(new PdfSaveOptions(), warnings);
+```
+```
+[E0900] ... (rustc reported error[E0597]: `warnings` does not live long enough)
+   crate::jux_arr(doc.save(&PdfSaveOptions::default(), &mut warnings.borrow_mut()))   // the block's tail
+```
+A block's tail expression keeps its temporaries past the block's locals
+(Rust 2021). **Fix:** a trailing `return` whose call is handed a collection
+local stays a `return ...;` statement. The same guard already covered field
+reads.
+
+### L37. The borrow self-check flagged a crate method named like a Jux one. **compiler-internal** (fixed)
+
+Under `JUX_SELFCHECK=1`, a class with a method `save` failed on
+`return doc.save(opts, warnings);`, a call to the crate's `save`. It was
+reported as `E0900: the compiler would emit a borrow conflict here`
+(`warnings is still borrowed mutably while save, which may use it, is handed
+it as an argument`). The self-check recognizes Jux calls by name only.
+**Fix:** an argument that is a guard's value (`&mut w.borrow_mut()`) is not
+counted, since Jux passes handles and never a guard.
+
+### L38. A method called on a local object passed a local `Ui` by value. **blocker** (fixed)
+
+```jux
+var ui = Ui.root();
+var form = new Form();
+form.show(ui);          // Form.show(Ui ui) takes it by `&mut`
+```
+```
+error[E0308]: mismatched types: expected `&mut Ui`, found `Ui`
+```
+The test for L33 found this, not the app, because eframe always lends the
+`Ui`. A one-name receiver (`form`) was looked up as a class name first, and
+when that found nothing, the lookup gave up instead of trying the receiver's
+type. **Fix:** a name that is neither a class nor a key in the by-reference
+table is resolved as a receiver.
+
+Fixing that uncovered the same shape in `main.jux`'s
+`run_ui_native("Leaker", options, (ui, frame) -> app.frame(ui))`. The lambda's
+`ui` had no type at all, because the closure type `(Ui, Frame)` was read in
+the caller's imports, and `main.jux` imports neither `Ui` nor `Frame`. Once
+`app.frame` was known to borrow its `Ui`, the call became `&mut ui` on a
+parameter that is already a borrow (E0596). **Fix:** a free function's
+closure type is read again in the function's own package when the caller's
+imports leave it incomplete. The `Ui` that any crate closure is lent is
+reborrowed (`&mut *ui`), as one lent by an egui container already was.
+
+### L39. Deprecated crate methods are not marked. **cosmetic** (open)
+
+egui 0.36 renamed `Panel.show_inside` to `show`. The stub lists both with
+nothing to tell them apart. `show_inside` compiles, and rustc's deprecation
+warning shows only under `--verbose`. The app first used `show_inside`.
+**Expected:** a stub carries `@Deprecated("Renamed to show")`, and the
+checker warns at the call.
+
+### Also noted (not leaks)
+
+- `n % store.products.len()` still needs `(int)`: a Rust length is a `uint`
+  (L23, decided by the spec).
+- `static final String X = compute();` is `E0841` (§T.11.1: a `static final`
+  String is a compile-time constant). A plain `static` works. A Java
+  programmer would expect the first form to work too.
+- printpdf's `Rect.from_xywh` has no paint mode, so a filled rectangle needs
+  `rect.mode = PaintMode.Fill;`. That is printpdf's API.

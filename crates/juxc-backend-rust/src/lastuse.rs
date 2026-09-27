@@ -75,6 +75,23 @@ pub(crate) fn captures_read_again(
     body: &Block,
     params: &HashSet<String>,
 ) -> HashMap<Span, Vec<(String, Span)>> {
+    captures(body, params, false)
+}
+
+/// Every read of a local in `body`: the safe lowering level's answer to
+/// [`non_final_local_uses`], under which no read moves (see
+/// `crate::lowering_level`).
+pub(crate) fn all_local_uses(body: &Block) -> HashSet<Span> {
+    walk(body).uses.iter().map(|u| u.span).collect()
+}
+
+/// Every capture of every lambda in `body`, as [`captures_read_again`] reports
+/// the shared ones: the safe lowering level shares every capture.
+pub(crate) fn all_captures(body: &Block, params: &HashSet<String>) -> HashMap<Span, Vec<(String, Span)>> {
+    captures(body, params, true)
+}
+
+fn captures(body: &Block, params: &HashSet<String>, all: bool) -> HashMap<Span, Vec<(String, Span)>> {
     let w = walk(body);
     let mut out = HashMap::new();
     for site in &w.lambdas {
@@ -96,7 +113,7 @@ pub(crate) fn captures_read_again(
             // the statement, so the capture cannot move the binding out from
             // under them (LEAKS L12).
             let read_alongside = w.uses[site.stmt_first..site.first].iter().any(|u| u.name == name);
-            if site.nested || in_loop || read_later || read_alongside {
+            if all || site.nested || in_loop || read_later || read_alongside {
                 shared.push((u.name.clone(), u.span));
             }
         }

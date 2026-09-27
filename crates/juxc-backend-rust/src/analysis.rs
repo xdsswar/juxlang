@@ -4445,8 +4445,14 @@ impl crate::RustEmitter {
                         .path_resolves_to_class_in_emit(qn)
                         .map(|fqn| fqn.rsplit('.').next().unwrap_or(&fqn).to_string())
                         .or_else(|| qn.segments.last().map(|s| s.text.clone()));
+                    // A single name is also a local holding an object
+                    // (`form.show(ui)`): read as a class name it found no
+                    // method, and `ui` went by value to a `&mut Ui` slot.
                     if let Some(bare) = bare {
-                        return Some(format!("m::{bare}::{method}"));
+                        let key = format!("m::{bare}::{method}");
+                        if self.byref_params.contains_key(&key) || self.path_resolves_to_class_in_emit(qn).is_some() {
+                            return Some(key);
+                        }
                     }
                 }
                 // Instance `recv.method(...)`: resolve the receiver's class.

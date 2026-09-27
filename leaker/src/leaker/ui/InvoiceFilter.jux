@@ -1,0 +1,34 @@
+// Which invoices the list shows.
+package leaker.ui;
+
+import leaker.model.Date;
+import leaker.model.Invoice;
+import leaker.model.InvoiceStatus;
+
+public enum InvoiceFilter {
+    All,
+    Draft,
+    Sent,
+    Paid,
+    Overdue;
+
+    public String label() {
+        return switch (this) {
+            case InvoiceFilter.All -> "All";
+            case InvoiceFilter.Draft -> "Draft";
+            case InvoiceFilter.Sent -> "Sent";
+            case InvoiceFilter.Paid -> "Paid";
+            case InvoiceFilter.Overdue -> "Overdue";
+        };
+    }
+
+    public bool matches(Invoice inv, Date today) {
+        return switch (this) {
+            case InvoiceFilter.All -> true;
+            case InvoiceFilter.Draft -> inv.status == InvoiceStatus.Draft;
+            case InvoiceFilter.Sent -> inv.status == InvoiceStatus.Sent;
+            case InvoiceFilter.Paid -> inv.status == InvoiceStatus.Paid;
+            case InvoiceFilter.Overdue -> inv.isOverdue(today);
+        };
+    }
+}

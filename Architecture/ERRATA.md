@@ -4467,6 +4467,117 @@ left them.
 §L.4.1 records that only `"C"` is accepted today. GAPS.md gap 35 is closed.
 
 ---
+
+## E130. An accepted program builds: the lowering heals itself
+
+**Conflict.** E23 makes every rustc rejection of the emitted crate a compiler
+bug, and E116 and E129 made sure the user sees such a bug in Jux words
+(`E0900`) rather than as Rust. Neither made the program build. A valid Jux
+program that met a backend bug stopped with an internal compiler error, and
+two were found in one afternoon with the release build:
+
+- `print(switch (3) { case 1 -> "ab " + 1; default -> "c"; })` was rustc's
+  `E0308` ("`match` arms have incompatible types": a `format!` `String`
+  against a `&str` literal);
+- `$"Box($v)"` over a generic `T` field was `E0277` (`T` has no `Display`),
+  while `${v}` worked.
+
+Each fast-path judgement of the backend (move on the last read, bind an
+operand only when a guard would be alive across Jux code, the tightest class
+representation, a `let` left to inference) is a place such a bug lives.
+
+**Resolution.** The backend has two lowering levels, and the driver retries a
+refused build at the safer one. The user sees nothing.
+
+- **Two levels** (`crates/juxc-backend-rust/src/lowering_level.rs`). *Fast*
+  is the lowering as it stood. *Safe* is the same lowering with five switches
+  turned to their general answer, per function:
+
+  | switch | safe level | rustc errors it is designed to eliminate |
+  |---|---|---|
+  | local reads | every read of a non-`Copy` local copies; every lambda capture shares | `E0382`, `E0505`, `E0507` |
+  | operands and call arguments | every operand of an operator chain, interpolated string, constructor or array literal, and every call argument, that reads a cell or runs Jux code is bound to a `let` first, in evaluation order | `E0499`, `E0502`, `E0506`, `E0716`, and the run-time "object of type C was already in use" |
+  | class representation | `rc-refcell` for the classes a safe function belongs to or names (all classes when the whole program is safe); not reported as a selector fallback | `E0382`/`E0507` on a copied Inline or `Box` object, `E0594`/`E0596` |
+  | `var` declarations | a primitive or `String` local (nullable or not) is declared with its checked type | `E0282`, `E0283` |
+  | `switch` arms | a value arm of a `String` switch is made an owned `String` | `E0308` in match arms (`String` against `&str`) |
+
+  Parameters stay as the fast level passes them: a Jux parameter is already
+  an owned value or a shared handle, and a foreign one follows E127's
+  convention, which the safe level must not break. A call to an overloaded
+  function or method, and a call or constructor with named arguments (which
+  has its own evaluation order), keep the fast argument rule: the binding
+  form does not name the overload member and would reorder the arguments.
+- **The retry loop** (`crates/juxc-driver/src/self_heal.rs`). The driver
+  keeps the checked program alive in the crate it lowered
+  (`RustCrate::relower`), with every Jux function's source region
+  (`function_regions`: methods, constructors, operators, properties,
+  initializer blocks; nested types; an overload set is one function). When
+  cargo fails with an `E0900` (rustc refused the emitted code), each error's
+  primary span in the JSON messages is traced through the `// JUX:` markers
+  to its `.jux` line, and from there to the innermost function holding it.
+  Those functions are lowered again at the safe level and the crate
+  rebuilt; at most twice. If an error lies in no function (a declaration's
+  own shape), or the retries do not converge, the whole program is lowered
+  safe, once. Only if that fails too is the fast build's `E0900` reported,
+  exactly as before: its error names the bug. A dependency that cannot be
+  fetched (`E0905`) or a link failure (`E0906`) is not the lowering's fault
+  and does not retry.
+- **Cache.** A heal writes `.jux-safe-fns` in the build directory (the
+  function keys, or `*` for the whole program, under a header naming the
+  compiler version), and the next build lowers those functions safe from the
+  start. A cache from another compiler version is ignored.
+- **What the user sees.** Nothing. Under `--verbose`, `note: retrying
+  `C.m` in compatibility mode` for each retry and `note: N functions
+  compiled in compatibility mode` when the build succeeds.
+- **The compiler's own tests.** Under `JUX_SELFCHECK=1` (set by the corpus,
+  the UI harness and every test that builds an example) a heal is a failure:
+  an `E0900` per function, "`C.m` compiled only in compatibility mode", at
+  the `.jux` line of its fast-path error, with rustc's code and first line in
+  the note the leak guard allows (E125), exit status 101. The cache is
+  neither read nor written. The fast path is still fixed; users get a working
+  program meanwhile.
+- **Knobs.** `JUX_FORCE_SAFE=1` lowers everything at the safe level.
+  `JUX_TEST_BREAK_FAST=<key>` is a test-only hook: the named function's fast
+  lowering opens with a statement rustc refuses as `E0502`, so the tests can
+  watch a heal.
+- **Tests.** Unit tests in `self_heal.rs` (rustc JSON to errors, errors to
+  functions through the markers, the retry plan, the cache, the self-check
+  report) and `lowering_level.rs` (the innermost region, the plan's scope).
+  `bin/jux/tests/safe_mode.rs` builds 97 examples (classes and their
+  representations, re-entrancy, generics, closures, async and workers,
+  collections, `rust.*` bindings) with `JUX_FORCE_SAFE=1` under the self-check
+  and holds each to the fast corpus's own `.expected`; with
+  `JUX_SAFE_CORPUS=all` it runs the whole corpus, and all 444 pinned examples
+  print the same fully safe (five differed on the first run, each a place
+  where a safe switch was too eager: a pointer local's written type, a `never`
+  arm, named-argument order, an overloaded call; each is now excluded as
+  above). The same file breaks `Counter.bump` with the hook and checks that
+  the build heals and prints the right answer, that the cache skips the retry
+  next time, and that under `JUX_SELFCHECK=1` the build fails with the
+  function and `error[E0502]` named.
+
+**The two known cases.** The `switch` arm case is rescued: the retry lowers
+`main` safe and the program prints `c`. The `$v` case is not: the safe level
+has no switch for a missing trait bound (`E0277`), so after the whole-program
+retry the user sees the same `E0900` as before. Both are fixed at source
+elsewhere (gap 35).
+
+**Known boundary.** Safe mode is designed against the borrow, move and
+inference families and `String`/`&str` arm disagreement. It does not help an
+error that is not about ownership or inference: a missing trait bound
+(`E0277`), a method or path that does not exist (`E0599`, `E0433`), a wrong
+arity or a mismatched type outside a match arm (`E0308`). The trace goes
+through the statement markers, so an error in code emitted between two
+functions is charged to the function above it, which costs a retry, not a
+wrong answer. A whole-program retry doubles a failing build's time. The
+retry needs the checked program, so a crate lowered without the driver
+(the backend's own tests) cannot heal.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0900` row says a
+successful retry is silent, that the reported error is the fast lowering's,
+and what `JUX_SELFCHECK=1` reports instead. GAPS.md gap 34 is closed.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 

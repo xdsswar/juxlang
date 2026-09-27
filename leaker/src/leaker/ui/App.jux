@@ -2,15 +2,16 @@
 package leaker.ui;
 
 import rust.eframe.Ui;
-import rust.eframe.Rect;
-import rust.eframe.Sense;
-import rust.eframe.CursorIcon;
-import rust.eframe.Visuals;
+import rust.eframe.Panel;
+import rust.eframe.CentralPanel;
+import rust.eframe.Id;
+import rust.eframe.RichText;
+import rust.eframe.Layout;
+import rust.eframe.Align;
 
 public class App {
     private Session session;
-    private Screen current = Screen.Invoices;
-    private float navWidth = 200.0f;
+    private Screen current = Screen.Dashboard;
     private bool styled = false;
 
     private OverviewScreen overview;
@@ -31,123 +32,73 @@ public class App {
      * invoices, or an invoice number to open straight in the editor.
      */
     public void start(String screen) {
-        if (screen == "overview") {
-            current = Screen.Dashboard;
-        } else if (screen == "customers") {
-            current = Screen.Customers;
-        } else if (screen == "products") {
-            current = Screen.Products;
-        } else if (screen.starts_with("INV-")) {
-            current = Screen.Invoices;
-            invoices.open(screen);
-        } else {
-            current = Screen.Invoices;
+        switch (screen) {
+            case "overview" -> current = Screen.Dashboard;
+            case "customers" -> current = Screen.Customers;
+            case "products" -> current = Screen.Products;
+            default -> {
+                current = Screen.Invoices;
+                if (screen.starts_with("INV-")) {
+                    invoices.open(screen);
+                }
+            }
         }
     }
 
     /** One frame. eframe calls this for every repaint. */
     public void frame(Ui ui) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
         if (!styled) {
-            // `ui.ctx()` returns a clone of the Context; egui's Context is a
-            // shared handle, so setting visuals through the clone sticks.
             ui.ctx().set_visuals(Palette.visuals());
             styled = true;
         }
-        var full = ui.max_rect();
-        Gui.fill(ui, full, Palette.pageBg());
 
-        // ---- resizable navigation -------------------------------------
-        var nav = Gui.rect(full.min.x, full.min.y, navWidth, full.height());
-        Gui.fill(ui, nav, Palette.navBg());
-        showNav(ui, nav);
+        Panel.left(new Id("nav"))
+            .resizable(true)
+            .default_size(200.0f)
+            .min_size(150.0f)
+            .max_size(320.0f)
+            .show(ui, (nav) -> showNav(nav));
 
-        var splitter = Gui.rect(nav.max.x - 3.0f, full.min.y, 6.0f, full.height());
-        var id = ui.next_auto_id();
-        ui.skip_ahead_auto_ids((uint) 1);
-        var drag = ui.interact(splitter, id, Sense.drag());
-        if (drag.hovered() || drag.dragged()) {
-            ui.ctx().set_cursor_icon(CursorIcon.ResizeHorizontal);
-        }
-        navWidth = navWidth + drag.drag_delta().x;
-        if (navWidth < Palette.NAV_MIN) {
-            navWidth = Palette.NAV_MIN;
-        }
-        if (navWidth > Palette.NAV_MAX) {
-            navWidth = Palette.NAV_MAX;
-        }
+        Panel.bottom(new Id("status")).show(ui, (bar) -> {
+            var color = session.statusIsError ? Palette.DANGER
+                : session.statusAgeSeconds() < 4 ? Palette.SUCCESS : Palette.MUTED;
+            bar.colored_label(color, session.status);
+        });
 
-        // ---- current screen -------------------------------------------
-        var main = Gui.rect(nav.max.x + Palette.PAD, full.min.y + Palette.PAD,
-            full.width() - navWidth - 2.0f * Palette.PAD,
-            full.height() - 2.0f * Palette.PAD - Palette.STATUS_HEIGHT);
-        // Each screen is called through a local: calling a method on a field
-        // with `ui` as an argument can move `ui` (L14).
-        if (current == Screen.Dashboard) {
-            var o = overview;
-            String clicked = o.show(ui, main);
-            if (clicked.length() > 0) {
-                current = Screen.Invoices;
-                invoices.open(clicked);
+        CentralPanel.default_margins().show(ui, (main) -> {
+            switch (current) {
+                case Screen.Dashboard -> {
+                    String? opened = overview.show(main);
+                    if (opened != null) {
+                        current = Screen.Invoices;
+                        invoices.open(opened!!);
+                    }
+                }
+                case Screen.Customers -> customers.show(main);
+                case Screen.Products -> products.show(main);
+                case Screen.Invoices -> invoices.show(main);
             }
-        } else if (current == Screen.Customers) {
-            var c = customers;
-            c.show(ui, main);
-        } else if (current == Screen.Products) {
-            var p = products;
-            p.show(ui, main);
-        } else {
-            var inv = invoices;
-            inv.show(ui, main);
-        }
-
-        showStatus(ui, Gui.rect(nav.max.x, full.max.y - Palette.STATUS_HEIGHT, full.width() - navWidth, Palette.STATUS_HEIGHT));
+        });
     }
 
-    private void showNav(Ui ui, Rect nav) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var brand = Gui.row(ui, Gui.rect(nav.min.x + 16.0f, nav.min.y + 14.0f, nav.width() - 24.0f, 30.0f));
-        Gui.strong(brand, "Leaker", Palette.white(), 22.0f);
-        var sub = Gui.row(ui, Gui.rect(nav.min.x + 16.0f, nav.min.y + 42.0f, nav.width() - 24.0f, 18.0f));
-        Gui.text(sub, "Invoicing, in Jux", Palette.navText(), 12.0f);
-
-        float y = nav.min.y + 84.0f;
+    private void showNav(Ui nav) {
+        nav.add_space(8.0f);
+        nav.label(new RichText("Leaker").size(22.0f).strong().color(Palette.ACCENT));
+        nav.label(new RichText("Invoicing, in Jux").size(12.0f).color(Palette.MUTED));
+        nav.add_space(20.0f);
         for (var s : Screen.values()) {
-            var item = Gui.rect(nav.min.x + 8.0f, y, nav.width() - 16.0f, 34.0f);
-            bool active = s == current;
-            if (active) {
-                Gui.fill(ui, item, Palette.navActive());
-            } else if (Gui.hovered(ui, item)) {
-                Gui.fill(ui, item, Palette.rgb(36, 48, 68));
-            }
-            if (Gui.clickedIn(ui, item)) {
+            var text = new RichText(s.title()).size(15.0f);
+            if (nav.selectable_label(s == current, text).clicked()) {
                 current = s;
+                if (s == Screen.Invoices) {
+                    invoices.closeEditor();
+                }
             }
-            var label = Gui.row(ui, Gui.rect(item.min.x + 12.0f, y, item.width() - 12.0f, 34.0f));
-            Gui.strong(label, s.title(), active ? Palette.white() : Palette.navText(), 14.5f);
-            y += 40.0f;
+            nav.add_space(4.0f);
         }
-
-        var foot = Gui.area(ui, Gui.rect(nav.min.x + 16.0f, nav.max.y - 64.0f, nav.width() - 24.0f, 56.0f));
-        Gui.text(foot, $"Today ${session.today.iso()}", Palette.navText(), 12.0f);
-        Gui.text(foot, $"Outstanding ${session.store.outstanding().display()}", Palette.navText(), 12.0f);
-    }
-
-    private void showStatus(Ui ui, Rect bounds) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        Gui.fill(ui, bounds, Palette.card());
-        Gui.hline(ui, bounds.min.x, bounds.max.x, bounds.min.y, Palette.border());
-        var line = Gui.row(ui, Gui.rect(bounds.min.x + Palette.PAD, bounds.min.y, bounds.width() - 2.0f * Palette.PAD, bounds.height()));
-        var color = session.statusIsError ? Palette.danger() : Palette.muted();
-        if (!session.statusIsError && session.statusAgeSeconds() < 4) {
-            color = Palette.success();
-        }
-        Gui.text(line, session.status, color, 13.0f);
-    }
-
-    private void placeholder(Ui ui, Rect area, String title) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var top = Gui.area(ui, area);
-        Gui.heading(top, title);
+        nav.with_layout(Layout.bottom_up(Align.Min), (foot) -> {
+            foot.label(new RichText($"Outstanding ${session.store.outstanding()}").size(12.0f).color(Palette.MUTED));
+            foot.label(new RichText($"Today ${session.today}").size(12.0f).color(Palette.MUTED));
+        });
     }
 }

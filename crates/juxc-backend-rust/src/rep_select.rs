@@ -375,6 +375,7 @@ impl Walker<'_, '_> {
         for_each_node(b, &mut |n| {
             let mut places: Vec<&Expr> = Vec::new();
             collect_places(n, user_mut, &mut places);
+            self.foreign_lent_places(n, &mut places);
             for p in places {
                 self.place(p, ctx);
             }
@@ -386,10 +387,58 @@ impl Walker<'_, '_> {
         for_each_node_in(e, &mut |n| {
             let mut places: Vec<&Expr> = Vec::new();
             collect_places(n, user_mut, &mut places);
+            self.foreign_lent_places(n, &mut places);
             for p in places {
                 self.place(p, ctx);
             }
         });
+    }
+
+    /// The arguments a crate's `&mut` parameter writes through: a field lent
+    /// to `TextEdit.singleline(name)` or `new DragValue(line.qty)` is written
+    /// by the crate, often with no other write to its class anywhere.
+    fn foreign_lent_places<'e>(&self, n: Node<'e>, out: &mut Vec<&'e Expr>) {
+        let external = |bare: &str| {
+            self.symbols
+                .classes
+                .iter()
+                .filter(|(k, c)| c.is_external && k.rsplit('.').next() == Some(bare))
+                .map(|(_, c)| c)
+                .collect::<Vec<_>>()
+        };
+        match n {
+            Node::Expr(Expr::NewObject(new)) => {
+                let Some(seg) = new.class_name.segments.last() else { return };
+                for c in external(&seg.text) {
+                    for ctor in c.constructors.iter().filter(|ct| ct.params.len() == new.args.len()) {
+                        for (a, p) in new.args.iter().zip(&ctor.params) {
+                            if p.is_mut_ref {
+                                out.push(a);
+                            }
+                        }
+                    }
+                }
+            }
+            Node::Expr(Expr::Call(call)) => {
+                let Expr::Field(f) = &*call.callee else { return };
+                let owner = match self.expr_types.get(&crate::exprs::expr_span_of(&f.object)) {
+                    Some(Ty::User { name, .. }) => name.rsplit('.').next().unwrap_or(name).to_string(),
+                    _ => match &*f.object {
+                        Expr::Path(qn) => qn.segments.last().map(|s| s.text.clone()).unwrap_or_default(),
+                        _ => return,
+                    },
+                };
+                for c in external(&owner) {
+                    let Some(m) = c.methods.get(f.field.text.as_str()) else { continue };
+                    for (a, p) in call.args.iter().zip(&m.params) {
+                        if p.is_mut_ref {
+                            out.push(a);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Mark `fqn` as written, with every class its object may also be seen as:

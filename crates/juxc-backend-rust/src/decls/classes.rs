@@ -493,7 +493,7 @@ impl RustEmitter {
                 continue;
             }
             if field.is_final
-                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.as_ref())
             {
                 self.emit_static_field(field);
             }
@@ -671,7 +671,7 @@ impl RustEmitter {
             // (a wrapper-class object): those route here so the
             // thread_local form carries them (rustc E0015 otherwise).
             let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.as_ref());
             if field.is_static && (!field.is_final || final_needs_tl) {
                 if type_ref_mentions_any(&juxc_tycheck::resolved_field_type(field), &generic_param_names) {
                     continue;
@@ -1195,7 +1195,7 @@ impl RustEmitter {
         for field in &class_decl.fields {
             if field.is_static
                 && field.is_final
-                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some())
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.as_ref())
             {
                 self.emit_static_field(field);
             }
@@ -1399,7 +1399,7 @@ impl RustEmitter {
             // `final`+`!Send` payloads route here too (thread_local form);
             // see the inline-class site for the rationale.
             let final_needs_tl = field.is_final
-                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some());
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.as_ref());
             if field.is_static && (!field.is_final || final_needs_tl) {
                 self.emit_mutable_static_field(name, field);
             }
@@ -5493,7 +5493,7 @@ impl RustEmitter {
         for field in &class_decl.fields {
             let runtime_storage = field.is_static
                 && (!field.is_final
-                    || self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.is_some()));
+                    || self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field), field.default.as_ref()));
             if runtime_storage && field.default.is_some() {
                 steps.push((field.span.start as usize, Step::Field(field)));
             }
@@ -5678,10 +5678,10 @@ impl RustEmitter {
     /// A BLANK `static final` (no initializer, assigned once in a `static { }`
     /// block, §S.4.1) has no value to put in a `const`, so it always takes the
     /// runtime storage its `static` block writes.
-    pub(crate) fn final_static_needs_runtime_init(&self, ty: &juxc_ast::TypeRef, has_initializer: bool) -> bool {
-        if !has_initializer {
+    pub(crate) fn final_static_needs_runtime_init(&self, ty: &juxc_ast::TypeRef, initializer: Option<&juxc_ast::Expr>) -> bool {
+        let Some(init) = initializer else {
             return true;
-        }
+        };
         if self.static_type_needs_thread_local(ty) {
             return true;
         }
@@ -5692,6 +5692,12 @@ impl RustEmitter {
             || crate::analysis::is_jux_string_type(ty)
         {
             return false;
+        }
+        // A value built by a CALL (`PdfCanvas.rgb(30, 41, 59)`, `new Rgb(..)`,
+        // `font()!!`) runs Jux or library code a Rust `const` cannot run
+        // (E0015), whatever its type: it is initialized on first use.
+        if initializer_is_call(init) {
+            return true;
         }
         let Some(seg) = ty.name.segments.last() else { return false };
         let bare = seg.text.as_str();
@@ -6784,4 +6790,15 @@ fn field_drop_order(fields: &[juxc_ast::FieldDecl], reverse: bool) -> Vec<&juxc_
         out.reverse();
     }
     out
+}
+
+/// Whether a static's initializer is a call (`f()`, `T.make()`, `new T(..)`,
+/// `f()!!`, `(T) f()`): code a Rust `const` item cannot run.
+fn initializer_is_call(init: &juxc_ast::Expr) -> bool {
+    match init {
+        juxc_ast::Expr::Call(_) | juxc_ast::Expr::NewObject(_) => true,
+        juxc_ast::Expr::NotNullAssert(inner, _) => initializer_is_call(inner),
+        juxc_ast::Expr::Cast(c) => initializer_is_call(&c.value),
+        _ => false,
+    }
 }

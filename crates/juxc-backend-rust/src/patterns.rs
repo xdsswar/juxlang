@@ -423,7 +423,7 @@ impl RustEmitter {
                         // `as` binds tighter than any binary operator:
                         // `(n * 2) as i64`, never `n * 2 as i64`.
                         self.emit_expr_with_parent_prec(e, crate::exprs::UNARY_PREC, false);
-                    } else {
+                    } else if !self.emit_safe_string_arm(s.span, e) {
                         self.emit_expr(e);
                     }
                     if let Some(p) = widen {
