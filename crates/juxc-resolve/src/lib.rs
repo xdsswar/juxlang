@@ -919,6 +919,11 @@ impl Resolver {
             for f in &enum_decl.fields {
                 self.declare_at(&f.name.text, f.name.span);
             }
+            // Its methods too, static and instance, as in a class or a record:
+            // `describe(this)` inside the enum is `Level.describe(this)`.
+            for m in &enum_decl.methods {
+                self.declare(&m.name.text);
+            }
             // Parameters in an inner scope, so one may shadow a field.
             self.push_scope();
             for param in &method.params {
@@ -937,6 +942,11 @@ impl Resolver {
             }
             for f in &enum_decl.fields {
                 self.declare_at(&f.name.text, f.name.span);
+            }
+            // Its methods too, static and instance, as in a class or a record:
+            // `describe(this)` inside the enum is `Level.describe(this)`.
+            for m in &enum_decl.methods {
+                self.declare(&m.name.text);
             }
             self.push_scope();
             for param in &ctor.params {
