@@ -4211,7 +4211,7 @@ fn jux_debug_value_end(text: &str, start: usize) -> Option<(usize, usize)> {
     let mut close: Option<usize> = Option::None;
     let mut quote: Option<u8> = Option::None;
     let mut i = start;
-    while i < bytes.len() && close.is_none() {
+    while i < bytes.len() && close == Option::None {
         let b = bytes[i];
         if let Some(q) = quote {
             if b == b'\\' {
@@ -4227,7 +4227,7 @@ fn jux_debug_value_end(text: &str, start: usize) -> Option<(usize, usize)> {
             depth = depth - 1;
         } else if b == b'}' {
             close = Some(i);
-        } else if b == b',' && depth == 0 && value_end.is_none() {
+        } else if b == b',' && depth == 0 && value_end == Option::None {
             value_end = Some(i);
         }
         i = i + 1;
