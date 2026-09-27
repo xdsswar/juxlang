@@ -146,8 +146,14 @@ fn invalid_rust(
         None => "error".to_string(),
     };
     let primary = primary_span(message);
-    let at_rust = primary.as_ref().map(|(file, line, col)| format!(" (at {file}:{line}:{col} of the generated crate)"));
-    d.notes.push(format!("rustc reported {rustc}: {text}{}", at_rust.unwrap_or_default()));
+    // The cause, on a line of its own: the one-line formats append exactly
+    // this note to the E0900 line (LEAKS L27), so it carries rustc's first
+    // line and nothing else.
+    let first_line = text.lines().next().unwrap_or("");
+    d.notes.push(format!("rustc reported {rustc}: {first_line}"));
+    if let Some((file, line, col)) = &primary {
+        d.notes.push(format!("rustc's error is at {file}:{line}:{col} of the generated crate"));
+    }
     if let Some((file, line, _)) = &primary {
         if let Some(entry) = map.lookup(file, *line) {
             match locate(&entry.jux_path, entry.jux_line, entry.jux_col, sources) {

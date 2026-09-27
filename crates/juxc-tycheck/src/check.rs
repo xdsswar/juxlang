@@ -6014,17 +6014,30 @@ impl<'a> Checker<'a> {
             return;
         }
         let (ln, rn) = (crate::ty::primitive_name(l), crate::ty::primitive_name(r));
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::Code::E0410_TypeMismatch,
-                format!(
-                    "`{ln}` and `{rn}` have no common type: no one integer type holds every value \
-                     of both, so either result type could be wrong -- cast one operand to the type \
-                     you mean, `({ln})` or `({rn})`"
-                ),
-            )
-            .with_span(b.span),
-        );
+        let mut d = Diagnostic::error(
+            code::Code::E0410_TypeMismatch,
+            format!(
+                "`{ln}` and `{rn}` have no common type: no one integer type holds every value \
+                 of both, so either result type could be wrong -- cast one operand to the type \
+                 you mean, `({ln})` or `({rn})`"
+            ),
+        )
+        .with_span(b.span);
+        // A Rust length (`xs.len()`, a `usize`) is a `uint` in Jux (§G.3.1), and
+        // meeting an `int` in one operator is where a Java programmer first
+        // runs into that (LEAKS L23). Say which operand it is and the two
+        // spellings that work, rather than only "cast one operand".
+        let length_side = [(b.left.as_ref(), l), (b.right.as_ref(), r)]
+            .into_iter()
+            .find_map(|(e, p)| (p == Primitive::Uint).then(|| rust_length_call(e)).flatten());
+        if let Some(what) = length_side {
+            d = d.with_help(format!(
+                "`{what}` is a Rust length, which is a `uint` in Jux (a `usize`): convert it where it \
+                 meets an `int`, `(int) {what}`, or take it into an `int` first, `int n = {what};` \
+                 (§S.2.7)"
+            ));
+        }
+        self.diagnostics.push(d);
     }
 
     /// Walk one statement, emitting diagnostics where types disagree.
@@ -15490,6 +15503,31 @@ fn canonical_annotation_spelling(name: &str) -> String {
     }
 }
 
+/// `xs.len()` (or `s.count()`, `v.capacity()`) as written, when `e` is a
+/// no-argument call of one of the Rust length methods: the operand an `E0410`
+/// help names (LEAKS L23).
+fn rust_length_call(e: &Expr) -> Option<String> {
+    let Expr::Call(call) = e else { return None };
+    if !call.args.is_empty() {
+        return None;
+    }
+    let Expr::Field(f) = call.callee.as_ref() else { return None };
+    if !matches!(f.field.text.as_str(), "len" | "count" | "capacity") {
+        return None;
+    }
+    let path = |qn: &juxc_ast::QualifiedName| qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+    let receiver = match f.object.as_ref() {
+        Expr::Path(qn) => path(qn),
+        Expr::Field(inner) => match inner.object.as_ref() {
+            Expr::Path(qn) => format!("{}.{}", path(qn), inner.field.text),
+            Expr::This(_) => format!("this.{}", inner.field.text),
+            _ => inner.field.text.clone(),
+        },
+        _ => "xs".to_string(),
+    };
+    Some(format!("{receiver}.{}()", f.field.text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18598,6 +18636,17 @@ public void main() { }");
         let d = run("long f(long a, u32 b) { return a + b; }
                      int g(int a, ushort b) { return a * b; }");
         assert!(!has(&d, code::Code::E0410_TypeMismatch), "a holding signed type is fine: {d:?}");
+    }
+
+    /// LEAKS L23: a Rust length meeting an `int` names the length and the two
+    /// spellings that work; the §S.2.7 slot forms stay accepted.
+    #[test]
+    fn a_length_meeting_an_int_says_it_is_a_uint() {
+        let d = run("class Bag { public uint len() { return 3; } } int f(int n, Bag v) { return n % v.len(); }");
+        let e = d.iter().find(|d| d.code == code::Code::E0410_TypeMismatch).expect("E0410");
+        assert!(e.help.iter().any(|h| h.contains("`v.len()` is a Rust length") && h.contains("`(int) v.len()`")), "{e:?}");
+        let d = run("class Bag { public uint len() { return 3; } } int f(Bag v) { int a = v.len() + v.len(); int last = v.len() - 1; return a + last; }");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
     /// Comparisons are exact, never an error, and an untyped literal takes the

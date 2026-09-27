@@ -1,0 +1,23 @@
+// A program's own class wins over a library enum of the same name
+// (LEAKS L25, ERRATA E102/E117). `rust.std` has enums named `Ordering`
+// and `Shutdown`; these classes hold constants and static methods, and
+// every use of them here is the class, never the enum.
+
+class Ordering {
+    public static const int FIRST = 1;
+    public static const int LAST = 9;
+    public static int span() { return LAST - FIRST; }
+}
+
+class Shutdown {
+    public static const String REASON = "done";
+}
+
+void main() {
+    int x = 5;
+    if (x > Ordering.FIRST && x < Ordering.LAST) {
+        print($"inside ${Ordering.FIRST}..${Ordering.LAST}");
+    }
+    print(Ordering.span());
+    print(Shutdown.REASON);
+}

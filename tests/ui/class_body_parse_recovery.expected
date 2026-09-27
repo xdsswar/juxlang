@@ -1,0 +1,6 @@
+class_body_parse_recovery.jux:7:19: [E0200] error: an array initializer `{ ... }` is only allowed where a variable or field is declared with its type (`int[] xs = { 1, 2 };`); anywhere else write the array with its type: `new int[] { 1, 2 }`
+class_body_parse_recovery.jux:14:5: [E0200] error: `count` is assigned here with no type, and a statement cannot stand directly in a type body -- declare the field with its type (`int count = ...;`), or move the assignment into a constructor or an `init { ... }` block
+class_body_parse_recovery.jux:19:5: [E0200] error: `print(...)` here is a call, and a statement cannot stand directly in a type body -- move it into a method, a constructor or an `init { ... }` block (a constructor is named after its type, `Printer(...)`)
+class_body_parse_recovery.jux:24:21: [E0200] error: expected identifier
+class_body_parse_recovery.jux:30:49: [E0200] error: expected ';' after return
+class_body_parse_recovery.jux:35:17: [E0200] error: expected identifier

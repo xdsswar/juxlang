@@ -636,6 +636,50 @@ fn recovery_skips_garbage_to_next_top_level() {
     assert!(!ast.items.is_empty(), "function should survive recovery");
 }
 
+/// LEAKS L22: a class whose constructor holds a parse error is still the
+/// class, with every member, and nothing of it becomes a top-level statement
+/// (which used to make a synthetic `main` beside the real one).
+#[test]
+fn parse_error_inside_a_class_keeps_the_class() {
+    let src = "public class FontMetrics {
+               private int[] regular;
+               public FontMetrics() { regular = { 278, 355 }; }
+               public int first() { return regular[0]; }
+               }
+";
+    let (ast, n) = parse_with_errors(src);
+    assert_eq!(n, 1, "one error, at the brace list");
+    assert_eq!(ast.items.len(), 1, "the class, and no synthetic `main`: {:?}", ast.items);
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("expected the class") };
+    assert_eq!(c.fields.len(), 1);
+    assert_eq!(c.constructors.len(), 1);
+    assert_eq!(c.methods.len(), 1);
+}
+
+/// A member that fails in its signature is skipped whole and the members
+/// after it still parse, in a class, a record, an enum and an interface.
+#[test]
+fn a_broken_member_does_not_take_the_type_with_it() {
+    let src = "class A { void f( { } int g() { return 1; } }
+               record R(int x) { int f( { return x; } int g() { return x; } }
+               enum E { X; int f( { return 1; } int g() { return 2; } }
+               interface I { int f(; int g(); }
+";
+    let (ast, n) = parse_with_errors(src);
+    assert_eq!(n, 4, "one error per broken member");
+    assert_eq!(ast.items.len(), 4, "{:?}", ast.items);
+    for item in &ast.items {
+        let names: Vec<&str> = match item {
+            TopLevelDecl::Class(c) => c.methods.iter().map(|m| m.name.text.as_str()).collect(),
+            TopLevelDecl::Record(r) => r.methods.iter().map(|m| m.name.text.as_str()).collect(),
+            TopLevelDecl::Enum(e) => e.methods.iter().map(|m| m.name.text.as_str()).collect(),
+            TopLevelDecl::Interface(i) => i.methods.iter().map(|m| m.name.text.as_str()).collect(),
+            other => panic!("unexpected item {other:?}"),
+        };
+        assert!(names.contains(&"g"), "`g` survives in {names:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // var declarations (§A.2.8)
 // ---------------------------------------------------------------------------

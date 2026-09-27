@@ -1,0 +1,45 @@
+// LEAKS L22: a parse error inside a type body is reported once, where it is,
+// and the type's other members still parse. None of these may turn into
+// "a class cannot be declared inside a function body" or a second `main`.
+class FontMetrics {
+    private int[] regular;
+    public FontMetrics() {
+        regular = { 278, 278, 355 };
+    }
+    public int first() { return regular[0]; }
+}
+
+class Counter {
+    private int count = 0;
+    count = 5;
+    public int get() { return count; }
+}
+
+class Printer {
+    print("hello");
+    public void run() { print("run"); }
+}
+
+record Point(int x, int y) {
+    public int sum( { return x + y; }
+    public int twice() { return x * 2; }
+}
+
+enum Mode {
+    ON, OFF;
+    public bool isOn() { return this == Mode.ON }
+    public String label() { return "mode"; }
+}
+
+interface Shape {
+    double area(;
+    String name();
+}
+
+void main() {
+    print(new FontMetrics().first());
+    print(new Counter().get());
+    new Printer().run();
+    print(new Point(1, 2).twice());
+    print(Mode.ON.label());
+}

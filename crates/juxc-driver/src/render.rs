@@ -203,29 +203,44 @@ fn location(src: &SourceFile, span: Span) -> String {
     format!("{}:{line}:{col}", src.path().display())
 }
 
+/// The message a one-line format prints: the diagnostic's own, and for an
+/// `E0900` (rustc rejected the emitted Rust, ERRATA E116) the rustc error
+/// that caused it as well. Without it the one-line formats said only "the
+/// Rust generated for this code does not compile", once per statement, and
+/// the cause took `--verbose` and reading the generated crate to find
+/// (LEAKS L27). The `human` format shows it as a note.
+fn one_line_message(d: &Diagnostic) -> std::borrow::Cow<'_, str> {
+    if d.code == juxc_diagnostics::code::Code::E0900_BackendEmittedInvalidRust {
+        if let Some(cause) = d.notes.iter().find(|n| n.starts_with("rustc reported ")) {
+            return format!("{} ({cause}; a compiler bug, `--verbose` shows the full report)", d.message).into();
+        }
+    }
+    d.message.as_str().into()
+}
+
 /// The historical line format.
 fn render_line(out: &mut String, d: &Diagnostic, sources: &[SourceFile]) {
+    let message = one_line_message(d);
     match (primary_source(d, sources), d.primary_span) {
         (Some(src), Some(span)) => {
             let (line, col) = src.line_col(span.start as usize);
             let _ = writeln!(
                 out,
-                "{}:{line}:{col}: [{}] {}: {}",
+                "{}:{line}:{col}: [{}] {}: {message}",
                 src.path().display(),
                 d.code,
                 severity_label(d.severity),
-                d.message,
             );
         }
         _ => {
-            let _ = writeln!(out, "[{}] {}: {}", d.code, severity_label(d.severity), d.message);
+            let _ = writeln!(out, "[{}] {}: {message}", d.code, severity_label(d.severity));
         }
     }
 }
 
 /// `compact` (with labels) and `short` (without).
 fn render_compact(out: &mut String, d: &Diagnostic, sources: &[SourceFile], with_labels: bool) {
-    let head = format!("{}[{}]: {}", severity_label(d.severity), d.code, d.message);
+    let head = format!("{}[{}]: {}", severity_label(d.severity), d.code, one_line_message(d));
     match (primary_source(d, sources), d.primary_span) {
         (Some(src), Some(span)) => {
             let _ = writeln!(out, "{}: {head}", location(src, span));
