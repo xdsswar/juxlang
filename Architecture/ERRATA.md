@@ -4073,8 +4073,13 @@ Jux code works on it in place.
   (primitives, `String`, records, Jux classes, collections) are still cloned
   out, as §G.6.4.4 says for iterator adaptors.
 - **One convention for a foreign parameter.** A method or function parameter
-  of a foreign class with no `@RustClone` lowers to `&mut T`, whatever the body
-  calls on it, and every use lends it on. The exception is a body that KEEPS
+  of a foreign class with no `@RustClone` is a borrow, whatever the body calls
+  on it, and every use lends it on: `&mut T` when the body writes through it
+  or lends it to a slot that does (a foreign `&mut` parameter, a `&mut self`
+  method, a Jux parameter that is `&mut` in turn), `&T` when it only reads,
+  since a crate may lend its object shared (`Once.call_once_force` passes
+  `&OnceState`). A local initialized from such a parameter (`var u = ui;`) is
+  the same borrow. The exception is a body that KEEPS
   it: returns it, stores it in a field, an element or a new object, hands it
   to a slot that takes ownership (a foreign by-value parameter, or a Jux
   parameter that keeps it in turn), or lets a closure that may outlive the
@@ -4082,8 +4087,9 @@ Jux code works on it in place.
   settled by starting every candidate as a borrow and withdrawing each one
   found kept until nothing changes. A foreign type that is `Clone` keeps the
   old rule (a copy, or `&mut T` when the body mutates it), because copying a
-  value type is what passing it means. A local that is already a borrow (such
-  a parameter, a lent lambda parameter) is lent on as `&mut *ui` everywhere:
+  value type is what passing it means. Both answers are fixpoints over the
+  whole program. A local that is already a borrow (such a parameter, a lent
+  lambda parameter, an alias of one) is lent on as `&mut *ui` everywhere:
   foreign `&mut` slots, Jux by-`&mut` parameters, and bare calls to the
   class's own methods, which now take the same argument path as `Class.m(..)`.
 - **A place lent to a foreign `&mut` slot is lent in place.** A local is
