@@ -904,21 +904,19 @@ pub fn load_package_doc_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> 
 /// only project-local crate stubs come from here.
 pub fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
     let root = &manifest.project_root;
-    for dep in &manifest.dependencies {
-        let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
-            continue; // ordinary Jux path dependency — handled elsewhere
-        };
-        if let Err(e) =
-            crate::stubs::resolve_crate_stub(root, kind, crate_name, dep)
-        {
+    let deps: Vec<&crate::manifest::Dependency> = manifest.dependencies.iter().collect();
+    for (name, result) in crate::stubs::resolve_crate_stubs(root, &deps) {
+        if let Err(e) = result {
             eprintln!(
-                "jux: warning: could not resolve stub for `{}.{crate_name}` \
+                "jux: warning: could not resolve stub for `{name}` \
                  (autocomplete for it will be unavailable): {e}",
-                kind
             );
         }
     }
-    crate::stubs::load_project_stub_sources(root)
+    // Only the stubs of the dependencies the manifest declares NOW (§G.9.4):
+    // a stub left behind by a removed dependency kept being loaded, and its
+    // declarations shadowed the ones a program meant (L7).
+    crate::stubs::load_declared_stub_sources(root, &deps)
 }
 
 /// Summary of an [`ensure_project_stubs`] pass.
@@ -969,17 +967,14 @@ pub fn ensure_project_stubs(root: &Path) -> StubSyncReport {
 
     for manifest in &manifests {
         let pkg_root = &manifest.project_root;
-        for dep in &manifest.dependencies {
-            let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
-                continue; // ordinary Jux path dependency
-            };
-            match crate::stubs::resolve_crate_stub(pkg_root, kind, crate_name, dep) {
+        let deps: Vec<&crate::manifest::Dependency> = manifest.dependencies.iter().collect();
+        for (name, result) in crate::stubs::resolve_crate_stubs(pkg_root, &deps) {
+            match result {
                 Ok(path) => report.resolved.push(path),
-                Err(e) => report
-                    .warnings
-                    .push(format!("could not resolve stub for `{kind}.{crate_name}`: {e}")),
+                Err(e) => report.warnings.push(format!("could not resolve stub for `{name}`: {e}")),
             }
         }
+        crate::stubs::prune_undeclared_stubs(pkg_root, &deps);
     }
     report
 }
