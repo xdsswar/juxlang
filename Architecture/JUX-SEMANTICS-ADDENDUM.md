@@ -567,7 +567,7 @@ A **panic** is the runtime response to a condition the language guarantees canno
 
 Per `ERRATA.md` E1, panics and exceptions are **two orthogonal layers**: exceptions are the user-level error model (values, declared in `throws`, caught with `try`/`catch`); panics are an abort-only runtime mechanism. **A panic is never catchable from Jux source** — `catch` clauses match only `Exception` subclasses, and there is no user-visible `Panic` type.
 
-- **`jux-full`**: a panic reports the condition with its source location and a stack trace, then terminates the program. It does **not** unwind into user `catch` blocks. (Phase 1 lowers panics to Rust's own panic machinery, but the report is Jux's: `panic: <what happened>` and the `.jux` line, never the Rust runtime's text. An array or list position out of range is not a panic: it throws `IndexOutOfBoundsException`, as a `String` position does. See `ERRATA.md` E1XX-GAP33.)
+- **`jux-full`**: a panic reports the condition with its source location and a stack trace, then terminates the program. It does **not** unwind into user `catch` blocks. (Phase 1 lowers panics to Rust's own panic machinery, but the report is Jux's: `panic: <what happened>` and the `.jux` line, never the Rust runtime's text. An array or list position out of range is not a panic: it throws `IndexOutOfBoundsException`, as a `String` position does. See `ERRATA.md` E129.)
 - **`jux-embedded`**: same as `jux-full` if the runtime-report machinery is enabled in the build profile; otherwise as `jux-core`.
 - **`jux-core`**: a panic calls a configurable panic handler, which by default aborts the program (using whatever abort means on the target — `__builtin_trap`, a vendor-specific reset, a halt loop). Programs may set their own handler:
   ```jux

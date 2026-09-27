@@ -4217,7 +4217,7 @@ of `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is no longer reserved.
 
 ---
 
-## E1XX-GAP33. Rust never reaches the user: one detector, a guard at every exit
+## E129. Rust never reaches the user: one detector, a guard at every exit
 
 **Conflict.** E116 promised that Jux never prints raw Rust, and gaps 27-32
 kept that promise one leak at a time, each found by someone reading output.
