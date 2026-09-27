@@ -866,8 +866,7 @@ fn run_cargo_build(crate_dir: &Path, profile_args: &[String], rs_files: &[PathBu
         cmd.args(["--target", triple]);
     }
     cmd.current_dir(crate_dir);
-    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
-        .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
+    let output = spawn_toolchain(cmd, "building a Jux program needs it")?;
     if output.status.success() {
         return Ok(());
     }
@@ -879,21 +878,48 @@ fn run_cargo_build(crate_dir: &Path, profile_args: &[String], rs_files: &[PathBu
         return Err(failure.into());
     }
     let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
-    anyhow::bail!("`cargo build` failed for the emitted Rust crate:\n{rewritten}");
+    Err(dependency_failure(&rewritten).into())
+}
+
+/// `E0905`: the build of an accepted program failed and rustc said nothing,
+/// so what failed is getting or building a dependency (a registry out of
+/// reach, a version that does not exist, a dependency's own build step). It
+/// used to pass the build tools' text through as it stood (GAPS.md gap 33).
+/// The first line that says what went wrong is kept when it reads as Jux;
+/// the whole report goes to `--verbose`.
+fn dependency_failure(report: &str) -> BuildFailure {
+    let mut d = Diagnostic::error(
+        juxc_diagnostics::code::Code::E0905_DependencyUnavailable,
+        "a dependency of the program could not be fetched or built",
+    );
+    let reason = report
+        .lines()
+        .map(str::trim)
+        .find_map(|l| l.strip_prefix("error:").map(str::trim))
+        .filter(|l| !l.is_empty() && juxc_diagnostics::leak::find_rust_leak(l).is_none());
+    if let Some(reason) = reason {
+        d.notes.push(format!("the build said: {reason}"));
+    }
+    let d = d.with_help(
+        "check the network and the `[dependencies]` of jux.toml; `--verbose` shows the full report",
+    );
+    BuildFailure { diagnostics: vec![d], sources: Vec::new(), detail: report.to_string(), exit_code: 1 }
 }
 
 fn spawn_toolchain(
     mut cmd: Command,
-    program: &str,
     needed_for: &str,
 ) -> Result<std::process::Output> {
     cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
+            // Named by what it is for, not by the tool's own name (gap 33):
+            // the fix is the same whatever the missing program is called.
             anyhow::anyhow!(
-                "`{program}` is not installed or not on PATH: {needed_for}. Jux compiles through the Rust toolchain -- install it from https://rustup.rs",
+                "the toolchain Jux builds with is not installed or not on PATH ({needed_for}); \
+                 install it as INSTALL.md describes, from https://rustup.rs",
             )
         } else {
-            anyhow::anyhow!("failed to run `{program}`: {e}")
+            anyhow::anyhow!("the toolchain Jux builds with could not be started: {e}")
         }
     })
 }

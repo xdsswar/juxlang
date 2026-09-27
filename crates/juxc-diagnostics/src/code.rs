@@ -1245,6 +1245,12 @@ pub enum Code {
     /// installed.** Checked before the build starts; it used to surface as a
     /// flood of rustc `E0463` ("can't find crate for `std`"), one per crate.
     E0904_TargetNotInstalled,
+    /// E0905 -- **a dependency could not be fetched or built**: the build of
+    /// an accepted program failed with no compiler error in it (a registry out
+    /// of reach, a crate version that does not exist, a dependency's own build
+    /// step failing). It used to print the build tools' text verbatim; the
+    /// full report is shown only under `--verbose` (GAPS.md gap 33).
+    E0905_DependencyUnavailable,
     /// E0906 -- **the program could not be linked**: a native library an
     /// `@extern(lib=...)` or `[ffi.*]` entry names was not found, or the linker
     /// failed. Reported with the one line of the linker's output that says why;
@@ -1475,6 +1481,7 @@ impl Code {
             Code::W0903_ManifestNameNotReverseDns => "W0903",
             Code::E0900_BackendEmittedInvalidRust => "E0900",
             Code::E0904_TargetNotInstalled       => "E0904",
+            Code::E0905_DependencyUnavailable    => "E0905",
             Code::E0906_LinkFailed               => "E0906",
             Code::E0907_StubBody                 => "E0907",
             Code::E0908_LinkageUnavailable       => "E0908",

@@ -1,0 +1,34 @@
+// A position outside an array throws `IndexOutOfBoundsException` with Java's
+// message, negative positions included, and an empty array's `pop()` throws
+// `NoSuchElementException`. One nothing catches ends the program with the
+// exception and the `.jux` line it was thrown at (GAPS.md gap 33). All three
+// used to stop the program with the Rust runtime's own text, at a line of
+// the generated code.
+
+int[] scores() {
+    return new int[] { 90, 75, 60 };
+}
+
+public void main() {
+    int[] a = scores();
+    try {
+        print(a[3]);
+    } catch (IndexOutOfBoundsException e) {
+        print($"caught: ${e.getMessage()}");
+    }
+    int i = -1;
+    try {
+        a[i] = 1;
+    } catch (IndexOutOfBoundsException e) {
+        print($"caught: ${e.getMessage()}");
+    }
+    int[] empty = new int[0];
+    try {
+        print(empty.pop());
+    } catch (NoSuchElementException e) {
+        print($"caught: ${e.getMessage()}");
+    }
+    print("the last one is not caught");
+    print(a[5]);
+    print("not reached");
+}

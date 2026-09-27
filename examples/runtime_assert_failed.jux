@@ -1,0 +1,12 @@
+// A failed `assert` with no message stops the program with `assertion
+// failed` at its `.jux` line (GAPS.md gap 33). It used to print the condition
+// as the GENERATED code spelled it, which is not what the program says.
+
+import rust.std.Vec;
+
+public void main() {
+    Vec<int> v = new Vec<int>();
+    print("checking the list");
+    assert v.len() > 0;
+    print("not reached");
+}

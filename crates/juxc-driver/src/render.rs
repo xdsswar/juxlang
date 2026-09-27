@@ -18,8 +18,10 @@
 //! - **`json`** (§D.2): NDJSON, one object per diagnostic and a trailing
 //!   summary line.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use juxc_diagnostics::{Diagnostic, Severity};
 use juxc_source::{SourceFile, Span};
@@ -162,6 +164,49 @@ pub fn severity_label(s: Severity) -> &'static str {
     }
 }
 
+/// `--verbose` was given: a diagnostic the leak guard replaces keeps its
+/// original text as a note (see [`guard_leaks`]).
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Record `--verbose` for the renderers. The binaries call it once.
+pub fn set_verbose(on: bool) {
+    VERBOSE.store(on, Ordering::Relaxed);
+}
+
+/// Whether `--verbose` was recorded.
+pub fn verbose() -> bool {
+    VERBOSE.load(Ordering::Relaxed)
+}
+
+/// The leak guard every rendered diagnostic passes (GAPS.md gap 33): a
+/// diagnostic whose message, label, note or help shows Rust (a Rust type or
+/// path, rustc's or cargo's words, a `.rs` location, Rust's panic text; see
+/// `juxc_diagnostics::leak`) is replaced by an `E0900` internal compiler
+/// error at the same place. Text the program itself contains is not a leak,
+/// so the check reads `sources`. The one documented exception is an
+/// `E0900`'s note quoting rustc (ERRATA E116, E125).
+///
+/// Under the self-check (`JUX_SELFCHECK=1`, which the test corpus sets) and
+/// in unit tests a leak panics instead, so it fails the test that found it
+/// rather than being papered over.
+pub fn guard_leaks<'a>(diagnostics: &'a [Diagnostic], sources: &[SourceFile]) -> Cow<'a, [Diagnostic]> {
+    let texts: Vec<&str> = sources.iter().map(|s| s.contents()).collect();
+    let user_wrote = juxc_diagnostics::leak::contained_in(&texts);
+    let panic_on_leak = cfg!(test) || juxc_diagnostics::leak::selfcheck();
+    let mut out: Option<Vec<Diagnostic>> = None;
+    for (i, d) in diagnostics.iter().enumerate() {
+        if let Some(ice) =
+            juxc_diagnostics::leak::guard_diagnostic(d, &user_wrote, panic_on_leak, verbose(), crate::ice::ISSUES_URL)
+        {
+            out.get_or_insert_with(|| diagnostics.to_vec())[i] = ice;
+        }
+    }
+    match out {
+        Some(v) => Cow::Owned(v),
+        None => Cow::Borrowed(diagnostics),
+    }
+}
+
 /// Render `diagnostics` in a text format (everything but `json`), in source
 /// order and de-duplicated, as one string ready for stderr.
 pub fn render_text(
@@ -170,6 +215,8 @@ pub fn render_text(
     format: DiagnosticFormat,
     color: bool,
 ) -> String {
+    let diagnostics = guard_leaks(diagnostics, sources);
+    let diagnostics = &diagnostics[..];
     let p = Palette::new(color);
     let mut out = String::new();
     let ordered = crate::diagnostic_order::in_source_order(diagnostics);
@@ -443,6 +490,8 @@ fn render_summary(out: &mut String, ordered: &[&Diagnostic], p: &Palette) {
 /// then a `{"summary":…}` line (§D.2.4). `duration_ms` is what the caller
 /// measured around the compile, or 0.
 pub fn render_json(diagnostics: &[Diagnostic], sources: &[SourceFile], duration_ms: u128) -> String {
+    let diagnostics = guard_leaks(diagnostics, sources);
+    let diagnostics = &diagnostics[..];
     let mut out = String::new();
     let mut errors = 0u32;
     let mut warnings = 0u32;
@@ -606,6 +655,29 @@ mod tests {
         assert!(!text.contains('\x1b'), "no color was asked for");
         let colored = render_text(&d, &s, DiagnosticFormat::Human, true);
         assert!(colored.contains("\x1b[1;31merror[E0410]"), "{colored}");
+    }
+
+    /// The leak guard (gap 33) reads the program: a name the program chose is
+    /// its own, whatever it spells.
+    #[test]
+    fn the_programs_own_names_are_not_a_leak() {
+        let text = "public void main() { int cargo = 1; }\n";
+        let src = SourceFile::new(std::path::PathBuf::from("src/main.jux"), text.to_string());
+        let start = text.find("cargo").unwrap() as u32;
+        let mut d = Diagnostic::warning(Code::E0410_TypeMismatch, "variable `cargo` is never read")
+            .with_span(Span { start, end: start + 5, file: 0 });
+        d.file = Some(0);
+        let out = render_text(std::slice::from_ref(&d), std::slice::from_ref(&src), DiagnosticFormat::Line, false);
+        assert!(out.contains("variable `cargo` is never read"), "{out}");
+        assert!(render_json(&[d], &[src], 0).contains("never read"));
+    }
+
+    /// Under test a diagnostic that shows Rust panics, so it cannot be pinned.
+    #[test]
+    #[should_panic(expected = "shows Rust to the user")]
+    fn a_diagnostic_that_shows_rust_fails_the_test_that_made_it() {
+        let d = Diagnostic::error(Code::E0410_TypeMismatch, "expected `std::string::String`, found `i64`");
+        let _ = render_text(&[d], &[], DiagnosticFormat::Human, false);
     }
 
     #[test]

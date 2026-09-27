@@ -1,0 +1,4 @@
+checking the list
+panic: assertion failed
+    at examples/runtime_assert_failed.jux:10:5
+[exit: 101]

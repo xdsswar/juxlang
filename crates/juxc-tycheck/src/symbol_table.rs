@@ -4402,8 +4402,8 @@ fn check_interface_on_exception_class(table: &SymbolTable, diagnostics: &mut Vec
                 format!(
                     "class `{class_name}` extends the exception hierarchy and implements an \
                      interface -- interface dynamic dispatch isn't supported for exception \
-                     classes yet (they can't use the interior-mutable representation that \
-                     `Rc<dyn Trait>` requires)",
+                     classes yet (an exception is thrown as a value of its own class, and \
+                     cannot also be shared as an object of an interface type)",
                 ),
             )
             .with_span(class.span),

@@ -78,6 +78,9 @@ const EXCLUDED: &[(&str, &str)] = &[
     // specific (3 on Windows, SIGABRT elsewhere). `tests/examples_ffi.rs`
     // checks what it prints and that it did not finish.
     ("ffi_unwind_barrier", "aborts by design; covered by tests/examples_ffi.rs"),
+    // A stack overflow is reported in Jux terms on Windows only; elsewhere the
+    // runtime's own report stands, so there is no one output to pin.
+    ("runtime_stack_overflow", "output differs by platform; covered by tests/runtime_failures.rs"),
 ];
 
 /// How many examples to compile at once.
@@ -168,7 +171,12 @@ fn normalize(raw: &str, root: &Path) -> String {
         // checkout. A program is free to print a backslash of its own, and
         // rewriting those would corrupt the very output being pinned.
         let cleaned = if line.contains(&root_slash) || line.contains(&root_back) {
-            line.replace(&root_slash, "")
+            // With its separator first, so a path in the middle of a line
+            // (`    at <root>/examples/x.jux:3:5`, the line an uncaught
+            // failure is reported at) keeps no leading `/`.
+            line.replace(&format!("{root_slash}/"), "")
+                .replace(&format!("{root_back}\\"), "")
+                .replace(&root_slash, "")
                 .replace(&root_back, "")
                 .replace('\\', "/")
                 .trim_start_matches('/')

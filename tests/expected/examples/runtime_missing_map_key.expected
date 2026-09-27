@@ -1,0 +1,4 @@
+3
+panic: no entry for the key
+    at examples/runtime_missing_map_key.jux:11:5
+[exit: 101]

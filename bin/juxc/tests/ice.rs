@@ -70,7 +70,7 @@ fn a_panic_is_reported_as_a_compiler_bug() {
         "the report must stamp the compiler version:\n{stderr}"
     );
     assert!(
-        stderr.contains("ice.rs:"),
+        stderr.contains("juxc-driver/src/ice:"),
         "the panic location must survive the hop from the compilation thread \
          to the main one:\n{stderr}"
     );
@@ -96,6 +96,12 @@ fn rusts_default_panic_output_is_suppressed() {
     assert!(
         !stderr.contains("note: run with `RUST_BACKTRACE=1`"),
         "the report gives its own backtrace hint:\n{stderr}"
+    );
+    // Nor anything else of Rust's (gap 33): the report is in Jux terms.
+    assert!(
+        juxc_diagnostics::leak::find_rust_leak(&stderr).is_none(),
+        "the report shows Rust: {:?}\n{stderr}",
+        juxc_diagnostics::leak::find_rust_leak(&stderr)
     );
 }
 

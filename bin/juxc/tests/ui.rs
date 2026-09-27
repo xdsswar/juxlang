@@ -85,6 +85,10 @@ fn run_case(jux: &Path) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_juxc"))
         .arg("--check")
         .arg(jux)
+        // A diagnostic that shows Rust panics the renderer under the
+        // self-check (gap 33), so the case fails here instead of the
+        // user seeing the E0900 the guard would put in its place.
+        .env("JUX_SELFCHECK", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawning juxc --check for {case}: {e}"));
     let blob = format!(

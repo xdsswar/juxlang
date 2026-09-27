@@ -174,7 +174,7 @@ fn invalid_rust(
         "this is a bug in the Jux compiler, not in your program".to_string()
     });
     d.with_help(format!(
-        "please report it at {}, with the source that triggered it; `--verbose` shows rustc's full report",
+        "please report it at {}, with the source that triggered it; `--verbose` shows the full report",
         crate::ice::ISSUES_URL
     ))
 }
@@ -253,7 +253,7 @@ fn missing_std(message: &serde_json::Value) -> Diagnostic {
         .and_then(|c| c.as_array())
         .and_then(|c| c.iter().filter_map(|c| c.get("message").and_then(|m| m.as_str())).find(|m| m.contains("target")))
     {
-        d.notes.push(format!("rustc said: {note}"));
+        d.notes.push(format!("the build tools said: {note}"));
     }
     d.with_help("install it with `rustup target add <target>`")
 }
@@ -315,7 +315,7 @@ pub(crate) fn preflight_target(triple: &str, crate_dir: &Path) -> Result<(), Bui
     let Ok(output) = output else { return Ok(()) };
     let failure = if !output.status.success() {
         Some(
-            Diagnostic::error(Code::E0904_TargetNotInstalled, format!("`{triple}` is not a target rustc can build for"))
+            Diagnostic::error(Code::E0904_TargetNotInstalled, format!("`{triple}` is not a target Jux can build for"))
                 .with_help("`rustup target list` shows the targets there are"),
         )
     } else {

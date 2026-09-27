@@ -64,8 +64,8 @@ struct Cli {
     /// the only value.
     #[arg(short = 'W', global = true, value_name = "error")]
     warnings: Option<String>,
-    /// When a build fails after the program was accepted, also print cargo's
-    /// and rustc's own report (the full linker command line, for one).
+    /// When a build fails after the program was accepted, also print the
+    /// build tools' own report (the full linker command line, for one).
     #[arg(long, global = true)]
     verbose: bool,
 }
@@ -173,13 +173,12 @@ enum CliCommand {
     Build {
         /// Optional `.jux` file.
         file: Option<PathBuf>,
-        /// Where to emit the generated Rust crate. Defaults to
+        /// Where to write the generated build files. Defaults to
         /// `<input-parent>/target/.rust-build/`, or `<project>/target/.rust-build/`
         /// for a project (a whole workspace always uses the latter).
         #[arg(long)]
         emit_dir: Option<PathBuf>,
-        /// Build the emitted program with optimizations
-        /// (forwards `--release` to the inner `cargo build`).
+        /// Build the program with optimizations.
         #[arg(long)]
         release: bool,
         /// In a workspace, build only this member package (by package name
@@ -200,8 +199,7 @@ enum CliCommand {
         /// Build every program under `examples/` (§B.1.3).
         #[arg(long, conflicts_with_all = ["bin", "lib"])]
         examples: bool,
-        /// Cross-compile for the given Rust target triple (forwards
-        /// `--target` to the inner `cargo build`). The toolchain must
+        /// Cross-compile for the given target triple. The target must
         /// be installed: `rustup target add <triple>`.
         #[arg(long)]
         target: Option<String>,
@@ -223,13 +221,12 @@ enum CliCommand {
         /// Optional `.jux` file. When omitted, acts on the project whose
         /// `jux.toml` is found upward from here (or given by --manifest-path).
         file: Option<PathBuf>,
-        /// Where to emit the generated Rust crate. Defaults to
+        /// Where to write the generated build files. Defaults to
         /// `<input-parent>/target/.rust-build/`, or `<project>/target/.rust-build/`
         /// for a project (a whole workspace always uses the latter).
         #[arg(long)]
         emit_dir: Option<PathBuf>,
-        /// Build the emitted program with optimizations
-        /// (forwards `--release` to the inner `cargo build`).
+        /// Build the program with optimizations.
         #[arg(long)]
         release: bool,
         /// In a workspace, run a binary from this member package (by package
@@ -315,7 +312,7 @@ enum CliCommand {
         #[arg(long)]
         target: Option<String>,
     },
-    /// Inspect cross-compilation targets (analogous to `rustup target`).
+    /// Inspect cross-compilation targets.
     Target {
         #[command(subcommand)]
         cmd: TargetCmd,
@@ -335,13 +332,16 @@ enum TargetCmd {
     },
 }
 
-fn main() -> Result<ExitCode> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     // What `jux` was pointed at, kept for an ICE report.
     let inputs = ice_inputs(&cli);
+    let verbose_flag = cli.verbose;
+    juxc_driver::render::set_verbose(verbose_flag);
     // Same contract as `juxc`: a panic in here is a compiler bug and reports
-    // itself as one. See `juxc_driver::ice`.
-    juxc_driver::ice::guard("jux", &inputs, move || {
+    // itself as one. See `juxc_driver::ice`. An error that is not a
+    // diagnostic leaves through `report_error`, which keeps Rust out of it.
+    let result = juxc_driver::ice::guard("jux", &inputs, move || {
         // Same reason as `juxc`: the front end runs in-process here, it recurses
         // with source nesting, and its frames are large enough that a default
         // main stack aborts the process around 60 levels deep. See
@@ -351,7 +351,11 @@ fn main() -> Result<ExitCode> {
             let verbose = cli.verbose;
             report_build_failure(run_cli(cli), verbose)
         })
-    })
+    });
+    match result {
+        Ok(code) => code,
+        Err(err) => juxc_driver::ice::report_error("jux", &err, verbose_flag),
+    }
 }
 
 /// What this invocation was pointed at, for an internal-compiler-error report.

@@ -36,6 +36,7 @@ pub(crate) fn hover(doc: &Document, uri: &Url, pos: Position) -> Option<Hover> {
             // `rust.std` stub) via `definition_of` and read its `/** … */`
             // there. Falls back to the usage-site scan (members, or when the
             // declaration can't be located).
+            let mut decl_file = String::new();
             let decl_doc = doc.symbols.definition_of(&word.text).and_then(|(unit, span)| {
                 let path = doc.source_paths.get(unit)?;
                 let same_as_open = Url::from_file_path(path).ok().as_ref() == Some(uri);
@@ -44,26 +45,36 @@ pub(crate) fn hover(doc: &Document, uri: &Url, pos: Position) -> Option<Hover> {
                 } else {
                     std::fs::read_to_string(path).ok()?
                 };
-                doc_comment_before(&decl_text, span.start as usize)
+                let found = doc_comment_before(&decl_text, span.start as usize);
+                decl_file = decl_text;
+                found
             });
             if let Some(doc_line) = decl_doc.or_else(|| doc_comment_before(&text, word.start)) {
                 value.push_str("\n\n");
                 value.push_str(&doc_line);
             }
-            return Some(Hover {
-                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
-                range: Some(doc.range_of(Span::new(word.start as u32, word.end as u32))),
-            });
+            // The one exit a hover leaves by (gap 33): a doc comment is the
+            // declaring file's own text, the signature is the checker's.
+            return crate::leak_guard::hover(
+                Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
+                    range: Some(doc.range_of(Span::new(word.start as u32, word.end as u32))),
+                }),
+                &[&text, &decl_file],
+            );
         }
     }
 
     // Fallback: the inferred type at the cursor, as a Jux code block.
     let (span, ty) = doc.type_at(offset)?;
-    Some(Hover {
-        contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("```jux\n{ty}\n```"),
+    crate::leak_guard::hover(
+        Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!("```jux\n{ty}\n```"),
+            }),
+            range: Some(doc.range_of(span)),
         }),
-        range: Some(doc.range_of(span)),
-    })
+        &[&text],
+    )
 }

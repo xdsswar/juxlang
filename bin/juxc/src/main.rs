@@ -76,19 +76,19 @@ struct Cli {
     #[arg(required = true, num_args = 1..)]
     inputs: Vec<PathBuf>,
 
-    /// Directory to write the emitted Rust crate into. Defaults to
+    /// Directory the generated build files are written to. Defaults to
     /// `target/.rust-build/` next to the first input file's parent.
     #[arg(long)]
     emit_dir: Option<PathBuf>,
 
     /// Name of the produced binary. When omitted, defaults to the
     /// input's file-stem (single file) or directory name (folder
-    /// input). The name flows into the emitted Cargo.toml and
-    /// drives the lookup of the resulting `.exe`.
+    /// input). The name is the produced program's file name
+    /// (the resulting `.exe`).
     #[arg(long)]
     name: Option<String>,
 
-    /// After lowering, run `cargo build` on the emitted crate.
+    /// After lowering, build the program.
     #[arg(long)]
     build: bool,
 
@@ -97,15 +97,14 @@ struct Cli {
     #[arg(long)]
     run: bool,
 
-    /// Build the emitted program in release mode (forwards `--release`
-    /// to the inner `cargo build`). The produced binary lands under
+    /// Build the program with optimizations. The produced binary lands under
     /// `target/release/` instead of `target/debug/`. Has no effect
     /// without `--build` or `--run`.
     #[arg(long)]
     release: bool,
 
     /// Run the front end only (lex → parse → resolve → tycheck) and report
-    /// diagnostics — emit NO Rust crate and never touch `cargo` or the
+    /// diagnostics: generate and build nothing, and never touch the
     /// filesystem. This is the path editor tooling / CI lint use; combine
     /// with `--diagnostic-format json` for machine-readable output. Exits
     /// non-zero iff an error-severity diagnostic fired.
@@ -133,27 +132,30 @@ struct Cli {
     #[arg(short = 'W', value_name = "error", value_parser = ["error"])]
     warnings: Option<String>,
 
-    /// When the build fails after the program was accepted, also print
-    /// cargo's and rustc's own report (the full linker command line, for one).
+    /// When the build fails after the program was accepted, also print the
+    /// build tools' own report (the full linker command line, for one).
     #[arg(long)]
     verbose: bool,
 }
 
-fn main() -> Result<ExitCode> {
+fn main() -> ExitCode {
     // `juxc explain <CODE>` (§D.5.3) takes no inputs, so it is answered
     // before the compile arguments are parsed.
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("explain") {
-        return Ok(explain(args.get(2).map(String::as_str)));
+        return explain(args.get(2).map(String::as_str));
     }
     let cli = Cli::parse();
     // Kept for the report: `cli` is moved onto the compilation thread below,
     // and an ICE needs to name the files that were being compiled.
     let inputs = cli.inputs.clone();
+    let verbose = cli.verbose;
+    juxc_driver::render::set_verbose(verbose);
     // A panic anywhere in the compiler is a bug in the compiler, and it should
     // say so rather than dumping a Rust backtrace that reads like the user's
-    // program crashed -- see `juxc_driver::ice`.
-    juxc_driver::ice::guard("juxc", &inputs, move || {
+    // program crashed -- see `juxc_driver::ice`. An error that is not a
+    // diagnostic leaves through `report_error`, which keeps Rust out of it.
+    let result = juxc_driver::ice::guard("juxc", &inputs, move || {
         // The front end recurses in step with source nesting and its frames are
         // large; on a default 8 MB main stack that caps out around 60 levels of
         // nested expression and then aborts the process with no diagnostic. Give
@@ -162,7 +164,11 @@ fn main() -> Result<ExitCode> {
             juxc_driver::ice::selftest_trip();
             run_juxc(cli).map(|c| c.unwrap_or(ExitCode::SUCCESS))
         })
-    })
+    });
+    match result {
+        Ok(code) => code,
+        Err(err) => juxc_driver::ice::report_error("juxc", &err, verbose),
+    }
 }
 
 /// Real `main` body — returns `Ok(Some(code))` when we want to forward an

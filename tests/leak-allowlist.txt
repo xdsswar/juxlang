@@ -1,0 +1,10 @@
+# Pinned outputs allowed to show Rust-shaped text (GAPS.md gap 33).
+#
+# `bin/juxc/tests/leak_sweep.rs` runs the leak detector over every
+# tests/ui/*.expected and tests/expected/examples/*.expected. A hit is fixed
+# where the text is made; an entry here is only for output that must show
+# such text on purpose. One entry per line:
+#
+#     <path from the repository root> | <matched text> | <why it is right>
+#
+# An entry that no longer matches fails the sweep. Keep this list empty.

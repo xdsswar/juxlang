@@ -91,7 +91,9 @@ pub(crate) fn check_crate(crate_dir: &Path, rs_files: &[PathBuf]) -> Result<(), 
             Code::E0900_BackendEmittedInvalidRust,
             "internal compiler error: the compiler would emit a borrow conflict here",
         );
-        d.notes.push(format!("{} (at {}:{} of the generated crate)", hit.what, hit.file, hit.line));
+        // Where in the generated crate goes to `--verbose` (the detail below):
+        // a `.rs` location is not something a Jux programmer reads (gap 33).
+        d.notes.push(hit.what.clone());
         if let Some(entry) = map.lookup(&hit.file, hit.line) {
             let key = (entry.jux_path.clone(), entry.jux_line, entry.jux_col);
             if seen.contains(&key) {

@@ -32,6 +32,10 @@ pub fn to_lsp(
     enc: PositionEncoding,
     files: FileResolver<'_>,
 ) -> Diagnostic {
+    // The compiler's leak guard, on the way to the editor too (gap 33): a
+    // diagnostic whose text shows Rust is the E0900 the command line shows.
+    let guarded = crate::leak_guard::diagnostic(d, &rope.to_string());
+    let d = guarded.as_ref().unwrap_or(d);
     // A diagnostic with no primary span (synthesized) points at the very
     // start of the file — the editor still surfaces the message.
     let range = d

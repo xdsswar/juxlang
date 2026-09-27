@@ -1284,33 +1284,34 @@ fn two_dim_string_array_lowers_to_nested_vec_of_string() {
     );
 }
 
-/// Integer literal indices emit raw (no `as usize`) — Rust infers
-/// `usize` from the indexing context.
+/// Integer literal indices do not cast to `usize`: an array position is the
+/// prelude's checked `JuxIx` (gap 33), literal or not.
 #[test]
 fn integer_literal_index_does_not_cast_to_usize() {
     let rust = emit("public void main() { int[10] xs = new int[10]; print(xs[3]); }");
-    assert!(rust.contains("xs.borrow()[3]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[crate::JuxIx((3) as i128)]"), "got: {rust}");
     assert!(!rust.contains("xs[(3)"), "literal indices should be naked: {rust}");
 }
 
-/// Non-literal indices (variables, expressions) get cast to `usize`
-/// so platform-int (`isize`) loop counters index `[T; N]` correctly.
+/// Non-literal indices (variables, expressions) index through the checked
+/// `JuxIx`, so a negative `isize` is an `IndexOutOfBoundsException`, not a
+/// huge `usize` (gap 33).
 #[test]
 fn variable_index_wraps_with_as_usize() {
     let rust = emit(
         "public void main() { int[10] xs = new int[10]; var i = 0; print(xs[i]); }",
     );
-    assert!(rust.contains("xs.borrow()[(i) as usize]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[crate::JuxIx((i) as i128)]"), "got: {rust}");
 }
 
 /// `xs[i] = v;` lowers to a direct indexed assignment with the same
-/// `as usize` coercion on the index.
+/// checked position on the index.
 #[test]
 fn indexed_assignment_emits_with_usize_coercion() {
     let rust = emit(
         "public void main() { int[3] xs = new int[3]; var i = 0; xs[i] = 7; }",
     );
-    assert!(rust.contains("xs.borrow_mut()[(i) as usize] = 7;"), "got: {rust}");
+    assert!(rust.contains("xs.borrow_mut()[crate::JuxIx((i) as i128)] = 7;"), "got: {rust}");
 }
 
 /// `xs[i] = v;` causes the mutation analysis to promote `xs` to
@@ -1359,7 +1360,7 @@ fn array_length_on_composite_receiver_keeps_parens() {
     let rust = emit(
         "public void main() { int[3] xs = {1,2,3}; print(xs[0]); }",
     );
-    assert!(rust.contains("xs.borrow()[0]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[crate::JuxIx((0) as i128)]"), "got: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -1538,7 +1539,7 @@ fn pop_method_call_appends_unwrap() {
     let rust = emit(
         "public void main() { int[] xs = {}; xs.push(1); var v = xs.pop(); print(v); }",
     );
-    assert!(rust.contains("let v = xs.borrow_mut().pop().unwrap();"), "got: {rust}");
+    assert!(rust.contains("let v = xs.borrow_mut().pop().unwrap_or_else(|| crate::jux_empty_fail());"), "got: {rust}");
 }
 
 /// `xs.pop()` mutates `xs` even when its return value is bound to
@@ -2891,7 +2892,7 @@ fn wrapper_array_store_and_index_read_clone() {
     );
     // Index read: the value clones out of the Vec (shared handle out).
     assert!(
-        rust.contains("xs.borrow()[0].clone()"),
+        rust.contains("xs.borrow()[crate::JuxIx((0) as i128)].clone()"),
         "index-read clones out of the Vec: {rust}",
     );
     // The method-call receiver `r.set(...)` must NOT clone (it borrows
@@ -3204,7 +3205,7 @@ fn interp_expr_with_array_index_emits_indexed_value() {
         "public void main() { int[3] xs = {10, 20, 30}; print($\"first=${xs[0]}\"); }",
     );
     assert!(
-        rust.contains(r#"println!("first={}", xs.borrow()[0])"#),
+        rust.contains(r#"println!("first={}", xs.borrow()[crate::JuxIx((0) as i128)])"#),
         "got: {rust}",
     );
 }
@@ -5354,7 +5355,7 @@ fn new_array_of_type_parameter_adds_default_bound() {
     assert!(rust.contains("fn make<E: Clone + std::fmt::Debug + 'static + Default>"), "method: {rust}");
     // `return items[0];` last in the body keeps `return`, so the `borrow()`
     // guard drops before `items` does.
-    assert!(rust.contains("return items.borrow()[0].clone();"), "tail read: {rust}");
+    assert!(rust.contains("return items.borrow()[crate::JuxIx((0) as i128)].clone();"), "tail read: {rust}");
 }
 
 /// Reading a nullable element out of a collection clones the `Option`, so the
@@ -6129,7 +6130,7 @@ fn ident_words_finds_identifiers_and_skips_digit_led_runs() {
 #[test]
 fn indexed_assign_stays_inline_when_nothing_can_borrow() {
     let rust = emit("public void main() { int[3] xs = new int[3]; var i = 0; xs[i] = 7; }");
-    assert!(rust.contains("xs.borrow_mut()[(i) as usize] = 7;"), "got: {rust}");
+    assert!(rust.contains("xs.borrow_mut()[crate::JuxIx((i) as i128)] = 7;"), "got: {rust}");
     assert!(!rust.contains("__jux_v"), "no temp should appear: {rust}");
     assert!(!rust.contains("__jux_c"), "no temp should appear: {rust}");
 }
@@ -6142,16 +6143,16 @@ fn indexed_assign_hoists_a_read_of_the_same_array() {
     let rust = emit(
         "public void main() { int[3] a = new int[3]; var j = 0; a[j] = a[j + 1]; }",
     );
-    assert!(rust.contains("let __jux_v = a.borrow()[(j + 1) as usize]"), "got: {rust}");
-    assert!(rust.contains("a.borrow_mut()[(j) as usize] = __jux_v"), "got: {rust}");
+    assert!(rust.contains("let __jux_v = a.borrow()[crate::JuxIx((j + 1) as i128)]"), "got: {rust}");
+    assert!(rust.contains("a.borrow_mut()[crate::JuxIx((j) as i128)] = __jux_v"), "got: {rust}");
 }
 
 /// The target's OWN index may read the array being written.
 #[test]
 fn indexed_assign_hoists_a_self_referential_index() {
     let rust = emit("public void main() { int[3] a = new int[3]; a[a[0]] = 5; }");
-    assert!(rust.contains("let __jux_i = a.borrow()[0]"), "got: {rust}");
-    assert!(rust.contains("a.borrow_mut()[(__jux_i) as usize] = 5"), "got: {rust}");
+    assert!(rust.contains("let __jux_i = a.borrow()[crate::JuxIx((0) as i128)]"), "got: {rust}");
+    assert!(rust.contains("a.borrow_mut()[crate::JuxIx((__jux_i) as i128)] = 5"), "got: {rust}");
 }
 
 /// A hoisted value keeps every coercion the slot demands. The previous hoist

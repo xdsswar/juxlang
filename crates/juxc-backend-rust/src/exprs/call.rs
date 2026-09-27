@@ -1371,6 +1371,11 @@ impl RustEmitter {
                     self.w.push_str(", \"{}\", ");
                     self.emitting_format_arg = true;
                     self.emit_expr(msg);
+                } else {
+                    // Without a message the macro's own names the condition
+                    // as the EMITTED Rust spells it (`v.borrow().len() > 0`),
+                    // which the program's author never wrote (gap 33).
+                    self.w.push_str(", \"assertion failed\"");
                 }
                 self.emitting_format_arg = prev;
                 self.w.push(')');
@@ -2019,7 +2024,7 @@ impl RustEmitter {
                             // path variable survives for later calls.
                             self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
-                            self.w.push_str(")).unwrap()");
+                            self.w.push_str(")).unwrap_or_else(|e| crate::jux_io_fail(e))");
                             return;
                         }
                         "writeText" => {
@@ -2037,7 +2042,7 @@ impl RustEmitter {
                                 self.emit_expr(content);
                                 self.w.push(')');
                             }
-                            self.w.push_str(").unwrap()");
+                            self.w.push_str(").unwrap_or_else(|e| crate::jux_io_fail(e))");
                             return;
                         }
                         "exists" => {
@@ -2054,11 +2059,11 @@ impl RustEmitter {
                             if let Some(path) = call.args.first() {
                                 self.emit_expr(path);
                             }
-                            self.w.push_str(")).unwrap(); __jux_f.write_all((");
+                            self.w.push_str(")).unwrap_or_else(|e| crate::jux_io_fail(e)); __jux_f.write_all((");
                             if let Some(content) = call.args.get(1) {
                                 self.emit_expr(content);
                             }
-                            self.w.push_str(").as_bytes()).unwrap(); }");
+                            self.w.push_str(").as_bytes()).unwrap_or_else(|e| crate::jux_io_fail(e)); }");
                             return;
                         }
                         "readLines" => {
@@ -2071,7 +2076,7 @@ impl RustEmitter {
                             self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
                             self.w.push_str(
-                                ")).unwrap().lines().map(|l| l.to_string()).collect::<Vec<_>>()",
+                                ")).unwrap_or_else(|e| crate::jux_io_fail(e)).lines().map(|l| l.to_string()).collect::<Vec<_>>()",
                             );
                             if handle {
                                 self.w.push_str(")");
@@ -2081,7 +2086,7 @@ impl RustEmitter {
                         "delete" => {
                             self.w.push_str("std::fs::remove_file(&(");
                             self.emit_call_args(call);
-                            self.w.push_str(")).unwrap()");
+                            self.w.push_str(")).unwrap_or_else(|e| crate::jux_io_fail(e))");
                             return;
                         }
                         "listDir" => {
@@ -2093,7 +2098,7 @@ impl RustEmitter {
                             }
                             self.w.push_str("std::fs::read_dir(&(");
                             self.emit_call_args(call);
-                            self.w.push_str(")).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()");
+                            self.w.push_str(")).unwrap_or_else(|e| crate::jux_io_fail(e)).filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()");
                             if handle {
                                 self.w.push_str(")");
                             }
@@ -2889,7 +2894,7 @@ impl RustEmitter {
         // So: ask the scan first, and bridge only the intrinsic it says
         // nothing about.
         if self.pop_needs_intrinsic_unwrap(call) {
-            self.w.push_str(".unwrap()");
+            self.w.push_str(crate::ARRAY_POP_RAISE);
         }
     }
 
@@ -4892,7 +4897,7 @@ impl RustEmitter {
         // method the scan declares carries its own return type (`T?`), so only
         // the intrinsic the scan says nothing about is unwrapped here.
         if self.pop_needs_intrinsic_unwrap(call) {
-            self.w.push_str(".unwrap()");
+            self.w.push_str(crate::ARRAY_POP_RAISE);
         }
         if writes_back {
             self.w.push(';');
@@ -5090,7 +5095,7 @@ impl RustEmitter {
         self.emitting_format_arg = prev;
         self.w.push(')');
         if self.pop_needs_intrinsic_unwrap(call) {
-            self.w.push_str(".unwrap()");
+            self.w.push_str(crate::ARRAY_POP_RAISE);
         }
         if writes_back {
             self.w.push(';');
@@ -6090,7 +6095,7 @@ impl RustEmitter {
                         // Rust's `Option<T>`, so bridge it the same way the
                         // non-mutating path does.
                         if method == "pop" && c.args.is_empty() {
-                            this.w.push_str(".unwrap()");
+                            this.w.push_str(crate::ARRAY_POP_RAISE);
                         }
                         true
                     } else {
@@ -6222,31 +6227,32 @@ impl RustEmitter {
                 self.w.push_str(").map(|__i| __i as isize).unwrap_or(-1))");
                 true
             }
-            // `xs.get(i)` → `xs[i as usize].clone()` — clone so the
-            // value-shape consistent with index-access elsewhere.
+            // `xs.get(i)` → `xs[JuxIx(i)].clone()` — clone so the
+            // value-shape consistent with index-access elsewhere; a position
+            // outside the array throws, as `xs[i]` does (gap 33).
             "get" => {
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str("[(");
+                self.w.push_str("[crate::JuxIx((");
                 self.emit_call_args(call);
-                self.w.push_str(") as usize].clone()");
+                self.w.push_str(") as i128)].clone()");
                 true
             }
             // `xs.set(i, v)` → block expression that mutates in
             // place, returning the old value (consistent with
             // Java's List.set contract).
             "set" => {
-                self.w.push_str("{ let __i = (");
+                self.w.push_str("{ let __i = ((");
                 // Args are (index, value). Emit index first then value.
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 if let Some(idx) = call.args.first() {
                     self.emit_expr(idx);
                 }
-                self.w.push_str(") as usize; let __old = ");
+                self.w.push_str(") as i128); let __old = ");
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str("[__i].clone(); ");
+                self.w.push_str("[crate::JuxIx(__i)].clone(); ");
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str("[__i] = ");
+                self.w.push_str("[crate::JuxIx(__i)] = ");
                 if let Some(val) = call.args.get(1) {
                     self.emit_expr(val);
                 }
@@ -6257,13 +6263,13 @@ impl RustEmitter {
             // `xs.first()` / `xs.last()` — indexed access with clone.
             "first" => {
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str("[0].clone()");
+                self.w.push_str("[crate::JuxIx(0)].clone()");
                 true
             }
             "last" => {
                 self.w.push('(');
                 self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".last().cloned().unwrap())");
+                self.w.push_str(".last().cloned().unwrap_or_else(|| crate::jux_ix_fail(-1, 0)))");
                 true
             }
             // `xs.clear()` / `xs.reverse()` / `xs.sort()` — direct
