@@ -2,33 +2,28 @@
 package leaker.ui;
 
 import rust.eframe.Ui;
-import rust.eframe.Rect;
-import rust.egui.Color32;
+import rust.eframe.Grid;
+import rust.eframe.ScrollArea;
+import rust.eframe.RichText;
+import rust.eframe.Color32;
 import leaker.model.Money;
 import leaker.model.InvoiceStatus;
 
 public class OverviewScreen {
     private Session session;
-    private Table table;
 
     public OverviewScreen(Session session) {
         this.session = session;
-        this.table = new Table()
-            .column("Number", 1.0f, false)
-            .column("Customer", 2.4f, false)
-            .column("Due", 1.0f, false)
-            .column("Status", 0.9f, false)
-            .column("Total", 1.2f, true);
-        this.table.statusColumn = 3;
     }
 
-    /** Returns the number of an invoice the user clicked, or "". */
-    public String show(Ui ui, Rect area) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
-        Gui.heading(top, "Overview");
-        top.add_space(16.0f);
-        Gui.muted(top, $"as of ${session.today.iso()}");
+    /** Draws the overview. Returns the number of an invoice the user clicked, or null. */
+    public String? show(Ui ui) {
+        ui.horizontal((row) -> {
+            row.heading("Overview");
+            row.add_space(12.0f);
+            row.weak($"as of ${session.today}");
+        });
+        ui.add_space(8.0f);
 
         var draft = Money.zero();
         var sent = Money.zero();
@@ -37,12 +32,10 @@ public class OverviewScreen {
         int overdueCount = 0;
         for (var inv : session.store.invoices) {
             var total = inv.totals().total;
-            if (inv.status == InvoiceStatus.Draft) {
-                draft = draft + total;
-            } else if (inv.status == InvoiceStatus.Sent) {
-                sent = sent + total;
-            } else {
-                paid = paid + total;
+            switch (inv.status) {
+                case InvoiceStatus.Draft -> draft = draft + total;
+                case InvoiceStatus.Sent -> sent = sent + total;
+                case InvoiceStatus.Paid -> paid = paid + total;
             }
             if (inv.isOverdue(session.today)) {
                 overdue = overdue + total;
@@ -50,61 +43,58 @@ public class OverviewScreen {
             }
         }
 
-        // Four tiles; two per row when the window is narrow.
-        float y = area.min.y + 48.0f;
-        bool wide = area.width() >= 820.0f;
-        int perRow = wide ? 4 : 2;
-        float tileW = (area.width() - Palette.PAD * (float) (perRow - 1)) / (float) perRow;
-        float tileH = 96.0f;
-        tile(ui, area, 0, perRow, tileW, tileH, y, "Awaiting payment", sent.display(), Palette.accent());
-        tile(ui, area, 1, perRow, tileW, tileH, y, $"Overdue (${overdueCount})", overdue.display(), Palette.danger());
-        tile(ui, area, 2, perRow, tileW, tileH, y, "Drafts", draft.display(), Palette.warning());
-        tile(ui, area, 3, perRow, tileW, tileH, y, "Collected", paid.display(), Palette.success());
-        int tileRows = wide ? 1 : 2;
-        y += (float) tileRows * (tileH + Palette.PAD);
+        // Four tiles in a row, or two rows of two when the window is narrow.
+        int perRow = ui.available_width() >= 820.0f ? 4 : 2;
+        float spacing = ui.spacing().item_spacing.x;
+        float tileWidth = (ui.available_width() - spacing * (float) (perRow - 1)) / (float) perRow - 14.0f;
+        ui.horizontal_wrapped((row) -> {
+            tile(row, tileWidth, "Awaiting payment", sent, Palette.ACCENT);
+            tile(row, tileWidth, $"Overdue (${overdueCount})", overdue, Palette.DANGER);
+            tile(row, tileWidth, "Drafts", draft, Palette.WARNING);
+            tile(row, tileWidth, "Collected", paid, Palette.SUCCESS);
+        });
 
-        var counts = Gui.row(ui, Gui.rect(area.min.x, y, area.width(), 24.0f));
-        Gui.muted(counts, $"${session.store.customers.len()} customers, ${session.store.products.len()} products, ${session.store.invoices.len()} invoices");
-        y += 32.0f;
+        ui.add_space(12.0f);
+        ui.weak($"${session.store.customers.len()} customers, ${session.store.products.len()} products, ${session.store.invoices.len()} invoices");
+        ui.add_space(8.0f);
+        ui.label(new RichText("Open invoices").strong().size(15.0f));
+        ui.add_space(4.0f);
 
-        var head = Gui.row(ui, Gui.rect(area.min.x, y, area.width(), 26.0f));
-        Gui.strong(head, "Open invoices", Palette.ink(), 15.0f);
-        y += 32.0f;
-
-        var open = new Vec<String>();
-        var rows = new Vec<Vec<String>>();
-        for (var inv : session.store.invoices) {
-            if (inv.status != InvoiceStatus.Paid) {
-                var row = new Vec<String>();
-                row.push(inv.number);
-                row.push(inv.customer.name);
-                row.push(inv.dueDate.iso());
-                row.push(inv.isOverdue(session.today) ? "Overdue" : inv.status.label());
-                row.push(inv.totals().total.display());
-                rows.push(row);
-                open.push(inv.number);
-            }
-        }
-        var t = table;
-        int clicked = t.show(ui, Gui.rect(area.min.x, y, area.width(), area.max.y - y), rows, -1);
-        if (clicked >= 0) {
-            return open[clicked];
-        }
-        return "";
+        String? opened = null;
+        ScrollArea.vertical().auto_shrink(false).show(ui, (scroll) -> {
+            new Grid("open-invoices").striped(true).num_columns(5).min_col_width(90.0f).show(scroll, (grid) -> {
+                grid.strong("Number");
+                grid.strong("Customer");
+                grid.strong("Due");
+                grid.strong("Status");
+                grid.strong("Total");
+                grid.end_row();
+                for (var inv : session.store.invoices) {
+                    if (inv.status == InvoiceStatus.Paid) {
+                        continue;
+                    }
+                    if (grid.link(inv.number).on_hover_text("Open this invoice").clicked()) {
+                        opened = inv.number;
+                    }
+                    grid.label(inv.customer.name);
+                    grid.label(inv.dueDate.iso());
+                    String status = inv.isOverdue(session.today) ? "Overdue" : inv.status.label();
+                    grid.colored_label(Palette.status(status), status);
+                    Cells.amount(grid, 100.0f, new RichText(inv.totals().total.display()));
+                    grid.end_row();
+                }
+            });
+        });
+        return opened;
     }
 
-    private void tile(Ui ui, Rect area, int index, int perRow, float w, float h, float y0, String label, String value, Color32 color) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        int col = index % perRow;
-        int row = index / perRow;
-        float x = area.min.x + (float) col * (w + Palette.PAD);
-        float y = y0 + (float) row * (h + Palette.PAD);
-        var r = Gui.rect(x, y, w, h);
-        Gui.card(ui, r);
-        Gui.fill(ui, Gui.rect(x, y, 4.0f, h), color);
-        var inner = Gui.area(ui, Gui.rect(x + 18.0f, y + 16.0f, w - 30.0f, h - 24.0f));
-        Gui.text(inner, label, Palette.muted(), 13.0f);
-        inner.add_space(6.0f);
-        Gui.strong(inner, value, Palette.ink(), 22.0f);
+    private void tile(Ui ui, float width, String label, Money amount, Color32 color) {
+        ui.group((box) -> {
+            box.set_width(width);
+            box.vertical((column) -> {
+                column.label(new RichText(label).color(Palette.MUTED));
+                column.label(new RichText(amount.display()).size(22.0f).strong().color(color));
+            });
+        });
     }
 }

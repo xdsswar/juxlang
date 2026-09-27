@@ -1,15 +1,37 @@
-// Lays an invoice out on A4 and writes it to `invoices/<number>.pdf`.
+// Lays an invoice out on A4 with printpdf and writes it to
+// `invoices/<number>.pdf`.
 package leaker.pdf;
 
 import leaker.model.Company;
 import leaker.model.Invoice;
-import leaker.model.LineItem;
-import leaker.model.Money;
 import leaker.model.Percent;
+import rust.printpdf.PdfDocument;
+import rust.printpdf.PdfPage;
+import rust.printpdf.PdfSaveOptions;
+import rust.printpdf.PdfWarnMsg;
+import rust.printpdf.Color;
 import rust.std.create_dir_all;
+import rust.std.write;
 
 public class InvoicePdf {
-    private static const double MARGIN = 48.0;
+    private static final double MARGIN = 48.0;
+    private static final double LEFT = MARGIN;
+    private static final double RIGHT = PdfCanvas.WIDTH - MARGIN;
+    /** Where the line table stops and the footer begins. */
+    private static final double PAGE_BOTTOM = PdfCanvas.HEIGHT - 96.0;
+
+    // Right edges of the table's number columns.
+    private static final double COL_TOTAL = RIGHT;
+    private static final double COL_TAX = COL_TOTAL - 78.0;
+    private static final double COL_DISC = COL_TAX - 50.0;
+    private static final double COL_PRICE = COL_DISC - 52.0;
+    private static final double COL_QTY = COL_PRICE - 78.0;
+
+    private static final Color INK = PdfCanvas.rgb(30, 41, 59);
+    private static final Color MUTED = PdfCanvas.rgb(100, 116, 139);
+    private static final Color ACCENT = PdfCanvas.rgb(37, 99, 235);
+    private static final Color RULE = PdfCanvas.rgb(203, 213, 225);
+    private static final Color BAND = PdfCanvas.rgb(241, 245, 249);
 
     private Company company;
 
@@ -21,165 +43,151 @@ public class InvoicePdf {
     public String save(Invoice invoice, String directory) {
         create_dir_all(directory);
         String path = $"${directory}/${invoice.number}.pdf";
-        File.writeText(path, render(invoice));
+        write(path, render(invoice));
         return path;
     }
 
-    /** The PDF file's text. */
-    public String render(Invoice invoice) {
-        var doc = new PdfDocument($"Invoice ${invoice.number}");
-        var page = doc.addPage();
-        double left = MARGIN;
-        double right = page.width - MARGIN;
-        var ink = PdfColor.ink();
-        var muted = PdfColor.muted();
-        var accent = PdfColor.accent();
+    /** The PDF file's bytes. */
+    public Vec<ubyte> render(Invoice invoice) {
+        var pages = new Vec<PdfCanvas>();
+        var page = new PdfCanvas();
+        pages.push(page);
 
-        // ---- header band -------------------------------------------------
-        page.fillRect(0.0, 0.0, page.width, 6.0, accent);
-        page.text(left, 64.0, company.name, 18.0, true, ink);
+        // ---- header ------------------------------------------------------
+        page.fillRect(0.0, 0.0, PdfCanvas.WIDTH, 6.0, ACCENT);
+        page.text(LEFT, 64.0, company.name, 18.0, true, INK);
         double y = 80.0;
         for (var part : company.address.split(", ")) {
-            page.text(left, y, part, 9.0, false, muted);
+            page.text(LEFT, y, part, 9.0, false, MUTED);
             y += 12.0;
         }
-        page.text(left, y, company.email, 9.0, false, muted);
-        y += 12.0;
-        page.text(left, y, $"VAT ${company.taxId}", 9.0, false, muted);
+        page.text(LEFT, y, company.email, 9.0, false, MUTED);
+        page.text(LEFT, y + 12.0, $"VAT ${company.taxId}", 9.0, false, MUTED);
 
-        page.textRight(right, 64.0, "INVOICE", 22.0, true, accent);
-        double metaY = 88.0;
-        metaRow(page, right, metaY, "Invoice no.", invoice.number);
-        metaRow(page, right, metaY + 14.0, "Issue date", invoice.issueDate.iso());
-        metaRow(page, right, metaY + 28.0, "Due date", invoice.dueDate.iso());
-        metaRow(page, right, metaY + 42.0, "Status", invoice.status.label());
+        page.textRight(RIGHT, 64.0, "INVOICE", 22.0, true, ACCENT);
+        metaRow(page, 88.0, "Invoice no.", invoice.number);
+        metaRow(page, 102.0, "Issue date", invoice.issueDate.iso());
+        metaRow(page, 116.0, "Due date", invoice.dueDate.iso());
+        metaRow(page, 130.0, "Status", invoice.status.label());
 
         // ---- bill to -----------------------------------------------------
         double billY = 190.0;
-        page.line(left, billY - 16.0, right, billY - 16.0, 0.5, PdfColor.rule());
-        page.text(left, billY, "BILL TO", 8.0, true, muted);
+        page.rule(LEFT, RIGHT, billY - 16.0, 0.5, RULE);
+        page.text(LEFT, billY, "BILL TO", 8.0, true, MUTED);
         var c = invoice.customer;
-        page.text(left, billY + 16.0, c.name, 12.0, true, ink);
+        page.text(LEFT, billY + 16.0, c.name, 12.0, true, INK);
         double by = billY + 30.0;
-        for (var part : c.address.split(", ")) {
-            page.text(left, by, part, 9.5, false, ink);
+        for (var part : c.addressLines()) {
+            page.text(LEFT, by, part, 9.5, false, INK);
             by += 12.5;
         }
-        page.text(left, by, c.email, 9.5, false, muted);
+        page.text(LEFT, by, c.email, 9.5, false, MUTED);
         by += 12.5;
         if (c.taxId.length() > 0) {
-            page.text(left, by, $"Tax ID: ${c.taxId}", 9.5, false, muted);
+            page.text(LEFT, by, $"Tax ID: ${c.taxId}", 9.5, false, MUTED);
             by += 12.5;
         }
 
-        // ---- line table --------------------------------------------------
-        // Column right edges, from the right margin inward.
-        double colTotal = right;
-        double colTax = right - 78.0;
-        double colDisc = colTax - 50.0;
-        double colPrice = colDisc - 52.0;
-        double colQty = colPrice - 78.0;
+        // ---- line table, continued on further pages as needed -----------
         double tableY = by + 26.0;
-
-        tableHeader(page, left, right, tableY);
-
-        // The table flows onto further pages when it has to. A page break
-        // leaves room for the footer, and repeats the column header.
-        double pageBottom = page.height - 96.0;
+        tableHeader(page, tableY);
         double ry = tableY + 22.0;
         for (var line : invoice.lines) {
-            if (ry + 30.0 > pageBottom) {
-                page = doc.addPage();
-                page.fillRect(0.0, 0.0, page.width, 6.0, accent);
-                page.text(left, 40.0, $"Invoice ${invoice.number} (continued)", 10.0, true, muted);
-                tableHeader(page, left, right, 56.0);
+            if (ry + 30.0 > PAGE_BOTTOM) {
+                page = continuation(invoice);
+                pages.push(page);
+                tableHeader(page, 56.0);
                 ry = 78.0;
             }
             double baseline = ry + 16.0;
-            String desc = line.description;
             // Keep a long description inside its column.
-            double maxDesc = colQty - 60.0 - left;
-            while (desc.length() > 3 && page.textWidth(desc, 9.5, false) > maxDesc) {
+            String desc = line.description;
+            while (desc.length() > 3 && page.textWidth(desc, 9.5, false) > COL_QTY - 60.0 - LEFT) {
                 desc = desc.substring(0, desc.length() - 4) + "...";
             }
-            page.text(left + 8.0, baseline, desc, 9.5, false, ink);
-            page.text(left + 8.0, baseline + 11.0, line.product.sku, 7.5, false, muted);
-            page.textRight(colQty - 6.0, baseline, $"${line.quantity}", 9.5, false, ink);
-            page.textRight(colPrice - 6.0, baseline, line.unitPrice.format(), 9.5, false, ink);
-            page.textRight(colDisc - 6.0, baseline, line.discount == 0 ? "-" : Percent.format(line.discount), 9.5, false, ink);
-            page.textRight(colTax - 6.0, baseline, Percent.format(line.taxRate), 9.5, false, ink);
-            page.textRight(colTotal - 8.0, baseline, line.total().format(), 9.5, true, ink);
+            page.text(LEFT + 8.0, baseline, desc, 9.5, false, INK);
+            page.text(LEFT + 8.0, baseline + 11.0, line.product.sku, 7.5, false, MUTED);
+            page.textRight(COL_QTY - 6.0, baseline, $"${line.quantity}", 9.5, false, INK);
+            page.textRight(COL_PRICE - 6.0, baseline, line.unitPrice.format(), 9.5, false, INK);
+            page.textRight(COL_DISC - 6.0, baseline, line.discount == 0 ? "-" : Percent.format(line.discount), 9.5, false, INK);
+            page.textRight(COL_TAX - 6.0, baseline, Percent.format(line.taxRate), 9.5, false, INK);
+            page.textRight(COL_TOTAL - 8.0, baseline, line.total().format(), 9.5, true, INK);
             ry += 30.0;
-            page.line(left, ry, right, ry, 0.4, PdfColor.rule());
+            page.rule(LEFT, RIGHT, ry, 0.4, RULE);
         }
         if (invoice.lines.len() == 0) {
-            page.text(left + 8.0, ry + 18.0, "(no lines)", 9.5, false, muted);
+            page.text(LEFT + 8.0, ry + 18.0, "(no lines)", 9.5, false, MUTED);
             ry += 30.0;
         }
 
-        // ---- totals ------------------------------------------------------
-        // Totals and notes need about 150pt; start a page for them if not.
-        if (ry + 150.0 > pageBottom) {
-            page = doc.addPage();
-            page.fillRect(0.0, 0.0, page.width, 6.0, accent);
-            page.text(left, 40.0, $"Invoice ${invoice.number} (continued)", 10.0, true, muted);
+        // ---- totals and notes (about 150pt; on a new page if they do not fit)
+        if (ry + 150.0 > PAGE_BOTTOM) {
+            page = continuation(invoice);
+            pages.push(page);
             ry = 56.0;
         }
         var t = invoice.totals();
         double ty = ry + 24.0;
-        double labelX = colDisc - 6.0;
-        totalRow(page, labelX, colTotal - 8.0, ty, "Subtotal", t.subtotal.format(), false);
-        totalRow(page, labelX, colTotal - 8.0, ty + 16.0, "Discount", "-" + t.discount.format(), false);
-        totalRow(page, labelX, colTotal - 8.0, ty + 32.0, "Tax", t.tax.format(), false);
-        page.fillRect(labelX - 110.0, ty + 42.0, colTotal - labelX + 110.0, 26.0, PdfColor.band());
-        page.textRight(labelX, ty + 60.0, "Total due", 11.0, true, ink);
-        page.textRight(colTotal - 8.0, ty + 60.0, t.total.display(), 12.0, true, accent);
+        double labelX = COL_DISC - 6.0;
+        totalRow(page, ty, "Subtotal", t.subtotal.format());
+        totalRow(page, ty + 16.0, "Discount", "-" + t.discount.format());
+        totalRow(page, ty + 32.0, "Tax", t.tax.format());
+        page.fillRect(labelX - 110.0, ty + 42.0, COL_TOTAL - labelX + 110.0, 26.0, BAND);
+        page.textRight(labelX, ty + 60.0, "Total due", 11.0, true, INK);
+        page.textRight(COL_TOTAL - 8.0, ty + 60.0, t.total.display(), 12.0, true, ACCENT);
 
-        // ---- notes -------------------------------------------------------
-        double ny = ty + 100.0;
         if (invoice.notes.length() > 0) {
-            page.text(left, ny, "NOTES", 8.0, true, muted);
-            page.paragraph(left, ny + 14.0, right - left, invoice.notes, 9.5, 13.0, ink);
+            double ny = ty + 100.0;
+            page.text(LEFT, ny, "NOTES", 8.0, true, MUTED);
+            page.paragraph(LEFT, ny + 14.0, RIGHT - LEFT, invoice.notes, 9.5, 13.0, INK);
         }
 
-        // ---- footer on every page, now that the page count is known ------
-        int pageCount = doc.pages.len();
+        // ---- a footer on every page, now that the page count is known ----
         int number = 1;
-        for (var pg : doc.pages) {
-            double footY = pg.height - 56.0;
-            pg.line(left, footY - 14.0, right, footY - 14.0, 0.5, PdfColor.rule());
-            pg.text(left, footY, $"Please pay ${t.total.display()} by ${invoice.dueDate.iso()} quoting ${invoice.number}.", 8.5, false, muted);
-            pg.text(left, footY + 12.0, company.bank, 8.5, false, muted);
-            pg.textRight(right, footY + 12.0, $"Page ${number} of ${pageCount}", 8.5, false, muted);
+        for (var p : pages) {
+            double footY = PdfCanvas.HEIGHT - 56.0;
+            p.rule(LEFT, RIGHT, footY - 14.0, 0.5, RULE);
+            p.text(LEFT, footY, $"Please pay ${t.total} by ${invoice.dueDate} quoting ${invoice.number}.", 8.5, false, MUTED);
+            p.text(LEFT, footY + 12.0, company.bank, 8.5, false, MUTED);
+            p.textRight(RIGHT, footY + 12.0, $"Page ${number} of ${pages.len()}", 8.5, false, MUTED);
             number++;
         }
 
-        return doc.render();
+        var doc = new PdfDocument($"Invoice ${invoice.number}");
+        var pdfPages = new Vec<PdfPage>();
+        for (var p : pages) {
+            pdfPages.push(p.toPage());
+        }
+        doc.with_pages(pdfPages);
+        var warnings = new Vec<PdfWarnMsg>();
+        return doc.save(new PdfSaveOptions(), warnings);
     }
 
-    private void tableHeader(PdfPage page, double left, double right, double y) {
-        var muted = PdfColor.muted();
-        double colTax = right - 78.0;
-        double colDisc = colTax - 50.0;
-        double colPrice = colDisc - 52.0;
-        double colQty = colPrice - 78.0;
-        page.fillRect(left, y, right - left, 22.0, PdfColor.band());
+    private PdfCanvas continuation(Invoice invoice) {
+        var page = new PdfCanvas();
+        page.fillRect(0.0, 0.0, PdfCanvas.WIDTH, 6.0, ACCENT);
+        page.text(LEFT, 40.0, $"Invoice ${invoice.number} (continued)", 10.0, true, MUTED);
+        return page;
+    }
+
+    private void tableHeader(PdfCanvas page, double y) {
+        page.fillRect(LEFT, y, RIGHT - LEFT, 22.0, BAND);
         double hy = y + 14.5;
-        page.text(left + 8.0, hy, "Description", 8.5, true, muted);
-        page.textRight(colQty - 6.0, hy, "Qty", 8.5, true, muted);
-        page.textRight(colPrice - 6.0, hy, "Unit price", 8.5, true, muted);
-        page.textRight(colDisc - 6.0, hy, "Disc.", 8.5, true, muted);
-        page.textRight(colTax - 6.0, hy, "Tax", 8.5, true, muted);
-        page.textRight(right - 8.0, hy, "Line total", 8.5, true, muted);
+        page.text(LEFT + 8.0, hy, "Description", 8.5, true, MUTED);
+        page.textRight(COL_QTY - 6.0, hy, "Qty", 8.5, true, MUTED);
+        page.textRight(COL_PRICE - 6.0, hy, "Unit price", 8.5, true, MUTED);
+        page.textRight(COL_DISC - 6.0, hy, "Disc.", 8.5, true, MUTED);
+        page.textRight(COL_TAX - 6.0, hy, "Tax", 8.5, true, MUTED);
+        page.textRight(COL_TOTAL - 8.0, hy, "Line total", 8.5, true, MUTED);
     }
 
-    private void metaRow(PdfPage page, double right, double y, String label, String value) {
-        page.textRight(right - 110.0, y, label, 9.0, false, PdfColor.muted());
-        page.textRight(right, y, value, 9.0, true, PdfColor.ink());
+    private void metaRow(PdfCanvas page, double y, String label, String value) {
+        page.textRight(RIGHT - 110.0, y, label, 9.0, false, MUTED);
+        page.textRight(RIGHT, y, value, 9.0, true, INK);
     }
 
-    private void totalRow(PdfPage page, double labelRight, double valueRight, double y, String label, String value, bool bold) {
-        page.textRight(labelRight, y, label, 9.5, bold, PdfColor.muted());
-        page.textRight(valueRight, y, value, 9.5, bold, PdfColor.ink());
+    private void totalRow(PdfCanvas page, double y, String label, String value) {
+        page.textRight(COL_DISC - 6.0, y, label, 9.5, false, MUTED);
+        page.textRight(COL_TOTAL - 8.0, y, value, 9.5, false, INK);
     }
 }

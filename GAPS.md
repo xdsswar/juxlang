@@ -260,6 +260,46 @@ diagnostic.
 
 **32. CLOSED 2026-09-26 (gap 32 stream, ERRATA E122-e).** ~~Language and diagnostics found along the way (L22-L28).~~ Parse-error recovery inside a class (L22, fixed), `usize` counts (L23, kept a `uint` by the spec; the E0410 help names the length), a record's unqualified static call (L24, fixed, enums too), a user class shadowed by a foreign type in codegen (L25, fixed), a parameter named `r` lowered as a collection (L26, root cause: constructor locals leaked into the backend's base type scope; fixed and minimized), a terse E0900 without `--verbose` (L27, fixed), Rust naming showing through (L28: stubs no longer need nightly, hover pinned clean; verbatim names stay per §G.4).
 
+**34. OPEN (found 2026-09-27 by the idiomatic rewrite, LEAKS L29, L39).**
+
+- **L29: egui's `Frame` cannot be named from `rust.eframe`.** `eframe::Frame`
+  and `egui::Frame` share a name within one crate family, and the host's item
+  wins (`FamilyPaths::rank`). So `egui::Frame` is dropped, and
+  `Panel.frame(..)`, `CentralPanel.frame(..)`, `TextEdit.frame(..)` and
+  `Ui.dnd_drop_zone(..)` name eframe's type. A panel cannot get its own fill
+  or margins. The fix needs a second Jux name for the losing type (a nested
+  package or a renamed type).
+- **L39: deprecated crate methods are not marked.** A stub does not mark them
+  (`Panel.show_inside`, renamed `show` in egui 0.36), and only rustc warns,
+  under `--verbose`.
+
+**35. CLOSED 2026-09-27 (branch `leaker-idiomatic`, LEAKS L30-L38).** ~~The shapes the idiomatic rewrite hit.~~
+
+- **L30:** a lambda argument bound to a `let` by argument hoisting lost its
+  parameter type (E0282).
+- **L31:** a `static final` of a non-class type computed by a call became a
+  Rust `const` (E0015).
+- **L32:** field initializers were never type-checked, so `!!` in one emitted
+  nothing.
+- **L33:** a field lent to a crate's static function or constructor
+  (`TextEdit.singleline(name)`, `new DragValue(line.qty)`) was a copy or a
+  shared borrow, the representation selector did not count it as a write, and
+  hoisting ended the widget's borrow early.
+- **L34:** a lent `Ui` was moved into an argument temporary.
+- **L35:** a crate closure's `&str` argument stayed `&str`, and `c ? null : x`
+  did not wrap `x` without an announced nullable target.
+- **L36:** a trailing `return` lending a collection kept its guard past the
+  local (E0597).
+- **L37:** the borrow self-check took a crate method named like a Jux method
+  for the Jux one.
+- **L38:** `local.method(ui)` passed `ui` by value because the one-name
+  receiver was read as a class name. A crate function's closure type (such as
+  `run_ui_native`'s `(Ui, Frame)`) was also read only in the caller's imports,
+  so it left the lambda's parameters untyped.
+
+Tests: `bin/juxc/tests/leaker_idioms.rs` and
+`examples/field_initializer_calls.jux`.
+
 ---
 
 ## 4. Three streams stopped mid-flight

@@ -2,16 +2,23 @@
 package leaker.ui;
 
 import rust.eframe.Ui;
-import rust.eframe.Rect;
+import rust.eframe.Panel;
+import rust.eframe.Id;
+import rust.eframe.Grid;
+import rust.eframe.ScrollArea;
+import rust.eframe.RichText;
+import rust.eframe.TextEdit;
+import rust.eframe.Button;
+import rust.eframe.Color32;
+import rust.eframe.Vec2;
 import leaker.model.Money;
 import leaker.model.Percent;
+import leaker.model.Product;
 
 public class ProductsScreen {
     private Session session;
-    private Table table;
-    private int selected = -1;
+    private int selectedId = 0;
 
-    private int editingId = 0;
     private String sku = "";
     private String name = "";
     private String price = "";
@@ -23,107 +30,110 @@ public class ProductsScreen {
 
     public ProductsScreen(Session session) {
         this.session = session;
-        this.table = new Table()
-            .column("SKU", 1.4f, false)
-            .column("Name", 2.6f, false)
-            .column("Unit price", 1.2f, true)
-            .column("Tax", 0.8f, true);
     }
 
-    public void show(Ui ui, Rect area) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var products = session.store.products;
+    public void show(Ui ui) {
+        ui.horizontal((row) -> {
+            row.heading("Products");
+            row.add_space(12.0f);
+            row.weak($"${session.store.products.len()} in the catalogue");
+            row.add_space(12.0f);
+            if (row.button("+ New product").clicked()) {
+                startNew();
+            }
+        });
+        ui.add_space(6.0f);
 
-        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
-        Gui.heading(top, "Products");
-        top.add_space(16.0f);
-        Gui.muted(top, $"${products.len()} in the catalogue");
-        top.add_space(16.0f);
-        if (Gui.primaryButton(top, "+ New product")) {
-            startNew();
-        }
+        var form = ui.available_width() >= 900.0f
+            ? Panel.right(new Id("product-form")).resizable(true).default_size(380.0f).min_size(340.0f)
+            : Panel.bottom(new Id("product-form-below")).resizable(true).default_size(320.0f);
+        form.show(ui, (panel) -> showForm(panel));
 
-        float bodyY = area.min.y + 46.0f;
-        float bodyH = area.max.y - bodyY;
-        bool wide = area.width() >= 900.0f;
-        float formW = wide ? 380.0f : area.width();
-        float formH = 320.0f;
-        var listRect = wide
-            ? Gui.rect(area.min.x, bodyY, area.width() - formW - Palette.PAD, bodyH)
-            : Gui.rect(area.min.x, bodyY, area.width(), bodyH - formH - Palette.PAD);
-        var formRect = wide
-            ? Gui.rect(area.max.x - formW, bodyY, formW, formH)
-            : Gui.rect(area.min.x, area.max.y - formH, area.width(), formH);
-
-        var rows = new Vec<Vec<String>>();
-        for (var p : products) {
-            var row = new Vec<String>();
-            row.push(p.sku);
-            row.push(p.name);
-            row.push(p.unitPrice.format());
-            row.push(Percent.format(p.taxRate));
-            rows.push(row);
-        }
-        var t = table;
-        int sel = selected;
-        int clicked = t.show(ui, listRect, rows, sel);
-        if (clicked >= 0) {
-            select(clicked);
-        }
-
-        showForm(ui, formRect);
+        ScrollArea.vertical().auto_shrink(false).show(ui, (scroll) -> {
+            new Grid("products").striped(true).num_columns(4).min_col_width(70.0f).show(scroll, (grid) -> {
+                grid.strong("SKU");
+                grid.strong("Name");
+                grid.strong("Unit price");
+                grid.strong("Tax");
+                grid.end_row();
+                for (var p : session.store.products) {
+                    if (grid.selectable_label(p.id == selectedId, p.sku).clicked()) {
+                        select(p);
+                    }
+                    grid.label(p.name);
+                    Cells.amount(grid, 80.0f, new RichText(p.unitPrice.format()));
+                    Cells.amount(grid, 50.0f, new RichText(Percent.format(p.taxRate)));
+                    grid.end_row();
+                }
+            });
+        });
     }
 
-    private void showForm(Ui ui, Rect bounds) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        Gui.card(ui, bounds);
-        var inner = bounds.shrink(Palette.PAD);
-        var title = Gui.row(ui, Gui.rect(inner.min.x, inner.min.y, inner.width(), 24.0f));
-        Gui.strong(title, editingId == 0 ? "New product" : $"Edit product #${editingId}", Palette.ink(), 15.0f);
-
-        var form = new Form(Gui.rect(inner.min.x, inner.min.y + 36.0f, inner.width(), inner.height() - 36.0f), 90.0f);
-        String s = sku;
-        String se = skuError;
-        String n = name;
-        String ne = nameError;
-        String p = price;
-        String pe = priceError;
-        String tr = taxRate;
-        String te = taxError;
-        sku = form.checkedField(ui, "SKU", s, se);
-        name = form.checkedField(ui, "Name", n, ne);
-        price = form.checkedField(ui, "Unit price", p, pe);
-        taxRate = form.checkedField(ui, "Tax rate", tr, te);
+    private void showForm(Ui ui) {
+        ui.add_space(8.0f);
+        ui.label(new RichText(selectedId == 0 ? "New product" : $"Edit product #${selectedId}").strong().size(15.0f));
+        ui.add_space(8.0f);
+        new Grid("product-fields").num_columns(2).spacing(new Vec2(12.0f, 8.0f)).show(ui, (grid) -> {
+            grid.label("SKU");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(sku).desired_width(220.0f));
+                showError(cell, skuError);
+            });
+            grid.end_row();
+            grid.label("Name");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(name).desired_width(220.0f));
+                showError(cell, nameError);
+            });
+            grid.end_row();
+            grid.label("Unit price");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(price).desired_width(220.0f));
+                showError(cell, priceError);
+            });
+            grid.end_row();
+            grid.label("Tax rate");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(taxRate).desired_width(220.0f));
+                showError(cell, taxError);
+            });
+            grid.end_row();
+        });
 
         // A live preview of what one unit costs with tax, as the user types.
-        var parsedPrice = Money.parse(price);
-        var parsedRate = Percent.parse(taxRate);
-        if (parsedPrice != null && parsedRate != null) {
-            var net = parsedPrice!!;
-            var gross = net + net.percent(parsedRate!!);
-            var preview = Gui.row(ui, Gui.rect(inner.min.x + 90.0f, form.cursorY() - 4.0f, inner.width() - 90.0f, 18.0f));
-            Gui.muted(preview, $"One unit with tax: ${gross.display()}");
+        var net = Money.parse(price);
+        var rate = Percent.parse(taxRate);
+        if (net != null && rate != null) {
+            var gross = net!! + net!!.percent(rate!!);
+            ui.weak($"One unit with tax: ${gross}");
         }
-        form.skip(18.0f);
 
-        var buttons = form.buttons(ui);
-        if (Gui.primaryButton(buttons, editingId == 0 ? "Add product" : "Save changes")) {
-            save();
-        }
-        if (Gui.button(buttons, "Clear")) {
-            startNew();
-        }
-        if (editingId != 0) {
-            buttons.add_space(24.0f);
-            if (Gui.dangerButton(buttons, "Delete")) {
-                delete();
+        ui.add_space(12.0f);
+        ui.horizontal((row) -> {
+            if (row.add(new Button(new RichText(selectedId == 0 ? "Add product" : "Save changes").color(Color32.WHITE)).fill(Palette.ACCENT)).clicked()) {
+                save();
             }
+            if (row.button("Clear").clicked()) {
+                startNew();
+            }
+            if (selectedId != 0) {
+                row.add_space(24.0f);
+                if (row.add(new Button(new RichText("Delete").color(Color32.WHITE)).fill(Palette.DANGER)).clicked()) {
+                    delete();
+                }
+            }
+        });
+    }
+
+    /** A field's validation message, under the field. */
+    private void showError(Ui ui, String error) {
+        if (error.length() > 0) {
+            ui.colored_label(Palette.DANGER, error);
         }
     }
 
     private void startNew() {
-        selected = -1;
-        editingId = 0;
+        selectedId = 0;
         sku = "";
         name = "";
         price = "";
@@ -138,10 +148,8 @@ public class ProductsScreen {
         taxError = "";
     }
 
-    private void select(int index) {
-        var p = session.store.products[index];
-        selected = index;
-        editingId = p.id;
+    private void select(Product p) {
+        selectedId = p.id;
         sku = p.sku;
         name = p.name;
         price = p.unitPrice.format();
@@ -156,7 +164,7 @@ public class ProductsScreen {
             skuError = "A SKU is required.";
         }
         for (var other : session.store.products) {
-            if (other.sku == cleanSku && other.id != editingId) {
+            if (other.sku == cleanSku && other.id != selectedId) {
                 skuError = $"${cleanSku} is already used by ${other.name}.";
             }
         }
@@ -176,13 +184,13 @@ public class ProductsScreen {
             return;
         }
 
-        if (editingId == 0) {
+        if (selectedId == 0) {
             var p = session.store.addProduct(cleanSku, name.trim(), parsedPrice!!, parsedRate!!);
-            select(session.store.products.len() - 1);
+            select(p);
             session.info($"Added ${p.sku} ${p.name}.");
             return;
         }
-        var existing = session.store.findProduct(editingId);
+        var existing = session.store.findProduct(selectedId);
         if (existing == null) {
             session.error("That product no longer exists.");
             startNew();
@@ -198,13 +206,13 @@ public class ProductsScreen {
     }
 
     private void delete() {
-        var existing = session.store.findProduct(editingId);
+        var existing = session.store.findProduct(selectedId);
         if (existing == null) {
             startNew();
             return;
         }
         String what = existing!!.sku;
-        session.store.deleteProduct(editingId);
+        session.store.deleteProduct(selectedId);
         session.info($"Deleted ${what}. Invoices that used it are unchanged.");
         startNew();
     }

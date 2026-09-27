@@ -2,36 +2,24 @@
 package leaker.ui;
 
 import rust.eframe.Ui;
-import rust.eframe.Rect;
-import leaker.model.Invoice;
-import leaker.model.InvoiceStatus;
-import leaker.model.Date;
-import leaker.model.Percent;
-import leaker.pdf.InvoicePdf;
+import rust.eframe.Grid;
+import rust.eframe.ScrollArea;
+import rust.eframe.Button;
+import rust.eframe.RichText;
+import rust.eframe.Color32;
 
 public class InvoicesScreen {
     private Session session;
-    private Table table;
-    private int selected = -1;
-    /** 0 all, 1 draft, 2 sent, 3 paid, 4 overdue. */
-    private int filter = 0;
+    private InvoiceFilter filter = InvoiceFilter.All;
     private InvoiceEditor editor;
     private bool editing = false;
 
     public InvoicesScreen(Session session) {
         this.session = session;
         this.editor = new InvoiceEditor(session);
-        this.table = new Table()
-            .column("Number", 1.1f, false)
-            .column("Customer", 2.4f, false)
-            .column("Issued", 1.1f, false)
-            .column("Due", 1.1f, false)
-            .column("Status", 0.9f, false)
-            .column("Total", 1.3f, true);
-        this.table.statusColumn = 4;
     }
 
-    /** Opens the editor on an invoice, by number. Used by --screen editor too. */
+    /** Opens the editor on an invoice, by number. */
     public void open(String number) {
         var inv = session.store.findInvoice(number);
         if (inv != null) {
@@ -40,86 +28,60 @@ public class InvoicesScreen {
         }
     }
 
-    public void show(Ui ui, Rect area) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
+    public void closeEditor() {
+        editing = false;
+    }
+
+    public void show(Ui ui) {
         if (editing) {
-            var ed = editor;
-            if (!ed.show(ui, area)) {
-                editing = false;
-                selected = -1;
-            }
-            return;
-        }
-        showList(ui, area);
-    }
-
-    private void showList(Ui ui, Rect area) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
-        Gui.heading(top, "Invoices");
-        top.add_space(16.0f);
-        if (Gui.primaryButton(top, "+ New invoice")) {
-            createInvoice();
+            editing = editor.show(ui);
             return;
         }
 
-        // Status filter, as a row of toggle buttons.
-        var bar = Gui.row(ui, Gui.rect(area.min.x, area.min.y + 42.0f, area.width(), 30.0f));
-        var names = new Vec<String>();
-        names.push("All");
-        names.push("Draft");
-        names.push("Sent");
-        names.push("Paid");
-        names.push("Overdue");
-        int i = 0;
-        for (var n : names) {
-            String caption = i == filter ? $"[ ${n} ]" : $"${n}";
-            if (Gui.button(bar, caption)) {
-                filter = i;
-                selected = -1;
+        ui.horizontal((row) -> {
+            row.heading("Invoices");
+            row.add_space(12.0f);
+            if (row.add(new Button(new RichText("+ New invoice").color(Color32.WHITE)).fill(Palette.ACCENT)).clicked()) {
+                createInvoice();
             }
-            i++;
-        }
-        bar.add_space(20.0f);
-        Gui.muted(bar, "Click a row to open it.");
-
-        var shown = new Vec<Invoice>();
-        for (var inv : session.store.invoices) {
-            if (matches(inv)) {
-                shown.push(inv);
+        });
+        ui.add_space(6.0f);
+        ui.horizontal((row) -> {
+            for (var f : InvoiceFilter.values()) {
+                row.selectable_value(filter, f, f.label());
             }
-        }
-        var rows = new Vec<Vec<String>>();
-        for (var inv : shown) {
-            var row = new Vec<String>();
-            row.push(inv.number);
-            row.push(inv.customer.name);
-            row.push(inv.issueDate.iso());
-            row.push(inv.dueDate.iso());
-            row.push(inv.isOverdue(session.today) ? "Overdue" : inv.status.label());
-            row.push(inv.totals().total.display());
-            rows.push(row);
-        }
+            row.add_space(16.0f);
+            row.weak("Click a number to open the invoice.");
+        });
+        ui.add_space(6.0f);
 
-        float listY = area.min.y + 82.0f;
-        var t = table;
-        int sel = selected;
-        int clicked = t.show(ui, Gui.rect(area.min.x, listY, area.width(), area.max.y - listY), rows, sel);
-        if (clicked >= 0) {
-            selected = clicked;
-            editor.load(shown[clicked]);
-            editing = true;
-        }
-    }
-
-    private bool matches(Invoice inv) {
-        return switch (filter) {
-            case 1 -> inv.status == InvoiceStatus.Draft;
-            case 2 -> inv.status == InvoiceStatus.Sent;
-            case 3 -> inv.status == InvoiceStatus.Paid;
-            case 4 -> inv.isOverdue(session.today);
-            default -> true;
-        };
+        ScrollArea.vertical().auto_shrink(false).show(ui, (scroll) -> {
+            new Grid("invoices").striped(true).num_columns(6).min_col_width(80.0f).show(scroll, (grid) -> {
+                grid.strong("Number");
+                grid.strong("Customer");
+                grid.strong("Issued");
+                grid.strong("Due");
+                grid.strong("Status");
+                grid.strong("Total");
+                grid.end_row();
+                for (var inv : session.store.invoices) {
+                    if (!filter.matches(inv, session.today)) {
+                        continue;
+                    }
+                    if (grid.link(inv.number).clicked()) {
+                        editor.load(inv);
+                        editing = true;
+                    }
+                    grid.label(inv.customer.name);
+                    grid.label(inv.issueDate.iso());
+                    grid.label(inv.dueDate.iso());
+                    String status = inv.isOverdue(session.today) ? "Overdue" : inv.status.label();
+                    grid.colored_label(Palette.status(status), status);
+                    Cells.amount(grid, 100.0f, new RichText(inv.totals().total.display()));
+                    grid.end_row();
+                }
+            });
+        });
     }
 
     private void createInvoice() {

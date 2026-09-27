@@ -1,17 +1,24 @@
-// Customers: a list on one side, the selected customer's form on the other.
+// Customers: the list, and a form beside it (or below it in a narrow window)
+// to add, edit and delete them.
 package leaker.ui;
 
 import rust.eframe.Ui;
-import rust.eframe.Rect;
+import rust.eframe.Panel;
+import rust.eframe.Id;
+import rust.eframe.Grid;
+import rust.eframe.ScrollArea;
+import rust.eframe.RichText;
+import rust.eframe.TextEdit;
+import rust.eframe.Button;
+import rust.eframe.Color32;
+import rust.eframe.Vec2;
 import leaker.model.Customer;
 
 public class CustomersScreen {
     private Session session;
-    private Table table;
-    private int selected = -1;
+    private int selectedId = 0;
 
-    // The form edits these buffers, not the customer, so Cancel means cancel.
-    private int editingId = 0;
+    // The form edits these, not the customer, so Clear means clear.
     private String name = "";
     private String email = "";
     private String address = "";
@@ -21,104 +28,101 @@ public class CustomersScreen {
 
     public CustomersScreen(Session session) {
         this.session = session;
-        this.table = new Table()
-            .column("#", 0.5f, true)
-            .column("Name", 2.4f, false)
-            .column("Email", 2.4f, false)
-            .column("Tax ID", 1.7f, false);
     }
 
-    public void show(Ui ui, Rect area) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        var customers = session.store.customers;
-
-        // Title bar with the actions that do not need a selection.
-        var top = Gui.row(ui, Gui.rect(area.min.x, area.min.y, area.width(), 34.0f));
-        Gui.heading(top, "Customers");
-        top.add_space(16.0f);
-        Gui.muted(top, $"${customers.len()} on file");
-        top.add_space(16.0f);
-        if (Gui.primaryButton(top, "+ New customer")) {
-            startNew();
-        }
+    public void show(Ui ui) {
+        ui.horizontal((row) -> {
+            row.heading("Customers");
+            row.add_space(12.0f);
+            row.weak($"${session.store.customers.len()} on file");
+            row.add_space(12.0f);
+            if (row.button("+ New customer").clicked()) {
+                startNew();
+            }
+        });
+        ui.add_space(6.0f);
 
         // Wide windows put the form beside the list, narrow ones below it.
-        float bodyY = area.min.y + 46.0f;
-        float bodyH = area.max.y - bodyY;
-        bool wide = area.width() >= 900.0f;
-        float formW = wide ? 380.0f : area.width();
-        float formH = 330.0f;
-        var listRect = wide
-            ? Gui.rect(area.min.x, bodyY, area.width() - formW - Palette.PAD, bodyH)
-            : Gui.rect(area.min.x, bodyY, area.width(), bodyH - formH - Palette.PAD);
-        var formRect = wide
-            ? Gui.rect(area.max.x - formW, bodyY, formW, formH)
-            : Gui.rect(area.min.x, area.max.y - formH, area.width(), formH);
+        var form = ui.available_width() >= 900.0f
+            ? Panel.right(new Id("customer-form")).resizable(true).default_size(380.0f).min_size(340.0f)
+            : Panel.bottom(new Id("customer-form-below")).resizable(true).default_size(330.0f);
+        form.show(ui, (panel) -> showForm(panel));
 
-        var rows = new Vec<Vec<String>>();
-        for (var c : customers) {
-            var r = new Vec<String>();
-            r.push($"${c.id}");
-            r.push(c.name);
-            r.push(c.email);
-            r.push(c.taxId);
-            rows.push(r);
-        }
-        // Calling through the field would hoist `ui` into a temporary and
-        // move it (L14); a local receiver does not.
-        var t = table;
-        int sel = selected;
-        int clicked = t.show(ui, listRect, rows, sel);
-        if (clicked >= 0) {
-            select(clicked);
-        }
-
-        showForm(ui, formRect);
+        ScrollArea.vertical().auto_shrink(false).show(ui, (scroll) -> {
+            new Grid("customers").striped(true).num_columns(4).min_col_width(60.0f).show(scroll, (grid) -> {
+                grid.strong("#");
+                grid.strong("Name");
+                grid.strong("Email");
+                grid.strong("Tax ID");
+                grid.end_row();
+                for (var c : session.store.customers) {
+                    grid.label($"${c.id}");
+                    if (grid.selectable_label(c.id == selectedId, c.name).clicked()) {
+                        select(c);
+                    }
+                    grid.label(c.email);
+                    grid.label(c.taxId);
+                    grid.end_row();
+                }
+            });
+        });
     }
 
-    private void showForm(Ui ui, Rect bounds) {
-        ui.skip_ahead_auto_ids((uint) 0);  // see Gui: makes `ui` a borrow (L9)
-        Gui.card(ui, bounds);
-        var inner = bounds.shrink(Palette.PAD);
-        var title = Gui.row(ui, Gui.rect(inner.min.x, inner.min.y, inner.width(), 24.0f));
-        Gui.strong(title, editingId == 0 ? "New customer" : $"Edit customer #${editingId}", Palette.ink(), 15.0f);
+    private void showForm(Ui ui) {
+        ui.add_space(8.0f);
+        ui.label(new RichText(selectedId == 0 ? "New customer" : $"Edit customer #${selectedId}").strong().size(15.0f));
+        ui.add_space(8.0f);
+        new Grid("customer-fields").num_columns(2).spacing(new Vec2(12.0f, 8.0f)).show(ui, (grid) -> {
+            grid.label("Name");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(name).desired_width(240.0f));
+                if (nameError.length() > 0) {
+                    cell.colored_label(Palette.DANGER, nameError);
+                }
+            });
+            grid.end_row();
 
-        var form = new Form(Gui.rect(inner.min.x, inner.min.y + 36.0f, inner.width(), inner.height() - 36.0f), 80.0f);
-        // Fields are copied to locals before the calls: an argument list that
-        // reads a field makes the compiler hoist every argument into a
-        // temporary, and the hoist MOVES `ui` instead of reborrowing it (L14).
-        String n = name;
-        String ne = nameError;
-        String e = email;
-        String ee = emailError;
-        String a = address;
-        String t = taxId;
-        name = form.checkedField(ui, "Name", n, ne);
-        email = form.checkedField(ui, "Email", e, ee);
-        address = form.field(ui, "Address", a);
-        taxId = form.field(ui, "Tax ID", t);
-        var hint = Gui.row(ui, Gui.rect(inner.min.x + 80.0f, form.cursorY() - 6.0f, inner.width() - 80.0f, 16.0f));
-        Gui.muted(hint, "Separate address lines with a comma.");
-        form.skip(12.0f);
+            grid.label("Email");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(email).desired_width(240.0f));
+                if (emailError.length() > 0) {
+                    cell.colored_label(Palette.DANGER, emailError);
+                }
+            });
+            grid.end_row();
 
-        var buttons = form.buttons(ui);
-        if (Gui.primaryButton(buttons, editingId == 0 ? "Add customer" : "Save changes")) {
-            save();
-        }
-        if (Gui.button(buttons, "Clear")) {
-            startNew();
-        }
-        if (editingId != 0) {
-            buttons.add_space(24.0f);
-            if (Gui.dangerButton(buttons, "Delete")) {
-                delete();
+            grid.label("Address");
+            grid.vertical((cell) -> {
+                cell.add(TextEdit.singleline(address).desired_width(240.0f));
+                cell.weak("Separate address lines with a comma.");
+            });
+            grid.end_row();
+
+            grid.label("Tax ID");
+            grid.add(TextEdit.singleline(taxId).desired_width(240.0f));
+            grid.end_row();
+        });
+
+        ui.add_space(12.0f);
+        ui.horizontal((row) -> {
+            var save = new Button(new RichText(selectedId == 0 ? "Add customer" : "Save changes").color(Color32.WHITE)).fill(Palette.ACCENT);
+            if (row.add(save).clicked()) {
+                save();
             }
-        }
+            if (row.button("Clear").clicked()) {
+                startNew();
+            }
+            if (selectedId != 0) {
+                row.add_space(24.0f);
+                if (row.add(new Button(new RichText("Delete").color(Color32.WHITE)).fill(Palette.DANGER)).clicked()) {
+                    delete();
+                }
+            }
+        });
     }
 
     private void startNew() {
-        selected = -1;
-        editingId = 0;
+        selectedId = 0;
         name = "";
         email = "";
         address = "";
@@ -127,10 +131,8 @@ public class CustomersScreen {
         emailError = "";
     }
 
-    private void select(int index) {
-        var c = session.store.customers[index];
-        selected = index;
-        editingId = c.id;
+    private void select(Customer c) {
+        selectedId = c.id;
         name = c.name;
         email = c.email;
         address = c.address;
@@ -151,13 +153,13 @@ public class CustomersScreen {
             session.error("Please fix the highlighted fields.");
             return;
         }
-        if (editingId == 0) {
+        if (selectedId == 0) {
             var c = session.store.addCustomer(name.trim(), email.trim(), address.trim(), taxId.trim());
-            select(session.store.customers.len() - 1);
+            select(c);
             session.info($"Added customer ${c.name}.");
             return;
         }
-        var existing = session.store.findCustomer(editingId);
+        var existing = session.store.findCustomer(selectedId);
         if (existing == null) {
             session.error("That customer no longer exists.");
             startNew();
@@ -172,13 +174,13 @@ public class CustomersScreen {
     }
 
     private void delete() {
-        var existing = session.store.findCustomer(editingId);
+        var existing = session.store.findCustomer(selectedId);
         if (existing == null) {
             startNew();
             return;
         }
         String who = existing!!.name;
-        if (session.store.deleteCustomer(editingId)) {
+        if (session.store.deleteCustomer(selectedId)) {
             session.info($"Deleted customer ${who}.");
             startNew();
         } else {
