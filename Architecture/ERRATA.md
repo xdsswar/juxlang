@@ -4140,6 +4140,82 @@ E119 self-check; `examples/lent_foreign_closure.jux` runs one through
 
 ---
 
+## E128. A crate's API as the crate's users reach it
+
+**Conflict.** LEAKS L2-L7, L11, L13 and L16-L21: bindgen's type map (§G.3.1)
+folded away facts a call needs. `impl Into<WidgetText>` was surfaced as
+`WidgetText`, so a Jux `String` was refused where Rust takes it; `impl Widget`
+was lowered as a `Box<dyn crate::rust::eframe::Widget>` naming a module that
+does not exist; `Arc<RichText>` and `&Arc<Style>` were erased with nothing to
+put them back; associated constants, tuple structs, named-field variants and
+`HashMap`/`BTreeMap` parameters had no Jux spelling at all; a crate re-exported
+by the bound one (`eframe` -> `egui` -> `ecolor`) was either missing or
+declared twice under two Jux names; a keyword-named field (`operator`) took
+the rest of a stub down and was reported as a duplicate `main` in the user's
+file; a removed dependency's stub stayed loaded.
+
+**Resolution.**
+
+- **Generic slots (§G.3.6).** A parameter written `impl Trait` or `&dyn Trait`
+  is marked `@RustImpl`. It accepts any value that converts into its declared
+  class (the class's own `From` impls, `@RustFrom("String,RichText")`, and a
+  blanket `From<T: Into<Y>>` as `@RustFromInto("Y")`) or meets its declared
+  trait (an `implements` clause, a type the trait's impls name,
+  `@RustImplementedBy("String")`, or a blanket bound,
+  `@RustBlanket("Into<Atom>")` / `@RustBlanket("Hash + Debug")`, where the
+  standard traits are answered from the `@RustHash`/`@RustDebug`/... markers
+  and the built-in types). A text value fills a borrowed-view slot
+  (`impl AsRef<Path>`). The call passes the value as it is.
+- **Erased pointers.** A parameter or variant slot whose Rust type is
+  `Arc<T>`/`Rc<T>`/`Box<T>` carries `@RustArc`/`@RustRc`/`@RustBox`, and the
+  argument is `.into()`-wrapped. A method returning one (`&Arc<Style>`) is
+  `@RustDerefOut`: the program gets the pointee, copied out.
+- **Associated constants** are `static final` fields (`Color32.RED`).
+- **Tuple structs** (`Mm(pub f32)`) get a `@RustTuple` constructor and `_0`,
+  `_1` fields, lowered to the struct expression and `.0`.
+- **Named-field variants** keep their payload; `@RustStructVariants` records
+  the field names and the backend builds them with braces.
+- **Maps and sets keep their own names** (`HashMap<K, V>`, `BTreeSet<T>`), as
+  `Vec` does, so a program can build the value a parameter takes. The
+  canonical `Map`/`Set` of §G.3.1's old rows named nothing constructible.
+- **A collection is built from elements and iterated** (`Extend` or
+  `FromIterator`, and `IntoIterator`). genpdf's `Style` merges into itself and
+  is not iterated, so it is a value again.
+- **A foreign stub's bare names are Rust's**: `Path` in `rust.genpdf` is
+  `rust.std.Path`, never the `jux.std.io.Path` helper.
+- **Crate families (§G.6.2.4).** A bound crate's stub also takes the crates
+  it re-exports and those defining a type its signatures mention, as far as
+  the host publishes them. A name several members declare means the one the
+  family publishes (`emath::Rect`, not `accesskit::Rect`). Every path is
+  written through the host (`eframe::egui::Color32`). A member the program
+  binds in its own right is declared once, by the dependency with the
+  smallest family holding it, and aliased everywhere else, so `rust.egui.Ui`
+  and `rust.eframe.Ui` are one type. The stub's second line records its
+  family; the cache marker records the other bound crates.
+- **Only declared dependencies' stubs load (§G.9.4).** A generated stub no
+  dependency names any more is deleted; a hand-vendored one is left unread.
+- **Keyword-named fields.** `operator` followed by `;`, `=` or `,` is a field
+  name, not an operator declaration.
+- **A stub that reads as statements is `E0907`.** Text the parser took as
+  top-level statements (script mode) is dropped from the stub and reported
+  against the stub file and line, as a bindgen internal error; it never
+  becomes a second `main`.
+- **Read-only closure arguments (gap 30's follow-up).** A closure slot records
+  which arguments the crate lends as `&T` rather than `&mut T`,
+  `@RustClosureShared("0:0")`. A lambda that assigns through one, or calls a
+  `@MutSelf` method on it, is `E0488` at the write, not rustc's E0594/E0596.
+
+**Known boundary.** A borrowed parameter of a Jux method (`void f(Ui ui)`)
+passed on to a foreign `&mut` slot still depends on gap 30's lowering (L9);
+that is not a type-mapping question. A generic slot whose bound this stub
+cannot see (a trait from a crate outside the family) accepts only what the
+recorded markers prove.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.3.1 (map and set rows), new
+§G.3.6 and §G.3.7, §G.6.2.4, §G.6.6 and §G.12 carry the rules; the E0907 row
+of `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is no longer reserved.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 

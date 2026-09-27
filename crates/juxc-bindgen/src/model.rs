@@ -218,6 +218,26 @@ pub struct StubType {
     /// reaches this class's methods from a Jux value of that primitive
     /// (`x.powf(2.0)` on a `double`).
     pub primitive: Option<String>,
+    /// What converts INTO this type, read off its own `impl From<X> for Self`
+    /// impls: `WidgetText` takes a `String`, a `RichText`, a `LayoutJob`.
+    /// Rendered as `@RustFrom("String", "RichText")`. A Rust parameter written
+    /// `impl Into<WidgetText>` accepts every one of them, and so does the Jux
+    /// slot (Bindgen G.3.6). A `String` source that Rust takes only as `&str`
+    /// is recorded as `str`, so the call site can lend it.
+    pub from_types: Vec<String>,
+    /// The targets of a blanket `impl<T: Into<Y>> From<T> for Self`: anything
+    /// that converts into `Y` converts into this type too (egui's `Atom` takes
+    /// whatever converts into `AtomKind`). Rendered as `@RustFromInto("Y")`.
+    pub from_into: Vec<String>,
+    /// Whether the type implements `Hash`, read off its impls like the four
+    /// derive markers. Rendered as `@RustHash`. A blanket trait over
+    /// `T: Hash + Debug` (egui's `AsId`) is met exactly by the types that say
+    /// both.
+    pub is_hash: bool,
+    /// A TUPLE struct (`pub struct Mm(pub f32);`) whose fields are all
+    /// public. Its fields are surfaced as `_0`, `_1`, ... and its Rust
+    /// constructor is the struct expression itself. Rendered as `@RustTuple`.
+    pub is_tuple_struct: bool,
 }
 
 impl StubType {
@@ -246,6 +266,10 @@ impl StubType {
             blanket_over: Vec::new(),
             implemented_by: Vec::new(),
             primitive: None,
+            from_types: Vec::new(),
+            from_into: Vec::new(),
+            is_hash: false,
+            is_tuple_struct: false,
         }
     }
 }
@@ -256,6 +280,9 @@ pub struct StubField {
     pub visibility: Vis,
     pub name: String,
     pub ty: JuxType,
+    /// An ASSOCIATED constant (`impl Color32 { pub const RED: Color32 = ..; }`),
+    /// surfaced as a `static final` field so `Color32.RED` reads it.
+    pub is_static: bool,
 }
 
 /// A constructor stub (`new`-style; method name = class name, §G.5.1).
@@ -271,6 +298,9 @@ pub struct StubCtor {
     /// `@RustDefault` so the backend calls `T::default()` rather than a `new`
     /// that takes arguments.
     pub is_default: bool,
+    /// The constructor of a TUPLE struct: the Rust value is built by the struct
+    /// expression `Mm(x)`, there being no `new`. Rendered with `@RustTuple`.
+    pub is_tuple: bool,
 }
 
 /// A method / free-function stub.
@@ -310,6 +340,11 @@ pub struct StubFn {
     /// (`-> Pixmap<'_>`): not a reference, but only valid while the receiver
     /// is. Rendered as `@RustBorrowsSelf`.
     pub carries_borrow: bool,
+    /// The Rust result is a shared pointer the Jux type erased (§G.3.1 maps
+    /// `Arc<T>` / `Rc<T>` to `T`): `ui.style()` returns `&Arc<Style>`. The value
+    /// a program gets is the pointee, copied out, so writing to it and handing
+    /// it back (`set_style`) works. Rendered as `@RustDerefOut`.
+    pub returns_shared: bool,
     /// The **real** fully-qualified Rust path of a free function
     /// (`humantime::parse_duration`), from the rustdoc summary. Rendered as a
     /// `@rust("…")` annotation so the backend lowers the import to
@@ -324,6 +359,12 @@ pub struct StubFn {
     /// `@RustClosureRefs("0")`; a Jux lambda in that slot takes owned values,
     /// so the backend clones each argument out of its reference.
     pub closure_ref_params: Vec<usize>,
+    /// Per closure parameter, the argument positions the crate passes by
+    /// SHARED reference (`FnMut(&T)`), as `(parameter index, positions)`.
+    /// Rendered as `@RustClosureShared("1:0,1")` (entries joined by `;`). A
+    /// lambda there may read those arguments and not write through them; an
+    /// argument passed `&mut` is absent, and the lambda may.
+    pub closure_shared: Vec<(usize, Vec<usize>)>,
     /// What the method asks of the TYPE's own parameters, written `T: Ord`:
     /// `sort` on `[T]` needs `where T: Ord`. Rendered as
     /// `@RustBounds("T: Ord")`, so the checker can report an unmet bound in
@@ -383,6 +424,16 @@ pub struct StubParam {
     /// callee writes through it, so the call site must lend `&mut`. Surfaced in
     /// the `.jux.d` as `&mut` before the type.
     pub by_mut_ref: bool,
+    /// The Rust parameter is GENERIC: `impl Trait`, `impl Into<T>`, or a type
+    /// parameter of the method bounded by a conversion trait. The Jux type
+    /// names what the value converts into (a class) or the trait it must
+    /// implement (an interface), and the call site passes the value as it is,
+    /// for Rust to convert. Rendered as the parameter annotation `@RustImpl`.
+    pub is_impl: bool,
+    /// The Rust parameter holds the value behind a pointer the Jux type
+    /// erased: `Arc`, `Rc` or `Box` of a concrete type. The call site wraps
+    /// the value. Rendered as `@RustArc` / `@RustRc` / `@RustBox`.
+    pub shared: Option<&'static str>,
 }
 
 /// An enum variant. `payload` empty = unit variant; `discriminant` set for
@@ -392,6 +443,14 @@ pub struct StubVariant {
     pub name: String,
     pub payload: Vec<JuxType>,
     pub discriminant: Option<i64>,
+    /// Field names of a variant written with NAMED fields
+    /// (`SetFillColor { col: Color }`), parallel to `payload`. Empty for a
+    /// tuple or unit variant.
+    pub payload_names: Vec<String>,
+    /// Per payload slot, the pointer the Jux type erased (`Arc`, `Rc`, `Box`),
+    /// parallel to `payload`: `WidgetText::RichText(Arc<RichText>)`. Empty when
+    /// no slot has one. Rendered as the component annotation `@RustArc` etc.
+    pub payload_shared: Vec<Option<&'static str>>,
 }
 
 /// A `public const` stub (§G.5.6).

@@ -117,6 +117,33 @@ fn render_type(out: &mut String, t: &StubType) {
     if let Some(prim) = &t.primitive {
         let _ = writeln!(out, "@RustPrimitive(\"{prim}\")");
     }
+    // What converts into the type (its own `From` impls), for the generic
+    // `impl Into<Self>` slots that take any of them (Bindgen G.3.6).
+    if !t.from_types.is_empty() {
+        let _ = writeln!(out, "@RustFrom(\"{}\")", t.from_types.join(","));
+    }
+    if !t.from_into.is_empty() {
+        let _ = writeln!(out, "@RustFromInto(\"{}\")", t.from_into.join(","));
+    }
+    if t.is_hash {
+        let _ = writeln!(out, "@RustHash");
+    }
+    if t.is_tuple_struct {
+        let _ = writeln!(out, "@RustTuple");
+    }
+    // The variants written with NAMED fields (`Op::SetFillColor { col }`),
+    // each with its field names: `SetFillColor:col;MoveTo:x,y`. The names ride
+    // here rather than in the payload because a Rust field may be named like a
+    // Jux keyword (`class`, `when`), which a payload component cannot be.
+    let struct_variants: Vec<String> = t
+        .variants
+        .iter()
+        .filter(|v| !v.payload_names.is_empty())
+        .map(|v| format!("{}:{}", v.name, v.payload_names.join(",")))
+        .collect();
+    if !struct_variants.is_empty() {
+        let _ = writeln!(out, "@RustStructVariants(\"{}\")", struct_variants.join(";"));
+    }
 
     let keyword = match t.kind {
         TypeKind::Class => "class",
@@ -153,9 +180,14 @@ fn render_type(out: &mut String, t: &StubType) {
     let _ = writeln!(out, "public {keyword} {}{generics}{implements} {{", t.name);
 
     if t.kind == TypeKind::Enum {
-        render_variants(out, &t.variants, !t.methods.is_empty());
-        if !t.methods.is_empty() {
+        let has_members = !t.methods.is_empty() || !t.fields.is_empty();
+        render_variants(out, &t.variants, has_members);
+        if has_members {
             out.push('\n');
+        }
+        // An enum's associated constants (`Align2::LEFT_TOP`).
+        for fld in &t.fields {
+            render_field(out, fld);
         }
     } else {
         for fld in &t.fields {
@@ -187,7 +219,16 @@ fn render_variants(out: &mut String, variants: &[StubVariant], has_members: bool
                 let payload = v
                     .payload
                     .iter()
-                    .map(|t| t.to_string())
+                    .enumerate()
+                    .map(|(i, t)| {
+                        // The pointer the type map erased from the slot
+                        // (`WidgetText::RichText(Arc<RichText>)`), so the
+                        // backend wraps the value it is given.
+                        match v.payload_shared.get(i).copied().flatten().filter(|_| !t.to_string().starts_with('(')) {
+                            Some(kind) => format!("@Rust{kind} {t}"),
+                            None => t.to_string(),
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 s.push_str(&format!("({payload})"));
@@ -205,13 +246,16 @@ fn render_variants(out: &mut String, variants: &[StubVariant], has_members: bool
 }
 
 fn render_field(out: &mut String, f: &StubField) {
-    let _ = writeln!(out, "    {}{} {};", f.visibility.prefix(), f.ty, f.name);
+    // An associated constant is a `static final` field (`Color32.RED`).
+    let modifiers = if f.is_static { "static final " } else { "" };
+    let _ = writeln!(out, "    {}{modifiers}{} {};", f.visibility.prefix(), f.ty, f.name);
 }
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
     let mut s = format!(
-        "    {}{}{}({})",
+        "    {}{}{}{}({})",
         if c.is_default { "@RustDefault " } else { "" },
+        if c.is_tuple { "@RustTuple " } else { "" },
         c.visibility.prefix(),
         c.name,
         render_params(&c.params)
@@ -252,9 +296,23 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     if f.returns_borrow {
         s.push_str("@RustRefOut ");
     }
+    if f.returns_shared {
+        s.push_str("@RustDerefOut ");
+    }
     if !f.closure_ref_params.is_empty() {
         let list: Vec<String> = f.closure_ref_params.iter().map(|i| i.to_string()).collect();
         s.push_str(&format!("@RustClosureRefs(\"{}\") ", list.join(",")));
+    }
+    // Which of those arguments are lent read-only (`&T`, not `&mut T`).
+    if !f.closure_shared.is_empty() {
+        let list: Vec<String> = f
+            .closure_shared
+            .iter()
+            .map(|(slot, args)| {
+                format!("{slot}:{}", args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(","))
+            })
+            .collect();
+        s.push_str(&format!("@RustClosureShared(\"{}\") ", list.join(";")));
     }
     // What the method asks of the type's own parameters (`T: Ord` for
     // `sort`), so the checker can report an unmet bound in Jux terms.
@@ -337,7 +395,19 @@ fn render_params(params: &[crate::model::StubParam]) -> String {
                 (true, false) => "&",
                 (false, false) => "",
             };
-            format!("{amp}{} {}", p.ty, p.name)
+            // A generic Rust slot (`impl Into<X>`, `impl Trait`, `&dyn
+            // Trait`) takes any value that converts or implements; an erased
+            // pointer is re-added at the call. Both ride as parameter
+            // annotations, ahead of the `&` marker.
+            // An annotation right before `(` would read the parenthesis as its
+            // argument list, so a tuple- or function-typed slot goes unmarked.
+            let bare = !p.ty.to_string().starts_with('(');
+            let generic = if p.is_impl && bare { "@RustImpl " } else { "" };
+            let shared = match p.shared.filter(|_| bare) {
+                Some(kind) => format!("@Rust{kind} "),
+                None => String::new(),
+            };
+            format!("{generic}{shared}{amp}{} {}", p.ty, p.name)
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -355,6 +425,8 @@ mod tests {
             ty,
             by_ref: false,
             by_mut_ref: false,
+            is_impl: false,
+            shared: None,
         }
     }
 
@@ -395,6 +467,7 @@ mod tests {
         hm.generics = vec!["K".into(), "V".into()];
         hm.constructors.push(StubCtor {
             is_default: false,
+            is_tuple: false,
             visibility: Vis::Public,
             name: "HashMap".into(),
             params: vec![],
@@ -416,9 +489,11 @@ mod tests {
             is_mut_self: false,
             returns_borrow: false,
             carries_borrow: false,
+            returns_shared: false,
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
         });
@@ -435,9 +510,11 @@ mod tests {
             is_mut_self: false,
             returns_borrow: false,
             carries_borrow: false,
+            returns_shared: false,
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
         });
@@ -471,9 +548,11 @@ mod tests {
             is_mut_self: false,
             returns_borrow: false,
             carries_borrow: false,
+            returns_shared: false,
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
         };
@@ -488,11 +567,15 @@ mod tests {
                 name: "Red".into(),
                 payload: vec![],
                 discriminant: None,
+                payload_names: Vec::new(),
+                payload_shared: Vec::new(),
             },
             StubVariant {
                 name: "Custom".into(),
                 payload: vec![JuxType::Prim("int")],
                 discriminant: None,
+                payload_names: Vec::new(),
+                payload_shared: Vec::new(),
             },
         ];
         let file = StubFile {
@@ -523,9 +606,11 @@ mod tests {
             is_mut_self: false,
             returns_borrow: false,
             carries_borrow: false,
+            returns_shared: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
             closure_ref_params: Vec::new(),
+            closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
         };
@@ -561,9 +646,11 @@ mod tests {
             is_mut_self: false,
             returns_borrow: false,
             carries_borrow: false,
+            returns_shared: false,
             rust_path: None,
             doc: None,
             closure_ref_params: Vec::new(),
+            closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
         };

@@ -7484,6 +7484,38 @@ mod jux_stack_overflow {
             }
         }
 
+        // A foreign ALIAS of a type another stub declares (`rust.eframe.Widget`
+        // = `rust.egui.Widget`, Bindgen G.6.2.4) is a `use` of that type's real
+        // path, bound under the imported name. Spelled through the alias's own
+        // package it named `eframe::Widget`, which the host does not publish.
+        if segs.first() == Some(&"rust") {
+            let mut cursor = fqn.clone();
+            for _ in 0..4 {
+                let Some(a) = self.symbols.aliases.get(&cursor) else { break };
+                let target: Vec<&str> = a.target.name.segments.iter().map(|s| s.text.as_str()).collect();
+                let joined = target.join(".");
+                cursor = if target.len() > 1 {
+                    joined
+                } else {
+                    format!("{}.{joined}", cursor.rsplit_once('.').map_or("", |(p, _)| p))
+                };
+                let real = self
+                    .symbols
+                    .classes
+                    .get(&cursor)
+                    .filter(|c| c.is_external)
+                    .and_then(|c| c.rust_path.clone())
+                    .or_else(|| self.symbols.enums.get(&cursor).filter(|e| e.is_external).and_then(|e| e.rust_path.clone()))
+                    .or_else(|| {
+                        self.symbols.interfaces.get(&cursor).filter(|i| i.is_external).and_then(|i| i.rust_path.clone())
+                    });
+                if let Some(real) = real {
+                    let bound = alias.as_ref().map_or(segs.last().copied().unwrap_or(""), |a| a.text.as_str());
+                    return Some(format!("use {real} as {bound};"));
+                }
+            }
+        }
+
         // Fallback for foreign *non-type* symbols (free functions, consts) that
         // carry no `@rust` annotation: a `rust.<crate>.…` import on a foreign
         // crate other than `std`. The crate's `.jux.d` package mirrors the crate

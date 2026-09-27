@@ -276,6 +276,9 @@ impl RustEmitter {
                     qn.segments
                         .last()
                         .and_then(|l| self.resolve_bare_type_fqn(&l.text))
+                        // A crate's alias of another package's class
+                        // (`rust.eframe.Sense` = `rust.egui.Sense`) is that class.
+                        .map(|fqn| self.symbols.alias_class(&fqn).unwrap_or(fqn))
                 } else {
                     None
                 };
@@ -2555,6 +2558,38 @@ impl RustEmitter {
                                 self.emit_byref_arg(&call.callee, i, arg);
                                 continue;
                             }
+                            // A foreign `&mut` slot (`TextEdit::singleline(text:
+                            // &mut dyn TextBuffer)`) lends the caller's own
+                            // place, as it does on an instance method.
+                            if self.callee_param_borrow_prefix(&call.callee, i) == "&mut "
+                                && self.foreign_arg_handle_lend(&call.callee, i, arg).is_none()
+                            {
+                                self.w.push_str("&mut ");
+                                self.emitting_method_receiver = true;
+                                self.emit_expr(arg);
+                                self.emitting_method_receiver = false;
+                                continue;
+                            }
+                            // A generic foreign slot takes the value as it is,
+                            // and an erased pointer is re-added (Bindgen G.3.6).
+                            let generic_slot = self.callee_param_is_foreign_impl(&call.callee, i);
+                            let shared_slot = self.callee_param_is_foreign_shared(&call.callee, i);
+                            if generic_slot || shared_slot {
+                                if self.callee_param_borrow_prefix(&call.callee, i) == "&" {
+                                    self.w.push('&');
+                                }
+                                if shared_slot {
+                                    self.w.push('(');
+                                }
+                                self.emit_expr(arg);
+                                if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
+                                    self.w.push_str(".clone()");
+                                }
+                                if shared_slot {
+                                    self.w.push_str(").into()");
+                                }
+                                continue;
+                            }
                             // An integer argument converts to the parameter's
                             // width and sign, as on every other call path.
                             if self.emit_int_width_converted_arg(call, i, arg) {
@@ -2575,9 +2610,12 @@ impl RustEmitter {
                                     .and_then(|c| c.methods.get(f.field.text.as_str()))
                                     .and_then(|m| m.params.get(i))
                                     .is_some_and(|p| p.is_ref || p.ty.array_shape.is_some());
-                                // A borrowing slot takes `&`, and so does a
+                                // A borrowing slot takes `&` (`&mut` when the
+                                // callee writes through it), and so does a
                                 // reslice (`[..]` is unsized).
-                                if is_ref || borrow.ends_with("[..]") {
+                                if self.callee_param_borrow_prefix(&call.callee, i) == "&mut " {
+                                    self.w.push_str("&mut ");
+                                } else if is_ref || borrow.ends_with("[..]") {
                                     self.w.push('&');
                                 }
                                 self.emitting_method_receiver = true;
@@ -2782,9 +2820,28 @@ impl RustEmitter {
         // matching argument `Box::new(arg)` here. Empty unless this is an enum
         // ctor with at least one boxed slot.
         let boxed_slots = self.enum_ctor_boxed_slots(call);
+        // A FOREIGN variant's payload slot behind an erased pointer
+        // (`WidgetText::RichText(Arc<RichText>)`) takes `.into()`, and a
+        // variant with NAMED fields (`Op::SetFillColor { col }`) is built with
+        // braces (Bindgen G.3.7).
+        let (shared_slots, struct_fields, interior_slots) = self.foreign_enum_ctor_shape(call);
+        if struct_fields.is_some() {
+            // Replace the `(` just written with the struct form.
+            let at = self.w.len() - 1;
+            let _ = self.w.split_off_from(at);
+            self.w.push_str(" { ");
+        }
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            if let Some(name) = struct_fields.as_ref().and_then(|f| f.get(i)) {
+                self.w.push_str(&to_rust_ident(name));
+                self.w.push_str(": ");
+            }
+            let share_this = shared_slots.get(i).copied().unwrap_or(false);
+            if share_this {
+                self.w.push('(');
             }
             let box_this = boxed_slots.get(i).copied().unwrap_or(false);
             if box_this {
@@ -2800,15 +2857,25 @@ impl RustEmitter {
             // the receiver is hoisted by `call_needs_borrow_hoist`.
             if self.arg_is_byref(call, i) {
                 self.emit_byref_arg(&call.callee, i, arg);
+            } else if interior_slots.get(i).copied().unwrap_or(false) && self.expr_is_collection_handle(arg) {
+                // A foreign variant's by-value collection slot takes the
+                // sequence, not the Jux handle (§G.6.6).
+                self.emitting_method_receiver = true;
+                self.emit_expr(arg);
+                self.emitting_method_receiver = false;
+                self.w.push_str(".borrow().clone()");
             } else {
                 self.emit_call_arg_value(call, i, arg);
             }
             if box_this {
                 self.w.push(')');
             }
+            if share_this {
+                self.w.push_str(").into()");
+            }
         }
         self.emitting_format_arg = prev;
-        self.w.push(')');
+        self.w.push_str(if struct_fields.is_some() { " }" } else { ")" });
 
         // A Jux ARRAY's `pop()` returns `T`, while the Rust `Vec::pop` it
         // lowers to returns `Option<T>` — so the array intrinsic bridges the
@@ -2956,6 +3023,62 @@ impl RustEmitter {
     /// Resolution mirrors the enum-variant path in `emit_field`: the callee must
     /// be `Enum.Variant` (a `Field` whose object is a single-segment path naming
     /// a known enum), resolved bare → import-alias → cross-package last-segment.
+    /// For the construction of a FOREIGN enum's variant, `(shared slots,
+    /// field names)`: which payload slots sit behind an erased pointer
+    /// (`@RustArc` on the component), and, for a variant written with named
+    /// fields, those names (the enum's `@RustStructVariants`). Empty and
+    /// `None` for anything else.
+    pub(crate) fn foreign_enum_ctor_shape(&self, call: &CallExpr) -> (Vec<bool>, Option<Vec<String>>, Vec<bool>) {
+        use juxc_ast::{AnnotationArg, Expr as E, Literal};
+        let Expr::Field(f) = &*call.callee else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let Expr::Path(qn) = &*f.object else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let Some(fqn) = qn
+            .segments
+            .last()
+            .and_then(|s| self.enum_fqn_behind(&s.text).or_else(|| {
+                self.resolve_bare_type_fqn(&s.text).filter(|k| self.symbols.enums.contains_key(k))
+            }))
+        else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let Some(sig) = self.symbols.enums.get(&fqn).filter(|e| e.is_external) else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let variant = f.field.text.as_str();
+        let shared = sig.variants.get(variant).map(|v| v.payload_shared.clone()).unwrap_or_default();
+        let fields = sig
+            .annotations
+            .iter()
+            .filter(|a| {
+                a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("ruststructvariants")
+            })
+            .find_map(|a| match a.args.first() {
+                Some(AnnotationArg::Positional(E::Literal(Literal::String(s)))) => Some(s.clone()),
+                _ => None,
+            })
+            .and_then(|list| {
+                list.split(';').find_map(|entry| {
+                    let (name, fields) = entry.split_once(':')?;
+                    (name == variant).then(|| fields.split(',').map(str::to_string).collect())
+                })
+            });
+        let interior: Vec<bool> = sig
+            .variants
+            .get(variant)
+            .map(|v| {
+                v.payload
+                    .iter()
+                    .map(|p| p.array_shape.is_none() && self.collection_is_handle(&p.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (shared, fields, interior)
+    }
+
     pub(crate) fn enum_ctor_boxed_slots(&self, call: &CallExpr) -> Vec<bool> {
         let Expr::Field(f) = &*call.callee else {
             return Vec::new();
@@ -3696,6 +3819,26 @@ impl RustEmitter {
             self.emit_expr(arg);
             self.emitting_format_arg = prev;
             self.w.push_str(").0)");
+            return;
+        }
+        // A GENERIC foreign slot (`impl Into<WidgetText>`, `impl Widget`,
+        // Bindgen G.3.6) takes the value as it is: Rust converts it, or finds
+        // the trait on its concrete type. It is never boxed as a trait object.
+        if self.callee_param_is_foreign_impl(&call.callee, i) {
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(arg);
+            self.emitting_format_arg = prev;
+            return;
+        }
+        // A slot whose value sits behind a pointer the stub erased
+        // (`Arc<RichText>`): `.into()` wraps a plain value (`Arc: From<T>`)
+        // and passes an already-wrapped one through.
+        if self.callee_param_is_foreign_shared(&call.callee, i) {
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.w.push('(');
+            self.emit_expr(arg);
+            self.w.push_str(").into()");
+            self.emitting_format_arg = prev;
             return;
         }
         // Interface-typed param slot: wrap a class value in `Rc<dyn

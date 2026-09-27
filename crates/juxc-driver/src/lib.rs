@@ -335,10 +335,17 @@ fn lex_parse_resolve(
             juxc_parse::parse_with_array_aliases(&lex_result.tokens, &array_aliases)
         };
         diagnostics.extend(parsed.diagnostics);
+        let mut ast = parsed.ast;
+        if foreign[idx] {
+            // A stub has signatures only. Text the parser read as statements
+            // is a stub that stopped parsing as declarations, and must not
+            // become a `main` of the program's (Bindgen G.12, E0907).
+            diagnostics.extend(stubs::reject_stub_bodies(&mut ast, &sources[idx]));
+        }
         for d in &mut diagnostics[before..] {
             d.file = Some(idx);
         }
-        units.push(parsed.ast);
+        units.push(ast);
     }
     // Conditional compilation (§C.2.5): what this build leaves out is gone
     // before any name is resolved, so it is never checked against APIs the

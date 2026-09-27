@@ -90,6 +90,8 @@ ui.heading("Leaker");
 and `ui.colored_label(color, new RichText(s).size(20.0f))`. You have to read
 the Rust source to learn which conversions exist.
 
+**Status: fixed (gap 31, ERRATA E128).** `ui.label(s)` with a `String`, `ui.heading("Leaker")` and `ui.colored_label(c, "text")` compile as written. An `impl Into<T>` parameter is marked `@RustImpl T` and takes whatever `T`'s own `From` impls name (`@RustFrom`), the value passed as it is (probe `g31-leaker/probes/egui1`).
+
 ### L3. Passing a value to an interface-typed foreign parameter emits a non-existent path. **blocker** (for those APIs)
 
 A foreign trait in parameter position (`IntoAtoms`, `Widget`, `AsIdSalt`,
@@ -125,6 +127,8 @@ Ids come from `ui.next_auto_id()` plus `ui.skip_ahead_auto_ids(1)`. A combo box
 id comes from its label (`ComboBox.from_label`), using distinct whitespace
 labels (`" "`, `"  "`) so the label does not show.
 
+**Status: fixed (gap 31, ERRATA E128).** `ui.button("Click")`, `ui.add(new Button(...))`, `ui.add(new DragValue(v))`, `id.with("child")` and genpdf's `render_to_file` compile and run. An `impl Trait` / `&dyn Trait` parameter takes the value as it is, and a foreign trait is always named by its real path, never `crate::rust::...` (probes `egui1`, `egui2`, `pdf_genpdf`).
+
 ### L4. Blanket-impl traits cannot be satisfied: `new Id("nav")`. **annoying**
 
 egui has `impl<T: Hash + Debug> AsId for T`. The stub declares `interface AsId {}`
@@ -137,6 +141,8 @@ Panel.left(new Id("nav"));
 [E0413] error: no static method `new` on class `rust.egui.Id`
 ```
 **Workaround:** `ui.next_auto_id()` (see L3).
+
+**Status: fixed (gap 31, ERRATA E128).** `new Id("nav")` compiles: a blanket `impl<T: Hash + Debug> AsId for T` is recorded as `@RustBlanket("Hash + Debug")`, which a `String` meets (probe `egui1`).
 
 ### L5. One Rust type, two Jux types; and a mislabelled `Rect`/`Vec2`. **annoying**
 
@@ -158,6 +164,8 @@ accesskit): `@rust("egui::Rect") public class Rect { public double x0; ... }`,
 **Workaround:** import every egui type from `rust.eframe.*`, except `Color32`
 (L6).
 
+**Status: fixed (gap 31, ERRATA E128).** `rust.egui.Ui` and `rust.eframe.Ui` are one type: a crate bound in its own right is declared once and aliased by the stub that re-exports it, and a shared name means the definition the family publishes (`emath::Rect`, not kurbo's). A `Widget` imported from `rust.eframe` takes a `rust.egui.Ui` (probe `egui3`).
+
 ### L6. Re-exported crates must be listed by hand, and `Color32` is missing from eframe's stub. **annoying**
 
 A program that uses only `rust.eframe` types still emits `use egui::...`,
@@ -171,12 +179,16 @@ in `jux.toml` as well (see the file). `Color32` is not declared in the eframe
 stub at all, so it has to come from `rust.egui.Color32`. The eframe stub's
 parameters that mention `Color32` are "unknown type" and accept it.
 
+**Status: fixed (gap 31, ERRATA E128).** A program that lists only `rust.eframe` reaches `Color32`, `Rect`, `CornerRadius` and the rest; every path is written through `eframe` (`eframe::egui::Color32`), so `egui`, `emath`, `epaint` and `ecolor` need not be listed (probe `egui1`).
+
 ### L7. Removing a dependency leaves its stub active. **annoying**
 
 After deleting `"rust.egui"` from `jux.toml`, `.jux-stubs/rust/egui.jux.d`
 stays and keeps being loaded. The same `expected rust.egui.Ui` error came back
 until I deleted the file by hand. The same happened with printpdf, lopdf and
 genpdf stubs while trying crates (see L20 for how bad it can get).
+
+**Status: fixed (gap 31, ERRATA E128).** Only the stubs of the dependencies `jux.toml` declares are loaded, and a generated stub whose dependency was removed is deleted (probe `egui3`, dropping `rust.egui`).
 
 ### L8. A field passed to a `&mut` parameter is lent as a temporary copy. **annoying**
 
@@ -263,6 +275,8 @@ error[E0308]: mismatched types: expected `Arc<RichText>`, found `RichText`
 **Workaround:** `ui.colored_label(color, new RichText(..))`, or
 `WidgetText.Text(s).color(c)`.
 
+**Status: fixed (gap 31, ERRATA E128).** `WidgetText.RichText(new RichText("big").size(20.0f))` compiles: the payload slot is `@RustArc RichText` and the argument is wrapped (probe `egui1`).
+
 ### L12. A lambda that captures a collection used elsewhere in the same call fails to borrow. **annoying**
 
 ```jux
@@ -289,6 +303,8 @@ TextEdit.singleline(v).desired_width(200.0f).show(u);     // v is a String
 egui has `impl TextBuffer for String`, but bindgen only records impls whose
 self type the crate itself declares. **Workaround:** `ui.text_edit_singleline(v)`
 (generic `S`) plus a width trick (L16).
+
+**Status: fixed (gap 31, ERRATA E128).** `TextEdit.singleline(n)` with a `String` compiles and edits `n`: `impl TextBuffer for String` is recorded on the trait as `@RustImplementedBy("String")` (probe `egui2`).
 
 ### L14. Argument hoisting moves `&mut Ui`. **annoying**
 
@@ -330,6 +346,8 @@ error[E0594]: cannot assign to data in an `Arc`
 (`Gui.textFieldWidth`). Nested field writes on a *fresh* foreign value do work
 (`v.widgets.inactive.bg_stroke = new Stroke(...)` in `Palette.visuals()`).
 
+**Status: fixed (gap 31, ERRATA E128).** `var style = ui.style(); style.spacing.text_edit_width = 120.0f; ui.set_style(style);` compiles: `style()` is `@RustDerefOut` (the `Style` is copied out of the `Arc`) and `set_style` takes `impl Into<Arc<Style>>` (probe `egui2`).
+
 ### L17. Associated constants are not surfaced. **annoying**
 
 `Color32::RED`, `Align2::LEFT_TOP`, `Id::NULL`, `Vec2::ZERO` and the rest do not
@@ -337,6 +355,8 @@ exist in the stubs, and `Align2` has no constructor, so
 `Painter.text(pos, Align2, text, font, color)` cannot be called.
 **Workaround:** `Color32.from_rgb(...)`, and text is drawn through child `Ui`s
 with right-to-left layouts instead of the painter.
+
+**Status: fixed (gap 31, ERRATA E128).** Associated constants are `static final` fields: `Color32.RED`, `Vec2.ZERO`, `Align2.LEFT_TOP` (probe `egui1`).
 
 ### L18. No numeric input widget. **annoying**
 
@@ -346,6 +366,8 @@ only renders through `ui.add` (L3) or `Widget.ui` (L5). `Slider` is the same.
 **Workaround:** quantity is a text field between `-`/`+` buttons, and price,
 discount and tax are text fields parsed by `Money.parse`/`Percent.parse`, with a
 per-line "check input" state (`LineDraft`).
+
+**Status: fixed (gap 31, ERRATA E128).** `ui.add(new DragValue(v).speed(0.1))` and `ui.add(new Slider(w, 0.0..=10.0))` compile over a `double` local: a foreign constructor's `&mut` slot lends the caller's place. Lending a FIELD in place is gap 30's rule and applies too (probe `egui2`).
 
 ### L25. A user class named like a foreign type is replaced by the foreign one in codegen. **annoying**
 
@@ -407,6 +429,8 @@ var doc = PdfDocument.from_html(html, new HashMap<String, Base64OrRaw>(), ...);
   type no Jux code can construct and that `HashMap`/`BTreeMap` do not convert
   to. So `from_html`, the only op-free entry point, is also unreachable.
 
+**Status: fixed (gap 31, ERRATA E128).** A printpdf document with a filled rectangle and Helvetica text built from `new Mm(...)`, `Op.SetFillColor(...)`, `Op.DrawRectangle(...)`, `Op.SetFont(...)` and `Op.ShowText(...)` is written and parses in pypdf (probe `pdf_printpdf`); `PdfDocument.from_html(html, new BTreeMap<String, Base64OrRaw>(), ...)` runs (probe `pdf_html`). Tuple structs have their constructor and `_0`, named-field variants keep their fields, and maps keep their own names.
+
 ### L20. lopdf 0.45: a field named `operator` breaks the stub, and the error lands on `main`. **blocker**
 
 `lopdf::content::Operation` has a public field `operator` (a Jux keyword). The
@@ -421,6 +445,8 @@ src\main.jux:1:8: [E0400] error: `main` is declared more than once at the top le
 This happened even with `main() { print("x"); }` and no lopdf import, and
 because of L7 it survived removing the dependency. It cost a lot of time: the
 message points at the wrong file and the wrong problem.
+
+**Status: fixed (gap 31, ERRATA E128).** lopdf's stub loads (`Document.load`, `get_pages`, `op.operator`, probe `pdf_lopdf`). A field named `operator` is read as a field; a stub that stops parsing as declarations is reported as `E0907` against the stub, never as a duplicate `main`.
 
 ### L21. genpdf 0.2: collection handles and `Path` resolution. **blocker**
 
@@ -456,6 +482,8 @@ multi-page tables with repeated headers and "Page n of m" footers, and a
 correct xref table. It writes the file with `File.writeText` and creates the
 folder with `rust.std.create_dir_all`. That last one worked first time: the
 `Result` became an exception.
+
+**Status: fixed (gap 31, ERRATA E128).** A genpdf document with a styled paragraph and a `TableLayout` built from a Jux `Vec<uint>` renders to a PDF (probe `pdf_genpdf`). `Style` is a value again (a collection must also iterate), a by-value `Vec` constructor parameter takes the interior, and `Path` in the stub is `std::path::Path`, which text also fills.
 
 ---
 
