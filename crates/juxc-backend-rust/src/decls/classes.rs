@@ -4189,11 +4189,16 @@ impl RustEmitter {
             self.w.push_str("impl From<");
             // The subclass is often in another package than the base whose
             // upcast impl this is.
-            let sub_prefix = match crate::backend_fqn::fqn_package(&sub_fqn) {
-                Some(pkg) if pkg != self.current_package_path() => {
-                    format!("crate::{}::", juxc_lex::to_rust_path(pkg))
-                }
-                _ => String::new(),
+            // A subclass in the ROOT package (`main.jux` subclassing a library
+            // class) lives at the crate root, which a packaged base must name
+            // as `crate::` (gap 35).
+            let sub_pkg = crate::backend_fqn::fqn_package(&sub_fqn).unwrap_or("");
+            let sub_prefix = if sub_pkg == self.current_package_path() {
+                String::new()
+            } else if sub_pkg.is_empty() {
+                "crate::".to_string()
+            } else {
+                format!("crate::{}::", juxc_lex::to_rust_path(sub_pkg))
             };
             self.w.push_str(&sub_prefix);
             self.w.push_str(&to_rust_ident(&sub));
@@ -6120,10 +6125,18 @@ impl RustEmitter {
                     .map(|b| {
                         body_writes_to_this(b)
                             || crate::analysis::body_writes_bare_field(b, &instance_fields, &param_names)
-                            || crate::analysis::body_calls_mut_method_on_this(
-                                b,
-                                &self.user_mut_methods,
-                            )
+                            // A record's components are final (§7.6), so a
+                            // call on one never needs the record itself
+                            // mutable. The name-keyed mut-method set could
+                            // not tell `this.inner.eval()` on an interface
+                            // from a mutating `eval` elsewhere, and a `&mut
+                            // self` method could not be called from the
+                            // record's `&self` interface impl (gap 35).
+                            || (!self.in_record_body
+                                && crate::analysis::body_calls_mut_method_on_this(
+                                    b,
+                                    &self.user_mut_methods,
+                                ))
                     })
                     .unwrap_or(false));
 
@@ -6307,12 +6320,12 @@ impl RustEmitter {
             // Static setters read through the associated getter; the
             // class-scoped storage has no `self`.
             let recv = if obs.is_static { "Self::" } else { "self." };
-            self.w.line(&format!("let __jux_old = {recv}{prop}();"));
+            self.w.line(&format!("let __jux_old = {recv}{getter}();", getter = to_rust_ident(prop)));
             // §P.1.5: pre-capture every dependent COMPUTED property's
             // value so the post-body bracket can fire on change.
             for (c, _) in dependents {
                 self.w
-                    .line(&format!("let __jux_cold_{c} = {recv}{c}();"));
+                    .line(&format!("let __jux_cold_{c} = {recv}{getter}();", getter = to_rust_ident(c)));
             }
         }
         if let Some(body) = body {
@@ -6414,7 +6427,7 @@ impl RustEmitter {
             if let Some(obs) = &setter_observer {
                 let (prop, comparable, dependents) = (&obs.prop, &obs.comparable, &obs.dependents);
                 let recv = if obs.is_static { "Self::" } else { "self." };
-                self.w.line(&format!("let __jux_now = {recv}{prop}();"));
+                self.w.line(&format!("let __jux_now = {recv}{getter}();", getter = to_rust_ident(prop)));
                 if *comparable {
                     // §P.3.6 re-entrant sets: an observer may set this
                     // same property — the nested set COMMITS its value
@@ -6430,7 +6443,7 @@ impl RustEmitter {
                     self.w.line("let mut __jux_prev = __jux_now;");
                     self.w.line("loop {");
                     self.w.indent_inc();
-                    self.w.line(&format!("let __jux_cur = {recv}{prop}();"));
+                    self.w.line(&format!("let __jux_cur = {recv}{getter}();", getter = to_rust_ident(prop)));
                     self.w.line("if __jux_cur == __jux_prev { break; }");
                     self.w.line(&format!(
                         "{recv}__obs_{prop}_fire(&__jux_prev, &__jux_cur);"
@@ -6450,7 +6463,7 @@ impl RustEmitter {
                 // types fire only on a real change; non-comparable
                 // ones fire whenever the driving setter completed.
                 for (c, c_comparable) in dependents {
-                    self.w.line(&format!("let __jux_cnow_{c} = {recv}{c}();"));
+                    self.w.line(&format!("let __jux_cnow_{c} = {recv}{getter}();", getter = to_rust_ident(c)));
                     if *c_comparable {
                         self.w.line(&format!(
                             "if __jux_cold_{c} != __jux_cnow_{c} {{ {recv}__obs_{c}_fire(&__jux_cold_{c}, &__jux_cnow_{c}); }}"

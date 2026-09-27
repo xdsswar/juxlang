@@ -1,0 +1,111 @@
+// Release blockers that were valid programs the compiler could not build, or
+// built wrong (GAPS.md gap 35). Each section is the smallest shape of one.
+
+// `$v` is `${v}` (LANG-V1 3.4): a generic `T` field reads the same either way.
+class Box<T> {
+    T v;
+    Box(T v) { this.v = v; }
+    public String show() { return $"Box($v)"; }
+    public String showBraced() { return $"Box(${v})"; }
+}
+
+// A property getter's body reads the class's fields by their bare names, and
+// every String method, widening and promotion works on them as in a method.
+// A property may be named with a Rust keyword (`loop`); it is still Jux's.
+class Word {
+    String text = "hello";
+    int n = 3;
+    public int Length { get -> text.length(); }
+    public String Upper { get -> text.toUpperCase(); }
+    public long Wide { get -> n; }
+    public double Scaled { get -> n * 1.5; }
+    public int Chars { get -> text.charLength; }
+    public int loop { get; set; } = 0;
+}
+
+// A record implementing an interface calls through its own component.
+interface Expr { int eval(); }
+record Num(int v) implements Expr { public int eval() { return v; } }
+record Paren(Expr inner) implements Expr { public int eval() { return this.inner.eval(); } }
+
+// A null test narrows inside an interface's default method, as it does in a
+// free function.
+interface Cache {
+    int? get(String k);
+    default int getOr(String k, int fallback) {
+        var e = get(k);
+        if (e != null) return e;
+        return fallback;
+    }
+}
+
+class OneEntry implements Cache {
+    public int? get(String k) {
+        if (k == "a") return 1;
+        return null;
+    }
+}
+
+// ASYNC 18.3's own example: an `AsyncMutex` held in a field.
+class Counter {
+    private AsyncMutex<int> count = new AsyncMutex<>(0);
+    public async int increment() {
+        var guard = await count.lock();
+        guard.value = guard.value + 1;
+        return guard.value;
+    }
+}
+
+// `Task.yield()` hands the loop back once, then carries on.
+async int yielding() {
+    await Task.yield();
+    return 7;
+}
+
+public void main() {
+    // A switch whose arms are a concatenation and a literal, printed directly.
+    int e = 1;
+    print(switch (e) { case 1 -> "ab " + e; default -> "c"; });
+    print(switch (e) { case 2 -> "x"; default -> "d " + e; });
+
+    print(new Box<int>(3).show());
+    print(new Box<String>("s").show());
+    print(new Box<double>(2.0).show());
+    print(new Box<double>(2.0).showBraced());
+
+    var w = new Word();
+    print(w.Length);
+    print(w.Upper);
+    print(w.Wide);
+    print(w.Scaled);
+    print(w.Chars);
+    w.loop = 4;
+    print(w.loop);
+
+    Expr ex = new Paren(new Num(4));
+    print(ex.eval());
+
+    var cache = new OneEntry();
+    print(cache.getOr("a", 9));
+    print(cache.getOr("b", 9));
+
+    var counter = new Counter();
+    print(block_on(counter.increment()));
+    print(block_on(counter.increment()));
+
+    print(block_on(yielding()));
+
+    // A function value prints as what it is.
+    var add = (int a) -> (int b) -> a + b;
+    print(add);
+    print(add(1)(2));
+
+    // A negative size written as a literal throws when it runs, exactly as
+    // the same size held in a variable does.
+    try {
+        var none = new int[-1];
+        print(none.length);
+    } catch (IllegalArgumentException x) {
+        print("refused: " + x.getMessage());
+    }
+}

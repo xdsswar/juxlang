@@ -2321,8 +2321,9 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
                         code::Code::W0457_UnannotatedRefCycle,
                         format!(
                             "field `{fname}` forms a reference cycle on class `{bare}` -- \
-                             classes are `Rc`-refcounted and `Rc` does not collect cycles, \
-                             so this leaks; mark a back-edge field `weak` to break it (§6.5)",
+                             classes are reference-counted, and objects that refer to each \
+                             other in a cycle are never freed, so this leaks; mark a back-edge \
+                             field `weak` to break it (§6.5)",
                         ),
                     )
                     .with_span(*span),
@@ -3870,6 +3871,73 @@ fn break_inheritance_cycles(table: &mut SymbolTable, diagnostics: &mut Vec<Diagn
                 code::Code::E0434_CyclicInheritance,
                 format!(
                     "`{class_name}` is its own ancestor -- following its `extends` chain returns to `{class_name}`. A class cannot inherit from itself, directly or through any number of steps.",
+                ),
+            )
+            .with_span(span),
+        );
+    }
+    break_interface_cycles(table, diagnostics);
+}
+
+/// **E0434** for interfaces: `interface I extends J {}` with `interface J
+/// extends I {}`. The class rule above, applied to an interface's `extends`
+/// list (which may name several parents). A cycle checked clean and reached
+/// the emitted program, which rejected it with its own report (FEATURES-TODO
+/// release blockers, gap 35). The interface whose parent closes the loop is
+/// reported and that one parent link is cut, so later passes see a finite
+/// hierarchy.
+fn break_interface_cycles(table: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    let parents_of = |t: &SymbolTable, key: &str| -> Vec<(usize, String)> {
+        let Some(iface) = t.interfaces.get(key) else { return Vec::new() };
+        let pkg = fqn_package(key).unwrap_or("").to_string();
+        iface
+            .extends
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                let seg = p.name.segments.last()?;
+                resolve_interface_key_in(t, &seg.text, &pkg).map(|k| (i, k.clone()))
+            })
+            .collect()
+    };
+    let mut names: Vec<String> =
+        table.interfaces.iter().filter(|(_, i)| !i.is_external).map(|(k, _)| k.clone()).collect();
+    names.sort();
+    for start in &names {
+        // Depth-first from `start`; a path that comes back to `start` is the
+        // cycle, and its last hop is the link to cut.
+        let mut stack: Vec<(String, Vec<(usize, String)>)> = vec![(start.clone(), parents_of(table, start))];
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        visited.insert(start.clone());
+        let mut closing: Option<(String, usize)> = None;
+        while let Some((node, pending)) = stack.last_mut() {
+            let Some((idx, parent)) = pending.pop() else {
+                stack.pop();
+                continue;
+            };
+            if &parent == start {
+                closing = Some((node.clone(), idx));
+                break;
+            }
+            if visited.insert(parent.clone()) {
+                let next = parents_of(table, &parent);
+                stack.push((parent, next));
+            }
+        }
+        let Some((owner, idx)) = closing else { continue };
+        let Some(iface) = table.interfaces.get_mut(&owner) else { continue };
+        if idx >= iface.extends.len() {
+            continue;
+        }
+        let parent_name = iface.extends[idx].name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+        iface.extends.remove(idx);
+        let span = iface.span;
+        let bare = owner.rsplit('.').next().unwrap_or(&owner).to_string();
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0434_CyclicInheritance,
+                format!(
+                    "`{bare}` is its own ancestor -- following its `extends` list through `{parent_name}` returns to `{bare}`. An interface cannot extend itself, directly or through any number of steps.",
                 ),
             )
             .with_span(span),

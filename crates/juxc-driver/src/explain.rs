@@ -34,6 +34,15 @@ pub fn normalize(code: &str) -> String {
 }
 
 /// The explanation for `code`, or `None` when no source mentions it.
+///
+/// What is printed is for the person who got the diagnostic: what the code
+/// means and what to do about it, in Jux terms. The sources it is drawn from
+/// are written for the compiler's own authors as well, and they also say how
+/// a construct is lowered to the code Jux compiles to, what the build tools
+/// reported before a check existed, and which ERRATA entry settled the rule.
+/// Every paragraph (and every sentence of the one-line description) that
+/// talks about that is left out ([`for_the_user`]); the specification keeps
+/// its rationale, and `Defined in` points at it (gap 35).
 pub fn explain(code: &str) -> Option<String> {
     let code = normalize(code);
     let catalog = catalog_row(&code);
@@ -45,24 +54,131 @@ pub fn explain(code: &str) -> Option<String> {
     let mut out = String::new();
     match &catalog {
         Some((desc, source)) => {
+            let desc = override_description(&code)
+                .map(str::to_string)
+                .unwrap_or_else(|| user_sentences(desc));
             out.push_str(&format!("{code}: {desc}\n"));
+            // The specification section, without the ERRATA entry that
+            // records how the rule was settled.
+            let source = source
+                .split(" / ")
+                .filter(|part| !part.contains("ERRATA"))
+                .collect::<Vec<_>>()
+                .join(" / ");
             if source.chars().any(|c| c.is_alphanumeric()) {
                 out.push_str(&format!("Defined in: {source}\n"));
             }
         }
         None => out.push_str(&format!("{code}\n")),
     }
-    if let Some(doc) = doc {
+    if let Some(doc) = doc.filter(|d| !d.trim().is_empty()) {
         out.push('\n');
         out.push_str(&doc);
         out.push('\n');
     }
     for s in sections {
+        let s = user_paragraphs(&s);
+        // A heading with nothing left under it says nothing.
+        if s.lines().filter(|l| !l.trim().is_empty()).count() < 2 {
+            continue;
+        }
         out.push('\n');
         out.push_str(&s);
         out.push('\n');
     }
     Some(out)
+}
+
+/// The one-line description of a code whose catalog row is written about the
+/// compiler's internals rather than about the program.
+fn override_description(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "E0900" => {
+            "internal compiler error: the compiler produced a program it could not build. This \
+             is a bug in the Jux compiler, not in your program; please report it with the source \
+             that triggered it"
+        }
+        "E0904" => "`--target` names a target whose standard library is not installed for the toolchain Jux builds with",
+        "E0305" => "a name that the code Jux compiles to cannot spell (`self`, `Self`, `crate`, `super`); rename it",
+        _ => return None,
+    })
+}
+
+/// Whether a piece of the explanation is about the compiler rather than the
+/// program: how it is lowered, what the generated code or the build tools
+/// did, or the ERRATA history behind the rule.
+fn about_the_compiler(text: &str) -> bool {
+    if juxc_diagnostics::leak::find_rust_leak(text).is_some() {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    // "Rust" alone is not on the list: Rust's standard library is Jux's
+    // (`rust.std.Vec`), and saying so is about the program.
+    const TERMS: &[&str] = &[
+        "rustc", "rustdoc", "rustfmt", "rustup", "cargo", "backend", "lowering", "lowered",
+        "lowers ", "lower to", "lower it", "emitted", "emitter", "the generated", "generated rust",
+        "generated crate", "rust crate", "rust code", "rust compiler", "`rc<", "`rc`", "refcell",
+        "trait object", "errata",
+        "phase 1", "phase-1", "pre-fix", "codegen", "monomorph",
+    ];
+    TERMS.iter().any(|t| lower.contains(t))
+}
+
+/// `text` without the paragraphs (and list items) [`about_the_compiler`].
+fn user_paragraphs(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut in_fence = false;
+    let flush = |current: &mut Vec<&str>, out: &mut Vec<String>| {
+        if current.is_empty() {
+            return;
+        }
+        let para = current.join("\n");
+        if !about_the_compiler(&para) {
+            out.push(para);
+        }
+        current.clear();
+    };
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+            current.push(line);
+            if !in_fence {
+                flush(&mut current, &mut out);
+            }
+            continue;
+        }
+        if in_fence {
+            current.push(line);
+            continue;
+        }
+        if t.is_empty() {
+            flush(&mut current, &mut out);
+            continue;
+        }
+        if t.starts_with("- ") || t.starts_with("* ") || t.starts_with('|') {
+            flush(&mut current, &mut out);
+        }
+        current.push(line);
+    }
+    flush(&mut current, &mut out);
+    out.join("\n\n")
+}
+
+/// The sentences of a one-line description that are about the program.
+fn user_sentences(desc: &str) -> String {
+    let kept: Vec<&str> = desc
+        .split_inclusive(". ")
+        .filter(|s| !about_the_compiler(s))
+        .collect();
+    let text = kept.concat();
+    let text = text.trim().trim_end_matches('.').trim();
+    if text.is_empty() {
+        "see the specification section below".to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// `(description, source)` from the catalog table row for `code`.
@@ -118,7 +234,9 @@ fn variant_doc(code: &str) -> Option<String> {
                     break;
                 }
             }
-            return Some(reflow(&text));
+            // Paragraph boundaries are the blank `///` lines, which
+            // `reflow` folds away, so the filter runs first.
+            return Some(reflow(&user_paragraphs(&text)));
         }
         doc.clear();
     }
@@ -225,5 +343,35 @@ mod tests {
     #[test]
     fn an_unknown_code_is_none() {
         assert!(explain("E9876").is_none());
+    }
+
+    /// Every code this compiler can raise explains itself in Jux terms: no
+    /// Rust leak, and nothing about how the construct is lowered or what the
+    /// build tools said (gap 35).
+    #[test]
+    fn every_explanation_is_about_the_program() {
+        let codes: Vec<String> = CODES
+            .lines()
+            .filter_map(|l| l.split_once("=> \"").and_then(|(_, r)| r.split_once('"')).map(|(c, _)| c.to_string()))
+            .filter(|c| c.len() == 5 && (c.starts_with('E') || c.starts_with('W')))
+            .collect();
+        assert!(codes.len() > 100, "the code scan found {}", codes.len());
+        let mut bad = Vec::new();
+        for code in &codes {
+            let Some(text) = explain(code) else { continue };
+            for para in text.split("\n\n") {
+                if about_the_compiler(para) {
+                    bad.push(format!("{code}: {para}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} explanation paragraph(s) talk about the compiler:\n{}", bad.len(), bad.join("\n---\n"));
+    }
+
+    #[test]
+    fn the_internal_error_explains_itself_in_jux_terms() {
+        let text = explain("E0900").expect("E0900 is documented");
+        assert!(text.contains("bug in the Jux compiler"), "{text}");
+        assert!(!text.contains("rustc"), "{text}");
     }
 }

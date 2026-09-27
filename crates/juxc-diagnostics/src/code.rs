@@ -54,6 +54,17 @@ pub enum Code {
     /// whatever the parser tripped over next. This code says the true thing
     /// once, and the parser then skips the construct so nothing cascades.
     E0203_ReservedNotImplemented,
+    /// E0204 -- a Jux keyword written as the name of a parameter or a local
+    /// variable (`int f(int type)`, `int record = 1;`).
+    ///
+    /// Every keyword of Grammar A.1.3 is reserved, so a binding cannot be
+    /// called `type`, `record`, `sealed`, `yield` or `ref`. Rename it
+    /// (`kind`, `typeName`, `rec`). Later uses of the name are read as the
+    /// name, so the one mistake is reported once.
+    ///
+    /// Before gap 35 the declaration parsed and every use of it cascaded into
+    /// unrelated parse errors.
+    E0204_KeywordAsBindingName,
 
     /// E0210 — `super(...)` or `this(...)` not first statement.
     E0210_ConstructorCallNotFirst,
@@ -132,6 +143,18 @@ pub enum Code {
     /// construct an instance to call it on). A non-static `main` is an ordinary
     /// method, not an entry point; the spec makes the likely mistake an error.
     E0326_ClassMainNotStatic,
+    /// E0327 — A program built as a binary has no entry point: no free
+    /// `main`, no class `static main`, no `@entry` function and no top-level
+    /// statements (an empty file, or one holding only declarations).
+    ///
+    /// Entry Points §E.1 gives every binary exactly one entry; with none there
+    /// is nothing to run. Declare `void main() { ... }`, write the program's
+    /// statements at the top level of the entry file, or mark a function
+    /// `@entry`.
+    ///
+    /// Raised when the build finds no entry, since the same file is a fine
+    /// member of a library; before gap 35 it was an internal compiler error.
+    E0327_NoEntryPoint,
     /// E0323 — `main`'s signature does not match any accepted form.
     ///
     /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.2 the accepted forms are
@@ -309,10 +332,17 @@ pub enum Code {
     /// parent type can't reach the override.
     E0433_OverrideNarrowsAccess,
     /// E0434 — A class's `extends` chain forms a cycle (direct
-    /// `class A extends A` or transitive `A extends B extends A`).
+    /// `class A extends A` or transitive `A extends B extends A`), or an
+    /// interface's `extends` list does (`interface I extends J {}` with
+    /// `interface J extends I {}`).
+    ///
+    /// A type cannot be its own ancestor: inheritance has to have a top.
+    /// Change the `extends` of one of the types named so the chain ends.
+    ///
     /// Per `classes-rules.md` §1.2 inheritance must be a DAG. The
     /// pre-fix symptom was a runtime OOM in the backend's ancestor
-    /// walk; with this code the cycle is caught at tycheck.
+    /// walk; with this code the cycle is caught at tycheck. The interface
+    /// form reached the generated program until gap 35.
     E0434_CyclicInheritance,
     /// E0435 — An interface is used as a **dynamically-dispatched value
     /// type** (an interface-typed local / parameter / field / return —
@@ -632,6 +662,17 @@ pub enum Code {
     /// argument names a type, and `ref` is a binding mode. Store the values
     /// and share the container, which is already a reference type.
     E0526_RefGenericArgument,
+    /// E0527 -- `@export(convention = ...)` names a calling convention this
+    /// compiler cannot give the export: a name that is not a convention, or
+    /// one of Layout-ABI L.4.1's Windows conventions (`"Stdcall"`,
+    /// `"Fastcall"`, `"Vectorcall"`).
+    ///
+    /// Every export uses the C convention today. Remove `convention` (or
+    /// write `"C"`), and call the export with the C convention.
+    ///
+    /// Accepting and ignoring the value let a `__stdcall` caller corrupt its
+    /// stack at run time; the backend only emits `extern "C"` (gap 35).
+    E0527_ExportConventionUnsupported,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -869,17 +910,18 @@ pub enum Code {
     /// to rustc and the error would arrive in Rust's words (§G.1). Reported at
     /// the call instead, naming the method and the projection.
     E0469_UnresolvedForeignProjection,
-    /// E0454 — **Retired.** Reserved: a generic class used as a polymorphic
-    /// base was a Phase-1 limitation. Generic `Kind` traits and generic trait
-    /// objects (`Rc<dyn ContainerKind<isize>>`) are emitted now, so
-    /// `Container<int> b = new Box<int>(…)` compiles and dispatches like any
-    /// other base. The number is not reused.
+    // E0454 — **Retired.** Reserved: a generic class used as a polymorphic
+    // base was a Phase-1 limitation. Generic `Kind` traits and generic trait
+    // objects (`Rc<dyn ContainerKind<isize>>`) are emitted now, so
+    // `Container<int> b = new Box<int>(…)` compiles and dispatches like any
+    // other base. The number is not reused.
     /// W0457 — A class field forms an **un-annotated reference cycle** that will
-    /// leak (§6.5). Classes are `Rc`-refcounted and `Rc` does not collect
-    /// cycles, so a strong field whose type transitively references the owning
-    /// class (parent↔child, a `Node next` list, observer↔subject) keeps the
-    /// whole cycle alive forever. Annotating one back-edge field `weak` breaks
-    /// it. A **warning**, not an error — the program still compiles and runs.
+    /// leak (§6.5). Classes are reference-counted, and objects that refer to
+    /// each other in a cycle are never freed, so a strong field whose type
+    /// transitively references the owning class (parent↔child, a `Node next`
+    /// list, observer↔subject) keeps the whole cycle alive forever. Annotating
+    /// one back-edge field `weak` breaks it. A **warning**, not an error — the
+    /// program still compiles and runs.
     W0457_UnannotatedRefCycle,
     /// W0820 -- An `unsafe { }` block with no `// SAFETY:` comment saying why
     /// its obligations hold (Layout-ABI §L.5.5). Raised by the checking entry
@@ -1011,6 +1053,13 @@ pub enum Code {
     /// of `t` used to leak rustc's E0382 ("use of moved value"). Carries a
     /// label on the consuming site.
     E0707_TaskAlreadyConsumed,
+    /// E0708 -- `spawn(x)` is given the result of a call that is not async.
+    ///
+    /// The call has already run by the time `spawn` sees its result, so there
+    /// is no work left to start as a task. `spawn` takes a function,
+    /// `spawn(() -> makeUser("bob"))`, or the call of an `async` function,
+    /// `spawn(fetch())` (LANG-V1 §10.1.3).
+    E0708_SpawnNotATask,
 
     // ---- Memory / Unsafe (E0500–E0599) ----
     /// E0506 — An `unsafe` operation used outside an `unsafe` context. Per
@@ -1287,6 +1336,7 @@ impl Code {
             Code::E0201_NestingTooDeep           => "E0201",
             Code::E0202_NumericLiteralOutOfRange => "E0202",
             Code::E0203_ReservedNotImplemented   => "E0203",
+            Code::E0204_KeywordAsBindingName     => "E0204",
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0144_ColonTypeAnnotation      => "E0144",
             Code::E0262_ExpressionBodyOnVoid     => "E0262",
@@ -1306,6 +1356,7 @@ impl Code {
             Code::E0323_MainSignatureMismatch    => "E0323",
             Code::E0324_EntryNotEntryShaped      => "E0324",
             Code::E0326_ClassMainNotStatic       => "E0326",
+            Code::E0327_NoEntryPoint             => "E0327",
             Code::E0400_DuplicateDeclaration     => "E0400",
             Code::E0401_DuplicateField           => "E0401",
             Code::E0402_DuplicateMethod          => "E0402",
@@ -1383,6 +1434,7 @@ impl Code {
             Code::E0523_RefReturnType            => "E0523",
             Code::E0524_NestedRef                => "E0524",
             Code::E0526_RefGenericArgument       => "E0526",
+            Code::E0527_ExportConventionUnsupported => "E0527",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0470_AnnotationTargetMismatch => "E0470",
@@ -1448,6 +1500,7 @@ impl Code {
             Code::E0705_AsyncCallNotAwaited      => "E0705",
             Code::E0706_AsyncTryMutatesOuterLocal => "E0706",
             Code::E0707_TaskAlreadyConsumed      => "E0707",
+            Code::E0708_SpawnNotATask            => "E0708",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
             Code::E0710_ThrowRequiresException   => "E0710",

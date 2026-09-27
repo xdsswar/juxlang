@@ -3,7 +3,7 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
-use juxc_ast::{Expr, Ident, InterpSegment};
+use juxc_ast::{Expr, Ident, InterpSegment, QualifiedName};
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
@@ -64,13 +64,18 @@ impl<'a> Parser<'a> {
                     j += 1;
                 }
                 let name = String::from_utf8_lossy(&bytes[id_start..j]).into_owned();
-                // Ident spans get DUMMY here — interp inner span fidelity
-                // is a known polish item. The outer InterpString span
-                // already points at the literal.
-                segments.push(InterpSegment::Bare(Ident {
-                    text: name,
-                    span: Span::DUMMY,
-                }));
+                // `$name` IS `${name}` (§3.4), so it becomes the same
+                // expression segment: a one-segment path with a real span,
+                // rebased exactly as a `${…}` hole is. As a separate `Bare`
+                // segment with no span of its own it had no recorded type,
+                // and the backend guessed: a `T` field printed through `$v`
+                // was assumed `Display` where `${v}` knew better.
+                let ident_span = Span::new((base + id_start) as u32, (base + j) as u32);
+                let path = Expr::Path(QualifiedName {
+                    segments: vec![Ident { text: name, span: ident_span }],
+                    span: ident_span,
+                });
+                segments.push(InterpSegment::Expr(Box::new(path)));
                 i = j;
                 continue;
             }

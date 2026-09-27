@@ -2591,6 +2591,23 @@ impl crate::RustEmitter {
                                 juxc_ast::ReturnType::Type(t) if t.nullable
                             );
                         }
+                        // Inside an interface's default method a bare call is
+                        // `this.get(k)` on the interface (Java's implicit
+                        // `this`), and its declared return type says whether
+                        // the result is an `Option`. Without this, `var e =
+                        // get(k); if (e != null) return e;` never narrowed `e`
+                        // and the return handed an `Option` to an `int` slot
+                        // (gap 35); the same code in a free function worked.
+                        if let Some(iface) = self.enclosing_interface.as_deref() {
+                            if let Some((_, sig)) = self.lookup_interface_by_bare_or_fqn(iface) {
+                                if let Some(m) = sig.methods.get(&qn.segments[0].text) {
+                                    return matches!(
+                                        &m.return_type,
+                                        juxc_ast::ReturnType::Type(t) if t.nullable
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 // Method call: receiver-typed lookup is a tycheck

@@ -66,6 +66,22 @@ impl RustEmitter {
         // Headed for an interface slot: each expression arm coerces itself
         // (see `arm_iface_target`).
         let arm_iface_target = self.arm_iface_target.take();
+        // **String arms agree, as a `? :`'s do.** A string literal lowers to
+        // a `&str` inside a `format!` argument and to an owned `String`
+        // everywhere else, so `print(switch (n) { case 1 -> "ab " + n;
+        // default -> "c"; })` put a `String` in one arm and a `&str` in the
+        // other. When a `String` switch has any arm that is not a plain
+        // literal, every arm is emitted as an owned value.
+        let is_str_literal = |e: &juxc_ast::Expr| {
+            matches!(e, juxc_ast::Expr::Literal(juxc_ast::Literal::String(_)))
+        };
+        let own_string_arms = matches!(
+            self.expr_types.get(&s.span),
+            Some(juxc_tycheck::Ty::String)
+        ) && s.arms.iter().any(|arm| match &arm.body {
+            juxc_ast::SwitchBody::Expr(e) => !is_str_literal(e),
+            juxc_ast::SwitchBody::Block(_) => true,
+        });
         // Resolve the scrutinee's enum (if any) so bare `case Variant ->`
         // labels qualify to `Enum::Variant`. Saved/restored for nested switches.
         let prev_switch_enum = self.current_switch_enum.take();
@@ -396,6 +412,10 @@ impl RustEmitter {
                         };
                         self.operand_primitive(e) != Some(*p) && !adapts
                     });
+                    let prev_format_arg = self.emitting_format_arg;
+                    if own_string_arms {
+                        self.emitting_format_arg = false;
+                    }
                     if let Some(target) = &arm_iface_target {
                         self.emit_expr_coerced_to_iface(target, e);
                     } else if widen.is_some() {
@@ -411,6 +431,12 @@ impl RustEmitter {
                         self.w.push_str(crate::exprs::rust_primitive_name(p));
                         self.w.push(')');
                     }
+                    // A `String` read out of a place is copied, not moved out
+                    // of it, as a `? :` arm's is.
+                    if own_string_arms && widen.is_none() && self.value_place_needs_clone(e) {
+                        self.w.push_str(".clone()");
+                    }
+                    self.emitting_format_arg = prev_format_arg;
                     if wrap {
                         self.w.push(')');
                     }

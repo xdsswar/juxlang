@@ -1,0 +1,10 @@
+// `Result` is built from its variants, `Result.Ok(v)` and `Result.Err(e)`
+// (ERRATA E56). `ok` and `err` are instance methods, and calling one through
+// the type is E0413 rather than a call with the argument as its receiver
+// (gap 35).
+public void main() {
+    Result<int, String> good = Result.ok(1);
+    Result<int, String> bad = Result.err("no");
+    Result<int, String> fine = Result.Ok(2);
+    print(fine.isOk());
+}

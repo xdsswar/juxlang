@@ -2753,20 +2753,25 @@ fn interp_string_with_no_interpolation_yields_one_literal_segment() {
     assert!(matches!(&s.segments[0], InterpSegment::Literal(t) if t == "plain"));
 }
 
-/// `$name` bare-ident form yields literal-then-Bare segments.
+/// `$name` is `${name}`: a one-segment path expression with a real span
+/// inside the literal, so it is typed and lowered exactly as the braced form.
 #[test]
-fn interp_string_bare_ident_yields_bare_segment() {
+fn interp_string_bare_ident_is_a_path_expression() {
     use juxc_ast::InterpSegment;
-    let ast = parse_clean(r#"public void main() { var s = $"hi $name!"; }"#);
+    let src = r#"public void main() { var s = $"hi $name!"; }"#;
+    let ast = parse_clean(src);
     let body = body_of(&ast.items[0]);
     let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
     let Some(Expr::InterpString(s)) = v.init.as_ref() else { panic!() };
     assert_eq!(s.segments.len(), 3);
     assert!(matches!(&s.segments[0], InterpSegment::Literal(t) if t == "hi "));
-    let InterpSegment::Bare(ident) = &s.segments[1] else {
-        panic!("expected Bare segment");
+    let InterpSegment::Expr(e) = &s.segments[1] else {
+        panic!("expected an expression segment");
     };
-    assert_eq!(ident.text, "name");
+    let Expr::Path(qn) = &**e else { panic!("expected a path, got {e:?}") };
+    assert_eq!(qn.segments.len(), 1);
+    assert_eq!(qn.segments[0].text, "name");
+    assert_ne!(qn.span, juxc_source::Span::DUMMY);
     assert!(matches!(&s.segments[2], InterpSegment::Literal(t) if t == "!"));
 }
 

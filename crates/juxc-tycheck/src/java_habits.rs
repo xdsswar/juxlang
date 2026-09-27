@@ -167,9 +167,47 @@ pub fn java_class_hint(class: &str, method: &str) -> Option<&'static str> {
     }
 }
 
+/// Help for a dotted READ through a Java utility class Jux does not have
+/// (`Integer.MAX_VALUE`, `Double.NaN`), or `None` for any other name. The
+/// caller has already established that nothing called `class` is visible.
+/// A boxed number class's constant is the primitive's own, spelled with the
+/// primitive's name (Core lib §K.11): `Integer.MAX_VALUE` is `int.MAX_VALUE`.
+pub fn java_class_member_hint(class: &str, member: &str) -> Option<String> {
+    let primitive = match class {
+        "Integer" => "int",
+        "Long" => "long",
+        "Short" => "short",
+        "Byte" => "byte",
+        "Double" => "double",
+        "Float" => "float",
+        _ => return java_class_hint(class, member).map(str::to_string),
+    };
+    let float = matches!(primitive, "double" | "float");
+    let constant = match member {
+        "MAX_VALUE" | "MIN_VALUE" => member,
+        "NaN" | "NAN" if float => "NAN",
+        "POSITIVE_INFINITY" | "NEGATIVE_INFINITY" if float => member,
+        _ => return java_class_hint(class, member).map(str::to_string),
+    };
+    Some(format!(
+        "Jux has no boxed number classes: the constant belongs to the primitive, `{primitive}.{constant}`"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boxed_number_constants_name_the_primitive() {
+        assert!(java_class_member_hint("Integer", "MAX_VALUE").unwrap().contains("`int.MAX_VALUE`"));
+        assert!(java_class_member_hint("Long", "MIN_VALUE").unwrap().contains("`long.MIN_VALUE`"));
+        assert!(java_class_member_hint("Double", "NaN").unwrap().contains("`double.NAN`"));
+        // An integer has no infinity: the general boxed-number help instead.
+        assert!(!java_class_member_hint("Integer", "POSITIVE_INFINITY").unwrap().contains("int.POSITIVE"));
+        assert!(java_class_member_hint("Math", "PI").unwrap().contains("no `Math` class"));
+        assert_eq!(java_class_member_hint("Zork", "thing"), None);
+    }
 
     fn vec_like(name: &str) -> bool {
         matches!(name, "push" | "len" | "insert" | "is_empty" | "pop")

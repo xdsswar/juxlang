@@ -262,6 +262,50 @@ diagnostic.
 
 **33. CLOSED 2026-09-27 (ERRATA E129).** ~~Make a Rust leak impossible to ship, with one guard at every exit.~~ One detector (`juxc_diagnostics::leak`) guards the diagnostic renderers, the binaries' error exit, the language server and the ICE report; the emitted program throws Jux exceptions for out-of-range positions, empty-array `pop()`, negative array sizes and failed `File` operations, and its panic hook reports what is left (`panic: ...` / `Exception in thread "main" ...` with the `.jux` line; a stack overflow on Windows too). `E0905` replaces the cargo passthrough; `E0436`, `E0900`, `E0904`, the self-check note, the ICE report and `--help` no longer name Rust tools or types. `bin/juxc/tests/leak_sweep.rs` holds every pinned output to the detector (allowlist empty), and `bin/jux/tests/runtime_failures.rs` runs five deliberately failing programs. Not guarded: a stack overflow off Windows, foreign `Display`/`Debug` text beyond cells and nullables.
 
+### Release-blocker sweep (added 2026-09-27)
+
+**35. CLOSED 2026-09-27 (ERRATA E1XX-GAP35).** ~~Re-measure the 2026-09-24 release-blocker list and fix what still fails.~~ Every item of FEATURES-TODO's "Release blockers measured 2026-09-24" was reproduced against a release build with real Jux syntax. Seventeen had been closed by gaps 1-33 and four only in part; the rest still failed. Everything that failed is fixed at source, each with a regression test (`examples/release_blockers.jux`, `examples/no_entry_point.jux`, seven `tests/ui` cases, `bin/jux/tests/release_blockers.rs`). Also from E129's "not guarded" list: the bound-crate toolchain wording, `juxc explain` (now user-facing, held by a unit test over every code) and the `jux:` lines.
+
+| # | Blocker (2026-09-24) | Outcome | Fix / test |
+|---|---|---|---|
+| 1 | `ref int acc = total;` aliases nothing | already fixed | E90; `examples/ref_bindings.jux` |
+| 2 | `observer<T>` parameter attaches nothing | already fixed | E91 |
+| 3 | `$v` of a `var` double prints `2` | already fixed; the same form over a generic `T` still failed | E90-E93; gap 35 makes `$v` the `${v}` expression; `release_blockers.jux` |
+| 4 | `task.cancel()` skips `finally` | already fixed | E92; `cancellation_and_timeouts.jux` |
+| 5 | static-initializer cycle hangs | already fixed | E93 (`E0497`) |
+| 6 | user type named `T`/`Vec`/`String`/... | already fixed | E96 |
+| 7 | `spawn` of a class; `Task` surface; `Task` typo | fixed by E87/E94/E114, except `spawn(f())` of a non-async `f` (E0900) and `Task.yield()` | `E0708`, `Task.yield()`; `ui/spawn_not_a_task`, `release_blockers.jux` |
+| 8 | foreign non-`Clone + Debug` type in an aggregate | already fixed | E97, E118, E120 |
+| 9 | `sealed class` beyond one binding | already fixed | E101 |
+| 10 | function type over a polymorphic class | already fixed | E98 |
+| 11 | root `main.jux` subclass of a packaged class | still failing | `crate::` path in the base's `From` impls; `bin/jux/tests/release_blockers.rs` |
+| 12 | `print(switch ...)` with a `String` and a literal arm | still failing | arms agree as a `? :`'s do; `release_blockers.jux` |
+| 13 | `ref` class parameter breaks the build; no `W0490` | build fixed before gap 35; `W0490` still missing on a parameter | `W0490` on parameters; `ui/ref_param_on_reference_type` |
+| 14 | keyword-named property (`loop`) | still failing, and the formatter printed Rust | escaped getter call; formatter output dropped; `release_blockers.jux` |
+| 15 | property getter String intrinsics | still failing (also widening, promotion, `charLength`) | synthesized `this` gets its own span; `release_blockers.jux` |
+| 16 | record implementing an interface calls `this.inner.eval()` | still failing | record methods take `&self`; `release_blockers.jux` |
+| 17 | wildcards over a class bound | already fixed | E100, E115 |
+| 18 | `Box<int?>`; `HashMap<K,int>` with `double` | already fixed | E107; `E0933` |
+| 19 | annotations on parameters and locals | already fixed | E104 |
+| 20 | `Result.ok(1)` / `Result.err(e)`; `unwrap` on `Err`; `Result.from` | `ok`/`err` still E0900; `unwrap` throwing `IllegalStateException` is not a bug (E56); `Result.from` not provided | `E0413` naming `Result.Ok`; `ui/result_static_constructor`; `Result.from` left open |
+| 21 | `@entry` does nothing | already fixed | E105 |
+| 22 | `[lib]` plus two `[[bin]]` | already fixed | E103 |
+| 23 | `jux.toml` unvalidated | already fixed | E106 (`E0903`, `W0901`, `W0902`) |
+| 24 | `@export(convention = "Stdcall")` ignored | still failing | `E0527`; `ui/export_convention_unsupported` |
+| 25 | no lint levels, no `-Werror` | already fixed | E110 |
+| 26 | `Integer.MAX_VALUE`, `Zork.thing` leak | still failing | `E0301` with the `int.MAX_VALUE` hint; `ui/unknown_qualified_name` |
+| 27 | `new app.model.Secret()` skips `E0416` | still failing | FQN checked against its declaration; `bin/jux/tests/release_blockers.rs` |
+| 28 | link and target selection leak | already fixed | E116 (`E0904`, `E0906`, `E0908`) |
+| 29 | null narrowing in an interface `default` method | still failing | bare call typed by the interface's method; `release_blockers.jux` |
+| 30 | `AsyncMutex<T>` as a class field | still failing | owned guard, `Debug`; `release_blockers.jux` |
+| 31 | `assertThrows<E>` with a user exception | already fixed (no ERRATA names it) | the probe needs `throws` on the callee (E0711) |
+| 32 | empty file; interface cycle; `new int[-1]`; printing a curried lambda | all still failing | `E0327`, `E0434` for interfaces, run-time size, `<fn>`; `no_entry_point.jux`, `ui/interface_inheritance_cycle`, `release_blockers.jux` |
+| 33 | keyword as a parameter or local name cascades | still failing (E109 fixed only `E0305`'s text) | `E0204`; `ui/keyword_binding_name` |
+
+Also found and fixed on the way: `W0457` said classes are "`Rc`-refcounted" (eleven pinned outputs updated by hand).
+
+Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0413` with help. A stack overflow off Windows and a foreign `Display` stay as E129 left them.
+
 ---
 
 ## 4. Three streams stopped mid-flight

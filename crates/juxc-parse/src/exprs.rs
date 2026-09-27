@@ -1180,6 +1180,15 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_primary(&mut self) -> Option<Expr> {
         // Clone the kind so we can advance() without borrow-checker grief.
         let span = self.peek_span();
+        // A keyword already refused as a binding's name (E0204) reads as that
+        // name, so the one mistake is reported once.
+        if self.at_keyword_binding() {
+            if let TokenKind::Kw(kw) = self.peek().clone() {
+                self.advance();
+                let ident = Ident { text: kw.as_str().to_string(), span };
+                return Some(Expr::Path(QualifiedName { segments: vec![ident], span }));
+            }
+        }
         match self.peek().clone() {
             TokenKind::Str(text) => {
                 self.advance();

@@ -3489,7 +3489,12 @@ impl<'a> Parser<'a> {
                 ty.array_shape = Some(juxc_ast::ArrayShape::single(juxc_ast::ArrayDim::Dynamic));
             }
         }
-        let name = self.parse_decl_name()?;
+        // `this` stays the name the explicit-receiver form has always parsed.
+        let name = if self.at_kw(Keyword::This) {
+            self.parse_decl_name()?
+        } else {
+            self.parse_binding_name("parameter")?
+        };
         // Optional default value — `int port = 80` (spec 7.2). Evaluated
         // at the call site when the argument is omitted (S.1.3); the
         // expansion pass clones it into each such call.

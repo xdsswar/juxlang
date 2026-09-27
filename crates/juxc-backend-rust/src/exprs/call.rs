@@ -1590,6 +1590,14 @@ impl RustEmitter {
                             self.emitting_format_arg = prev;
                             return;
                         }
+                        // `Task.yield()` (LANG-V1 §10's fairness note) is the
+                        // built-in `yield_now()`: it hands the loop back once
+                        // (gap 35).
+                        "yield" => {
+                            self.w.push_str("crate::__jux_yield_now()");
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
                         _ => {
                             self.emitting_format_arg = prev;
                         }

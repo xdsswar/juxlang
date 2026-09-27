@@ -1,0 +1,16 @@
+// Every export uses the C convention, so any other value of `convention` is
+// refused rather than ignored (E0527, Layout-ABI L.4.1, gap 35).
+@export(convention = "Stdcall")
+public int add(int a, int b) {
+    return a + b;
+}
+
+@export(convention = "Bogus")
+public int sub(int a, int b) {
+    return a - b;
+}
+
+@export(convention = "C")
+public int mul(int a, int b) {
+    return a * b;
+}

@@ -940,9 +940,11 @@ fn cmd_target_list(installed: bool) -> Result<ExitCode> {
     match cmd.status() {
         Ok(status) => Ok(ExitCode::from(status.code().unwrap_or(1) as u8)),
         Err(e) => {
-            eprintln!("jux: could not run `rustup target list`: {e}");
+            // Said by what it is for, as the build's missing-toolchain error is
+            // (gap 33, gap 35), not by the name of the program it runs.
+            eprintln!("jux: could not list the targets: the toolchain Jux builds with could not be started ({e})");
             eprintln!(
-                "     install rustup (https://rustup.rs) to manage cross-compile targets",
+                "     install it as INSTALL.md describes, from https://rustup.rs, to build for other targets",
             );
             Ok(ExitCode::from(2))
         }
@@ -1419,7 +1421,7 @@ fn build_and_act(
         }
         Action::Build => {
             if let Some(lib) = &build.library {
-                eprintln!("jux: built library crate at {}", lib.crate_dir.display());
+                eprintln!("jux: built library at {}", lib.crate_dir.display());
             }
             for bin in &build.binaries {
                 eprintln!("jux: built {}", bin.binary_path.display());
@@ -1537,7 +1539,7 @@ fn run_workspace(
             return Ok(ExitCode::from(1));
         }
         if let Some(lib) = &build.library {
-            eprintln!("jux: [{name}] built library crate at {}", lib.crate_dir.display());
+            eprintln!("jux: [{name}] built library at {}", lib.crate_dir.display());
         }
         for bin in &build.binaries {
             eprintln!("jux: [{name}] built {}", bin.binary_path.display());

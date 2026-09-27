@@ -1,0 +1,16 @@
+// `spawn` runs work: a function or an async call's future. The result of an
+// ordinary call has already run (E0708, gap 35).
+class User {
+    public String name;
+    User(String name) { this.name = name; }
+}
+
+User makeUser(String name) {
+    return new User(name);
+}
+
+public async void main() {
+    var task = spawn(makeUser("bob"));
+    var ok = spawn(() -> makeUser("ann"));
+    print((await ok).name);
+}

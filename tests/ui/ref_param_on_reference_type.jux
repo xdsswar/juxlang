@@ -1,0 +1,15 @@
+// `ref` on a parameter whose type is already shared means nothing extra and
+// says so (W0490, ERRATA E84), as on a local or a field (gap 35).
+class Counter {
+    public int n = 0;
+}
+
+void bump(ref Counter c) {
+    c.n = c.n + 1;
+}
+
+public void main() {
+    var c = new Counter();
+    bump(c);
+    print(c.n);
+}

@@ -1,0 +1,8 @@
+// An interface cannot extend itself through any number of steps (E0434),
+// exactly as a class cannot (gap 35).
+interface Shape extends Drawable {}
+interface Drawable extends Shape {}
+
+public void main() {
+    print("unreachable");
+}

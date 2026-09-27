@@ -1,0 +1,1 @@
+interface_inheritance_cycle.jux:3:1: [E0434] error: `Shape` is its own ancestor -- following its `extends` list through `Drawable` returns to `Shape`. An interface cannot extend itself, directly or through any number of steps.

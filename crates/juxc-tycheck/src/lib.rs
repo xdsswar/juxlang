@@ -429,6 +429,36 @@ fn annotation_named_arg<'a>(
     })
 }
 
+/// `E0527` for an `@export(convention = "...")` the backend cannot honour
+/// (Layout-ABI §L.4.1). Every export is emitted with the C convention, so
+/// `"Stdcall"` used to be accepted and silently ignored, and so was a value
+/// that names no convention at all: a `__stdcall` caller of such an export
+/// corrupts its stack at run time with nothing said at compile time (gap 35).
+/// `"C"` (the default) is the one value accepted, the way `E0322` treats
+/// `@entry`'s convention.
+pub(crate) fn export_convention_diagnostic(annotations: &[juxc_ast::Annotation]) -> Option<Diagnostic> {
+    let ann = annotations
+        .iter()
+        .find(|a| a.name.segments.last().is_some_and(|s| s.text.eq_ignore_ascii_case("export")))?;
+    let literal = annotation_named_arg(ann, "convention")?;
+    let known = ["C", "Stdcall", "Fastcall", "Vectorcall"];
+    let message = match literal {
+        Some(name) if name.eq_ignore_ascii_case("c") => return None,
+        Some(name) if known.iter().any(|k| k.eq_ignore_ascii_case(name)) => format!(
+            "calling convention `{name}` is not supported on any target yet: every export is emitted with the C convention"
+        ),
+        Some(name) => format!(
+            "`{name}` is not a calling convention: `@export` accepts `\"C\"`, `\"Stdcall\"`, `\"Fastcall\"` or `\"Vectorcall\"`"
+        ),
+        None => "`@export(convention = ...)` takes a string naming a calling convention".to_string(),
+    };
+    Some(
+        Diagnostic::error(code::Code::E0527_ExportConventionUnsupported, message)
+            .with_span(ann.span)
+            .with_help("remove `convention` to export with the C convention, the only one emitted today (§L.4.1)"),
+    )
+}
+
 /// Whole-program `@entry` rules (`JUX-ENTRY-POINTS-ADDENDUM.md` §E.2,
 /// ERRATA E105).
 ///

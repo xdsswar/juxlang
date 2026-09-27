@@ -1,0 +1,2 @@
+export_convention_unsupported.jux:3:1: [E0527] error: calling convention `Stdcall` is not supported on any target yet: every export is emitted with the C convention
+export_convention_unsupported.jux:8:1: [E0527] error: `Bogus` is not a calling convention: `@export` accepts `"C"`, `"Stdcall"`, `"Fastcall"` or `"Vectorcall"`

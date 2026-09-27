@@ -108,6 +108,8 @@ pub(crate) fn from_messages(messages: &str, map: &SourceMap) -> Option<BuildFail
             link_failure(message)
         } else if rustc_code == Some("E0463") && (text.contains("`std`") || text.contains("`core`")) {
             missing_std(message)
+        } else if rustc_code == Some("E0601") {
+            no_entry_point()
         } else {
             failure.exit_code = crate::ice::ICE_EXIT_CODE;
             invalid_rust(message, rustc_code, text, map, &mut failure.sources)
@@ -119,6 +121,18 @@ pub(crate) fn from_messages(messages: &str, map: &SourceMap) -> Option<BuildFail
         }
     }
     (!failure.diagnostics.is_empty()).then_some(failure)
+}
+
+/// `E0327`: the program has nothing to run. The front end accepts a file with
+/// no entry point, because the same file is a fine library member; only a
+/// binary needs one, and the binary is what reports it. An empty file is the
+/// plainest case (FEATURES-TODO release blockers, gap 35).
+fn no_entry_point() -> Diagnostic {
+    Diagnostic::error(Code::E0327_NoEntryPoint, "this program has no entry point, so there is nothing to run")
+        .with_help(
+            "declare `void main() { ... }`, write the program's statements at the top level of \
+             the entry file, or mark one function `@entry` (§E.1, §E.2)",
+        )
 }
 
 /// What a rustc error code means, said the way a Jux programmer would.

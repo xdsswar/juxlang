@@ -309,10 +309,11 @@ Each `path` must contain exactly one entry (per §E.1.3 / §E.2).
 | `E0324` | `@entry` cannot select the declaration it is written on: a signature outside §E.1.2's set, or anything that is not a free function |
 | `E0325` | `freestanding = true` but no `@entry` function is declared                 |
 | `E0326` | A class member named `main` with an entry-shaped signature is not `static` (§E.1.2.2) |
+| `E0327` | A program built as a binary has no entry point: no `main`, no `@entry` function and no top-level statements, an empty file included (ERRATA E1XX-GAP35) |
 
 **Implementation status.** `E0320` (both forms in one binary, as well as the
 §E.1.3 double-implicit case), `E0321`, `E0322` (as the blanket rejection of
-§E.2.2), `E0323`, `E0324` and `E0326` are raised today. `E0325` needs
+§E.2.2), `E0323`, `E0324`, `E0326` and `E0327` are raised today. `E0325` needs
 `freestanding = true` to mean something, so it arrives with §E.3.
 
 A varargs parameter that is not the last parameter of its function is rejected

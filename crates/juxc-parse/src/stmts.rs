@@ -1264,7 +1264,7 @@ impl<'a> Parser<'a> {
         let is_final = final_kw.is_final();
         let start = self.peek_span();
         self.advance(); // 'var'
-        let name = self.parse_ident()?;
+        let name = self.parse_binding_name("local variable")?;
         // `var x: int = 5;` (E0144): the Kotlin/TypeScript annotation. Say so
         // once, read the type so the rest of the line parses, and carry on as
         // plain `var` (JUX-LANG-V1 §5.6).
@@ -1615,8 +1615,10 @@ impl<'a> Parser<'a> {
         while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Star)) {
             i += 1;
         }
-        // After the type, expect IDENT then `=` or `;`.
-        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+        // After the type, expect IDENT then `=` or `;`. A keyword there can
+        // only be a (refused, E0204) name: no other statement is a type, a
+        // keyword and `=` or `;`.
+        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_)) | Some(TokenKind::Kw(_)))
             && matches!(
                 self.tokens.get(i + 1).map(|t| &t.kind),
                 Some(TokenKind::Eq) | Some(TokenKind::Semicolon)
@@ -1639,7 +1641,7 @@ impl<'a> Parser<'a> {
         let is_final = final_kw.is_final();
         let ty_start = self.peek_span();
         let ty = self.parse_type_ref()?;
-        let name = self.parse_ident()?;
+        let name = self.parse_binding_name("local variable")?;
         let mut init_error = false;
         let init = if self.eat(&TokenKind::Eq) {
             // Bare `{a, b, c}` initializer (Java-style) — only valid

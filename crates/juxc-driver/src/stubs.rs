@@ -583,7 +583,7 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         &source_refs,
         "rust.std",
     )
-    .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("could not read the standard library's API description: {e}"))?;
     // The JSON is nightly's std; leave out what the user's own `rustc` would
     // reject as unstable (B32, Bindgen G.6.2.3).
     crate::stability::prune_unstable(&mut stub);
@@ -1025,7 +1025,7 @@ fn write_family_stub(
         anyhow::anyhow!("bindgen failed to read the re-exports of `{crate_name}`: {e}")
     })?;
     let mut stub_file = juxc_bindgen::ingest::generate_family(&refs, &package, &fam, excluded)
-        .map_err(|e| anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not read the API description of the dependency `{crate_name}`: {e}"))?;
     // Only the bound crate is linked, so anything merged in from a crate it
     // re-exports has to be named through it.
     if jsons.len() > 1 {
@@ -1070,7 +1070,7 @@ fn run_cargo_rustdoc_json(
     dep: &crate::manifest::Dependency,
 ) -> anyhow::Result<String> {
     let work = rustdoc_gen_dir(crate_name)
-        .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
+        .ok_or_else(|| anyhow::anyhow!("no cache directory to read a dependency's API description into"))?;
     std::fs::create_dir_all(work.join("src"))?;
     // A minimal package whose only purpose is to pull `crate_name` into a
     // resolvable dependency graph for rustdoc.
@@ -1100,7 +1100,7 @@ fn run_cargo_rustdoc_json(
 /// `host_crate`. This is how a crate's re-export sources are read.
 fn rustdoc_json_for_package(host_crate: &str, crate_name: &str) -> anyhow::Result<String> {
     let work = rustdoc_gen_dir(host_crate)
-        .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
+        .ok_or_else(|| anyhow::anyhow!("no cache directory to read a dependency's API description into"))?;
     // rustdoc names a crate by its LIB TARGET (`tiny_skia_path`); cargo's `-p`
     // wants the PACKAGE (`tiny-skia-path`). The two differ by more than
     // punctuation often enough that cargo is asked rather than guessed at.
@@ -1182,10 +1182,21 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
             .current_dir(work)
             .output()
             .map_err(|e| {
-                anyhow::anyhow!(
-                    "could not run `cargo`: {e}. Jux generates a crate's API stub \
-                     from rustdoc JSON, so `cargo` must be on PATH."
-                )
+                // Said by what it is for, as the build's own missing-toolchain
+                // error is (gap 33): the fix does not depend on which of the
+                // toolchain's programs was not found.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::anyhow!(
+                        "the toolchain Jux builds with is not installed or not on PATH (reading the \
+                         API of the dependency `{package}` needs it); install it as INSTALL.md \
+                         describes, from https://rustup.rs"
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "the toolchain Jux builds with could not be started to read the API of the \
+                         dependency `{package}`: {e}"
+                    )
+                }
             })
     };
     let mut output = run(true)?;
@@ -1199,12 +1210,21 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
     }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // The tool's own report is about a crate the program only names, in
+        // the toolchain's terms (gap 35), so the message says what to do in
+        // Jux terms instead. The first line that reads as Jux is kept.
+        let reason = stderr
+            .lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix("error:").map(str::trim))
+            .filter(|l| !l.is_empty() && juxc_diagnostics::leak::find_rust_leak(l).is_none())
+            .map(|l| format!(" (the toolchain said: {l})"))
+            .unwrap_or_default();
         anyhow::bail!(
-            "could not read the API of the Rust crate `{package}`: `cargo rustdoc \
-             --output-format json` failed.\n{stderr}\n\
-             Jux reads a crate's API from rustdoc's JSON output. If the default toolchain \
-             could not give it, the `nightly` one can:\n    rustup toolchain install nightly\n\
-             The stub is generated once per crate version and cached in `.jux-stubs/`."
+            "could not read the API of the dependency `{package}`: the toolchain Jux builds \
+             with could not describe it{reason}. Install the toolchain's `nightly` channel, \
+             which can, as INSTALL.md describes, then build again. The description is read \
+             once per dependency version and kept in `.jux-stubs/`."
         );
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
@@ -1212,11 +1232,9 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
     let json_path = doc_target.join("doc").join(&json_name);
     std::fs::read_to_string(&json_path).map_err(|e| {
         anyhow::anyhow!(
-            "rustdoc reported success but wrote no JSON for `{package}` \
-             (looked at {}): {e}.\n\
-             This usually means the nightly toolchain is missing its docs \
-             component:\n    rustup component add rust-docs-json --toolchain nightly",
-            json_path.display(),
+            "could not read the API of the dependency `{package}`: the toolchain reported \
+             success but left no description of it ({e}). This usually means its `nightly` \
+             channel is missing a component; INSTALL.md lists the ones Jux needs"
         )
     })
 }

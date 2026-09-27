@@ -1,0 +1,1 @@
+ref_param_on_reference_type.jux:7:11: [W0490] warning: `ref` adds nothing here: `Counter` is already a reference type, so every binding of it shares one object (§M.13.2)

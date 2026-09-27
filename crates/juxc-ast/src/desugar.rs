@@ -1017,9 +1017,18 @@ fn static_modifier(is_static: bool) -> Vec<crate::decls::FnModifier> {
 }
 
 /// `this.<field>` as an expression.
+///
+/// The synthesized `this` gets an EMPTY span at the start of the name, never
+/// the name's own span: the per-expression type map is keyed by span, and a
+/// `this` sharing the field read's span overwrote the read's type with the
+/// class's. Inside an accessor body (`get -> f.length()`, where `f` is
+/// rewritten to `this.f`) every read of a field then looked like a read of
+/// the object: its String methods, numeric widening and promotion all went
+/// out wrong (gap 35).
 fn this_field(field: &str, span: Span) -> Expr {
+    let this_span = Span { start: span.start, end: span.start, file: span.file };
     Expr::Field(FieldExpr {
-        object: Box::new(Expr::This(span)),
+        object: Box::new(Expr::This(this_span)),
         field: ident(field, span),
         safe: false,
         span,

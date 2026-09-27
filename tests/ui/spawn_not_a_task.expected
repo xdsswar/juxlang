@@ -1,0 +1,1 @@
+spawn_not_a_task.jux:13:22: [E0708] error: `spawn` needs work to run, and `makeUser(...)` is not async: the call runs before `spawn` sees its result, so there is no task to start
