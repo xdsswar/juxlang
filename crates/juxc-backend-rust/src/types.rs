@@ -715,7 +715,23 @@ impl RustEmitter {
         // `pub mod` tree. Same-package references stay bare —
         // they reach their sibling through normal Rust module
         // visibility.
-        let path = if ty.name.segments.len() == 1 {
+        // A FOREIGN trait is named by its real Rust path (`egui::Widget`),
+        // recorded on the stub like a class's. The fallback below spells a
+        // Jux FQN as a module of the emitted crate, `crate::rust::eframe::
+        // Widget`, which does not exist (L3).
+        let foreign_trait_path = if shadowed_by_nested_type {
+            None
+        } else {
+            ty.name
+                .segments
+                .last()
+                .and_then(|s| self.lookup_interface_by_bare_or_fqn(&s.text))
+                .filter(|(_, i)| i.is_external)
+                .and_then(|(_, i)| i.rust_path.clone())
+        };
+        let path = if let Some(real) = foreign_trait_path {
+            real
+        } else if ty.name.segments.len() == 1 {
             let bare = ty.name.segments[0].text.as_str();
             // §M.9 enclosing-class fallback: a bare `Config` inside
             // `HttpServer` (or a sibling nested type) names the

@@ -43,6 +43,15 @@ impl Parser<'_> {
         ) {
             return false;
         }
+        // A FIELD named `operator` (`lopdf::content::Operation` has one)
+        // ends where its name does. Read as a declaration, it did not parse,
+        // and a stub that does not parse loses every declaration after it.
+        if matches!(
+            self.tokens.get(j + 1).map(|t| &t.kind),
+            Some(TokenKind::Semicolon | TokenKind::Eq | TokenKind::Comma)
+        ) {
+            return false;
+        }
         if !matches!(
             self.tokens.get(j + 1).map(|t| &t.kind),
             Some(TokenKind::LParen)

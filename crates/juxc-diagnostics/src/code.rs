@@ -398,6 +398,12 @@ pub enum Code {
     /// in a field or an element, or passed to a constructor. It exists only
     /// while the crate's call runs (ERRATA E127).
     E0454_LentObjectKept,
+    /// E0488 -- A lambda WRITES THROUGH an object a crate lends it read-only:
+    /// the closure slot's Rust signature passes that argument as `&T`, not
+    /// `&mut T` (bindgen records which, `@RustClosureShared`). Assigning to one
+    /// of its fields or calling a mutating method on it is refused here rather
+    /// than by rustc (ERRATA E1XX-GAP31).
+    E0488_LentReadOnlyWritten,
     /// E0443 — A malformed **explicit call-site type-argument list** —
     /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:
     /// the callee isn't generic (no type params to apply the args to),
@@ -1244,6 +1250,14 @@ pub enum Code {
     /// failed. Reported with the one line of the linker's output that says why;
     /// the full linker command line is shown only under `--verbose`.
     E0906_LinkFailed,
+    /// E0907 -- **a generated `.jux.d` stub did not parse as declarations.**
+    /// Bindgen wrote text the parser read as statements (a script body) or as a
+    /// body where a stub has only signatures. It is an internal error of the
+    /// binding generator, reported against the stub with the line it went wrong
+    /// at; the declarations from that line on are left out, and nothing of the
+    /// stub is mistaken for the program's own `main` (Bindgen G.12, ERRATA
+    /// E1XX-GAP31).
+    E0907_StubBody,
     /// E0908 -- **a linkage the target cannot provide**: an `[ffi.*]` entry
     /// with `linkage = "framework"` built for a target that is not Apple's.
     /// Frameworks exist only there, and rustc's `-l framework=` is refused
@@ -1324,6 +1338,7 @@ impl Code {
             Code::E0439_PatternShapeMismatch     => "E0439",
             Code::E0453_GenericInferenceNoSolution => "E0453",
             Code::E0454_LentObjectKept           => "E0454",
+            Code::E0488_LentReadOnlyWritten      => "E0488",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
@@ -1461,6 +1476,7 @@ impl Code {
             Code::E0900_BackendEmittedInvalidRust => "E0900",
             Code::E0904_TargetNotInstalled       => "E0904",
             Code::E0906_LinkFailed               => "E0906",
+            Code::E0907_StubBody                 => "E0907",
             Code::E0908_LinkageUnavailable       => "E0908",
             Code::W0906_UnusedFfiEntry           => "W0906",
         }

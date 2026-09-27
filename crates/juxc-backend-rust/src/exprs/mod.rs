@@ -125,18 +125,20 @@ impl RustEmitter {
     /// not a foreign enum.
     pub(crate) fn external_enum_real_path(&self, fqn: &str) -> Option<String> {
         let sig = self.symbols.enums.get(fqn).filter(|e| e.is_external)?;
-        // Prefer the crate's RE-EXPORT path (`minifb::Key`) for a non-std
-        // foreign crate: the `@rust("…")` annotation may record the canonical
-        // path through a PRIVATE module (`minifb::key::Key`, which trips rustc
-        // E0603), while the crate re-exports the type at its root — matching
-        // the import's own `use minifb::Key;`. `std` keeps its annotation path
-        // (the stub flattens nested std modules, so `std::path::Component` is
-        // the only valid form).
+        // The `@rust("…")` path is the one to use: bindgen writes a path a
+        // `use` accepts (§G.9.2), and for a member of a crate family the path
+        // through the crate the program links (`eframe::egui::Align`).
+        // Deriving it from the Jux package instead (`rust.eframe.Align` ->
+        // `eframe::Align`) named a type the host never published (L25). Only
+        // a stub with no recorded path falls back to that spelling.
+        if let Some(real) = &sig.rust_path {
+            return Some(real.clone());
+        }
         let segs: Vec<&str> = fqn.split('.').collect();
         if segs.first() == Some(&"rust") && segs.len() >= 3 && segs[1] != "std" {
             return Some(juxc_lex::join_rust_path(&segs[1..]));
         }
-        sig.rust_path.clone()
+        None
     }
 
     /// The OWNED form of a foreign borrowed-view type, as bindgen discovered it
@@ -428,6 +430,9 @@ impl RustEmitter {
     }
 
     pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
+        if self.is_foreign_struct_field(e) {
+            return false;
+        }
         match self.narrowed_receiver_ty_of(e) {
             // An array is a reference type on the same terms (§6.5.2), so it
             // takes the same handle and every rule written for a collection --
@@ -441,6 +446,28 @@ impl RustEmitter {
         }
     }
 
+    /// Whether `e` reads an instance field of a FOREIGN value
+    /// (`doc.pages` on a `printpdf::PdfDocument`). The crate stores a plain
+    /// Rust `Vec` there, never the §6.5.1 handle a Jux-held collection is, so
+    /// a method on it is called on the container itself.
+    pub(crate) fn is_foreign_struct_field(&self, e: &Expr) -> bool {
+        let Expr::Field(f) = e else { return false };
+        if f.safe {
+            return false;
+        }
+        let Some(juxc_tycheck::Ty::User { name, .. }) = self.receiver_ty_of(&f.object) else {
+            return false;
+        };
+        let class = self
+            .symbols
+            .classes
+            .get(name.as_str())
+            .or_else(|| self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name)));
+        class.is_some_and(|c| {
+            c.is_external && c.fields.get(f.field.text.as_str()).is_some_and(|fld| !fld.is_static)
+        })
+    }
+
     /// The `RefCell` borrow a collection-handle RECEIVER needs before
     /// `method`, or `None` when the receiver is not a handle.
     ///
@@ -452,6 +479,9 @@ impl RustEmitter {
         recv: &Expr,
         method: &str,
     ) -> Option<&'static str> {
+        if self.is_foreign_struct_field(recv) {
+            return None;
+        }
         let juxc_tycheck::Ty::User { name, .. } = self.narrowed_receiver_ty_of(recv)? else {
             return None;
         };
@@ -890,10 +920,59 @@ impl RustEmitter {
             .next()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
-        self.w.push_str("::new");
-        self.w.push_str(&ctor_sfx);
-        self.w.push('(');
+        // The constructor the call resolves to, when the type is foreign: its
+        // flags say how the Rust value is built and what each slot takes.
+        let foreign_ctor: Option<juxc_tycheck::symbol_table::ConstructorSig> = if shadows_an_import {
+            None
+        } else {
+            n.class_name
+                .segments
+                .last()
+                .and_then(|s| self.lookup_class_by_bare_or_fqn(&s.text))
+                .filter(|c| c.is_external)
+                .and_then(|c| c.constructors.iter().find(|ct| ct.params.len() == n.args.len()).cloned())
+        };
+        // A TUPLE struct is built by its struct expression, `Mm(210.0)`
+        // (Bindgen G.3.7): it has no `new`.
+        if foreign_ctor.as_ref().is_some_and(|c| c.is_rust_tuple) {
+            self.w.push('(');
+        } else {
+            let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
+            self.w.push_str("::new");
+            self.w.push_str(&ctor_sfx);
+            self.w.push('(');
+        }
+        let ctor_param_is_impl: Vec<bool> = foreign_ctor
+            .as_ref()
+            .map(|c| c.params.iter().map(|p| p.is_foreign_impl).collect())
+            .unwrap_or_default();
+        // A `&mut` slot (`DragValue::new(value: &mut Num)`) lends the caller's
+        // own place, exactly as a foreign method's does.
+        let ctor_param_is_mut_ref: Vec<bool> = foreign_ctor
+            .as_ref()
+            .map(|c| c.params.iter().map(|p| p.is_mut_ref).collect())
+            .unwrap_or_default();
+        let ctor_param_is_shared: Vec<bool> = foreign_ctor
+            .as_ref()
+            .map(|c| c.params.iter().map(|p| p.foreign_shared.is_some()).collect())
+            .unwrap_or_default();
+        // A by-value foreign COLLECTION parameter (`TableLayout::new(Vec<usize>)`)
+        // takes the sequence, not the Jux handle (§G.6.6): the handle lends a
+        // copy of its interior.
+        let ctor_param_takes_interior: Vec<bool> = foreign_ctor
+            .as_ref()
+            .map(|c| {
+                c.params
+                    .iter()
+                    .map(|p| {
+                        !p.is_ref
+                            && !p.is_mut_ref
+                            && p.ty.array_shape.is_none()
+                            && self.collection_is_handle(&p.ty.name)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         // Constructor args consume their values, so any
         // nested string literal needs the Fix-1 self-coerce
         // — clear the format-arg flag for the arg emission.
@@ -1121,6 +1200,40 @@ impl RustEmitter {
         // `Some()`, wrapper share-clone), shared by the inline
         // and the lexical-hoist paths.
         let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
+            if ctor_param_is_mut_ref.get(i).copied().unwrap_or(false) {
+                this.w.push_str("&mut ");
+                this.emitting_method_receiver = true;
+                this.emit_expr(arg);
+                this.emitting_method_receiver = false;
+                return;
+            }
+            // A generic foreign slot takes the value as it is (Bindgen G.3.6);
+            // an erased pointer is re-added with `.into()`.
+            if ctor_param_is_impl.get(i).copied().unwrap_or(false) {
+                this.emit_expr(arg);
+                if this.wrapper_value_needs_clone(arg) || this.value_place_needs_clone(arg) {
+                    this.w.push_str(".clone()");
+                }
+                return;
+            }
+            if ctor_param_is_shared.get(i).copied().unwrap_or(false) {
+                this.w.push('(');
+                this.emit_expr(arg);
+                if this.wrapper_value_needs_clone(arg) || this.value_place_needs_clone(arg) {
+                    this.w.push_str(".clone()");
+                }
+                this.w.push_str(").into()");
+                return;
+            }
+            if ctor_param_takes_interior.get(i).copied().unwrap_or(false)
+                && this.expr_is_collection_handle(arg)
+            {
+                this.emitting_method_receiver = true;
+                this.emit_expr(arg);
+                this.emitting_method_receiver = false;
+                this.w.push_str(".borrow().clone()");
+                return;
+            }
             if let Some(pty) = ctor_param_types.get(i) {
                 // `null` into a raw-pointer parameter is a null pointer, not
                 // `None` (§L.6.1).
@@ -1640,6 +1753,17 @@ impl RustEmitter {
                 if wrap_inside_option {
                     self.w.push('(');
                 }
+                // A value handed back through a pointer the stub erased
+                // (`ui.style()` is `&Arc<Style>`) is the pointee, copied out:
+                // the program then owns a `Style` it can change and hand back
+                // (`set_style`). `&*` reaches the pointee from the pointer, or
+                // from a reference to it, by deref coercion (L16).
+                let deref_shared = if wrap { None } else { self.call_derefs_shared(c) };
+                if let Some(path) = &deref_shared {
+                    self.w.push('<');
+                    self.w.push_str(path);
+                    self.w.push_str(" as ::std::clone::Clone>::clone(&*(");
+                }
                 // A call to a foreign (`.jux.d`) function/method whose `throws E`
                 // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
                 // Jux-visible value is `T`, re-throwing the error via `panic_any`
@@ -1651,6 +1775,9 @@ impl RustEmitter {
                         .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
                 } else {
                     self.emit_call(c);
+                }
+                if deref_shared.is_some() {
+                    self.w.push_str("))");
                 }
                 if borrowed {
                     self.w.push_str(".to_vec()");

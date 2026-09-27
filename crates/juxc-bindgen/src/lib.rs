@@ -19,6 +19,7 @@
 //! the spec's mapping rules are unit-tested on plain data.
 
 pub mod emit;
+pub mod family;
 pub mod ingest;
 pub mod model;
 pub mod naming;

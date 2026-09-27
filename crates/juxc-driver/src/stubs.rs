@@ -29,6 +29,7 @@
 //! builds units ([`crate::compile_workspace_as`], [`crate::check_workspace`],
 //! …) calls [`mark_external_units`] after the parse loop.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -67,8 +68,11 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
-/// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 44;
+/// checked on load. 45: the crate-family and generic-slot markers of Bindgen
+/// G.3.6-G.3.7 (`@RustImpl`, `@RustFrom`, `@RustHash`, associated constants),
+/// maps and sets under their own names, and a collection must also iterate.
+/// 46: `@RustClosureShared` (closure arguments lent read-only).
+const STD_STUB_CACHE_VERSION: u32 = 46;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -112,7 +116,12 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// 19: `@RustDebug`, `@RustPartialEq` and a TYPE-level `@RustDefault` (ERRATA
 /// E97): a stub without them says a type has no `Debug`, and every aggregate
 /// holding one would silently lose its own.
-const CRATE_STUB_CACHE_VERSION: u32 = 19;
+/// 20: crate families (Bindgen G.6.2.4) -- transitive re-exports, the
+/// published definition of a shared name, paths through the host, aliases of
+/// a crate bound in its own right; `@RustImpl`, `@RustFrom`, `@RustFromInto`,
+/// `@RustHash`, `@RustTuple`, `@RustStructVariants`, `@RustDerefOut`,
+/// `@RustArc`, associated constants (G.3.6). 21: `@RustClosureShared`.
+const CRATE_STUB_CACHE_VERSION: u32 = 21;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -219,12 +228,60 @@ pub fn drop_external_diagnostics(diagnostics: &mut Vec<Diagnostic>, sources: &[S
 
 /// Does this stub diagnostic mean the whole stub failed to load?
 ///
-/// Lexical (`E01xx`) and syntax (`E02xx`) errors do; everything later in the
-/// pipeline is about a declaration that parsed, and is the noise
+/// Lexical (`E01xx`) and syntax (`E02xx`) errors do, and so does `E0907`, a
+/// stub whose text reads as statements; everything later in the pipeline is
+/// about a declaration that parsed, and is the noise
 /// [`drop_external_diagnostics`] exists to suppress.
 fn stub_error_is_fatal_to_the_unit(d: &Diagnostic) -> bool {
     d.severity == juxc_diagnostics::Severity::Error
-        && matches!(&d.code.as_str()[..3], "E01" | "E02")
+        && (matches!(&d.code.as_str()[..3], "E01" | "E02")
+            || d.code == juxc_diagnostics::code::Code::E0907_StubBody)
+}
+
+/// Take out of a parsed STUB every function that has a body, and report the
+/// first as the bindgen error it is (`E0907`).
+///
+/// A stub is signatures only (§G.2), so a body can only be the parser's
+/// script mode (§E.1.1) at work: text it could not read as a declaration was
+/// read as top-level statements and wrapped in a synthetic `main`. That is how
+/// one keyword-named field in the `lopdf` stub took the 900 lines after it and
+/// surfaced as "`main` is declared more than once" against the user's own
+/// `main.jux` -- the wrong file and the wrong problem (L20). The body is dropped
+/// here, so nothing of the stub reaches the program, and the report names the
+/// stub and where it stopped parsing.
+pub fn reject_stub_bodies(unit: &mut CompilationUnit, source: &SourceFile) -> Option<Diagnostic> {
+    let mut first: Option<juxc_source::Span> = None;
+    unit.items.retain(|item| match item {
+        juxc_ast::TopLevelDecl::Function(f) if f.body.is_some() => {
+            let at = f.body.as_ref().map_or(f.span, |b| b.span);
+            if first.map_or(true, |s| at.start < s.start) {
+                first = Some(at);
+            }
+            false
+        }
+        _ => true,
+    });
+    let at = first?;
+    let (line, _) = source.line_col(at.start as usize);
+    Some(
+        Diagnostic::error(
+            juxc_diagnostics::code::Code::E0907_StubBody,
+            format!(
+                "internal compiler error: the generated stub `{}` stops parsing as declarations at line {line}; \
+                 what follows reads as statements. The declarations from there on are left out of `{}`. \
+                 This is a bindgen bug: please report it with this stub",
+                source.path().display(),
+                unit.package.as_ref().map_or_else(String::new, |p| p
+                    .name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")),
+            ),
+        )
+        .with_span(at),
+    )
 }
 
 // ============================================================================
@@ -549,6 +606,61 @@ pub fn load_project_stub_sources(project_root: &Path) -> Vec<SourceFile> {
     collect_stub_sources(&dir)
 }
 
+/// The stubs of exactly the foreign dependencies `deps` declares (§G.9.4:
+/// "stubs not named by a dependency are not loaded"), path-sorted.
+///
+/// Loading everything under `.jux-stubs/` instead kept a removed
+/// dependency's stub alive: its declarations went on resolving, so after
+/// taking `rust.egui` out of `jux.toml` a program still got
+/// `expected rust.egui.Ui` until the file was deleted by hand (L7). A generated
+/// stub nothing declares any more is deleted outright, since only the
+/// compiler wrote it; a hand-vendored one is left on disk, unread.
+pub fn load_declared_stub_sources(
+    project_root: &Path,
+    deps: &[&crate::manifest::Dependency],
+) -> Vec<SourceFile> {
+    prune_undeclared_stubs(project_root, deps);
+    let mut paths: Vec<PathBuf> = deps
+        .iter()
+        .filter_map(|d| foreign_dep_kind(&d.name))
+        .map(|(kind, krate)| crate_stub_cache_path(project_root, kind, krate))
+        .filter(|p| p.is_file())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+        .into_iter()
+        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|c| SourceFile::new(p, c)))
+        .collect()
+}
+
+/// Delete every GENERATED stub under `.jux-stubs/` whose dependency `deps`
+/// no longer declares. A generated stub is one whose first line is the
+/// compiler's cache marker; anything else was put there by hand and is kept.
+pub fn prune_undeclared_stubs(project_root: &Path, deps: &[&crate::manifest::Dependency]) {
+    let dir = project_root.join(PROJECT_STUB_DIRNAME);
+    if !dir.is_dir() {
+        return;
+    }
+    let declared: HashSet<PathBuf> = deps
+        .iter()
+        .filter_map(|d| foreign_dep_kind(&d.name))
+        .map(|(kind, krate)| crate_stub_cache_path(project_root, kind, krate))
+        .collect();
+    let mut found: Vec<PathBuf> = Vec::new();
+    collect_stub_files(&dir, &mut found);
+    for path in found {
+        if declared.contains(&path) {
+            continue;
+        }
+        let generated = std::fs::read_to_string(&path)
+            .is_ok_and(|t| t.starts_with("// juxc crate stub cache-version"));
+        if generated {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// Recursively read every `.jux.d` file under `dir` into [`SourceFile`]s,
 /// path-sorted. Hidden subdirectories are skipped.
 fn collect_stub_sources(dir: &Path) -> Vec<SourceFile> {
@@ -673,69 +785,262 @@ pub fn resolve_crate_stub(
     crate_name: &str,
     dep: &crate::manifest::Dependency,
 ) -> anyhow::Result<PathBuf> {
-    let version = dep.version.as_deref();
-    let source = &crate_source_of(dep);
-    let cache = crate_stub_cache_path(project_root, kind, crate_name);
-    if cache.is_file() {
-        // Vendored c/cpp stubs are authored by hand and carry no version marker,
-        // so trust them as-is. A generated `rust.*` stub is trusted only when its
-        // cache-version marker matches; a stale one (pre-snake_case naming) falls
-        // through to regeneration.
-        if kind != "rust" || crate_stub_cache_is_fresh(&cache, &crate_stub_header(source, dep)) {
-            return Ok(cache);
+    resolve_crate_stubs(project_root, &[dep])
+        .into_iter()
+        .next()
+        .map(|(_, r)| r)
+        .unwrap_or_else(|| anyhow::bail!("`{kind}.{crate_name}` is not a foreign dependency"))
+}
+
+/// The prefix of the header line that records a generated stub's family.
+const FAMILY_LINE: &str = "// family:";
+
+/// The crates a generated stub describes (its bound crate and the crates it
+/// re-exports), as its second header line records them. Empty when the stub
+/// has no such line.
+fn cached_family(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    text.lines()
+        .nth(1)
+        .and_then(|l| l.strip_prefix(FAMILY_LINE))
+        .map(|rest| rest.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// The header of the stub for `dep` in a program that binds `others` too.
+///
+/// Which crates the stub declares depends on the program's OTHER foreign
+/// dependencies (§G.6.2.4): a crate bound in its own right is declared in its
+/// own package and only aliased here. So the list is part of the key, and
+/// adding `rust.egui` next to `rust.eframe` regenerates `eframe`'s stub.
+fn crate_stub_header_with(
+    source: &juxc_backend_rust::CrateSource,
+    dep: &crate::manifest::Dependency,
+    others: &[String],
+) -> String {
+    let base = crate_stub_header(source, dep);
+    if others.is_empty() {
+        return base;
+    }
+    format!("{} with [{}]\n", base.trim_end(), others.join(","))
+}
+
+/// Resolve every foreign dependency in `deps` to a `.jux.d` stub on disk,
+/// generating the stale ones together (§G.6.2.4).
+///
+/// They are resolved as a SET because a crate re-exported by one dependency
+/// may be bound by another (`rust.eframe` re-exports `egui`, and a program
+/// may name `rust.egui` as well). Declaring it in both packages made one Rust
+/// type two Jux types that did not unify. Each crate is therefore declared by
+/// exactly one package, the dependency that names it or else the first whose
+/// family holds it, and every other stub aliases that declaration.
+///
+/// Returns one `(dependency name, result)` per foreign dependency, in order.
+pub fn resolve_crate_stubs(
+    project_root: &Path,
+    deps: &[&crate::manifest::Dependency],
+) -> Vec<(String, anyhow::Result<PathBuf>)> {
+    let ident = |s: &str| s.replace('-', "_");
+    let foreign: Vec<(&'static str, String, &crate::manifest::Dependency)> = deps
+        .iter()
+        .filter_map(|d| foreign_dep_kind(&d.name).map(|(k, c)| (k, c.to_string(), *d)))
+        .collect();
+    let rust_crates: Vec<String> = foreign
+        .iter()
+        .filter(|(k, _, _)| *k == "rust")
+        .map(|(_, c, _)| ident(c))
+        .collect();
+
+    // Which stubs are stale, and each fresh one's recorded family.
+    let mut results: Vec<Option<anyhow::Result<PathBuf>>> = Vec::with_capacity(foreign.len());
+    let mut families: HashMap<String, Vec<String>> = HashMap::new();
+    let mut headers: Vec<String> = Vec::with_capacity(foreign.len());
+    for (kind, crate_name, dep) in &foreign {
+        let cache = crate_stub_cache_path(project_root, kind, crate_name);
+        let others: Vec<String> = {
+            let mut o: Vec<String> =
+                rust_crates.iter().filter(|c| **c != ident(crate_name)).cloned().collect();
+            o.sort();
+            o
+        };
+        let header = crate_stub_header_with(&crate_source_of(dep), dep, &others);
+        headers.push(header.clone());
+        if *kind != "rust" {
+            // Vendored c/cpp stubs are authored by hand and carry no marker.
+            results.push(Some(if cache.is_file() {
+                Ok(cache)
+            } else {
+                Err(anyhow::anyhow!(
+                    "no cached stub for `{kind}.{crate_name}` at {} (C/C++ stub generation \
+                     is not wired in this phase -- vendor a `.jux.d` into `.jux-stubs/{kind}/`)",
+                    cache.display()
+                ))
+            }));
+            continue;
+        }
+        if cache.is_file() && crate_stub_cache_is_fresh(&cache, &header) {
+            families.insert(ident(crate_name), cached_family(&cache));
+            results.push(Some(Ok(cache)));
+        } else {
+            results.push(None);
         }
     }
-    if kind != "rust" {
-        anyhow::bail!(
-            "no cached stub for `{kind}.{crate_name}` at {} (C/C++ stub generation \
-             is not wired in this phase -- vendor a `.jux.d` into `.jux-stubs/{kind}/`)",
-            cache.display()
+
+    // Read the stale stubs' families: the rustdoc JSON of each bound crate
+    // and of every crate it re-exports.
+    let mut family_jsons: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (i, (_, crate_name, dep)) in foreign.iter().enumerate() {
+        if results[i].is_some() {
+            continue;
+        }
+        match read_crate_family(crate_name, dep) {
+            Ok(jsons) => {
+                families.insert(ident(crate_name), jsons.iter().map(|(n, _)| ident(n)).collect());
+                family_jsons.insert(ident(crate_name), jsons);
+            }
+            Err(e) => results[i] = Some(Err(e)),
+        }
+    }
+
+    // Each crate is declared by one package: the dependency that names it, or
+    // else the dependency with the SMALLEST family holding it. A family nested
+    // inside another is the closer owner: `rust.egui`'s family is part of
+    // `rust.eframe`'s, so `ecolor::Color32` is `rust.egui.Color32` and
+    // `rust.eframe` aliases it. Ties go to manifest order.
+    let mut owner: HashMap<String, String> = HashMap::new();
+    for c in &rust_crates {
+        owner.insert(c.clone(), c.clone());
+    }
+    let mut by_size: Vec<&String> = rust_crates.iter().collect();
+    by_size.sort_by_key(|c| families.get(*c).map_or(usize::MAX, Vec::len));
+    for c in by_size {
+        for m in families.get(c).into_iter().flatten() {
+            owner.entry(m.clone()).or_insert_with(|| c.clone());
+        }
+    }
+
+    for (i, (kind, crate_name, _)) in foreign.iter().enumerate() {
+        if results[i].is_some() {
+            continue;
+        }
+        let me = ident(crate_name);
+        let jsons = family_jsons.remove(&me).unwrap_or_default();
+        let excluded: HashMap<String, String> = jsons
+            .iter()
+            .map(|(n, _)| ident(n))
+            .filter_map(|m| {
+                let o = owner.get(&m)?;
+                (*o != me).then(|| (m, format!("rust.{o}")))
+            })
+            .collect();
+        let cache = crate_stub_cache_path(project_root, kind, crate_name);
+        results[i] = Some(
+            write_family_stub(crate_name, &jsons, &excluded, &headers[i], &cache).map(|()| cache),
         );
     }
 
-    let json = run_cargo_rustdoc_json(crate_name, version, source, dep)?;
-    let package = format!("rust.{crate_name}");
-    // A crate's public API may be DEFINED in its own dependencies and
-    // re-exported: `tiny-skia` is `pub use tiny_skia_path::{Path, Rect,
-    // Transform, ...}`. Those crates are documented too and merged in, or the
-    // stub names types it never declares -- `fill_path(&Path ...)` with no
-    // `Path` in the file. Which crates those are is read out of the JSON.
+    foreign
+        .into_iter()
+        .zip(results)
+        .map(|((_, _, dep), r)| {
+            (dep.name.clone(), r.unwrap_or_else(|| Err(anyhow::anyhow!("stub not resolved"))))
+        })
+        .collect()
+}
+
+/// The rustdoc JSON of a bound crate and of every crate its API is made of,
+/// host first.
+///
+/// First the crates the host re-exports from (`tiny-skia` is `pub use
+/// tiny_skia_path::{Path, Rect, ...}`); then, a round at a time, the crates
+/// that DEFINE a type the stub so far mentions without declaring: `egui`'s
+/// signatures say `Color32`, which `ecolor` defines and `egui` re-exports, so
+/// a stub for `eframe` alone had no `Color32` at all. A crate whose API cannot
+/// be read is noted and skipped: the stub then lacks those types, as before.
+fn read_crate_family(
+    crate_name: &str,
+    dep: &crate::manifest::Dependency,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let json = run_cargo_rustdoc_json(
+        crate_name,
+        dep.version.as_deref(),
+        &crate_source_of(dep),
+        dep,
+    )?;
     let mut jsons: Vec<(String, String)> = vec![(crate_name.to_string(), json)];
-    for extra in juxc_bindgen::ingest::reexported_crate_names(&jsons[0].1).unwrap_or_default() {
-        // The crate is already in the throwaway project's dependency graph (it
-        // is a dependency of the one just documented), so this is one more
-        // `-p` in the same place. Failure is not fatal: the stub is then
-        // simply missing those types, as it was before.
+    let mut tried: HashSet<String> = HashSet::new();
+    tried.insert(crate_name.replace('-', "_"));
+    let mut fetch = |extra: String, jsons: &mut Vec<(String, String)>| {
+        if !tried.insert(extra.replace('-', "_")) {
+            return;
+        }
+        // Already in the throwaway project's dependency graph (a dependency of
+        // the one just documented), so this is one more `-p` in the same place.
         match rustdoc_json_for_package(crate_name, &extra) {
             Ok(text) => jsons.push((extra, text)),
             Err(e) => eprintln!(
                 "juxc: note: `{crate_name}` re-exports from `{extra}`, whose API could not be read ({e}); the stub will not describe those types"
             ),
         }
+    };
+    for extra in juxc_bindgen::ingest::reexported_crate_names(&jsons[0].1).unwrap_or_default() {
+        fetch(extra, &mut jsons);
     }
+    // Rounds of "who defines what the stub mentions". Two are enough for any
+    // crate seen so far; the cap keeps a pathological graph bounded. Only a
+    // crate the host PUBLISHES is taken: a signature deep in a graphics
+    // backend may mention the `windows` bindings, which are not the API.
+    for _ in 0..2 {
+        let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
+        let Ok(fam) = juxc_bindgen::family::FamilyPaths::read(crate_name, &refs) else { break };
+        let Ok(stub) = juxc_bindgen::ingest::generate_merged(&refs, "probe") else { break };
+        let known: Vec<String> = jsons.iter().map(|(n, _)| n.replace('-', "_")).collect();
+        let missing: Vec<String> = juxc_bindgen::family::missing_type_crates(&refs, &stub, &known)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| fam.publishes(c))
+            .collect();
+        let before = jsons.len();
+        for extra in missing {
+            fetch(extra, &mut jsons);
+        }
+        if jsons.len() == before {
+            break;
+        }
+    }
+    Ok(jsons)
+}
+
+/// Generate, render and write the stub for one bound crate's family.
+fn write_family_stub(
+    crate_name: &str,
+    jsons: &[(String, String)],
+    excluded: &HashMap<String, String>,
+    header: &str,
+    cache: &Path,
+) -> anyhow::Result<()> {
+    let package = format!("rust.{crate_name}");
     let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
-    let mut stub_file = juxc_bindgen::ingest::generate_merged(&refs, &package).map_err(|e| {
-        anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}")
+    let fam = juxc_bindgen::family::FamilyPaths::read(crate_name, &refs).map_err(|e| {
+        anyhow::anyhow!("bindgen failed to read the re-exports of `{crate_name}`: {e}")
     })?;
+    let mut stub_file = juxc_bindgen::ingest::generate_family(&refs, &package, &fam, excluded)
+        .map_err(|e| anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}"))?;
     // Only the bound crate is linked, so anything merged in from a crate it
     // re-exports has to be named through it.
     if jsons.len() > 1 {
-        let _ = juxc_bindgen::ingest::rewrite_reexported_paths(
-            &mut stub_file,
-            crate_name,
-            &jsons[0].1,
-        );
+        let _ = juxc_bindgen::ingest::rewrite_reexported_paths(&mut stub_file, crate_name, &jsons[0].1);
     }
     let body = juxc_bindgen::render_stub(&stub_file);
-    // Prepend the cache-version marker so a future toolchain can detect a stale
-    // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
-    let stub = format!("{}{body}", crate_stub_header(source, dep));
-
+    // The cache marker, then the family the stub describes (read back by the
+    // next resolution, so a fresh stub's members are known without rustdoc).
+    let members: Vec<String> = jsons.iter().map(|(n, _)| n.replace('-', "_")).collect();
+    let stub = format!("{header}{FAMILY_LINE} {}\n{body}", members.join(" "));
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    write_atomic(&cache, &stub)?;
-    Ok(cache)
+    write_atomic(cache, &stub)?;
+    Ok(())
 }
 
 /// Render a `.jux.d` stub from a rustdoc-JSON string for `package`. Thin
@@ -1131,6 +1436,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// L7: a generated stub whose dependency left `jux.toml` is deleted and not
+    /// loaded; a hand-vendored one is left on disk, unread; a declared one loads.
+    #[test]
+    fn only_declared_dependencies_stubs_load() {
+        let dir = std::env::temp_dir().join(format!("juxc-stub-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rust = dir.join(PROJECT_STUB_DIRNAME).join("rust");
+        std::fs::create_dir_all(&rust).unwrap();
+        let generated = "// juxc crate stub cache-version 1 source registry\npackage rust.gone;\n";
+        std::fs::write(rust.join("gone.jux.d"), generated).unwrap();
+        std::fs::write(rust.join("vendored.jux.d"), "package rust.vendored;\n").unwrap();
+        std::fs::write(rust.join("kept.jux.d"), "package rust.kept;\n").unwrap();
+        let kept = crate::manifest::Dependency {
+            name: "rust.kept".into(),
+            path: None,
+            version: None,
+            git: None,
+            git_ref: None,
+            features: Vec::new(),
+            default_features: true,
+            package: None,
+        };
+        let loaded = load_declared_stub_sources(&dir, &[&kept]);
+        let names: Vec<String> =
+            loaded.iter().map(|s| s.path().file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["kept.jux.d".to_string()]);
+        assert!(!rust.join("gone.jux.d").exists(), "a generated stub nothing declares is deleted");
+        assert!(rust.join("vendored.jux.d").exists(), "a hand-vendored stub is left alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// L20: text a stub's parser read as statements is dropped and reported
+    /// against the stub as `E0907`, never as a second `main`.
+    #[test]
+    fn a_stub_that_reads_as_statements_is_e0907() {
+        let src = SourceFile::new(
+            PathBuf::from("x/.jux-stubs/rust/bad.jux.d"),
+            "package rust.bad;\n\npublic class Good {\n    public int x;\n}\n\nprint(\"stray\");\n".to_string(),
+        );
+        let lexed = juxc_lex::lex(&src);
+        let mut unit = juxc_parse::parse_foreign(&lexed.tokens).ast;
+        let d = reject_stub_bodies(&mut unit, &src).expect("the stray statement is reported");
+        assert_eq!(d.code, juxc_diagnostics::code::Code::E0907_StubBody);
+        assert!(d.message.contains("line 7"), "{}", d.message);
+        assert!(
+            !unit.items.iter().any(|i| matches!(i, juxc_ast::TopLevelDecl::Function(f) if f.name.text == "main")),
+            "no `main` survives from a stub",
+        );
+        assert!(unit.items.iter().any(|i| matches!(i, juxc_ast::TopLevelDecl::Class(_))));
+    }
     /// The vendored `rust.std` snapshot must stay in lockstep with
     /// [`STD_STUB_CACHE_VERSION`]. Bumping that constant means the bindgen
     /// surface changed, which makes the frozen copy wrong for everyone who
