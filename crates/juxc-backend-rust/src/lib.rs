@@ -837,7 +837,7 @@ struct RustEmitter {
     byref_params: std::collections::HashMap<String, HashSet<usize>>,
     /// The entries of `byref_params` that are SHARED borrows, `&T`: a
     /// foreign object with no `Clone` that the body only reads, and lends
-    /// to nothing that writes (ERRATA E1XX-GAP30). Same keys.
+    /// to nothing that writes (ERRATA E127). Same keys.
     shared_byref_params: std::collections::HashMap<String, HashSet<usize>>,
     /// **C6 runtime set.** Names of the parameters in the body currently
     /// being emitted that were lowered to `&mut T` (the per-call-site

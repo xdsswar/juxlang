@@ -2912,7 +2912,7 @@ impl RustEmitter {
     /// auto-`.clone()`.
     pub(crate) fn emit_byref_arg(&mut self, callee: &Expr, i: usize, arg: &Expr) {
         // A borrowed foreign object the callee only reads is lent shared
-        // (ERRATA E1XX-GAP30).
+        // (ERRATA E127).
         self.w.push_str(if self.callee_byref_is_shared(callee, i) { "&" } else { "&mut " });
         if let Expr::Path(qn) = arg {
             if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text) {

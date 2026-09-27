@@ -6262,7 +6262,7 @@ impl RustEmitter {
             }
             if is_byref {
                 // C6: foreign collection by exclusive ref; a borrowed foreign
-                // object the method only reads is shared (E1XX-GAP30).
+                // object the method only reads is shared (E127).
                 self.w.push_str(if byref_shared.contains(&i) { "&" } else { "&mut " });
             }
             if param.is_shared_ref {

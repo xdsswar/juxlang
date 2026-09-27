@@ -396,7 +396,7 @@ pub enum Code {
     /// slot marked `@RustClosureRefs` whose parameter is a foreign class with
     /// no `Clone`, like egui's `Ui`) is kept past the call: returned, stored
     /// in a field or an element, or passed to a constructor. It exists only
-    /// while the crate's call runs (ERRATA E1XX-GAP30).
+    /// while the crate's call runs (ERRATA E127).
     E0454_LentObjectKept,
     /// E0443 — A malformed **explicit call-site type-argument list** —
     /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:

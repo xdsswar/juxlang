@@ -13682,7 +13682,7 @@ impl<'a> Checker<'a> {
     /// A closure slot marked `@RustClosureRefs` is called with references,
     /// and a parameter of a foreign class with no `Clone` (egui's `Ui`) is the
     /// crate's own object, lent for as long as the call runs (ERRATA
-    /// E1XX-GAP30). The lambda works on it in place and may hand it to
+    /// E127). The lambda works on it in place and may hand it to
     /// methods; what it cannot do is keep it: return it, store it in a field
     /// or an element, or put it in a new object. Without this check such a
     /// program type-checked and then failed in rustc (E0900), which says

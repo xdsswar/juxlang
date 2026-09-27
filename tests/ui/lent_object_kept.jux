@@ -1,5 +1,5 @@
 // A foreign object a crate lends to a lambda exists only while the crate's
-// call runs; keeping it is E0454 (ERRATA E1XX-GAP30).
+// call runs; keeping it is E0454 (ERRATA E127).
 
 import rust.std.Once;
 import rust.std.OnceState;

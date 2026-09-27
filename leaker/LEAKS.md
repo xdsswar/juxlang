@@ -69,7 +69,7 @@ gets a clone of the whole `InputState` every frame (wasteful but correct).
 **Decision:** I stayed on egui instead of switching crates. With the
 workarounds, every screen that was asked for could be built.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** A lambda in an egui container receives the `Ui` egui lends it, not a clone: `CentralPanel.show(ui, (panel) -> ...)`, `ScrollArea.vertical().show(...)`, `ui.horizontal(...)` and nested ones work, and the lambda can hand its `Ui` to Jux helper methods. Objects, collections and locals the lambda changes are the caller's own afterwards (`counter.bump()`, `names.push(..)`, `n++`). Keeping the lent `Ui` past the call (storing it in a field, returning it) is a Jux error, `E0454`, at the line that keeps it. Checked against egui 0.36 in a headless `Context.run_ui` probe and by `bin/juxc/tests/borrowed_foreign.rs`.
+**Status: fixed (gap 30, ERRATA E127).** A lambda in an egui container receives the `Ui` egui lends it, not a clone: `CentralPanel.show(ui, (panel) -> ...)`, `ScrollArea.vertical().show(...)`, `ui.horizontal(...)` and nested ones work, and the lambda can hand its `Ui` to Jux helper methods. Objects, collections and locals the lambda changes are the caller's own afterwards (`counter.bump()`, `names.push(..)`, `n++`). Keeping the lent `Ui` past the call (storing it in a field, returning it) is a Jux error, `E0454`, at the line that keeps it. Checked against egui 0.36 in a headless `Context.run_ui` probe and by `bin/juxc/tests/borrowed_foreign.rs`.
 
 ### L2. `impl Into<T>` parameters are surfaced as `T`, so a Jux `String` is rejected. **annoying**
 
@@ -195,7 +195,7 @@ programmer reads "pass the field".
 **Workaround:** `String v = this.name; ui.text_edit_singleline(v); this.name = v;`
 (`Gui.textField`). The same pattern is used for `ComboBox.show_index(u, sel, ...)`'s `&mut usize`.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** `ui.text_edit_singleline(this.name)` edits the field itself. When another argument of the same call runs Jux code (a lambda, as in `ComboBox.show_index(ui, this.choice, ...)`), the field is copied in and written back right after the call, so the edit is never lost.
+**Status: fixed (gap 30, ERRATA E127).** `ui.text_edit_singleline(this.name)` edits the field itself. When another argument of the same call runs Jux code (a lambda, as in `ComboBox.show_index(ui, this.choice, ...)`), the field is copied in and written back right after the call, so the edit is never lost.
 
 ### L9. How a `Ui` parameter is passed depends on what the body happens to call. **annoying**
 
@@ -234,7 +234,7 @@ mutating call, `ui.skip_ahead_auto_ids((uint) 0);`, so the parameter becomes
 (`var u = ui;`) and use only `u` from then on. This is purely ritual code, and
 it appears 30+ times in `src/leaker/ui`.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** A `Ui` parameter has one convention whatever the body calls: it is the caller's `Ui`, borrowed, and can be passed on to egui or to other Jux methods, directly or through a local (`var u = ui;`). Only a method that keeps it (stores it, returns it) owns it. In a copy of this app every `ui.skip_ahead_auto_ids((uint) 0);` line (45 of them) was deleted and the app still builds, runs every screen, and writes its PDFs.
+**Status: fixed (gap 30, ERRATA E127).** A `Ui` parameter has one convention whatever the body calls: it is the caller's `Ui`, borrowed, and can be passed on to egui or to other Jux methods, directly or through a local (`var u = ui;`). Only a method that keeps it (stores it, returns it) owns it. In a copy of this app every `ui.skip_ahead_auto_ids((uint) 0);` line (45 of them) was deleted and the app still builds, runs every screen, and writes its PDFs.
 
 ### L10. Writing through a `@RustRefOut` accessor silently does nothing. **annoying (silent)**
 
@@ -250,7 +250,7 @@ same applies to `style_mut()`, `visuals_mut()`, `get_object_mut()` and so on.
 **Expected:** a write through `x_mut()` reaches the object, or a compile error.
 **Workaround:** see L16.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** `ui.spacing_mut().item_spacing = ...` and `var s = ui.spacing_mut(); s.indent = ...;` change the `Ui`'s spacing; reading it back with `ui.spacing()` shows the new value.
+**Status: fixed (gap 30, ERRATA E127).** `ui.spacing_mut().item_spacing = ...` and `var s = ui.spacing_mut(); s.indent = ...;` change the `Ui`'s spacing; reading it back with `ui.spacing()` shows the new value.
 
 ### L11. `WidgetText.RichText(...)` does not wrap in the `Arc` the stub erased. **annoying**
 
@@ -276,7 +276,7 @@ error[E0505]: cannot move out of `names` because it is borrowed
 ```
 **Workaround:** `uint count = (uint) names.len();` before the call.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** `show_index(u, s, names.len(), (i) -> WidgetText.Text(names[i]))` compiles as written, for a local and for a field.
+**Status: fixed (gap 30, ERRATA E127).** `show_index(u, s, names.len(), (i) -> WidgetText.Text(names[i]))` compiles as written, for a local and for a field.
 
 ### L13. A foreign trait implemented for `String` is not known. **annoying**
 
@@ -311,7 +311,7 @@ The same happens for `this.table.show(ui, ...)` (receiver is a field).
 (`String n = name; name = form.checkedField(ui, "Name", n, ne);`), and call
 methods of field-held objects through a local (`var t = table; t.show(ui, ...)`).
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** Arguments that read fields no longer move `ui`: `form.checkedField(ui, "Name", name, nameError)` twice in a row, and `this.table.show(ui, ...)`, work without copying anything into locals first.
+**Status: fixed (gap 30, ERRATA E127).** Arguments that read fields no longer move `ui`: `form.checkedField(ui, "Name", name, nameError)` twice in a row, and `this.table.show(ui, ...)`, work without copying anything into locals first.
 
 ### L16. `ui.style()` is an `Arc<Style>` in Rust but `Style` in Jux. **annoying**
 
@@ -483,7 +483,7 @@ error[E0382]: use of moved value: `text`
 Strings are values in Jux. Using one twice is the most ordinary thing in Java.
 **Workaround:** pass a fresh copy, `$"${word}"`.
 
-**Status: fixed (gap 30, ERRATA E1XX-GAP30).** A `String` read in one arm of `?:`, or passed to a method of the same class called by its bare name, is copied when it is read again later, so both reproducers above work without `$"${word}"`.
+**Status: fixed (gap 30, ERRATA E127).** A `String` read in one arm of `?:`, or passed to a method of the same class called by its bare name, is copied when it is read again later, so both reproducers above work without `$"${word}"`.
 
 ### L22. A parse error inside a class shows up as a bogus "class in function body" plus a duplicate `main`. **annoying**
 

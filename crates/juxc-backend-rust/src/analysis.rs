@@ -4311,7 +4311,7 @@ impl crate::RustEmitter {
 
     /// Whether by-reference parameter `arg_idx` of `callee` is a SHARED
     /// borrow, `&T`: a foreign object with no `Clone` that the callee only
-    /// reads (ERRATA E1XX-GAP30). Every other by-reference parameter is
+    /// reads (ERRATA E127). Every other by-reference parameter is
     /// `&mut T`.
     pub(crate) fn callee_byref_is_shared(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
         if self.shared_byref_params.is_empty() {

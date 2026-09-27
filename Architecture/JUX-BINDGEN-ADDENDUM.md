@@ -167,7 +167,7 @@ method names, it cannot go stale when the library grows one.
 
 Every read-into-a-buffer API in Rust has this shape, so without the marker the whole of `std::io` type-checks and then fails to compile.
 
-**A foreign object is lent, never copied** (ERRATA E1XX-GAP30). What a Java programmer means by passing an object is passing the object, and for a foreign object that has to be a borrow: egui's `Ui` has no `Clone`, and a copy of one that does would take the callee's writes and drop them. So:
+**A foreign object is lent, never copied** (ERRATA E127). What a Java programmer means by passing an object is passing the object, and for a foreign object that has to be a borrow: egui's `Ui` has no `Clone`, and a copy of one that does would take the callee's writes and drop them. So:
 
 - A parameter of a foreign class with no `@RustClone` is a borrow in the lowered signature, whatever the body calls on it, and each use lends it on (`&mut *ui`): `&mut T` when the body writes through it or lends it to something that does, `&T` when it only reads. Only a body that keeps it (returns it, stores it, hands it to a slot that takes ownership, or lets an escaping closure capture it) takes it by value. A `@RustClone` type keeps §6.3's rule: a copy, or `&mut T` when the body mutates it.
 - A lambda in a `@RustClosureRefs` slot receives a foreign object as the reference the crate passes (`|ui: &mut Ui|`), not a clone (§G.6.4.4). Keeping one past the call is `E0454`.

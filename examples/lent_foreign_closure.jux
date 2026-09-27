@@ -1,5 +1,5 @@
 // A foreign object a crate lends to a lambda is used in place (ERRATA
-// E1XX-GAP30, LEAKS.md L1).
+// E127, LEAKS.md L1).
 //
 // `Once.call_once_force` calls its closure with `&OnceState`, and `OnceState`
 // has no `Clone`: the lambda's `state` is that reference, not a copy of it.

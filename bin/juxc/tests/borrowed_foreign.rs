@@ -1,7 +1,7 @@
 //! Borrowed foreign objects: closures a crate lends them to, parameters that
 //! carry them, fields lent to `&mut` slots and writes through `&mut`
 //! accessors (LEAKS.md L1, L8, L9, L10, L12, L14, L15; GAPS.md gap 30; ERRATA
-//! E1XX-GAP30).
+//! E127).
 //!
 //! egui is the crate that found these, and it is too heavy to build in a test,
 //! so a small crate written here, `fakeui`, has the same shapes: a `Ui` with no

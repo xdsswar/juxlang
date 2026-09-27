@@ -4023,7 +4023,7 @@ used.
 
 ---
 
-## E1XX-GAP30. A borrowed foreign object is lent, not copied
+## E127. A borrowed foreign object is lent, not copied
 
 **Conflict.** Bindgen §G.3.4 says borrows vanish: `&T` and `&mut T` have no
 Jux spelling, and the call site re-derives the borrow. A Java programmer
