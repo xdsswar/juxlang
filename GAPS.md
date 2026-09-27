@@ -258,7 +258,7 @@ diagnostic.
 
 **31. Bindgen type mapping (L2-L7, L11, L13, L16-L21).** `impl Into<T>` and blanket-impl traits, trait-object parameters (non-existent emitted path), erased `Arc`s, associated constants, tuple structs, struct-like enum variants, `HashMap`/`BTreeMap` parameters, keyword-named fields corrupting a stub, collection and `Path` conversion, duplicate/mislabelled types, re-exported crates, stale stubs after removing a dependency.
 
-**32. Language and diagnostics found along the way (L22-L28).** Parse-error recovery inside a class, `usize` counts, a record's unqualified static call, a user class shadowed by a foreign type in codegen, a parameter named `r` lowered as a collection, a terse E0900 without `--verbose`, Rust naming showing through.
+**32. CLOSED 2026-09-26 (gap 32 stream, ERRATA E122-e).** ~~Language and diagnostics found along the way (L22-L28).~~ Parse-error recovery inside a class (L22, fixed), `usize` counts (L23, kept a `uint` by the spec; the E0410 help names the length), a record's unqualified static call (L24, fixed, enums too), a user class shadowed by a foreign type in codegen (L25, fixed), a parameter named `r` lowered as a collection (L26, root cause: constructor locals leaked into the backend's base type scope; fixed and minimized), a terse E0900 without `--verbose` (L27, fixed), Rust naming showing through (L28: stubs no longer need nightly, hover pinned clean; verbatim names stay per §G.4).
 
 ---
 

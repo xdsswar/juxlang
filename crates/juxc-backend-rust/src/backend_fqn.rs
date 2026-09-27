@@ -458,6 +458,40 @@ impl crate::RustEmitter {
         }
     }
 
+    /// Whether the bare `name`, written in the unit being emitted, names one
+    /// of the program's own types that is NOT an enum: through the unit's
+    /// imports, in its own package, or in the root package (§M.16, ERRATA
+    /// E102/E117). Such a declaration is what the name means there, so no
+    /// library enum of the same last segment may answer for it: a user
+    /// `leaker.ui.Theme`'s constants lowered as eframe's `Theme` enum
+    /// (`eframe::Theme::NAV_MIN`, LEAKS L25).
+    pub(crate) fn bare_names_own_non_enum_type(&self, name: &str) -> bool {
+        if name.contains('.') {
+            return false;
+        }
+        let ctx = self.current_unit_idx.and_then(|i| self.symbols.units.get(i));
+        let own_non_enum = |fqn: &str| {
+            self.symbols.classes.get(fqn).is_some_and(|c| !c.is_external)
+                || self.symbols.records.contains_key(fqn)
+                || self.symbols.interfaces.get(fqn).is_some_and(|i| !i.is_external)
+        };
+        if let Some(fqn) = ctx.and_then(|c| c.unqualified.get(name)) {
+            // An import says which type is meant, whatever it is.
+            return own_non_enum(fqn);
+        }
+        let pkg = ctx.map(|c| c.package.join(".")).unwrap_or_default();
+        if !pkg.is_empty() {
+            let cand = format!("{pkg}.{name}");
+            if self.symbols.enums.contains_key(&cand) {
+                return false;
+            }
+            if own_non_enum(&cand) {
+                return true;
+            }
+        }
+        !self.symbols.enums.contains_key(name) && own_non_enum(name)
+    }
+
     /// Resolve a bare or FQN class name to its [`ClassSig`], package-aware via
     /// [`Self::resolve_bare_class_fqn`]. Used by emission helpers that hold
     /// `self.enclosing_class` (bare in the source) but need the FQN-keyed

@@ -1691,6 +1691,23 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen, "')' to close parenthesized expression");
                 inner
             }
+            // `regular = { 278, 355 };`, `return { 1, 2 };`, `f({ 1 })`: the
+            // brace shorthand is an INITIALIZER, allowed only where a
+            // variable or field is declared with its array type (JUX-LANG-V1
+            // §5.5, Arrays). Say so, rather than "expected expression" followed by the
+            // cascade of LEAKS L22.
+            TokenKind::LBrace => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "an array initializer `{ ... }` is only allowed where a variable or field is \
+                         declared with its type (`int[] xs = { 1, 2 };`); anywhere else write the \
+                         array with its type: `new int[] { 1, 2 }`",
+                    )
+                    .with_span(span),
+                );
+                None
+            }
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error(code::Code::E0200_UnexpectedToken, "expected expression")

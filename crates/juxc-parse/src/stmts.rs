@@ -864,6 +864,23 @@ impl<'a> Parser<'a> {
     ) -> Option<Stmt> {
         let op_span = self.peek_span();
         self.advance(); // '=' or compound assignment op
+        // `regular = { 278, 355 };` (LEAKS L22): the brace shorthand is not an
+        // expression (JUX-LANG-V1 §5.5). Report it once, skip the braces and
+        // keep the statement as an assignment of the target to itself, so the
+        // checker still sees the variable assigned where the program assigns
+        // it and adds no "not definitely assigned" after the real error.
+        if self.at(&TokenKind::LBrace) {
+            let _ = self.parse_primary(); // reports the shorthand, consumes nothing
+            self.skip_balanced_braces();
+            self.eat(&TokenKind::Semicolon);
+            let span = expr_span(&target_expr).join(self.last_consumed_span());
+            return Some(Stmt::Assign(AssignStmt {
+                value: target_expr.clone(),
+                target: target_expr,
+                op: compound_op,
+                span,
+            }));
+        }
         let rhs_expr = self.parse_expr()?;
         self.expect(&TokenKind::Semicolon, "';' after assignment");
 
@@ -1442,7 +1459,7 @@ impl<'a> Parser<'a> {
 
     /// If the statement at the cursor declares a TYPE, the kind of type:
     /// `class`, `interface`, `enum`, `record` or `struct`, after any modifiers.
-    fn local_type_declaration_ahead(&self) -> Option<&'static str> {
+    pub(crate) fn local_type_declaration_ahead(&self) -> Option<&'static str> {
         let mut i = self.pos;
         while matches!(
             self.tokens.get(i).map(|t| &t.kind),
@@ -1900,18 +1917,154 @@ impl<'a> Parser<'a> {
     /// Skip tokens until the next `;` (consumed) or `}` (left in place).
     /// Used to bail out of a busted statement so we can keep parsing
     /// the rest of the block.
+    ///
+    /// A `{ ... }` group the skip itself steps INTO is skipped whole: its
+    /// `;`s and its closing `}` belong to the broken statement, not to the
+    /// enclosing block. Stopping at such a `}` (`regular = { 1, 2 };` in a
+    /// constructor) closed the constructor's body early, left the `;` for the
+    /// class body, and lost the whole class (LEAKS L22).
     pub(crate) fn recover_to_stmt_boundary(&mut self) {
+        let mut depth: usize = 0;
         while !self.at_eof() {
             match self.peek() {
-                TokenKind::Semicolon => {
+                TokenKind::Semicolon if depth == 0 => {
                     self.advance();
                     return;
                 }
-                TokenKind::RBrace => return,
+                TokenKind::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                TokenKind::RBrace if depth == 0 => return,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    self.advance();
+                    // `x = { 1, 2 };`: the `;` after the group ends the
+                    // statement. Otherwise keep scanning for the `;` (or
+                    // the enclosing block's `}`).
+                    if depth == 0 && self.at(&TokenKind::Semicolon) {
+                        self.advance();
+                        return;
+                    }
+                }
                 _ => self.advance(),
             }
         }
     }
+
+    /// A statement at the start of a type-body member (LEAKS L22), with the
+    /// message that says so: a statement keyword, a call that is not the
+    /// type's constructor, or an assignment with no type in front of it.
+    pub(crate) fn statement_in_type_body(&self, type_name: &str) -> Option<String> {
+        let next = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+        match self.peek() {
+            TokenKind::Kw(
+                kw @ (Keyword::If
+                | Keyword::For
+                | Keyword::While
+                | Keyword::Do
+                | Keyword::Return
+                | Keyword::Throw
+                | Keyword::Try),
+            ) => Some(format!(
+                "`{}` is a statement, and a statement cannot stand directly in a type body -- move it \
+                 into a method, a constructor or an `init {{ ... }}` block",
+                kw.as_str(),
+            )),
+            TokenKind::Ident(first) => match next {
+                // `print(...)`, not `Other(...)` (a constructor under the
+                // wrong name, or a method whose name is missing) and not
+                // `int (...)` (a method whose name is missing).
+                Some(TokenKind::LParen)
+                    if first != type_name
+                        && first.starts_with(|c: char| c.is_ascii_lowercase())
+                        && !is_primitive_type_name(first)
+                        // `fn(void*) -> int find;`: a type, then a name.
+                        && !self
+                            .scan_type_at(self.pos)
+                            .is_some_and(|j| matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Ident(_)))) =>
+                {
+                    Some(format!(
+                    "`{first}(...)` here is a call, and a statement cannot stand directly in a type \
+                     body -- move it into a method, a constructor or an `init {{ ... }}` block (a \
+                     constructor is named after its type, `{type_name}(...)`)",
+                    ))
+                }
+                Some(
+                    TokenKind::Eq
+                    | TokenKind::PlusEq
+                    | TokenKind::MinusEq
+                    | TokenKind::StarEq
+                    | TokenKind::SlashEq
+                    | TokenKind::PercentEq
+                    | TokenKind::PlusPlus
+                    | TokenKind::MinusMinus,
+                ) => Some(format!(
+                    "`{first}` is assigned here with no type, and a statement cannot stand directly \
+                     in a type body -- declare the field with its type (`int {first} = ...;`), or \
+                     move the assignment into a constructor or an `init {{ ... }}` block",
+                )),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Put the cursor on the next member of a type body after the member
+    /// that began at `member_start` failed to parse (LEAKS L22). The member
+    /// is skipped as a whole from its first token: through a `;` at brace
+    /// depth zero, or through a `{ ... }` group opened at depth zero (a
+    /// body, or a field's `{ ... }` initializer, with its `;`), stopping in
+    /// front of the `}` that closes the type body. A visibility keyword at
+    /// depth zero after the first token starts the next member, so a member
+    /// missing its `;` does not swallow the one after it.
+    ///
+    /// Rewinding first means a member parser that stopped anywhere, even
+    /// past the type body's own `}`, cannot take the rest of the type with
+    /// it: the diagnostics it gave stay, only its cursor is discarded.
+    pub(crate) fn recover_to_member_boundary(&mut self, member_start: usize) {
+        self.pos = member_start;
+        let mut depth: usize = 0;
+        let mut first = true;
+        while !self.at_eof() {
+            match self.peek() {
+                TokenKind::Semicolon if depth == 0 => {
+                    self.advance();
+                    return;
+                }
+                TokenKind::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                TokenKind::RBrace if depth == 0 => return,
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    self.advance();
+                    if depth == 0 {
+                        self.eat(&TokenKind::Semicolon);
+                        return;
+                    }
+                }
+                TokenKind::Kw(Keyword::Public | Keyword::Private | Keyword::Protected)
+                    if depth == 0 && !first =>
+                {
+                    return;
+                }
+                _ => self.advance(),
+            }
+            first = false;
+        }
+    }
+}
+
+/// A primitive type's name, which a member can begin with (`int (...)` is a
+/// method whose name is missing, not a call).
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "int" | "long" | "short" | "byte" | "uint" | "ulong" | "ushort" | "ubyte" | "float"
+            | "double" | "bool" | "boolean" | "char" | "isize" | "usize"
+    )
 }
 
 /// If `kind` is a compound assignment operator (`+=`, `-=`, `*=`, `/=`,

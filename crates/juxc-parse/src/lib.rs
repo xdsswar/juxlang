@@ -110,7 +110,7 @@ pub fn parse_with_array_aliases(
     // A sealed type with no `permits` clause permits its own file's
     // subtypes (Grammar §A.2.5).
     juxc_ast::infer_sealed_permits(&mut ast);
-    ParseResult { ast, diagnostics: p.diagnostics }
+    ParseResult { ast, diagnostics: one_syntax_error_per_token(p.diagnostics) }
 }
 
 /// Parse a **foreign declaration stub** (`.jux.d`) token stream. Identical to
@@ -126,7 +126,23 @@ pub fn parse_foreign(tokens: &[Token]) -> ParseResult {
     // A sealed type with no `permits` clause permits its own file's
     // subtypes (Grammar §A.2.5).
     juxc_ast::infer_sealed_permits(&mut ast);
-    ParseResult { ast, diagnostics: p.diagnostics }
+    ParseResult { ast, diagnostics: one_syntax_error_per_token(p.diagnostics) }
+}
+
+/// Keep the first syntax error (`E0200`) reported at any one token and drop
+/// the rest. A member that fails at one token otherwise says so once per
+/// production that gave up there (`expected identifier` then `expected ')'
+/// to close parameter list`, both at the same `{`), which reads as two
+/// problems where there is one (LEAKS L22).
+fn one_syntax_error_per_token(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let mut seen = std::collections::HashSet::new();
+    diagnostics
+        .into_iter()
+        .filter(|d| {
+            d.code != code::Code::E0200_UnexpectedToken
+                || d.primary_span.is_none_or(|s| seen.insert((s.file, s.start)))
+        })
+        .collect()
 }
 
 // ============================================================================

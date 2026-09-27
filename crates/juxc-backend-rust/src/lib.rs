@@ -1166,6 +1166,10 @@ struct RustEmitter {
     /// are being emitted, by name. A bare `mass` in one of its methods reads
     /// `this.mass`, which lowers through the enum's `__field` accessor.
     pub(crate) enclosing_enum_fields: std::collections::HashMap<String, juxc_ast::TypeRef>,
+    /// The methods of the enum whose methods are being emitted, by name,
+    /// with whether each is `static`: a bare `describe(this)` inside the enum
+    /// is `Self::describe(...)` (LEAKS L24), as it is in a class or a record.
+    pub(crate) enclosing_enum_methods: std::collections::HashMap<String, bool>,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -5897,6 +5901,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             in_enum_method: false,
             in_record_body: false,
             enclosing_enum_fields: std::collections::HashMap::new(),
+            enclosing_enum_methods: std::collections::HashMap::new(),
             current_switch_enum: None,
             current_switch_enum_path: None,
             test_mode: false,
@@ -7571,6 +7576,17 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         };
         let anns_owned: Vec<juxc_ast::Annotation> = anns.to_vec();
         self.emit_annotation_attrs(&anns_owned);
+        // Every declaration starts from an empty name-to-type map. A local of
+        // one declaration that some body path left in the base scope used to
+        // answer for a same-named parameter of any declaration emitted after
+        // it: `int[] r` in `FontMetrics`'s constructor made `Rect r` in
+        // `Gui.fill` an array handle, lent as `r.borrow().clone()` (LEAKS
+        // L26). Each body pushes its own scope as well; this is the floor
+        // under whichever path forgets to.
+        self.local_types.truncate(1);
+        if let Some(base) = self.local_types.first_mut() {
+            base.clear();
+        }
         match item {
             TopLevelDecl::Function(fn_decl) => self.emit_fn_decl(fn_decl),
             // An annotation TYPE has no runtime representation of its own:

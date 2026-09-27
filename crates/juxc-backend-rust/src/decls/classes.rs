@@ -500,12 +500,18 @@ impl RustEmitter {
         }
         // Constructor → `pub fn new(args) -> Self` with the __self pattern.
         for (idx, ctor) in class_decl.constructors.iter().enumerate() {
+            // Its locals live in a scope of their own, dropped after it
+            // (LEAKS L26; see `emit_fn_body_at`).
+            self.local_types.push(std::collections::HashMap::new());
             self.emit_constructor(class_decl, ctor, idx);
+            self.local_types.pop();
         }
         // If no constructor was declared, synthesize an implicit zero-
         // arg `new()` per §7.3.1 (declaring any constructor removes it).
         if class_decl.constructors.is_empty() {
+            self.local_types.push(std::collections::HashMap::new());
             self.emit_synthetic_default_constructor(class_decl);
+            self.local_types.pop();
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);
@@ -1200,10 +1206,16 @@ impl RustEmitter {
         let prev_wrapper = self.emitting_wrapper_class;
         self.emitting_wrapper_class = true;
         for (idx, ctor) in class_decl.constructors.iter().enumerate() {
+            // Its locals live in a scope of their own, dropped after it
+            // (LEAKS L26; see `emit_fn_body_at`).
+            self.local_types.push(std::collections::HashMap::new());
             self.emit_wrapper_constructor(class_decl, ctor, idx);
+            self.local_types.pop();
         }
         if class_decl.constructors.is_empty() {
+            self.local_types.push(std::collections::HashMap::new());
             self.emit_wrapper_synthetic_default_constructor(class_decl);
+            self.local_types.pop();
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);

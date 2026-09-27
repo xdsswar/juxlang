@@ -2206,6 +2206,20 @@ impl RustEmitter {
                 {
                     on_self = true;
                 }
+                // A record's or an enum's own STATIC method, called bare
+                // (`channel(r)` inside `record Color`), is `Self::channel`:
+                // Rust has no implicit `Self` for an associated function
+                // (LEAKS L24). A class's is found through its chain below.
+                let record_static = self.enclosing_record.as_ref().is_some_and(|r| {
+                    r.methods
+                        .iter()
+                        .any(|m| m.name.text == *name && m.modifiers.contains(&juxc_ast::FnModifier::Static))
+                });
+                if record_static || self.enclosing_enum_methods.get(name.as_str()) == Some(&true) {
+                    as_static_on = Some("Self".to_string());
+                } else if self.enclosing_enum_methods.get(name.as_str()) == Some(&false) {
+                    on_self = true;
+                }
                 if let Some(iface_name) = &self.enclosing_interface {
                     if let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(iface_name) {
                         if let Some(m) = iface.methods.get(name.as_str()) {
@@ -2215,7 +2229,7 @@ impl RustEmitter {
                         }
                     }
                 }
-                if !on_self {
+                if !on_self && as_static_on.is_none() {
                     // Walk the enclosing class's `extends` chain so a
                     // bare call to an inherited method (`name()` in
                     // `Dog.bark()` finding `Animal::name`) resolves

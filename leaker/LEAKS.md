@@ -337,6 +337,8 @@ per-line "check input" state (`LineDraft`).
 
 ### L25. A user class named like a foreign type is replaced by the foreign one in codegen. **annoying**
 
+**Status: fixed (gap 32, ERRATA E124).** A bare name the unit resolves to the program's own class, record or interface is never re-read as a library enum of the same name. The leaker builds with the class named `Theme`; `examples/user_type_named_like_library_enum.jux` does the same against `std::cmp::Ordering`.
+
 My `leaker.ui.Theme` (static consts plus static methods) type-checks, but every
 *constant* access lowered to egui's enum:
 ```jux
@@ -351,6 +353,8 @@ Static *method* calls on the same class lowered correctly. I had not imported
 `eframe.Theme`. **Workaround:** renamed the class to `Palette`.
 
 ### L26. A parameter named `r` lowered as a collection handle. **annoying** (not minimized)
+
+**Status: fixed and minimized (gap 32, ERRATA E124).** Root cause: constructor bodies emitted their locals into the backend's base name-to-type scope, which is never popped, so `int[] r` in `FontMetrics`'s constructor answered for `Rect r` in `Gui.fill` (a foreign-typed parameter registers no type of its own). Constructors now get their own scope and each top-level declaration starts from an empty one. `examples/local_names_do_not_leak.jux` is the minimized reproducer (an array local `r` in one constructor, `String r` parameters later).
 
 In `Gui.jux`, `public static void fill(Ui ui, Rect r, Color32 c) { ui.painter().rect_filled(r, ...); }`
 lowered to `r.borrow().clone()`:
@@ -469,6 +473,8 @@ Strings are values in Jux. Using one twice is the most ordinary thing in Java.
 
 ### L22. A parse error inside a class shows up as a bogus "class in function body" plus a duplicate `main`. **annoying**
 
+**Status: fixed (gap 32, ERRATA E122).** The class keeps its other members and the one error is at the brace list: `an array initializer { ... } is only allowed where a variable or field is declared with its type ...; anywhere else write the array with its type: new int[] { 1, 2 }`. No `E0993`, no second `main`.
+
 ```jux
 public class FontMetrics {
     private int[] regular;
@@ -486,6 +492,8 @@ The real problem is that `{...}` is only allowed in a declaration
 
 ### L23. `String.len()` and `Vec.len()` are Rust's `usize`. **cosmetic / annoying**
 
+**Status: decided by the spec (ERRATA E123).** A Rust length stays a `uint` (§G.3.1, §K.12: a `Vec` has `len`, not `size`). `int n = v.len();`, `int last = v.len() - 1;`, `int at = a.len() + b.len();` and `i < v.len()` need no cast (§S.2.6, §S.2.7); where a length meets an `int` in one operator the `E0410` help now names the length and the two spellings that work. `String.length()` is the `int` count.
+
 ```jux
 int at = header.len() + body.len();          // String
 var p = store.products[n % store.products.len()];
@@ -498,6 +506,8 @@ Assigning `int n = v.len()` is accepted, but mixing it in arithmetic is not.
 `size()`. Counts end up with `(int)` casts.
 
 ### L24. A record's unqualified call to its own static method is not qualified in the output. **annoying**
+
+**Status: fixed (gap 32, ERRATA E124).** A record's or an enum's own static method called bare is `Self::channel(...)`; an enum's methods are also in scope in its own bodies (they were `E0301`). `examples/own_static_calls.jux`.
 
 ```jux
 public record Color(int r, int g, int b) {
@@ -514,6 +524,8 @@ The same code in a `class` works. **Workaround:** `Color.channel(r)`.
 
 ### L27. The E0900 report says nothing without `--verbose`. **cosmetic**
 
+**Status: fixed (gap 32, ERRATA E125).** The `line`, `short` and `compact` formats append the rustc error to the E0900 line: `... does not compile (rustc reported error[E0599]: no method named ... ; a compiler bug, --verbose shows the full report)`. The `human` format already showed it as a note.
+
 Every lowering failure above first appears as one line per statement, for
 example `Gui.jux:44:16: [E0900] error: internal compiler error: the Rust generated for this code does not compile`
 (or `... value used after it was moved`). The actual rustc error and the
@@ -522,6 +534,8 @@ to read `target/.rust-build/bin-<name>/src/**.rs` to understand them. For a
 user who is not supposed to know Rust, E0900 is where the abstraction ends.
 
 ### L28. Rust shows through in the everyday API. **cosmetic**
+
+**Status: partly addressed (gap 32, ERRATA E126).** Stub generation no longer needs a nightly toolchain: without one, the default toolchain's rustdoc is run with `RUSTC_BOOTSTRAP=1` (same JSON, identical stubs). Hover, completion and signature help render Jux signatures with no `&`/`&mut`/`@MutSelf` (now pinned by a test); the markers are only in the `.jux.d` text. Verbatim snake_case names are the spec's decision (§G.4, no camelCase aliases). A literal that fits needs no `(ubyte)` cast; an `int` value does, as any narrowing (§S.2.7). The first-build cost is paid once per crate version (cached in `.jux-stubs/`).
 
 - Foreign names are snake_case and verbatim (`text_edit_singleline`,
   `skip_ahead_auto_ids`, `rect_contains_pointer`). This is by design (§G.4),

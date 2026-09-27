@@ -1,0 +1,33 @@
+// A local of one declaration never answers for a same-named parameter of
+// another (LEAKS L26). `Metrics`'s constructor declares an array local `r`;
+// the methods emitted after it take a `String r`, an `int r` and a
+// `double[] r`, and each is exactly what its own declaration says.
+
+class Metrics {
+    private int[] widths;
+    public Metrics() {
+        int[] r = { 278, 355, 556 };
+        widths = r;
+    }
+    public int first() { return widths[0]; }
+}
+
+class Text {
+    public static String shout(String r) { return r.toUpperCase() + "!"; }
+    public static int size(String r) { return r.length(); }
+    public static int twice(int r) { return r * 2; }
+    public static double sum(double[] r) {
+        double total = 0.0;
+        for (var x : r) { total += x; }
+        return total;
+    }
+}
+
+void main() {
+    print(new Metrics().first());
+    print(Text.shout("hey"));
+    print(Text.size("four"));
+    print(Text.twice(21));
+    double[] xs = { 1.5, 2.5 };
+    print(Text.sum(xs));
+}

@@ -73,6 +73,31 @@ fn a_borrow_error_is_an_e0900_ice_at_the_jux_line() {
     assert!(first.contains("\"line_start\":3"), "{first}");
 }
 
+/// LEAKS L27: the one-line formats (`line` is the default off a terminal)
+/// carry the rustc error that caused an E0900, not only "does not compile",
+/// and keep the Jux location; `--verbose` stays the way to the full report.
+#[test]
+fn the_one_line_formats_name_the_rustc_error() {
+    let dir = scratch("oneline");
+    let (_jux, rust) = program(&dir);
+    let json = compiler_message(Some("E0599"), "no method named `borrow` found for struct `String` in the current scope", "src\\\\main.rs", 4, 5);
+    let failure = juxc_driver::build_failure::from_cargo_messages(&json, &[("src/main.rs", &rust)]).expect("a failure");
+    for format in [DiagnosticFormat::Line, DiagnosticFormat::Short, DiagnosticFormat::Compact] {
+        let text = render_text(&failure.diagnostics, &failure.sources, format, false);
+        let first = text.lines().next().unwrap_or_default();
+        assert!(first.contains("leak.jux:3:5"), "{format:?}: {first}");
+        assert!(first.contains("internal compiler error: the Rust generated for this code does not compile"), "{format:?}: {first}");
+        assert!(
+            first.contains("rustc reported error[E0599]: no method named `borrow` found for struct `String`"),
+            "{format:?}: {first}"
+        );
+        assert!(first.contains("`--verbose` shows the full report"), "{format:?}: {first}");
+        assert!(!first.contains("main.rs"), "the generated file stays out of the one line: {first}");
+    }
+    let human = render_text(&failure.diagnostics, &failure.sources, DiagnosticFormat::Human, false);
+    assert!(human.contains("note: rustc's error is at src"), "{human}");
+}
+
 #[test]
 fn each_borrow_family_gets_its_jux_words() {
     for (code, words) in [

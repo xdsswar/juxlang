@@ -546,12 +546,19 @@ impl RustEmitter {
                 // another package: scan all enum FQNs and pick one
                 // whose last segment matches. Same shape the
                 // class- and interface-FQN walks use elsewhere.
-                let enum_hit = self
-                    .symbols
-                    .enums
-                    .keys()
-                    .find(|fqn| fqn.rsplit('.').next().unwrap_or(fqn.as_str()) == bare.as_str())
-                    .cloned();
+                //
+                // Not when the name means one of the program's own classes,
+                // records or interfaces here: that declaration wins over a
+                // library enum of the same last segment (LEAKS L25).
+                let enum_hit = if self.bare_names_own_non_enum_type(bare) {
+                    None
+                } else {
+                    self.symbols
+                        .enums
+                        .keys()
+                        .find(|fqn| fqn.rsplit('.').next().unwrap_or(fqn.as_str()) == bare.as_str())
+                        .cloned()
+                };
                 if let Some(enum_fqn) = enum_hit {
                     // A FOREIGN (`rust.<crate>`) enum variant lowers through
                     // the enum's REAL Rust path (`minifb::MouseButton::Left`),

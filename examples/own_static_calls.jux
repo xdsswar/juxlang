@@ -1,0 +1,29 @@
+// A record's and an enum's own methods, called by their bare name from
+// inside the type (LEAKS L24), the way a class's already were:
+// `channel(r)` inside `record Color` is `Color.channel(r)`, and
+// `describe(this)` inside `enum Level` is `Level.describe(this)`.
+
+record Color(int r, int g, int b) {
+    public String op() {
+        String x = channel(r);
+        return x + " " + channel(g) + " " + Color.channel(b);
+    }
+    private static String channel(int v) { return $"${v}"; }
+    public static Color gray(int v) { return new Color(v, v, v); }
+    public Color lighter() { return gray(r + 1); }
+}
+
+enum Level {
+    LOW, HIGH;
+    public String describeSelf() { return describe(this) + "/" + weight(); }
+    public int weight() { return this == Level.LOW ? 1 : 2; }
+    private static String describe(Level l) { return l == Level.LOW ? "low" : "high"; }
+}
+
+void main() {
+    var c = new Color(1, 2, 3);
+    print(c.op());
+    print(c.lighter().op());
+    print(Level.HIGH.describeSelf());
+    print(Level.LOW.describeSelf());
+}

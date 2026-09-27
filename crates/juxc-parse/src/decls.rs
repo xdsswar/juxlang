@@ -175,6 +175,12 @@ impl<'a> Parser<'a> {
         let mut static_init_blocks: Vec<juxc_ast::Block> = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // Where this member begins: a member that fails to parse is
+            // skipped from here as a whole, and the class goes on with the
+            // next one (LEAKS L22). Giving up on the class instead made the
+            // unit loop re-read it as a statement, which reported a bogus
+            // "class inside a function body" and a second `main`.
+            let member_start = self.pos;
             // Per grammar §A.2.4 each class member may carry its own
             // annotations — captured first, then routed to the
             // member's parser.
@@ -288,11 +294,25 @@ impl<'a> Parser<'a> {
                             .map(juxc_ast::TopLevelDecl::Enum),
                         _ => None,
                     };
-                    if let Some(nt) = nested {
-                        nested_types.push(nt);
-                        continue;
+                    match nested {
+                        Some(nt) => nested_types.push(nt),
+                        None => self.recover_to_member_boundary(member_start),
                     }
+                    continue;
                 }
+            }
+            // A statement written straight into the class body (`count = 5;`,
+            // `print("x");`, `if (...)`): said once, in those words, and
+            // skipped whole (LEAKS L22). Read as a member it became a field
+            // named after the assigned variable, or a failed member that
+            // took the class down with it.
+            if let Some(message) = self.statement_in_type_body(&name.text) {
+                self.diagnostics.push(
+                    Diagnostic::error(code::Code::E0200_UnexpectedToken, message)
+                        .with_span(self.peek_span()),
+                );
+                self.recover_to_member_boundary(member_start);
+                continue;
             }
             // Three dispatch shapes after visibility:
             //   1. `Name(` → constructor (name matches class).
@@ -322,7 +342,10 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_ctor {
-                let ctor = self.parse_constructor_decl(member_anns, member_vis)?;
+                let Some(ctor) = self.parse_constructor_decl(member_anns, member_vis) else {
+                    self.recover_to_member_boundary(member_start);
+                    continue;
+                };
                 // The single-constructor Turn-1 limitation is enforced in
                 // tycheck (`check_single_constructor`) rather than here, so a
                 // `.jux.d` declaration stub — which legitimately declares
@@ -363,8 +386,9 @@ impl<'a> Parser<'a> {
                 self.operator_kw_starts_decl(self.scan_type_at(i))
             };
             if lookahead_is_operator {
-                if let Some(op) = self.parse_operator_decl(member_vis) {
-                    operators.push(op);
+                match self.parse_operator_decl(member_vis) {
+                    Some(op) => operators.push(op),
+                    None => self.recover_to_member_boundary(member_start),
                 }
                 continue;
             }
@@ -474,15 +498,20 @@ impl<'a> Parser<'a> {
             // so this discriminator is unambiguous.)
             let lookahead_is_property = self.looks_like_property_at(self.pos);
             if lookahead_is_method {
-                let method = self.parse_fn_decl(member_anns, member_vis)?;
-                methods.push(method);
+                match self.parse_fn_decl(member_anns, member_vis) {
+                    Some(method) => methods.push(method),
+                    None => self.recover_to_member_boundary(member_start),
+                }
             } else if lookahead_is_property {
-                if let Some(prop) = self.parse_property_decl(member_anns, member_vis) {
-                    properties.push(prop);
+                match self.parse_property_decl(member_anns, member_vis) {
+                    Some(prop) => properties.push(prop),
+                    None => self.recover_to_member_boundary(member_start),
                 }
             } else {
-                let field = self.parse_field_decl(member_anns, member_vis)?;
-                fields.push(field);
+                match self.parse_field_decl(member_anns, member_vis) {
+                    Some(field) => fields.push(field),
+                    None => self.recover_to_member_boundary(member_start),
+                }
             }
         }
 
@@ -870,6 +899,8 @@ impl<'a> Parser<'a> {
         let mut properties = Vec::new();
         let mut operators = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // A member that fails is skipped whole from here (LEAKS L22).
+            let member_start = self.pos;
             // Interface members carry annotations like class members
             // (grammar §A.2.4) — bindgen stubs also emit machine
             // markers here (`@MutSelf` on trait methods with a
@@ -1037,8 +1068,10 @@ impl<'a> Parser<'a> {
             // Reuse `parse_fn_decl` — its semicolon-or-block body
             // dispatch lets it land an abstract signature naturally
             // when the user writes `void foo();`.
-            let Some(mut method) = self.parse_fn_decl(method_annotations, method_vis)
-            else { break };
+            let Some(mut method) = self.parse_fn_decl(method_annotations, method_vis) else {
+                self.recover_to_member_boundary(member_start);
+                continue;
+            };
             // Per §7.6 / Java: an interface method is **implicitly public** when
             // no visibility is written. Promote the package-private default to
             // `public` (an explicitly written `private`/`protected` helper, if
@@ -1945,6 +1978,8 @@ impl<'a> Parser<'a> {
         }
         if self.eat(&TokenKind::LBrace) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                // A member that fails is skipped whole from here (LEAKS L22).
+                let member_start = self.pos;
                 // `record-member = annotation* ( function-decl | static-init-block )`
                 // (§A.2.5). A record may implement an interface, so its methods
                 // carry `@Override` exactly as a class's do.
@@ -1981,8 +2016,9 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 if names_record && matches!(after_name, Some(TokenKind::LParen)) {
-                    if let Some(ctor) = self.parse_constructor_decl(member_annotations, member_vis) {
-                        constructors.push(ctor);
+                    match self.parse_constructor_decl(member_annotations, member_vis) {
+                        Some(ctor) => constructors.push(ctor),
+                        None => self.recover_to_member_boundary(member_start),
                     }
                     continue;
                 }
@@ -2109,10 +2145,9 @@ impl<'a> Parser<'a> {
                         // Method shape: `[modifiers] returnType
                         // methodName(params) { ... }`. Reuses the
                         // class fn-decl parser unchanged.
-                        if let Some(m) =
-                            self.parse_fn_decl(member_annotations.clone(), member_vis)
-                        {
-                            methods.push(m);
+                        match self.parse_fn_decl(member_annotations.clone(), member_vis) {
+                            Some(m) => methods.push(m),
+                            None => self.recover_to_member_boundary(member_start),
                         }
                     }
                     _ => {
@@ -2126,9 +2161,7 @@ impl<'a> Parser<'a> {
                             )
                             .with_span(here),
                         );
-                        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                            self.advance();
-                        }
+                        self.recover_to_member_boundary(member_start);
                     }
                 }
             }
@@ -2208,6 +2241,8 @@ impl<'a> Parser<'a> {
         let mut constructors: Vec<ConstructorDecl> = Vec::new();
         if self.eat(&TokenKind::Semicolon) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                // A member that fails is skipped whole from here (LEAKS L22).
+                let member_start = self.pos;
                 // `enum-member = annotation* ( function-decl | const-decl )`
                 // (§A.2.5). An enum may implement an interface, so its methods
                 // carry `@Override` too.
@@ -2237,8 +2272,9 @@ impl<'a> Parser<'a> {
                 let names_enum = matches!(self.peek(), TokenKind::Ident(t) if *t == name.text)
                     && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LParen));
                 if names_enum {
-                    if let Some(ctor) = self.parse_constructor_decl(member_annotations, member_vis) {
-                        constructors.push(ctor);
+                    match self.parse_constructor_decl(member_annotations, member_vis) {
+                        Some(ctor) => constructors.push(ctor),
+                        None => self.recover_to_member_boundary(member_start),
                     }
                     continue;
                 }
@@ -2283,11 +2319,9 @@ impl<'a> Parser<'a> {
                     {
                         methods.push(m);
                     } else {
-                        // Recovery: skip to the closing brace so one
-                        // malformed member can't loop forever.
-                        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                            self.advance();
-                        }
+                        // Skip the malformed member whole; the next one
+                        // still parses (LEAKS L22).
+                        self.recover_to_member_boundary(member_start);
                     }
                 }
             }
@@ -2800,7 +2834,7 @@ impl<'a> Parser<'a> {
     /// handling) or a function type (`(A) -> R`). `None` if no type is there.
     /// `void` is accepted as a (result-position) type. Shared by the member
     /// discriminator and `scan_fn_type_at`.
-    fn scan_type_at(&self, mut i: usize) -> Option<usize> {
+    pub(crate) fn scan_type_at(&self, mut i: usize) -> Option<usize> {
         // `fn(A) -> R`: a function-pointer type is the function-type scan
         // after its leading `fn`.
         if self.at_fn_pointer_type(i) {

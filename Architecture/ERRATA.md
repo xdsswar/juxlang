@@ -3826,6 +3826,203 @@ say what is built. GAPS.md gap 23 is closed.
 
 ---
 
+## E122. A parse error inside a type body stays inside it
+
+**Conflict.** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.1 asks for a diagnostic at the
+place that is wrong, and `JUX-ENTRY-POINTS-ADDENDUM.md` has top-level
+statements become `main` (§E.1.1). The parser met the second rule with the first one's
+input. A type body with one broken member (`regular = { 278, 355 };` in a
+constructor, LEAKS L22) made the whole type fail; the compilation-unit loop
+then retried the type as a top-level STATEMENT, the statement parser reported
+`E0993` "a class cannot be declared inside a function body", and the
+recovered statement became a synthetic `main` that collided with the real
+one in another file (`E0400` "`main` is declared more than once"). The real
+error, and its location, were dropped with the failed declaration attempt.
+Two recovery rules fed it: statement recovery stopped at the first `}` even
+when it had stepped into a `{ ... }` group itself, closing the constructor
+early, and every member parser's failure was the type's failure.
+
+**Resolution.**
+
+- A member that fails to parse is skipped whole, from its first token: through
+  a `;` at brace depth zero, or through a `{ ... }` group opened at depth zero
+  (a body, or a field's brace initializer, with its `;`), stopping before the
+  type body's `}` or at a visibility keyword that starts the next member. The
+  type keeps every other member. This holds in a class, a record, an enum and
+  an interface body.
+- A type declaration (`class`/`interface`/`enum`/`record`/`struct` and a name)
+  that fails is never retried as a statement: its own diagnostics stand and
+  the declaration is skipped whole.
+- Statement recovery skips a brace group it steps into, so its `;`s and `}`
+  stay the broken statement's.
+- Three messages say what is wrong instead of "expected expression": the
+  brace shorthand outside a declaration ("an array initializer `{ ... }` is
+  only allowed where a variable or field is declared with its type ...; write
+  `new int[] { 1, 2 }`", JUX-LANG-V1 §5.5), and a statement written straight
+  into a type body (`count = 5;`, `print(...)`, `if`/`for`/`while`/`return`/
+  `throw`/`try`), each with where it belongs. After the shorthand in an
+  assignment the statement is kept as an assignment of the target to itself,
+  so a field assigned there is not also reported "not definitely assigned".
+- One token carries at most one syntax error (`E0200`): a production that
+  gives up where another already did adds nothing.
+
+`tests/ui/class_body_parse_recovery.jux` pins six malformed shapes.
+
+**Still open.** An uninitialized LOCAL assigned the brace shorthand
+(`int[] r; r = { 1, 2 };`) also reports `E0601` for the placeholder read.
+
+**Spec status:** no addendum text changes; this is recovery, which the
+grammar leaves to the implementation.
+
+---
+
+## E123. A Rust length stays a `uint`
+
+**Conflict.** LEAKS L23: `String.len()` and `Vec.len()` are Rust's `usize`,
+which `JUX-BINDGEN-ADDENDUM.md` §G.3.1 maps to `uint`, and
+`n % v.len()` or `int t = n + v.len();` with an `int n` is `E0410` by
+`JUX-SEMANTICS-ADDENDUM.md` §S.2.6 rule 4 (`int + uint` has no common type).
+A Java programmer expects `int` sizes, and JUX-LANG-V1's older examples
+(`d.tricks.size()` "copies the int out") read that way.
+
+**Resolution.** The spec decides it, and the decision stands:
+
+- `JUX-CORE-LIB-ADDENDUM.md` §K.12 keeps `Vec`, `HashMap`, `HashSet` and
+  `VecDeque` as Rust's own types with their own methods: "a `Vec` has `push`
+  and `len`, not `add` and `size`". `JUX-MISSING-DEFS-ADDENDUM.md` §M.6.1 builds
+  on it (`0..v.len()` is a `uint` range). A Jux-level `int` length would
+  contradict three addenda and the range rule.
+- The Jux-side count is `String.length()`, an `int` (§K.7, ERRATA E13).
+- §S.2.7 already carries the "size() is int" ergonomics, and they are what
+  the compiler does: a `uint` flows into an `int` slot (`int n = v.len();`,
+  `return v.len();`), and `+ - *` over `uint` values and literals in a signed
+  slot is computed in the slot's type (`int last = v.len() - 1;` is `-1` for
+  an empty list; `int at = header.len() + body.len();`).
+- A comparison never needs a cast (`i < v.len()`, "comparisons are exact").
+- Where a length meets an `int` in one operator, `E0410` stays, and its help
+  now names the length and the two spellings that work: "`v.len()` is a Rust
+  length, which is a `uint` in Jux (a `usize`): convert it where it meets an
+  `int`, `(int) v.len()`, or take it into an `int` first, `int n = v.len();`".
+
+**Spec status:** no addendum text changes.
+
+---
+
+## E124. What a bare name means inside a type, in the backend too
+
+**Conflict.** ERRATA E102 and E117 settled that a name keeps the meaning the
+unit it was written in gives it, and that a program's own declaration is
+what a bare name in its package means. Three backend lookups still asked a
+different question (LEAKS L24, L25, L26):
+
+- **A record's or an enum's own static method, called bare.** `channel(r)`
+  inside `record Color` was emitted as a bare `channel(self.r)` (rustc
+  E0425: an associated function has no implicit `Self`). A class's was
+  qualified through its `extends` chain; a record's and an enum's were not.
+  Inside an enum the resolver did not even see its methods: `describe(this)`
+  was `E0301`.
+- **A user class named like a library enum.** Every constant read of
+  `leaker.ui.Theme.NAV_MIN` (a user class, same package, no import of
+  eframe's `Theme`) lowered as `eframe::Theme::NAV_MIN`: the enum-variant
+  path scanned every enum by last segment before the static-field path ran,
+  and a library enum named `Theme` answered for the user's class.
+  `std::cmp::Ordering` does the same to a root-package `class Ordering`.
+- **A local's type answering for another declaration's parameter.**
+  Constructor bodies emitted their locals into the backend's base name-to-type
+  scope, which is never popped. `int[] r` in `FontMetrics`'s constructor then
+  answered for `Rect r` in `Gui.fill`, emitted later: the parameter was taken
+  for an array handle and lent as `r.borrow().clone()`. A foreign-typed
+  parameter the backend cannot type registers nothing, so the stale entry was
+  what the lookup found. Renaming the parameter "fixed" it.
+
+**Resolution.**
+
+- A bare call of a record's or an enum's own static method is
+  `Self::name(...)`; an enum's own instance method called bare is a call on
+  `self`, as in a class. The resolver puts an enum's methods in scope in its
+  bodies, as it does for classes and records.
+- A bare name that the unit resolves to one of the program's own classes,
+  records or interfaces (through its imports, in its own package, or in the
+  root package) is never re-read as a library enum of the same last segment.
+  An import of the enum still wins, as the import says which type is meant.
+- A constructor's locals live in a scope of their own, and every top-level
+  declaration starts from an empty base scope, so no declaration's locals can
+  answer for another's names.
+
+`examples/own_static_calls.jux`, `examples/user_type_named_like_library_enum.jux`
+and `examples/local_names_do_not_leak.jux` run the three shapes; the leaker
+app builds with its palette class named `Theme` and `Gui.fill(Ui, Rect r, ...)`.
+
+**Spec status:** no addendum text changes; §M.16.6 (E102) and §M.16 (E117)
+already say this.
+
+---
+
+## E125. An `E0900` names its rustc error in every format
+
+**Conflict.** ERRATA E116 made a rustc rejection of the emitted crate an
+`E0900` in Jux words, with rustc's code and message as a note and the full
+report behind `--verbose`. The `line` format, the default whenever stderr is
+not a terminal (an IDE console, a script, a pipe; ERRATA E72), prints no
+notes, and neither do `short` and `compact`. So the one line a user saw was
+"internal compiler error: the Rust generated for this code does not
+compile", once per statement, and finding the cause meant `--verbose` and
+reading the generated crate (LEAKS L27).
+
+**Resolution.** The one-line formats append the cause to an `E0900`:
+
+```text
+Gui.jux:66:9: [E0900] error: internal compiler error: the Rust generated for this code does not compile (rustc reported error[E0599]: no method named `borrow` found for struct `Rect` in the current scope; a compiler bug, `--verbose` shows the full report)
+```
+
+The note carries rustc's first message line only; where it points in the
+generated crate is a note of its own, which `human` and `json` show and the
+one-line formats leave out. The message itself is unchanged (the Jux words
+E116 chose), so the JSON `message` and every test keyed on it are too.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` is unchanged; this is
+rendering. E116's `E0900` bullet is refined by this entry.
+
+---
+
+## E126. How much Rust shows through a crate's API
+
+**Conflict.** LEAKS L28 lists what a Java developer meets when using a Rust
+crate: snake_case member names, borrow markers and machine annotations in the
+stubs, `(ubyte)` casts, and a nightly toolchain plus a slow first build for
+stub generation.
+
+**Resolution.** Each item against the spec:
+
+- **Names stay verbatim.** `JUX-BINDGEN-ADDENDUM.md` §G.4 is explicit: a
+  foreign name is kept as the crate spells it, "instead of a camelCased
+  alias", so a call reads like the crate's own documentation. No alias is
+  generated.
+- **Hover, completion and signature help show Jux signatures.** They render
+  from the checker's signatures, which carry no `&`/`&mut` and no machine
+  annotation (§G.3.4, borrows vanish); a test now pins that. The markers are
+  in the `.jux.d` text only, which go-to-definition opens (§G.10.2).
+- **`(ubyte)` casts.** An integer literal that fits takes a `ubyte`
+  parameter's type with no cast (§S.2.6); an `int` VALUE into a `ubyte` slot
+  is a narrowing, which §S.2.7 requires to be written. Both are the rules for
+  any Jux function, not a foreign special case.
+- **No nightly toolchain is required.** A `rust.<crate>` stub is read from
+  rustdoc JSON, which rustdoc only writes behind `-Z unstable-options`. The
+  nightly toolchain is still asked first; when it is not installed, the
+  default toolchain's rustdoc is run with `RUSTC_BOOTSTRAP=1`. On the pinned
+  stable (1.96) that JSON is format 57, the one `rustdoc-types` 0.57 reads,
+  and the `semver` and `rand` stubs generated from it are identical to the
+  nightly ones but for the header line. The error, when both fail, names the
+  crate and the one command that fixes it.
+- **The first build.** Generating a large crate's stub (eframe) takes about
+  a minute, once per crate version; the stub is cached in `.jux-stubs/`
+  (§G.11.2). Lazy per-item generation remains §G.13's open question.
+
+**Spec status:** no addendum text changes. INSTALL.md says when nightly is
+used.
+
+---
+
 ## E1XX-GAP30. A borrowed foreign object is lent, not copied
 
 **Conflict.** Bindgen §G.3.4 says borrows vanish: `&T` and `&mut T` have no

@@ -278,9 +278,18 @@ impl RustEmitter {
                 self.emit_enum_field_methods(enum_decl);
                 self.w.indent_dec();
             }
+            let prev_methods = std::mem::replace(
+                &mut self.enclosing_enum_methods,
+                enum_decl
+                    .methods
+                    .iter()
+                    .map(|m| (m.name.text.clone(), m.modifiers.contains(&juxc_ast::FnModifier::Static)))
+                    .collect(),
+            );
             for method in &enum_decl.methods {
                 self.emit_enum_method(method);
             }
+            self.enclosing_enum_methods = prev_methods;
             self.enclosing_enum_fields = prev_fields;
             self.emit_enum_auto_helpers(enum_decl);
             self.w.line("}");
