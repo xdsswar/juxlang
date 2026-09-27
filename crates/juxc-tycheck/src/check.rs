@@ -13664,6 +13664,74 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `E0454`: a foreign object a crate LENDS to a lambda, kept past the call.
+    ///
+    /// A closure slot marked `@RustClosureRefs` is called with references,
+    /// and a parameter of a foreign class with no `Clone` (egui's `Ui`) is the
+    /// crate's own object, lent for as long as the call runs (ERRATA
+    /// E1XX-GAP30). The lambda works on it in place and may hand it to
+    /// methods; what it cannot do is keep it: return it, store it in a field
+    /// or an element, or put it in a new object. Without this check such a
+    /// program type-checked and then failed in rustc (E0900), which says
+    /// nothing a Jux programmer can act on.
+    fn check_lent_closure_params(
+        &mut self,
+        declaring_class: Option<&str>,
+        callee_name: &str,
+        slot: usize,
+        param: &ParamSig,
+        l: &juxc_ast::LambdaExpr,
+    ) {
+        let Some(class) = declaring_class.and_then(|c| self.symbols.classes.get(c)) else { return };
+        if !class.is_external {
+            return;
+        }
+        let Some(method) = class.methods.get(callee_name) else { return };
+        let lends = method.annotations.iter().any(|a| {
+            a.name.segments.len() == 1
+                && a.name.segments[0].text.eq_ignore_ascii_case("rustclosurerefs")
+                && matches!(
+                    a.args.first(),
+                    Some(juxc_ast::AnnotationArg::Positional(Expr::Literal(juxc_ast::Literal::String(list))))
+                        if list.split(',').any(|n| n.trim() == slot.to_string())
+                )
+        });
+        let Some(shape) = param.ty.closure_shape() else { return };
+        if !lends {
+            return;
+        }
+        let dc = declaring_class.unwrap_or_default();
+        for (k, lp) in l.params.iter().enumerate() {
+            let Some(pty) = shape.params.get(k) else { continue };
+            let Ty::User { name, .. } = lower_member_type(pty, dc, self.symbols) else { continue };
+            let external = self
+                .symbols
+                .classes
+                .get(&name)
+                .is_some_and(|c| c.is_external);
+            if !external || self.symbols.type_is_rust_clone(&name) {
+                continue;
+            }
+            let pname = lp.name.text.as_str();
+            let Some(kept_at) = lent_param_kept_at(l, pname) else { continue };
+            let bare = name.rsplit('.').next().unwrap_or(&name);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0454_LentObjectKept,
+                    format!(
+                        "`{pname}` is the `{bare}` that `{callee_name}` lends to this lambda while it runs, and it cannot be kept"
+                    ),
+                )
+                .with_span(kept_at)
+                .with_label(lp.name.span, format!("`{callee_name}` lends `{pname}` here"))
+                .with_help(format!(
+                    "use `{pname}` inside the lambda, or pass it to a method as a parameter; \
+                     a `{bare}` has no copy that could outlive the call"
+                )),
+            );
+        }
+    }
+
     fn check_call_args(
         &mut self,
         callee_name: &str,
@@ -13900,6 +13968,11 @@ impl<'a> Checker<'a> {
             self.check_expr(arg);
             self.lambda_slot_params = None;
             self.lambda_is_comparator = false;
+            if let (Expr::Lambda(l), Some(slot)) = (arg, arg_to_param[i]) {
+                if let Some(param) = params.get(slot) {
+                    self.check_lent_closure_params(declaring_class, callee_name, slot, param, l);
+                }
+            }
             let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else {
                 continue;
             };
@@ -15406,6 +15479,48 @@ fn const_arg_mismatch(cty: &juxc_ast::TypeRef, lit: &str) -> Option<String> {
 /// narrowing only claims what it can see plainly.
 /// Whether `ty` names a type with nothing left to infer: no type parameter
 /// and no unknown anywhere inside it.
+/// Where lambda `l` KEEPS its parameter `name` (see
+/// `Checker::check_lent_closure_params`): the first place it returns it,
+/// stores it in a field or an element, or passes it to a constructor or an
+/// array.
+fn lent_param_kept_at(l: &juxc_ast::LambdaExpr, name: &str) -> Option<Span> {
+    let is_name = |e: &Expr| matches!(e, Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == name);
+    let span_of = |e: &Expr| match e {
+        Expr::Path(qn) => Some(qn.span),
+        _ => None,
+    };
+    let mut found: Option<Span> = None;
+    let mut visit = |n: juxc_ast::visit::Node<'_>| {
+        if found.is_some() {
+            return;
+        }
+        let kept: Option<&Expr> = match n {
+            juxc_ast::visit::Node::Stmt(Stmt::Return(Some(e), _)) if is_name(e) => Some(e),
+            juxc_ast::visit::Node::Stmt(Stmt::Assign(a))
+                if is_name(&a.value) && !matches!(&a.target, Expr::Path(qn) if qn.segments.len() == 1) =>
+            {
+                Some(&a.value)
+            }
+            juxc_ast::visit::Node::Expr(Expr::NewObject(o)) => o.args.iter().find(|a| is_name(a)),
+            juxc_ast::visit::Node::Expr(Expr::NewArrayLit(a)) => a.elements.iter().find(|e| is_name(e)),
+            _ => None,
+        };
+        if let Some(e) = kept {
+            found = span_of(e);
+        }
+    };
+    match &l.body {
+        juxc_ast::LambdaBody::Expr(e) => {
+            if is_name(e) {
+                return span_of(e);
+            }
+            juxc_ast::visit::for_each_node_in(e, &mut visit);
+        }
+        juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_node(b, &mut visit),
+    }
+    found
+}
+
 fn ty_is_concrete(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) | Ty::Unknown | Ty::Wildcard(_) => false,

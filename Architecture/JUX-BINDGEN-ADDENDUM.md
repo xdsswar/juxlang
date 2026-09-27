@@ -167,6 +167,13 @@ method names, it cannot go stale when the library grows one.
 
 Every read-into-a-buffer API in Rust has this shape, so without the marker the whole of `std::io` type-checks and then fails to compile.
 
+**A foreign object is lent, never copied** (ERRATA E1XX-GAP30). What a Java programmer means by passing an object is passing the object, and for a foreign object that has to be a borrow: egui's `Ui` has no `Clone`, and a copy of one that does would take the callee's writes and drop them. So:
+
+- A parameter of a foreign class with no `@RustClone` is `&mut T` in the lowered signature, whatever the body calls on it, and each use lends it on (`&mut *ui`). Only a body that keeps it (returns it, stores it, hands it to a slot that takes ownership, or lets an escaping closure capture it) takes it by value. A `@RustClone` type keeps §6.3's rule: a copy, or `&mut T` when the body mutates it.
+- A lambda in a `@RustClosureRefs` slot receives a foreign object as the reference the crate passes (`|ui: &mut Ui|`), not a clone (§G.6.4.4). Keeping one past the call is `E0454`.
+- A field or element passed to a `&mut T` parameter is lent in place, through its owner's cell; when another argument could run Jux code during the call, it is copied in and written back after it, so the write is never lost.
+- The result of a `@MutSelf @RustRefOut` accessor (`spacing_mut()`) is the borrow itself where the program writes through it: `ui.spacing_mut().item_spacing = v`, or a local initialized from it.
+
 ### G.3.5. Phase-1 Nominal Placeholders — Tuples and Raw Pointers
 
 The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, §A.2.7, `unsafe`-only) but the Phase-1 parser does not yet read either spelling back in. Because a generated stub must **parse** for its enclosing member to survive into the symbol table (and thus autocomplete), `bindgen` surfaces these two types under nominal placeholders until the real type-syntax features land (the pointer/tuple work travels with the broader `unsafe` / C-interop effort):
@@ -494,7 +501,7 @@ A trait's associated function (no `self`) is marked `@RustStatic` and is called 
 
 **Rust's `Iterator` trait is `RustIterator`.** It is the one `core` trait the stub declares, since its adaptors (`count`, `sum`, `max`, `map`, `filter`, `position`, `fold`, `collect`, ...) are what a program calls on an iterator; it is renamed so that K.5's `Iterator<T>`, the protocol a program writes, keeps its name alone. The adaptor types its methods return (`Filter`, `Map`, `Zip`) are surfaced with it.
 
-**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
+**Elements are values.** An iterator over borrowed items (`v.iter()` yields `&T`) is taken `.cloned()` where it is made (a borrowed view, `&str`, is owned with `to_owned`), so every adaptor after it sees the element values a Jux program works with. A closure a Rust adaptor calls with references (`filter` passes `&Item`, `sort_unstable_by` passes `&T, &T`) is marked `@RustClosureRefs`, and a Jux lambda in that slot clones its arguments out first. A FOREIGN object in that slot is the exception: an egui container calls its closure with `&mut Ui`, and the lambda's parameter is that borrow, used in place and lent on (§G.3.4). `collect<Vec<int>>()` builds the plain Rust collection and hands it back as a Jux collection.
 
 A comparator lambda into a closure slot that returns `Ordering` may return an `int` instead; its sign picks the `Ordering` (Operators §O.2.1).
 

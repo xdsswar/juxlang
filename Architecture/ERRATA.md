@@ -3826,6 +3826,117 @@ say what is built. GAPS.md gap 23 is closed.
 
 ---
 
+## E1XX-GAP30. A borrowed foreign object is lent, not copied
+
+**Conflict.** Bindgen §G.3.4 says borrows vanish: `&T` and `&mut T` have no
+Jux spelling, and the call site re-derives the borrow. A Java programmer
+reads that as "objects are passed by reference", and for Jux classes and
+collections that is what happens. For a FOREIGN object the lowering did
+something else in five places, found by the leaker app (`leaker/LEAKS.md`
+L1, L8, L9, L10, L12, L14, L15; GAPS.md gap 30):
+
+- **A lambda lent an object got a clone of it (L1).** A closure slot marked
+  `@RustClosureRefs` (every egui container: `CentralPanel.show`,
+  `ScrollArea.show`, `ui.horizontal`, ...) is called with references, and
+  the lambda started with `let ui = ui.clone();`. egui's `Ui` has no
+  `Clone`; it derefs to `Context`, so the clone silently became a `Context`
+  and the body failed in rustc (`no method heading on Context`). A foreign
+  object that IS `Clone` took the lambda's writes into a copy.
+- **How a `Ui` parameter was passed depended on the body (L9).** A foreign
+  parameter was `&mut T` only when the body called a `&mut self` method on it
+  directly. Handing it on, or calling only `&self` methods, made it by value,
+  which no caller holding a lent `Ui` could satisfy; programs opened every
+  such method with a no-op mutating call. Handing a `&mut Ui` parameter on to
+  a foreign `&mut Ui` slot then wrote `&mut ui` on a binding that is not
+  `mut`.
+- **A field lent to a `&mut` slot was a temporary copy (L8).**
+  `ui.text_edit_singleline(this.name)` became `let __jux_arg0 =
+  self.0.borrow().name.clone(); ...(&mut __jux_arg0)`: a compile error, and
+  had it compiled, the edit would have gone into the copy.
+- **A write through a `&mut` accessor was lost (L10).**
+  `ui.spacing_mut().item_spacing = v` lowered to
+  `(ui.spacing_mut()).clone().item_spacing = v`, with no diagnostic from
+  either compiler. `var s = ui.spacing_mut(); s.indent = 12;` did the same.
+- **Hoisting moved what it should lend (L12, L14, L15).** The E119
+  argument hoist bound a `&mut Ui` argument to a `let`, moving it
+  (`let __jux_arg0 = ui;`), so the next use of `ui` failed. A lambda that
+  captured a collection the same call also read (`names.len()`) moved the
+  collection while that read's guard was alive. A `String` read in one arm of
+  a `?:`, or passed to a class's own static method by its bare name, was
+  moved though the program read it again.
+
+**Resolution.** One convention: a foreign object is the crate's object, and
+Jux code works on it in place.
+
+- **A lent object stays the reference.** In a `@RustClosureRefs` slot, a
+  lambda parameter whose type is a foreign class (a stub class that is not a
+  §6.5.1 collection) is not cloned: it is the `&T` / `&mut T` the crate
+  passes, and the body calls through it, lends it on with a reborrow
+  (`&mut *ui`), and hands it to Jux methods. Parameters of Jux value types
+  (primitives, `String`, records, Jux classes, collections) are still cloned
+  out, as §G.6.4.4 says for iterator adaptors.
+- **One convention for a foreign parameter.** A method or function parameter
+  of a foreign class with no `@RustClone` lowers to `&mut T`, whatever the body
+  calls on it, and every use lends it on. The exception is a body that KEEPS
+  it: returns it, stores it in a field, an element or a new object, hands it
+  to a slot that takes ownership (a foreign by-value parameter, or a Jux
+  parameter that keeps it in turn), or lets a closure that may outlive the
+  call capture it. Such a parameter is owned, as before. "Keeps in turn" is
+  settled by starting every candidate as a borrow and withdrawing each one
+  found kept until nothing changes. A foreign type that is `Clone` keeps the
+  old rule (a copy, or `&mut T` when the body mutates it), because copying a
+  value type is what passing it means. A local that is already a borrow (such
+  a parameter, a lent lambda parameter) is lent on as `&mut *ui` everywhere:
+  foreign `&mut` slots, Jux by-`&mut` parameters, and bare calls to the
+  class's own methods, which now take the same argument path as `Class.m(..)`.
+- **A place lent to a foreign `&mut` slot is lent in place.** A local is
+  lent where it stands. A field or element is lent through its owner's cell,
+  `&mut self.0.borrow_mut().name`, when nothing else in the call can run Jux
+  code while the cell is borrowed: no lambda, method reference or function
+  value among the other arguments, and a receiver that reads no cell. When
+  something can, the value is copied in, lent, and stored back right after the
+  call, so the program sees the write afterwards and §CR.4.1 holds during the
+  call (no guard is alive while a lambda runs).
+- **A `&mut` accessor is written through.** The result of a `@MutSelf
+  @RustRefOut` method is not copied when the program writes through it (an
+  assignment target, the receiver of a call), and a local initialized from one
+  keeps the borrow: `var s = ui.spacing_mut(); s.indent = 12;` changes the
+  `Ui`. A `&T` accessor (`spacing()`) is still copied out.
+- **Hoisting lends.** A local lent to a `&mut` slot is not hoisted. A lambda's
+  capture counts a read of the same binding earlier in the same statement as
+  a later use, so it captures a shared copy of the handle. A `?:` arm and a
+  bare static call's argument take a copy of a local that is read again.
+- **Keeping a lent object is `E0454`.** A lambda that returns a lent foreign
+  object with no `Clone`, stores it in a field or element, or passes it to a
+  constructor or array literal, is reported in Jux terms, at the use, with
+  the lambda parameter labelled. It exists only while the crate's call runs.
+
+**Captured locals.** A Jux lambda captures a local by reference, not by
+Java's effectively-final copy: a local the lambda (or the code after it)
+reassigns is promoted to a shared cell (already the rule for `Rc<dyn Fn>`
+lambdas, Async §18 for workers aside), and objects and collections are shared
+handles. The same holds for a lambda lent to a crate: `counter++`,
+`names.push(x)` and `obj.bump()` inside `ui.horizontal(...)` are all visible
+after the call. This is a deliberate departure from Java, where the first of
+the three does not compile.
+
+**Known boundary.** The mutability of a lent reference is not in the stub
+(`@RustClosureRefs` lists the slot, not whether each argument is `&` or
+`&mut`), so a lambda that writes through an object the crate lends shared
+still reaches rustc. `E0454` sees the lambda's own body; a lent object handed
+to a Jux method that keeps its parameter is still an `E0900`. A `var`
+initialized from a `&mut` accessor holds the borrow while it is live, so
+using the accessor's receiver in between is a rustc borrow error.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.3.4 carries the convention and
+§G.6.4.4 the lent closure parameter; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 has
+`E0454`. GAPS.md gap 30 is closed. Tests: `bin/juxc/tests/borrowed_foreign.rs`
+builds and runs a program against a small crate with egui's shapes under the
+E119 self-check; `examples/lent_foreign_closure.jux` runs one through
+`std::sync::Once`; `tests/ui/lent_object_kept.jux` pins `E0454`.
+
+---
+
 When you edit any addendum that touches one of the items above,
 either:
 

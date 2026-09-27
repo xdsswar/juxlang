@@ -554,6 +554,11 @@ impl RustEmitter {
             .get(&format!("fn::{}", fn_decl.name.text))
             .cloned()
             .unwrap_or_default();
+        let byref_shared = self
+            .shared_byref_params
+            .get(&format!("fn::{}", fn_decl.name.text))
+            .cloned()
+            .unwrap_or_default();
         for (i, param) in fn_decl.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -579,7 +584,9 @@ impl RustEmitter {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
             }
             if is_byref {
-                self.w.push_str("&mut "); // C6: foreign collection by exclusive ref
+                // C6: foreign collection by exclusive ref; a borrowed foreign
+                // object the function only reads is shared (E1XX-GAP30).
+                self.w.push_str(if byref_shared.contains(&i) { "&" } else { "&mut " });
             }
             if param.is_weak {
                 // `weak T` (§M.14.3) — a weak reference to a class object. The

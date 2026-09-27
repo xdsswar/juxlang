@@ -2000,7 +2000,11 @@ impl RustEmitter {
         // arms, so a ternary picking between two objects compiled once and
         // failed on the second turn of the enclosing loop -- E0382, on a line
         // whose Jux source only reads two variables.
-        if self.wrapper_value_needs_clone(arm) {
+        // The same for a VALUE read out of a local that is read again: a
+        // `String` arm moved `word` out of its binding, and the next
+        // `line = word;` was a use after move (LEAKS L15). A copy there is
+        // what Java's value semantics say anyway.
+        if self.wrapper_value_needs_clone(arm) || self.value_place_needs_clone(arm) {
             self.w.push_str(".clone()");
         }
         if let Some(p) = widen_to {
@@ -2876,6 +2880,17 @@ impl RustEmitter {
             && self.receiver_ty_of(&b.left) == self.receiver_ty_of(&b.right)
     }
 
+    /// Whether a value of type `ty` is a FOREIGN object: an instance of a
+    /// class a crate stub declares (`rust.egui.Ui`), which is not one of the
+    /// §6.5.1 collection handles. A crate that lends one to a closure lends
+    /// the object itself (LEAKS L1).
+    pub(crate) fn ty_is_foreign_object(&self, ty: &juxc_tycheck::Ty) -> bool {
+        let juxc_tycheck::Ty::User { name, .. } = ty else { return false };
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        !self.collection_name_is_handle(bare)
+            && self.lookup_class_by_bare_or_fqn(name).is_some_and(|c| c.is_external)
+    }
+
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         // `move` is unconditional: Phase-1 lambdas wrap in
         // `Rc<dyn Fn>`, which often outlives the enclosing scope
@@ -3008,11 +3023,41 @@ impl RustEmitter {
         // caller awaits, `crate::jux_async(async move { … })`.
         // Arguments that arrive by reference are cloned out first, so the
         // body works with values (`x > 3`, `a.total_cmp(b)`).
+        //
+        // Except a FOREIGN object (LEAKS L1). What the crate lends there is the
+        // thing itself -- egui's `&mut Ui`, `input_mut`'s `&mut InputState` --
+        // and a Jux program works on it in place, as Java works on the object
+        // a callback is handed. A clone was never right for it: `Ui` has no
+        // `Clone`, so `nav.clone()` auto-derefed to the `Context` inside and
+        // the body stopped compiling, and a `Clone` one took the writes into a
+        // copy. The parameter stays the reference, and is a borrowed local of
+        // the body like a by-`&mut` parameter (`byref_param_names`): lent on
+        // with a reborrow, never moved.
+        let prev_byref_names = self.byref_param_names.clone();
+        for p in &l.params {
+            self.byref_param_names.remove(&p.name.text);
+        }
         if clone_params {
-            self.w.push_str("{ ");
+            let mut opened = false;
             for p in &l.params {
+                let by_ref = self
+                    .local_types
+                    .last()
+                    .and_then(|scope| scope.get(&p.name.text))
+                    .is_some_and(|ty| self.ty_is_foreign_object(ty));
+                if by_ref {
+                    self.byref_param_names.insert(p.name.text.clone());
+                    continue;
+                }
+                if !opened {
+                    self.w.push_str("{ ");
+                    opened = true;
+                }
                 let n = to_rust_ident(&p.name.text);
                 self.w.push_str(&format!("let {n} = {n}.clone(); "));
+            }
+            if !opened {
+                self.w.push_str("{ ");
             }
         }
         if l.is_async {
@@ -3105,6 +3150,7 @@ impl RustEmitter {
         if clone_params {
             self.w.push_str(" }");
         }
+        self.byref_param_names = prev_byref_names;
         self.local_types.pop();
         for n in &shadowed_refs {
             self.ref_locals.insert(n.clone());

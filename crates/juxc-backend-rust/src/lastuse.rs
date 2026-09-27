@@ -90,7 +90,13 @@ pub(crate) fn captures_read_again(
             }
             let in_loop = site.depth > w.decl_depth.get(name).copied().unwrap_or(0);
             let read_later = w.uses[site.end..].iter().any(|later| later.name == name);
-            if site.nested || in_loop || read_later {
+            // Read earlier in the SAME statement, say by another argument of
+            // the call the lambda is passed to: that read's temporaries (a
+            // collection's `borrow()` for `names.len()`) live to the end of
+            // the statement, so the capture cannot move the binding out from
+            // under them (LEAKS L12).
+            let read_alongside = w.uses[site.stmt_first..site.first].iter().any(|u| u.name == name);
+            if site.nested || in_loop || read_later || read_alongside {
                 shared.push((u.name.clone(), u.span));
             }
         }
@@ -116,6 +122,9 @@ struct LambdaSite {
     nested: bool,
     /// The lambda's reads are `uses[first..end]`.
     first: usize,
+    /// Reads of the statement the lambda is written in start at
+    /// `uses[stmt_first]`.
+    stmt_first: usize,
     end: usize,
     /// Every name the lambda declares, its parameters included.
     declares: HashSet<String>,
@@ -142,6 +151,8 @@ struct Walker {
     lambdas: Vec<LambdaSite>,
     /// The names declared by each lambda being walked, innermost last.
     lambda_declares: Vec<HashSet<String>>,
+    /// Where the reads of the innermost statement being walked start.
+    stmt_first: usize,
 }
 
 impl Walker {
@@ -188,6 +199,12 @@ impl Walker {
     }
 
     fn stmt(&mut self, s: &Stmt) {
+        let outer = std::mem::replace(&mut self.stmt_first, self.uses.len());
+        self.stmt_inner(s);
+        self.stmt_first = outer;
+    }
+
+    fn stmt_inner(&mut self, s: &Stmt) {
         match s {
             Stmt::Expr(e) => self.expr(e),
             Stmt::Return(Some(e), _) => self.expr(e),
@@ -371,6 +388,7 @@ impl Walker {
                     depth: self.depth,
                     nested,
                     first,
+                    stmt_first: self.stmt_first,
                     end: self.uses.len(),
                     declares,
                 });

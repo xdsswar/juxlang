@@ -1,0 +1,1 @@
+lent_object_kept.jux:15:23: [E0454] error: `state` is the `OnceState` that `call_once_force` lends to this lambda while it runs, and it cannot be kept
