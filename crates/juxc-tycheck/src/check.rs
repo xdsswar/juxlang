@@ -13714,6 +13714,69 @@ impl<'a> Checker<'a> {
             return;
         }
         let dc = declaring_class.unwrap_or_default();
+        // The arguments the crate lends READ-ONLY (`FnMut(&T)`, recorded as
+        // `@RustClosureShared("slot:args")`): the lambda may not write
+        // through them, which rustc would otherwise report as E0594/E0596.
+        let shared: Vec<usize> = method
+            .annotations
+            .iter()
+            .filter(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustclosureshared"))
+            .filter_map(|a| match a.args.first() {
+                Some(juxc_ast::AnnotationArg::Positional(Expr::Literal(juxc_ast::Literal::String(list)))) => {
+                    Some(list.clone())
+                }
+                _ => None,
+            })
+            .flat_map(|list| {
+                list.split(';')
+                    .filter_map(|entry| {
+                        let (s, args) = entry.split_once(':')?;
+                        (s.trim() == slot.to_string()).then(|| {
+                            args.split(',').filter_map(|n| n.trim().parse::<usize>().ok()).collect::<Vec<_>>()
+                        })
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (k, lp) in l.params.iter().enumerate() {
+            if !shared.contains(&k) {
+                continue;
+            }
+            let Some(pty) = shape.params.get(k) else { continue };
+            let pname = lp.name.text.as_str();
+            let class_of = match lower_member_type(pty, dc, self.symbols) {
+                Ty::User { name, .. } => Some(name),
+                _ => None,
+            };
+            let mut_self = |m: &str| {
+                class_of
+                    .as_deref()
+                    .and_then(|c| self.symbols.classes.get(c))
+                    .and_then(|c| c.methods.get(m))
+                    .is_some_and(|ms| {
+                        ms.annotations.iter().any(|a| {
+                            a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("mutself")
+                        })
+                    })
+            };
+            let Some(written_at) = lent_param_written_at(l, pname, &mut_self) else { continue };
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0488_LentReadOnlyWritten,
+                    format!(
+                        "`{callee_name}` lends `{pname}` to this lambda to read, not to change: \
+                         it cannot be written through here"
+                    ),
+                )
+                .with_span(written_at)
+                .with_label(lp.name.span, format!("`{callee_name}` lends `{pname}` read-only"))
+                .with_help(format!(
+                    "copy what you need out of `{pname}` and change the copy, or use a method of \
+                     `{callee_name}`'s type that hands its argument over to be changed"
+                )),
+            );
+        }
         for (k, lp) in l.params.iter().enumerate() {
             let Some(pty) = shape.params.get(k) else { continue };
             let Ty::User { name, .. } = lower_member_type(pty, dc, self.symbols) else { continue };
@@ -14051,6 +14114,10 @@ impl<'a> Checker<'a> {
                 );
             if !pointer_null
                 && !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
+                // A generic Rust slot (`impl Into<X>`, `impl Trait`) takes any
+                // value that converts or implements (Bindgen G.3.6).
+                && (!param.is_foreign_impl
+                    || !crate::foreign_conv::generic_slot_accepts(&expected, &found, self.symbols))
                 && (declaring_class.is_some()
                     || !callee_is_foreign_free_fn(callee_name, self.symbols)
                     || !slice_arg_bridges(&expected, &found, param, self.symbols))
@@ -15529,6 +15596,49 @@ fn lent_param_kept_at(l: &juxc_ast::LambdaExpr, name: &str) -> Option<Span> {
             }
             juxc_ast::visit::for_each_node_in(e, &mut visit);
         }
+        juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_node(b, &mut visit),
+    }
+    found
+}
+
+/// Where lambda `l` WRITES THROUGH its parameter `name` (see the read-only
+/// lending in `Checker::check_lent_closure_params`): the first assignment to a
+/// field or element reached from it, or the first call on it to a method
+/// `mutates` names (a `@MutSelf` method of its foreign type).
+fn lent_param_written_at(l: &juxc_ast::LambdaExpr, name: &str, mutates: &dyn Fn(&str) -> bool) -> Option<Span> {
+    fn rooted_at(e: &Expr, name: &str) -> bool {
+        match e {
+            Expr::Path(qn) => qn.segments.len() == 1 && qn.segments[0].text == name,
+            Expr::Field(f) => rooted_at(&f.object, name),
+            Expr::Index(i) => rooted_at(&i.array, name),
+            _ => false,
+        }
+    }
+    let mut found: Option<Span> = None;
+    let mut visit = |n: juxc_ast::visit::Node<'_>| {
+        if found.is_some() {
+            return;
+        }
+        match n {
+            juxc_ast::visit::Node::Stmt(Stmt::Assign(a))
+                if !matches!(&a.target, Expr::Path(_)) && rooted_at(&a.target, name) =>
+            {
+                found = Some(expr_span(&a.target));
+            }
+            juxc_ast::visit::Node::Expr(Expr::Call(c)) => {
+                if let Expr::Field(f) = &*c.callee {
+                    if matches!(&*f.object, Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == name)
+                        && mutates(&f.field.text)
+                    {
+                        found = Some(c.span);
+                    }
+                }
+            }
+            _ => {}
+        }
+    };
+    match &l.body {
+        juxc_ast::LambdaBody::Expr(e) => juxc_ast::visit::for_each_node_in(e, &mut visit),
         juxc_ast::LambdaBody::Block(b) => juxc_ast::visit::for_each_node(b, &mut visit),
     }
     found

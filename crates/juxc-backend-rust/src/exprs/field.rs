@@ -51,6 +51,25 @@ impl RustEmitter {
                 return;
             }
         }
+        // A foreign TUPLE struct's `_N` is Rust's positional `.N` (Bindgen
+        // G.3.7), on every path a field is read or written through.
+        if !f.safe && !self.emitting_call_callee {
+            if let Some(index) = self.foreign_tuple_field(&f.object, &f.field.text) {
+                let place = self.emitting_lvalue || self.emitting_out_place;
+                self.w.push('(');
+                self.emit_expr_with_parent_prec(&f.object, u8::MAX, false);
+                self.w.push_str(").");
+                self.w.push_str(&index);
+                let copy = matches!(
+                    self.expr_types.get(&f.span),
+                    Some(juxc_tycheck::Ty::Primitive(_))
+                );
+                if !place && !copy {
+                    self.w.push_str(".clone()");
+                }
+                return;
+            }
+        }
         // A Java-style enum's per-variant field (JUX-LANG-V1 §7.7.4): the
         // values live in the enum's table, one row per variant, reached
         // through its `__field` accessor. `Planet.Earth.mass` and `this.mass`
@@ -311,7 +330,9 @@ impl RustEmitter {
                 // enclosing wrapper only needs a SHARED `.0.borrow()` — taking
                 // the exclusive one here would make two mutating calls on
                 // sibling fields of the same object panic for no reason.
-                let handle = self.collection_name_is_handle(&name);
+                // ...unless it is a foreign value's own field (`doc.pages`),
+                // which the crate holds as a plain container.
+                let handle = self.collection_name_is_handle(&name) && !self.is_foreign_struct_field(&f.object);
                 let prev_recv = self.emitting_method_receiver;
                 let prev_out = self.emitting_out_place;
                 let prev_lv = self.emitting_lvalue;
@@ -570,15 +591,7 @@ impl RustEmitter {
                     // path verbatim (std keeps its flattened form).
                     if let Some(sig) = self.symbols.enums.get(&enum_fqn) {
                         if sig.is_external {
-                            let segs: Vec<&str> = enum_fqn.split('.').collect();
-                            let real = if segs.first() == Some(&"rust")
-                                && segs.len() >= 3
-                                && segs[1] != "std"
-                            {
-                                Some(juxc_lex::join_rust_path(&segs[1..]))
-                            } else {
-                                sig.rust_path.clone()
-                            };
+                            let real = self.external_enum_real_path(&enum_fqn);
                             if let Some(real) = real {
                                 self.w.push_str(&real);
                                 self.w.push_str("::");
@@ -686,6 +699,20 @@ impl RustEmitter {
             if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                 let cls = self.symbols.classes.get(&class_fqn);
                 if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
+                    // A FOREIGN type's static is its associated constant
+                    // (`Color32.RED` is `Color32::RED`), reached through the
+                    // type's real Rust path. It has no Jux storage to guard.
+                    if field.is_static {
+                        if let Some(real) = cls.filter(|c| c.is_external).and_then(|c| c.rust_path.clone()) {
+                            self.w.push_str(&real);
+                            self.w.push_str("::");
+                            self.w.push_str(&to_rust_ident(&f.field.text));
+                            if let Some(sfx) = &method_suffix {
+                                self.w.push_str(sfx);
+                            }
+                            return;
+                        }
+                    }
                     if field.is_static {
                         // A `final` static normally reads as the assoc
                         // const `Class::field` — EXCEPT when the payload
@@ -935,7 +962,12 @@ impl RustEmitter {
             });
         }
         self.w.push('.');
-        self.w.push_str(&to_rust_ident(&f.field.text));
+        // A foreign TUPLE struct's field `_0` is Rust's positional `.0`
+        // (Bindgen G.3.7: a Jux field name cannot be a number).
+        match (!is_call_callee).then(|| self.foreign_tuple_field(&f.object, &f.field.text)).flatten() {
+            Some(index) => self.w.push_str(&index),
+            None => self.w.push_str(&to_rust_ident(&f.field.text)),
+        }
         if let Some(sfx) = &method_suffix {
             self.w.push_str(sfx);
         }
@@ -3186,6 +3218,31 @@ impl super::super::RustEmitter {
     ) -> bool {
         self.external_param(type_name, method, idx)
             .is_some_and(|p| p.ty.array_shape.is_some() && !p.is_ref)
+    }
+
+    /// The position `N` of a foreign tuple struct's field `_N`, when `object`
+    /// is a value of a foreign type marked `@RustTuple` (`Mm(pub f32)`), else
+    /// `None`.
+    pub(crate) fn foreign_tuple_field(&self, object: &Expr, name: &str) -> Option<String> {
+        let index = name.strip_prefix('_')?;
+        if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let ty = self.receiver_ty_of(object)?;
+        let juxc_tycheck::Ty::User { name: class, .. } = strip_nullable(ty) else {
+            return None;
+        };
+        let sig = self
+            .symbols
+            .classes
+            .get(class.as_str())
+            .or_else(|| self.lookup_class_by_bare_or_fqn(class.rsplit('.').next().unwrap_or(&class)))?;
+        let tuple = sig.is_external
+            && sig
+                .annotations
+                .iter()
+                .any(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rusttuple"));
+        tuple.then(|| index.to_string())
     }
 
     pub(crate) fn external_param_is_by_ref(

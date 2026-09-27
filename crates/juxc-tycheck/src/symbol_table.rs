@@ -400,6 +400,27 @@ impl SymbolTable {
                 return found;
             }
         }
+        // A FOREIGN stub's own signatures name Rust types, never a Jux one: a
+        // `render_to_file(Path path)` in `rust.genpdf` means `std::path::Path`.
+        // Letting the `jux.std` helper of the same name win (the rule below,
+        // made for user code) typed the slot as `jux.std.io.Path`, which no
+        // `rust.std.Path` value fits (L21). `rust.std` first, then any other
+        // stub, deterministically.
+        if is_foreign_stub_package(prefer_pkg) && prefer_pkg != "rust.std" {
+            let std_key = format!("rust.std.{name}");
+            if self.classes.get(&std_key).is_some_and(|c| c.is_external) && matches_last(&std_key) {
+                return Some(std_key);
+            }
+            if let Some(k) = self
+                .classes
+                .iter()
+                .filter(|(k, sig)| matches_last(k) && sig.is_external)
+                .map(|(k, _)| k)
+                .min()
+            {
+                return Some(k.clone());
+            }
+        }
         // (B) Cross-package fallback. A non-`external` class (the user's own /
         //     `jux.std`) shadows an auto-loaded `.jux.d` stub (`Box`, `String`,
         //     `HashMap` exist in both `jux.std` and the generated `rust.std`
@@ -1586,6 +1607,9 @@ pub struct ConstructorSig {
     /// True for a foreign zero-arg constructor that stands for Rust's
     /// `Default::default()` (`@RustDefault`, discovered from `impl Default`).
     pub is_rust_default: bool,
+    /// A foreign TUPLE struct's constructor (`@RustTuple`, Bindgen G.3.7): the
+    /// Rust value is the struct expression `Mm(x)`, the type having no `new`.
+    pub is_rust_tuple: bool,
     /// Span of the constructor declaration.
     pub span: Span,
 }
@@ -1633,6 +1657,15 @@ pub struct ParamSig {
     /// (→ `T?`). Drives the backend's weak lowering and the call-site
     /// downgrade. Mutually exclusive with [`Self::is_shared_ref`] / `is_out`.
     pub is_weak: bool,
+    /// The foreign parameter is a GENERIC Rust slot (`impl Into<X>`,
+    /// `impl Trait`, `&dyn Trait`), marked `@RustImpl` by bindgen: it takes
+    /// any value that converts into the declared class or implements the
+    /// declared trait (Bindgen G.3.6), and the call passes the value as it is.
+    pub is_foreign_impl: bool,
+    /// The pointer the foreign parameter wraps its value in and the Jux type
+    /// erased (`@RustArc` / `@RustRc` / `@RustBox`): the call site re-adds
+    /// it. `None` for every other parameter.
+    pub foreign_shared: Option<String>,
 }
 
 /// Signature of a top-level record declaration.
@@ -1757,6 +1790,11 @@ pub struct VariantSig {
     /// Payload component types in declaration order. Empty for unit
     /// variants like `Color.Red`.
     pub payload: Vec<TypeRef>,
+    /// Per payload slot of a FOREIGN variant: the value sits behind a pointer
+    /// the stub erased (`WidgetText::RichText(Arc<RichText>)` is marked
+    /// `@RustArc`), so the backend wraps it with `.into()`. Empty for every
+    /// variant with no such slot.
+    pub payload_shared: Vec<bool>,
     /// Span of the variant declaration.
     pub span: Span,
 }
@@ -4998,6 +5036,7 @@ fn insert_class(
                     a.name.segments.len() == 1
                         && a.name.segments[0].text.eq_ignore_ascii_case("rustdefault")
                 }),
+            is_rust_tuple: is_external && c.annotations.iter().any(|a| annotation_named(a, "rusttuple")),
             span: c.span,
         })
         .collect();
@@ -5165,10 +5204,13 @@ fn insert_record(
                 is_shared_ref: false,
                 is_final: false,
                 is_weak: false,
+                is_foreign_impl: false,
+                foreign_shared: None,
             })
             .collect(),
         is_foreign_result: false,
         is_rust_default: false,
+        is_rust_tuple: false,
         span: record_decl.span,
     };
     let header_types: Vec<String> = record_decl.components.iter().map(|c| render_type_ref(&c.ty)).collect();
@@ -5194,6 +5236,7 @@ fn insert_record(
             params: ctor.params.iter().map(param_sig).collect(),
             is_foreign_result: false,
             is_rust_default: false,
+            is_rust_tuple: false,
             span: ctor.span,
         });
     }
@@ -5254,6 +5297,17 @@ fn insert_enum(
             variant.name.text.clone(),
             VariantSig {
                 payload: variant.payload.iter().map(|p| p.ty.clone()).collect(),
+                payload_shared: variant
+                    .payload
+                    .iter()
+                    .map(|p| {
+                        p.annotations.iter().any(|a| {
+                            annotation_named(a, "rustarc")
+                                || annotation_named(a, "rustrc")
+                                || annotation_named(a, "rustbox")
+                        })
+                    })
+                    .collect(),
                 span: variant.span,
             },
         );
@@ -5298,6 +5352,7 @@ fn insert_enum(
                     params: c.params.iter().map(param_sig).collect(),
                     is_foreign_result: false,
                     is_rust_default: false,
+                    is_rust_tuple: false,
                     span: c.span,
                 })
                 .collect(),
@@ -5621,6 +5676,8 @@ fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &E
         is_shared_ref: false,
         is_final: false,
         is_weak: false,
+        is_foreign_impl: false,
+        foreign_shared: None,
     };
     let with_params = |mut sig: MethodSig, params: Vec<ParamSig>| {
         sig.params = params;
@@ -5908,7 +5965,23 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         is_shared_ref: p.is_shared_ref,
         is_final: p.is_final,
         is_weak: p.is_weak,
+        is_foreign_impl: p.annotations.iter().any(|a| annotation_named(a, "rustimpl")),
+        foreign_shared: ["Arc", "Rc", "Box"]
+            .into_iter()
+            .find(|k| p.annotations.iter().any(|a| annotation_named(a, &format!("rust{}", k.to_ascii_lowercase()))))
+            .map(str::to_string),
     }
+}
+
+/// Whether `pkg` is a generated foreign stub's package (`rust.egui`,
+/// `c.sqlite3`, `cpp.engine`).
+fn is_foreign_stub_package(pkg: &str) -> bool {
+    pkg.starts_with("rust.") || pkg.starts_with("c.") || pkg.starts_with("cpp.")
+}
+
+/// Whether annotation `a` is the one-segment marker `name` (case-insensitive).
+fn annotation_named(a: &juxc_ast::Annotation, name: &str) -> bool {
+    a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case(name)
 }
 
 /// Enforce the spec's fixed return types for operators that have them

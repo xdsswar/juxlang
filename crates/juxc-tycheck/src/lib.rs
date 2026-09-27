@@ -49,6 +49,7 @@ pub(crate) mod definite_assign;
 pub mod defaults;
 pub mod env;
 pub mod expand;
+pub mod foreign_conv;
 pub mod generators;
 pub mod hashing;
 pub(crate) mod hash_keys;

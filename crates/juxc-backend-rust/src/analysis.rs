@@ -3048,6 +3048,52 @@ impl crate::RustEmitter {
             })
     }
 
+    /// The real Rust path of the value a foreign call hands back through an
+    /// erased shared pointer (`@RustDerefOut`: `ui.style()` is `&Arc<Style>`),
+    /// when that value can be copied out (`@RustClone`). `None` otherwise, and
+    /// then the pointer is kept as it was.
+    pub(crate) fn call_derefs_shared(&self, call: &juxc_ast::CallExpr) -> Option<String> {
+        let m = self.foreign_callee_method(&call.callee)?;
+        let marked = m
+            .annotations
+            .iter()
+            .any(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustderefout"));
+        if !marked {
+            return None;
+        }
+        let juxc_tycheck::Ty::User { name, .. } = self.expr_types.get(&call.span)? else {
+            return None;
+        };
+        let class = self
+            .symbols
+            .classes
+            .get(name.as_str())
+            .or_else(|| self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name)))?;
+        if !class.is_external
+            || !class.annotations.iter().any(crate::exprs::field::annotation_is_rust_clone)
+            || !class.generic_params.is_empty()
+        {
+            return None;
+        }
+        class.rust_path.clone()
+    }
+
+    /// Whether arg `arg_idx` of `callee` fills a GENERIC foreign slot
+    /// (`@RustImpl`: `impl Into<X>`, `impl Trait`, `&dyn Trait`, Bindgen
+    /// G.3.6). The value is passed as it is and Rust converts it; boxing it
+    /// into a `Box<dyn Trait>`, which an interface-typed slot otherwise gets,
+    /// is what the callee does NOT take.
+    pub(crate) fn callee_param_is_foreign_impl(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        self.foreign_callee_param(callee, arg_idx).is_some_and(|p| p.is_foreign_impl)
+    }
+
+    /// Whether arg `arg_idx` of `callee` fills a foreign slot whose value
+    /// sits behind a pointer the Jux type erased (`@RustArc` and friends):
+    /// `(arg).into()` wraps a plain value and passes an already-wrapped one.
+    pub(crate) fn callee_param_is_foreign_shared(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        self.foreign_callee_param(callee, arg_idx).is_some_and(|p| p.foreign_shared.is_some())
+    }
+
     /// Resolve the **external** (`rust.std` / crate) method parameter that arg
     /// `arg_idx` of `callee` maps to, or `None` when `callee` is not a foreign
     /// method/static-method call. Shared by [`Self::callee_param_is_ref`] and
@@ -3157,6 +3203,35 @@ impl crate::RustEmitter {
                 }
             }
         });
+        // A foreign CONSTRUCTOR's `&mut` slot lends its argument just the same
+        // (`DragValue::new(&mut value)`).
+        juxc_ast::visit::for_each_expr(block, &mut |e| {
+            let juxc_ast::Expr::NewObject(n) = e else { return };
+            let Some(ctor) = self.foreign_ctor_of(n) else { return };
+            for (arg, p) in n.args.iter().zip(&ctor.params) {
+                if let juxc_ast::Expr::Path(qn) = arg {
+                    if p.is_mut_ref && qn.segments.len() == 1 {
+                        out.insert(qn.segments[0].text.clone());
+                    }
+                }
+            }
+        });
+    }
+
+    /// The constructor of a FOREIGN class that `new C(args)` calls, chosen by
+    /// arity, or `None` when `C` is not a foreign class.
+    pub(crate) fn foreign_ctor_of(
+        &self,
+        n: &juxc_ast::NewObjectExpr,
+    ) -> Option<juxc_tycheck::symbol_table::ConstructorSig> {
+        if n.class_name.segments.len() == 1 && self.enclosing_nested_type(&n.class_name.segments[0].text).is_some() {
+            return None;
+        }
+        let class = self.lookup_class_by_bare_or_fqn(&n.class_name.segments.last()?.text)?;
+        if !class.is_external {
+            return None;
+        }
+        class.constructors.iter().find(|ct| ct.params.len() == n.args.len()).cloned()
     }
 
     /// The fully-qualified name of the FOREIGN class a method call's receiver
