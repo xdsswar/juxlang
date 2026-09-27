@@ -30,8 +30,13 @@ Install the binaries first, then the plugin.
 - **Git**, to clone the repo.
 - **An IntelliJ-platform IDE 2024.1 or newer** (IntelliJ IDEA, CLion, GoLand,
   PyCharm, RustRover, …). The prebuilt plugin targets **2026.1.3**.
-- *(Optional)* a **Rust nightly** toolchain — only needed if you generate Rust
-  crate bindings yourself (`rustdoc` JSON, see §7). Not required for normal use.
+- *(Optional)* a **Rust nightly** toolchain. A `rust.<crate>` dependency's stub
+  is generated from `rustdoc` JSON: with the nightly toolchain when it is
+  installed, and otherwise with the default toolchain's `rustdoc` (run with
+  `RUSTC_BOOTSTRAP=1`, which lets it take the unstable JSON flag). The stub is
+  generated once per crate version and cached in `.jux-stubs/`; a large crate
+  (eframe) takes about a minute the first time. Generating bindings by hand
+  (§8) still uses nightly.
 
 ```sh
 rustc --version   # should print a stable toolchain

@@ -838,9 +838,17 @@ fn package_owning_crate(work: &Path, crate_name: &str) -> Option<String> {
     None
 }
 
-/// Run `cargo +nightly rustdoc -p <package>` in `work` and read the JSON back.
-/// `crate_name` names the FILE rustdoc writes (the lib target, hyphens folded
-/// to underscores), which is not always the package name.
+/// Run `cargo rustdoc -p <package>` with JSON output in `work` and read the
+/// JSON back. `crate_name` names the FILE rustdoc writes (the lib target,
+/// hyphens folded to underscores), which is not always the package name.
+///
+/// rustdoc's JSON output sits behind `-Z unstable-options`. The `nightly`
+/// toolchain is asked first, as it always was; when it is not installed the
+/// DEFAULT toolchain is asked instead, with `RUSTC_BOOTSTRAP=1` letting its
+/// rustdoc take the unstable flag (LEAKS L28). That rustdoc belongs to the
+/// toolchain the program is built with (§G.6.2.3), and its JSON is a format
+/// `rustdoc-types` reads, so a first `rust.<crate>` dependency no longer
+/// needs a second toolchain installed.
 fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Result<String> {
     let sanitized = crate_name.replace('-', "_");
     // Pin the target directory instead of letting cargo choose it. A user
@@ -849,42 +857,49 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
     // somewhere else entirely, and the read below would fail with a bare
     // "cannot find the path specified" naming a directory cargo never used.
     let doc_target = work.join("target");
-    let output = Command::new("cargo")
-        .arg("+nightly")
-        .arg("rustdoc")
-        .arg("--target-dir")
-        .arg(&doc_target)
-        .arg("-p")
-        .arg(package)
-        .arg("--")
-        .arg("-Z")
-        .arg("unstable-options")
-        .arg("--output-format")
-        .arg("json")
-        .current_dir(work)
-        .output()
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "could not run `cargo`: {e}. Jux generates a crate's API stub \
-                 from rustdoc JSON, so `cargo` must be on PATH."
-            )
-        })?;
+    let run = |nightly: bool| {
+        let mut cmd = Command::new("cargo");
+        if nightly {
+            cmd.arg("+nightly");
+        } else {
+            cmd.env("RUSTC_BOOTSTRAP", "1");
+        }
+        cmd.arg("rustdoc")
+            .arg("--target-dir")
+            .arg(&doc_target)
+            .arg("-p")
+            .arg(package)
+            .arg("--")
+            .arg("-Z")
+            .arg("unstable-options")
+            .arg("--output-format")
+            .arg("json")
+            .current_dir(work)
+            .output()
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "could not run `cargo`: {e}. Jux generates a crate's API stub \
+                     from rustdoc JSON, so `cargo` must be on PATH."
+                )
+            })
+    };
+    let mut output = run(true)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // rustup says this when the toolchain is absent; it is the single
-        // most common reason a first `rust.<crate>` dependency fails, and the
-        // fix is one command.
+        // rustup says this when the toolchain is absent: the default
+        // toolchain's rustdoc writes the same JSON.
         if stderr.contains("is not installed") || stderr.contains("no such toolchain") {
-            anyhow::bail!(
-                "the `nightly` toolchain is required to read a crate's API \
-                 (rustdoc JSON is a nightly feature) and is not installed.\n\
-                 Install it with:\n    rustup toolchain install nightly\n\
-                 Then add the docs component:\n    \
-                 rustup component add rust-docs-json --toolchain nightly"
-            );
+            output = run(false)?;
         }
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
-            "`cargo +nightly rustdoc --output-format json` failed for `{package}`:\n{stderr}"
+            "could not read the API of the Rust crate `{package}`: `cargo rustdoc \
+             --output-format json` failed.\n{stderr}\n\
+             Jux reads a crate's API from rustdoc's JSON output. If the default toolchain \
+             could not give it, the `nightly` one can:\n    rustup toolchain install nightly\n\
+             The stub is generated once per crate version and cached in `.jux-stubs/`."
         );
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).

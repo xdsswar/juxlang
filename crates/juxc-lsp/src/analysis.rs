@@ -691,6 +691,29 @@ version = \"0.1.0\"
         assert!(sig.contains("(String who)"), "missing typed params: {sig}");
     }
 
+    /// LEAKS L28: what hover and signature help show for a stub member is its
+    /// Jux signature. The stub's own borrow markers (`&`, `&mut`) and machine
+    /// annotations (`@MutSelf`, `@RustRefOut`) stay in the `.jux.d` file
+    /// (§G.3.4, borrows vanish) and never reach the popup.
+    #[test]
+    fn hover_and_signature_help_show_no_rust_markers() {
+        const STUB: &str = "package gui;\n\
+            public class Canvas { }\n\
+            public class Painter {\n\
+                @MutSelf @RustRefOut public Canvas draw(&mut Canvas c, &String label) { return c; }\n\
+            }\n";
+        let (analysis, _uri, _rope) = analyze_one("hover_markers", "Painter.jux", STUB);
+        let recv = Ty::User { name: "gui.Painter".to_string(), generic_args: vec![] };
+        let resolved = crate::intel::resolve_member(&analysis.symbols, &recv, "draw")
+            .expect("draw must resolve on Painter");
+        let sig = resolved.signature();
+        assert!(sig.contains("Canvas draw(Canvas c, String label)"), "{sig}");
+        assert!(!sig.contains('&') && !sig.contains('@'), "no Rust markers: {sig}");
+        let crate::intel::Resolved::Method(_, m) = resolved else { panic!("a method") };
+        let help = crate::calls::signature_info("draw", &m.params);
+        assert_eq!(help.label, "draw(Canvas c, String label)");
+    }
+
     // ====================================================================
     // FEATURE 2 — receiver members come from the receiver's type only
     // ====================================================================
