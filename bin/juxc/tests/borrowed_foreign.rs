@@ -148,6 +148,11 @@ class Gui {
     public static float width(Ui ui) {
         return ui.width();
     }
+    // A local naming the borrow is the same borrow.
+    public static void aliased(Ui ui, String text) {
+        var u = ui;
+        u.label(text);
+    }
 }
 
 class Form {
@@ -222,6 +227,7 @@ public void main() {
         panel.horizontal((row) -> {
             row.label("in a row");
             Gui.line(row, "helper in a row");
+            Gui.aliased(row, "through an alias");
             inner = Gui.width(row);
             counter.bump();
             seen.push("row");
@@ -246,6 +252,7 @@ const EXPECTED: &str = "\
 top
   in a row
   helper in a row
+  through an alias
 red
 green
 ann (edited)
@@ -363,5 +370,8 @@ fn the_lowering_lends_rather_than_copies() {
         "a write through `spacing_mut()` must not go into a copy:\n{rust}",
     );
     // L14: a borrowed `ui` is reborrowed, never moved into a temporary.
-    assert!(!flat.contains("= ui;"), "`ui` must not be moved into a temporary:\n{rust}");
+    assert!(
+        !rust.lines().any(|l| l.contains("__jux_arg") && l.trim_end().ends_with("= ui;")),
+        "`ui` must not be moved into an argument temporary:\n{rust}",
+    );
 }
