@@ -366,8 +366,8 @@ The build driver has no band of its own, because until 2026-09-25 it raised no
 coded diagnostic at all: a `jux.toml` it could not read was an uncoded warning
 on stderr. Its checks (`E0901`-`E0903`, `W0901`-`W0903`, BUILD-SYSTEM §B.2.5)
 sit in `E0900`-`E0999` beside the whole-build errors this table already
-reserves there for the driver, `E0905` (cannot resolve dependency, not raised
-yet) and `E0908` (a linkage the target cannot provide). They run before phase 1
+reserves there for the driver, `E0905` (a dependency that cannot be fetched
+or built, raised since gap 33) and `E0908` (a linkage the target cannot provide). They run before phase 1
 rather than after phase 19, so the band is the build's, not the backend's alone.
 The rest of the build's failures sit there too: `E0904` (an uninstalled
 `--target`), `E0906` (a failed link) and `E0900`, the internal compiler error
@@ -646,7 +646,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0902`  | The manifest has no `[package]` table, or a `[package]` with no `name` (a `[workspace]`-only manifest is exempt) | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0903`  | A `[package]` value this compiler cannot honour: a `name` with a character the package grammar forbids, a non-SemVer `version`, or an `edition` other than `"2026"` | Build system §B.2.5 / `ERRATA.md` E106 |
 | `E0904`  | `--target` names a target whose Rust standard library is not installed (`rustup target add` it) | Build system §B.14 / `ERRATA.md` E116 |
-| `E0905`  | Cannot resolve dependency *(reserved)*                      | Build system §B.5.4            |
+| `E0905`  | A dependency of the program could not be fetched or built: the build of an accepted program failed with no compiler error in it (a registry out of reach, a version that does not exist, a dependency's own build step). The build tools' report is shown only under `--verbose` | Build system §B.5.4 / `ERRATA.md` E1XX-GAP33 |
 | `E0906`  | The program could not be linked: a native library named by `@extern(lib=...)` or `[ffi.*]` was not found, or the linker failed | Build system §B.14 / `ERRATA.md` E116 |
 | `E0907`  | A `.jux.d` declaration has a body *(reserved)*               | Bindgen §G.12                  |
 | `E0908`  | A linkage the target cannot provide: `linkage = "framework"` in an `[ffi.*]` entry on a non-Apple target (dynamic linkage in the `core` profile, §B.14.6, is the same code and is not checked yet) | Build system §B.14.6 / `ERRATA.md` E116 |

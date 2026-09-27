@@ -77,11 +77,11 @@ impl RustEmitter {
                     && matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String))
                 {
                     self.emit_expr_with_parent_prec(&f.object, u8::MAX, false);
-                    self.w.push_str(".as_bytes()[(");
+                    self.w.push_str(".as_bytes()[crate::JuxIx((");
                     let prev = std::mem::take(&mut self.emitting_lvalue);
                     self.emit_expr(&i.index);
                     self.emitting_lvalue = prev;
-                    self.w.push_str(") as usize]");
+                    self.w.push_str(") as i128)]");
                     return;
                 }
             }
@@ -157,7 +157,8 @@ impl RustEmitter {
                 });
             }
         }
-        self.emit_index_key(map_index, &i.index);
+        let checked = !map_index && self.index_is_jux_sequence(&i.array);
+        self.emit_index_key(map_index, checked, &i.index);
         // Rvalue index reads of non-Copy elements (String, value
         // classes, nested arrays) clone out — `xs[0]` would otherwise
         // move out of the Vec (rustc E0507). Lvalue positions
@@ -223,11 +224,17 @@ impl RustEmitter {
     /// - A bare integer literal indexes directly; Rust infers `usize`.
     /// - Anything else is a Jux `int` (`isize`) and needs the cast.
     ///
+    /// With `checked` (the container is a Jux array, a `Vec` or a
+    /// `VecDeque`, see [`Self::index_is_jux_sequence`]) a position is the
+    /// prelude's `JuxIx`, whose `Index` throws `IndexOutOfBoundsException`
+    /// for a position outside the sequence, negative ones included, instead
+    /// of Rust's `index out of bounds` panic (GAPS.md gap 33).
+    ///
     /// Shared with the assignment path so an indexed WRITE shapes its key the
     /// same way an indexed read does -- the store used to hard-code the
     /// `as usize` form, which turned a map-typed field write into
     /// `("a".to_string()) as usize`.
-    pub(crate) fn emit_index_key(&mut self, map_index: bool, key: &Expr) {
+    pub(crate) fn emit_index_key(&mut self, map_index: bool, checked: bool, key: &Expr) {
         self.w.push('[');
         // Is the key a POSITION? The `as usize` below exists only because a
         // Jux `int` is a Rust `isize` and a sequence wants a `usize`, and an
@@ -261,6 +268,10 @@ impl RustEmitter {
                 self.emitting_format_arg = prev;
                 self.w.push(')');
             }
+        } else if checked {
+            self.w.push_str("crate::JuxIx((");
+            self.emit_expr(key);
+            self.w.push_str(") as i128)");
         } else if matches!(key, Expr::Literal(Literal::Int(_))) {
             self.emit_expr(key);
         } else {
@@ -269,6 +280,21 @@ impl RustEmitter {
             self.w.push_str(") as usize");
         }
         self.w.push(']');
+    }
+
+    /// Whether indexing `array` by position goes through `JuxIx`: the
+    /// sequences the prelude checks, a Jux array (every Rust shape it takes
+    /// indexes through a slice) and `rust.std`'s `Vec` and `VecDeque`. A
+    /// foreign container with an `Index<usize>` of its own keeps the plain
+    /// position (gap 33).
+    pub(crate) fn index_is_jux_sequence(&self, array: &Expr) -> bool {
+        match self.narrowed_receiver_ty_of(array) {
+            Some(juxc_tycheck::Ty::Array { .. }) => true,
+            Some(juxc_tycheck::Ty::User { ref name, .. }) => {
+                matches!(name.as_str(), "rust.std.Vec" | "rust.std.VecDeque")
+            }
+            _ => false,
+        }
     }
 
     /// True when `key` indexes by POSITION, which is what the `as usize` cast
@@ -551,12 +577,13 @@ impl RustEmitter {
             }
         }
         // A RUNTIME `int` size is `isize`, but the `vec![v; N]` repeat
-        // position wants `usize` — cast. (Runtime sizes only reach the
-        // `vec!` / dynamic form; a fixed `[v; N]` always has a const
-        // size handled above.)
-        self.w.push('(');
+        // position wants `usize`. (Runtime sizes only reach the `vec!` /
+        // dynamic form; a fixed `[v; N]` always has a const size handled
+        // above.) A negative size throws, as Java's `new int[-1]` does,
+        // where the bare cast asked for an impossible allocation (gap 33).
+        self.w.push_str("crate::jux_array_len((");
         self.emit_expr(size);
-        self.w.push_str(") as usize");
+        self.w.push_str(") as i128)");
     }
 
     /// Lower an array initializer literal — `new T[]{a, b, c}` or the

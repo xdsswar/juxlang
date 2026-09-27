@@ -37,6 +37,7 @@
 use juxc_source::Span;
 
 pub mod code;
+pub mod leak;
 
 /// A single diagnostic — error, warning, note, or help.
 ///

@@ -150,7 +150,7 @@ fn an_unknown_target_is_e0904_not_a_flood_of_e0463() {
     std::fs::write(dir.join("hello.jux"), "public void main() {\n    print(1);\n}\n").unwrap();
     let (out, code) = juxc(&["--build", "hello.jux"], &dir, Some("nonexistent-triple"));
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("[E0904] error: `nonexistent-triple` is not a target rustc can build for"), "{out}");
+    assert!(out.contains("[E0904] error: `nonexistent-triple` is not a target Jux can build for"), "{out}");
     assert!(!out.contains("E0463"), "{out}");
 
     let (json, _) = juxc(&["--build", "--diagnostic-format", "json", "hello.jux"], &dir, Some("nonexistent-triple"));

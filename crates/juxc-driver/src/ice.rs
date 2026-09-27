@@ -87,6 +87,12 @@ static HOOK: OnceLock<()> = OnceLock::new();
 /// to call this itself.
 pub fn install_hook() {
     HOOK.get_or_init(|| {
+        // `JUX_BACKTRACE` is the spelling the report suggests; the runtime
+        // only captures a backtrace for its own variable, read at the first
+        // panic, so it is passed on before there can be one.
+        if std::env::var("JUX_BACKTRACE").is_ok_and(|v| v != "0") && std::env::var_os("RUST_BACKTRACE").is_none() {
+            std::env::set_var("RUST_BACKTRACE", "1");
+        }
         let default_hook = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
             if let Some(location) = info.location() {
@@ -139,6 +145,41 @@ where
     }
 }
 
+/// Print an error that ended a `jux` or `juxc` run without being a diagnostic
+/// (an input that cannot be read, a toolchain that is not installed) and give
+/// the exit status. This is the last exit a message can leave by, so it
+/// passes the leak guard too (GAPS.md gap 33): an error whose text shows Rust
+/// (the build tools' own report, a Rust type) is replaced by a sentence that
+/// says the compiler could not explain it, with the text itself under
+/// `--verbose`, and the status is the ICE's. Under the self-check it panics.
+pub fn report_error(tool: &str, err: &anyhow::Error, verbose: bool) -> ExitCode {
+    let mut text = format!("{tool}: error: {err}");
+    for cause in err.chain().skip(1) {
+        text.push_str(&format!("\n  caused by: {cause}"));
+    }
+    match juxc_diagnostics::leak::find_rust_leak(&text) {
+        None => {
+            eprintln!("{text}");
+            ExitCode::FAILURE
+        }
+        Some(hit) => {
+            if juxc_diagnostics::leak::selfcheck() {
+                panic!("{tool}'s error shows Rust to the user: {hit}\n{text}");
+            }
+            eprintln!(
+                "{tool}: error: internal compiler error: the build stopped with a report the compiler \
+                 could not put in Jux terms; this is a bug in the Jux compiler, please report it at \
+                 {ISSUES_URL}{}",
+                if verbose { "" } else { " (`--verbose` shows the report)" }
+            );
+            if verbose {
+                eprintln!("{text}");
+            }
+            ExitCode::from(ICE_EXIT_CODE)
+        }
+    }
+}
+
 /// Panic on purpose when [`SELFTEST_VAR`] is set, so the ICE path can be
 /// exercised end to end.
 ///
@@ -169,8 +210,11 @@ pub fn render_report(
     out.push_str(&format!(
         "internal compiler error: {tool} panicked and could not continue\n\n"
     ));
-    out.push_str(&format!("  message:  {message}\n"));
-    out.push_str(&format!("  location: {}\n", site.unwrap_or("unknown")));
+    // Rust's panic text and a `.rs` location are not what a Jux programmer
+    // reads, even in a crash report (GAPS.md gap 33): the message is put in
+    // Jux words and the site names the compiler's module, not its file.
+    out.push_str(&format!("  message:  {}\n", juxc_diagnostics::leak::jux_panic_wording(message)));
+    out.push_str(&format!("  location: {}\n", site.map(compiler_site).unwrap_or_else(|| "unknown".to_string())));
     out.push_str(&format!(
         "  version:  {tool} {}\n",
         env!("CARGO_PKG_VERSION")
@@ -187,7 +231,7 @@ pub fn render_report(
         "Please report it at {ISSUES_URL}, with the source that triggered it.\n"
     ));
     if !backtrace_requested() {
-        out.push_str("Re-run with RUST_BACKTRACE=1 to include a backtrace in the report.\n");
+        out.push_str("Re-run with JUX_BACKTRACE=1 to include a backtrace in the report.\n");
     }
     out
 }
@@ -207,14 +251,21 @@ fn message_of(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Whether the user asked for a backtrace.
-///
-/// Matches the runtime's own reading of the variable: set and not `0`.
+/// Whether the user asked for a backtrace: `JUX_BACKTRACE`, or the runtime's
+/// own variable, set and not `0`.
 fn backtrace_requested() -> bool {
-    match std::env::var("RUST_BACKTRACE") {
-        Ok(value) => value != "0",
-        Err(_) => false,
-    }
+    ["JUX_BACKTRACE", "RUST_BACKTRACE"]
+        .iter()
+        .any(|var| std::env::var(var).is_ok_and(|value| value != "0"))
+}
+
+/// `crates/juxc-tycheck/src/check.rs:1204:9` as the compiler module it names,
+/// `juxc-tycheck/src/check:1204:9`: enough to find the line, without the
+/// file name of the language the compiler is written in.
+fn compiler_site(site: &str) -> String {
+    let site = site.replace('\\', "/");
+    let site = site.strip_prefix("crates/").unwrap_or(&site);
+    site.replacen(".rs:", ":", 1)
 }
 
 /// Render a path for the report, preferring a path relative to the working
@@ -244,8 +295,8 @@ mod tests {
             &[PathBuf::from("examples/hello.jux")],
         );
         assert!(report.contains("internal compiler error"), "{report}");
-        assert!(report.contains("index out of bounds"), "{report}");
-        assert!(report.contains("check.rs:1204:9"), "{report}");
+        assert!(report.contains("out of bounds"), "{report}");
+        assert!(report.contains("juxc-tycheck/src/check:1204:9"), "{report}");
         assert!(report.contains(env!("CARGO_PKG_VERSION")), "{report}");
         assert!(report.contains("hello.jux"), "{report}");
         assert!(report.contains(ISSUES_URL), "{report}");
@@ -257,6 +308,20 @@ mod tests {
         let report = render_report("jux", "boom", None, &[]);
         assert!(report.contains("not in your program"), "{report}");
         assert!(report.contains("location: unknown"), "{report}");
+    }
+
+    /// A crash report is still read by a Jux programmer first (gap 33): no
+    /// Rust panic text, no `.rs` location, no `RUST_BACKTRACE`.
+    #[test]
+    fn report_shows_no_rust() {
+        let report = render_report(
+            "juxc",
+            "index out of bounds: the len is 3 but the index is 7",
+            Some("crates\\juxc-tycheck\\src\\check.rs:1204:9"),
+            &[PathBuf::from("app.jux")],
+        );
+        assert!(report.contains("index 7 is out of bounds for length 3"), "{report}");
+        assert!(juxc_diagnostics::leak::find_rust_leak(&report).is_none(), "{report}");
     }
 
     /// House style: no em-dashes in anything a user reads.

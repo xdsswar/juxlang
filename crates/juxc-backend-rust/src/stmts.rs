@@ -4732,11 +4732,12 @@ impl RustEmitter {
                     // one here would make a write to one field conflict with a
                     // read of a sibling for no reason.
                     let handle = self.expr_is_collection_handle(&ix.array);
+                    let checked = self.index_is_jux_sequence(&ix.array);
                     self.w.push_str("{ let __jux_v = ");
                     self.emit_assign_rhs(&a.value);
-                    self.w.push_str("; let __jux_i = (");
+                    self.w.push_str(if checked { "; let __jux_i = crate::JuxIx((" } else { "; let __jux_i = (" });
                     self.emit_expr(&ix.index);
-                    self.w.push_str(") as usize; ");
+                    self.w.push_str(if checked { ") as i128); " } else { ") as usize; " });
                     self.emitting_method_receiver = true;
                     self.emit_expr(&af.object);
                     self.emitting_method_receiver = false;
@@ -5020,7 +5021,8 @@ impl RustEmitter {
             self.w.push_str(if block { "); }\n" } else { ");\n" });
             return true;
         }
-        self.emit_index_key(map_index, &key);
+        let checked = self.index_is_jux_sequence(&ix.array);
+        self.emit_index_key(map_index, checked, &key);
         if let Some(op) = a.op {
             self.w.push(' ');
             self.w.push_str(op.as_rust_str());

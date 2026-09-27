@@ -720,15 +720,20 @@ pub(crate) struct PendingSetterObserver {
 /// `catch (NullPointerException e)` downcast it and run. The earlier
 /// `panic!` carried a `&str`, so a handler written to stop the abort
 /// compiled and then did not stop it.
-pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"NullPointerException: `!!` asserted on a null value\"))))";
+/// What an array's `pop()` on an empty array does: throw
+/// `NoSuchElementException` (Java's `removeLast` on an empty list), where the
+/// bare `.unwrap()` stopped the program with Rust's `Option::unwrap()` panic
+/// (gap 33).
+pub(crate) const ARRAY_POP_RAISE: &str = ".unwrap_or_else(|| crate::jux_empty_fail())";
+pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"`!!` asserted on a null value\"))))";
 
 /// How a call through a `null` function pointer raises (Layout-ABI §L.6.4):
 /// a Jux `NullPointerException`, not a jump to address zero.
-pub(crate) const FN_POINTER_NULL_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"NullPointerException: call through a null function pointer\"))))";
+pub(crate) const FN_POINTER_NULL_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"call through a null function pointer\"))))";
 
 /// How a failing downcast raises, either side of the target type name.
 /// Same reasoning as [`NOT_NULL_ASSERT_RAISE`]: the value, not a string.
-pub(crate) const CLASS_CAST_RAISE_OPEN: &str = "().unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::ClassCastException::new(String::from(\"ClassCastException: value is not a ";
+pub(crate) const CLASS_CAST_RAISE_OPEN: &str = "().unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::ClassCastException::new(String::from(\"value is not a ";
 pub(crate) const CLASS_CAST_RAISE_CLOSE: &str = "\")))))";
 
 /// Internal emitter state. Accumulates source text into a [`Writer`]
@@ -4156,8 +4161,78 @@ fn jux_debug_as_jux(raw_name: &str, text: String) -> String {
         },
         _ if quoted => jux_unescape_debug(&text[1..text.len() - 1]),
         _ if jux_debug_nests_option(name) => jux_debug_strip_options(&text),
+        _ if jux_debug_is_foreign(name) => jux_debug_foreign(name, &text),
         _ => text,
     }
+}
+/// Whether `name` is a type from outside the program, a crate's or Rust's
+/// own, with none of the program's types inside it. Its `Debug` text is
+/// whatever its author wrote, in Rust's notation.
+fn jux_debug_is_foreign(name: &str) -> bool {
+    let own = module_path!().split("::").next().unwrap_or("");
+    name.contains("::") && !name.contains(&format!("{own}::"))
+}
+/// A foreign value's `Debug` text in Jux's terms (gap 33): the cells a
+/// value sits in print the value (`RefCell { value: 3 }` is `3`), `Some(x)`
+/// is `x`, and a `None` in a field (`hover: None`), or anywhere when the
+/// type itself is a nullable, is `null`. Quoted text is left alone.
+fn jux_debug_foreign(name: &str, text: &str) -> String {
+    let unwrapped = jux_debug_unwrap_cells(text);
+    jux_debug_strip_options_in(&unwrapped, name.contains("::option::Option<"))
+}
+/// `RefCell { value: X }`, `Cell { value: X }`, `Mutex { data: X, .. }` and
+/// `RwLock { data: X, .. }` as `X`, at any depth.
+fn jux_debug_unwrap_cells(text: &str) -> String {
+    let mut out = String::from(text);
+    for open in ["RefCell { value: ", "Cell { value: ", "Mutex { data: ", "RwLock { data: "] {
+        let mut from = 0;
+        while let Some(found) = out[from..].find(open) {
+            let at = from + found;
+            let own_word = !out[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let start = at + open.len();
+            match jux_debug_value_end(&out, start).filter(|_| own_word) {
+                Some((value_end, close)) => {
+                    let value = String::from(out[start..value_end].trim_end());
+                    out.replace_range(at..close + 1, &value);
+                    from = at;
+                }
+                _ => from = start,
+            }
+        }
+    }
+    out
+}
+/// From `start`, the end of the value there (the first `,` outside brackets
+/// and quotes, else the closing brace) and the `}` that closes the struct.
+fn jux_debug_value_end(text: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut depth: i32 = 0;
+    let mut value_end: Option<usize> = Option::None;
+    let mut close: Option<usize> = Option::None;
+    let mut quote: Option<u8> = Option::None;
+    let mut i = start;
+    while i < bytes.len() && close.is_none() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' {
+                i = i + 1;
+            } else if b == q {
+                quote = Option::None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'(' || b == b'[' || b == b'{' {
+            depth = depth + 1;
+        } else if (b == b')' || b == b']' || b == b'}') && depth > 0 {
+            depth = depth - 1;
+        } else if b == b'}' {
+            close = Some(i);
+        } else if b == b',' && depth == 0 && value_end.is_none() {
+            value_end = Some(i);
+        }
+        i = i + 1;
+    }
+    close.map(|c| (value_end.unwrap_or(c), c))
 }
 /// Whether `name` holds a nullable somewhere INSIDE it, and is built only from
 /// types whose `Debug` text is known: primitives, `String`, the collections and
@@ -4200,6 +4275,12 @@ fn jux_debug_nests_option(name: &str) -> bool {
 /// `x`, at any depth. Quoted spans are copied untouched, escapes included, so a
 /// string element that happens to read `"None"` keeps its text.
 fn jux_debug_strip_options(text: &str) -> String {
+    jux_debug_strip_options_in(text, true)
+}
+/// [`jux_debug_strip_options`], rewriting a bare `None` only where it is a
+/// field's value (after `: `) unless `every_none`: a foreign enum may well
+/// have a variant of that name.
+fn jux_debug_strip_options_in(text: &str, every_none: bool) -> String {
     let mut out = String::with_capacity(text.len());
     // One entry per open parenthesis: `true` when it was a `Some(` whose
     // closing parenthesis is dropped along with it.
@@ -4227,7 +4308,7 @@ fn jux_debug_strip_options(text: &str) -> String {
                 word.push(d);
                 chars.next();
             }
-            if word == "None" {
+            if word == "None" && (every_none || out.ends_with(": ")) {
                 out.push_str("null");
             } else if word == "Some" && chars.peek() == Some(&'(') {
                 chars.next();
@@ -4495,10 +4576,18 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             "    let bare = head.rsplit(\"::\").next().unwrap_or(head);\n",
             "    bare.strip_suffix(\"_Inner\").unwrap_or(bare)\n",
             "}\n",
-            "/// The `.jux` line the generated line `file:line` came from, read from the\n",
-            "/// source-marker table the driver writes into `__JUX_LINES` once the\n",
-            "/// crate is formatted. A crate built without it names the Rust line.\n",
+            "/// The `.jux` line the generated line `file:line` came from, for a\n",
+            "/// conflict report. A line with no source marker (a crate built without\n",
+            "/// the driver) is not named: its place in the generated code means\n",
+            "/// nothing to the program's author (gap 33).\n",
             "fn jux_line_at(file: &str, line: u32, column: u32) -> String {\n",
+            "    let _ = column;\n",
+            "    jux_line_of(file, line).unwrap_or_else(|| String::from(\"a line the compiler did not record\"))\n",
+            "}\n",
+            "/// The `.jux` place the generated line `file:line` came from, read from\n",
+            "/// the source-marker table the driver writes into `__JUX_LINES` once the\n",
+            "/// crate is formatted. `None` for a line no marker covers.\n",
+            "pub fn jux_line_of(file: &str, line: u32) -> Option<String> {\n",
             "    let file = file.replace('\\\\', \"/\");\n",
             "    let mut found: Option<&(u32, &str, u32, u32)> = None;\n",
             "    for (rust, marks) in crate::__JUX_LINES {\n",
@@ -4510,10 +4599,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
             "            }\n",
             "        }\n",
             "    }\n",
-            "    match found {\n",
-            "        Some(m) => format!(\"{}:{}:{}\", m.1, m.2, m.3),\n",
-            "        None => format!(\"{file}:{line}:{column} of the generated Rust\"),\n",
-            "    }\n",
+            "    found.map(|m| format!(\"{}:{}:{}\", m.1.replace('\\\\', \"/\"), m.2, m.3))\n",
             "}\n",
             "/// `(emitted file, [(rust line, jux file, jux line, jux column)])`, one\n",
             "/// entry per source marker. Empty as emitted; the driver fills it in\n",
@@ -4783,13 +4869,17 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("}\n");
         w.push_str("macro_rules! jux_int_div_impl {\n");
         w.push_str("    ($($t:ty),*) => {$(\n");
+        // `#[track_caller]` throughout, so the uncaught report names the
+        // `.jux` line of the division, not this helper's (gap 33).
         w.push_str("        impl JuxIntDiv for $t {\n");
+        w.push_str("            #[track_caller]\n");
         w.push_str("            fn jux_div(self, rhs: Self) -> Self {\n");
         w.push_str("                if rhs == 0 {\n");
         w.push_str("                    std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"/ by zero\")));\n");
         w.push_str("                }\n");
         w.push_str("                if cfg!(debug_assertions) { self / rhs } else { self.wrapping_div(rhs) }\n");
         w.push_str("            }\n");
+        w.push_str("            #[track_caller]\n");
         w.push_str("            fn jux_rem(self, rhs: Self) -> Self {\n");
         w.push_str("                if rhs == 0 {\n");
         w.push_str("                    std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"/ by zero\")));\n");
@@ -4802,8 +4892,8 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str(
             "jux_int_div_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);\n",
         );
-        w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
-        w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        w.push_str("#[track_caller]\npub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
+        w.push_str("#[track_caller]\npub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
         // Simple Unicode case mapping for `char.toUppercase()` /
         // `toLowercase()` (K.11): the one-char result of Rust's full mapping,
         // or the char itself when the full mapping has several (`'ß'`).
@@ -4827,6 +4917,7 @@ pub struct JuxForeignError {
     pub error: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
 }
 /// Throw the `Err` of a foreign call; `text` is its Display (or Debug) form.
+#[track_caller]
 pub fn __jux_raise_foreign<E: ::std::any::Any + ::std::marker::Send>(text: String, error: E) -> ! {
     let type_name = ::std::any::type_name::<E>();
     let type_name = type_name.rsplit("::").next().unwrap_or(type_name);
@@ -5006,6 +5097,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // a payload no `catch` could match and `skip/take` quietly clamped
         // `"ab".substring(1, 9)` to `"b"`.
         w.push_str(concat!(
+            "#[track_caller]\n",
             "pub fn jux_substring(s: &str, begin: isize, end: Option<isize>) -> String {\n",
             "    let length = s.chars().count() as isize;\n",
             "    let end = end.unwrap_or(length);\n",
@@ -5019,6 +5111,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // `s.substringBytes(a, b)` (§K.7): a byte-indexed slice. A range
             // outside the string throws `IndexOutOfBoundsException`, and one
             // that would split a multi-byte character `EncodingException`.
+            "#[track_caller]\n",
             "pub fn jux_substring_bytes(s: &str, begin: isize, end: isize) -> String {\n",
             "    let length = s.len() as isize;\n",
             "    if begin < 0 || end > length || begin > end {\n",
@@ -5033,6 +5126,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "        )),\n",
             "    }\n",
             "}\n",
+            "#[track_caller]\n",
             "pub fn jux_char_at(s: &str, at: isize) -> char {\n",
             "    match usize::try_from(at).ok().and_then(|i| s.chars().nth(i)) {\n",
             "        Some(c) => c,\n",
@@ -5792,6 +5886,240 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("        Task(rx)\n");
         w.push_str("    }\n");
         w.push_str("}\n");
+        // **Runtime failures in Jux terms (GAPS.md gap 33).** A program never
+        // shows the user Rust's runtime text: not `thread 'main' panicked at
+        // src/main.rs`, not `index out of bounds: the len is 3`, not an
+        // `Option::unwrap()` on `None`. The common failures are prevented at
+        // their source (an indexed read or write of an array or list goes
+        // through `JuxIx` and throws `IndexOutOfBoundsException`; an empty
+        // array's `pop()` throws `NoSuchElementException`; a failed `File`
+        // operation throws `IOException`); the panic hook below is the last
+        // resort, and it puts whatever Rust panic is left in Jux words, at the
+        // `.jux` line `__JUX_LINES` maps it to. On Windows a stack overflow,
+        // which never reaches a panic hook, is reported the same way.
+        //
+        // No early exit, string conversion call or borrowing iterator below: the backend's own
+        // tests search an emitted crate for those to check what the USER's
+        // code became, and this text sits in every crate.
+        w.push_str(r##"/// A position into a Jux array or list (gap 33). `xs[i]` on an array, a
+/// `Vec` or a `VecDeque` indexes with this, so a position outside the
+/// sequence throws `IndexOutOfBoundsException` with Java's message instead of
+/// stopping the program with Rust's.
+pub struct JuxIx(pub i128);
+fn jux_ix_at(i: i128, len: usize) -> Option<usize> {
+    if i >= 0 && (i as u128) < len as u128 { Some(i as usize) } else { None }
+}
+/// Throw the `IndexOutOfBoundsException` for position `i` of a sequence of `len`.
+#[cold]
+#[track_caller]
+pub fn jux_ix_fail(i: i128, len: usize) -> ! {
+    std::panic::panic_any(crate::jux::std::exceptions::IndexOutOfBoundsException::new(format!(
+        "Index {i} out of bounds for length {len}"
+    )))
+}
+macro_rules! jux_ix_impl {
+    ($($t:ty),*) => {$(
+        impl<T> std::ops::Index<JuxIx> for $t {
+            type Output = T;
+            #[track_caller]
+            fn index(&self, i: JuxIx) -> &T {
+                match jux_ix_at(i.0, self.len()) {
+                    Some(at) => &self[at],
+                    None => jux_ix_fail(i.0, self.len()),
+                }
+            }
+        }
+        impl<T> std::ops::IndexMut<JuxIx> for $t {
+            #[track_caller]
+            fn index_mut(&mut self, i: JuxIx) -> &mut T {
+                let len = self.len();
+                match jux_ix_at(i.0, len) {
+                    Some(at) => &mut self[at],
+                    None => jux_ix_fail(i.0, len),
+                }
+            }
+        }
+    )*};
+}
+// `[T; N]` indexes through `[T]`, so arrays of every length are covered.
+jux_ix_impl!(Vec<T>, [T], std::collections::VecDeque<T>);
+/// The length of `new T[n]`: a negative one throws, as Java's does.
+#[track_caller]
+pub fn jux_array_len(n: i128) -> usize {
+    if n < 0 {
+        std::panic::panic_any(crate::jux::std::exceptions::IllegalArgumentException::new(format!(
+            "Negative array size: {n}"
+        )))
+    }
+    n as usize
+}
+/// Throw `NoSuchElementException`: `pop()` on an empty array.
+#[cold]
+#[track_caller]
+pub fn jux_empty_fail() -> ! {
+    std::panic::panic_any(crate::jux::std::exceptions::NoSuchElementException::new(String::from(
+        "the array is empty",
+    )))
+}
+/// Throw what a failed `File` operation is in Jux: `FileNotFoundException`
+/// for a missing file, `IOException` for anything else, with the operating
+/// system's reason as the message.
+#[cold]
+#[track_caller]
+pub fn jux_io_fail(error: std::io::Error) -> ! {
+    let text = format!("{error}");
+    let text = match text.find(" (os error ") {
+        Some(at) => String::from(&text[..at]),
+        None => text,
+    };
+    if error.kind() == std::io::ErrorKind::NotFound {
+        std::panic::panic_any(crate::jux::std::exceptions::FileNotFoundException::new(text))
+    } else {
+        std::panic::panic_any(crate::jux::std::exceptions::IOException::new(text))
+    }
+}
+/// Rust's text for a runtime failure, in the words a Jux programmer reads.
+/// Keep in step with `juxc_diagnostics::leak::jux_panic_wording`, which
+/// says the same of a panic inside the compiler.
+pub fn jux_panic_text(message: &str) -> String {
+    let m = message.trim();
+    let index = m
+        .strip_prefix("index out of bounds: the len is ")
+        .and_then(|rest| rest.split_once(" but the index is "))
+        .map(|(len, at)| (at, len));
+    let moved = m
+        .strip_prefix("removal index (is ")
+        .or_else(|| m.strip_prefix("insertion index (is "))
+        .and_then(|rest| rest.split_once(") should be "))
+        .map(|(at, rest)| (at, rest.rsplit("(is ").next().unwrap_or(rest).trim_end_matches(')')));
+    let overflow = [
+        ("add", "addition"),
+        ("subtract", "subtraction"),
+        ("multiply", "multiplication"),
+        ("divide", "division"),
+        ("negate", "negation"),
+        ("shift left", "left shift"),
+        ("shift right", "right shift"),
+        ("calculate the remainder", "remainder"),
+    ]
+    .into_iter()
+    .find(|(op, _)| m == format!("attempt to {op} with overflow"));
+    if let Some((at, len)) = index.or(moved) {
+        format!("index {} is out of bounds for length {}", jux_signed_index(at.trim()), len.trim())
+    } else if m.contains("on a `None` value") {
+        String::from("a null value was used where a value is required")
+    } else if m.contains("Result::unwrap()") || m.contains("Result::expect()") {
+        String::from("an operation failed and its error was not handled")
+    } else if let Some((_, what)) = overflow {
+        format!("integer overflow in {what}")
+    } else if m == "attempt to divide by zero" || m == "attempt to calculate the remainder with a divisor of zero" {
+        String::from("/ by zero")
+    } else if m == "no entry found for key" {
+        String::from("no entry for the key")
+    } else if m == "capacity overflow" {
+        String::from("a size is negative or too large")
+    } else if m.starts_with("already borrowed") || m.starts_with("already mutably borrowed") || m.starts_with("RefCell already") {
+        String::from("internal error: an object was already in use. This is a bug in the Jux compiler (ERRATA E23)")
+    } else {
+        String::from(m)
+    }
+}
+/// `18446744073709551615` is how a negative index cast to an unsigned one
+/// prints; show the index the program computed.
+fn jux_signed_index(at: &str) -> String {
+    match at.parse::<u64>() {
+        Ok(v) if v > i64::MAX as u64 => format!("{}", v as i64),
+        _ => String::from(at),
+    }
+}
+std::thread_local! {
+    /// The `.jux` place of the last panic on this thread, and the type of
+    /// what was thrown there, for the uncaught-exception report.
+    static JUX_PANIC_SITE: std::cell::Cell<Option<(std::any::TypeId, String)>> = const { std::cell::Cell::new(Option::None) };
+}
+/// The panic hook every Jux program runs under. A thrown Jux exception is
+/// quiet here (a `catch` may take it; `jux_report_throw_site` names its line
+/// if nothing does). Any other panic cannot be caught, so it is reported now:
+/// `panic: <what happened>` and `    at <file>.jux:<line>:<col>`.
+pub fn jux_install_panic_hook() {
+    std::panic::set_hook(::std::boxed::Box::new(|info| {
+        let payload = info.payload();
+        let site = info.location().and_then(|l| jux_line_of(l.file(), l.line()));
+        if let Some(text) = jux_panic_payload_text(payload) {
+            match &site {
+                Some(site) => eprintln!("panic: {text}\n    at {site}"),
+                None => eprintln!("panic: {text}"),
+            }
+        }
+        let kind = (*payload).type_id();
+        JUX_PANIC_SITE.with(|slot| slot.set(site.map(|s| (kind, s))));
+    }));
+    jux_stack_overflow::install();
+}
+/// Under an uncaught exception's report, the `.jux` line it was thrown at,
+/// when the last panic on this thread was that throw.
+pub fn jux_report_throw_site(payload: &(dyn std::any::Any + Send)) {
+    let kind = (*payload).type_id();
+    if let Some((thrown, site)) = JUX_PANIC_SITE.with(|slot| slot.take()) {
+        if thrown == kind {
+            eprintln!("    at {site}");
+        }
+    }
+}
+/// What a panic payload says, for the reports that catch one (a test, a task).
+pub fn jux_panic_payload_text(p: &(dyn std::any::Any + Send)) -> Option<String> {
+    p.downcast_ref::<&str>()
+        .map(|s| jux_panic_text(s))
+        .or_else(|| p.downcast_ref::<String>().map(|s| jux_panic_text(s)))
+}
+/// A stack overflow never reaches a panic hook: the runtime prints its own
+/// message and aborts. On Windows a vectored exception handler sees it first
+/// and reports it in Jux terms, with the exit status of any other uncaught
+/// failure. Elsewhere the runtime's report stands (GAPS.md gap 33).
+#[cfg(windows)]
+mod jux_stack_overflow {
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+    }
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *const ExceptionRecord,
+        context: *const u8,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AddVectoredExceptionHandler(
+            first: u32,
+            handler: unsafe extern "system" fn(*const ExceptionPointers) -> i32,
+        ) -> *const u8;
+        fn GetStdHandle(which: u32) -> *const u8;
+        fn WriteFile(file: *const u8, buf: *const u8, len: u32, written: *mut u32, overlapped: *const u8) -> i32;
+        fn GetCurrentProcess() -> *const u8;
+        fn TerminateProcess(process: *const u8, code: u32) -> i32;
+    }
+    const STATUS_STACK_OVERFLOW: u32 = 0xC000_00FD;
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
+    const MESSAGE: &[u8] = b"panic: stack overflow: a method called itself too many times without finishing\n";
+    unsafe extern "system" fn handler(p: *const ExceptionPointers) -> i32 {
+        if !p.is_null() && !(*p).record.is_null() && (*(*p).record).code == STATUS_STACK_OVERFLOW {
+            let mut written = 0u32;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), MESSAGE.as_ptr(), MESSAGE.len() as u32, &mut written, std::ptr::null());
+            TerminateProcess(GetCurrentProcess(), 101);
+        }
+        0
+    }
+    pub fn install() {
+        unsafe {
+            AddVectoredExceptionHandler(1, handler);
+        }
+    }
+}
+#[cfg(not(windows))]
+mod jux_stack_overflow {
+    pub fn install() {}
+}
+"##);
         // `now_ms()` helper — wall-clock reading in milliseconds
         // since the UNIX epoch. Lives next to the worker pool
         // because benchmarks pairing the two (timing a parallel
@@ -6831,10 +7159,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "fn __jux_panic_msg(p: &::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>) -> String {",
         );
         self.w.indent_inc();
+        // A Rust panic's text in Jux words (gap 33): a failing test says
+        // `index 5 is out of bounds for length 3`, not Rust's wording.
         self.w
-            .line("if let Some(s) = p.downcast_ref::<String>() { return s.clone(); }");
-        self.w
-            .line("if let Some(s) = p.downcast_ref::<&'static str>() { return s.to_string(); }");
+            .line("if let Some(s) = crate::jux_panic_payload_text(&**p) { return s; }");
         for fqn in self.throwable_class_fqns() {
             let path = match backend_fqn::fqn_package(&fqn) {
                 Some(pkg) => format!(
@@ -7867,16 +8195,12 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             // crate with no main at all), append nothing — a second
             // `fn main` would not compile.
             if renamed {
+                // The hook lives in the prelude (`jux_install_panic_hook`,
+                // gap 33): it puts a Rust panic in Jux words at its `.jux`
+                // line, and on Windows reports a stack overflow too.
                 let mut wrapper = String::from(concat!(
                     "\nfn main() {\n",
-                    "    std::panic::set_hook(::std::boxed::Box::new(|__jux_info| {\n",
-                    "        let __jux_p = __jux_info.payload();\n",
-                    "        if let Some(__jux_s) = __jux_p.downcast_ref::<&str>() {\n",
-                    "            eprintln!(\"panic: {__jux_s}\");\n",
-                    "        } else if let Some(__jux_s) = __jux_p.downcast_ref::<String>() {\n",
-                    "            eprintln!(\"panic: {__jux_s}\");\n",
-                    "        }\n",
-                    "    }));\n",
+                    "    crate::jux_install_panic_hook();\n",
                     // Rust's own `Err`, spelled in full: a user class may be
                     // NAMED `Err` (`examples/stress_upcast.jux` declares one),
                     // and a tuple struct of that name in scope shadows the
@@ -7884,6 +8208,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     // compiling (rustc E0308).
                     "    if let ::std::result::Result::Err(__jux_p) = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(__jux_user_main)) {\n",
                 ));
+                // One arm per known exception class, chained, each followed
+                // by the `.jux` line the exception was thrown at (Java's
+                // `\tat` line, gap 33).
+                wrapper.push_str("        ");
                 for fqn in &throwable_fqns {
                     let path = match backend_fqn::fqn_package(fqn) {
                         Some(pkg) => format!(
@@ -7900,22 +8228,29 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     };
                     wrapper.push_str(&format!(
                         concat!(
-                            "        if let Some(__jux_e) = __jux_p.downcast_ref::<{path}>() {{\n",
+                            "if let Some(__jux_e) = __jux_p.downcast_ref::<{path}>() {{\n",
                             "            eprintln!(\"Exception in thread \\\"main\\\" {fqn}: {{}}\", __jux_e.getMessage());\n",
-                            "        }}\n",
+                            "            crate::jux_report_throw_site(&*__jux_p);\n",
+                            "        }} else ",
                         ),
                         path = path,
                         fqn = fqn,
                     ));
                 }
                 // A Rust `Err` nothing caught (Bindgen G.5.4) is reported like
-                // an uncaught exception, under the Rust error type's name.
+                // an uncaught exception, under the Rust error type's name. A
+                // panic the hook already reported adds nothing; anything else
+                // is an instance of a generic exception class, whose name the
+                // wrapper cannot enumerate.
                 wrapper.push_str(concat!(
-                    "        if let Some(__jux_e) = __jux_p.downcast_ref::<crate::JuxForeignError>() {\n",
+                    "if let Some(__jux_e) = __jux_p.downcast_ref::<crate::JuxForeignError>() {\n",
                     "            eprintln!(\"Exception in thread \\\"main\\\" {}: {}\", __jux_e.type_name, __jux_e.text);\n",
+                    "            crate::jux_report_throw_site(&*__jux_p);\n",
+                    "        } else if __jux_p.is::<&str>() || __jux_p.is::<::std::string::String>() {\n",
+                    "        } else {\n",
+                    "            eprintln!(\"Exception in thread \\\"main\\\" (an exception of a generic class)\");\n",
+                    "            crate::jux_report_throw_site(&*__jux_p);\n",
                     "        }\n",
-                ));
-                wrapper.push_str(concat!(
                     "        std::process::exit(101);\n",
                     "    }\n",
                     "}\n",
@@ -7937,7 +8272,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                     "    if let Some(e) = p.downcast_ref::<{path}>() {{\n        eprintln!(\"Unhandled exception in spawned task: {fqn}: {{}}\", e.getMessage());\n        std::process::exit(101);\n    }}\n"
                 ));
             }
-            hook.push_str("    if let Some(s) = p.downcast_ref::<&str>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
+            hook.push_str("    if let Some(s) = crate::jux_panic_payload_text(&*p) {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
             source.push_str(&hook);
         }
         // **The FFI unwind barrier** (Exceptions §X.6.5). A Jux function C
@@ -7966,11 +8301,8 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
                 "                if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() {\n",
                 "                    break 'what format!(\"{}: {}\", e.type_name, e.text);\n",
                 "                }\n",
-                "                if let Some(s) = p.downcast_ref::<&str>() {\n",
-                "                    break 'what s.to_string();\n",
-                "                }\n",
-                "                if let Some(s) = p.downcast_ref::<String>() {\n",
-                "                    break 'what s.clone();\n",
+                "                if let Some(s) = crate::jux_panic_payload_text(&*p) {\n",
+                "                    break 'what s;\n",
                 "                }\n",
                 "                String::from(\"an exception\")\n",
                 "            };\n",
