@@ -6815,6 +6815,9 @@ fn a_missed_write_is_lowered_again_with_the_cell_restored() {
                 sources: Vec::new(),
                 rep_fallbacks: Vec::new(),
                 rep_violations: Vec::new(),
+                plan: LoweringPlan::default(),
+                fn_regions: Vec::new(),
+                relower: None,
             },
             missed,
         )
