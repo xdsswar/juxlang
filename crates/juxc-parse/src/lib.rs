@@ -140,7 +140,7 @@ fn one_syntax_error_per_token(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
         .into_iter()
         .filter(|d| {
             d.code != code::Code::E0200_UnexpectedToken
-                || d.primary_span.is_none_or(|s| seen.insert((s.file, s.start)))
+                || d.primary_span.map_or(true, |s| seen.insert((s.file, s.start)))
         })
         .collect()
 }
