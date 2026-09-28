@@ -1088,6 +1088,9 @@ impl<'a> Checker<'a> {
         if !crate::symbol_table::has_annotation(&fn_decl.annotations, "export") {
             return;
         }
+        if let Some(d) = crate::export_convention_diagnostic(&fn_decl.annotations) {
+            self.diagnostics.push(d);
+        }
         let name = &fn_decl.name.text;
         if !fn_decl.generic_params.is_empty() {
             self.diagnostics.push(
@@ -1317,6 +1320,7 @@ impl<'a> Checker<'a> {
                 self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
                 if param.is_shared_ref {
                     self.env.declare_ref_binding(&param.name.text);
+                    self.warn_ref_on_reference_type(&param.ty, param.span);
                 }
                 self.note_fixed_array_decl(&param.name.text, &param.ty, true);
                 if crate::infer::type_ref_is_void_pointer(&param.ty) {
@@ -2507,6 +2511,9 @@ impl<'a> Checker<'a> {
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             if param.is_shared_ref {
                 self.env.declare_ref_binding(&param.name.text);
+                // A `ref` parameter of a type that is already shared says
+                // what a `ref` local or field says (W0490, ERRATA E84).
+                self.warn_ref_on_reference_type(&param.ty, param.span);
             }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
@@ -3437,6 +3444,9 @@ impl<'a> Checker<'a> {
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             if param.is_shared_ref {
                 self.env.declare_ref_binding(&param.name.text);
+                // A `ref` parameter of a type that is already shared says
+                // what a `ref` local or field says (W0490, ERRATA E84).
+                self.warn_ref_on_reference_type(&param.ty, param.span);
             }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
@@ -3520,6 +3530,9 @@ impl<'a> Checker<'a> {
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             if param.is_shared_ref {
                 self.env.declare_ref_binding(&param.name.text);
+                // A `ref` parameter of a type that is already shared says
+                // what a `ref` local or field says (W0490, ERRATA E84).
+                self.warn_ref_on_reference_type(&param.ty, param.span);
             }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
@@ -3597,9 +3610,10 @@ impl<'a> Checker<'a> {
     /// allows, which is the worse of the two errors, so it stays visible until
     /// modules are modelled.
     ///
-    /// Only single-segment names are checked. A written FQN (`a.b.C`) is
-    /// deliberate and rare, and resolving one here would duplicate the import
-    /// machinery for no gain.
+    /// A written FQN (`new app.model.Secret()`) names its declaration
+    /// exactly, so it is checked against that declaration with no lookup: the
+    /// import was the only road checked before, and the fully-qualified one
+    /// compiled and ran (gap 35).
     ///
     /// Since gap 24 closed, a bare name reaches another user package only
     /// through an `import` (single-type or wildcard), so that is the one road
@@ -3617,6 +3631,14 @@ impl<'a> Checker<'a> {
         name: &juxc_ast::QualifiedName,
         span: juxc_source::Span,
     ) {
+        if name.segments.len() > 1 {
+            let written = name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            if let Some((fqn, sig)) = self.symbols.classes.get_key_value(&written) {
+                let (fqn, visibility, package) = (fqn.clone(), sig.visibility, sig.package.clone());
+                self.report_package_private_type(&fqn, visibility, &package, span);
+            }
+            return;
+        }
         if name.segments.len() != 1 {
             return;
         }
@@ -3654,18 +3676,31 @@ impl<'a> Checker<'a> {
         else {
             return;
         };
-        if !matches!(sig.visibility, juxc_ast::Visibility::Package) {
+        let (fqn, visibility, package) = (fqn.clone(), sig.visibility, sig.package.clone());
+        self.report_package_private_type(&fqn, visibility, &package, span);
+    }
+
+    /// The `E0416` of [`Self::check_type_name_visibility`], once the name has
+    /// resolved to the declaration `fqn` with `visibility` in `package`.
+    fn report_package_private_type(
+        &mut self,
+        fqn: &str,
+        visibility: juxc_ast::Visibility,
+        package: &[String],
+        span: juxc_source::Span,
+    ) {
+        if !matches!(visibility, juxc_ast::Visibility::Package) {
             return;
         }
         // Same package — including the "no package at all" case, where every
         // declaration shares one root scope.
-        if sig.package.as_slice() == self.env.current_package.as_slice() {
+        if package == self.env.current_package.as_slice() {
             return;
         }
-        let declaring = if sig.package.is_empty() {
+        let declaring = if package.is_empty() {
             "the root package".to_string()
         } else {
-            format!("`{}`", sig.package.join("."))
+            format!("`{}`", package.join("."))
         };
         let here = if self.env.current_package.is_empty() {
             "the root package".to_string()
@@ -4230,6 +4265,9 @@ impl<'a> Checker<'a> {
             self.env.declare_pointer(&param.name.text, param.ty.ptr_depth);
             if param.is_shared_ref {
                 self.env.declare_ref_binding(&param.name.text);
+                // A `ref` parameter of a type that is already shared says
+                // what a `ref` local or field says (W0490, ERRATA E84).
+                self.warn_ref_on_reference_type(&param.ty, param.span);
             }
             self.note_fixed_array_decl(&param.name.text, &param.ty, true);
             if crate::infer::type_ref_is_void_pointer(&param.ty) {
@@ -7319,6 +7357,13 @@ impl<'a> Checker<'a> {
                 if qn.segments.len() == 1 {
                     self.used_names.insert(qn.segments[0].text.clone());
                 }
+                // `Integer.MAX_VALUE`, `Zork.thing`: a dotted read whose head
+                // names nothing visible here. A bare unknown name is E0301
+                // from the resolver; the dotted form passed every check and
+                // reached the emitted program as a name it could not find.
+                if qn.segments.len() >= 2 {
+                    self.check_dotted_read_head(expr, &qn.segments[0], &qn.segments[1].text);
+                }
             }
             // `this` inside a `static` method has no receiver to
             // refer to — fire E0425 once per occurrence.
@@ -7380,6 +7425,11 @@ impl<'a> Checker<'a> {
                 );
             }
             Expr::Field(f) => {
+                if let Expr::Path(root) = f.object.as_ref() {
+                    if root.segments.len() == 1 {
+                        self.check_dotted_read_head(expr, &root.segments[0], &f.field.text);
+                    }
+                }
                 self.check_expr(&f.object);
                 // `v.x` on an `any` (§T.1.2): it has no fields.
                 if self.check_any_receiver(&f.object, &format!("has no field `{}`", f.field.text), f.span) {
@@ -8907,6 +8957,60 @@ impl<'a> Checker<'a> {
             })
             .collect();
         params.iter().all(ty_is_concrete).then_some(params)
+    }
+
+    /// `Integer.MAX_VALUE`, `Zork.thing`: a dotted read whose head names
+    /// nothing visible here (see [`Self::name_is_visible`]). A bare unknown
+    /// name is `E0301` from the resolver; the dotted form passed every check
+    /// and reached the emitted program as a name it could not find (gap 35).
+    /// `System` is left to the `System.out` habit check.
+    fn check_dotted_read_head(&mut self, expr: &Expr, head: &juxc_ast::Ident, member: &str) {
+        let name = head.text.as_str();
+        if name == "System" || self.name_is_visible(name) {
+            return;
+        }
+        // A type nested in the enclosing class or one of its ancestors is
+        // named by its simple name there (§M.9): `Level.Senior` in a
+        // subclass of the class that nests `Level`.
+        let mut cursor = self.env.current_class.clone();
+        let mut hops = 0;
+        while let Some(cls) = cursor.take() {
+            let bare = cls.rsplit('.').next().unwrap_or(&cls).to_string();
+            // The lift names a nested type `Owner__Name`.
+            let nested = [format!("{cls}__{name}"), format!("{bare}__{name}")];
+            let hit = |k: &String| nested.iter().any(|n| k == n || k.ends_with(&format!(".{n}")));
+            if self.symbols.classes.keys().any(hit)
+                || self.symbols.enums.keys().any(hit)
+                || self.symbols.records.keys().any(hit)
+                || self.symbols.interfaces.keys().any(hit)
+            {
+                return;
+            }
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+            cursor = self.symbols.classes.get(&cls).and_then(|c| {
+                c.extends_fqn.clone().or_else(|| {
+                    c.extends.as_ref().and_then(|x| x.name.segments.last().map(|s| s.text.clone()))
+                })
+            });
+        }
+        // Whatever the head names, a read the checker could type is not an
+        // unknown name: an inherited nested type (`Level.Senior` in a
+        // subclass) is reached that way.
+        if !matches!(infer_expr(expr, &self.env, self.symbols), Ty::Unknown) {
+            return;
+        }
+        let message = match crate::java_habits::java_class_member_hint(name, member) {
+            Some(help) => format!("cannot find `{name}` in this scope -- {help}"),
+            None => format!("cannot find `{name}` in this scope"),
+        };
+        let mut diag = Diagnostic::error(code::Code::E0301_NameNotFound, message).with_span(head.span);
+        if let Some(help) = self.import_hint(name) {
+            diag = diag.with_help(help);
+        }
+        self.diagnostics.push(diag);
     }
 
     /// Whether the bare `name` can start an expression here (see
@@ -11325,6 +11429,51 @@ impl<'a> Checker<'a> {
         Some((ty, format!("{bare}.{prop_name}")))
     }
 
+    /// **E0708** — `spawn(x)` runs work: a function (`spawn(() -> f())`) or
+    /// the future of an async call (`spawn(fetch())`). A call to an ordinary
+    /// function has already run by the time `spawn` sees its result, so
+    /// `spawn(makeUser("bob"))` had no task to make and the emitted program
+    /// could not be built (gap 35). Only a call whose callee is known is
+    /// judged; anything else is left alone.
+    fn check_spawn_argument(&mut self, arg: &Expr) {
+        let Expr::Call(inner) = arg else { return };
+        let (desc, is_async) = match inner.callee.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if self.env.lookup(name).is_some() {
+                    return;
+                }
+                let fqn = if self.symbols.functions.contains_key(name) {
+                    Some(name.to_string())
+                } else {
+                    self.env.unqualified.get(name).cloned().filter(|f| self.symbols.functions.contains_key(f))
+                };
+                let Some(sig) = fqn.and_then(|f| self.symbols.functions.get(&f)) else { return };
+                (name.to_string(), matches!(sig.return_type, juxc_ast::ReturnType::AsyncType(_)))
+            }
+            Expr::Field(f) => {
+                let Ty::User { name, .. } = infer_expr(&f.object, &self.env, self.symbols) else { return };
+                let Some((sig, _)) = self.symbols.lookup_method(&name, &f.field.text) else { return };
+                (f.field.text.clone(), matches!(sig.return_type, juxc_ast::ReturnType::AsyncType(_)))
+            }
+            _ => return,
+        };
+        if is_async {
+            return;
+        }
+        let call_text = format!("{desc}(...)");
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0708_SpawnNotATask,
+                format!(
+                    "`spawn` needs work to run, and `{call_text}` is not async: the call runs before `spawn` sees its result, so there is no task to start",
+                ),
+            )
+            .with_span(inner.span)
+            .with_help(format!("pass the work as a function: `spawn(() -> {call_text})` (§10.1.3)")),
+        );
+    }
+
     /// E0705 (§18.1.2): a call to an async callee outside a
     /// future-consuming slot is an unstarted future used as a value —
     /// the body never runs. Read-only on `in_future_slot` (no take):
@@ -11777,6 +11926,9 @@ impl<'a> Checker<'a> {
                 // capture gate: E0702 belongs to `Worker.spawn` (§M.12),
                 // which is a real thread boundary and keeps it.
                 if name == "spawn" {
+                    if let Some(arg) = c.args.first() {
+                        self.check_spawn_argument(arg);
+                    }
                     // `spawn(asyncFn())` consumes the future (E0705 exempt).
                     let prev_slot = self.in_future_slot;
                     self.in_future_slot = true;
@@ -12110,7 +12262,7 @@ impl<'a> Checker<'a> {
                     }
                     if qn.segments.len() == 1
                         && qn.segments[0].text == "Task"
-                        && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay")
+                        && matches!(method_name, "all" | "race" | "any" | "allSettled" | "delay" | "yield")
                     {
                         if method_name == "delay" {
                             if let Some(span) = c.args.first() {
@@ -12151,8 +12303,8 @@ impl<'a> Checker<'a> {
                                 code::Code::E0413_UnresolvedMethod,
                                 format!(
                                     "no static `{method_name}` on `Task` -- the task statics are \
-                                     `completed`, `failed`, `all`, `any`, `race`, `allSettled` \
-                                     and `delay` (§18.1.4)",
+                                     `completed`, `failed`, `all`, `any`, `race`, `allSettled`, \
+                                     `delay` and `yield` (§18.1.4)",
                                 ),
                             )
                             .with_span(field.field.span),
@@ -12362,24 +12514,37 @@ impl<'a> Checker<'a> {
                     // and helpers such as `fromName` / `cases`). Anything else
                     // reached rustc as an unresolved associated item.
                     if let Some((kind, fqn)) = self.value_type_named_by(qn) {
-                        let known = match kind {
-                            "enum" => self.symbols.enums.get(&fqn).is_some_and(|e| {
-                                e.variants.contains_key(method_name) || e.methods.contains_key(method_name)
-                            }),
-                            _ => self
-                                .symbols
-                                .records
-                                .get(&fqn)
-                                .is_some_and(|r| r.methods.contains_key(method_name)),
+                        // An INSTANCE method named through the type is not a
+                        // static: `Result.ok(1)` (the spelling §7.11 uses) was
+                        // lowered as a call of the instance `ok()` with `1` for
+                        // its receiver, which the emitted program rejected
+                        // (gap 35, ERRATA E56).
+                        let method_sig = match kind {
+                            "enum" => self.symbols.enums.get(&fqn).and_then(|e| e.methods.get(method_name)),
+                            _ => self.symbols.records.get(&fqn).and_then(|r| r.methods.get(method_name)),
                         };
+                        let is_variant = kind == "enum"
+                            && self.symbols.enums.get(&fqn).is_some_and(|e| e.variants.contains_key(method_name));
+                        let instance_only = method_sig.is_some_and(|m| !m.is_static);
+                        let known = is_variant || method_sig.is_some_and(|m| m.is_static);
                         if !known {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0413_UnresolvedMethod,
-                                    format!("no static method `{method_name}` on {kind} `{fqn}`"),
+                            let message = if instance_only {
+                                format!(
+                                    "`{method_name}` is an instance method of {kind} `{fqn}`, so it is called on a value, not on the type"
                                 )
-                                .with_span(c.span),
-                            );
+                            } else {
+                                format!("no static method `{method_name}` on {kind} `{fqn}`")
+                            };
+                            let mut diag =
+                                Diagnostic::error(code::Code::E0413_UnresolvedMethod, message).with_span(c.span);
+                            if fqn == "jux.std.result.Result" && matches!(method_name, "ok" | "err" | "from") {
+                                diag = diag.with_help(match method_name {
+                                    "ok" => "a `Result` is built from its variants: `Result.Ok(value)` (ERRATA E56)",
+                                    "err" => "a `Result` is built from its variants: `Result.Err(error)` (ERRATA E56)",
+                                    _ => "catch the exception and build the value from its variants: `Result.Ok(value)` or `Result.Err(e)`",
+                                });
+                            }
+                            self.diagnostics.push(diag);
                             for arg in &c.args {
                                 self.check_expr(arg);
                             }

@@ -1,0 +1,8 @@
+// A dotted read whose head names nothing is E0301, as a bare unknown name is
+// (gap 35). The boxed number classes get the Jux spelling of the constant.
+public void main() {
+    print(Integer.MAX_VALUE);
+    print(Zork.thing);
+    var low = Long.MIN_VALUE;
+    print(Double.NaN);
+}

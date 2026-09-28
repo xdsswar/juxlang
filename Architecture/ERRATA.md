@@ -4340,6 +4340,131 @@ integer division by zero does (E1), and the report is the one above. §S.7.1
 is otherwise unchanged: overflow and a failed `assert` are still panics, not
 catchable. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4: `E0905` is raised, and the
 `E0900` row names the leak guard as a third source. GAPS.md gap 33 is closed.
+---
+
+## E1XX-GAP35. The release-blocker sweep: what a valid program could not do, and what an invalid one was told
+
+**Conflict.** The 2026-09-24 release-blocker list (FEATURES-TODO) was
+re-probed against the built toolchain on 2026-09-27. Most items had been
+closed by gaps 1-33, but eighteen shapes still failed, each against a rule the
+specification already states. A valid program must build and do what it says;
+an invalid one must be told why in Jux terms, and an internal compiler error
+(`E0900`) is a compiler bug whatever the source. These did neither:
+
+- valid programs that did not build: `print(switch (e) { case 1 -> "ab " + e;
+  default -> "c"; })`; `$v` over a generic `T` field where `${v}` worked; a
+  property getter reading a field by its bare name (`get -> f.length()`,
+  `get -> n` into a `long`, `get -> n * 1.5`, `get -> f.charLength`); a
+  property named with a Rust keyword (`public int loop { get; set; }`); a
+  record implementing an interface and calling through its component
+  (`this.inner.eval()`); a null test inside an interface's `default` method; an
+  `AsyncMutex` held in a class field (ASYNC §18.3's own example); a class in
+  the root `main.jux` extending a class of a named package;
+  `new int[-1]` written with a literal; `Task.yield()`;
+- invalid programs answered with `E0900` or nothing: `Integer.MAX_VALUE` and
+  any dotted read whose head names nothing; an empty file (or one with no
+  entry point); `interface I extends J {}` with `interface J extends I {}`;
+  `spawn(makeUser("bob"))` on a function that is not async; `Result.ok(1)`
+  (§7.11's spelling, not provided since E56); `@export(convention =
+  "Stdcall")` and a convention that names nothing, both silently emitted as C;
+  `new app.model.Secret()` on a package-private type from another package
+  (the import was `E0416`, the written FQN compiled and ran); a keyword as a
+  parameter or local name (`int f(int type)`), a four-error cascade starting
+  at a "bare `return`"; `ref` on a class-typed PARAMETER (no `W0490`, which a
+  local and a field get);
+- text that showed Rust: printing a curried lambda gave `<Rc>`; the formatter
+  the build runs printed its own parse errors with the generated file's path;
+  `W0457` said classes are "`Rc`-refcounted"; `juxc explain` printed the
+  specification's notes about the lowering; the missing-toolchain message for
+  a bound crate said "`cargo` must be on PATH".
+
+**Resolution.** Each is fixed where the text or the code is made.
+
+- **`$name` is `${name}`.** The parser gives `$v` the expression segment
+  `${v}` produces, a one-segment path with a real span, so the two are typed
+  and lowered identically (§3.4). The separate bare segment had no span and no
+  recorded type, and the backend guessed `Display`.
+- **A `String` switch's arms agree.** When a `String`-typed switch has any arm
+  that is not a plain literal, every arm is emitted as an owned value, the rule
+  a `? :` already followed.
+- **A synthesized `this` has a span of its own.** An accessor body's bare
+  field read becomes `this.f` (§M.7); the `this` now takes an empty span at the
+  name's start rather than the name's span, which the per-expression type map
+  overwrote with the class's type. Every String method, widening and promotion
+  in a getter follows from that one change.
+- **A property's getter is called by its escaped name** in the observer
+  bracket, as every other member already was.
+- **A record's methods take `&self`.** Components are final (§7.6), so a call
+  on one never needs the record mutable; the name-keyed mutating-method set
+  had marked `eval` mutating and the record's interface impl could not call it.
+- **A bare call in an interface default method is typed by the interface's
+  method**, so `var e = get(k)` is known nullable and the null test narrows it.
+- **`AsyncMutex.lock()` hands out a guard that owns its share of the lock**,
+  and the handle has a `Debug` form, so a field of that type compiles.
+- **A root-package subclass is named from a packaged base as `crate::Phone`.**
+- **A negative constant array size is a run-time size**: it throws
+  `IllegalArgumentException("Negative array size: -1")` exactly as the same
+  size in a variable does (Java compiles it too).
+- **`Task.yield()`** is the built-in `yield_now()`: it hands the loop back
+  once (LANG-V1 §10's fairness note names it).
+- **A dotted read whose head names nothing visible is `E0301`**, as a bare
+  unknown name is. `Integer`/`Long`/`Short`/`Byte`/`Double`/`Float` with
+  `MAX_VALUE`, `MIN_VALUE`, `NaN` or an infinity get the Jux spelling as help,
+  `int.MAX_VALUE` (Core lib §K.11); any other member gets the existing
+  boxed-number help.
+- **`E0327`**: a program built as a binary with no entry point (no `main`, no
+  class `static main`, no `@entry`, no top-level statements) is reported by the
+  build, since the same file is a valid library member and `jux check` of it
+  stays clean. It replaces the `E0900` an empty file produced.
+- **`E0434` covers interfaces**: the interface whose `extends` link closes a
+  cycle is reported and that link cut, as for classes.
+- **`E0708`**: `spawn(f())` where `f` is known and not async. The call has
+  already run; `spawn` takes a function or an async call's future (§10.1.3).
+- **`E0413` for an instance method called through its type**: `Result.ok(1)`
+  says `ok` is called on a value, with help naming `Result.Ok(value)`. A record's
+  or enum's static set is its variants and its `static` methods; an instance
+  method of the same name no longer passes as one.
+- **`E0527`**: `@export(convention = ...)` other than `"C"`. Every export is
+  emitted with the C convention, so the three Windows values of Layout-ABI
+  §L.4.1 are refused on every target, and a value that is not a convention is
+  refused as such, the way `E0322` treats `@entry`'s.
+- **`E0416` for a written FQN**: `new app.model.Secret()` is checked against
+  the declaration it names.
+- **`E0204`**: a Jux keyword as the name of a parameter or local variable
+  (Grammar §A.1.3 reserves every one). It is reported once; the parser then
+  reads the keyword as that name wherever it appears in an expression, so
+  nothing cascades. A foreign stub keeps its Rust names, and a parameter
+  literally named `this` parses as it did.
+- **`W0490` on a `ref` parameter** of a class, interface, array or collection
+  type, as on a local and a field (E84).
+- **Text.** A function value held by its own closure type prints `<fn>`, as
+  one held as a function type already did. The formatter's output is captured
+  and dropped; it is about a file the programmer never wrote, and the build
+  after it reports in Jux terms. `W0457` says "classes are reference-counted,
+  and objects that refer to each other in a cycle are never freed". A bound
+  crate's missing toolchain is said by what it is for, as the build's own is
+  (gap 33), and the crate-description failures name the dependency, not the
+  tools. `jux build` reports "built library at", and `jux target list` without
+  a toolchain says what to install rather than the tool's name.
+- **`juxc explain` is written for the person who got the diagnostic.** It
+  keeps the catalog description, the code's own documentation and the
+  addendum sections about it, and leaves out every paragraph (and every
+  sentence of the description) that talks about the lowering, the generated
+  code, the build tools or the ERRATA history; `Defined in` names the
+  specification section without the ERRATA entry. `E0900`, `E0904` and `E0305`,
+  whose catalog rows are about the compiler, have a user-facing description of
+  their own. A unit test holds every code's explanation to that rule.
+
+**Not changed.** `Result.unwrap()` on an `Err` still throws
+`IllegalStateException` (E56's decision). `Result.from(() -> ...)` (§X.5.4) is
+still not provided; it is a clean `E0413` with help naming the variants. A
+stack overflow off Windows and a foreign type's own `Display` text stay as E129
+left them.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains `E0204`, `E0327`,
+`E0527` and `E0708`, and the `E0434` row names interfaces.
+`JUX-ENTRY-POINTS-ADDENDUM.md` §E.6 lists `E0327`; `JUX-LAYOUT-ABI-ADDENDUM.md`
+§L.4.1 records that only `"C"` is accepted today. GAPS.md gap 35 is closed.
 
 ---
 

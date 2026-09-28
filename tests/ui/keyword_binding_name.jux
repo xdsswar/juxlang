@@ -1,0 +1,11 @@
+// A Jux keyword cannot name a parameter or a local (E0204). Each is reported
+// once, and its uses read as the name, so nothing cascades (gap 35).
+int area(int type, int record) {
+    return type * record;
+}
+
+public void main() {
+    int sealed = 2;
+    var permits = 3;
+    print(area(sealed, permits));
+}

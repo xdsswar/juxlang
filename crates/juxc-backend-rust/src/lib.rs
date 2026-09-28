@@ -4136,8 +4136,10 @@ impl RustEmitter {
             "pub fn jux_type_label<T: ?Sized>() -> String {\n",
             "    let full = std::any::type_name::<T>().trim_start_matches('&');\n",
             "    // A Jux function value is an `Rc<dyn Fn(..)>`, and neither half of\n",
-            "    // that is a name the program wrote. `fn` is what it is.\n",
-            "    if full.contains(\"dyn \") && full.contains(\"Fn(\") {\n",
+            "    // that is a name the program wrote. `fn` is what it is. A lambda\n",
+            "    // held by its own type (`Rc<{{closure}}>`, a curried lambda's\n",
+            "    // outer value) is one too.\n",
+            "    if (full.contains(\"dyn \") && full.contains(\"Fn(\")) || full.contains(\"{{closure}}\") {\n",
             "        String::from(\"<fn>\")\n",
             "    } else {\n",
             "        let head = full.split('<').next().unwrap_or(full);\n",
@@ -5791,8 +5793,19 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "        JuxAsyncMutex { inner: std::sync::Arc::new(futures::lock::Mutex::new(v)) }\n",
         );
         w.push_str("    }\n");
-        w.push_str("    pub async fn lock(&self) -> futures::lock::MutexGuard<'_, T> {\n");
-        w.push_str("        self.inner.lock().await\n");
+        // The guard OWNS its share of the lock rather than borrowing the
+        // handle it came from: a field read (`count.lock()` on a class's
+        // `AsyncMutex` field, §18.3's own example) hands over a copy of the
+        // handle, and a guard borrowing that copy outlived it (gap 35).
+        w.push_str("    pub async fn lock(&self) -> futures::lock::OwnedMutexGuard<T> {\n");
+        w.push_str("        self.inner.clone().lock_owned().await\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // A class holding one derives `Debug` for its fields; the lock has no
+        // text of its own to give without taking it.
+        w.push_str("impl<T> std::fmt::Debug for JuxAsyncMutex<T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        f.write_str(\"AsyncMutex\")\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
         // Stepped range runtime -- MISSING-DEFS M.6.1. `a..b step s` as a

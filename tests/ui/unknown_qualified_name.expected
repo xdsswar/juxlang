@@ -1,0 +1,4 @@
+unknown_qualified_name.jux:4:11: [E0301] error: cannot find `Integer` in this scope -- Jux has no boxed number classes: the constant belongs to the primitive, `int.MAX_VALUE`
+unknown_qualified_name.jux:5:11: [E0301] error: cannot find `Zork` in this scope
+unknown_qualified_name.jux:6:15: [E0301] error: cannot find `Long` in this scope -- Jux has no boxed number classes: the constant belongs to the primitive, `long.MIN_VALUE`
+unknown_qualified_name.jux:7:11: [E0301] error: cannot find `Double` in this scope -- Jux has no boxed number classes: the constant belongs to the primitive, `double.NAN`

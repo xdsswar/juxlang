@@ -447,7 +447,9 @@ impl RustEmitter {
         // there's no LHS shape to consult. A const-generic param
         // (`new T[N]` inside `<int N>` scope) is a compile-time
         // constant — it stays fixed, so it is NOT a runtime size.
-        let size_is_const = self.try_const_int(size).is_some()
+        // A negative constant is no stack length: it is built, and throws, at
+        // run time (see `emit_array_repeat_len`).
+        let size_is_const = self.try_const_int(size).is_some_and(|v| v >= 0)
             || matches!(
                 size,
                 Expr::Path(qn)
@@ -555,8 +557,11 @@ impl RustEmitter {
     /// const-generic `N`, or a runtime size for the `vec!` form), never
     /// the `(N as isize)` value-cast.
     fn emit_array_repeat_len(&mut self, size: &Expr) {
-        // A const literal emits its computed `usize` value.
-        if let Some(v) = self.try_const_int(size) {
+        // A const literal emits its computed `usize` value. A negative one
+        // (`new int[-1]`) has no `usize` spelling: it takes the run-time path
+        // below and throws there, exactly as the same size held in a variable
+        // does (Java compiles it too, and fails when it runs).
+        if let Some(v) = self.try_const_int(size).filter(|v| *v >= 0) {
             self.w.push_str(&v.to_string());
             return;
         }

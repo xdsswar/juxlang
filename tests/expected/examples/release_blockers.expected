@@ -1,0 +1,22 @@
+ab 1
+d 1
+Box(3)
+Box(s)
+Box(2.0)
+Box(2.0)
+5
+HELLO
+3
+4.5
+5
+4
+4
+1
+9
+1
+2
+7
+<fn>
+3
+refused: Negative array size: -1
+examples/release_blockers.jux:23:16: [W0974] warning: property `loop` should be PascalCase (`Loop`) -- the preferred visual signal that a member is a property, not a plain field (§P.1.1)

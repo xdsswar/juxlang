@@ -235,6 +235,11 @@ pub(crate) struct Parser<'a> {
     /// bare `{1, 2, 3}` initializer needs the array shape of the declared
     /// type, and under an alias the shape is in the alias's declaration.
     pub(crate) array_aliases: Option<std::collections::HashMap<String, juxc_ast::TypeRef>>,
+    /// Keywords this file used as a parameter or local-variable name, each
+    /// already reported once as `E0204` (§A.1.3). A later read of the name is
+    /// taken as a name rather than as the keyword, so one mistake is one
+    /// diagnostic instead of a cascade through every statement that uses it.
+    pub(crate) keyword_bindings: std::collections::HashSet<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -255,6 +260,7 @@ impl<'a> Parser<'a> {
             depth: 0,
             depth_reported: false,
             array_aliases: None,
+            keyword_bindings: std::collections::HashSet::new(),
         }
     }
 
@@ -615,5 +621,64 @@ impl<'a> Parser<'a> {
     /// (`foreign_mode` already relied on this acceptance for Rust stub members.)
     pub(crate) fn parse_decl_name(&mut self) -> Option<Ident> {
         self.parse_member_name()
+    }
+
+    /// Consume the name of a **parameter or local variable**. A keyword there
+    /// is refused with one `E0204` (§A.1.3 reserves every Jux keyword) and then
+    /// taken as the name, so the declaration and each later read of it parse
+    /// instead of cascading into unrelated errors: `int f(int type) { return
+    /// type; }` used to report a bare `return` and an expected expression.
+    /// A foreign stub keeps its Rust names (`foreign_mode`), as before.
+    pub(crate) fn parse_binding_name(&mut self, what: &str) -> Option<Ident> {
+        if let TokenKind::Kw(kw) = self.peek() {
+            if !self.foreign_mode {
+                let span = self.peek_span();
+                let text = kw.as_str().to_string();
+                self.advance();
+                self.report_keyword_binding(&text, span, what);
+                return Some(Ident { text, span });
+            }
+        }
+        self.parse_decl_name()
+    }
+
+    /// `E0204` for a keyword written as the name of a binding, once per name.
+    pub(crate) fn report_keyword_binding(&mut self, text: &str, span: juxc_source::Span, what: &str) {
+        self.keyword_bindings.insert(text.to_string());
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0204_KeywordAsBindingName,
+                format!("`{text}` is a Jux keyword, so it cannot name a {what}"),
+            )
+            .with_span(span)
+            .with_help(format!("rename it, for example `{text}Value` or `{text}_` (§A.1.3)")),
+        );
+    }
+
+    /// A keyword this file already reported as a binding name (`E0204`), which
+    /// an expression reads as that name. Keywords that start an expression of
+    /// their own keep that meaning.
+    pub(crate) fn at_keyword_binding(&self) -> bool {
+        match self.peek() {
+            TokenKind::Kw(kw) => {
+                !matches!(
+                    kw,
+                    Keyword::This
+                        | Keyword::Super
+                        | Keyword::New
+                        | Keyword::Switch
+                        | Keyword::Sizeof
+                        | Keyword::Typeof
+                        | Keyword::Await
+                        | Keyword::Move
+                        | Keyword::Throw
+                        | Keyword::Try
+                        | Keyword::If
+                        | Keyword::Async
+                        | Keyword::Unsafe
+                ) && self.keyword_bindings.contains(kw.as_str())
+            }
+            _ => false,
+        }
     }
 }

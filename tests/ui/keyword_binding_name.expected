@@ -1,0 +1,4 @@
+keyword_binding_name.jux:3:14: [E0204] error: `type` is a Jux keyword, so it cannot name a parameter
+keyword_binding_name.jux:3:24: [E0204] error: `record` is a Jux keyword, so it cannot name a parameter
+keyword_binding_name.jux:8:9: [E0204] error: `sealed` is a Jux keyword, so it cannot name a local variable
+keyword_binding_name.jux:9:9: [E0204] error: `permits` is a Jux keyword, so it cannot name a local variable

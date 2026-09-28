@@ -177,7 +177,7 @@ fn lib_plus_three_bins_checks_builds_and_runs_each() {
 
     let (ok, out) = jux(root, &["build"]);
     assert!(ok, "build failed on the §B.15.2 shape:\n{out}");
-    assert!(out.contains("built library crate"), "no [lib] target built:\n{out}");
+    assert!(out.contains("built library at"), "no [lib] target built:\n{out}");
     for name in ["myapp", "myapp-server", "myapp-migrator"] {
         assert!(out.contains(name), "binary `{name}` not built:\n{out}");
     }

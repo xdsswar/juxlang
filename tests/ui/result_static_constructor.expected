@@ -1,0 +1,2 @@
+result_static_constructor.jux:6:32: [E0413] error: `ok` is an instance method of enum `jux.std.result.Result`, so it is called on a value, not on the type
+result_static_constructor.jux:7:31: [E0413] error: `err` is an instance method of enum `jux.std.result.Result`, so it is called on a value, not on the type

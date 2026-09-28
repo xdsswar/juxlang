@@ -1659,9 +1659,9 @@ fn escape_rs(s: &str) -> String {
 
 /// Invoke `rustfmt --edition=2021 <file>` on every emitted Rust file
 /// for readability. Failures (rustfmt not on PATH, syntax that
-/// rustfmt rejects, etc.) are logged to stderr but do NOT fail the
-/// build — the generated source still compiles either way, so we
-/// shouldn't block users who haven't installed rustfmt.
+/// rustfmt rejects, etc.) are silent and do NOT fail the build — the
+/// generated source compiles the same either way, and what rustfmt says
+/// is about a file the programmer never wrote.
 ///
 /// Per `JUX-CODEGEN-FIXES.md` Fix 2: rustfmt runs once per emitted
 /// file. We don't batch because rustfmt's `--check` mode behaves
@@ -1678,35 +1678,16 @@ fn run_rustfmt(files: &[PathBuf]) {
         return;
     }
     for path in files {
-        // `--quiet` suppresses rustfmt's own "Formatting…" chatter so
-        // a clean run stays silent. We still surface the spawn error
-        // (rustfmt not found) once, on the first file only — repeating
-        // the same warning for every file would be noisy.
-        let status = Command::new("rustfmt")
-            .arg("--edition=2021")
-            .arg("--quiet")
-            .arg(path)
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(_) => {
-                // Non-zero exit: rustfmt parsed but flagged something.
-                // The unformatted file is still compilable, so we just
-                // warn and move on. Worth knowing about — points at a
-                // codegen bug worth investigating later.
-                eprintln!(
-                    "warning: rustfmt failed on {} (continuing with unformatted source)",
-                    path.display(),
-                );
-            }
-            Err(_) => {
-                // Couldn't spawn rustfmt at all — almost always means
-                // it's missing from PATH. One advisory line covers the
-                // whole batch since the cause is the same for every
-                // file; returning early keeps the warning de-duplicated.
-                eprintln!("warning: rustfmt not found on PATH; emitted code is unformatted");
-                return;
-            }
+        // Formatting only makes the emitted crate readable; the build is the
+        // same either way. So its output is CAPTURED and dropped, never shown:
+        // a formatter that rejected the file printed its own parse errors,
+        // with the generated file's path and lines, straight to the terminal
+        // before any Jux diagnostic (gap 35). Whatever made it fail, the build
+        // that follows reports in Jux terms.
+        match Command::new("rustfmt").arg("--edition=2021").arg("--quiet").arg(path).output() {
+            Ok(_) => {}
+            // Not installed: the whole batch would fail the same way.
+            Err(_) => return,
         }
     }
 }
