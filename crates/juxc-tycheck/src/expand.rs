@@ -373,16 +373,37 @@ fn expand_if(i: &mut juxc_ast::IfStmt, plans: &Rewrites<'_>) {
 }
 
 fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
-    if plans.late.is_some_and(|l| l.hits(expr)) {
+    if let Some((class, field)) = plans.late.and_then(|l| l.hit(expr)) {
         if let Expr::Field(f) = expr {
             expand_expr(&mut f.object, plans);
         }
         let span = crate::check::expr_span_pub(expr);
-        // Its own span, a point at the read's end, so the read and the
-        // assertion keep separate types.
+        // `read ?: throw new IllegalStateException(..)`: an unset field read
+        // during construction is an exception the program can catch (ERRATA
+        // E1XX-GAP39f). The `?:` has its own span, a point at the read's
+        // end, so the read and the result keep separate types.
         let at = Span { start: span.end, end: span.end, file: span.file };
+        let bare = class.rsplit('.').next().unwrap_or(&class);
+        let bare = bare.rsplit("__").next().unwrap_or(bare);
+        let message = format!("field '{field}' of {bare} read before it was initialized");
+        let ident = |text: &str| juxc_ast::Ident { text: text.to_string(), span: Span::DUMMY };
+        let throw = Expr::Throw(
+            Box::new(Expr::NewObject(juxc_ast::NewObjectExpr {
+                class_name: juxc_ast::QualifiedName {
+                    segments: vec![ident("IllegalStateException")],
+                    span: Span::DUMMY,
+                },
+                generic_args: Vec::new(),
+                args: vec![Expr::Literal(juxc_ast::Literal::String(message))],
+                arg_names: vec![None],
+                anonymous_body: None,
+                eval_order: Vec::new(),
+                span: Span::DUMMY,
+            })),
+            Span::DUMMY,
+        );
         let read = std::mem::replace(expr, Expr::This(Span::DUMMY));
-        *expr = Expr::NotNullAssert(Box::new(read), at);
+        *expr = Expr::Elvis(juxc_ast::ElvisExpr { value: Box::new(read), fallback: Box::new(throw), span: at });
         return;
     }
     match expr {

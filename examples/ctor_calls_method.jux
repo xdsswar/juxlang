@@ -7,7 +7,7 @@
 // found for struct `Grid_Inner`". It is about the most ordinary constructor a
 // Java programmer writes.
 //
-// Expected output: 3 / 9 / 7 / 7
+// Expected output: 3 / 9 / 0 / 7
 class Grid {
     public int n;
     public Grid(int n) {
@@ -22,9 +22,9 @@ public void main() {
     print(g.get());
     var h = new Grid(3);
     print(h.get());
-    // The constructor dispatches to the OVERRIDE, as Java does. Unlike Java it
-    // reads 7 rather than 0: Jux runs every field initializer before any
-    // constructor body, so the override never sees a half-built object.
+    // The constructor dispatches to the OVERRIDE, and reads 0, as Java does:
+    // `Child`'s field initializers run after `Base`'s constructor (ERRATA
+    // E1XX-GAP39f).
     var c = new Child();
     c.show();
 }

@@ -8,11 +8,12 @@
 //! not, and `Worker w = new Worker(this);` is exactly that case. Java's
 //! answer is `null` until the initializer runs, and so is this pass's: the
 //! driver gives such a field a nullable slot (`Worker?`), and each read of it
-//! anywhere in the program asserts it is set (`w!!`), which it always is once
+//! anywhere in the program checks it is set, which it always is once
 //! construction is over. A read during construction that comes before the
-//! initializer (a method the constructor calls that reads a later field)
-//! stops with the same exception an unset `!!` raises, not with a value that
-//! was never written. The program is then checked again, so the backend sees
+//! initializer (a method an ancestor's constructor calls that reads a
+//! subclass field, ERRATA E1XX-GAP39f) throws `IllegalStateException`
+//! ("field 'w' of Owner read before it was initialized"), which the program
+//! can catch, rather than reading a value that was never written. The program is then checked again, so the backend sees
 //! a nullable field and non-null reads, both of which it already lowers.
 
 use std::collections::{HashMap, HashSet};
@@ -35,24 +36,27 @@ impl LateReads<'_> {
     /// Whether `e` reads one of the late fields: a bare name the checker read
     /// as one, or `obj.f` on an object whose class has it.
     pub(crate) fn hits(&self, e: &Expr) -> bool {
+        self.hit(e).is_some()
+    }
+
+    /// The late field `e` reads, as `(declaring class FQN, field)`.
+    pub(crate) fn hit(&self, e: &Expr) -> Option<(String, String)> {
         match e {
             Expr::Path(qn) if qn.segments.len() == 1 => {
-                self.bare.get(&qn.span).is_some_and(|key| self.late.contains(key))
+                self.bare.get(&qn.span).filter(|key| self.late.contains(*key)).cloned()
             }
             Expr::Field(f) => {
-                let Some(ty) = self.expr_types.get(&crate::check::expr_span_pub(&f.object)) else {
-                    return false;
-                };
+                let ty = self.expr_types.get(&crate::check::expr_span_pub(&f.object))?;
                 let ty = match ty {
                     Ty::Nullable(inner) => inner.as_ref(),
                     other => other,
                 };
-                let Ty::User { name, .. } = ty else { return false };
-                self.symbols
-                    .lookup_field(name, &f.field.text)
-                    .is_some_and(|(sig, decl)| !sig.is_static && self.late.contains(&(decl.to_string(), f.field.text.clone())))
+                let Ty::User { name, .. } = ty else { return None };
+                let (sig, decl) = self.symbols.lookup_field(name, &f.field.text)?;
+                let key = (decl.to_string(), f.field.text.clone());
+                (!sig.is_static && self.late.contains(&key)).then_some(key)
             }
-            _ => false,
+            _ => None,
         }
     }
 }
@@ -124,11 +128,13 @@ fn plan(units: &[CompilationUnit], symbols: &SymbolTable) -> HashSet<(String, St
             }
         }
     }
-    let mut memo: HashMap<String, Vec<usize>> = HashMap::new();
     let mut late = HashSet::new();
     let names: Vec<String> = classes.keys().cloned().collect();
+    let decl_of = |f: &str| classes.get(f).copied();
+    let parent_of = |f: &str| symbols.classes.get(f).and_then(|c| c.extends_fqn.clone());
     for fqn in names {
-        let deferred = deferred_of(&fqn, &classes, symbols, &mut memo, 0);
+        let deferred = crate::field_init::deferred_of(&fqn, &decl_of, &parent_of, symbols);
+        let observed = crate::field_init::ancestor_facts_of(&fqn, &decl_of, &parent_of, symbols, 0).observes;
         let cd = classes[&fqn];
         for i in deferred {
             let f = &cd.fields[i];
@@ -177,56 +183,15 @@ fn plan(units: &[CompilationUnit], symbols: &SymbolTable) -> HashSet<(String, St
             for b in &cd.init_blocks {
                 scan(b, &[]);
             }
-            if stores_object {
+            // An ancestor's construction that reaches the object may read the
+            // field before this class's constructor body assigns it (ERRATA
+            // E1XX-GAP39f): it has to find the field unset, not a value.
+            if stores_object || observed {
                 late.insert((fqn.clone(), f.name.text.clone()));
             }
         }
     }
     late
-}
-
-fn deferred_of(
-    fqn: &str,
-    classes: &HashMap<String, &ClassDecl>,
-    symbols: &SymbolTable,
-    memo: &mut HashMap<String, Vec<usize>>,
-    depth: usize,
-) -> Vec<usize> {
-    if let Some(v) = memo.get(fqn) {
-        return v.clone();
-    }
-    let Some(cd) = classes.get(fqn).copied() else { return Vec::new() };
-    let ancestor = depth < 64
-        && symbols
-            .classes
-            .get(fqn)
-            .and_then(|c| c.extends_fqn.clone())
-            .is_some_and(|p| !deferred_of(&p, classes, symbols, memo, depth + 1).is_empty() || ancestor_defers(&p, classes, symbols, memo, depth + 1));
-    let is_member = |n: &str| {
-        cd.fields.iter().any(|f| !f.is_static && f.name.text == n)
-            || cd.properties.iter().any(|p| p.name.text == n)
-            || cd.methods.iter().any(|m| m.name.text == n && !m.modifiers.contains(&juxc_ast::FnModifier::Static))
-            || symbols.lookup_field(fqn, n).is_some_and(|(f, _)| !f.is_static)
-            || symbols.lookup_property(fqn, n).is_some_and(|(p, _)| !p.is_static)
-            || symbols.lookup_method(fqn, n).is_some_and(|(m, _)| !m.is_static)
-    };
-    let v = crate::field_init::deferred_indices(&cd.fields, ancestor, &is_member);
-    memo.insert(fqn.to_string(), v.clone());
-    v
-}
-
-fn ancestor_defers(
-    fqn: &str,
-    classes: &HashMap<String, &ClassDecl>,
-    symbols: &SymbolTable,
-    memo: &mut HashMap<String, Vec<usize>>,
-    depth: usize,
-) -> bool {
-    depth < 64
-        && symbols.classes.get(fqn).and_then(|c| c.extends_fqn.clone()).is_some_and(|p| {
-            !deferred_of(&p, classes, symbols, memo, depth + 1).is_empty()
-                || ancestor_defers(&p, classes, symbols, memo, depth + 1)
-        })
 }
 
 /// Whether a slot of type `ty` has a value to hold before its initializer

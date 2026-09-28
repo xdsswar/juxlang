@@ -1667,22 +1667,18 @@ public class Singleton {
 
 **Init blocks.** For initialization logic shared across multiple constructors, see `JUX-MISSING-DEFS-ADDENDUM.md` §M.1 (`init { ... }` blocks).
 
-**Construction order.** Per `ERRATA.md` E2 (and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4), `new C(args)` initializes in this order:
+**Construction order.** Java's (`ERRATA.md` E2, E1XX-GAP39f; `JUX-SEMANTICS-ADDENDUM.md` §S.4.4). `new C(args)` initializes in this order:
 
-1. **`super(args)` resolves first** — the parent's constructor (including its own ancestor chain, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain.)
-2. **Field initializers** of `C` are evaluated in textual order. An initializer may use the object being built: call its methods, read the fields initialized before it, hand `this` out (`Worker w = new Worker(this);`), build an anonymous class or a lambda over it. A field read before its initializer has run holds its type's default value; an initializer that reads one directly whose type has no default value (a class, an interface, a function type, a type parameter) is `E0499` (`ERRATA.md` E139).
-3. **`init { }` blocks** of `C` run, in textual order — before the constructor body. An init block may reference inherited fields because the parent has already constructed.
-4. **The constructor body** runs.
+1. **`super(args)` resolves first** — the parent's construction (its own `super(..)`, field initializers, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain, and `C`'s initializers run once, in the constructor that calls `super`.)
+2. **Field initializers and `init` blocks** of `C` run in textual order, interleaved as they are written. An initializer may use the object being built: call its methods, read the fields initialized before it, hand `this` out (`Worker w = new Worker(this);`), build an anonymous class or a lambda over it. A field read before its initializer has run holds its type's default value; an initializer that reads one directly whose type has no default value (a class, an interface, a function type, a type parameter) is `E0499` (`ERRATA.md` E139).
+3. **The constructor body** runs.
 
-**One deliberate divergence from Java: every field initializer of the whole
-class hierarchy runs before any constructor body.** Java runs the parent's
-constructor body first and only then the child's field initializers, which is
-why a constructor that calls an overridable method sees the child's fields at
-their zero values:
+**A base constructor that calls an override sees the subclass's fields at their
+default values**, as in Java: the subclass's initializers have not run yet.
 
 ```java
 public class Base {
-    public Base() { this.show(); }          // Java: prints 0. Jux: prints 7.
+    public Base() { this.show(); }          // prints 0, as in Java
     public void show() { print(-1); }
 }
 public class Child extends Base {
@@ -1691,15 +1687,11 @@ public class Child extends Base {
 }
 ```
 
-The dispatch is the same in both languages -- `show()` resolves to the child's
-override, because the object being constructed is a `Child`. What differs is
-what it sees. Java's answer is a famous trap: the field is declared with a value
-right there in the source, and the method reads zero anyway. Jux initializes
-every field first, so a constructor never observes a half-built object.
-
-Calling an overridable method from a constructor is still worth avoiding -- the
-override runs before the subclass constructor body has had its say either way --
-but in Jux it can no longer read a value that was never written.
+A subclass field whose type has no default value (a class, an interface, a
+type parameter) holds none yet, and reading it throws `IllegalStateException`
+("field 'v' of Child read before it was initialized") where Java reads `null`
+(`ERRATA.md` E1XX-GAP39f). Calling an overridable method from a constructor is
+worth avoiding for exactly this reason.
 
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.
 

@@ -5225,6 +5225,10 @@ impl RustEmitter {
             vec![MutLend::None; call.args.len()]
         };
         let writes_back = lends.contains(&MutLend::WriteBack);
+        // This call's overload pick, taken now: emitting the receiver and the
+        // arguments below emits their own calls, and each re-arms the pick
+        // for itself (ERRATA E1XX-GAP39f).
+        let own_suffix = self.pending_method_suffix.take();
         self.w.push_str("({ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing
         // an owned handle and dropping the `borrow()` temporary at the `;`.
@@ -5283,7 +5287,8 @@ impl RustEmitter {
             self.w.push_str("__jux_recv.");
         }
         self.w.push_str(&to_rust_ident(&callee.field.text));
-        if let Some(sfx) = self.pending_method_suffix.take() {
+        self.pending_method_suffix = None;
+        if let Some(sfx) = own_suffix {
             self.w.push_str(&sfx);
         }
         if !call.explicit_generic_args.is_empty() {

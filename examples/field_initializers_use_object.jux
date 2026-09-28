@@ -2,10 +2,11 @@
 // an instance method called from one, an earlier field read bare or through
 // `this`, `this` handed out (`new Worker(this)`, a list built from it), an
 // anonymous class or a lambda that reaches the object's members. They run
-// against the finished object, in the order they are written, before any
-// `init` block or constructor body -- every field initializer of the
-// hierarchy first, the root class's first (JUX-LANG-V1 §7.3.1). A field
-// read before its initializer runs holds its default value.
+// against the finished object, in the order they are written with the
+// class's `init` blocks, after its `super(..)` and before the rest of its
+// constructor body, root class first (JUX-LANG-V1 §7.3.1, ERRATA
+// E1XX-GAP39f). A field read before its initializer runs holds its default
+// value.
 
 import rust.std.Vec;
 
@@ -58,7 +59,7 @@ class Owner {
     }
 }
 
-// The hierarchy's field initializers all run before any init block or body.
+// Each class, root first: its initializers and init blocks, then its body.
 class Base {
     int a = Log.note("base.a");
     int b = twice(2) + Log.note("base.b");

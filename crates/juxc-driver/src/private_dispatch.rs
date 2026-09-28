@@ -15,6 +15,9 @@ use juxc_tycheck::private_dispatch::PrivateAccess;
 /// skeletons' range.
 const STAND_IN_INDEX_BASE: u32 = 0x5000_0000;
 
+/// Source indices set aside for one member's stand-ins: one per overload.
+const OVERLOAD_SLOTS: u32 = 256;
+
 /// The placeholder a stand-in's text writes for the member's type.
 const TYPE_PLACEHOLDER: &str = "__JuxPrivT";
 
@@ -22,7 +25,8 @@ const TYPE_PLACEHOLDER: &str = "__JuxPrivT";
 pub(crate) fn apply(units: &mut [CompilationUnit], accesses: &[PrivateAccess]) -> bool {
     let mut any = false;
     for (k, access) in accesses.iter().enumerate() {
-        let index = STAND_IN_INDEX_BASE + k as u32;
+        // Room for each overload's own source index (ERRATA E1XX-GAP39f).
+        let index = STAND_IN_INDEX_BASE + (k as u32) * OVERLOAD_SLOTS;
         for unit in units.iter_mut().filter(|u| !u.is_external) {
             let pkg = unit
                 .package
@@ -83,30 +87,41 @@ fn declare(class: &mut ClassDecl, access: &PrivateAccess, index: u32) -> bool {
         class.fields.extend(parsed.fields);
         return true;
     }
-    let Some(original) = class
+    // One stand-in per private overload, in the order they are declared, all
+    // under the one hidden name: they are an overload group of their own, and
+    // each calls the overload with its own parameter list (ERRATA
+    // E1XX-GAP39f).
+    let originals: Vec<juxc_ast::FnDecl> = class
         .methods
         .iter()
-        .find(|m| m.name.text == *member && !m.modifiers.contains(&juxc_ast::FnModifier::Static))
+        .filter(|m| {
+            m.name.text == *member
+                && !m.modifiers.contains(&juxc_ast::FnModifier::Static)
+                && matches!(m.visibility, juxc_ast::Visibility::Private)
+        })
+        .take(OVERLOAD_SLOTS as usize)
         .cloned()
-    else {
-        return false;
-    };
-    let args = original.params.iter().map(|p| p.name.text.clone()).collect::<Vec<_>>().join(", ");
-    let body = match &original.return_type {
-        ReturnType::Void => format!("this.{member}({args});"),
-        ReturnType::Type(_) => format!("return this.{member}({args});"),
-        ReturnType::AsyncType(_) => format!("return await this.{member}({args});"),
-    };
-    let text = format!("class __JuxPriv {{ void __jux_body() {{ {body} }} }}\n");
-    let Some(parsed) = parse_class(&text, index) else { return false };
-    let Some(stand_in_body) = parsed.methods.into_iter().next().and_then(|m| m.body) else { return false };
-    let mut stand_in = original;
-    stand_in.name.text = hidden;
-    stand_in.visibility = juxc_ast::Visibility::Public;
-    stand_in.annotations.clear();
-    stand_in.body = Some(stand_in_body);
-    class.methods.push(stand_in);
-    true
+        .collect();
+    let mut any = false;
+    for (j, original) in originals.into_iter().enumerate() {
+        let args = original.params.iter().map(|p| p.name.text.clone()).collect::<Vec<_>>().join(", ");
+        let body = match &original.return_type {
+            ReturnType::Void => format!("this.{member}({args});"),
+            ReturnType::Type(_) => format!("return this.{member}({args});"),
+            ReturnType::AsyncType(_) => format!("return await this.{member}({args});"),
+        };
+        let text = format!("class __JuxPriv {{ void __jux_body() {{ {body} }} }}\n");
+        let Some(parsed) = parse_class(&text, index + j as u32) else { continue };
+        let Some(stand_in_body) = parsed.methods.into_iter().next().and_then(|m| m.body) else { continue };
+        let mut stand_in = original;
+        stand_in.name.text = hidden.clone();
+        stand_in.visibility = juxc_ast::Visibility::Public;
+        stand_in.annotations.clear();
+        stand_in.body = Some(stand_in_body);
+        class.methods.push(stand_in);
+        any = true;
+    }
+    any
 }
 
 fn parse_class(text: &str, index: u32) -> Option<ClassDecl> {
