@@ -2205,7 +2205,25 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
     // for type-position resolution). Multi-segment names are taken
     // verbatim as a dot-joined FQN. Falls back to the bare name
     // when neither resolves.
-    let name = resolve_class_name(&n.class_name, env, symbols);
+    let mut name = resolve_class_name(&n.class_name, env, symbols);
+    // A qualified name that is not itself a declaration may be a nested type
+    // written through a qualified owner (`new app.model.Circle.Builder()`):
+    // the type position's reading of it names the lifted class, so the value
+    // and a slot declared with the same spelling agree.
+    if n.class_name.segments.len() > 1 && !symbols.is_type_name(&name) {
+        let written = juxc_ast::TypeRef {
+            name: n.class_name.clone(),
+            generic_args: Vec::new(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: n.class_name.span,
+        };
+        if let Ty::User { name: lifted, .. } = ty_from_ref(&written, env, symbols) {
+            name = lifted;
+        }
+    }
     // Explicit `<...>` on the `new` site wins: `new Box<int>(42)`
     // skips inference entirely.
     if !n.generic_args.is_empty() {

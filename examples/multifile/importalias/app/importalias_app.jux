@@ -90,6 +90,12 @@ public void main() {
     C.Builder b = new C.Builder();
     C built = b.build();
     print(built.r);
+    // Members chained on the nested type reached through the alias, and on
+    // the same type written by its qualified name.
+    print(b.build().r);
+    print(b.build().area());
+    importalias.model.Circle.Builder b2 = new importalias.model.Circle.Builder();
+    print(b2.build().r + b2.r);
 
     Holder h = new Holder();
     h.list.push(h.c);

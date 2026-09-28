@@ -4736,12 +4736,17 @@ the head of a static access). Nothing after it sees an alias.
   (`import rust.g37app.g37ui.Frame as EguiFrame` beside the host's `Frame`),
   UI `import_alias_clash`, `type_alias_cycle`, `type_alias_arity`.
 
-**Known boundary.** Where the alias's target shares its simple name with
-another type of the file, the backend still reads some positions by simple
-name: a member chained on a value whose type is reached only through such a
-name (`b.build().r` for the nested builder of an aliased `Circle` beside the
-file's own `Circle`) names the file's type. Binding the value to a local of
-the aliased type (`C built = b.build();`) works.
+**A nested type through a qualified owner (gap 37c).** Where the alias's
+target shares its simple name with another type of the file, `C.Builder`
+becomes `app.model.Circle.Builder`. The checker read a qualified TYPE only as
+a declaration or as `<first segment>.<nested>`, so that spelling lowered to
+`Unknown`: a slot declared with it took any value, a member chained on the
+value (`b.build().r`) had no type, and the backend read the member on the
+file's own `Circle` (rustc `E0609`). A type position now tries every split,
+longest owner first (`app.model.Circle` + `Builder`, the lifted
+`app.model.Circle__Builder`), as the backend already did, and a `new` with
+such a name has the same type. `examples/multifile/importalias` chains members
+on both spellings.
 
 **Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.4.1 (what an alias binds),
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0443` covers an alias, new `E0498`).
