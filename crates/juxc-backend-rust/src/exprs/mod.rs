@@ -1369,6 +1369,11 @@ impl RustEmitter {
         // an erased type parameter is boxed; one read out of such a slot is
         // unboxed to the type the checker gave it.
         if self.erasure_active() {
+            // A collection crossing the boundary is linked, not boxed (ERRATA
+            // E1XX-COLLREF).
+            if self.emit_linked(expr) {
+                return;
+            }
             let span = Self::erase_key(expr);
             if self.erase_on_emit.contains_key(&span) && self.erasing_now.insert((span, true)) {
                 let mark = self.erase_on_emit.get(&span).cloned().unwrap_or_default();

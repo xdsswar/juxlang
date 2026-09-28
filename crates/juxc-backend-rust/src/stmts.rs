@@ -3870,6 +3870,9 @@ impl RustEmitter {
         // A store into an erased class's type-parameter field from outside its
         // generic body boxes the value (ERRATA E141).
         if let Expr::Field(f) = &a.target {
+            if a.op.is_none() && self.erasure_active() {
+                self.mark_link_field_store(f, &a.value);
+            }
             if a.op.is_none() && self.erased_field_slot(f) {
                 let bounds = self.erased_field_bounds(f);
                 self.erase_on_emit.insert(

@@ -16,8 +16,12 @@
 //! The erased family is closed over the class hierarchy: a class whose
 //! instantiations cannot be closed brings its generic ancestors and
 //! descendants with it, so one erased value is the same Rust type wherever
-//! it is seen. A type parameter with a bound cannot be erased (a boxed value
-//! has none of the bound's members); such a cycle is still `E0438`.
+//! it is seen. An erased value keeps each bound as a dispatch object, through
+//! an adapter when the bound names the parameter (ERRATA E142, E143), and a
+//! collection holding the parameter is linked to one storage on both sides
+//! (E1XX-COLLREF). A bound holding the parameter inside a foreign type that
+//! is neither a Jux class nor a collection has no conversion, and such a
+//! cycle is `E0438`.
 
 use std::collections::BTreeSet;
 
@@ -137,8 +141,9 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     // A bound is carried along with the value (ERRATA E142): the
     // boxing site, which knows the value's type, keeps it as the bound's
     // dispatch object too. A bound that is not a fixed type (one naming a
-    // type parameter, `T extends Comparable<T>`) has no one object to keep,
-    // and a `const` parameter is not a type: those cycles are `E0438`.
+    // type parameter, `T extends Comparable<T>`) is kept through an adapter
+    // (E143), and a collection of the parameter is linked (E1XX-COLLREF); a
+    // foreign type holding it that is neither is `E0438`.
     let grower = fns.iter().next().cloned().or_else(|| closure.unbounded.values().next().cloned()).unwrap_or_default();
     let mut refused: Vec<(String, String, juxc_ast::TypeParam)> = Vec::new();
     for c in &classes {
@@ -279,8 +284,9 @@ fn collect_classes_naming(
 /// bound is kept as a dispatch object when it is a fixed Jux type, and
 /// through an adapter when it is a Jux interface at the declaration's
 /// parameters (`T extends Ranked<T>`), each argument a parameter, a type
-/// with none, or a Jux class or record (erased with the family); a bound
-/// that is another parameter is the identity (ERRATA E143).
+/// with none, a Jux class or record (erased with the family), or a
+/// collection holding the parameter (linked, E1XX-COLLREF); a bound that is
+/// another parameter is the identity (ERRATA E143).
 fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
     if p.is_const() {
         return true;
@@ -296,10 +302,41 @@ fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &S
         (user_interface(symbols, bare).is_some() || user_class(symbols, bare).is_some())
             && b.generic_args.iter().filter_map(|a| a.as_type()).all(|a| {
                 !names_param(a, params)
-                    || (a.generic_args.is_empty() && a.name.segments.len() == 1)
+                    || (a.generic_args.is_empty() && a.name.segments.len() == 1 && a.array_shape.is_none())
                     || a.name.segments.last().is_some_and(|s| user_class(symbols, &s.text).is_some())
+                    || linked(a, params, symbols)
             })
     })
+}
+
+/// Whether `t` holds a type parameter inside a collection (`Vec<T>`,
+/// `HashMap<String, Vec<T>>`, `T[]`): the erased code and the value see two
+/// Rust types for it, and the adapter links the two so they share one
+/// storage (ERRATA E1XX-COLLREF). Every argument of the collection is a
+/// parameter, a type with none, a Jux class (erased with the family), or a
+/// collection of the same kind.
+pub fn linked(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
+    if !names_param(t, params) || t.nullable || t.fn_shape.is_some() || t.ptr_depth > 0 {
+        return false;
+    }
+    let arg_ok = |a: &juxc_ast::TypeRef| {
+        !names_param(a, params)
+            || (a.generic_args.is_empty() && a.name.segments.len() == 1 && a.array_shape.is_none() && !a.nullable)
+            || a.name.segments.last().is_some_and(|s| user_class(symbols, &s.text).is_some())
+            || linked(a, params, symbols)
+    };
+    if let Some(shape) = &t.array_shape {
+        let dynamic = shape.dims.iter().all(|d| matches!(d, juxc_ast::ArrayDim::Dynamic));
+        let mut element = t.clone();
+        element.array_shape = None;
+        return dynamic && shape.dims.len() == 1 && !shape.elem_nullable && arg_ok(&element);
+    }
+    let name = t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+    let is_collection = symbols.is_rust_collection(&name)
+        || t.name.segments.last().is_some_and(|s| symbols.is_rust_collection(&s.text));
+    is_collection
+        && (1..=2).contains(&t.generic_args.len())
+        && t.generic_args.iter().all(|a| a.as_type().is_some_and(arg_ok))
 }
 
 /// `E0438` for each cycle [`plan`] could not erase.
@@ -323,8 +360,8 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
             .collect::<Vec<_>>()
             .join(" & ");
         let what = format!(
-            "bounded by `{bound}`, which holds the parameter inside a type that is not a Jux class (a Rust \
-             collection or foreign type), where an erased value has no conversion that keeps it shared"
+            "bounded by `{bound}`, which holds the parameter inside a foreign type that is neither a Jux \
+             class nor a collection, and an erased value has no conversion into such a type"
         );
         out.push((
             unit,

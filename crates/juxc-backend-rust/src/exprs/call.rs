@@ -4447,8 +4447,13 @@ impl RustEmitter {
         // Only a Jux object can run Jux code that comes back to this one; a
         // collection, a string or a foreign value cannot, and keeps its
         // in-place read.
+        // A type parameter may be one too (`T inner` holding the next level of
+        // a polymorphic-recursion cycle, whose bound method is Jux code).
         let is_jux_object = |span: &juxc_source::Span| {
             matches!(
+                self.expr_types.get(span).cloned().map(crate::exprs::field::strip_nullable),
+                Some(juxc_tycheck::Ty::Param(_))
+            ) || matches!(
                 self.expr_types.get(span).cloned().map(crate::exprs::field::strip_nullable),
                 Some(juxc_tycheck::Ty::User { ref name, .. })
                     if self.lookup_interface_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))

@@ -472,7 +472,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0435`  | Interface not usable as a dyn-dispatched value type: a generic interface used without its type arguments (a generic METHOD no longer blocks it, `ERRATA.md` E136) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | *(retired by `ERRATA.md` E139: a private member reached through a class's dispatch value, where it is visible, has a hidden stand-in; elsewhere it is `E0414`. The number is not reused.)* | Polymorphism, stage 2     |
-| `E0438`  | Polymorphic recursion (a function calling itself at an ever-larger type argument, `pack<Crate<T>>` inside `pack<T>`) whose cycle has a type parameter bounded at a Rust type holding the parameter (`T extends Rel<Vec<T>>`): the erased value would have to be copied into a new list to meet the bound, which breaks the list's sharing | Type system §T.4.6 / `ERRATA.md` E141, E142, E143 |
+| `E0438`  | Polymorphic recursion (a function calling itself at an ever-larger type argument, `pack<Crate<T>>` inside `pack<T>`) whose cycle has a type parameter bounded at a FOREIGN type holding the parameter that is neither a Jux class nor a collection (`T extends Rel<Box<T>>`): the erased value has no conversion into such a type. A collection holding it (`T extends Rel<Vec<T>>`) is linked instead, and compiles | Type system §T.4.6 / `ERRATA.md` E141, E142, E143, E1XX-COLLREF |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
@@ -619,7 +619,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0700`  | `await` requires async context                              | Async §18.1.2                 |
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
-| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections | Async §18.2 / ERRATA E27 |
+| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections; or it WRITES to a captured collection or array, whose worker-side copy would drop the write | Async §18.2 / ERRATA E27, E1XX-COLLREF |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
 | `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |

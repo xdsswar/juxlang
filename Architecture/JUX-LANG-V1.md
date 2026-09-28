@@ -1160,6 +1160,20 @@ lifting the collection out into a second name loses the aliasing. This is the
 one place §6.5.1 does not reach, and it is called out here rather than left to
 be discovered.
 
+**A worker's copy is read-only.** A `Worker.spawn` closure takes a captured
+collection or array by value (JUX-ASYNC-ADDENDUM §18.2), because a handle
+cannot cross threads. A copy that is only read cannot be told from the
+original, so the closure may read it freely; a write to it would be lost
+without a word, so it is `E0702`. Return what the worker computes, or ask for
+the copy (`var mine = xs.clone();`) and write that (`ERRATA.md` E1XX-COLLREF).
+
+**Across erasure the collection is still one collection.** A function on a
+polymorphic-recursion cycle is compiled by erasure (JUX-TYPE-SYSTEM-ADDENDUM
+§T.4.6), so its `Vec<T>` and a caller's `Vec<Item>` are two Rust types. Where
+one meets the other -- an argument, a return, a field, a bound's method -- the
+two are linked to one storage, never copied: a write through either is seen
+through the other (`ERRATA.md` E1XX-COLLREF).
+
 #### 6.5.2. Arrays Are Reference Types
 
 **An array is a reference, on exactly the same terms as a collection (§6.5.1)
@@ -1184,9 +1198,9 @@ arrays silently are not would make ordinary lines of code do nothing at all,
 with no diagnostic. An array is the most primitive aggregate the language has,
 and it should not be the one that behaves differently.
 
-**`clone()` copies**, shallowly, as it does for a collection: a new array of
-the same length holding the same elements.
-
+**`clone()` copies**, shallowly, as it does for a collection: a new array of
+the same length holding the same elements.
+
 **A nullable array is not an array of nullables.** The `?` binds where it is
 written: before the brackets it is the ELEMENT's, after them it is the ARRAY's.
 
