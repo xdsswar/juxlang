@@ -1,0 +1,7 @@
+// Two imports bind one alias to two different types: `Seq` cannot mean both.
+import rust.std.Vec as Seq;
+import rust.std.HashMap as Seq;
+
+public void main() {
+    print(1);
+}

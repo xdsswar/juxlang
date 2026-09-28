@@ -1617,6 +1617,12 @@ pub fn expand_alias(
         // back into `expand_alias` only for top-level matches, so
         // a target that itself references another alias produces
         // a `Ty::User` we then peel below).
+        // The wrong number of type arguments is `E0443`, reported where the
+        // alias is expanded (`crate::type_aliases`); the use names no type
+        // the checker could compare anything with.
+        if !args_cursor.is_empty() && args_cursor.len() != alias.generic_params.len() {
+            return Some(Ty::Unknown);
+        }
         let lowered_target = ty_from_ref(&alias.target, &scratch, symbols);
         let substituted = if alias.generic_params.is_empty() || args_cursor.is_empty() {
             lowered_target

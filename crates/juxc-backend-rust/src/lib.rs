@@ -3585,7 +3585,7 @@ fn compute_downcast_targets(units: &[juxc_ast::CompilationUnit]) -> HashSet<Stri
 fn cast_targets_pattern(p: &juxc_ast::Pattern, out: &mut HashSet<String>) {
     match p {
         juxc_ast::Pattern::TypeBind { type_name, .. } => {
-            out.insert(type_name.text.clone());
+            out.insert(juxc_ast::type_pattern_bare(&type_name.text).to_string());
         }
         // `case Circle(var r)` over a `Shape` tests the runtime type the way
         // `case Circle c` does (LANG-V1 §7.5), through the same hook. A name
@@ -8074,6 +8074,20 @@ mod jux_stack_overflow {
     /// normal type-emission path so primitive/generic/wildcard
     /// shapes pick up their usual mappings.
     pub(crate) fn emit_type_alias_decl(&mut self, alias: &juxc_ast::TypeAliasDecl) {
+        // Every use of a program's alias was expanded to its target before
+        // checking (gap 37), so the Rust program names none of them. An alias
+        // of an INTERFACE would have to be its value form (a trait is not a
+        // type), so it is left out: nothing refers to it.
+        let target_is_interface = alias.target.fn_shape.is_none()
+            && alias.target.array_shape.is_none()
+            && self
+                .lookup_interface_by_bare_or_fqn(
+                    &alias.target.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."),
+                )
+                .is_some();
+        if target_is_interface {
+            return;
+        }
         self.w.emit_indent();
         if !self.symbols.package.is_empty() || self.workspace_mode {
             self.emit_visibility(alias.visibility);

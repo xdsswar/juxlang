@@ -1,0 +1,6 @@
+// An interface the app reaches only through the alias `S`.
+package importalias.model;
+
+public interface Shape {
+    double area();
+}

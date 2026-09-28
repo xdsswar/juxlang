@@ -2216,6 +2216,14 @@ pub fn build_workspace(
     // Second pass: build per-unit name-resolution contexts now that
     // every class/record/etc. is registered under its FQN.
     table.units = build_unit_contexts(units, &table);
+    // A supertype written through an import alias (`class Sq implements S`
+    // with `import app.model.Shape as S;`) is recorded as the type it names:
+    // the subtype relation reads supertypes by name, and `S` names nothing
+    // outside the unit that wrote it (gap 37).
+    resolve_aliased_supertypes(&mut table);
+    // A `type` alias that stands for itself names nothing, and expanding one
+    // would never end.
+    break_type_alias_cycles(&mut table, diagnostics);
     // Third pass: resolve every class's `extends` / `implements`
     // TypeRefs into FQN strings using the declaring unit's
     // bare→FQN map. Stored on `ClassSig::extends_fqn` so chain
@@ -2936,6 +2944,130 @@ fn resolve_type_ref_to_fqn(
         return Some(joined);
     }
     None
+}
+
+/// `E0498` for every program `type` alias whose target leads back to itself
+/// through aliases (`type A = B; type B = A;`), each reported at its own
+/// declaration. The aliases of a cycle are then taken out of the table: a
+/// use of one is an unknown type from here on, which is what it is, rather
+/// than an expansion that never ends.
+fn break_type_alias_cycles(table: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    // The alias an alias's target names, resolved where it was declared.
+    let next = |table: &SymbolTable, fqn: &str| -> Option<String> {
+        let alias = table.aliases.get(fqn)?;
+        if alias.target.fn_shape.is_some() || alias.target.array_shape.is_some() {
+            return None;
+        }
+        let written: String =
+            alias.target.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+        if table.aliases.contains_key(&written) && written.contains('.') {
+            return Some(written);
+        }
+        let ctx = alias.unit_index.and_then(|i| table.units.get(i));
+        if let Some(fqn) = ctx.and_then(|c| c.unqualified.get(&written)) {
+            return table.aliases.contains_key(fqn).then(|| fqn.clone());
+        }
+        let pkg = fqn_package(fqn).unwrap_or("");
+        let local = if pkg.is_empty() { written.clone() } else { format!("{pkg}.{written}") };
+        if table.aliases.contains_key(&local) {
+            return Some(local);
+        }
+        table.aliases.contains_key(&written).then_some(written)
+    };
+    let mut cyclic: Vec<String> = Vec::new();
+    let mut keys: Vec<String> = table.aliases.keys().cloned().collect();
+    keys.sort();
+    for start in &keys {
+        let mut cur = start.clone();
+        for _ in 0..=keys.len() {
+            let Some(n) = next(table, &cur) else { break };
+            if n == *start {
+                cyclic.push(start.clone());
+                break;
+            }
+            cur = n;
+        }
+    }
+    for fqn in &cyclic {
+        let Some(alias) = table.aliases.get(fqn) else { continue };
+        if alias.unit_index.is_some_and(|i| table.units.get(i).is_some_and(|c| is_foreign_stub_package(&c.package.join("."))))
+        {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0498_TypeAliasCycle,
+                format!(
+                    "type alias `{}` stands for itself: its target leads back to it through other \
+                     aliases, so it names no type -- make one of them name a class, record, enum, \
+                     interface or primitive",
+                    fqn_bare(fqn),
+                ),
+            )
+            .with_span(alias.span),
+        );
+    }
+    for fqn in cyclic {
+        table.aliases.remove(&fqn);
+    }
+}
+
+/// Rewrite every supertype of the signature tables whose head is an import
+/// ALIAS of its declaring unit as the fully-qualified type it names.
+///
+/// The alias binds a simple name in one unit only, and the subtype relation
+/// and the obligation checks read a supertype by its written name, anywhere.
+/// A name that is not an alias is left as written.
+fn resolve_aliased_supertypes(table: &mut SymbolTable) {
+    let resolve = |t: &mut TypeRef, ctx: &UnitContext| {
+        let [head] = t.name.segments.as_slice() else { return };
+        let Some(fqn) = ctx.unqualified.get(&head.text) else { return };
+        if fqn_bare(fqn) == head.text {
+            return;
+        }
+        let span = head.span;
+        t.name.segments = fqn.split('.').map(|s| juxc_ast::Ident { text: s.to_string(), span }).collect();
+    };
+    let ctx_of = |table: &SymbolTable, fqn: &str| -> Option<UnitContext> {
+        let idx = *table.decl_unit.get(fqn)?;
+        table.units.get(idx).cloned()
+    };
+    let keys: Vec<String> = table.classes.keys().cloned().collect();
+    for k in keys {
+        let Some(ctx) = ctx_of(table, &k) else { continue };
+        if let Some(c) = table.classes.get_mut(&k) {
+            for t in c.extends.iter_mut().chain(c.implements.iter_mut()) {
+                resolve(t, &ctx);
+            }
+        }
+    }
+    let keys: Vec<String> = table.records.keys().cloned().collect();
+    for k in keys {
+        let Some(ctx) = ctx_of(table, &k) else { continue };
+        if let Some(r) = table.records.get_mut(&k) {
+            for t in &mut r.implements {
+                resolve(t, &ctx);
+            }
+        }
+    }
+    let keys: Vec<String> = table.enums.keys().cloned().collect();
+    for k in keys {
+        let Some(ctx) = ctx_of(table, &k) else { continue };
+        if let Some(e) = table.enums.get_mut(&k) {
+            for t in &mut e.implements {
+                resolve(t, &ctx);
+            }
+        }
+    }
+    let keys: Vec<String> = table.interfaces.keys().cloned().collect();
+    for k in keys {
+        let Some(ctx) = ctx_of(table, &k) else { continue };
+        if let Some(i) = table.interfaces.get_mut(&k) {
+            for t in &mut i.extends {
+                resolve(t, &ctx);
+            }
+        }
+    }
 }
 
 /// Apply a single `import …;` declaration to the bare→FQN map.
@@ -4315,14 +4447,15 @@ fn interface_closure(
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The name as written, qualified or not: `implements app.model.Shape`
+    // is that interface, whatever a same-named one nearer by is.
+    let written = |t: &TypeRef| -> Option<String> {
+        (!t.name.segments.is_empty())
+            .then(|| t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+    };
     let mut queue: std::collections::VecDeque<(String, String)> = implements
         .iter()
-        .filter_map(|t| {
-            t.name
-                .segments
-                .last()
-                .map(|s| (s.text.clone(), from_pkg.to_string()))
-        })
+        .filter_map(|t| written(t).map(|n| (n, from_pkg.to_string())))
         .collect();
     for (n, _) in &queue {
         seen.insert(n.clone());
@@ -4346,9 +4479,9 @@ fn interface_closure(
             continue;
         };
         for parent in iface.extends.clone() {
-            let Some(seg) = parent.name.segments.last() else { continue };
-            if seen.insert(seg.text.clone()) {
-                queue.push_back((seg.text.clone(), iface_pkg.clone()));
+            let Some(name) = written(&parent) else { continue };
+            if seen.insert(name.clone()) {
+                queue.push_back((name, iface_pkg.clone()));
             }
         }
     }

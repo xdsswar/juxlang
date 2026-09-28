@@ -175,13 +175,13 @@ impl RustEmitter {
             let mut sealed_class_pattern = false;
             let runtime_type_test = match (&arm.pattern, &dyn_scrutinee) {
                 (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, _) if any_scrutinee => {
-                    let target = crate::analysis::synth_iface_type_ref(&type_name.text, type_name.span);
+                    let target = crate::analysis::synth_iface_type_ref(juxc_ast::type_pattern_bare(&type_name.text), type_name.span);
                     Some((self.any_getter_text("__jux_subject", &target), to_rust_ident(&binder.text)))
                 }
                 (juxc_ast::Pattern::TypeBind { type_name, binder, .. }, Some(source))
-                    if &type_name.text != source =>
+                    if juxc_ast::type_pattern_bare(&type_name.text) != source =>
                 {
-                    Some((format!("__jux_subject.__jux_as_{}()", type_name.text), to_rust_ident(&binder.text)))
+                    Some((format!("__jux_subject.__jux_as_{}()", juxc_ast::type_pattern_bare(&type_name.text)), to_rust_ident(&binder.text)))
                 }
                 (juxc_ast::Pattern::EnumVariant { span, .. }, Some(_))
                     if self.symbols.record_patterns.contains_key(span) =>
@@ -499,7 +499,7 @@ impl RustEmitter {
         // so the arm Rust asks for can never run.
         let tests_runtime_type = dyn_scrutinee.as_ref().is_some_and(|source| {
             s.arms.iter().any(|arm| match &arm.pattern {
-                juxc_ast::Pattern::TypeBind { type_name, .. } => &type_name.text != source,
+                juxc_ast::Pattern::TypeBind { type_name, .. } => juxc_ast::type_pattern_bare(&type_name.text) != source,
                 juxc_ast::Pattern::EnumVariant { span, .. } => {
                     self.symbols.record_patterns.contains_key(span)
                         || self.sealed_subclass_pattern(&arm.pattern).is_some()
@@ -606,7 +606,7 @@ impl RustEmitter {
     /// a sealed hierarchy's subclass pattern (`Red(var s)`).
     fn is_runtime_type_alt(&self, alt: &juxc_ast::Pattern, source: &str) -> bool {
         match alt {
-            juxc_ast::Pattern::TypeBind { type_name, .. } => type_name.text != source,
+            juxc_ast::Pattern::TypeBind { type_name, .. } => juxc_ast::type_pattern_bare(&type_name.text) != source,
             juxc_ast::Pattern::EnumVariant { span, .. } => {
                 self.symbols.record_patterns.contains_key(span)
                     || self.sealed_subclass_pattern(alt).is_some()
@@ -755,7 +755,7 @@ impl RustEmitter {
         for alt in alts {
             match alt {
                 juxc_ast::Pattern::TypeBind { type_name, binder, .. } => tests.push(RuntimeTypeAlt {
-                    getter: format!("__jux_subject.__jux_as_{}()", type_name.text),
+                    getter: format!("__jux_subject.__jux_as_{}()", juxc_ast::type_pattern_bare(&type_name.text)),
                     destructure: to_rust_ident(&binder.text),
                     compares: String::new(),
                     refutable: false,

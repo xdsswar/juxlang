@@ -796,6 +796,10 @@ pub enum Code {
     /// clean, built, printed nothing and never exited. There is no value an
     /// initializer cycle can produce that is right, so it is an error.
     E0497_StaticInitializerCycle,
+    /// E0498 -- A `type` alias that stands for itself, directly or through
+    /// other aliases (`type A = B; type B = A;`): it names no type. Expanding
+    /// one used to overflow the checker's stack.
+    E0498_TypeAliasCycle,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -1467,6 +1471,7 @@ impl Code {
             Code::E0495_EnumConstructorShape     => "E0495",
             Code::E0496_EnumArgumentsWithoutConstructor => "E0496",
             Code::E0497_StaticInitializerCycle   => "E0497",
+            Code::E0498_TypeAliasCycle           => "E0498",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",

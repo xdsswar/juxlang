@@ -1,0 +1,3 @@
+package importalias.model;
+
+public enum Color { RED, GREEN }

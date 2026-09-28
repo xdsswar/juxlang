@@ -42,6 +42,7 @@ mod patterns;
 mod stmts;
 mod types;
 pub mod visit;
+pub mod visit_mut;
 
 pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};
@@ -63,7 +64,7 @@ pub use exprs::{
     TernaryExpr, TypeTestExpr, UnaryExpr, UnaryOp,
 };
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};
-pub use patterns::{Pattern, SwitchArm, SwitchBody, SwitchExpr};
+pub use patterns::{type_pattern_bare, Pattern, SwitchArm, SwitchBody, SwitchExpr};
 pub use stmts::{
     AssignStmt, Block, CatchClause, DoWhileStmt, ElseBranch, FinalKw, ForCStmt, ForEachStmt,
     IfCfgStmt, IfStmt,

@@ -1,0 +1,9 @@
+// `Dict` takes one type argument.
+import rust.std.HashMap;
+
+type Dict<V> = HashMap<String, V>;
+
+public void main() {
+    Dict<String, int> d = new Dict<String, int>();
+    print(d.len());
+}

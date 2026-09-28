@@ -15261,7 +15261,7 @@ fn collect_sealed_subclasses_covered(
         // captures the matched value while still narrowing the
         // arm to exactly the named subclass.
         Pattern::TypeBind { type_name, .. } => {
-            out.insert(type_name.text.clone());
+            out.insert(juxc_ast::type_pattern_bare(&type_name.text).to_string());
         }
         // Or-pattern coverage is the union of its alternatives.
         Pattern::Or(alts, _) => {

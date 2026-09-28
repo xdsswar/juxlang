@@ -476,6 +476,9 @@ where
     let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     // Flag `.jux.d` units external (§G.9.1) so the lowering step skips them.
     stubs::mark_external_units(&mut units, &sources);
+    // An import alias is written back as the type it names (gap 37).
+    juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
 
     // Enforce the source-layout rule (§B.1): a file's `package` must match its
     // path under `src/`. Catching a stale layout here turns what would be a
@@ -500,6 +503,9 @@ where
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
+    // A supertype written by its qualified name reaches the backend as one
+    // name it can look up (gap 37).
+    juxc_tycheck::aliases::pack_qualified_supertypes(&mut units, &mut typed.symbols);
 
     // `.jux.d` declaration stubs are trusted, signature-only views of foreign
     // APIs — never validated. Drop any diagnostic they produced so the build
@@ -580,6 +586,9 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
         .collect();
     let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     stubs::mark_external_units(&mut units, &sources);
+    // An import alias is written back as the type it names (gap 37).
+    juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources, cfg.bin_entries()));
     // §3.1: one public type per file, named like the file.
@@ -591,6 +600,9 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
+    // A supertype written by its qualified name reaches the backend as one
+    // name it can look up (gap 37).
+    juxc_tycheck::aliases::pack_qualified_supertypes(&mut units, &mut typed.symbols);
     // Trusted foreign-API stubs are never validated — drop their diagnostics.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
     // W0820 and the lint levels, as in the main compile path.
@@ -723,6 +735,9 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // tagged with its index so the LSP publishes against the right Url.
     let mut units = lex_parse_resolve(&sources, &mut diagnostics, cfg);
     stubs::mark_external_units(&mut units, &sources);
+    // An import alias is written back as the type it names (gap 37).
+    juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
 
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise
     // E0301 in the editor too, pointing at the offending `package` line.

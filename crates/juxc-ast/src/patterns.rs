@@ -182,3 +182,11 @@ impl Pattern {
         }
     }
 }
+
+/// The simple name of the type a `case T t` pattern tests. The type may be
+/// written by its qualified name (`case app.model.Circle c`), which the
+/// pattern keeps in its one name; the runtime type test and its generated
+/// hooks are keyed by the class's simple name.
+pub fn type_pattern_bare(written: &str) -> &str {
+    written.rsplit('.').next().unwrap_or(written)
+}

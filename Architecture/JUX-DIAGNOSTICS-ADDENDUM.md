@@ -477,7 +477,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
 | `E0442`  | Reference cast / type-test between unrelated types  | Polymorphism                   |
-| `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
+| `E0443`  | Malformed explicit type-argument list: a call's (`id<int>(5)`), a class's, or a generic `type` alias used with the wrong number of type arguments | Generics (Gap 5) / `ERRATA.md` E1XX-GAP37b |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
 | `E0446`  | Generic argument violates its parameter's `extends` bound, or a foreign method's bound on the receiver's element type (`sort` needs `operator<=>`) | Type system §T.2.2, Bindgen §G.6.4.4 |
@@ -528,6 +528,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0495`  | An enum constructor does more than give each field its value once | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0497`  | A cycle among static-field initializers: no order initializes them | Semantics §S.4.2 / `ERRATA.md` E89 |
+| `E0498`  | A `type` alias that stands for itself, directly or through other aliases (`type A = B; type B = A;`): it names no type | Type system §T.1 / `ERRATA.md` E1XX-GAP37b |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |

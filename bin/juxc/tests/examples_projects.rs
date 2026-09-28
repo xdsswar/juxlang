@@ -183,6 +183,29 @@ fn mf_alias() {
 }
 
 #[test]
+fn mf_import_alias() {
+    // `import x.y.Z as W` everywhere a plain import works (gap 37): every
+    // place a type is named, through aliases of a user package and of
+    // `rust.std`, where the alias is the only name the type has in the file
+    // (the file declares a `Circle` of its own), two aliases of one type, and
+    // an alias taking a name the standard library also uses.
+    let got = run("mf_import_alias", &[
+        "examples/multifile/importalias/app/importalias_app.jux",
+        "examples/multifile/importalias/model/Circle.jux",
+        "examples/multifile/importalias/model/Shape.jux",
+        "examples/multifile/importalias/model/Color.jux",
+        "examples/multifile/importalias/model/Pair.jux",
+    ]);
+    assert_eq!(
+        got,
+        [
+            "3.0", "1.0", "0", "12.0", "2.0", "square", "other", "green", "x2", "1", "8.5", "true", "6.0", "2.0",
+            "1", "8.0", "7", "1",
+        ],
+    );
+}
+
+#[test]
 fn mf_app() {
     let got = run("mf_app", &["examples/multifile/app/main/app.jux", "examples/multifile/com/lib/Greeter.jux"]);
     assert_eq!(

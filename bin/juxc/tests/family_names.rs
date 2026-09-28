@@ -176,6 +176,41 @@ public void main() {
     assert_eq!(build_and_run(&dir), "panel side fill=1,2,3 margin=0\nx\ntitle=\n");
 }
 
+/// The member's `Frame` imported under an alias, beside the host's `Frame`
+/// imported by its own name: each name means its own type everywhere, the
+/// closure's parameter included.
+#[test]
+fn an_alias_names_the_members_frame_beside_the_hosts() {
+    let dir = case_dir(
+        "alias",
+        r#"
+import rust.g37app.Frame;
+import rust.g37app.g37ui.Frame as EguiFrame;
+import rust.g37app.Ui;
+import rust.g37app.Panel;
+import rust.g37app.Color;
+import rust.g37app.run;
+
+EguiFrame dark() {
+    return new EguiFrame().fill(Color.DARK);
+}
+
+void title(Frame window) {
+    window.set_title("aliased");
+}
+
+public void main() {
+    print(run((ui, window) -> {
+        title(window);
+        EguiFrame framed = dark().inner_margin((byte) 2);
+        Panel.left("side").frame(framed).show(ui, (side) -> side.label("x"));
+    }));
+}
+"#,
+    );
+    assert_eq!(build_and_run(&dir), "panel side fill=27,27,27 margin=2\nx\ntitle=aliased\n");
+}
+
 /// Importing both by their simple name is `E0303`, naming both.
 #[test]
 fn importing_both_frames_is_e0303() {
