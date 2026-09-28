@@ -425,7 +425,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
 | `E0302`  | Import of a type from the importing file's own package | Build system §B.4 / `ERRATA.md` E25 |
 | `E0308`  | Dependency cycle between modules (`jux.toml` packages) | Build system §B.4.6 / ERRATA E41 |
-| `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
+| `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); import only one, alias one (`as`) or use the FQN. Also a USE of a simple name two wildcard imports bring for different types (JLS 6.5.5.1; an unused one is no error) | Build system §B.4.1, §B.4.2 / `ERRATA.md` E1XX-GAP37 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Two entry points in one binary: both implicit forms, or an `@entry` beside a `main` | Entry Points §E.6 |

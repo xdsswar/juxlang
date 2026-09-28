@@ -18,9 +18,9 @@
 //!   local, parameter or field of that name is in scope, which then is what
 //!   the name means (JLS 6.4.2).
 //!
-//! A generic parameter of the same name shadows the alias in a type. The
-//! import itself stays, so the unit's name table still knows the alias for
-//! anything that reads it (the editor, a diagnostic).
+//! A generic parameter of the same name shadows the alias in a type. Once
+//! every use is rewritten the alias's import is removed; an alias whose name
+//! conflicts with another binding is left as written for `E0303`.
 
 use std::collections::HashMap;
 
@@ -57,9 +57,15 @@ pub fn expand_import_aliases(units: &mut [CompilationUnit]) {
         // to report (`E0303`); it is left exactly as written.
         let pkg_types = declared.get(&unit_package(unit)).cloned().unwrap_or_default();
         let bindings = import_bindings(unit);
+        // Only an alias of a TYPE is rewritten: a function's or a constant's
+        // (`import jux.std.testing.assertThrows as expectThrown;`) is a call
+        // the unit's name table already resolves, the compiler's intrinsics
+        // included.
         aliases.retain(|alias, path| {
             let joined = path.join(".");
-            !pkg_types.contains(alias) && bindings.iter().all(|(b, t)| b != alias || *t == joined)
+            let (simple, pkg) = (path.last().cloned().unwrap_or_default(), path[..path.len() - 1].join("."));
+            let is_type = declared.get(&pkg).is_some_and(|names| names.contains(&simple));
+            is_type && !pkg_types.contains(alias) && bindings.iter().all(|(b, t)| b != alias || *t == joined)
         });
         if aliases.is_empty() {
             continue;

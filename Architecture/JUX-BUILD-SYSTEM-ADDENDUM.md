@@ -365,9 +365,13 @@ If no match is found, emit `E0301` ("name not found"). If multiple matches exist
 
 `import com.example.foo.*;` brings in every public top-level declaration of the named package — but **not** its sub-packages. To import sub-packages, name them explicitly.
 
+A wildcard is the weakest way a simple name is bound (JLS 6.4.1): a type the file's package declares and a single-type import both win over it. When two wildcards bring one simple name for DIFFERENT types (`import rust.eframe.*;` and `import rust.eframe.egui.*;` both bring a `Frame`), the name is ambiguous, and a USE of it (a type, a `new`, a static access) is `E0303` naming both candidates, as Java's "reference is ambiguous" (JLS 6.5.5.1); importing both is not an error by itself. Two spellings of ONE type (a crate family's nested alias `rust.eframe.egui.Ui` and `rust.eframe.Ui`) are not two candidates. Two single-type imports that bind one name to different types are `E0303` at the second import (ERRATA E1XX-GAP37).
+
 ### B.4.3. Renamed Imports
 
 `import com.example.foo.Bar as MyBar;` introduces `MyBar` into the current scope as an alias. `Bar` is not introduced. Renames apply only to the importing file.
+
+The alias names its target in every position a simple name can: a declaration, a supertype, a `new`, a static call or field, a nested type (`MyBar.Inner`), a generic argument, an array, a lambda parameter, a cast, a type test and a `switch` pattern. A local, parameter or field called `MyBar` is what the name means in an expression, and a generic parameter called `MyBar` in a type. The compiler rewrites each use as the target before resolving anything (ERRATA E1XX-GAP37b), so the alias and the name it stands for can never disagree.
 
 ### B.4.4. Grouped Imports
 
