@@ -1,0 +1,11 @@
+2.5
+not a number: abc (invalid float literal)
+-1.0
+illegal argument: cannot parse integer from empty string
+file not found
+an IOException too, with a message: true
+the library's own value, kind entity not found
+encoding: invalid utf-8 sequence of 1 bytes from index 0
+library std: cannot convert float seconds to Duration: value is negative
+invalid digit found in string
+done

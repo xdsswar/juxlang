@@ -1,7 +1,7 @@
-// Recursion that never stops overflows the stack. On Windows the report is
-// in Jux terms (GAPS.md gap 33); elsewhere the runtime's own report still
-// stands. `bin/jux/tests/runtime_failures.rs` runs it; the output corpus
-// does not, since it differs by platform.
+// Recursion that never stops overflows the stack. The report is in Jux
+// terms on Windows (GAPS.md gap 33) and on Linux and macOS (gap 38).
+// `bin/jux/tests/runtime_failures.rs` runs it; the output corpus does not,
+// since the report goes to stderr with no `.jux` line.
 
 int depth(int n) {
     if (n < 0) {

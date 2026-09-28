@@ -6919,3 +6919,76 @@ fn a_value_representation_the_program_cannot_have_is_reported() {
     let rust = emit(src);
     assert!(!rust.contains("// JUX-REP: inline\n#[derive(Clone)]\nstruct Seen"), "{rust}");
 }
+
+/// The prelude's text between the start of `fn <from>` and the end of `fn <to>`.
+fn prelude_fns(rust: &str, from: &str, to: &str) -> String {
+    let start = rust.find(&format!("fn {from}(")).expect("the first function");
+    let last = rust[start..].find(&format!("fn {to}(")).expect("the last function") + start;
+    let end = rust[last..].find("\n}\n").expect("its end") + last + 3;
+    rust[start..end].to_string()
+}
+
+/// A foreign value's `Debug` text in Jux's form (gap 38): the prelude's
+/// renderer, compiled on its own and run over hand-written cases. Struct
+/// syntax is a record's, cells and one-value wrappers print what they hold,
+/// `Some(x)` is `x` and a nested `None` is `null`, strings lose their quotes
+/// in a field and keep them in a collection, and nothing inside quotes is
+/// rewritten.
+#[test]
+fn foreign_debug_text_is_laid_out_the_jux_way() {
+    let rust = emit("public void main() {}\n");
+    let renderer = prelude_fns(&rust, "jux_debug_foreign", "jux_dbg_atom");
+    let unescape = prelude_fns(&rust, "jux_unescape_debug", "jux_unescape_debug");
+    let cases: &[(&str, &str, &str)] = &[
+        ("std::sync::once_lock::OnceLock<i64>", "OnceLock(<uninit>)", "null"),
+        ("std::sync::once_lock::OnceLock<i64>", "OnceLock(5)", "5"),
+        ("app::Foo", r#"Foo { a: 1, b: "x", c: None, d: Some(2) }"#, "Foo(a: 1, b: x, c: null, d: 2)"),
+        ("app::Foo", r#"Foo { tags: ["a", "b"], map: {"k": Some(1)} }"#, r#"Foo(tags: ["a", "b"], map: {"k": 1})"#),
+        ("app::Foo", r#"Foo { s: "Some(1) and None, { x: 1 }" }"#, "Foo(s: Some(1) and None, { x: 1 })"),
+        (
+            "app::Foo",
+            r#"Foo { cell: RefCell { value: 3 }, lock: Mutex { data: "m", poisoned: false, .. }, n: Cell { value: 4 }, _p: PhantomData<alloc::string::String>, .. }"#,
+            "Foo(cell: 3, lock: m, n: 4)",
+        ),
+        ("app::Mode", "None", "None"),
+        ("app::Holder", "Holder { mode: None }", "Holder(mode: null)"),
+        ("std::path::PathBuf", r#""a\\b""#, r"a\b"),
+        ("app::Unit", "Unit", "Unit"),
+        ("app::Pair", r#"Pair(1, "two")"#, "Pair(1, two)"),
+        ("core::time::Duration", "1.5s", "1.5s"),
+        ("core::ops::range::Range<isize>", "1..5", "1..5"),
+        ("app::Shape", "Circle { r: 1.0 }", "Circle(r: 1.0)"),
+        ("app::Opaque", "Opaque { .. }", "Opaque"),
+        ("alloc::vec::Vec<app::Foo>", r#"[Foo { a: None }, Foo { a: Some("q") }]"#, "[Foo(a: null), Foo(a: q)]"),
+        ("core::option::Option<app::Mode>", "None", "null"),
+        ("app::Wrapped", "Wrapped(Wrapping(7), Reverse(8), OnceCell(<uninit>))", "Wrapped(7, 8, null)"),
+        ("app::Pathy", "Pathy { inner: std::path::PathBuf }", "Pathy(inner: PathBuf)"),
+        ("app::Chars", r#"Chars { c: 'x', list: ['y'] }"#, "Chars(c: x, list: ['y'])"),
+    ];
+    let mut program = String::from("#![allow(dead_code)]\n");
+    program.push_str(&renderer);
+    program.push('\n');
+    program.push_str(&unescape);
+    program.push_str("\nfn main() {\n    let mut bad = 0;\n");
+    for (name, text, want) in cases {
+        program.push_str(&format!(
+            "    let got = jux_debug_foreign({name:?}, {text:?});\n    if got != {want:?} {{ bad += 1; eprintln!(\"{{:?}} -> {{:?}}, want {{:?}}\", {text:?}, got, {want:?}); }}\n"
+        ));
+    }
+    program.push_str("    std::process::exit(bad);\n}\n");
+    let dir = std::env::temp_dir().join(format!("juxc_foreign_debug_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("render.rs");
+    std::fs::write(&src, &program).unwrap();
+    let exe = dir.join(if cfg!(windows) { "render.exe" } else { "render" });
+    let built = std::process::Command::new("rustc")
+        .args(["--edition", "2021", "-o"])
+        .arg(&exe)
+        .arg(&src)
+        .output()
+        .expect("rustc");
+    assert!(built.status.success(), "{}\n{program}", String::from_utf8_lossy(&built.stderr));
+    let ran = std::process::Command::new(&exe).output().expect("the renderer");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+}

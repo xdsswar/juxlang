@@ -14,6 +14,7 @@ mod calls;
 mod capabilities;
 mod code_action;
 mod completion;
+mod crate_doc;
 mod definition;
 mod diagnostics;
 mod doc;

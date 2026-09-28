@@ -46,15 +46,23 @@ pub(crate) fn hover(doc: &Document, uri: &Url, pos: Position) -> Option<Hover> {
                     std::fs::read_to_string(path).ok()?
                 };
                 let found = doc_comment_before(&decl_text, span.start as usize);
-                decl_file = decl_text;
-                found
+                // A crate stub's doc is the crate's text, written for Rust:
+                // it is shown rewritten in Jux terms, and held to the leak
+                // detector on its own (gap 38). Only a Jux file's own doc
+                // comment counts as text the programmer can open and read.
+                if crate::crate_doc::is_crate_stub(path) {
+                    found.and_then(|d| crate::crate_doc::shown(&d, &[&text]))
+                } else {
+                    decl_file = decl_text;
+                    found
+                }
             });
             if let Some(doc_line) = decl_doc.or_else(|| doc_comment_before(&text, word.start)) {
                 value.push_str("\n\n");
                 value.push_str(&doc_line);
             }
-            // The one exit a hover leaves by (gap 33): a doc comment is the
-            // declaring file's own text, the signature is the checker's.
+            // The one exit a hover leaves by (gap 33): a Jux file's doc
+            // comment is that file's own text, the signature is the checker's.
             return crate::leak_guard::hover(
                 Some(Hover {
                     contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),

@@ -172,6 +172,12 @@ pub(crate) fn doc_comment_before(text: &str, name_start: usize) -> Option<String
         // Previous line's range [prev_start, cursor-1) (cursor-1 is its '\n').
         let prev_nl = text[..cursor - 1].rfind('\n').map(|p| p + 1).unwrap_or(0);
         let line = text[prev_nl..cursor - 1].trim();
+        // Annotations between the doc and the declaration (a crate stub's
+        // `@rust("...")`, `@RustClone`) do not end the search.
+        if doc_lines.is_empty() && line.starts_with('@') {
+            cursor = prev_nl;
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("///") {
             doc_lines.push(rest.trim().to_string());
             cursor = prev_nl;

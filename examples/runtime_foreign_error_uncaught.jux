@@ -1,0 +1,9 @@
+// A Rust library's error nothing catches ends the program the way an uncaught
+// Jux exception does, under the Jux exception it surfaces as (Bindgen G.5.4,
+// gap 38): never under the library's own type name.
+
+public void main() {
+    print("parsing");
+    double d = "abc".parse<double>();
+    print(d);
+}

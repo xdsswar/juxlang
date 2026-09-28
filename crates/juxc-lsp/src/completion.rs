@@ -1278,7 +1278,14 @@ pub(crate) fn resolve_item(
             Err(_) => return item,
         }
     };
-    if let Some(doc_line) = crate::text::doc_comment_before(&decl_text, span.start as usize) {
+    let doc_line = crate::text::doc_comment_before(&decl_text, span.start as usize);
+    // A crate stub's doc in Jux terms, held to the leak detector (gap 38).
+    let doc_line = if crate::crate_doc::is_crate_stub(path) {
+        doc_line.and_then(|d| crate::crate_doc::shown(&d, &[&snap.text]))
+    } else {
+        doc_line
+    };
+    if let Some(doc_line) = doc_line {
         item.documentation = Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: doc_line,

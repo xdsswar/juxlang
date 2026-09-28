@@ -828,6 +828,12 @@ impl RustEmitter {
         ));
         self.w.line("Err(__jux_p) => '__jux_thrown: {");
         self.w.indent_inc();
+        // A Rust `Err` is the Jux exception it surfaces as (Bindgen G.5.4,
+        // gap 38): `assertThrows<NumberFormatException>` of a failed parse.
+        self.w.emit_indent();
+        self.w.push_str("let __jux_p = crate::__jux_foreign_as::<");
+        self.emit_fqn_path_in_rust(exception_fqn, exception_fqn.contains('.'));
+        self.w.push_str(">(__jux_p);\n");
         let mut candidates = vec![exception_fqn.to_string()];
         candidates.extend(self.subclass_fqns_of(exception_fqn));
         for class in candidates {

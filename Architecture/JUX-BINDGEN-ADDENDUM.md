@@ -300,18 +300,31 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
-**Catching a Rust error.** The `Err` value is thrown as itself, so a clause naming the foreign error type
-(`catch (ParseFloatError e)`, `catch (Error e)` for `std::io::Error`) receives the Rust value with its own
-methods. It is also an exception in the Jux sense: `catch (Exception e)` and `catch (Throwable e)` catch it too,
-and bind an `Exception` (or `Throwable`) whose message is the error's text, its `Display` form, or its `Debug`
-form when it has no `Display`. Clauses are still tried in source order, so a foreign-typed clause placed after
-`catch (Exception e)` never runs. A Rust error that nothing catches ends the program the way an uncaught Jux
-exception does, with `Exception in thread "main" <ErrorType>: <text>` on stderr and exit status 101.
+**A Rust error is a Jux exception** (ERRATA E1XX-GAP38). The `Err` value is thrown as the Jux exception it
+stands for, so a Jux programmer catches, reads and reports it in Jux terms and never under the library's type name:
+
+| Rust error | Jux exception |
+|---|---|
+| `ParseIntError`, `ParseFloatError` | `NumberFormatException` |
+| `io::Error` of kind `NotFound` / any other kind | `FileNotFoundException` / `IOException` (the message without ` (os error N)`) |
+| `Utf8Error`, `FromUtf8Error`, `FromUtf16Error` | `EncodingException` |
+| `TryFromIntError` | `ArithmeticException` |
+| `ParseBoolError`, `ParseCharError`, `AddrParseError` | `IllegalArgumentException` |
+| any other error of any crate | `LibraryException`: `getMessage()` is the error's text (its `Display` form, or `Debug` without one), `getLibrary()` the crate (`std` for Rust's own) |
+
+A clause for that class or any class above it catches the error: `catch (NumberFormatException e)`,
+`catch (IllegalArgumentException e)`, `catch (Exception e)`, `catch (Throwable e)`. A clause for an unrelated class
+leaves it for the next clause. The Rust value stays reachable: a clause naming the foreign error type itself
+(`catch (ParseFloatError e)`, `catch (Error e)` for `std::io::Error`) receives the Rust value with its own methods.
+Clauses are still tried in source order. A Rust error is unchecked, whatever its Jux class: the `throws` clause of
+a stub documents it and requires no `catch`. A Rust error that nothing catches ends the program the way an uncaught
+Jux exception does, with `Exception in thread "main" jux.std.exceptions.NumberFormatException: <text>`, the `.jux`
+line, and exit status 101.
 
 ```jux
 try {
     double d = text.parse<double>();      // Rust: Result<f64, ParseFloatError>
-} catch (Exception e) {
+} catch (NumberFormatException e) {
     print(e.getMessage());                // invalid float literal
 }
 ```
