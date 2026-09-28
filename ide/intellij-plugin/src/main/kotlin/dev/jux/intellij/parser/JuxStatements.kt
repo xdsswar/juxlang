@@ -243,7 +243,7 @@ private fun PsiBuilder.parseLocalVariable(m: PsiBuilder.Marker = mark()) {
         return
     }
     if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // typed tuple destructuring
-    else expectOrError(T.IDENTIFIER, "Variable name expected")
+    else consumeBindingName("Variable name expected", declNameFallback = false)
     if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     m.done(E.LOCAL_VARIABLE)
@@ -386,11 +386,16 @@ private fun PsiBuilder.parseLabeledOrExprOrLocal() {
     }
 }
 
+/** What may follow a typed local's name: `int x = 1;`, `int x;`. */
+private val LOCAL_NAME_FOLLOWERS = com.intellij.psi.tree.TokenSet.create(T.EQ, T.SEMICOLON)
+
 /** Parse `Type name [= expr];`; returns false (for rollback) if it isn't one. */
 private fun PsiBuilder.tryLocalVarTail(): Boolean {
     parseType()
-    if (!at(T.IDENTIFIER)) return false
-    advanceLexer() // name
+    // A keyword followed by `=` or `;` can only be a (refused, E0204) name:
+    // no other statement is a type, a keyword and `=` or `;`.
+    if (!at(T.IDENTIFIER) && !atKeywordBindingName(LOCAL_NAME_FOLLOWERS)) return false
+    consumeBindingName("Variable name expected", declNameFallback = false)
     if (expect(T.EQ)) parseExpressionOrError()
     semicolon()
     return true

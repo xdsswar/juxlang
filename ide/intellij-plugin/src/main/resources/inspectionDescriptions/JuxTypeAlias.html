@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports the errors a <code>type</code> alias itself can carry:
+<ul>
+<li>an alias that stands for itself through other aliases,
+<code>type A = B; type B = A;</code> (<b>E0498</b>);</li>
+<li>a use of a generic alias with the wrong number of type arguments,
+<code>Dict&lt;String, int&gt;</code> for <code>type Dict&lt;V&gt; = HashMap&lt;String, V&gt;;</code>
+(<b>E0443</b>). A use with no type arguments is left to inference.</li>
+</ul>
+Everywhere else an alias is read as the type it stands for.
+</body>
+</html>

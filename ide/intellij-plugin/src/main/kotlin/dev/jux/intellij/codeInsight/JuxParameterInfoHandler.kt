@@ -150,7 +150,7 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
      */
     private fun constructorsOf(newExpr: PsiElement, args: PsiElement): List<PsiElement> {
         val typeRef = newExpr.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return emptyList()
-        val type = JuxTypeIndex.findType(args, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
+        val type = JuxTypeIndex.findTypeThroughAliases(args, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
         val ctors = JuxHierarchy.directChildren(type, E.CONSTRUCTOR_DECLARATION)
         if (ctors.isNotEmpty()) return ctors
         return listOfNotNull(type.node.findChildByType(E.RECORD_COMPONENT_LIST)?.psi)
@@ -200,7 +200,7 @@ class JuxParameterInfoHandler : ParameterInfoHandler<PsiElement, JuxParameterInf
                 }
             }
             for (sn in JuxHierarchy.superTypeNames(t)) {
-                JuxTypeIndex.findType(t, sn)?.let { queue.add(it) }
+                JuxTypeIndex.findTypeThroughAliases(t, sn)?.let { queue.add(it) }
             }
         }
         return out

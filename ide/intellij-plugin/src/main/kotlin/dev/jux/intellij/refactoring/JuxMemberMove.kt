@@ -54,7 +54,7 @@ internal object JuxMemberMove {
         val ref = JuxHierarchy.supertypeReferences(type).firstOrNull { it.second }?.first
             ?: JuxHierarchy.supertypeReferences(type).firstOrNull()?.first
             ?: return null
-        return JuxTypeIndex.findType(type, JuxHierarchy.bareTypeName(ref))
+        return JuxTypeIndex.findTypeThroughAliases(type, JuxHierarchy.bareTypeName(ref))
     }
 
     // ---- pull up ---------------------------------------------------------------

@@ -143,7 +143,13 @@ object JuxTypeEngine {
             E.PARENTHESIZED_EXPRESSION -> typeOf(firstExpressionChild(expr))
             E.REFERENCE_EXPRESSION -> when (val target = resolveReferenceExpression(expr)) {
                 null -> JuxType.Unknown
-                is JuxTypeDeclaration -> JuxType.Static(target)
+                // `Named.origin()` through `type Named = Pair<String, int>;`:
+                // the static surface is the target's (ERRATA E133).
+                is JuxTypeDeclaration -> if (isTypeAlias(target)) {
+                    aliasTargetDeclaration(target)?.let { JuxType.Static(it) } ?: JuxType.Unknown
+                } else {
+                    JuxType.Static(target)
+                }
                 is JuxTypeParameter -> JuxType.Unknown
                 else -> if (target.elementType === E.LOCAL_VARIABLE || target.elementType === E.PARAMETER) {
                     narrowedType(expr, target) ?: declaredType(target)
@@ -641,7 +647,7 @@ object JuxTypeEngine {
             simple in JuxKeywords.PRIMITIVES -> JuxType.Primitive(simple)
             else -> when (val target = resolveTypeName(context, simple, qualifier)) {
                 is JuxTypeParameter -> JuxType.TypeVar(target, boundOf(target))
-                is JuxTypeDeclaration -> JuxType.ClassType(target, args)
+                is JuxTypeDeclaration -> if (isTypeAlias(target)) expandAlias(target, args) else JuxType.ClassType(target, args)
                 else -> JuxType.Unknown
             }
         }
@@ -767,7 +773,8 @@ object JuxTypeEngine {
      */
     private fun componentType(context: PsiElement, headName: String, index: Int): JuxType? {
         if (index < 0) return null
-        val decl = resolveTypeName(context, headName) as? JuxTypeDeclaration ?: return null
+        val named = resolveTypeName(context, headName) as? JuxTypeDeclaration ?: return null
+        val decl = aliasTargetDeclaration(named) ?: return null
         JuxHierarchy.recordComponents(decl).getOrNull(index)?.let { return declaredType(it) }
         return instanceFields(decl).getOrNull(index)?.let { declaredType(it) }
     }
@@ -820,7 +827,7 @@ object JuxTypeEngine {
                     ?: emptyList()
                 when (val target = resolveTypeName(ref, name, qualifier(ref))) {
                     is JuxTypeParameter -> JuxType.TypeVar(target, boundOf(target))
-                    is JuxTypeDeclaration -> JuxType.ClassType(target, args)
+                    is JuxTypeDeclaration -> if (isTypeAlias(target)) expandAlias(target, args) else JuxType.ClassType(target, args)
                     else -> JuxType.Unknown
                 }
             }
@@ -940,6 +947,49 @@ object JuxTypeEngine {
             }
         }
         return JuxTypeIndex.findType(context, name)
+    }
+
+    // ------------------------------------------------------------ aliases
+
+    /** Whether [decl] is a `type X = ...;` declaration. */
+    fun isTypeAlias(decl: PsiElement?): Boolean = decl?.elementType === E.TYPE_ALIAS_DECLARATION
+
+    /** The written target of a `type` alias: the `Pair<K, int>` of `type Keyed<K> = Pair<K, int>;`. */
+    fun aliasTargetReference(alias: JuxTypeDeclaration): PsiElement? =
+        alias.node.findChildByType(E.TYPE_REFERENCE)?.psi
+
+    /**
+     * The type a `type` alias stands for, with the alias's own parameters
+     * bound to [args] (ERRATA E133: an alias is expanded to its target
+     * everywhere a type is named, following aliases of aliases).
+     *
+     * The target is resolved where the alias is DECLARED, which is what makes
+     * `type Dict<V> = HashMap<String, V>;` mean the same `HashMap` from every
+     * file that uses it. A cycle (`type A = B; type B = A;`, the compiler's
+     * E0498) expands to [JuxType.Unknown] rather than recursing.
+     */
+    fun expandAlias(alias: JuxTypeDeclaration, args: List<JuxType>): JuxType {
+        val target = aliasTargetReference(alias) ?: return JuxType.Unknown
+        val expanded = RecursionManager.doPreventingRecursion(alias, false) { typeOfTypeReference(target) }
+            ?: return JuxType.Unknown
+        val params = alias.node.findChildByType(E.TYPE_PARAMETER_LIST)?.psi?.children
+            ?.filterIsInstance<JuxTypeParameter>()?.mapNotNull { it.name } ?: emptyList()
+        if (params.isEmpty()) return expanded
+        val subst = HashMap<String, JuxType>()
+        for ((i, n) in params.withIndex()) args.getOrNull(i)?.let { subst[n] = it }
+        return substitute(expanded, subst)
+    }
+
+    /**
+     * The declaration a `type` alias finally names -- `Shape` for
+     * `type Sh = Shape;`, `Pair` for `type Label = Named;` over
+     * `type Named = Pair<String, int>;` -- or null when the target is not a
+     * declared type (an array, a function type, a primitive, a cycle, or a
+     * name nothing declares). Returns [decl] itself when it is no alias.
+     */
+    fun aliasTargetDeclaration(decl: JuxTypeDeclaration): JuxTypeDeclaration? {
+        if (!isTypeAlias(decl)) return decl
+        return (stripNullable(expandAlias(decl, emptyList())) as? JuxType.ClassType)?.decl
     }
 
     /** The type named [name] declared in package [pkg], through the declaration index. */

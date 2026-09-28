@@ -97,7 +97,7 @@ class JuxUnhandledExceptionInspection : LocalInspectionTool() {
             if (name == "Exception") return (start.name ?: return null) to names
             val parentRef = JuxHierarchy.supertypeReferences(decl).firstOrNull { it.second }?.first ?: return null
             val parentName = JuxHierarchy.bareTypeName(parentRef)
-            val parent = JuxTypeIndex.findType(decl, parentName)
+            val parent = JuxTypeIndex.findTypeThroughAliases(decl, parentName)
             if (parent == null) {
                 // The chain leaves the project. Only the two names the spec
                 // defines checkedness by can still decide it.

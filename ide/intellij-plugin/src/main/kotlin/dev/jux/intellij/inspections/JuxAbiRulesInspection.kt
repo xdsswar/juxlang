@@ -26,6 +26,7 @@ import dev.jux.intellij.resolve.JuxTypeEngine
  *   pointer to a pointer.
  * - E0522: `transmute` without exactly two type arguments, or between two
  *   primitive types whose sizes differ.
+ * - E0527: `@export(convention = ...)` other than `"C"`.
  * - E0951: the same free operator declared twice in one file.
  * - E0950: a free operator on types none of which this program declares (only
  *   decided when every operand and the result are primitives or `String`).
@@ -36,13 +37,40 @@ class JuxAbiRulesInspection : LocalInspectionTool() {
         object : PsiElementVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element.elementType) {
-                    E.ANNOTATION -> checkAlign(element, holder)
+                    E.ANNOTATION -> {
+                        checkAlign(element, holder)
+                        checkExportConvention(element, holder)
+                    }
                     E.CAST_EXPRESSION -> checkArrayToPointer(element, holder)
                     E.CALL_EXPRESSION -> checkTransmute(element, holder)
                     E.OPERATOR_DECLARATION -> if (element.parent is JuxFile) checkFreeOperator(element, holder)
                 }
             }
         }
+
+    // ------------------------------------------------------ @export convention
+
+    /**
+     * E0527 (ERRATA E131, Layout-ABI §L.4.1): every export is emitted with the
+     * C convention, so `@export(convention = ...)` accepts only `"C"`. The
+     * three Windows conventions are refused on every target, and a value that
+     * names no convention is refused as such.
+     */
+    private fun checkExportConvention(ann: PsiElement, holder: ProblemsHolder) {
+        val text = ann.text
+        if (!text.removePrefix("@").substringBefore('(').trim().equals("export", ignoreCase = true)) return
+        val arg = CONVENTION_ARG.find(text) ?: return
+        val literal = STRING_VALUE.matchEntire(arg.groupValues[1].trim())?.groupValues?.get(1)
+        val message = when {
+            literal == null -> "`@export(convention = ...)` takes a string naming a calling convention"
+            literal.equals("c", ignoreCase = true) -> return
+            KNOWN_CONVENTIONS.any { it.equals(literal, ignoreCase = true) } ->
+                "Calling convention `$literal` is not supported on any target yet: every export is emitted with the C convention"
+            else ->
+                "`$literal` is not a calling convention: `@export` accepts `\"C\"`, `\"Stdcall\"`, `\"Fastcall\"` or `\"Vectorcall\"`"
+        }
+        holder.registerProblem(ann, "$message (E0527)", ProblemHighlightType.GENERIC_ERROR)
+    }
 
     // ---------------------------------------------------------------- @align
 
@@ -250,5 +278,14 @@ class JuxAbiRulesInspection : LocalInspectionTool() {
 
         /** Types no Jux program declares: primitives and `String`. */
         val FOREIGN_OWNED: Set<String> = PRIMITIVE_SIZES.keys + setOf("String", "void")
+
+        /** The conventions §L.4.1 names; only `"C"` is emitted today. */
+        val KNOWN_CONVENTIONS = listOf("C", "Stdcall", "Fastcall", "Vectorcall")
+
+        /** `convention = <value>` inside an annotation's argument list. */
+        val CONVENTION_ARG = Regex("""\bconvention\s*=\s*([^,)]*)""")
+
+        /** A plain string literal, its text captured. */
+        val STRING_VALUE = Regex(""""([^"\\]*)"""")
     }
 }

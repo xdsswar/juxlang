@@ -52,6 +52,7 @@ class JuxLsp4ijServerFactory : LanguageServerFactory, LanguageServerEnablementSu
     override fun createClientFeatures(): com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures =
         com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures()
             .setCompletionFeature(JuxLsp4ijNoCompletion())
+            .setDiagnosticFeature(JuxLsp4ijDiagnostics())
 
     override fun isEnabled(project: Project): Boolean =
         !nativeLspActive() &&
@@ -104,6 +105,28 @@ class JuxLsp4ijServerFactory : LanguageServerFactory, LanguageServerEnablementSu
 /** LSP4IJ completion for Jux files: never enabled (see [JuxLsp4ijServerFactory.createClientFeatures]). */
 class JuxLsp4ijNoCompletion : com.redhat.devtools.lsp4ij.client.features.LSPCompletionFeature() {
     override fun isEnabled(file: com.intellij.psi.PsiFile): Boolean = false
+}
+
+/**
+ * The server's diagnostics, less the ones the plugin reports itself: the same
+ * code over an overlapping range is shown once, as the plugin's, which carries
+ * the PSI quick-fixes ([dev.jux.intellij.inspections.JuxMirroredDiagnostics],
+ * shared with the native client's customizer).
+ */
+class JuxLsp4ijDiagnostics : com.redhat.devtools.lsp4ij.client.features.LSPDiagnosticFeature() {
+    override fun createAnnotation(
+        diagnostic: org.eclipse.lsp4j.Diagnostic,
+        document: com.intellij.openapi.editor.Document,
+        fixes: MutableList<com.intellij.codeInsight.intention.IntentionAction>,
+        holder: com.intellij.lang.annotation.AnnotationHolder,
+    ) {
+        val mirrored = dev.jux.intellij.inspections.JuxMirroredDiagnostics
+        val code = mirrored.codeOf(diagnostic.code?.let { if (it.isLeft) it.left else it.right?.toString() }, diagnostic.message)
+        val r = diagnostic.range
+        val range = r?.let { mirrored.textRange(document, it.start.line, it.start.character, it.end.line, it.end.character) }
+        if (mirrored.isDuplicate(holder.currentAnnotationSession.file, code, range)) return
+        super.createAnnotation(diagnostic, document, fixes, holder)
+    }
 }
 
 /**

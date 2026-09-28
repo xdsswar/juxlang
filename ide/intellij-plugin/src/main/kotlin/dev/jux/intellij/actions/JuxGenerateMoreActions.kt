@@ -77,7 +77,7 @@ class JuxGenerateDelegateMethodsAction : JuxGenerateAction() {
     private fun targetType(owner: JuxTypeDeclaration, field: JuxField): JuxTypeDeclaration? {
         val bare = field.type.substringBefore('<').substringAfterLast('.').trim()
         if (bare.isEmpty() || field.type.trimEnd().endsWith("]") || field.type.trimEnd().endsWith("?")) return null
-        return JuxTypeIndex.findType(owner, bare)
+        return JuxTypeIndex.findTypeThroughAliases(owner, bare)
     }
 
     /**

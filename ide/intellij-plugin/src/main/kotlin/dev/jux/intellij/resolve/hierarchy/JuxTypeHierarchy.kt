@@ -173,7 +173,7 @@ internal class JuxTypeHierarchyTreeStructure(
 
         /** The resolvable direct supertypes of [type], extends first. */
         fun supertypesOf(type: JuxTypeDeclaration): List<JuxTypeDeclaration> =
-            JuxHierarchy.superTypeNames(type).mapNotNull { JuxTypeIndex.findType(type, it) }
+            JuxHierarchy.superTypeNames(type).mapNotNull { JuxTypeIndex.findTypeThroughAliases(type, it) }
     }
 }
 

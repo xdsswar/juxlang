@@ -7,6 +7,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import dev.jux.intellij.JuxFileType
+import dev.jux.intellij.inspections.JuxMirroredDiagnostics
 import dev.jux.intellij.project.JuxSourceRootsConfig
 import dev.jux.intellij.run.JuxLspCommandLine
 
@@ -93,5 +94,24 @@ class JuxLspDescriptor(project: Project) : ProjectWideLspServerDescriptor(projec
                 com.intellij.platform.lsp.api.customization.LspFindReferencesDisabled
             override val documentSymbolCustomizer =
                 com.intellij.platform.lsp.api.customization.LspDocumentSymbolDisabled
+
+            /**
+             * A diagnostic the plugin reports itself -- the same code over an
+             * overlapping range ([JuxMirroredDiagnostics]) -- is shown once,
+             * as the plugin's, which carries the PSI quick-fixes.
+             */
+            override val diagnosticsCustomizer =
+                object : com.intellij.platform.lsp.api.customization.LspDiagnosticsSupport() {
+                    override fun createAnnotation(
+                        holder: com.intellij.lang.annotation.AnnotationHolder,
+                        diagnostic: org.eclipse.lsp4j.Diagnostic,
+                        textRange: com.intellij.openapi.util.TextRange,
+                        quickFixes: List<com.intellij.codeInsight.intention.IntentionAction>,
+                    ) {
+                        val code = JuxMirroredDiagnostics.codeOf(diagnostic.code?.let { if (it.isLeft) it.left else it.right?.toString() }, diagnostic.message)
+                        if (JuxMirroredDiagnostics.isDuplicate(holder.currentAnnotationSession.file, code, textRange)) return
+                        super.createAnnotation(holder, diagnostic, textRange, quickFixes)
+                    }
+                }
         }
 }

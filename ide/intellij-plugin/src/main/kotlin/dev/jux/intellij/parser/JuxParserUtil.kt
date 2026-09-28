@@ -37,6 +37,70 @@ fun PsiBuilder.markForeignStub() {
 /** True when this parse is over a generated `*.jux.d` declaration stub. */
 fun PsiBuilder.inForeignStub(): Boolean = getUserData(FOREIGN_STUB) == true
 
+/**
+ * The keywords this parse has taken as the name of a parameter or a local
+ * (`int f(int type)`, `int sealed = 2;`). The compiler refuses each once
+ * (`E0204`, ERRATA E131) and then reads the keyword as that name wherever an
+ * expression uses it, so the one mistake does not cascade; the IDE parses the
+ * same way and leaves the `E0204` itself to the annotator.
+ */
+private val KEYWORD_BINDINGS = com.intellij.openapi.util.Key.create<MutableSet<String>>("jux.parse.keyword.bindings")
+
+/** Tokens after which a keyword in a binding slot can only be that binding's (refused) name. */
+private val AFTER_BINDING_NAME: TokenSet = TokenSet.create(T.EQ, T.SEMICOLON, T.COMMA, T.RPAREN)
+
+/**
+ * Keywords that open an expression of their own, so an expression never reads
+ * them as a refused binding's name (the compiler's `at_keyword_binding`).
+ */
+private val EXPRESSION_KEYWORD_SPELLINGS = setOf(
+    "this", "super", "new", "switch", "sizeof", "typeof", "await", "move", "throw", "try", "if", "async", "unsafe",
+)
+
+/**
+ * True at a keyword in a parameter's or local's name slot: a keyword followed
+ * by what can only end a binding (`=`, `;`, `,`, `)`). `this` stays the
+ * explicit receiver's name, and a generated stub keeps its Rust names.
+ */
+fun PsiBuilder.atKeywordBindingName(followers: TokenSet = AFTER_BINDING_NAME): Boolean {
+    val t = tokenType ?: return false
+    if (inForeignStub() || !T.KEYWORDS.contains(t) || t === T.THIS_KW) return false
+    return followers.contains(lookAhead(1))
+}
+
+/**
+ * Consume the name of a parameter or a local variable (the compiler's
+ * `parse_binding_name`). A keyword there is taken as the name and remembered,
+ * so a later read of it parses as a reference ([atKeywordBindingUse]); the
+ * annotator reports it as `E0204`. Anything else goes to [consumeDeclName]
+ * when [declNameFallback] is set, else it is the [message] error.
+ */
+fun PsiBuilder.consumeBindingName(message: String, declNameFallback: Boolean): Boolean {
+    if (at(T.IDENTIFIER)) {
+        advanceLexer()
+        return true
+    }
+    if (atKeywordBindingName()) {
+        val set = getUserData(KEYWORD_BINDINGS) ?: HashSet<String>().also { putUserData(KEYWORD_BINDINGS, it) }
+        tokenText?.let(set::add)
+        remapCurrentToken(T.IDENTIFIER)
+        advanceLexer()
+        return true
+    }
+    if (declNameFallback) return consumeDeclName(message)
+    errorHere(message)
+    return false
+}
+
+/** True at a keyword this parse already took as a binding's name, read in an expression. */
+fun PsiBuilder.atKeywordBindingUse(): Boolean {
+    val t = tokenType ?: return false
+    if (!T.KEYWORDS.contains(t)) return false
+    val text = tokenText ?: return false
+    if (text in EXPRESSION_KEYWORD_SPELLINGS) return false
+    return getUserData(KEYWORD_BINDINGS)?.contains(text) == true
+}
+
 /** True if the current token is [type]. */
 fun PsiBuilder.at(type: IElementType): Boolean = tokenType === type
 

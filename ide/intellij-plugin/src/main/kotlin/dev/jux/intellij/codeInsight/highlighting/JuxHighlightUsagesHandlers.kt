@@ -185,7 +185,7 @@ class JuxOverridingMethodsHandler(
             val fromClause = JuxGotoSuperHandler.superMethods(method).any { sup ->
                 val owner = JuxHierarchy.enclosingType(sup) ?: return@any false
                 owner.name in named || named.any { JuxHierarchy.inheritsFrom(owner, it) } ||
-                    named.any { n -> JuxTypeIndex.findType(type, n)?.let { JuxHierarchy.inheritsFrom(it, owner.name) } == true }
+                    named.any { n -> JuxTypeIndex.findTypeThroughAliases(type, n)?.let { JuxHierarchy.inheritsFrom(it, owner.name) } == true }
             }
             if (fromClause) method.nameIdentifier?.let { addOccurrence(it) }
         }
@@ -290,7 +290,7 @@ object JuxExceptionSites {
         if (thrown == null) return catchType == "Exception"
         if (thrown == catchType) return true
         if (catchType == "Exception") return !thrown.endsWith("Error")
-        val thrownDecl = JuxTypeIndex.findType(context, thrown) ?: return false
+        val thrownDecl = JuxTypeIndex.findTypeThroughAliases(context, thrown) ?: return false
         return JuxHierarchy.inheritsFrom(thrownDecl, catchType)
     }
 

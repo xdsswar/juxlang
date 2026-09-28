@@ -22,13 +22,35 @@ object JuxSubtypes {
     /** supertype simple-name → the project types that directly name it. */
     fun buildIndex(project: Project): Map<String, List<JuxTypeDeclaration>> {
         val m = HashMap<String, MutableList<JuxTypeDeclaration>>()
-        JuxTypeIndex.forEachType(project, GlobalSearchScope.allScope(project)) { t ->
+        val all = ArrayList<JuxTypeDeclaration>()
+        JuxTypeIndex.forEachType(project, GlobalSearchScope.allScope(project)) { all.add(it) }
+        // `class Square implements Sh` with `type Sh = Shape;`, or with
+        // `import app.Shape as Sh;`, is a subtype of `Shape` (ERRATA E133).
+        // Only a name some `type` alias declares, or one an import of the
+        // subtype's own file renames, is resolved, so the common case stays a
+        // pure name walk.
+        val aliasNames = all.filter { JuxTypeEngine.isTypeAlias(it) }.mapNotNullTo(HashSet()) { it.name }
+        val importAliasesByFile = HashMap<com.intellij.psi.PsiFile, Set<String>>()
+        for (t in all) {
+            val file = t.containingFile
+            val importAliases = if (file == null) emptySet() else importAliasesByFile.getOrPut(file) { importAliasNames(file) }
             for (sup in JuxHierarchy.superTypeNames(t)) {
                 m.getOrPut(sup) { ArrayList() }.add(t)
+                if (sup in aliasNames || sup in importAliases) {
+                    val target = JuxTypeIndex.findTypeThroughAliases(t, sup)?.name
+                    if (target != null && target != sup) m.getOrPut(target) { ArrayList() }.add(t)
+                }
             }
         }
         return m
     }
+
+    /** The names [file]'s imports bind under another simple name: `Z` of `import x.Y as Z;`. */
+    private fun importAliasNames(file: com.intellij.psi.PsiFile): Set<String> =
+        dev.jux.intellij.editor.JuxImportSupport.collectImports(file)
+            .flatMap { it.targets.entries }
+            .filter { (bound, fqn) -> fqn.substringAfterLast('.') != bound }
+            .mapTo(HashSet()) { it.key }
 
     /** All transitive subtypes of [name] using a prebuilt [index]. */
     fun transitiveSubtypes(
