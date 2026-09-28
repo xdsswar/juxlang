@@ -378,9 +378,9 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
             expand_expr(&mut f.object, plans);
         }
         let span = crate::check::expr_span_pub(expr);
-        // `read ?: throw new IllegalStateException(..)`: an unset field read
-        // during construction is an exception the program can catch (ERRATA
-        // E140). The `?:` has its own span, a point at the read's
+        // `read ?: throw new NullPointerException(..)`: an unset field read
+        // during construction is the exception Java raises there, which the
+        // program can catch (ERRATA E140, E1XX-GAP39g). The `?:` has its own span, a point at the read's
         // end, so the read and the result keep separate types.
         let at = Span { start: span.end, end: span.end, file: span.file };
         let bare = class.rsplit('.').next().unwrap_or(&class);
@@ -390,7 +390,7 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
         let throw = Expr::Throw(
             Box::new(Expr::NewObject(juxc_ast::NewObjectExpr {
                 class_name: juxc_ast::QualifiedName {
-                    segments: vec![ident("IllegalStateException")],
+                    segments: vec![ident("NullPointerException")],
                     span: Span::DUMMY,
                 },
                 generic_args: Vec::new(),

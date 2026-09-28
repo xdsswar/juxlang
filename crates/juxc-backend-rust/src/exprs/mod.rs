@@ -872,7 +872,21 @@ impl RustEmitter {
             self.w.push_str("::<");
             // Clone to release the immutable borrow on `n` before
             // the `emit_type_as_rust` calls (which need `&mut self`).
-            let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
+            // An erased class is built at its one instantiation (ERRATA
+            // E1XX-GAP39g).
+            let written = juxc_ast::TypeRef {
+                name: n.class_name.clone(),
+                generic_args: n.generic_args.iter().cloned().map(juxc_ast::GenericArg::Type).collect(),
+                nullable: false,
+                array_shape: None,
+                fn_shape: None,
+                ptr_depth: 0,
+                span: n.span,
+            };
+            let args: Vec<juxc_ast::TypeRef> = match self.erased_type_ref(&written) {
+                Some(e) => e.generic_args.iter().filter_map(|a| a.as_type().cloned()).collect(),
+                None => n.generic_args.clone(),
+            };
             for (i, arg) in args.iter().enumerate() {
                 if i > 0 {
                     self.w.push_str(", ");
@@ -1351,6 +1365,32 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // **Erasure** (ERRATA E1XX-GAP39g): a value filling a slot declared as
+        // an erased type parameter is boxed; one read out of such a slot is
+        // unboxed to the type the checker gave it.
+        if self.erasure_active() {
+            let span = Self::erase_key(expr);
+            if self.erase_on_emit.contains_key(&span) && self.erasing_now.insert((span, true)) {
+                let written = self.erase_on_emit.get(&span).cloned().flatten();
+                let at = self.erased_box_type(expr, written.as_ref());
+                self.emit_erased_box(expr, at);
+                self.erasing_now.remove(&(span, true));
+                return;
+            }
+            if !self.erasing_now.contains(&(span, false)) {
+                if let Some(target) = self.erased_read_target(expr) {
+                    self.erasing_now.insert((span, false));
+                    self.emit_erased_unbox(expr, &target);
+                    self.erasing_now.remove(&(span, false));
+                    return;
+                }
+            }
+            match expr {
+                Expr::Call(c) => self.mark_erased_call_args(c),
+                Expr::NewObject(n) => self.mark_erased_ctor_args(n),
+                _ => {}
+            }
+        }
         // The receiver of a member access on a value whose type parameter
         // is bounded `Into<C>` (ERRATA E137): the member is C's.
         if !self.into_receivers.is_empty() {

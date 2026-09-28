@@ -492,6 +492,19 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `scale(int)` / `scale(double)`, `show(int)` public beside `show(String)` private | E0900 | works |
 | `add(x, name())` on the overloaded stand-in through a bound receiver | E0900 (rustc: the one-argument overload called) | calls `add(int, String)` |
 
+**39g. CLOSED 2026-09-28 (ERRATA E1XX-GAP39g).** ~~Polymorphic recursion (`E0438`, or rustc's recursion limit); an early read threw `IllegalStateException`.~~ The functions, methods and classes on a polymorphic-recursion cycle (found by the E137 instantiation closure, closed over the class hierarchy) are instantiated at one erased type, `JuxErased`, a boxed value carrying its own type, text, `==` and hash; values are boxed into the family's type-parameter slots and unboxed out of them to the type the checker gave them, and the erased subtype's dispatch has one branch for every depth. Code off the cycle is compiled as before. `E0438` is left for a cycle with a bounded type parameter. An early read of a field with no default now throws `NullPointerException`; a `String` field still reads `""` (non-null by type). Tests: `examples/polymorphic_recursion_grow.jux`, `examples/polymorphic_recursion_nested.jux` (both checked against Java: differential cases 84 and 85), `examples/early_read_no_default.jux`, `tests/ui/generic_method_dispatch_limits` (the bounded case).
+
+| Probe | Before | Now |
+|---|---|---|
+| `grow<A, B>` calling `grow<A, Vec<B>>`, building `Weird<A, B>` dispatched through `Tree<A>` | `E0438` | works, prints each depth, `accept` finds the `Weird` |
+| `build<T>` calling `build<Pair<T>>` for `Nested<T> = Flat(T) \| Nest(Nested<Pair<T>>)` | E0900 (rustc recursion limit) | works: depth, size, printing |
+| `sameAfter<T>(a, b, n)` comparing `Pair<..>` values `n` levels deep with `operator ==` | E0900 | works (`true` / `false`, as Java's `equals`) |
+| `HashSet<Pair<int>>` of an erased class with `operator hash`, beside that recursion | E0900 (the program did not build) | works |
+| a generic method `walk<T>` calling `walk<Pair<T>>`; `echo<T>` returning `T` through `echo<Pair<T>>` | E0900 | works |
+| a `T?` field of an erased class read and written from outside | E0900 | works |
+| `nest<T extends Named>` calling `nest<Wrap<T>>` | E0900 | `E0438` naming the bound |
+| base constructor's override reads an unset `Gear` field | `IllegalStateException` | `NullPointerException` |
+
 ---
 
 ## 4. Three streams stopped mid-flight

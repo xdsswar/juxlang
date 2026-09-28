@@ -11,7 +11,7 @@
 //! anywhere in the program checks it is set, which it always is once
 //! construction is over. A read during construction that comes before the
 //! initializer (a method an ancestor's constructor calls that reads a
-//! subclass field, ERRATA E140) throws `IllegalStateException`
+//! subclass field, ERRATA E140) throws `NullPointerException` (E1XX-GAP39g)
 //! ("field 'w' of Owner read before it was initialized"), which the program
 //! can catch, rather than reading a value that was never written. The program is then checked again, so the backend sees
 //! a nullable field and non-null reads, both of which it already lowers.

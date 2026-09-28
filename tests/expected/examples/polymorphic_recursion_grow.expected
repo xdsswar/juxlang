@@ -1,0 +1,12 @@
+depth 5: x
+depth 4: [x, x]
+depth 3: [[x, x], [x, x]]
+depth 2: [[[x, x], [x, x]], [[x, x], [x, x]]]
+depth 1: [[[[x, x], [x, x]], [[x, x], [x, x]]], [[[x, x], [x, x]], [[x, x], [x, x]]]]
+depth 0: [[[[[x, x], [x, x]], [[x, x], [x, x]]], [[[x, x], [x, x]], [[x, x], [x, x]]]], [[[[x, x], [x, x]], [[x, x], [x, x]]], [[[x, x], [x, x]], [[x, x], [x, x]]]]]
+visited 1 / [[[[[x, x], [x, x]], [[x, x], [x, x]]], [[[x, x], [x, x]], [[x, x], [x, x]]]], [[[[x, x], [x, x]], [[x, x], [x, x]]], [[[x, x], [x, x]], [[x, x], [x, x]]]]]
+160
+8
+y!
+18
+visited 9 / y

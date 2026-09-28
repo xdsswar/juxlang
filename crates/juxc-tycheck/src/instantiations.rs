@@ -51,6 +51,9 @@ pub struct Closure {
     /// Classes whose set did not close (polymorphic recursion), with the
     /// function or method that keeps growing it.
     pub unbounded: HashMap<String, String>,
+    /// Generic functions and methods (as call keys) called with arguments
+    /// that keep growing (ERRATA E1XX-GAP39g erases them).
+    pub growing: HashSet<String>,
 }
 
 const MAX_PER_KEY: usize = 512;
@@ -241,7 +244,7 @@ pub fn close(symbols: &SymbolTable, facts: &[Fact], seeds: &[Ty]) -> Closure {
             classes.insert(c.clone(), v);
         }
     }
-    Closure { classes, unbounded }
+    Closure { classes, unbounded, growing }
 }
 
 /// The call keys whose instantiations reach the body of method key `m`: its

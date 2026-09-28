@@ -390,12 +390,11 @@ pub enum Code {
     /// visible has a hidden stand-in on the dispatch trait, and anywhere else
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
-    /// E0438 — A **polymorphic base class declares a virtual method with its
-    /// own generic type parameters** (`<R> R map(...)`). The base lowers to a
-    /// `dyn <Name>Kind` trait object for virtual dispatch, and a generic
-    /// method makes the trait not object-safe (rustc `E0038`). Make the method
-    /// non-generic, mark the class (or method) `final`, or seal the hierarchy.
-    /// (Stage-2 polymorphism; mirrors the interface rule E0435.)
+    /// E0438 — **Polymorphic recursion that cannot be erased** (ERRATA
+    /// E1XX-GAP39g): a function calling itself at an ever-larger type
+    /// argument is compiled by erasing the type arguments of every function
+    /// and class on that cycle, and a bounded type parameter on it cannot be
+    /// erased (an erased value has none of the bound's members).
     E0438_GenericVirtualMethod,
     /// E0442 — A **reference cast / type-test between unrelated types**
     /// (`(Dog) someString`, `x as Cat` where `x` can't be a `Cat`,

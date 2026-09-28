@@ -1,0 +1,92 @@
+// A classic polymorphic-recursion data structure (ERRATA E1XX-GAP39g):
+// `Nested<T>` is either a `Flat<T>` holding one `T`, or a `Nest<T>` holding a
+// `Nested<Pair<T>>` -- each level squares the number of values it holds, so
+// its type grows with its depth, and so do the types `build` and `sameAfter` are
+// called at. The whole family is compiled once, with erased type arguments;
+// printing, `==` and hashing still see each value's own type.
+
+import rust.std.HashSet;
+
+class Pair<T> {
+    T left;
+    T right;
+    Pair(T left, T right) {
+        this.left = left;
+        this.right = right;
+    }
+    public String operator string() {
+        return "(" + left + ", " + right + ")";
+    }
+    public bool operator==(Pair<T> other) {
+        return left == other.left && right == other.right;
+    }
+    public int operator hash() {
+        return left.operator hash() ^ right.operator hash();
+    }
+}
+
+abstract class Nested<T> {
+    abstract int depth();
+    abstract int size();
+    abstract String describe();
+}
+
+class Flat<T> extends Nested<T> {
+    T value;
+    Flat(T value) { this.value = value; }
+    int depth() { return 0; }
+    int size() { return 1; }
+    String describe() { return "Flat " + value; }
+}
+
+class Nest<T> extends Nested<T> {
+    Nested<Pair<T>> inner;
+    Nest(Nested<Pair<T>> inner) { this.inner = inner; }
+    int depth() { return 1 + inner.depth(); }
+    int size() { return 2 * inner.size(); }
+    String describe() { return "Nest(" + inner.describe() + ")"; }
+}
+
+// Builds a tree of depth `n` whose leaf holds 2^n copies of `x`.
+<T> Nested<T> build(T x, int n) {
+    if (n == 0) {
+        return new Flat<T>(x);
+    }
+    return new Nest<T>(build<Pair<T>>(new Pair<T>(x, x), n - 1));
+}
+
+// Whether two values are equal after being nested `n` levels deep.
+<T> bool sameAfter(T a, T b, int n) {
+    if (n == 0) {
+        return a == b;
+    }
+    return sameAfter<Pair<T>>(new Pair<T>(a, a), new Pair<T>(b, b), n - 1);
+}
+
+public void main() {
+    for (int d = 0; d <= 3; d++) {
+        Nested<int> t = build<int>(d + 1, d);
+        print("depth " + t.depth() + ", size " + t.size() + ": " + t.describe());
+    }
+    Nested<String> s = build<String>("s", 2);
+    print(s.describe());
+
+    print(sameAfter<int>(3, 3, 4));
+    print(sameAfter<String>("a", "b", 4));
+
+    // Hashing an erased value is its own type's hash.
+    HashSet<Pair<int>> pairs = new HashSet<Pair<int>>();
+    pairs.insert(new Pair<int>(1, 2));
+    pairs.insert(new Pair<int>(1, 2));
+    pairs.insert(new Pair<int>(2, 1));
+    print(pairs.len());
+
+    // Erased classes are ordinary classes to the rest of the program.
+    Flat<int> one = new Flat<int>(1);
+    HashSet<Flat<int>> seen = new HashSet<Flat<int>>();
+    seen.insert(one);
+    seen.insert(one);
+    seen.insert(new Flat<int>(1));
+    print(seen.len());
+    print(one.value + 41);
+}

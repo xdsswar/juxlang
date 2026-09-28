@@ -1,25 +1,25 @@
-// A method with type parameters of its own, called on a supertype value,
-// finds the concrete type behind the value (ERRATA E136, E137). A
-// subtype with a type parameter the supertype does not fix is found at every
-// argument the program builds it with -- a set that is finite in every
-// program but one that builds ever-larger types by calling itself (E0438).
-import rust.std.Vec;
+// Polymorphic recursion -- a function calling itself at an ever-larger type
+// argument -- is compiled by erasing the type arguments of the functions and
+// classes on the cycle (ERRATA E1XX-GAP39g). An erased value carries its
+// own type but none of a bound's members, so a bounded type parameter on
+// the cycle cannot be erased (E0438).
+interface Named { String name(); }
 
-interface Visitor<R> { R visit(int n); }
-abstract class Tree<T> {
-    public abstract <R> R accept(Visitor<R> v);
-}
-class Weird<T, U> extends Tree<T> {
-    U extra;
-    Weird(U extra) { this.extra = extra; }
-    public <R> R accept(Visitor<R> v) { return v.visit(2); }
+class Tag implements Named {
+    public String name() { return "tag"; }
 }
 
-<A, B> Tree<A> grow(B b, int n) {
-    if (n == 0) { return new Weird<A, B>(b); }
-    return grow<A, Vec<B>>(new Vec<B>(), n - 1);
+class Wrap<T extends Named> implements Named {
+    T inner;
+    Wrap(T inner) { this.inner = inner; }
+    public String name() { return "wrap(" + inner.name() + ")"; }
+}
+
+<T extends Named> String nest(T x, int n) {
+    if (n == 0) { return x.name(); }
+    return nest<Wrap<T>>(new Wrap<T>(x), n - 1);
 }
 
 public void main() {
-    Tree<int> t = grow<int, int>(1, 3);
+    print(nest<Tag>(new Tag(), 3));
 }

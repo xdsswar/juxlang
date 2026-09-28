@@ -5446,6 +5446,78 @@ and §S.4.4 and `JUX-MISSING-DEFS-ADDENDUM.md` §M.1.2 and §M.1.4 are amended
 to Java's order; E21 is superseded, and E139's order and its overloaded
 private method boundary with it. GAPS.md gap 39f is closed.
 
+## E1XX-GAP39g. Polymorphic recursion by erasure; an early read throws NullPointerException
+
+**Conflict.** Two items were left open:
+
+- **Polymorphic recursion did not build.** A function that calls itself at
+  an ever-larger type argument (`grow<A, Vec<B>>` inside `grow<A, B>`,
+  `build<Pair<T>>` inside `build<T>`) has no last instantiation. Where the
+  subtype it builds was dispatched on (E137) it was `E0438`; anywhere else
+  it reached rustc, which gave up at its recursion limit (E0900). Java runs
+  such a program through erasure, and Jux has to run it too.
+- **An early read of a field with no default value** threw
+  `IllegalStateException` (E140), where Java's `null` throws
+  `NullPointerException`.
+
+**Resolution.**
+
+1. **The cycle is found.** The instantiation closure (E137) already sees a
+   call whose type arguments keep growing and the classes built from them.
+   The functions and methods whose calls grow, the classes whose
+   instantiations do not close, and the generic ancestors and descendants of
+   those classes are the erased family (`juxc_tycheck::erasure`).
+2. **The family is compiled once, at an erased type.** Every type parameter
+   of the family is instantiated at `JuxErased`, a boxed value that carries
+   its own type (as `Rc<dyn Any>`) and, taken where it was boxed and its type
+   was still known, its text, its `==` and its hash. A use of an erased
+   class names it at `JuxErased` (`Nested<Pair<T>>` and `Nested<int>` are one
+   Rust type), except inside the class's own body at its own parameters, which
+   is the generic code every instance runs. A call of an erased function or
+   method names its type arguments as `JuxErased`. A value is boxed where it
+   fills a slot declared as one of the family's type parameters (an argument,
+   a constructor argument, a field store) and unboxed, to the type the checker
+   gave the expression, where it is read out of one (a field, a result); an
+   optional one keeps its `null`. Boxing a value that already is one keeps it,
+   and unboxing at `JuxErased` gives it back, so generic code whose `T` may be
+   either is right either way. The dispatch of a method with type parameters of
+   its own (E136) has one branch for an erased subtype, at `JuxErased`, which
+   covers every depth. Everything off the cycle keeps its own
+   instantiations: a program with no polymorphic recursion is compiled as
+   before.
+3. **Correctness.** Printing an erased value prints the text of its own type
+   (`operator string`, a record's form, a list's); `==` is its own type's
+   `operator ==` (identity for a class without one) and its hash is its own
+   type's. Unboxing to a type the value is not cannot happen in a program
+   the checker accepted; if it did, it would be an internal compiler error
+   with a Jux message, not a Rust panic.
+4. **`E0438` is left for a bound.** An erased value has none of a bound's
+   members, so a cycle with a bounded type parameter (`<T extends Named>`
+   calling itself at `Wrap<T>`) cannot be erased: `E0438` names the parameter
+   and the function that keeps growing it.
+5. **An early read throws `NullPointerException`** (superseding E140's
+   `IllegalStateException`), which is what Java's `null` throws. The message
+   still names the field ("field 'gear' of Mill read before it was
+   initialized"). A `String` field still reads as `""` before its initializer
+   runs: a Jux `String` is non-null by type (JUX-LANG-V1 §6.5), so it cannot
+   hold Java's `null`, and `""` is its default value.
+
+**Tests.** `examples/polymorphic_recursion_grow.jux` (`grow` to depth 5,
+printing the value at each depth, then dispatching `accept` on the result)
+and `examples/polymorphic_recursion_nested.jux` (`Nested<T> = Flat(T) |
+Nest(Nested<Pair<T>>)` with its depth and size, `==` and hashing through
+erased values), both pinned by the output Java prints and both
+`tools/java-differential` cases (`84_polymorphic_recursion_grow`,
+`85_polymorphic_recursion_nested`). `examples/early_read_no_default.jux`
+catches the `NullPointerException`. `tests/ui/generic_method_dispatch_limits`
+now holds the bounded case.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; JUX-LANG-V1
+§7.3.1 and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4 name `NullPointerException`.
+E137's and E140's corresponding statements are superseded. GAPS.md gap 39g is
+closed.
+
 ---
 When you edit any addendum that touches one of the items above,
 either:
