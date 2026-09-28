@@ -4320,7 +4320,7 @@ everything pinned.
   word for word by the corpus) and `runtime_stack_overflow` and holds their
   output to the detector with nothing excused.
 
-**Not guarded.** Resolved by gap 38 (E1XX-GAP38): ~~a stack overflow off
+**Not guarded.** Resolved by gap 38 (E134): ~~a stack overflow off
 Windows still prints the runtime's report~~ (Linux and macOS now report it in
 Jux terms); ~~a foreign type's `Debug` text other than cells and nullables
 (`OnceLock(<uninit>)`) is the crate author's~~ (laid out in Jux's form; a
@@ -4754,7 +4754,7 @@ on both spellings.
 
 ---
 
-## E1XX-GAP38. The four leaks E129 left: a stack overflow off Windows, a foreign value's text, a library's error, a crate's docs
+## E134. The four leaks E129 left: a stack overflow off Windows, a foreign value's text, a library's error, a crate's docs
 
 **Conflict.** E129 made Rust impossible to ship through every exit it could
 guard, and listed what it could not. Four of those still reached a Jux

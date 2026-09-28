@@ -300,7 +300,7 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
-**A Rust error is a Jux exception** (ERRATA E1XX-GAP38). The `Err` value is thrown as the Jux exception it
+**A Rust error is a Jux exception** (ERRATA E134). The `Err` value is thrown as the Jux exception it
 stands for, so a Jux programmer catches, reads and reports it in Jux terms and never under the library's type name:
 
 | Rust error | Jux exception |

@@ -78,7 +78,7 @@ public class RuntimeException extends Exception { ... }       -- usually NOT cau
 public class IOException extends Exception { ... }
 public class IllegalArgumentException extends Exception { ... }
 public class IllegalStateException extends Exception { ... }
-public class NumberFormatException extends IllegalArgumentException { ... }  -- text that is not a number (ERRATA E1XX-GAP38)
+public class NumberFormatException extends IllegalArgumentException { ... }  -- text that is not a number (ERRATA E134)
 public class LibraryException extends RuntimeException { ... }  -- a `rust.<crate>` error with no class above; getLibrary() (Bindgen G.5.4)
 public class CancellationException extends Exception { ... }
 public class TimeoutException extends Exception { ... }
