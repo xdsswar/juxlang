@@ -1,5 +1,5 @@
 //! Import aliases are resolved once, before anything reads a name
-//! (ERRATA E1XX-GAP37b).
+//! (ERRATA E133).
 //!
 //! `import app.model.Circle as C;` binds the simple name `C` in its unit.
 //! The checker and the backend each resolve names in many places, and every

@@ -13,7 +13,7 @@
 //! enclosing body. A rewriter reads them from the [`Scope`] it is handed. The
 //! first use is import aliases (`import app.model.Circle as C;`), which are
 //! written back as the type they name before anything resolves them
-//! (ERRATA E1XX-GAP37b).
+//! (ERRATA E133).
 
 use std::collections::HashSet;
 

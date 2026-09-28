@@ -691,7 +691,7 @@ own does not help, because the eframe signatures still name eframe's `Frame`.
 **Workaround:** none. The app styled panels only through `Visuals`, so the
 side navigation was no longer dark.
 
-**Fix (gap 37, ERRATA E1XX-GAP37).** Not a `Frame` special case: when two
+**Fix (gap 37, ERRATA E132).** Not a `Frame` special case: when two
 members of a crate family share a simple name, both keep a Jux name that
 follows their Rust path. The family stub has a nested package for each module
 the host publishes a member's items under, `rust.eframe.egui` for

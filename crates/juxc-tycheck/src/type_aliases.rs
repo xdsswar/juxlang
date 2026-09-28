@@ -1,5 +1,5 @@
 //! `type` aliases are expanded once, before anything reads a name
-//! (ERRATA E1XX-GAP37b).
+//! (ERRATA E133).
 //!
 //! `type Dict<V> = HashMap<String, V>;` stands for its target. The checker
 //! expanded an alias where it lowered a declared type, and nowhere else: `new

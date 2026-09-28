@@ -4579,7 +4579,7 @@ and what `JUX_SELFCHECK=1` reports instead. GAPS.md gap 34 is closed.
 
 ---
 
-## E1XX-GAP37. Two types of one simple name in a crate family, and a crate's deprecated items
+## E132. Two types of one simple name in a crate family, and a crate's deprecated items
 
 **Conflict.** §G.6.2.4 (E128) gave a crate family one Jux name per simple
 name: when two members declare the same one, the host's item (or the one the
@@ -4673,7 +4673,7 @@ closed; LEAKS L29 and L39 are fixed.
 
 ---
 
-## E1XX-GAP37b. An import alias and a `type` alias mean their target everywhere
+## E133. An import alias and a `type` alias mean their target everywhere
 
 **Conflict.** `import app.model.Circle as C;` bound `C` in the unit's name
 table, and every part of the checker and backend that asked that table got
