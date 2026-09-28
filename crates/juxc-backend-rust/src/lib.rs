@@ -4034,6 +4034,10 @@ impl RustEmitter {
         // local) follows the runtime rule of §S.2.1, panic in debug and wrap
         // in release; the deny-by-default lint made it a build failure.
         w.push_str("#![allow(arithmetic_overflow)]\n");
+        // A call to something deprecated, a crate's or the program's own
+        // `@Deprecated`, is the checker's `W0491`, said in Jux terms at the
+        // call (LEAKS L39); the toolchain's copy of it would name Rust items.
+        w.push_str("#![allow(deprecated)]\n");
         // The one lint that stays ON, and promoted to an error. A delegating
         // body — a trait impl calling the inherent method it wraps, a `Kind`
         // forwarder, a `super` shim — is self-recursive if and only if the

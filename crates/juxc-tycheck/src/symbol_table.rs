@@ -165,6 +165,13 @@ pub struct UnitContext {
     /// aren't in the map fall through to other resolution rules
     /// (primitives, `String`, generic params, etc.).
     pub unqualified: HashMap<String, String>,
+    /// Simple names two of the unit's WILDCARD imports bring for different
+    /// types (the same type through an alias does not count), mapped to
+    /// those types' FQNs, sorted. Nothing stronger binds them: no declaration
+    /// of the unit's package and no single-type import. A use of one is
+    /// `E0303` (JLS 6.5.5.1); `unqualified` still holds one of them, so an
+    /// unused name costs nothing.
+    pub ambiguous: HashMap<String, Vec<String>>,
 }
 
 impl SymbolTable {
@@ -250,6 +257,37 @@ impl SymbolTable {
             cur = candidates.into_iter().find(|c| self.aliases.contains_key(c.as_str()))?;
         }
         None
+    }
+
+    /// The declaration a type name finally means: `fqn` itself, or, for a
+    /// type ALIAS, whatever its chain of aliases ends at (resolved in each
+    /// alias's own package). Two FQNs with one canonical type are two
+    /// spellings of the same type, as a crate family's nested package and its
+    /// host's are (Bindgen §G.6.2.4).
+    pub fn canonical_type_fqn(&self, fqn: &str) -> String {
+        let mut cur = fqn.to_string();
+        for _ in 0..8 {
+            let Some(alias) = self.aliases.get(&cur) else { break };
+            if !alias.target.generic_args.is_empty() {
+                break;
+            }
+            let joined: String =
+                alias.target.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            let pkg = fqn_package(&cur).unwrap_or("");
+            let local = if pkg.is_empty() { joined.clone() } else { format!("{pkg}.{joined}") };
+            let next = if self.is_type_name(&joined) && joined.contains('.') {
+                joined
+            } else if self.is_type_name(&local) {
+                local
+            } else {
+                break;
+            };
+            if next == cur {
+                break;
+            }
+            cur = next;
+        }
+        cur
     }
 
     /// The `rust.std` class carrying the Rust method surface of the primitive
@@ -445,7 +483,12 @@ impl SymbolTable {
         if let Some(k) = self.interfaces.keys().filter(|k| matches_last(k)).min() {
             return Some(k.clone());
         }
-        if let Some(k) = self.aliases.keys().filter(|k| matches_last(k)).min() {
+        // A crate stub's alias is another spelling of a crate type (a family's
+        // nested package, `rust.eframe.egui.Ui` for `rust.eframe.Ui`, Bindgen
+        // §G.6.2.4), so it does not shadow that type; only a program's own
+        // alias does.
+        let foreign_alias = |k: &str| is_foreign_stub_package(fqn_package(k).unwrap_or(""));
+        if let Some(k) = self.aliases.keys().filter(|k| matches_last(k) && !foreign_alias(k)).min() {
             return Some(k.clone());
         }
         // Last resort: an external stub class. Reached only when no user type
@@ -455,6 +498,7 @@ impl SymbolTable {
             .filter(|k| matches_last(k))
             .min()
             .cloned()
+            .or_else(|| self.aliases.keys().filter(|k| matches_last(k)).min().cloned())
     }
 
     /// Resolve an identifier to the location of its declaration: the index of
@@ -1610,6 +1654,9 @@ pub struct ConstructorSig {
     /// A foreign TUPLE struct's constructor (`@RustTuple`, Bindgen G.3.7): the
     /// Rust value is the struct expression `Mm(x)`, the type having no `new`.
     pub is_rust_tuple: bool,
+    /// The message of the constructor's `@Deprecated` (empty when it gives
+    /// none), or `None` when it has none: a `new` of it is `W0491`.
+    pub deprecated: Option<String>,
     /// Span of the constructor declaration.
     pub span: Span,
 }
@@ -2044,6 +2091,9 @@ pub struct FunctionSig {
     /// functions. Const-evaluability is a property of the body, not a modifier
     /// (§A.2.2) — there is no `const fn` keyword in Jux.
     pub body: Option<juxc_ast::Block>,
+    /// The message of the function's `@Deprecated` (empty when it gives
+    /// none), or `None` when it has none: a call is `W0491`.
+    pub deprecated: Option<String>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -2437,14 +2487,19 @@ fn check_imports_resolve(
             |bind: String, fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| match bound
                 .get(&bind)
             {
-                Some((prev, prev_span)) if *prev != fqn => {
+                // Two spellings of one type (a crate family's nested package
+                // and its host's, Bindgen §G.6.2.4) are one import.
+                Some((prev, prev_span))
+                    if *prev != fqn && table.canonical_type_fqn(prev) != table.canonical_type_fqn(&fqn) =>
+                {
                     diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0303_ConflictingImport,
                             format!(
                                 "conflicting imports: the name `{bind}` is imported from \
-                                     both `{prev}` and `{fqn}` -- give one an `as` alias \
-                                     (`import {fqn} as {bind}2;`) or use a fully-qualified name",
+                                     both `{prev}` and `{fqn}` -- import only one of them, give one \
+                                     an `as` alias (`import {fqn} as {bind}2;`), or use a \
+                                     fully-qualified name",
                             ),
                         )
                         .with_span(span)
@@ -2702,7 +2757,97 @@ fn build_unit_contexts(
             UnitContext {
                 package: pkg,
                 unqualified,
+                ambiguous: ambiguous_wildcard_names(unit, &pkg_str, table),
             }
+        })
+        .collect()
+}
+
+/// The simple names two of `unit`'s wildcard imports bring for different
+/// types, with those types' FQNs (see [`UnitContext::ambiguous`]).
+///
+/// A name the unit's package declares, or a single-type import binds, is not
+/// ambiguous: both are stronger than an import on demand (JLS 6.4.1). Two
+/// spellings of ONE type are not two types either: a crate family publishes
+/// `rust.eframe.Ui` and its alias `rust.eframe.egui.Ui` (Bindgen §G.6.2.4).
+fn ambiguous_wildcard_names(
+    unit: &juxc_ast::CompilationUnit,
+    unit_pkg: &str,
+    table: &SymbolTable,
+) -> HashMap<String, Vec<String>> {
+    use juxc_ast::ImportSpec;
+    let type_keys = || {
+        table
+            .classes
+            .keys()
+            .chain(table.records.keys())
+            .chain(table.enums.keys())
+            .chain(table.interfaces.keys())
+            .chain(table.aliases.keys())
+    };
+    let wildcard_pkgs: Vec<String> = unit
+        .imports
+        .iter()
+        .filter_map(|i| match &i.spec {
+            ImportSpec::Path { name, wildcard: true, .. } => {
+                Some(name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            }
+            _ => None,
+        })
+        .collect();
+    if wildcard_pkgs.len() < 2 {
+        return HashMap::new();
+    }
+    // What binds a simple name more strongly than a wildcard.
+    let mut strong: HashSet<String> = type_keys()
+        .filter(|k| fqn_package(k).unwrap_or("") == unit_pkg)
+        .map(|k| fqn_bare(k).to_string())
+        .collect();
+    for import in &unit.imports {
+        match &import.spec {
+            ImportSpec::Path { name, wildcard: false, alias } => {
+                let bind = alias
+                    .as_ref()
+                    .map(|a| a.text.clone())
+                    .or_else(|| name.segments.last().map(|s| s.text.clone()));
+                strong.extend(bind);
+            }
+            ImportSpec::Items { items, .. } => {
+                strong.extend(items.iter().map(|it| {
+                    it.alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| it.name.text.clone())
+                }));
+            }
+            ImportSpec::Path { wildcard: true, .. } => {}
+        }
+    }
+    // Simple name -> canonical type -> the first FQN seen for it.
+    let mut found: HashMap<String, std::collections::BTreeMap<String, String>> = HashMap::new();
+    for pkg in &wildcard_pkgs {
+        let prefix = format!("{pkg}.");
+        for fqn in type_keys() {
+            let Some(bare) = fqn.strip_prefix(&prefix) else { continue };
+            if bare.contains('.') || strong.contains(bare) {
+                continue;
+            }
+            found
+                .entry(bare.to_string())
+                .or_default()
+                .entry(table.canonical_type_fqn(fqn))
+                .and_modify(|seen: &mut String| {
+                    if fqn < seen {
+                        *seen = fqn.clone();
+                    }
+                })
+                .or_insert_with(|| fqn.clone());
+        }
+    }
+    found
+        .into_iter()
+        .filter(|(_, types)| types.len() > 1)
+        .map(|(bare, types)| {
+            let mut fqns: Vec<String> = types.into_values().collect();
+            fqns.sort();
+            (bare, fqns)
         })
         .collect()
 }
@@ -2899,6 +3044,26 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
         }
     }
     None
+}
+
+/// The message of a `@Deprecated` annotation in `annotations`: its
+/// `message = "..."` (or `note`, or a lone string), empty when it gives none.
+/// `None` when the list has no `@Deprecated` (names are case-insensitive).
+pub fn deprecation_of(annotations: &[juxc_ast::Annotation]) -> Option<String> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    let ann = annotations.iter().find(|a| {
+        a.name.segments.last().is_some_and(|s| s.text.eq_ignore_ascii_case("deprecated"))
+    })?;
+    let text = ann.args.iter().find_map(|a| match a {
+        AnnotationArg::Named { name, value: Expr::Literal(Literal::String(s)) }
+            if name.text.eq_ignore_ascii_case("message") || name.text.eq_ignore_ascii_case("note") =>
+        {
+            Some(s.clone())
+        }
+        AnnotationArg::Positional(Expr::Literal(Literal::String(s))) => Some(s.clone()),
+        _ => None,
+    });
+    Some(text.unwrap_or_default())
 }
 
 /// The single string argument of the bindgen marker `name`
@@ -5105,6 +5270,7 @@ fn insert_class(
                         && a.name.segments[0].text.eq_ignore_ascii_case("rustdefault")
                 }),
             is_rust_tuple: is_external && c.annotations.iter().any(|a| annotation_named(a, "rusttuple")),
+            deprecated: deprecation_of(&c.annotations),
             span: c.span,
         })
         .collect();
@@ -5279,6 +5445,7 @@ fn insert_record(
         is_foreign_result: false,
         is_rust_default: false,
         is_rust_tuple: false,
+        deprecated: None,
         span: record_decl.span,
     };
     let header_types: Vec<String> = record_decl.components.iter().map(|c| render_type_ref(&c.ty)).collect();
@@ -5305,6 +5472,7 @@ fn insert_record(
             is_foreign_result: false,
             is_rust_default: false,
             is_rust_tuple: false,
+            deprecated: deprecation_of(&ctor.annotations),
             span: ctor.span,
         });
     }
@@ -5421,6 +5589,7 @@ fn insert_enum(
                     is_foreign_result: false,
                     is_rust_default: false,
                     is_rust_tuple: false,
+                    deprecated: deprecation_of(&c.annotations),
                     span: c.span,
                 })
                 .collect(),
@@ -5568,6 +5737,7 @@ fn insert_function(
             } else {
                 fn_decl.body.clone()
             },
+            deprecated: deprecation_of(&fn_decl.annotations),
             span: fn_decl.span,
     };
     // A second declaration of the name is an OVERLOAD (§T.3.1) as long as it

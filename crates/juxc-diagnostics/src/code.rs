@@ -949,6 +949,11 @@ pub enum Code {
     /// (a class, an interface, an array, a collection): §M.13.2 says such a
     /// `ref` is accepted and means nothing, and reserves this warning for it.
     W0490_RefOnReferenceType,
+    /// W0491 -- A call to a `@Deprecated` function, method or constructor,
+    /// with the declaration's `message`. A crate's `#[deprecated]` item is
+    /// marked in its stub, so the program hears it from Jux, never from rustc
+    /// (LEAKS L39).
+    W0491_DeprecatedUse,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -1489,6 +1494,7 @@ impl Code {
             Code::W0242_UnknownLint              => "W0242",
             Code::W0470_MissingOverrideAnnotation => "W0470",
             Code::W0490_RefOnReferenceType       => "W0490",
+            Code::W0491_DeprecatedUse            => "W0491",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",

@@ -6,6 +6,12 @@
 
 use std::fmt;
 
+/// The prefix of a type no Jux name can mean: one that lost a simple name its
+/// crate family shares, and that the family publishes no path to (Bindgen
+/// §G.6.2.4). A member mentioning it is left out of the stub
+/// ([`JuxType::is_spellable`]) rather than silently naming the winner.
+pub const UNNAMEABLE_PREFIX: &str = "__unnameable.";
+
 /// A Jux type, as it should appear in a stub.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JuxType {
@@ -95,6 +101,10 @@ impl JuxType {
             JuxType::Fn { params, ret, .. } => {
                 params.iter().all(JuxType::is_spellable) && ret.is_spellable()
             }
+            // A type that lost a name its crate family shares, and that the
+            // family publishes no path to: no Jux name means it (LEAKS L29),
+            // and the winner of the name is a different type.
+            JuxType::Unknown(name) => !name.starts_with(UNNAMEABLE_PREFIX),
             _ => true,
         }
     }

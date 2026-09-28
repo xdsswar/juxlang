@@ -26,6 +26,9 @@ clap             = { workspace = true }
 [dev-dependencies]
 # The diagnostic-format tests check that `--diagnostic-format json` is JSON.
 serde_json       = { workspace = true }
+# `family_names.rs` generates a crate family's stubs from checked-in rustdoc
+# JSON, the way the driver does for a real dependency.
+juxc-bindgen     = { workspace = true }
 
 # Embed Windows resources (icon + VERSIONINFO with product name,
 # company, copyright, file/product version). Only active on the

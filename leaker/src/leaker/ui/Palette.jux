@@ -14,6 +14,10 @@ public class Palette {
     public static final Color32 DANGER = Color32.from_rgb(220, 38, 38);
     public static final Color32 SUCCESS = Color32.from_rgb(22, 163, 74);
     public static final Color32 WARNING = Color32.from_rgb(217, 119, 6);
+    public static final Color32 WHITE = Color32.from_rgb(255, 255, 255);
+    public static final Color32 NAV_BG = Color32.from_rgb(24, 32, 46);
+    public static final Color32 NAV_TEXT = Color32.from_rgb(203, 213, 225);
+    public static final Color32 NAV_HOVER = Color32.from_rgb(36, 48, 68);
 
     /** The color an invoice status is shown in. */
     public static Color32 status(String label) {

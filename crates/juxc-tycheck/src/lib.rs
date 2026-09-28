@@ -329,7 +329,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         // `ty_from_ref` knows that a bare `Greeter` in app.jux maps
         // to `com.lib.Greeter` (or whatever the import resolved to).
         if let Some(ctx) = symbols.units.get(idx) {
-            checker.seed_unit_context(&ctx.package, &ctx.unqualified);
+            checker.seed_unit_context(&ctx.package, &ctx.unqualified, &ctx.ambiguous);
         }
         checker.check_unit(unit);
         let (

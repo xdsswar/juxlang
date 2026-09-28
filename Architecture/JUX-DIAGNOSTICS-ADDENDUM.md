@@ -719,6 +719,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0242`  | `@lint(...)` names neither a lint nor a warning code, so it sets nothing | Diagnostics §D.5.4 |
 | `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |
 | `W0490`  | `ref` on a type that is already a reference (class, interface, array, collection) | JUX-MISSING-DEFS §M.13.2, ERRATA E84 |
+| `W0491`  | Use of a `@Deprecated` declaration: a call to a deprecated function, method or constructor, quoting the declaration's `message`. A crate's `#[deprecated]` item reaches its stub as `@Deprecated` | Bindgen §G.5.8 / ERRATA E1XX-GAP37 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
 | `W0305`  | Two foreign symbols map to one Jux name; the second is renamed *(reserved)* | Bindgen §G.12 |
 | `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |

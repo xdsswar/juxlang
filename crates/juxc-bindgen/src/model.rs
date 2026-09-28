@@ -46,7 +46,16 @@ pub struct StubFile {
     pub package: String,
     /// `// bindgen-version: N` style provenance header lines (optional).
     pub header: Vec<String>,
+    /// `import` lines, as the dotted path after the keyword (`rust.eframe.*`).
+    /// A nested family package imports its host's package, so its own
+    /// signatures read their bare names the way the host's do.
+    pub imports: Vec<String>,
     pub items: Vec<StubItem>,
+    /// The NESTED packages of a crate family (Bindgen §G.6.2.4): one per
+    /// module the host publishes a member's items under
+    /// (`rust.eframe.egui` for `eframe::egui`). Each is its own stub file, since
+    /// a unit declares one package. Empty for everything but a family stub.
+    pub nested: Vec<StubFile>,
 }
 
 /// A top-level stub declaration.
@@ -238,6 +247,9 @@ pub struct StubType {
     /// public. Its fields are surfaced as `_0`, `_1`, ... and its Rust
     /// constructor is the struct expression itself. Rendered as `@RustTuple`.
     pub is_tuple_struct: bool,
+    /// The crate marks the type `#[deprecated]`: the note it gives (empty when
+    /// it gives none). Rendered as `@Deprecated(message = "...")`.
+    pub deprecated: Option<String>,
 }
 
 impl StubType {
@@ -270,6 +282,7 @@ impl StubType {
             from_into: Vec::new(),
             is_hash: false,
             is_tuple_struct: false,
+            deprecated: None,
         }
     }
 }
@@ -301,6 +314,9 @@ pub struct StubCtor {
     /// The constructor of a TUPLE struct: the Rust value is built by the struct
     /// expression `Mm(x)`, there being no `new`. Rendered with `@RustTuple`.
     pub is_tuple: bool,
+    /// The crate marks the `new` this constructor stands for `#[deprecated]`
+    /// (see [`StubFn::deprecated`]).
+    pub deprecated: Option<String>,
 }
 
 /// A method / free-function stub.
@@ -373,6 +389,12 @@ pub struct StubFn {
     /// What this declaration is to an associated-type projection fan-out
     /// (§G.6.4.5). `None` for an ordinary method. See [`ProjectionRole`].
     pub projection_role: Option<ProjectionRole>,
+    /// The crate marks the function `#[deprecated]` (LEAKS L39): the note it
+    /// gives, or the version it was deprecated in, or empty. Rendered as
+    /// `@Deprecated(message = "...")`, which the checker reports at every call
+    /// in Jux terms (`W0491`), so rustc's own warning is never what a program
+    /// is told.
+    pub deprecated: Option<String>,
 }
 
 /// A method's part in an associated-type projection fan-out (§G.6.4.5).
