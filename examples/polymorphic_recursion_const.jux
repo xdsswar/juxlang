@@ -1,5 +1,5 @@
 // A class with a `const` parameter on a polymorphic-recursion cycle (ERRATA
-// E1XX-GAP39i). `stack<T>` calls itself at `Chunk<T, 3>`, so `Chunk`'s type
+// E143). `stack<T>` calls itself at `Chunk<T, 3>`, so `Chunk`'s type
 // parameter is erased with the cycle; its `const` parameter never grows (a
 // `const` argument is a constant, not a type that can nest), so it is kept
 // as it is: `N` stays a compile-time value, and `int[N]` a fixed array.

@@ -419,7 +419,7 @@ Rules:
    such set, and is compiled by erasure instead: the functions and classes on
    that cycle run at one erased type argument that carries each value's own
    type, with one dispatch for every depth (`ERRATA.md` E136, E137,
-   E141). An erased value keeps each bound of its type parameter (and its operator bounds) as that bound's dispatch object, through a generated adapter when the bound names the parameter (`T extends Ranked<T>`), and an erased class keeps its `const` parameters as they are (E142, E1XX-GAP39i). A bound that holds the parameter inside a Rust type (`T extends Rel<Vec<T>>`) has no conversion that keeps the value shared: that is **`E0438`**. An override may bound its type parameter
+   E141). An erased value keeps each bound of its type parameter (and its operator bounds) as that bound's dispatch object, through a generated adapter when the bound names the parameter (`T extends Ranked<T>`), and an erased class keeps its `const` parameters as they are (E142, E143). A bound that holds the parameter inside a Rust type (`T extends Rel<Vec<T>>`) has no conversion that keeps the value shared: that is **`E0438`**. An override may bound its type parameter
    by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
    `Store<Pet>`).
 

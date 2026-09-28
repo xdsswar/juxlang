@@ -92,7 +92,7 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     // and the classes an erased parameter's bound names at its parameters
     // (`Rel<Pair<T, T>>`: a `Pair<T, T>` is one erased type too). An
     // interface that is a bound keeps its own instantiations: the erased
-    // value reaches it through an adapter (ERRATA E1XX-GAP39i).
+    // value reaches it through an adapter (ERRATA E143).
     loop {
         let bound_heads = bound_heads(symbols, &classes, &fns);
         let mut grew = false;
@@ -280,7 +280,7 @@ fn collect_classes_naming(
 /// through an adapter when it is a Jux interface at the declaration's
 /// parameters (`T extends Ranked<T>`), each argument a parameter, a type
 /// with none, or a Jux class or record (erased with the family); a bound
-/// that is another parameter is the identity (ERRATA E1XX-GAP39i).
+/// that is another parameter is the identity (ERRATA E143).
 fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
     if p.is_const() {
         return true;

@@ -5572,7 +5572,7 @@ self-referencing bound.
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E141's bound
 refusal is superseded. GAPS.md gap 39h is closed.
 
-## E1XX-GAP39i. F-bounded parameters and `const` parameters on a polymorphic-recursion cycle
+## E143. F-bounded parameters and `const` parameters on a polymorphic-recursion cycle
 
 **Conflict.** E142 left two refusals (`E0438`) on an erased cycle: a bound
 that names a type parameter (`T extends Ranked<T>`, the `Comparable` idiom,

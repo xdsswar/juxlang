@@ -2,7 +2,7 @@
 // functions and classes on the cycle; an erased value keeps each bound as a
 // dispatch object, through an adapter when the bound names the parameter
 // (`T extends Ranked<T>`), converting the erased value at each position
-// (ERRATA E1XX-GAP39g .. E1XX-GAP39i). A position holding a Rust collection
+// (ERRATA E1XX-GAP39g .. E143). A position holding a Rust collection
 // of the parameter (`Rel<Vec<T>>`) has no conversion that keeps the list
 // shared, so that bound is refused (E0438).
 import rust.std.Vec;

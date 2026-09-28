@@ -4305,7 +4305,7 @@ impl RustEmitter {
                 self.w.push_str(&twin);
             }
             // A bound at the family's own parameters (`T extends Shape<T>`)
-            // is reached through an adapter (ERRATA E1XX-GAP39i).
+            // is reached through an adapter (ERRATA E143).
             self.erased_kind_adapters(class_decl, &text);
         }
     }

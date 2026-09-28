@@ -30,7 +30,7 @@ pub(crate) struct EraseMark {
     pub(crate) written: Option<TypeRef>,
     pub(crate) bounds: Vec<TypeRef>,
     /// The declaration's type parameters, and the one the slot is, for a
-    /// bound at them (`T extends Ranked<T>`, ERRATA E1XX-GAP39i).
+    /// bound at them (`T extends Ranked<T>`, ERRATA E143).
     pub(crate) decl_params: Vec<String>,
     pub(crate) param: String,
 }
@@ -102,7 +102,7 @@ impl RustEmitter {
     }
 
     /// Every parameter of the class, record or interface `fqn`, and whether it
-    /// is a `const` one (kept as it is, ERRATA E1XX-GAP39i).
+    /// is a `const` one (kept as it is, ERRATA E143).
     fn erased_class_all_params(&self, fqn: &str) -> Vec<(String, bool)> {
         let ps = self
             .symbols
@@ -508,7 +508,7 @@ impl RustEmitter {
     }
 
     /// The adapters an erased value reaches an interface bound at its own
-    /// parameters through (ERRATA E1XX-GAP39i): `I<JuxErased, ..>`,
+    /// parameters through (ERRATA E143): `I<JuxErased, ..>`,
     /// implemented by wrapping the value's own `I<X, ..>`. An erased argument
     /// is unboxed to `X` on the way in, and a result at an erased position is
     /// boxed on the way out with the value's own table when it is of the
@@ -538,7 +538,7 @@ impl RustEmitter {
     }
 
     /// The adapters an erased value reaches a class bound at its own
-    /// parameters through (`T extends Shape<T>`, ERRATA E1XX-GAP39i), made
+    /// parameters through (`T extends Shape<T>`, ERRATA E143), made
     /// from the class's `Kind` forwarding implementation (`text`): the same
     /// members, erased positions unboxed on the way in and reboxed on the
     /// way out. `None` when a member is not in the one-line forwarding form
@@ -775,7 +775,7 @@ impl RustEmitter {
         // extends Shape<T>>`): a generic implementation for the erased type
         // would ask itself to hold (rustc E0275), so it implements the one
         // instantiation erasure uses, at the erased type (ERRATA
-        // E1XX-GAP39i).
+        // E143).
         let head_name = sig.split('<').next().unwrap_or(sig).trim().to_string();
         let rest_parts = split_top(rest);
         let self_bounded = rest_parts.iter().any(|g| {

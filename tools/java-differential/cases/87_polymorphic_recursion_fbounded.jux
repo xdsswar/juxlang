@@ -1,4 +1,4 @@
-// Polymorphic recursion over F-bounded type parameters (ERRATA E1XX-GAP39i):
+// Polymorphic recursion over F-bounded type parameters (ERRATA E143):
 // a bound that names the parameter itself (`T extends Ord2<T>`, the
 // `Comparable` idiom; `T extends Shape<T>` over a class; `T extends
 // Tagged<T, String>` with a fixed second argument; `T extends
