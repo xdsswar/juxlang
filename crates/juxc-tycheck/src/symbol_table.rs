@@ -804,7 +804,7 @@ impl SymbolTable {
                 None => class.methods.get(method_name).into_iter().collect(),
             };
             for m in own {
-                match override_slot(&merged, m) {
+                match override_slot(&merged, m, class) {
                     Some(i) => merged[i] = (class, m.clone()),
                     None => merged.push((class, m.clone())),
                 }
@@ -2661,7 +2661,7 @@ pub(crate) fn make_fqn(package: &[String], bare: &str) -> String {
 
 /// Strip the trailing identifier off an FQN. `"a.lib.Foo"` → `"Foo"`,
 /// `"Foo"` (no package) → `"Foo"`.
-pub(crate) fn fqn_bare(fqn: &str) -> &str {
+pub fn fqn_bare(fqn: &str) -> &str {
     match fqn.rsplit_once('.') {
         Some((_, bare)) => bare,
         None => fqn,
@@ -4111,7 +4111,7 @@ fn inherit_class_operators(table: &mut SymbolTable) {
 
 /// `ty` with every bare type-parameter name in `subst` replaced, through
 /// generic arguments, wildcard bounds and nullability.
-fn substitute_type_ref(ty: &TypeRef, subst: &HashMap<String, TypeRef>) -> TypeRef {
+pub fn substitute_type_ref(ty: &TypeRef, subst: &HashMap<String, TypeRef>) -> TypeRef {
     if subst.is_empty() {
         return ty.clone();
     }
@@ -4725,69 +4725,51 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
     candidate.intersection(&extended).cloned().collect()
 }
 
-/// Stage-2 virtual dispatch (E0438): reject a **generic virtual method on a
-/// polymorphic base class**. The base lowers to a `dyn <Name>Kind` trait
-/// object so overrides dispatch dynamically; a method with its own generic
-/// type parameters makes that trait not object-safe (rustc `E0038`). Mirrors
-/// the interface object-safety rule E0435.
+/// **E0438**: a method with type parameters of its own, reached through a
+/// supertype, dispatches over the concrete types that are that supertype
+/// (`crate::generic_dispatch`, ERRATA E1XX-GAP39b). A value of the supertype
+/// has to say which of them it is, arguments included, and a subtype with a
+/// type parameter the supertype does not fix (`class Weird<T, U> extends
+/// Tree<T>`) cannot: a `Tree<int>` that is a `Weird` does not say what `U`
+/// is. That, and only that, is refused, with the reason. The refusal this
+/// replaces covered every generic method on an extended class.
 fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
-    let mut bases = polymorphic_base_bare_names(table);
-    // A GENERIC class that is extended dispatches through its `Kind` trait
-    // too (`Shape<T>` with `class Sq extends Shape<double>`), and a generic
-    // method there reached rustc as "cannot find type `R`" (ERRATA
-    // E135). `polymorphic_base_bare_names` leaves generic classes out
-    // for its other callers, so they are added for this check alone.
-    for (fqn, sig) in &table.classes {
-        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
-        if sig.is_final || sig.is_external || sig.generic_params.is_empty() {
-            continue;
-        }
-        let extended = table.classes.values().any(|c| {
-            c.extends_fqn.as_deref().map(|f| f.rsplit('.').next().unwrap_or(f)) == Some(bare)
-                || (c.extends_fqn.is_none()
-                    && c.extends.as_ref().and_then(|t| t.name.segments.last()).map(|s| s.text.as_str()) == Some(bare))
-        });
-        if extended {
-            bases.insert(bare.to_string());
-        }
-    }
-    if bases.is_empty() {
-        return;
-    }
-    for (fqn, sig) in &table.classes {
-        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
-        if !bases.contains(bare) {
-            continue;
-        }
-        // Deterministic order for a stable message (HashMap iteration isn't).
-        let mut offenders: Vec<&String> = sig
-            .methods
-            .iter()
-            .filter(|(_, m)| !m.is_static && !m.generic_params.is_empty())
-            // Every visibility but `private` is reachable through the base's
-            // dispatch trait (package-private included, which was missed).
-            .filter(|(_, m)| !matches!(m.visibility, Visibility::Private))
-            .map(|(name, _)| name)
-            .collect();
-        offenders.sort();
-        if let Some(name) = offenders.first() {
+    let owners = crate::generic_dispatch::generic_virtual_owners(table);
+    let mut owner_keys: Vec<&String> = owners.keys().collect();
+    owner_keys.sort();
+    let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for owner in owner_keys {
+        let method = &owners[owner][0];
+        for sub in crate::generic_dispatch::concrete_implementers(table, owner) {
+            if &sub == owner || reported.contains(&sub) {
+                continue;
+            }
+            let Some(param) = crate::generic_dispatch::unpinned_implementer_param(table, &sub, owner) else {
+                continue;
+            };
+            let span = table
+                .classes
+                .get(&sub)
+                .map(|c| c.span)
+                .or_else(|| table.records.get(&sub).map(|r| r.span))
+                .unwrap_or(Span::DUMMY);
+            let sub_bare = fqn_bare(&sub);
+            let owner_bare = fqn_bare(owner);
+            reported.insert(sub.clone());
             diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0438_GenericVirtualMethod,
                     format!(
-                        "class `{bare}` is extended, so its method `{name}` is called through \
-                         whichever subclass the object is -- and `{name}` has type parameters of its \
-                         own, which a method reached that way cannot have in this version of Jux",
+                        "`{sub_bare}` is a `{owner_bare}` with a type parameter `{param}` that `{owner_bare}` \
+                         does not fix, so a `{owner_bare}` value that is a `{sub_bare}` does not say what \
+                         `{param}` is -- and `{method}`, which has type parameters of its own, is called on \
+                         such a value by finding out which type it is",
                     ),
                 )
-                .with_span(sig.span)
-                // `final` and `sealed` used to be offered here. Neither
-                // changes how the method is reached, so neither helped
-                // (ERRATA E135).
+                .with_span(span)
                 .with_help(format!(
-                    "make `{name}` non-generic (a type parameter of the class can take the place \
-                     of the method's), make it `private`, or make it a `static` method that takes \
-                     the object as a parameter"
+                    "give `{sub_bare}` no type parameter beyond the ones its `{owner_bare}` supertype \
+                     fixes, or make `{method}` non-generic"
                 )),
             );
         }
@@ -5082,7 +5064,7 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
 /// so the two never match textually. Requiring an unambiguous single candidate
 /// keeps `show(int)` from silently replacing an inherited `show(String)` — with
 /// two same-arity members the declaration appends instead of guessing.
-fn override_slot(merged: &[(&ClassSig, MethodSig)], m: &MethodSig) -> Option<usize> {
+fn override_slot(merged: &[(&ClassSig, MethodSig)], m: &MethodSig, declaring: &ClassSig) -> Option<usize> {
     let want = param_shape_key(&m.params);
     if let Some(i) = merged
         .iter()
@@ -5090,23 +5072,59 @@ fn override_slot(merged: &[(&ClassSig, MethodSig)], m: &MethodSig) -> Option<usi
     {
         return Some(i);
     }
+    // An override writes the declaring class's (and the method's own) type
+    // parameters as whatever the subclass binds them to, at any depth:
+    // `accept(TreeVisitor<int, R> v)` overrides `accept(TreeVisitor<T, R> v)`
+    // under `extends Tree<int>` (ERRATA E1XX-GAP39b). Such a parameter
+    // matches anything in its place; the rest of the shape must agree.
     let substituted: Vec<usize> = merged
         .iter()
         .enumerate()
+        // Only an ANCESTOR's declaration is overridden this way: two members
+        // of one class are overloads (`<T> render(T)` beside `render(String)`).
+        .filter(|(_, (owner, _))| !std::ptr::eq(*owner, declaring))
         .filter(|(_, (owner, x))| {
+            let wild: Vec<&str> = owner
+                .generic_params
+                .iter()
+                .chain(x.generic_params.iter())
+                .map(|g| g.name.text.as_str())
+                .collect();
             x.params.len() == m.params.len()
-                && x.params.iter().any(|p| {
-                    p.ty.generic_args.is_empty()
-                        && p.ty.name.segments.len() == 1
-                        && owner
-                            .generic_params
-                            .iter()
-                            .any(|g| g.name.text == p.ty.name.segments[0].text)
-                })
+                && x.params.iter().zip(&m.params).all(|(a, b)| shape_matches_modulo(&a.ty, &b.ty, &wild))
         })
         .map(|(i, _)| i)
         .collect();
     (substituted.len() == 1).then(|| substituted[0])
+}
+
+/// Whether `written` (an ancestor's parameter type) has `actual`'s shape
+/// once every name in `wild` stands for any type.
+fn shape_matches_modulo(written: &TypeRef, actual: &TypeRef, wild: &[&str]) -> bool {
+    if written.fn_shape.is_some() || actual.fn_shape.is_some() {
+        return match (&written.fn_shape, &actual.fn_shape) {
+            (Some(a), Some(b)) => {
+                a.params.len() == b.params.len()
+                    && a.params.iter().zip(&b.params).all(|(x, y)| shape_matches_modulo(x, y, wild))
+                    && shape_matches_modulo(&a.return_type, &b.return_type, wild)
+            }
+            _ => false,
+        };
+    }
+    if written.generic_args.is_empty()
+        && written.name.segments.len() == 1
+        && wild.contains(&written.name.segments[0].text.as_str())
+    {
+        return true;
+    }
+    let last = |t: &TypeRef| t.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+    last(written) == last(actual)
+        && written.array_shape.is_some() == actual.array_shape.is_some()
+        && written.generic_args.len() == actual.generic_args.len()
+        && written.generic_args.iter().zip(&actual.generic_args).all(|(a, b)| match (a.as_type(), b.as_type()) {
+            (Some(x), Some(y)) => shape_matches_modulo(x, y, wild),
+            _ => true,
+        })
 }
 
 pub(crate) fn param_shape_key(params: &[ParamSig]) -> String {

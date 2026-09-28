@@ -726,6 +726,26 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         };
     }
 
+    // 1.55. A written `Task<T>` (§18.1.4) is the handle `spawn` and
+    //    `Worker.spawn` give back, typed by the sentinel those calls carry
+    //    (ERRATA E1XX-GAP39b), unless the program has a type of its own named
+    //    `Task` in scope (`todo.model.Task`).
+    if t.name.segments.len() == 1
+        && t.name.segments[0].text == "Task"
+        && t.generic_args.len() == 1
+        && !user_type_named(symbols, env, "Task")
+    {
+        let generic_args = t
+            .generic_args
+            .iter()
+            .map(|g| lower_generic_arg(g, env, symbols))
+            .collect();
+        return Ty::User {
+            name: juxc_ast::TASK_SENTINEL.to_string(),
+            generic_args,
+        };
+    }
+
     // 1.6. Async-runtime builtin types (§18.1/§18.3/§18.6): Channel<T> /
     //    AsyncMutex<T> / Stream<T> aren't Jux classes (they lower to
     //    emitted helpers), but parameter/field positions still need
@@ -2083,6 +2103,22 @@ fn walk_extends_to(
         current_args = parent_args_final;
         depth += 1;
     }
+}
+
+/// Whether `name` means a type the program (or a library it imports by name)
+/// declares, as seen from `env`'s unit. The runtime's own `Task` is not one.
+pub fn user_type_named(symbols: &SymbolTable, env: &TypeEnv, name: &str) -> bool {
+    let declared = |fqn: &str| {
+        symbols.classes.contains_key(fqn)
+            || symbols.records.contains_key(fqn)
+            || symbols.enums.contains_key(fqn)
+            || symbols.interfaces.contains_key(fqn)
+    };
+    declared(name)
+        || env.unqualified.get(name).is_some_and(|fqn| declared(fqn))
+        || symbols
+            .find_fqn_by_bare_in(name, &env.current_package.join("."))
+            .is_some_and(|fqn| declared(&fqn) && !fqn.starts_with("jux.std.") && !fqn.starts_with("rust."))
 }
 
 /// Compose the substitution table needed to interpret a member

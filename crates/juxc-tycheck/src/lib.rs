@@ -52,6 +52,7 @@ pub mod env;
 pub mod expand;
 pub mod foreign_conv;
 pub mod generators;
+pub mod generic_dispatch;
 pub mod hashing;
 pub(crate) mod hash_keys;
 pub mod infer;

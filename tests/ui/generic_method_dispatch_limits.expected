@@ -1,0 +1,2 @@
+generic_method_dispatch_limits.jux:12:1: [E0438] error: `Weird` is a `Tree` with a type parameter `U` that `Tree` does not fix, so a `Tree` value that is a `Weird` does not say what `U` is -- and `accept`, which has type parameters of its own, is called on such a value by finding out which type it is
+generic_method_dispatch_limits.jux:20:15: [E0438] error: an anonymous class cannot be a `Shape`: `describe` has type parameters of its own, and a call of it on a `Shape` value finds the method by the name of the type behind the value, which an anonymous class does not have

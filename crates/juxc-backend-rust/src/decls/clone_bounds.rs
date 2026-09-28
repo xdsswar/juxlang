@@ -136,7 +136,62 @@ impl RustEmitter {
             return String::new();
         }
         let subst = (!self.kind_type_subst.is_empty()).then_some(&self.kind_type_subst);
-        self.relaxed_where(sig.span, subst)
+        let mut parts = self.relaxed_where_parts(sig.span, subst);
+        parts.extend(self.kind_member_into_parts(sig));
+        Self::where_text(parts)
+    }
+
+    /// `V: Into<K>` for a member of a class declared `<K, V extends K>` that
+    /// takes a `V` (ERRATA E1XX-GAP39b): its body may store the `V` where a
+    /// `K` goes, and the trait member, every impl of it and the handle's
+    /// forwarding all have to say so, since the class's own method does.
+    /// Spelled in the vocabulary of the impl being written.
+    fn kind_member_into_parts(&self, sig: &juxc_tycheck::symbol_table::MethodSig) -> Vec<String> {
+        let Some(owner) = self
+            .symbols
+            .classes
+            .values()
+            .find(|c| c.methods.values().any(|m| m.span == sig.span))
+        else {
+            return Vec::new();
+        };
+        let names: Vec<&str> = owner.generic_params.iter().map(|p| p.name.text.as_str()).collect();
+        let spell = |n: &str| -> Option<String> {
+            match self.kind_type_subst.get(n) {
+                None => Some(juxc_lex::to_rust_ident(n)),
+                Some(t)
+                    if t.generic_args.is_empty()
+                        && t.name.segments.len() == 1
+                        && self.current_type_params.contains(t.name.segments[0].text.as_str()) =>
+                {
+                    Some(juxc_lex::to_rust_ident(&t.name.segments[0].text))
+                }
+                // Fixed to a concrete type by a subclass: nothing to say.
+                Some(_) => None,
+            }
+        };
+        let mut out = Vec::new();
+        for p in &owner.generic_params {
+            let takes = sig.params.iter().any(|q| {
+                q.ty.generic_args.is_empty() && q.ty.name.segments.len() == 1 && q.ty.name.segments[0].text == p.name.text
+            });
+            if !takes {
+                continue;
+            }
+            for b in &p.bounds {
+                if !b.generic_args.is_empty() || b.name.segments.len() != 1 {
+                    continue;
+                }
+                let k = b.name.segments[0].text.as_str();
+                if k == p.name.text || !names.contains(&k) {
+                    continue;
+                }
+                if let (Some(v), Some(k)) = (spell(&p.name.text), spell(k)) {
+                    out.push(format!("{v}: Into<{k}>"));
+                }
+            }
+        }
+        out
     }
 
     /// The clause for a function that returns a COPY of a value of type `ty`

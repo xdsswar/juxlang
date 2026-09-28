@@ -394,6 +394,12 @@ impl RustEmitter {
                 "Stream" if !self.symbols.classes.contains_key("Stream") => {
                     Some("crate::JuxStream")
                 }
+                // A written `Task<T>` is the handle `spawn` and `Worker.spawn`
+                // give back (§18.1.4, ERRATA E1XX-GAP39b), unless the program
+                // names a type of its own `Task`.
+                "Task" if ty.generic_args.len() == 1 && self.resolve_bare_type_fqn("Task").is_none() => {
+                    Some("crate::JuxTask")
+                }
                 _ => None,
             };
             if let Some(path) = mapped {

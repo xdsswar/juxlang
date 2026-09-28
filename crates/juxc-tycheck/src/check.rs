@@ -3984,19 +3984,10 @@ impl<'a> Checker<'a> {
         };
         let bare = seg.text.as_str();
         match crate::symbol_table::interface_dyn_dispatch_support(self.symbols, bare) {
-            Some(Err(crate::symbol_table::DynDispatchBlock::GenericMethod(m))) => {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0435_InterfaceNotDynDispatchable,
-                        format!(
-                            "interface `{bare}` can't be used as a dynamic value type -- its \
-                             method `{m}` has generic type parameters, which makes the trait \
-                             not object-safe; call it through a concrete implementer instead",
-                        ),
-                    )
-                    .with_span(tref.span),
-                );
-            }
+            // A method with type parameters of its own no longer keeps an
+            // interface from being a value type: it dispatches over the
+            // interface's implementers (ERRATA E1XX-GAP39b).
+            Some(Err(crate::symbol_table::DynDispatchBlock::GenericMethod(_))) => {}
             Some(Err(crate::symbol_table::DynDispatchBlock::GenericInterface(_)))
                 if tref.generic_args.is_empty() =>
             {
@@ -12341,7 +12332,7 @@ impl<'a> Checker<'a> {
                             .iter()
                             .map(|a| infer_expr(a, &self.env, self.symbols))
                             .collect();
-                        let inferred = infer_generic_args(&generic_params, &param_tys, &arg_tys);
+                        let inferred = infer_generic_args(&generic_params, &param_tys, &crate::generic_dispatch::args_as_param_types(self.symbols, &param_tys, &arg_tys));
                         self.report_generic_conflict(name, &generic_params, &param_tys, &arg_tys, c);
                         self.check_super_wildcard_args(&generic_params, &param_tys, &arg_tys, c);
                         let args: Vec<Ty> = generic_params
@@ -13022,6 +13013,9 @@ impl<'a> Checker<'a> {
                             method_name,
                             "cancel"
                                 | "blockingGet"
+                                // A worker's handle, now the same task
+                                // (ERRATA E1XX-GAP39b), was joined.
+                                | "join"
                                 | "isCancelled"
                                 | "isResolved"
                                 | "map"
@@ -13033,8 +13027,8 @@ impl<'a> Checker<'a> {
                                     format!(
                                         "no method `{method_name}` on `Task` -- a task's own \
                                          members are `cancel()`, `isCancelled()`, `isResolved()`, \
-                                         `blockingGet()`, `map(f)` and `flatMap(f)`; `await task` \
-                                         is what reads its value (§18.1.4)",
+                                         `blockingGet()` (or `join()`), `map(f)` and `flatMap(f)`; \
+                                         `await task` is what reads its value (§18.1.4)",
                                     ),
                                 )
                                 .with_span(field.field.span),
@@ -13500,6 +13494,34 @@ impl<'a> Checker<'a> {
         // expressions had no types, so `s.toUpperCase()` on a `String`
         // parameter reached rustc unlowered.
         if let Some(body) = &n.anonymous_body {
+            // A method with type parameters of its own, reached through the
+            // type implemented here, dispatches by naming the concrete type
+            // behind the value (ERRATA E1XX-GAP39b), and an anonymous class
+            // has no name to be found by.
+            let owners = crate::generic_dispatch::generic_virtual_owners(self.symbols);
+            let mut hit: Vec<(&String, &Vec<String>)> = owners
+                .iter()
+                .filter(|(o, _)| {
+                    *o == &class_name || crate::generic_dispatch::supertype_args(self.symbols, &class_name, o).is_some()
+                })
+                .collect();
+            hit.sort();
+            if let Some((owner, methods)) = hit.first() {
+                let owner_bare = crate::symbol_table::fqn_bare(owner);
+                let method = &methods[0];
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0438_GenericVirtualMethod,
+                        format!(
+                            "an anonymous class cannot be a `{owner_bare}`: `{method}` has type parameters \
+                             of its own, and a call of it on a `{owner_bare}` value finds the method by the \
+                             name of the type behind the value, which an anonymous class does not have",
+                        ),
+                    )
+                    .with_span(n.span)
+                    .with_help(format!("declare the class with a name (`class My{owner_bare} implements {owner_bare} {{ ... }}`)")),
+                );
+            }
             let this_ty = Ty::User { name: class_name.clone(), generic_args: Vec::new() };
             let saved_return = self.current_return.take();
             for method in &body.methods {
@@ -13865,7 +13887,7 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|a| infer_expr(a, &self.env, self.symbols))
             .collect();
-        let inferred = infer_generic_args(generic_params, &param_tys, &arg_tys);
+        let inferred = infer_generic_args(generic_params, &param_tys, &crate::generic_dispatch::args_as_param_types(self.symbols, &param_tys, &arg_tys));
         generic_params
             .iter()
             .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
@@ -13895,7 +13917,7 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|a| infer_expr(a, &self.env, self.symbols))
             .collect();
-        let inferred = infer_generic_args(method_generic_params, &param_tys, &arg_tys);
+        let inferred = infer_generic_args(method_generic_params, &param_tys, &crate::generic_dispatch::args_as_param_types(self.symbols, &param_tys, &arg_tys));
         // A method's own `<T>` SHADOWS a class parameter of the same name
         // (Java's rule): `<T> T echo(T t)` on a `Shelf<int>` takes and returns
         // what the call passes, not `int` (ERRATA E135). Substitution
@@ -18881,18 +18903,23 @@ public void main() { }");
         );
     }
 
-    /// A generic virtual method on a polymorphic base → E0438.
+    /// A generic virtual method on a polymorphic base dispatches on the
+    /// object's type (ERRATA E1XX-GAP39b): accepted. E0438 is left for a
+    /// subclass with a type parameter the base does not fix.
     #[test]
-    fn generic_virtual_method_on_base_emits_e0438() {
+    fn generic_virtual_method_on_base_is_accepted_unless_a_param_is_unfixed() {
         let d = run(r#"
             public class Base { public <R> R pick(R x){ return x; } }
             public class Sub extends Base {}
             public void main() {}
             "#);
-        assert!(
-            has(&d, code::Code::E0438_GenericVirtualMethod),
-            "expected E0438: {d:?}"
-        );
+        assert!(!has(&d, code::Code::E0438_GenericVirtualMethod), "unexpected E0438: {d:?}");
+        let d = run(r#"
+            public class Base<T> { public <R> R pick(R x){ return x; } }
+            public class Sub<T, U> extends Base<T> {}
+            public void main() {}
+            "#);
+        assert!(has(&d, code::Code::E0438_GenericVirtualMethod), "expected E0438: {d:?}");
     }
 
     /// A cast between two unrelated classes can never succeed → E0442.
@@ -19006,18 +19033,18 @@ public void main() { }");
         );
     }
 
-    /// A generic-method interface used as a value-typed local can't be a
-    /// trait object (object safety) → E0435.
+    /// A generic-method interface used as a value-typed local is a value
+    /// type like any other (ERRATA E1XX-GAP39b): no E0435.
     #[test]
-    fn generic_method_interface_value_local_emits_e0435() {
+    fn generic_method_interface_value_local_is_accepted() {
         let d = run(r#"
             public interface Mapper { <R> R map(R input); }
             public class Id implements Mapper { public <R> R map(R input) { return input; } }
             public void main() { Mapper m = new Id(); }
             "#);
         assert!(
-            has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
-            "expected E0435 for generic-method interface value: {d:?}",
+            !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
+            "unexpected E0435 for generic-method interface value: {d:?}",
         );
     }
 

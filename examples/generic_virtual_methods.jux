@@ -1,0 +1,181 @@
+// Methods with type parameters of their own, reached through a supertype
+// (ERRATA E1XX-GAP39b): the visitor pattern, `<R> R accept(Visitor<R> v)`,
+// on an interface and on an extended class, a generic method on a generic
+// base, a subclass that fixes its base's argument, a default method a
+// subclass overrides, and a type argument that is itself the caller's type
+// parameter. All of these used to be refused (E0435, E0438).
+
+import rust.std.Vec;
+
+// ---- the visitor over an interface ---------------------------------------
+
+interface Visitor<R> {
+    R visitNum(Num n);
+    R visitAdd(Add a);
+    R visitNeg(Neg n);
+}
+
+interface Expr {
+    <R> R accept(Visitor<R> v);
+    default <R> Vec<R> twice(Visitor<R> v) { Vec<R> out = new Vec<R>(); out.push(accept(v)); out.push(accept(v)); return out; }
+}
+
+class Num implements Expr {
+    int value;
+    Num(int value) { this.value = value; }
+    public <R> R accept(Visitor<R> v) { return v.visitNum(this); }
+}
+class Add implements Expr {
+    Expr left; Expr right;
+    Add(Expr left, Expr right) { this.left = left; this.right = right; }
+    public <R> R accept(Visitor<R> v) { return v.visitAdd(this); }
+}
+class Neg implements Expr {
+    Expr inner;
+    Neg(Expr inner) { this.inner = inner; }
+    public <R> R accept(Visitor<R> v) { return v.visitNeg(this); }
+    // Overrides the interface's default.
+    public <R> Vec<R> twice(Visitor<R> v) { Vec<R> out = new Vec<R>(); out.push(accept(v)); return out; }
+}
+
+class Eval implements Visitor<int> {
+    public int visitNum(Num n) { return n.value; }
+    public int visitAdd(Add a) { return a.left.accept(this) + a.right.accept(this); }
+    public int visitNeg(Neg n) { return -n.inner.accept(this); }
+}
+class Show implements Visitor<String> {
+    public String visitNum(Num n) { return "" + n.value; }
+    public String visitAdd(Add a) { return "(" + a.left.accept(this) + " + " + a.right.accept(this) + ")"; }
+    public String visitNeg(Neg n) { return "-" + n.inner.accept(this); }
+}
+// A visitor whose result is itself a tree: rebuilds the expression with
+// every number doubled.
+class Doubler implements Visitor<Expr> {
+    public Expr visitNum(Num n) { return new Num(n.value * 2); }
+    public Expr visitAdd(Add a) { return new Add(a.left.accept(this), a.right.accept(this)); }
+    public Expr visitNeg(Neg n) { return new Neg(n.inner.accept(this)); }
+}
+
+// The type argument is the CALLER's type parameter: no concrete `R` here.
+<R> Vec<R> visitAll(Vec<Expr> es, Visitor<R> v) {
+    Vec<R> out = new Vec<R>();
+    for (Expr e : es) { out.push(e.accept(v)); }
+    return out;
+}
+
+// ---- the same over an extended class, with a generic base -----------------
+
+interface TreeVisitor<T, R> {
+    R leaf(T value);
+    R node(Tree<T> left, Tree<T> right);
+}
+
+abstract class Tree<T> {
+    public abstract <R> R accept(TreeVisitor<T, R> v);
+    // Not overridden anywhere: inherited by every subclass.
+    public <R> R fold(R zero, (R, T) -> R step) {
+        return this.accept(new Folder<T, R>(zero, step));
+    }
+}
+class Leaf<T> extends Tree<T> {
+    T value;
+    Leaf(T value) { this.value = value; }
+    public <R> R accept(TreeVisitor<T, R> v) { return v.leaf(value); }
+}
+class Node<T> extends Tree<T> {
+    Tree<T> left; Tree<T> right;
+    Node(Tree<T> left, Tree<T> right) { this.left = left; this.right = right; }
+    public <R> R accept(TreeVisitor<T, R> v) { return v.node(left, right); }
+}
+// A subclass that fixes the base's argument.
+class Zero extends Tree<int> {
+    public <R> R accept(TreeVisitor<int, R> v) { return v.leaf(0); }
+}
+
+class Folder<T, R> implements TreeVisitor<T, R> {
+    R zero; (R, T) -> R step;
+    Folder(R zero, (R, T) -> R step) { this.zero = zero; this.step = step; }
+    public R leaf(T value) { return step(zero, value); }
+    public R node(Tree<T> left, Tree<T> right) { return right.accept(new Folder<T, R>(left.accept(this), step)); }
+}
+class Count<T> implements TreeVisitor<T, int> {
+    public int leaf(T value) { return 1; }
+    public int node(Tree<T> left, Tree<T> right) { return left.accept(this) + right.accept(this); }
+}
+// `R` is `Tree<T>`: the result is a tree of the visited tree's own type.
+class Mirror<T> implements TreeVisitor<T, Tree<T>> {
+    public Tree<T> leaf(T value) { return new Leaf<T>(value); }
+    public Tree<T> node(Tree<T> left, Tree<T> right) { return new Node<T>(right.accept(this), left.accept(this)); }
+}
+class Render<T> implements TreeVisitor<T, String> {
+    public String leaf(T value) { return "" + value; }
+    public String node(Tree<T> left, Tree<T> right) { return "[" + left.accept(this) + " " + right.accept(this) + "]"; }
+}
+
+// ---- a generic interface: a default one implementer overrides, and an
+//      implementer that fixes the interface's argument ---------------------
+
+interface Bag<T> {
+    Vec<T> items();
+    <R> R fold(R zero, (R, T) -> R step);
+    default <R> Vec<R> mapAll((T) -> R f) { Vec<R> out = new Vec<R>(); for (T t : items()) { out.push(f(t)); } return out; }
+}
+class ListBag<T> implements Bag<T> {
+    Vec<T> xs = new Vec<T>();
+    ListBag(T a, T b) { xs.push(a); xs.push(b); }
+    public Vec<T> items() { return xs; }
+    public <R> R fold(R zero, (R, T) -> R step) { R acc = zero; for (T t : xs) { acc = step(acc, t); } return acc; }
+}
+class Ints implements Bag<int> {
+    public Vec<int> items() { Vec<int> v = new Vec<int>(); v.push(10); v.push(20); return v; }
+    public <R> R fold(R zero, (R, int) -> R step) { return step(step(zero, 10), 20); }
+    public <R> Vec<R> mapAll((int) -> R f) { Vec<R> out = new Vec<R>(); out.push(f(99)); return out; }
+}
+<T, R> R foldAll(Vec<Bag<T>> bags, R zero, (R, T) -> R step) {
+    R acc = zero;
+    for (Bag<T> b : bags) { acc = b.fold(acc, step); }
+    return acc;
+}
+
+public void main() {
+    Expr e =new Add(new Num(1), new Neg(new Add(new Num(2), new Num(3))));
+    print(e.accept(new Eval()));
+    print(e.accept(new Show()));
+    Expr d = e.accept(new Doubler());
+    print(d.accept(new Show()));
+    print(d.accept(new Eval()));
+    print(e.twice(new Eval()).len());
+    Expr n = new Neg(new Num(4));
+    print(n.twice(new Show()).len());
+
+    Vec<Expr> es = new Vec<Expr>();
+    es.push(new Num(7));
+    es.push(e);
+    es.push(n);
+    Vec<String> shown = visitAll(es, new Show());
+    print(shown[1]);
+    Vec<int> values = visitAll(es, new Eval());
+    print(values[0] + values[1] + values[2]);
+
+    Tree<int> t = new Node<int>(new Leaf<int>(1), new Node<int>(new Leaf<int>(2), new Zero()));
+    print(t.accept(new Count<int>()));
+    print(t.accept(new Render<int>()));
+    Tree<int> m = t.accept(new Mirror<int>());
+    print(m.accept(new Render<int>()));
+    print(t.fold(0, (int acc, int v) -> acc + v));
+    print(t.fold("", (String acc, int v) -> acc + v));
+
+    Tree<String> words = new Node<String>(new Leaf<String>("a"), new Leaf<String>("b"));
+    print(words.accept(new Mirror<String>()).accept(new Render<String>()));
+    print(words.fold(0, (int acc, String w) -> acc + w.length()));
+
+    Vec<Bag<int>> bags = new Vec<Bag<int>>();
+    bags.push(new ListBag<int>(1, 2));
+    bags.push(new Ints());
+    print(foldAll(bags, 0, (int a, int x) -> a + x));
+    print(foldAll(bags, "", (String a, int x) -> a + x + ","));
+    for (Bag<int> b : bags) { print(b.mapAll((int x) -> x * 2).len()); }
+    Bag<String> sb = new ListBag<String>("a", "bc");
+    print(sb.fold(0, (int a, String s) -> a + s.length()));
+    print(sb.mapAll((String s) -> s + "!")[1]);
+}

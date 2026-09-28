@@ -469,10 +469,10 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0432`  | Invalid visibility on a top-level type (`private` / `protected`) | classes-rules §1.1 / §3.1 |
 | `E0433`  | Override narrows visibility relative to the overridden method | classes-rules §1.4   |
 | `E0434`  | Cyclic `extends` chain: a class that is its own ancestor, or an interface whose `extends` list leads back to itself | classes-rules §1.2 / `ERRATA.md` E131 |
-| `E0435`  | Interface not usable as a dyn-dispatched value type (generic interface / generic method) | Interface dispatch, stage 1 |
+| `E0435`  | Interface not usable as a dyn-dispatched value type: a generic interface used without its type arguments (a generic METHOD no longer blocks it, `ERRATA.md` E1XX-GAP39b) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
-| `E0438`  | Generic virtual method on a polymorphic base class (a generic base and a package-private method included); make it non-generic, `private`, or a `static` taking the object | Polymorphism, stage 2 / `ERRATA.md` E135 |
+| `E0438`  | A method with type parameters of its own, reached through a supertype, cannot find the object's type: a subtype with a type parameter the supertype does not fix (`Weird<T, U> extends Tree<T>`), or an anonymous class of the supertype | Type system §T.4.6 / `ERRATA.md` E135, E1XX-GAP39b |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |

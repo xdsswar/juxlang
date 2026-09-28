@@ -406,6 +406,15 @@ Rules:
 9. **Every type is written with its parameters' count** (**`E0443`**), at any
    depth of nesting and in every position; a Rust type may leave its defaulted
    parameters unwritten (§T.4.7.1).
+10. **A method with type parameters of its own may be reached through a
+   supertype** (the visitor pattern: `<R> R accept(Visitor<R> v)` on an
+   interface or on a class that is extended, called on a value typed by it),
+   for any type arguments the call has, including the caller's own type
+   parameters. The call runs the method of the object's own type. The object
+   has to be able to say what that type is, arguments included, so two
+   subtypes are refused (**`E0438`**, with the reason): one with a type
+   parameter the supertype does not fix (`class Weird<T, U> extends Tree<T>`),
+   and an anonymous class (`ERRATA.md` E1XX-GAP39b).
 
 ### T.4.7. Structural Inference Through Nested Generics
 
@@ -472,6 +481,16 @@ Rust allows it, with three rewrites where it does not:
   literal passed as such an `R` takes the type `K` is bound to (`ERRATA.md`
   E135). A method type parameter that shadows a class parameter is
   renamed in the Rust it lowers to.
+- **Generic methods through a supertype** (rule 10). The trait declares the
+  method `where Self: Sized`, off the vtable, and lists `JuxDynAny` as a
+  supertrait; the handle's impl (`impl Trait for Rc<H>`) downcasts the object
+  (`__jux_dyn_any()`) to each concrete class or record that is the supertype
+  and calls that type's method, which Rust monomorphizes for the call's type
+  arguments. A subtype that fixes the supertype's arguments is called with its
+  arguments and result passed through `__jux_seen_as`; a default method is
+  dispatched only to the types that override it and otherwise runs on the
+  handle through its `__jux_default_<m>` twin. A class `<K, V extends K>`
+  states `V: Into<K>` on each dispatch-trait member that takes a `V`.
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard
   whose bound names an in-scope type param substitutes that param directly

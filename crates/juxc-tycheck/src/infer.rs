@@ -1287,6 +1287,31 @@ pub fn named_operator_call_type(c: &CallExpr) -> Option<Ty> {
 /// bare `Vec` and `rust.std.Vec` are the same declaration, but only the resolved
 /// spelling matches what a declared slot, or a for-each over the result,
 /// compares against.
+/// The `Task<T>` a `spawn(f)` or `Worker.spawn(f)` gives back: `T` is what
+/// `f` produces. A lambda has no type of its own in Phase 1, so its body is
+/// read; an `async` call hands back what the call produces.
+fn spawned_task_type(arg: Option<&Expr>, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let value = match arg {
+        Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
+            juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
+                Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+                Some(Stmt::Return(Some(e), _)) => infer_expr(e, env, symbols),
+                _ => Ty::Void,
+            },
+        },
+        Some(other) => match infer_expr(other, env, symbols) {
+            Ty::Fn { return_type, .. } => *return_type,
+            t => t,
+        },
+        None => Ty::Unknown,
+    };
+    Ty::User {
+        name: juxc_ast::TASK_SENTINEL.to_string(),
+        generic_args: vec![value],
+    }
+}
+
 fn task_of_vec(element: Ty, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let vec = env
         .unqualified
@@ -1368,29 +1393,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // landed in. `Task` itself is not a Jux class, so method calls on
             // it go through the builtin short-circuit in `check`.
             if name == "spawn" {
-                let value = match c.args.first() {
-                    // `spawn(() -> …)`: the task's value is whatever the
-                    // lambda's body produces. A lambda has no type of its own
-                    // in Phase 1, so read the body rather than the lambda.
-                    Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
-                        juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
-                        juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
-                            Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
-                            _ => Ty::Void,
-                        },
-                    },
-                    // `spawn(asyncFn(x))` produces what the call produces,
-                    // since Phase 1 types a future by its value type.
-                    Some(other) => match infer_expr(other, env, symbols) {
-                        Ty::Fn { return_type, .. } => *return_type,
-                        t => t,
-                    },
-                    None => Ty::Unknown,
-                };
-                return Ty::User {
-                    name: juxc_ast::TASK_SENTINEL.to_string(),
-                    generic_args: vec![value],
-                };
+                return spawned_task_type(c.args.first(), env, symbols);
             }
             if name == "withTimeout" {
                 return Ty::Unknown;
@@ -1500,7 +1503,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     let param_tys: Vec<&TypeRef> = fn_sig.params.iter().map(|p| &p.ty).collect();
                     let arg_tys: Vec<Ty> =
                         c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
-                    infer_generic_args(&fn_sig.generic_params, &param_tys, &arg_tys)
+                    infer_generic_args(&fn_sig.generic_params, &param_tys, &crate::generic_dispatch::args_as_param_types(symbols, &param_tys, &arg_tys))
                 };
                 return substitute_via_inference(&base, &fn_sig.generic_params, &inferred);
             }
@@ -1568,6 +1571,19 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     return task_of_vec(element, env, symbols);
                 }
             }
+            // `Worker.spawn(f)` (§18.2) hands back the same `Task<T>` as
+            // `spawn` (ERRATA E1XX-GAP39b), so a written `Task<T>` slot takes
+            // either.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Worker"
+                    && method_name == "spawn"
+                    && env.lookup("Worker").is_none()
+                    && !crate::ty::user_type_named(symbols, env, "Worker")
+                {
+                    return spawned_task_type(c.args.first(), env, symbols);
+                }
+            }
             // `Task.completed(v)` is a `Task` of `v`'s type. `Task.failed(e)`
             // says nothing about the value it never produces, so its `T` is
             // whatever the slot it lands in makes it.
@@ -1632,7 +1648,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // code, so it has the type the task carries. Left untyped, the
             // `Vec` handle `Task.all(..).blockingGet()` answers with was
             // iterated as though it were a plain sequence.
-            if method_name == "blockingGet" && c.args.is_empty() {
+            if matches!(method_name, "blockingGet" | "join") && c.args.is_empty() {
                 if let Ty::User { name, generic_args } =
                     infer_expr(&field.object, env, symbols)
                 {
@@ -2253,7 +2269,7 @@ fn method_infer_return(
     } else {
         let param_tys: Vec<&TypeRef> = method.params.iter().map(|p| &p.ty).collect();
         let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
-        infer_generic_args(&method.generic_params, &param_tys, &arg_tys)
+        infer_generic_args(&method.generic_params, &param_tys, &crate::generic_dispatch::args_as_param_types(symbols, &param_tys, &arg_tys))
     };
     substitute_via_inference(after_class, &method.generic_params, &inferred)
 }

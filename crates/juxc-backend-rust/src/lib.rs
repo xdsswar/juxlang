@@ -5301,6 +5301,25 @@ pub fn __jux_foreign_as_exception(
         w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for ::std::boxed::Box<T> {\n");
         w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
         w.push_str("}\n\n");
+        // What an object is, through its vtable (ERRATA E1XX-GAP39b). A trait
+        // that declares a method with type parameters of its own lists this
+        // as a supertrait; the handle's impl of that method asks the object
+        // for it and calls the concrete type's method
+        // (`decls::generic_dispatch`). `__jux_seen_as` sees a value through the
+        // type it already is, for a subtype that fixes its supertype's
+        // arguments.
+        w.push_str("pub trait JuxDynAny {\n");
+        w.push_str("    fn __jux_dyn_any(&self) -> &dyn std::any::Any;\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: 'static> JuxDynAny for T {\n");
+        w.push_str("    fn __jux_dyn_any(&self) -> &dyn std::any::Any { self }\n");
+        w.push_str("}\n");
+        w.push_str("pub fn __jux_seen_as<A: 'static, B: 'static>(a: A) -> B {\n");
+        w.push_str("    match (::std::boxed::Box::new(a) as ::std::boxed::Box<dyn std::any::Any>).downcast::<B>() {\n");
+        w.push_str("        Ok(b) => *b,\n");
+        w.push_str("        Err(_) => panic!(\"a value was not of the type its class fixes\"),\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         // `any` (JUX-TYPE-SYSTEM-ADDENDUM §T.1.2). The value sits behind
         // `dyn Any`, which keeps its concrete type for the `=>` test. What the
         // value cannot say from behind `dyn Any` -- how `===` compares it and
@@ -5586,9 +5605,38 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    }\n");
         w.push_str("    value\n");
         w.push_str("}\n");
-        // The handle sits in a `Cell` so `cancel()` works through `&self`: a
-        // cancelled task is still a value the program may `await`.
-        w.push_str("pub struct JuxTask<T>(std::cell::Cell<Option<futures::future::RemoteHandle<Result<T, ()>>>>, std::sync::Arc<JuxTaskShared>);\n");
+        // The handle sits behind a shared slot so `cancel()` works through
+        // `&self` (a cancelled task is still a value the program may
+        // `await`), and so a task is a HANDLE (§18.1.4, "a refcounted handle
+        // to a running computation"): it can be held in a field, a
+        // collection or a parameter like any other value, and every copy
+        // names the same task (ERRATA E1XX-GAP39b). Whichever copy is awaited
+        // first takes the result.
+        w.push_str("pub struct JuxTaskSlot<T>(std::sync::Mutex<Option<futures::future::RemoteHandle<Result<T, ()>>>>);\n");
+        w.push_str("impl<T> JuxTaskSlot<T> {\n");
+        w.push_str("    fn new(h: futures::future::RemoteHandle<Result<T, ()>>) -> std::sync::Arc<Self> {\n");
+        w.push_str("        std::sync::Arc::new(JuxTaskSlot(std::sync::Mutex::new(Some(h))))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn take(&self) -> Option<futures::future::RemoteHandle<Result<T, ()>>> {\n");
+        w.push_str("        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("pub struct JuxTask<T>(std::sync::Arc<JuxTaskSlot<T>>, std::sync::Arc<JuxTaskShared>);\n");
+        w.push_str("impl<T> Clone for JuxTask<T> {\n");
+        w.push_str("    fn clone(&self) -> Self {\n");
+        w.push_str("        JuxTask(self.0.clone(), self.1.clone())\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> std::fmt::Debug for JuxTask<T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        f.write_str(\"Task\")\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> std::fmt::Display for JuxTask<T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        f.write_str(\"Task\")\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
         w.push_str("impl<T: 'static> JuxTask<T> {\n");
         w.push_str("    /// The awaiter's side of a failed task: rethrow what it threw.\n");
         w.push_str("    fn settle(shared: &JuxTaskShared, result: Result<T, ()>) -> T {\n");
@@ -5608,6 +5656,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    pub fn blockingGet(self) -> T {\n");
         w.push_str("        let Some(handle) = self.0.take() else { Self::cancelled() };\n");
         w.push_str("        Self::settle(&self.1, crate::__jux_block_on(handle))\n");
+        w.push_str("    }\n");
+        // A worker's handle was joined as `join()` before it became a task.
+        w.push_str("    pub fn join(self) -> T {\n");
+        w.push_str("        self.blockingGet()\n");
         w.push_str("    }\n");
         w.push_str("    pub fn cancel(&self) {\n");
         w.push_str("        // Cooperative, per EXCEPTIONS X.7.3: the task throws\n");
@@ -5660,7 +5712,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    let (remote, handle) = futures::FutureExt::remote_handle(async move { result });\n");
         w.push_str("    // Ready on its first poll, which delivers the outcome to the handle.\n");
         w.push_str("    let _ = futures::FutureExt::now_or_never(remote);\n");
-        w.push_str("    JuxTask(std::cell::Cell::new(Some(handle)), shared)\n");
+        w.push_str("    JuxTask(JuxTaskSlot::new(handle), shared)\n");
         w.push_str("}\n");
         // Per section 18.1.3 an UNAWAITED task runs to completion - but
         // RemoteHandle CANCELS its computation when dropped. The
@@ -5668,7 +5720,10 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // task); explicit `cancel()` drops the handle for real.
         w.push_str("impl<T> Drop for JuxTask<T> {\n");
         w.push_str("    fn drop(&mut self) {\n");
-        w.push_str("        if let Some(h) = self.0.get_mut().take() {\n");
+        // Only the last copy of the handle lets the task go.
+        w.push_str("        let last = std::sync::Arc::strong_count(&self.0) == 1;\n");
+        w.push_str("        let held = if last { self.0.take() } else { None };\n");
+        w.push_str("        if let Some(h) = held {\n");
         w.push_str("            h.forget();\n");
         w.push_str("            // Nobody will await it now: a failure already parked is\n");
         w.push_str("            // unhandled, and a later one will be reported by the task.\n");
@@ -5689,13 +5744,15 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("}\n");
         w.push_str("impl<T: 'static> std::future::Future for JuxTask<T> {\n");
         w.push_str("    type Output = T;\n");
-        w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
-        w.push_str("        let Some(h) = self.0.get_mut().as_mut() else { Self::cancelled() };\n");
+        w.push_str("    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
+        w.push_str("        let mut slot = self.0 .0.lock().unwrap_or_else(|e| e.into_inner());\n");
+        w.push_str("        let Some(h) = slot.as_mut() else { Self::cancelled() };\n");
         w.push_str("        match std::pin::Pin::new(h).poll(cx) {\n");
         w.push_str("            std::task::Poll::Pending => std::task::Poll::Pending,\n");
         w.push_str("            std::task::Poll::Ready(result) => {\n");
         w.push_str("                // Consumed: the handle's drop must not orphan the task.\n");
-        w.push_str("                *self.0.get_mut() = None;\n");
+        w.push_str("                *slot = None;\n");
+        w.push_str("                drop(slot);\n");
         w.push_str("                std::task::Poll::Ready(Self::settle(&self.1, result))\n");
         w.push_str("            }\n");
         w.push_str("        }\n");
@@ -5831,10 +5888,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         w.push_str("    let handle = __JUX_LOOP.with(|l| {\n");
         w.push_str("        futures::task::LocalSpawnExt::spawn_local_with_handle(&l.spawner, scoped).expect(\"spawn\")\n");
         w.push_str("    });\n");
-        w.push_str("    JuxTask(\n");
-        w.push_str("        std::cell::Cell::new(Some(handle)),\n");
-        w.push_str("        shared,\n");
-        w.push_str("    )\n");
+        w.push_str("    JuxTask(JuxTaskSlot::new(handle), shared)\n");
         w.push_str("}\n\n");
         // Channel runtime — JUX-ASYNC v2 §18.3. A bounded async
         // channel: `send` suspends when full, `receive` suspends
@@ -6193,36 +6247,45 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // `std::thread::spawn` — the spec hides these behind the
         // "transferable" terminology, but the constraints are
         // identical at the runtime layer.
-        w.push_str("pub struct Task<T>(futures::channel::oneshot::Receiver<T>);\n");
-        w.push_str("impl<T> std::future::Future for Task<T> {\n");
-        w.push_str("    type Output = T;\n");
-        w.push_str(
-            "    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n",
-        );
-        w.push_str(
-            "        match std::future::Future::poll(std::pin::Pin::new(&mut self.0), cx) {\n",
-        );
-        w.push_str("            std::task::Poll::Ready(Ok(v))  => std::task::Poll::Ready(v),\n");
-        w.push_str(
-            "            std::task::Poll::Ready(Err(_)) => panic!(\"worker task aborted before completion\"),\n",
-        );
-        w.push_str("            std::task::Poll::Pending       => std::task::Poll::Pending,\n");
-        w.push_str("        }\n");
-        w.push_str("    }\n");
-        w.push_str("}\n");
-        // `join()` — block the calling thread until the worker completes.
-        // Uses futures::executor::block_on so no additional runtime dep needed.
-        w.push_str(
-            "impl<T> Task<T> { pub fn join(self) -> T { crate::__jux_block_on(self) } }\n",
-        );
+        // **One task type** (ERRATA E1XX-GAP39b). A worker's handle is the
+        // same `JuxTask<T>` `spawn` gives back, so a written `Task<T>` holds
+        // either. The work is driven to completion ON the worker thread (the
+        // remote half of the handle runs there), so awaiting it, or blocking
+        // on it with `blockingGet()` / `join()`, never needs the caller's
+        // event loop, and a failure on the worker is rethrown where the
+        // task is awaited.
         w.push_str("pub struct Worker;\n");
         w.push_str("impl Worker {\n");
         w.push_str(
-            "    pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> Task<T> {\n",
+            "    pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> JuxTask<T> {\n",
         );
+        w.push_str("        let shared = std::sync::Arc::new(JuxTaskShared {\n");
+        w.push_str("            state: std::sync::Mutex::new((false, None)),\n");
+        w.push_str("            cancelled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("            settled: std::sync::atomic::AtomicBool::new(false),\n");
+        w.push_str("        });\n");
+        // `f` runs OUTSIDE any executor (an `async` lambda drives its own
+        // loop with `__jux_block_on`, which may not nest), and only then is
+        // its outcome delivered through the remote half; a failure is
+        // rethrown where the task is awaited.
+        w.push_str("        let done = shared.clone();\n");
         w.push_str("        let (tx, rx) = futures::channel::oneshot::channel();\n");
-        w.push_str("        std::thread::spawn(move || { crate::jux_enter_thread(); let _ = tx.send(f()); });\n");
-        w.push_str("        Task(rx)\n");
+        w.push_str("        let work = async move {\n");
+        w.push_str("            match rx.await {\n");
+        w.push_str("                Ok(Ok(v)) => Ok::<T, ()>(v),\n");
+        w.push_str("                Ok(Err(p)) => std::panic::resume_unwind(p),\n");
+        w.push_str("                Err(_) => panic!(\"worker task aborted before completion\"),\n");
+        w.push_str("            }\n");
+        w.push_str("        };\n");
+        w.push_str("        let (remote, handle) = futures::FutureExt::remote_handle(work);\n");
+        w.push_str("        std::thread::spawn(move || {\n");
+        w.push_str("            crate::jux_enter_thread();\n");
+        w.push_str("            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
+        w.push_str("            done.settled.store(true, std::sync::atomic::Ordering::SeqCst);\n");
+        w.push_str("            let _ = tx.send(out);\n");
+        w.push_str("            futures::executor::block_on(remote);\n");
+        w.push_str("        });\n");
+        w.push_str("        JuxTask(JuxTaskSlot::new(handle), shared)\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         // **Runtime failures in Jux terms (GAPS.md gap 33).** A program never
