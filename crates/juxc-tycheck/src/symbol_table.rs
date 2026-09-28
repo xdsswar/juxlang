@@ -4727,7 +4727,7 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
 
 /// **E0438**: a method with type parameters of its own, reached through a
 /// supertype, dispatches over the concrete types that are that supertype
-/// (`crate::generic_dispatch`, ERRATA E1XX-GAP39b). A value of the supertype
+/// (`crate::generic_dispatch`, ERRATA E136). A value of the supertype
 /// has to say which of them it is, arguments included, and a subtype with a
 /// type parameter the supertype does not fix (`class Weird<T, U> extends
 /// Tree<T>`) cannot: a `Tree<int>` that is a `Weird` does not say what `U`
@@ -5075,7 +5075,7 @@ fn override_slot(merged: &[(&ClassSig, MethodSig)], m: &MethodSig, declaring: &C
     // An override writes the declaring class's (and the method's own) type
     // parameters as whatever the subclass binds them to, at any depth:
     // `accept(TreeVisitor<int, R> v)` overrides `accept(TreeVisitor<T, R> v)`
-    // under `extends Tree<int>` (ERRATA E1XX-GAP39b). Such a parameter
+    // under `extends Tree<int>` (ERRATA E136). Such a parameter
     // matches anything in its place; the rest of the shape must agree.
     let substituted: Vec<usize> = merged
         .iter()

@@ -1,5 +1,5 @@
 //! Dispatch of a method with type parameters of its own through a supertype
-//! value (ERRATA E1XX-GAP39b; the design is in `juxc_tycheck::generic_dispatch`).
+//! value (ERRATA E136; the design is in `juxc_tycheck::generic_dispatch`).
 //!
 //! A supertype value is `Rc<dyn Trait>`. A trait object cannot carry a
 //! generic method, so the trait declares it `where Self: Sized` (every

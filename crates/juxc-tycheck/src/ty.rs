@@ -728,7 +728,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
 
     // 1.55. A written `Task<T>` (§18.1.4) is the handle `spawn` and
     //    `Worker.spawn` give back, typed by the sentinel those calls carry
-    //    (ERRATA E1XX-GAP39b), unless the program has a type of its own named
+    //    (ERRATA E136), unless the program has a type of its own named
     //    `Task` in scope (`todo.model.Task`).
     if t.name.segments.len() == 1
         && t.name.segments[0].text == "Task"

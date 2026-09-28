@@ -414,7 +414,7 @@ Rules:
    has to be able to say what that type is, arguments included, so two
    subtypes are refused (**`E0438`**, with the reason): one with a type
    parameter the supertype does not fix (`class Weird<T, U> extends Tree<T>`),
-   and an anonymous class (`ERRATA.md` E1XX-GAP39b).
+   and an anonymous class (`ERRATA.md` E136).
 
 ### T.4.7. Structural Inference Through Nested Generics
 

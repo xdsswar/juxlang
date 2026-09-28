@@ -5006,7 +5006,7 @@ a bound promises and how a bound is lowered.
    generic and package-private cases and advises what works (non-generic,
    `private`, or `static` taking the object).
 
-**Still a limitation, now a diagnostic.** Resolved by E1XX-GAP39b: ~~A
+**Still a limitation, now a diagnostic.** Resolved by E136: ~~A
 generic method that can be overridden, on a class that is extended (the
 visitor pattern's `<R> R accept(Visitor<R> v)`), is E0438 as before: its
 dispatch goes through a trait object, which a method with its own type
@@ -5020,7 +5020,7 @@ parameters cannot be part of.~~
 `extends_foreign_type`, `generic_method_on_generic_base` and
 `intersection_bound_one_missing`.
 
-**Known boundary.** Resolved by E1XX-GAP39b: ~~A written `Task<T>` type is the `Worker` task of
+**Known boundary.** Resolved by E136: ~~A written `Task<T>` type is the `Worker` task of
 `jux.std.concurrent`, not the task `spawn` returns, so `Task<int> t =
 spawn(f())` does not build; `var t = spawn(f())` does. That is the async
 surface's naming, not generics', and is left open. `<R extends K>` at the
@@ -5033,7 +5033,7 @@ it would also need the `where` clause on the class's dispatch trait.~~
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 lists `E0419` and `E0459`, and `E0443`
 says "at any depth". GAPS.md gap 39 is closed.
 
-## E1XX-GAP39b. The three things E135 left open: a written `Task<T>`, a generic method reached through a supertype, and `V extends K` on an extended class
+## E136. The three things E135 left open: a written `Task<T>`, a generic method reached through a supertype, and `V extends K` on an extended class
 
 **Conflict.** E135 closed gap 39 with three items left open, and the rule is
 that none may stay open:

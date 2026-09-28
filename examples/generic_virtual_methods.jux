@@ -1,5 +1,5 @@
 // Methods with type parameters of their own, reached through a supertype
-// (ERRATA E1XX-GAP39b): the visitor pattern, `<R> R accept(Visitor<R> v)`,
+// (ERRATA E136): the visitor pattern, `<R> R accept(Visitor<R> v)`,
 // on an interface and on an extended class, a generic method on a generic
 // base, a subclass that fixes its base's argument, a default method a
 // subclass overrides, and a type argument that is itself the caller's type

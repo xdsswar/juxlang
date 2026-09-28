@@ -65,7 +65,7 @@ impl RustEmitter {
             // `Sized`, the value behind it may not be, and the default body
             // reaches the value through the forwarded abstract methods.
             // A method with type parameters of its own is kept whatever its
-            // body: the handle answers it by dispatch (ERRATA E1XX-GAP39b).
+            // body: the handle answers it by dispatch (ERRATA E136).
             .filter(|m| !m.generic_params.is_empty() || !default_method_needs_sized_self(m))
             .cloned()
             .collect();
@@ -338,7 +338,7 @@ impl RustEmitter {
         // `===` and identity hashing reach it through the vtable.
         self.w.push_str(" + crate::JuxIdentity");
         // A method with type parameters of its own is dispatched on the
-        // object's own type (ERRATA E1XX-GAP39b), which the object tells.
+        // object's own type (ERRATA E136), which the object tells.
         let own_fqn = self
             .lookup_interface_by_bare_or_fqn(&interface.name.text)
             .map(|(k, _)| k.to_string())
@@ -381,7 +381,7 @@ impl RustEmitter {
             // still call, and `m` itself delegates to it.
             // A default with type parameters of its own keeps its body in a
             // twin too: the handle runs it for a value that does not write
-            // its own (ERRATA E1XX-GAP39b).
+            // its own (ERRATA E136).
             let super_called = method.body.is_some()
                 && (self
                     .interface_super_calls
@@ -469,7 +469,7 @@ impl RustEmitter {
                 bounds.push("Self: Sized + Clone + 'static".to_string());
             } else if !method.generic_params.is_empty() {
                 // Kept off the vtable, so the interface stays a value type;
-                // a handle answers it by dispatch (ERRATA E1XX-GAP39b).
+                // a handle answers it by dispatch (ERRATA E136).
                 bounds.push("Self: Sized".to_string());
             }
             bounds.extend(crate::decls::functions::where_bounds(&method.wheres));

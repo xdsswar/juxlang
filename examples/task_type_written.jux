@@ -1,5 +1,5 @@
 // A written `Task<T>` (JUX-ASYNC §18.1.4) is the handle `spawn` gives back,
-// and `Worker.spawn` gives back the same one (ERRATA E1XX-GAP39b). It used
+// and `Worker.spawn` gives back the same one (ERRATA E136). It used
 // to name a different, worker-only type, so `Task<int> t = spawn(f())` did
 // not build. A task is a handle: it goes in fields, parameters, returns and
 // collections like any other value.

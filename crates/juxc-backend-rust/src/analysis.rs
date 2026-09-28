@@ -4641,7 +4641,7 @@ impl crate::RustEmitter {
         // Inside an interface's default method, `this` is the interface: its
         // own method (or one it extends) is the callee. Without this an
         // interface-typed argument of `get(s)` was moved into the first of two
-        // calls (ERRATA E1XX-GAP39b).
+        // calls (ERRATA E136).
         if self.enclosing_class.is_none() {
             let iface = self.enclosing_interface.as_deref()?;
             let mut queue = vec![iface.to_string()];
@@ -4876,7 +4876,7 @@ impl crate::RustEmitter {
                 // extends) declares, read through the receiver's arguments.
                 // Without it an argument to `e.accept(this)` on an `Expr`
                 // value was not converted to the `Visitor<R>` it goes to
-                // (ERRATA E1XX-GAP39b).
+                // (ERRATA E136).
                 let mut queue: Vec<(String, Vec<juxc_tycheck::Ty>)> = vec![(bare.to_string(), recv_args.clone())];
                 // A CLASS receiver reaches an interface default it inherits
                 // (`f.both(new Twice())`) through the interfaces its chain
@@ -5139,7 +5139,7 @@ impl crate::RustEmitter {
         // An ancestor's body copied into a subclass that fixes both
         // parameters (`PetChain extends Chain<Pet, Cat>`): the checker held
         // `V extends K` where the body was written, and the conversion is
-        // between the types the subclass gives them (ERRATA E1XX-GAP39b).
+        // between the types the subclass gives them (ERRATA E136).
         if self.kind_type_subst.contains_key(k) && self.kind_type_subst.contains_key(&r) {
             return Some(r);
         }
@@ -5613,7 +5613,7 @@ impl crate::RustEmitter {
                 // The value's own class says which instantiation of the slot's
                 // interface it is (`Mirror<String>` is a `TreeVisitor<String,
                 // Tree<String>>`), which a type parameter of the callee in the
-                // slot (`TreeVisitor<T, R>`) cannot (ERRATA E1XX-GAP39b).
+                // slot (`TreeVisitor<T, R>`) cannot (ERRATA E136).
                 let cast_ty = self
                     .cast_type_from_value(&cast_ty, expr)
                     .unwrap_or_else(|| self.cast_type_in_caller_scope(&cast_ty));

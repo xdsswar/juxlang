@@ -1,5 +1,5 @@
 //! Methods with type parameters of their own reached through a supertype
-//! (ERRATA E1XX-GAP39b): the visitor pattern's `<R> R accept(Visitor<R> v)`
+//! (ERRATA E136): the visitor pattern's `<R> R accept(Visitor<R> v)`
 //! declared on an interface or an extended class and called on a value typed
 //! by it.
 //!
@@ -211,7 +211,7 @@ pub fn shown(fqn: &str) -> &str {
 /// Each argument type seen as the parameter's type where it is a SUBTYPE of
 /// it: `Mirror<String>` passed for a `TreeVisitor<T, R>` is read as the
 /// `TreeVisitor<String, Tree<String>>` it is, so inference binds `R`
-/// (ERRATA E1XX-GAP39b). Inference unifies heads structurally and learned
+/// (ERRATA E136). Inference unifies heads structurally and learned
 /// nothing from a subtype before. Arguments of the parameter's own type, and
 /// every other shape, pass through unchanged.
 pub fn args_as_param_types(

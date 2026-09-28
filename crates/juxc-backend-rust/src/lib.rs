@@ -5301,7 +5301,7 @@ pub fn __jux_foreign_as_exception(
         w.push_str("impl<T: ?Sized + JuxIdentity> JuxIdentity for ::std::boxed::Box<T> {\n");
         w.push_str("    fn __jux_identity(&self) -> *const () { (**self).__jux_identity() }\n");
         w.push_str("}\n\n");
-        // What an object is, through its vtable (ERRATA E1XX-GAP39b). A trait
+        // What an object is, through its vtable (ERRATA E136). A trait
         // that declares a method with type parameters of its own lists this
         // as a supertrait; the handle's impl of that method asks the object
         // for it and calls the concrete type's method
@@ -5610,7 +5610,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // `await`), and so a task is a HANDLE (§18.1.4, "a refcounted handle
         // to a running computation"): it can be held in a field, a
         // collection or a parameter like any other value, and every copy
-        // names the same task (ERRATA E1XX-GAP39b). Whichever copy is awaited
+        // names the same task (ERRATA E136). Whichever copy is awaited
         // first takes the result.
         w.push_str("pub struct JuxTaskSlot<T>(std::sync::Mutex<Option<futures::future::RemoteHandle<Result<T, ()>>>>);\n");
         w.push_str("impl<T> JuxTaskSlot<T> {\n");
@@ -6247,7 +6247,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
         // `std::thread::spawn` — the spec hides these behind the
         // "transferable" terminology, but the constraints are
         // identical at the runtime layer.
-        // **One task type** (ERRATA E1XX-GAP39b). A worker's handle is the
+        // **One task type** (ERRATA E136). A worker's handle is the
         // same `JuxTask<T>` `spawn` gives back, so a written `Task<T>` holds
         // either. The work is driven to completion ON the worker thread (the
         // remote half of the handle runs there), so awaiting it, or blocking

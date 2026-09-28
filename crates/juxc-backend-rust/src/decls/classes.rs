@@ -2980,7 +2980,7 @@ impl RustEmitter {
         self.w.push_str(&to_rust_ident(name));
         // A method with type parameters of its own keeps them, and stays off
         // the vtable (`Self: Sized`) so the trait is still a value type; the
-        // handle answers it by dispatch (ERRATA E1XX-GAP39b).
+        // handle answers it by dispatch (ERRATA E136).
         self.emit_method_own_generics(&sig.generic_params);
         self.w.push_str("(&self");
         for p in &sig.params {
@@ -3895,7 +3895,7 @@ impl RustEmitter {
             Vec::new()
         };
         // A method with type parameters of its own is dispatched on the
-        // object's own type (ERRATA E1XX-GAP39b), which the object tells.
+        // object's own type (ERRATA E136), which the object tells.
         if own_methods.iter().any(|(_, s)| !s.generic_params.is_empty()) {
             self.w.push_str(" + crate::JuxDynAny");
         }
@@ -4421,7 +4421,7 @@ impl RustEmitter {
         self.w.push_str(&clause);
         if !sig.generic_params.is_empty() {
             // Answered by the concrete type behind the handle (ERRATA
-            // E1XX-GAP39b).
+            // E136).
             self.w.push(' ');
             let base_fqn = self
                 .resolve_bare_class_fqn(class_bare)
@@ -5043,7 +5043,7 @@ impl RustEmitter {
                 self.w.push_str("fn ");
                 self.w.push_str(&to_rust_ident(method_name));
                 // A method with type parameters of its own implements them
-                // here too (ERRATA E1XX-GAP39b), read through the
+                // here too (ERRATA E136), read through the
                 // interface-to-class map.
                 if !method.generic_params.is_empty() {
                     let outer: Vec<String> = type_subst.keys().cloned().collect();

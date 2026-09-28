@@ -142,7 +142,7 @@ impl RustEmitter {
     }
 
     /// `V: Into<K>` for a member of a class declared `<K, V extends K>` that
-    /// takes a `V` (ERRATA E1XX-GAP39b): its body may store the `V` where a
+    /// takes a `V` (ERRATA E136): its body may store the `V` where a
     /// `K` goes, and the trait member, every impl of it and the handle's
     /// forwarding all have to say so, since the class's own method does.
     /// Spelled in the vocabulary of the impl being written.

@@ -1572,7 +1572,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 }
             }
             // `Worker.spawn(f)` (§18.2) hands back the same `Task<T>` as
-            // `spawn` (ERRATA E1XX-GAP39b), so a written `Task<T>` slot takes
+            // `spawn` (ERRATA E136), so a written `Task<T>` slot takes
             // either.
             if let Expr::Path(qn) = field.object.as_ref() {
                 if qn.segments.len() == 1

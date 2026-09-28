@@ -1,5 +1,5 @@
 // A method with type parameters of its own, called on a supertype value,
-// finds the concrete type behind the value (ERRATA E1XX-GAP39b). Two shapes
+// finds the concrete type behind the value (ERRATA E136). Two shapes
 // cannot be found, and each says why (E0438).
 interface Visitor<R> { R visit(int n); }
 abstract class Tree<T> {

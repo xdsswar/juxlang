@@ -176,7 +176,7 @@ If a task is dropped without being awaited, it continues to run to completion. E
 
 #### 18.1.4. The Task Type
 
-`Task<T>` is a refcounted handle to a running computation. It exists in `std.async`. There is one `Task<T>`: `spawn` returns it and so does `Worker.spawn` (§18.2), and a written `Task<T>` names it wherever a type is written, a field, a parameter, a return or an element (`ERRATA.md` E1XX-GAP39b). Copies of a task name the same task; whichever is awaited first takes the result:
+`Task<T>` is a refcounted handle to a running computation. It exists in `std.async`. There is one `Task<T>`: `spawn` returns it and so does `Worker.spawn` (§18.2), and a written `Task<T>` names it wherever a type is written, a field, a parameter, a return or an element (`ERRATA.md` E136). Copies of a task name the same task; whichever is awaited first takes the result:
 
 ```jux
 public class Task<T> {
@@ -468,7 +468,7 @@ public async int parallelSum(int[] data) {
 }
 ```
 
-`Worker.spawn(f)` runs `f` on a thread from the worker pool and returns a `Task<T>`, the same type `spawn` returns; a failure on the worker is rethrown where the task is awaited (`ERRATA.md` E1XX-GAP39b). Values captured by `f` must be **transferable** — a property the compiler verifies without exposing `Send` or `Sync` as user-facing terms.
+`Worker.spawn(f)` runs `f` on a thread from the worker pool and returns a `Task<T>`, the same type `spawn` returns; a failure on the worker is rethrown where the task is awaited (`ERRATA.md` E136). Values captured by `f` must be **transferable** — a property the compiler verifies without exposing `Send` or `Sync` as user-facing terms.
 
 Transferable types are:
 

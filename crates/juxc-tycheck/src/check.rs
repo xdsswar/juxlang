@@ -3986,7 +3986,7 @@ impl<'a> Checker<'a> {
         match crate::symbol_table::interface_dyn_dispatch_support(self.symbols, bare) {
             // A method with type parameters of its own no longer keeps an
             // interface from being a value type: it dispatches over the
-            // interface's implementers (ERRATA E1XX-GAP39b).
+            // interface's implementers (ERRATA E136).
             Some(Err(crate::symbol_table::DynDispatchBlock::GenericMethod(_))) => {}
             Some(Err(crate::symbol_table::DynDispatchBlock::GenericInterface(_)))
                 if tref.generic_args.is_empty() =>
@@ -13014,7 +13014,7 @@ impl<'a> Checker<'a> {
                             "cancel"
                                 | "blockingGet"
                                 // A worker's handle, now the same task
-                                // (ERRATA E1XX-GAP39b), was joined.
+                                // (ERRATA E136), was joined.
                                 | "join"
                                 | "isCancelled"
                                 | "isResolved"
@@ -13496,7 +13496,7 @@ impl<'a> Checker<'a> {
         if let Some(body) = &n.anonymous_body {
             // A method with type parameters of its own, reached through the
             // type implemented here, dispatches by naming the concrete type
-            // behind the value (ERRATA E1XX-GAP39b), and an anonymous class
+            // behind the value (ERRATA E136), and an anonymous class
             // has no name to be found by.
             let owners = crate::generic_dispatch::generic_virtual_owners(self.symbols);
             let mut hit: Vec<(&String, &Vec<String>)> = owners
@@ -18904,7 +18904,7 @@ public void main() { }");
     }
 
     /// A generic virtual method on a polymorphic base dispatches on the
-    /// object's type (ERRATA E1XX-GAP39b): accepted. E0438 is left for a
+    /// object's type (ERRATA E136): accepted. E0438 is left for a
     /// subclass with a type parameter the base does not fix.
     #[test]
     fn generic_virtual_method_on_base_is_accepted_unless_a_param_is_unfixed() {
@@ -19034,7 +19034,7 @@ public void main() { }");
     }
 
     /// A generic-method interface used as a value-typed local is a value
-    /// type like any other (ERRATA E1XX-GAP39b): no E0435.
+    /// type like any other (ERRATA E136): no E0435.
     #[test]
     fn generic_method_interface_value_local_is_accepted() {
         let d = run(r#"

@@ -1,7 +1,7 @@
 // A class parameter bounded by another (`class Chain<K, V extends K>`,
 // §T.4.6 rule 4: every `V` is usable wherever a `K` is expected), on a class
 // that is itself extended and used through its base type (ERRATA
-// E1XX-GAP39b). Storing a `V` where a `K` goes reached rustc through the
+// E136). Storing a `V` where a `K` goes reached rustc through the
 // base's dispatch as "the trait bound `K: From<V>` is not satisfied".
 
 import rust.std.Vec;
