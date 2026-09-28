@@ -192,6 +192,65 @@ class JuxTypeAliasTest : BasePlatformTestCase() {
         assertEquals("Shape", JuxTypeIndex.findType(myFixture.file.firstChild, "S")?.name)
     }
 
+    /**
+     * A supertype written through an import alias is indexed under its
+     * target: the subtype gutter, go-to-implementation, the hierarchy views
+     * and the sealed-switch cases all read [JuxSubtypes.buildIndex].
+     */
+    fun testImportAliasSupertypeIsIndexedAsASubtype() {
+        val shapeFile = myFixture.addFileToProject(
+            "app/model/Shape.jux",
+            """
+            package app.model;
+            public interface Shape { double area(); }
+            """.trimIndent(),
+        )
+        myFixture.addFileToProject(
+            "types.jux",
+            """
+            type Sh = app.model.Shape;
+            class ByTypeAlias implements Sh {
+                public double area() { return 2.0; }
+            }
+            """.trimIndent(),
+        )
+        descriptions(
+            """
+            import app.model.Shape as S;
+            import app.model.{Shape as T};
+
+            class Sq implements S {
+                public double area() { return 1.0; }
+            }
+            class Tri implements T {
+                public double area() { return 0.5; }
+            }
+            """,
+        )
+        val shape = PsiTreeUtil.findChildOfType(shapeFile, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)!!
+        val index = dev.jux.intellij.resolve.JuxSubtypes.buildIndex(project)
+        assertEquals(
+            setOf("Sq", "Tri", "ByTypeAlias"),
+            dev.jux.intellij.resolve.JuxSubtypes.directSubtypes(shape, index).mapNotNull { it.name }.toSet(),
+        )
+        assertEquals(
+            setOf("Sq", "Tri", "ByTypeAlias"),
+            dev.jux.intellij.resolve.JuxSubtypes.subtypesOf(shape).mapNotNull { it.name }.toSet(),
+        )
+        val sq = PsiTreeUtil.findChildrenOfType(myFixture.file, dev.jux.intellij.psi.JuxTypeDeclaration::class.java).first { it.name == "Sq" }
+        assertTrue(dev.jux.intellij.resolve.JuxHierarchy.inheritsFrom(sq, "Shape"))
+        // The method-level walk (override gutter, go-to-super) reaches the interface method.
+        val area = dev.jux.intellij.resolve.JuxHierarchy.findSuperMethod(sq, "area", 0)
+        assertEquals("app.model", area?.let { dev.jux.intellij.completion.JuxAutoImport.packageOf(PsiTreeUtil.getParentOfType(it, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)!!) })
+        // Overriders of `Shape.area` found from the interface side.
+        val shapeArea = PsiTreeUtil.findChildOfType(shape, dev.jux.intellij.psi.JuxMethodDeclaration::class.java)!!
+        assertEquals(
+            setOf("Sq", "Tri", "ByTypeAlias"),
+            dev.jux.intellij.resolve.JuxSubtypes.overridingMethods(shapeArea)
+                .mapNotNull { PsiTreeUtil.getParentOfType(it, dev.jux.intellij.psi.JuxTypeDeclaration::class.java)?.name }.toSet(),
+        )
+    }
+
     fun testGroupedImportAliasMeansItsTarget() {
         myFixture.addFileToProject(
             "app/model/Shape.jux",

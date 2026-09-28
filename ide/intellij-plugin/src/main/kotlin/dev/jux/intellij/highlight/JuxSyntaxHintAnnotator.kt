@@ -55,23 +55,37 @@ class JuxSyntaxHintAnnotator : Annotator {
      * loop's binder is not a slot the compiler reads this way.
      */
     private fun checkKeywordBindingName(binding: PsiElement, what: String, holder: AnnotationHolder) {
-        if (binding.containingFile?.name?.endsWith(".jux.d") == true) return
-        val id = (binding as? dev.jux.intellij.psi.JuxNamedElement)?.nameIdentifier ?: return
-        val name = id.text
-        if (name == "this" || name !in JuxKeywords.KEYWORDS) return
-        val parent = binding.parent
-        val applies = when (binding.elementType) {
-            E.PARAMETER -> parent?.elementType === E.PARAMETER_LIST && parent.parent?.elementType in PARAMETER_OWNERS
-            else -> parent?.elementType === E.CODE_BLOCK || parent is PsiFile // a script's top level too
-        }
-        if (!applies) return
-        holder.newAnnotation(HighlightSeverity.ERROR, "'$name' is a Jux keyword, so it cannot name a $what (E0204)")
+        val id = keywordBindingName(binding) ?: return
+        holder.newAnnotation(HighlightSeverity.ERROR, "'${id.text}' is a Jux keyword, so it cannot name a $what (E0204)")
             .range(id)
             .create()
     }
 
-    /** Declarations whose parameters the compiler names through `parse_binding_name`. */
-    private val PARAMETER_OWNERS = setOf(E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION)
+    companion object {
+        private val FOREIGN_FUNCTION_KEYWORDS = setOf("function", "def", "func", "fun", "fn", "sub")
+
+        /** Declarations whose parameters the compiler names through `parse_binding_name`. */
+        private val PARAMETER_OWNERS = setOf(E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION)
+
+        /**
+         * The name leaf of [binding] (a parameter or local) when it is a
+         * keyword the compiler refuses as `E0204`, else null. Shared with the
+         * LSP dedup ([dev.jux.intellij.inspections.JuxMirroredDiagnostics]).
+         */
+        fun keywordBindingName(binding: PsiElement): PsiElement? {
+            if (binding.elementType !== E.PARAMETER && binding.elementType !== E.LOCAL_VARIABLE) return null
+            if (binding.containingFile?.name?.endsWith(".jux.d") == true) return null
+            val id = (binding as? dev.jux.intellij.psi.JuxNamedElement)?.nameIdentifier ?: return null
+            val name = id.text
+            if (name == "this" || name !in JuxKeywords.KEYWORDS) return null
+            val parent = binding.parent
+            val applies = when (binding.elementType) {
+                E.PARAMETER -> parent?.elementType === E.PARAMETER_LIST && parent.parent?.elementType in PARAMETER_OWNERS
+                else -> parent?.elementType === E.CODE_BLOCK || parent is PsiFile // a script's top level too
+            }
+            return id.takeIf { applies }
+        }
+    }
 
     private fun checkQuoted(element: PsiElement, quote: Char, holder: AnnotationHolder) {
         val text = element.text
@@ -179,9 +193,5 @@ class JuxSyntaxHintAnnotator : Annotator {
             editor?.document?.replaceString(start, end, replacement)
         }
         override fun startInWriteAction(): Boolean = true
-    }
-
-    private companion object {
-        val FOREIGN_FUNCTION_KEYWORDS = setOf("function", "def", "func", "fun", "fn", "sub")
     }
 }
