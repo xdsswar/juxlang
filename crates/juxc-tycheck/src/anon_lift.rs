@@ -39,6 +39,51 @@ pub struct AnonLift {
     pub captures: Vec<(String, String)>,
     /// The types of the arguments given to `T`'s constructor.
     pub super_arg_types: Vec<String>,
+    /// The enclosing object's members the body reads, writes or calls bare
+    /// (`count++`, `total`, `refresh()`), when the class is built inside an
+    /// instance member (ERRATA E1XX-GAP39d). The lifted class holds the
+    /// enclosing object's handle in `__jux_outer` and reaches them through it.
+    pub outer_members: Vec<String>,
+    /// The enclosing object's type, when the lifted class holds it.
+    pub outer_type: Option<String>,
+    /// What the construction passes for `__jux_outer`: `this`, or, for an
+    /// anonymous class inside another one, that one's own `__jux_outer`.
+    pub outer_arg: String,
+}
+
+/// The name of the field a lifted anonymous class holds the enclosing object
+/// in (ERRATA E1XX-GAP39d).
+pub const OUTER_FIELD: &str = "__jux_outer";
+
+/// Every name `blocks` declare for themselves: locals, loop and catch
+/// binders, lambda parameters. A bare name one of these declares means the
+/// declaration, never the enclosing object's member of that name.
+pub fn declared_names(blocks: &[&juxc_ast::Block]) -> std::collections::HashSet<String> {
+    use juxc_ast::visit::Node;
+    use juxc_ast::{Expr, Stmt};
+    let mut out = std::collections::HashSet::new();
+    for b in blocks {
+        juxc_ast::visit::for_each_node(b, &mut |n| match n {
+            Node::Stmt(Stmt::VarDecl(v)) => {
+                out.insert(v.name.text.clone());
+            }
+            Node::Stmt(Stmt::ForEach(f)) => {
+                out.insert(f.var_name.text.clone());
+            }
+            Node::Stmt(Stmt::Try(t)) => {
+                for c in &t.catches {
+                    out.insert(c.name.text.clone());
+                }
+            }
+            Node::Expr(Expr::Lambda(l)) => {
+                for p in &l.params {
+                    out.insert(p.name.text.clone());
+                }
+            }
+            _ => {}
+        });
+    }
+    out
 }
 
 /// Whether a type's written form can be declared on a lifted class: no

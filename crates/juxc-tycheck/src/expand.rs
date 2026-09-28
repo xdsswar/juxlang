@@ -48,7 +48,7 @@ pub fn apply_call_expansions(
     if plans.is_empty() {
         return;
     }
-    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None });
+    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None, outer: None });
 }
 
 /// Rename the positional component reads the parser writes for a record
@@ -58,7 +58,28 @@ pub fn apply_call_expansions(
 /// field identifier's span. The destructuring temporaries also lose their
 /// written type here (see the `Stmt::VarDecl` arm of the walker).
 pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap<Span, String>) {
-    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None });
+    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None, outer: None });
+}
+
+/// In a lifted anonymous class's member body, make every bare `names` read,
+/// write and call go through the enclosing object's handle:
+/// `count++` is `__jux_outer.count++`, `refresh()` is
+/// `__jux_outer.refresh()` (ERRATA E1XX-GAP39d). The caller leaves out the
+/// names the body declares for itself.
+pub fn rewrite_outer_refs(block: &mut juxc_ast::Block, names: &std::collections::HashSet<String>) {
+    if names.is_empty() {
+        return;
+    }
+    expand_block(
+        block,
+        &Rewrites {
+            plans: &HashMap::new(),
+            components: &HashMap::new(),
+            destructuring: false,
+            anon: None,
+            outer: Some(names),
+        },
+    );
 }
 
 /// What an anonymous class's `new` expression becomes when it is lifted
@@ -80,7 +101,13 @@ pub fn lift_anonymous_classes(
     let anon = std::cell::RefCell::new((sites, HashMap::new()));
     rewrite_units(
         units,
-        &Rewrites { plans: &HashMap::new(), components: &HashMap::new(), destructuring: false, anon: Some(&anon) },
+        &Rewrites {
+            plans: &HashMap::new(),
+            components: &HashMap::new(),
+            destructuring: false,
+            anon: Some(&anon),
+            outer: None,
+        },
     );
     anon.into_inner().1
 }
@@ -95,6 +122,9 @@ pub(crate) struct Rewrites<'a> {
     /// Anonymous classes to lift, and the bodies taken from them.
     #[allow(clippy::type_complexity)]
     anon: Option<&'a std::cell::RefCell<(HashMap<Span, AnonSite>, HashMap<Span, juxc_ast::AnonymousBody>)>>,
+    /// Bare names that mean the enclosing object's members, read through
+    /// `__jux_outer` (ERRATA E1XX-GAP39d).
+    outer: Option<&'a std::collections::HashSet<String>>,
 }
 
 fn rewrite_units(units: &mut [CompilationUnit], plans: &Rewrites<'_>) {
@@ -424,6 +454,24 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
             if let Some(f) = &mut t.finally {
                 expand_block(f, plans);
             }
+        }
+        Expr::Path(qn)
+            if qn.segments.len() == 1 && plans.outer.is_some_and(|o| o.contains(&qn.segments[0].text)) =>
+        {
+            let seg = qn.segments[0].clone();
+            let span = qn.span;
+            // The handle's own span is a zero-width point at the name's
+            // start, so the two expressions keep separate types.
+            let at = Span { start: span.start, end: span.start, file: span.file };
+            *expr = Expr::Field(juxc_ast::FieldExpr {
+                object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: crate::anon_lift::OUTER_FIELD.to_string(), span: at }],
+                    span: at,
+                })),
+                field: seg,
+                safe: false,
+                span,
+            });
         }
         Expr::Literal(_)
         | Expr::Path(_)

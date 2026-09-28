@@ -56,8 +56,30 @@ pub(crate) fn apply(units: &mut [CompilationUnit], lifts: &[AnonLift]) -> bool {
     let mut any = false;
     for (unit, span, mut class) in classes {
         let Some(body) = bodies.remove(&span) else { continue };
-        class.methods.extend(body.methods);
-        class.init_blocks.extend(body.init_blocks);
+        let mut methods = body.methods;
+        let mut inits = body.init_blocks;
+        // Bare reads, writes and calls of the enclosing object's members go
+        // through the handle the class holds (ERRATA E1XX-GAP39d); what a
+        // body declares for itself keeps its own meaning.
+        if let Some(lift) = lifts.iter().find(|l| l.span == span) {
+            let members: std::collections::HashSet<String> = lift.outer_members.iter().cloned().collect();
+            if !members.is_empty() {
+                for m in &mut methods {
+                    let Some(b) = m.body.as_mut() else { continue };
+                    let mut own = juxc_tycheck::anon_lift::declared_names(&[&*b]);
+                    own.extend(m.params.iter().map(|p| p.name.text.clone()));
+                    let names: std::collections::HashSet<String> = members.difference(&own).cloned().collect();
+                    juxc_tycheck::expand::rewrite_outer_refs(b, &names);
+                }
+                for b in &mut inits {
+                    let own = juxc_tycheck::anon_lift::declared_names(&[&*b]);
+                    let names: std::collections::HashSet<String> = members.difference(&own).cloned().collect();
+                    juxc_tycheck::expand::rewrite_outer_refs(b, &names);
+                }
+            }
+        }
+        class.methods.extend(methods);
+        class.init_blocks.extend(inits);
         if let Some(u) = units.get_mut(unit) {
             u.items.push(TopLevelDecl::Class(class));
             any = true;
@@ -82,14 +104,21 @@ fn skeleton(name: &str, lift: &AnonLift, index: u32) -> Option<(juxc_ast::ClassD
     };
     let relation = if lift.target_is_class { "extends" } else { "implements" };
     let mut text = format!("class {name}{decl_params} {relation} {} {{\n", lift.target_text);
-    for (c, ty) in &lift.captures {
+    // The enclosing object, as a captured value like the locals are.
+    let mut fields: Vec<(String, String)> = lift.captures.clone();
+    let mut site_args: Vec<String> = lift.captures.iter().map(|(c, _)| c.clone()).collect();
+    if let Some(outer) = &lift.outer_type {
+        fields.push((juxc_tycheck::anon_lift::OUTER_FIELD.to_string(), outer.clone()));
+        site_args.push(lift.outer_arg.clone());
+    }
+    for (c, ty) in &fields {
         text.push_str(&format!("    {ty} {c};\n"));
     }
     let mut ctor_params: Vec<String> = Vec::new();
     for (i, ty) in lift.super_arg_types.iter().enumerate() {
         ctor_params.push(format!("{ty} __jux_a{i}"));
     }
-    for (c, ty) in &lift.captures {
+    for (c, ty) in &fields {
         ctor_params.push(format!("{ty} {c}"));
     }
     text.push_str(&format!("    {name}({}) {{\n", ctor_params.join(", ")));
@@ -97,11 +126,11 @@ fn skeleton(name: &str, lift: &AnonLift, index: u32) -> Option<(juxc_ast::ClassD
         let supers = (0..lift.super_arg_types.len()).map(|i| format!("__jux_a{i}")).collect::<Vec<_>>().join(", ");
         text.push_str(&format!("        super({supers});\n"));
     }
-    for (c, _) in &lift.captures {
+    for (c, _) in &fields {
         text.push_str(&format!("        this.{c} = {c};\n"));
     }
     text.push_str("    }\n}\n");
-    let captures = lift.captures.iter().map(|(c, _)| c.clone()).collect::<Vec<_>>().join(", ");
+    let captures = site_args.join(", ");
     text.push_str(&format!("void __jux_anon_site() {{ var __jux_x = new {name}{use_args}({captures}); }}\n"));
 
     let mut file = juxc_source::SourceFile::new(format!("<anonymous {name}>"), text);
