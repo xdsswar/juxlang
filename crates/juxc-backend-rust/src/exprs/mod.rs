@@ -3258,15 +3258,17 @@ impl RustEmitter {
                     // `Ordering` already in Rust: `a.cmp(&b)`, no round
                     // trip through -1/0/+1.
                     let juxc_ast::Expr::Binary(bin) = e.as_ref() else { unreachable!() };
-                    self.w.push('(');
+                    // `Ord::cmp` by path: a program's own `Ord` would hide the
+                    // prelude's trait, and with it the method (ERRATA E1XX-GAP39).
+                    self.w.push_str("std::cmp::Ord::cmp(&(");
                     self.emit_expr(&bin.left);
-                    self.w.push_str(").cmp(&(");
+                    self.w.push_str("), &(");
                     self.emit_expr(&bin.right);
                     self.w.push_str("))");
                 } else if ordering_from_int {
-                    self.w.push('(');
+                    self.w.push_str("std::cmp::Ord::cmp(&(");
                     self.emit_expr(e);
-                    self.w.push_str(").cmp(&0)");
+                    self.w.push_str("), &0)");
                 } else if let Some(ret) = &return_slot {
                     // The value converts to the slot's return type, the way
                     // a `return` into that type would.
@@ -3278,7 +3280,7 @@ impl RustEmitter {
             juxc_ast::LambdaBody::Block(b) if ordering_from_int => {
                 let prev_lam = self.in_lambda_body;
                 self.in_lambda_body = true;
-                self.w.push_str("(|| {\n");
+                self.w.push_str("std::cmp::Ord::cmp(&(|| {\n");
                 self.w.indent_inc();
                 for stmt in &b.statements {
                     self.emit_stmt(stmt);
@@ -3286,7 +3288,7 @@ impl RustEmitter {
                 self.patch_lambda_tail_try(b);
                 self.w.indent_dec();
                 self.w.emit_indent();
-                self.w.push_str("})().cmp(&0)");
+                self.w.push_str("})(), &0)");
                 self.in_lambda_body = prev_lam;
             }
             juxc_ast::LambdaBody::Block(b) => {

@@ -3745,6 +3745,59 @@ impl RustEmitter {
         self.w.push_str(") as u64)");
     }
 
+    /// The Rust suffix an untyped number literal needs when it is passed to a
+    /// method type parameter `R` bounded by a class parameter `K`
+    /// (`<U extends T> void putSub(U u)` on a `Shelf<int>`, called
+    /// `putSub(9)`). `R` is then known to Rust only as `R: Into<K>`
+    /// (ERRATA E1XX-GAP39), which does not steer a literal's type, so Rust
+    /// falls back to `i32` and finds no `Into<isize>`. The literal takes the
+    /// type `K` is bound to at this receiver, as Java infers `R = K`.
+    fn literal_arg_suffix_through_bound(&self, call: &CallExpr, i: usize, arg: &Expr) -> Option<&'static str> {
+        let is_int = match arg {
+            Expr::Literal(juxc_ast::Literal::Int(lit)) => {
+                if lit.kind.is_some() {
+                    return None;
+                }
+                true
+            }
+            Expr::Literal(juxc_ast::Literal::Float(lit)) => {
+                if lit.kind.is_some() {
+                    return None;
+                }
+                false
+            }
+            _ => return None,
+        };
+        let Expr::Field(f) = call.callee.as_ref() else { return None };
+        let Some(juxc_tycheck::Ty::User { name, generic_args }) =
+            self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
+        else {
+            return None;
+        };
+        let (method, declaring) = self.symbols.lookup_method(name, &f.field.text)?;
+        let pty = &method.params.get(i)?.ty;
+        if !pty.generic_args.is_empty() || pty.name.segments.len() != 1 || pty.array_shape.is_some() || pty.nullable {
+            return None;
+        }
+        let r = pty.name.segments[0].text.as_str();
+        let tp = method.generic_params.iter().find(|g| g.name.text == r)?;
+        let (params, args) = juxc_tycheck::ty::compose_extends_substitution(name, generic_args, declaring, &self.symbols)?;
+        let bound_to = tp.bounds.iter().find_map(|b| {
+            if !b.generic_args.is_empty() || b.name.segments.len() != 1 {
+                return None;
+            }
+            let k = b.name.segments[0].text.as_str();
+            params.iter().position(|p| p.name.text == k).and_then(|at| args.get(at))
+        })?;
+        match bound_to {
+            juxc_tycheck::Ty::Primitive(p) => {
+                let float = juxc_tycheck::ty::is_float_primitive(*p);
+                (float != is_int).then(|| p.rust_name())
+            }
+            _ => None,
+        }
+    }
+
     fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
         // **A `&mut` slot takes the PLACE, never a copy.** The value-position
         // auto-clone exists so an argument is not moved out of its binding;
@@ -3782,6 +3835,11 @@ impl RustEmitter {
         // coercion / share-clone. `emit_expr` handles the `Expr::Out` shape.
         if matches!(arg, Expr::Out(..)) {
             self.emit_expr(arg);
+            return;
+        }
+        if let Some(suffix) = self.literal_arg_suffix_through_bound(call, i, arg) {
+            self.emit_expr(arg);
+            self.w.push_str(suffix);
             return;
         }
         if self.emit_text_into_foreign_generic(call, i, arg) {

@@ -1,0 +1,7 @@
+// A Rust type cannot be extended (E0420); it used to be refused as E0429
+// listing every method of `Vec` as one the class "doesn't implement".
+import rust.std.Vec;
+
+class MyVec extends Vec<int> { }
+
+public void main() {}

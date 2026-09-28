@@ -1405,6 +1405,17 @@ impl RustEmitter {
                 // emitters differed here, which stayed invisible until a generic
                 // METHOD started coming through this one.
                 if let Some(expanded) = self.type_param_bound_expansion(bound) {
+                    // Where `Into<K> + ` goes if the body turns an `R` into a `K`
+                    // (see `RustEmitter::param_into_marks`).
+                    if self.param_into_marks.is_some() {
+                        let at = self.w.mark();
+                        self.emit_type_as_rust(bound);
+                        let k = self.w.split_off_from(at);
+                        let at = self.w.mark();
+                        if let Some(marks) = self.param_into_marks.as_mut() {
+                            marks.push((p.name.text.clone(), k, at));
+                        }
+                    }
                     for b in &expanded {
                         self.emit_bound_type(b);
                         self.w.push_str(" + ");

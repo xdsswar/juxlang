@@ -965,6 +965,34 @@ fn peel_safe_receiver(safe: bool, ty: Ty) -> Ty {
     }
 }
 
+/// The member surface of the bounded type parameter `param`: each of its
+/// `extends` bounds lowered to a type, in the order written, with a bound that
+/// names another type parameter (`<R extends K>`, §T.4.6 rule 4) replaced by
+/// THAT parameter's bounds. Empty for an unbounded parameter.
+///
+/// A member reached through `T` is typed by the first bound that declares it
+/// (ERRATA E1XX-GAP39). The bounds of an intersection are checked for
+/// agreement where they are declared, so the first one found is the answer.
+pub(crate) fn param_bound_tys(param: &str, env: &TypeEnv, symbols: &SymbolTable) -> Vec<Ty> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut queue = vec![param.to_string()];
+    while let Some(p) = queue.pop() {
+        if !seen.insert(p.clone()) {
+            continue;
+        }
+        let Some(bounds) = env.generic_bounds.get(&p) else { continue };
+        for bound in bounds {
+            match ty_from_ref(bound, env, symbols) {
+                Ty::Param(other) => queue.push(other),
+                Ty::Unknown => {}
+                ty => out.push(ty),
+            }
+        }
+    }
+    out
+}
+
 fn receiver_is_nullable(obj: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> bool {
     matches!(infer_expr(obj, env, symbols), Ty::Nullable(_))
 }
@@ -1060,6 +1088,16 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // resolved no method at all and the whole chain typed as `Unknown` --
     // which then silently satisfied every later check.
     let object_ty = peel_safe_receiver(f.safe, infer_expr(&f.object, env, symbols));
+    // A field read through a bounded type parameter (`t.id` on a
+    // `<T extends Base & Scored>`) has the type the bound declares
+    // (ERRATA E1XX-GAP39): read it against each bound in turn.
+    if let Ty::Param(param) = &object_ty {
+        for bound in param_bound_tys(param, env, symbols) {
+            if let Some(ty) = user_field_type(&bound, f.field.text.as_str(), symbols) {
+                return ty;
+            }
+        }
+    }
     // A range value's components (M.6.1).
     if let Ty::User { name, generic_args } = &object_ty {
         if let Some(element) = generic_args.first() {
@@ -1106,7 +1144,16 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     }
 
     // Field on a user type.
-    if let Ty::User { name, generic_args } = &object_ty {
+    user_field_type(&object_ty, field_name, symbols).unwrap_or(Ty::Unknown)
+}
+
+/// The type of field (or property, or record component) `field_name` read
+/// from a value of the user type `object_ty`, through its type arguments.
+/// `None` when the type has no such member. Split out of [`infer_field`] so
+/// a read through a bounded type parameter is typed by its bounds (ERRATA
+/// E1XX-GAP39).
+fn user_field_type(object_ty: &Ty, field_name: &str, symbols: &SymbolTable) -> Option<Ty> {
+    if let Ty::User { name, generic_args } = object_ty {
         if let Some((field, declaring_class)) = symbols.lookup_field(name, field_name) {
             // Lower in the declaring class's generic-param scope so a
             // `T value;` field reads as `Ty::Param("T")` rather than
@@ -1120,9 +1167,9 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if let Some((params, args)) =
                 compose_extends_substitution(name, generic_args, declaring_class, symbols)
             {
-                return substitute(&raw, &params, &args);
+                return Some(substitute(&raw, &params, &args));
             }
-            return raw;
+            return Some(raw);
         }
         // §M.7 / §P property read — `obj.Name`. The backing field is
         // mangled and the getter lives in `methods`, so the property's
@@ -1134,9 +1181,9 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if let Some((params, args)) =
                 compose_extends_substitution(name, generic_args, declaring_class, symbols)
             {
-                return substitute(&raw, &params, &args);
+                return Some(substitute(&raw, &params, &args));
             }
-            return raw;
+            return Some(raw);
         }
         if let Some(record) = symbols.records.get(name) {
             // A destructuring read names its component by position until the
@@ -1146,19 +1193,18 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             });
             if let Some(component) = component {
                 let raw = lower_member_type(&component.ty, name, symbols);
-                return substitute(&raw, &record.generic_params, generic_args);
+                return Some(substitute(&raw, &record.generic_params, generic_args));
             }
         }
         // A property an interface declares (§M.7.10), read through an
         // interface-typed value or inherited as a default by a class.
         if let Some((getter, iface)) = symbols.lookup_interface_property(name, field_name) {
             if let juxc_ast::ReturnType::Type(t) = &getter.return_type {
-                return lower_member_type(t, iface, symbols);
+                return Some(lower_member_type(t, iface, symbols));
             }
         }
     }
-
-    Ty::Unknown
+    None
 }
 
 /// `array[index]` returns the array's element type, or Unknown when
@@ -1463,8 +1509,14 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // has that call's type. Left `Unknown`, `peek().text` lost the
             // class of its receiver.
             if let Some(class) = env.current_class.as_deref() {
+                // An interface's default body calls its own methods the same
+                // way (`items().push(k)`); untyped, the collection it returned
+                // was used as a bare sequence (ERRATA E1XX-GAP39).
                 let on_this = symbols.lookup_method(class, name).is_some()
-                    || symbols.lookup_field(class, name).is_some_and(|(f, _)| f.ty.closure_shape().is_some());
+                    || symbols.lookup_field(class, name).is_some_and(|(f, _)| f.ty.closure_shape().is_some())
+                    || symbols.interfaces.get(class).is_some_and(|i| {
+                        i.methods.contains_key(name) || inherited_interface_method(symbols, i, name).is_some()
+                    });
                 if on_this && env.lookup(name).is_none() {
                     let this_call = CallExpr {
                         callee: Box::new(Expr::Field(FieldExpr {
@@ -1606,9 +1658,24 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             picked.or_else(|| class.methods.get(method_name).cloned())
                         {
                             if method.is_static {
-                                return return_type_in_class(
+                                // A generic static (`static <X, Y> Pair<X, Y>
+                                // of(X x, Y y)`) is read through the types its
+                                // call binds, as an instance method's is
+                                // (ERRATA E1XX-GAP39); left as `Pair<X, Y>`,
+                                // `var p = Pair.of("a", 1)` had no field types.
+                                let raw = return_type_in_method(
                                     &method.return_type,
                                     &class_fqn,
+                                    &method.generic_params,
+                                    symbols,
+                                );
+                                return method_infer_return(
+                                    &raw,
+                                    &method,
+                                    &class_fqn,
+                                    &c.args,
+                                    &c.explicit_generic_args,
+                                    env,
                                     symbols,
                                 );
                             }
@@ -1633,10 +1700,19 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         }
                         if let Some(method) = enum_sig.methods.get(method_name) {
                             if method.is_static {
-                                return return_type_in_method(
+                                let raw = return_type_in_method(
                                     &method.return_type,
                                     enum_fqn,
                                     &method.generic_params,
+                                    symbols,
+                                );
+                                return method_infer_return(
+                                    &raw,
+                                    method,
+                                    enum_fqn,
+                                    &c.args,
+                                    &c.explicit_generic_args,
+                                    env,
                                     symbols,
                                 );
                             }
@@ -1659,10 +1735,19 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     });
                     if let Some((iface_fqn, iface)) = iface {
                         if let Some(method) = iface.methods.get(method_name).filter(|m| m.is_static) {
-                            return return_type_in_method(
+                            let raw = return_type_in_method(
                                 &method.return_type,
                                 iface_fqn,
                                 &method.generic_params,
+                                symbols,
+                            );
+                            return method_infer_return(
+                                &raw,
+                                method,
+                                iface_fqn,
+                                &c.args,
+                                &c.explicit_generic_args,
+                                env,
                                 symbols,
                             );
                         }
@@ -1689,10 +1774,19 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     if let Some(record_fqn) = record_fqn {
                         if let Some(method) = symbols.records[&record_fqn].methods.get(method_name) {
                             if method.is_static {
-                                return return_type_in_method(
+                                let raw = return_type_in_method(
                                     &method.return_type,
                                     &record_fqn,
                                     &method.generic_params,
+                                    symbols,
+                                );
+                                return method_infer_return(
+                                    &raw,
+                                    method,
+                                    &record_fqn,
+                                    &c.args,
+                                    &c.explicit_generic_args,
+                                    env,
                                     symbols,
                                 );
                             }
@@ -1811,136 +1905,15 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     };
                 }
             }
-            if let Ty::User { name, generic_args } = &receiver_ty {
-                // `clone()` on a scanned `Clone` type yields the SAME type. The
-                // stub lists no `clone` method - it comes from the trait, which
-                // the scan records on the type - so this is the only place the
-                // call can resolve.
-                if method_name == "clone" && c.args.is_empty() && symbols.type_is_rust_clone(name) {
-                    return receiver_ty.clone();
-                }
-                // Walk the class extends-chain first.
-                if let Some((method, declaring_class)) = symbols.lookup_method(name, method_name) {
-                    // Overload-group pick (§T.3, count + types): a
-                    // group's members may differ in return type.
-                    let method = &select_method_overload_typed(symbols, name, method_name, c, env)
-                        .map(|(_, m)| m)
-                        .unwrap_or_else(|| method.clone());
-                    // Lower in the declaring class's generic scope AND the
-                    // method's own generic params so both `T get()` (class
-                    // param) and `<U> U pick()` (method param) read as
-                    // `Param(..)`, not `Unknown` — the call-site inference then
-                    // substitutes the concrete type in.
-                    let raw = return_type_in_method(
-                        &method.return_type,
-                        declaring_class,
-                        &method.generic_params,
-                        symbols,
-                    );
-                    // Compose the substitution through the
-                    // extends-chain (see `infer_field` for the same
-                    // pattern). For a direct method on the receiver
-                    // this collapses to a single hop.
-                    let after_class = match compose_extends_substitution(
-                        name,
-                        generic_args,
-                        declaring_class,
-                        symbols,
-                    ) {
-                        Some((params, args)) => substitute(&raw, &params, &args),
-                        None => raw,
-                    };
-                    return method_infer_return(
-                        &after_class,
-                        method,
-                        declaring_class,
-                        &c.args,
-                        &c.explicit_generic_args,
-                        env,
-                        symbols,
-                    );
-                }
-                // Record methods — records can declare methods per
-                // grammar §A.2.4. No inheritance chain (records don't
-                // extend), but substitution applies for the record's
-                // own generic params.
-                if let Some(record) = symbols.records.get(name) {
-                    // §M.5 synthesized wither: `r.with(name: v, …)`
-                    // returns a NEW record of the same type. A
-                    // user-declared `with` method (below) shadows the
-                    // synthesized one.
-                    if method_name == "with" && !record.methods.contains_key("with") {
-                        return receiver_ty.clone();
-                    }
-                    if let Some(method) = record.methods.get(method_name) {
-                        let raw = return_type_in_method(
-                            &method.return_type,
-                            name,
-                            &method.generic_params,
-                            symbols,
-                        );
-                        let after_class = substitute(&raw, &record.generic_params, generic_args);
-                        return method_infer_return(
-                            &after_class,
-                            method,
-                            name,
-                            &c.args,
-                            &c.explicit_generic_args,
-                            env,
-                            symbols,
-                        );
-                    }
-                }
-                // Interface methods, walking the interface's own `extends`
-                // chain: an interface does not extend a class, but it very
-                // much extends other interfaces, and a default body written
-                // against an inherited signature (`Greeter extends Named`
-                // calling `this.name()`) has to find it. Before interface
-                // bodies were checked at all this went unnoticed.
-                if let Some(iface) = symbols.interfaces.get(name) {
-                    if let Some(method) = iface
-                        .methods
-                        .get(method_name)
-                        .or_else(|| inherited_interface_method(symbols, iface, method_name))
-                    {
-                        let raw = return_type_in_method(
-                            &method.return_type,
-                            name,
-                            &method.generic_params,
-                            symbols,
-                        );
-                        let after_class = substitute(&raw, &iface.generic_params, generic_args);
-                        return method_infer_return(
-                            &after_class,
-                            method,
-                            name,
-                            &c.args,
-                            &c.explicit_generic_args,
-                            env,
-                            symbols,
-                        );
-                    }
-                }
-                // Enum methods (§A.2.5) — declared in the enum body
-                // after the variant list. No inheritance chain; the
-                // enum's own generic params substitute.
-                if let Some(enum_sig) = symbols.enums.get(name) {
-                    if let Some(method) = enum_sig.methods.get(method_name) {
-                        let raw = return_type_in_method(
-                            &method.return_type,
-                            name,
-                            &method.generic_params,
-                            symbols,
-                        );
-                        return method_infer_return(
-                            &raw,
-                            method,
-                            name,
-                            &c.args,
-                            &c.explicit_generic_args,
-                            env,
-                            symbols,
-                        );
+            if let Some(ty) = user_method_return(&receiver_ty, method_name, c, env, symbols) {
+                return ty;
+            }
+            // A receiver typed by a bounded type parameter answers through its
+            // bounds, in the order written (ERRATA E1XX-GAP39).
+            if let Ty::Param(param) = &receiver_ty {
+                for bound in param_bound_tys(param, env, symbols) {
+                    if let Some(ty) = user_method_return(&bound, method_name, c, env, symbols) {
+                        return ty;
                     }
                 }
             }
@@ -1959,6 +1932,159 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
         _ => Ty::Unknown,
     }
+}
+
+/// The return type of `receiver.method_name(args)` on a user (or scanned
+/// foreign) type: a class's own or inherited method, a record's, an
+/// interface's (its `extends` chain included) or an enum's, read through the
+/// receiver's type arguments. `None` when the type declares no such method.
+///
+/// Split out of [`infer_call`] so a receiver typed by a BOUNDED type parameter
+/// can be answered by each of its bounds in turn (ERRATA E1XX-GAP39): `t.age()`
+/// on a `<T extends Named & Aged>` is an `int`, and left `Unknown` it reached
+/// the backend untyped, which then wrote `t.age() + t.score()` with no numeric
+/// promotion and rustc refused to add an `f64` to an `isize`.
+fn user_method_return(
+    receiver_ty: &Ty,
+    method_name: &str,
+    c: &CallExpr,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<Ty> {
+    if let Ty::User { name, generic_args } = &receiver_ty {
+        // `clone()` on a scanned `Clone` type yields the SAME type. The
+        // stub lists no `clone` method - it comes from the trait, which
+        // the scan records on the type - so this is the only place the
+        // call can resolve.
+        if method_name == "clone" && c.args.is_empty() && symbols.type_is_rust_clone(name) {
+            return Some(receiver_ty.clone());
+        }
+        // Walk the class extends-chain first.
+        if let Some((method, declaring_class)) = symbols.lookup_method(name, method_name) {
+            // Overload-group pick (§T.3, count + types): a
+            // group's members may differ in return type.
+            let method = &select_method_overload_typed(symbols, name, method_name, c, env)
+                .map(|(_, m)| m)
+                .unwrap_or_else(|| method.clone());
+            // Lower in the declaring class's generic scope AND the
+            // method's own generic params so both `T get()` (class
+            // param) and `<U> U pick()` (method param) read as
+            // `Param(..)`, not `Unknown` — the call-site inference then
+            // substitutes the concrete type in.
+            let raw = return_type_in_method(
+                &method.return_type,
+                declaring_class,
+                &method.generic_params,
+                symbols,
+            );
+            // Compose the substitution through the
+            // extends-chain (see `infer_field` for the same
+            // pattern). For a direct method on the receiver
+            // this collapses to a single hop.
+            let after_class = match compose_extends_substitution(
+                name,
+                generic_args,
+                declaring_class,
+                symbols,
+            ) {
+                Some((params, args)) => substitute(&raw, &params, &args),
+                None => raw,
+            };
+            return Some(method_infer_return(
+                &after_class,
+                method,
+                declaring_class,
+                &c.args,
+                &c.explicit_generic_args,
+                env,
+                symbols,
+            ));
+        }
+        // Record methods — records can declare methods per
+        // grammar §A.2.4. No inheritance chain (records don't
+        // extend), but substitution applies for the record's
+        // own generic params.
+        if let Some(record) = symbols.records.get(name) {
+            // §M.5 synthesized wither: `r.with(name: v, …)`
+            // returns a NEW record of the same type. A
+            // user-declared `with` method (below) shadows the
+            // synthesized one.
+            if method_name == "with" && !record.methods.contains_key("with") {
+                return Some(receiver_ty.clone());
+            }
+            if let Some(method) = record.methods.get(method_name) {
+                let raw = return_type_in_method(
+                    &method.return_type,
+                    name,
+                    &method.generic_params,
+                    symbols,
+                );
+                let after_class = substitute(&raw, &record.generic_params, generic_args);
+                return Some(method_infer_return(
+                    &after_class,
+                    method,
+                    name,
+                    &c.args,
+                    &c.explicit_generic_args,
+                    env,
+                    symbols,
+                ));
+            }
+        }
+        // Interface methods, walking the interface's own `extends`
+        // chain: an interface does not extend a class, but it very
+        // much extends other interfaces, and a default body written
+        // against an inherited signature (`Greeter extends Named`
+        // calling `this.name()`) has to find it. Before interface
+        // bodies were checked at all this went unnoticed.
+        if let Some(iface) = symbols.interfaces.get(name) {
+            if let Some(method) = iface
+                .methods
+                .get(method_name)
+                .or_else(|| inherited_interface_method(symbols, iface, method_name))
+            {
+                let raw = return_type_in_method(
+                    &method.return_type,
+                    name,
+                    &method.generic_params,
+                    symbols,
+                );
+                let after_class = substitute(&raw, &iface.generic_params, generic_args);
+                return Some(method_infer_return(
+                    &after_class,
+                    method,
+                    name,
+                    &c.args,
+                    &c.explicit_generic_args,
+                    env,
+                    symbols,
+                ));
+            }
+        }
+        // Enum methods (§A.2.5) — declared in the enum body
+        // after the variant list. No inheritance chain; the
+        // enum's own generic params substitute.
+        if let Some(enum_sig) = symbols.enums.get(name) {
+            if let Some(method) = enum_sig.methods.get(method_name) {
+                let raw = return_type_in_method(
+                    &method.return_type,
+                    name,
+                    &method.generic_params,
+                    symbols,
+                );
+                return Some(method_infer_return(
+                    &raw,
+                    method,
+                    name,
+                    &c.args,
+                    &c.explicit_generic_args,
+                    env,
+                    symbols,
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Return type inference for `BUILTIN_*_METHODS` calls. Returns

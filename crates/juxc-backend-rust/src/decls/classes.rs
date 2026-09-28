@@ -1736,7 +1736,16 @@ impl RustEmitter {
                     self.emit_method(m);
                 } else {
                     let substituted = substitute_fn_signature(m, &subst);
+                    // The body too, minus the method's own params that
+                    // shadow an ancestor's.
+                    let body_subst: std::collections::HashMap<String, juxc_ast::TypeRef> = subst
+                        .iter()
+                        .filter(|(k, _)| !m.generic_params.iter().any(|g| &g.name.text == *k))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    self.inherited_body_subst = Some(body_subst);
                     self.emit_method(&substituted);
+                    self.inherited_body_subst = None;
                 }
                 self.relaxed_member_subst = prev_subst;
             }
@@ -1943,7 +1952,18 @@ impl RustEmitter {
                 // K.5) forwards with its own type parameters.
                 if !sig.generic_params.is_empty() {
                     let none = std::collections::HashSet::new();
-                    self.emit_generic_params_with_bounds(&sig.generic_params, &none);
+                    // `<V extends K>` over the interface's `K` is `V: Into<K>`
+                    // on the trait; here `K` is what this class binds it to.
+                    let outer: Vec<String> = type_subst.keys().cloned().collect();
+                    let params: Vec<juxc_ast::TypeParam> =
+                        bounds_into_outer_params(&sig.generic_params, &outer)
+                            .into_iter()
+                            .map(|mut p| {
+                                p.bounds = p.bounds.iter().map(|b| substitute_type_ref(b, &type_subst)).collect();
+                                p
+                            })
+                            .collect();
+                    self.emit_generic_params_with_bounds(&params, &none);
                 }
                 self.w.push_str("(&self");
                 for param in &sig.params {
@@ -6091,7 +6111,69 @@ impl RustEmitter {
         self.enclosing_class = prev_enclosing;
     }
 
+    /// Emit one method. A method type parameter that SHADOWS one of the
+    /// enclosing type's (`<T> T echo(T t)` in `class Shelf<T>`, Java's rule)
+    /// is a second `T` to Rust, which refuses it (E0403), so it is renamed
+    /// for the method's whole signature and body: `T` there is the method's
+    /// (ERRATA E1XX-GAP39).
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
+        let shadowing: Vec<&juxc_ast::TypeParam> = method
+            .generic_params
+            .iter()
+            .filter(|p| !p.is_const() && self.current_type_params.contains(p.name.text.as_str()))
+            .collect();
+        let prev_used = std::mem::take(&mut self.param_into_used);
+        if shadowing.is_empty() {
+            self.emit_method_unshadowed(method);
+            self.param_into_used = prev_used;
+            return;
+        }
+        let rename: std::collections::HashMap<String, juxc_ast::TypeRef> = shadowing
+            .iter()
+            .map(|p| {
+                let ident = juxc_ast::Ident { text: format!("{}__m", p.name.text), span: p.name.span };
+                let to = juxc_ast::TypeRef {
+                    name: juxc_ast::QualifiedName { segments: vec![ident], span: p.name.span },
+                    generic_args: Vec::new(),
+                    nullable: false,
+                    array_shape: None,
+                    fn_shape: None,
+                    ptr_depth: 0,
+                    span: p.name.span,
+                };
+                (p.name.text.clone(), to)
+            })
+            .collect();
+        let mut renamed = method.clone();
+        for p in &mut renamed.generic_params {
+            if let Some(to) = rename.get(&p.name.text) {
+                p.name.text = to.name.segments[0].text.clone();
+            }
+            for b in &mut p.bounds {
+                *b = substitute_type_ref(b, &rename);
+            }
+        }
+        let prev_subst = self.kind_type_subst.clone();
+        self.kind_type_subst.extend(rename);
+        self.emit_method_unshadowed(&renamed);
+        self.kind_type_subst = prev_subst;
+        self.param_into_used = prev_used;
+    }
+
+    /// Write `Into<K> + ` into the generic list just emitted, for each
+    /// `<R extends K>` whose `R` the body converted into a `K` (recorded in
+    /// [`crate::RustEmitter::param_into_used`], ERRATA E1XX-GAP39). The marks
+    /// are positions in that list, so they are filled last to first.
+    pub(crate) fn insert_param_into_bounds(&mut self, marks: &[(String, String, usize)]) {
+        let mut due: Vec<&(String, String, usize)> =
+            marks.iter().filter(|(r, _, _)| self.param_into_used.contains(r)).collect();
+        due.sort_by_key(|m| std::cmp::Reverse(m.2));
+        for (_, k, at) in due {
+            self.w.insert_at(*at, &format!("Into<{k}> + "));
+        }
+    }
+
+    fn emit_method_unshadowed(&mut self, method: &FnDecl) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_class_decl`) is at level 0; method signature
         // sits at depth 1 (inside the `impl` block), body at depth 2.
@@ -6215,6 +6297,9 @@ impl RustEmitter {
         }
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         // Method's own generic parameters plus any synthetic wildcards.
+        // `<R extends K>` records where `R: Into<K>` goes (ERRATA
+        // E1XX-GAP39); the body decides whether it is written.
+        let prev_marks = self.param_into_marks.replace(Vec::new());
         if combined_method_generics.is_empty() {
             self.emit_generic_params(&method.generic_params);
         } else {
@@ -6230,6 +6315,7 @@ impl RustEmitter {
             );
             self.emit_generic_params_with_bounds(&combined_method_generics, &defaulted);
         }
+        let param_into_marks = std::mem::replace(&mut self.param_into_marks, prev_marks).unwrap_or_default();
         self.w.push('(');
         // Static methods have no implicit receiver in Rust either —
         // skip the `&self` / `&mut self` slot so callers do
@@ -6321,6 +6407,26 @@ impl RustEmitter {
         // the ancestor's answer through the ancestor-to-this-class map.
         let clause = self.relaxed_where(method.span, self.relaxed_member_subst.as_ref());
         self.w.push_str(&clause);
+        // A CLASS parameter `V extends K` converted in this body gets its
+        // `V: Into<K>` here, on the method alone (ERRATA E1XX-GAP39): on the
+        // struct it would bind every use of the class.
+        let where_mark = self.w.mark();
+        let where_open = clause.contains("where");
+        let method_own: HashSet<&str> = method.generic_params.iter().map(|g| g.name.text.as_str()).collect();
+        let class_param_into: Vec<(String, String)> = self
+            .type_param_bounds
+            .iter()
+            .filter(|(r, _)| self.current_type_params.contains(r.as_str()) && !method_own.contains(r.as_str()))
+            .flat_map(|(r, bounds)| {
+                bounds
+                    .iter()
+                    .filter(|b| b.generic_args.is_empty() && b.name.segments.len() == 1)
+                    .map(|b| b.name.segments[0].text.clone())
+                    .filter(|k| self.current_type_params.contains(k.as_str()) && !method_own.contains(k.as_str()))
+                    .map(|k| (r.clone(), k))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         self.w.push_str(" {\n");
         // Body sits at depth 2 — push one more level so
         // `emit_fn_body_at` sees the writer at the body depth.
@@ -6426,7 +6532,32 @@ impl RustEmitter {
             if is_static {
                 self.emit_static_init_trigger();
             }
+            // An inherited body names its ancestor's type params; read them
+            // in this class's vocabulary (ERRATA E1XX-GAP39).
+            let body_subst = self.inherited_body_subst.take().filter(|m| !m.is_empty());
+            let prev_kind_subst = body_subst.map(|m| {
+                let prev = self.kind_type_subst.clone();
+                // A shadowing rename (`emit_method`) already in the map wins.
+                for (k, v) in m {
+                    self.kind_type_subst.entry(k).or_insert(v);
+                }
+                prev
+            });
             self.emit_fn_body_at(body, &method.return_type);
+            if let Some(prev) = prev_kind_subst {
+                self.kind_type_subst = prev;
+            }
+            let class_into: Vec<String> = class_param_into
+                .iter()
+                .filter(|(r, _)| self.param_into_used.contains(r))
+                .map(|(r, k)| format!("{}: Into<{}>", to_rust_ident(r), to_rust_ident(k)))
+                .collect();
+            if !class_into.is_empty() {
+                let joined = class_into.join(", ");
+                let text = if where_open { format!(", {joined}") } else { format!(" where {joined}") };
+                self.w.insert_at(where_mark, &text);
+            }
+            self.insert_param_into_bounds(&param_into_marks);
             self.byref_param_names = prev_byref;
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
@@ -6604,6 +6735,46 @@ fn type_ref_mentions_any(
 /// A method that declares its OWN generic params shadowing a parent
 /// param keeps them: those names are dropped from the effective subst so
 /// the method-local parameter isn't accidentally replaced.
+/// A method's type parameters with every bound that names one of `outer` (the
+/// parameters of the interface declaring the method) rewritten to `Into<K>`:
+/// `<V extends K>` in `interface Store<K>` is `V: Into<K>` (Type system §T.4.6
+/// rule 4, "every `V` is usable wherever a `K` is expected"; ERRATA
+/// E1XX-GAP39). An implementing class forwards to the trait's method with `K`
+/// replaced by its own argument, so the trait states the conversion outright
+/// rather than only when its default body needs it.
+pub(crate) fn bounds_into_outer_params(
+    params: &[juxc_ast::TypeParam],
+    outer: &[String],
+) -> Vec<juxc_ast::TypeParam> {
+    params
+        .iter()
+        .map(|p| {
+            let mut p = p.clone();
+            for b in &mut p.bounds {
+                let names_outer = b.generic_args.is_empty()
+                    && b.name.segments.len() == 1
+                    && b.array_shape.is_none()
+                    && !b.nullable
+                    && outer.iter().any(|o| *o == b.name.segments[0].text);
+                if names_outer {
+                    let span = b.span;
+                    let ident = juxc_ast::Ident { text: "Into".to_string(), span };
+                    *b = juxc_ast::TypeRef {
+                        name: juxc_ast::QualifiedName { segments: vec![ident], span },
+                        generic_args: vec![juxc_ast::GenericArg::Type(b.clone())],
+                        nullable: false,
+                        array_shape: None,
+                        fn_shape: None,
+                        ptr_depth: 0,
+                        span,
+                    };
+                }
+            }
+            p
+        })
+        .collect()
+}
+
 fn substitute_fn_signature(
     m: &juxc_ast::FnDecl,
     subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,

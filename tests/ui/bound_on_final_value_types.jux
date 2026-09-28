@@ -1,0 +1,13 @@
+// A record, an enum, a primitive and `String` are final: a bound on one
+// admits that type alone (E0459). A `final` class is still a legal bound.
+record Point(int x, int y) {}
+enum Color { Red, Green }
+final class Leaf { public int v = 3; }
+
+<T extends Point> int px(T t) { return t.x; }
+<C extends Color> int ord(C c) { return 0; }
+<N extends int> int twice(N n) { return 2; }
+<S extends String> int len(S s) { return 0; }
+<L extends Leaf> int leaf(L l) { return l.v; }
+
+public void main() { print(leaf(new Leaf())); }

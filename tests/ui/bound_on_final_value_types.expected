@@ -1,0 +1,4 @@
+bound_on_final_value_types.jux:7:12: [E0459] error: `T extends Point` admits only `Point` itself: `Point` is a record, and a record is final (§T.4.6)
+bound_on_final_value_types.jux:8:12: [E0459] error: `C extends Color` admits only `Color` itself: `Color` is an enum, and an enum is final (§T.4.6)
+bound_on_final_value_types.jux:9:12: [E0459] error: `N extends int` admits only `int` itself: `int` is a primitive type (§T.4.6)
+bound_on_final_value_types.jux:10:12: [E0459] error: `S extends String` admits only `String` itself: `String` is final (§T.4.6)

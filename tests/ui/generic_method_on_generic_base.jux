@@ -1,0 +1,20 @@
+// A method with type parameters of its own on a class that is extended is
+// reached through whichever subclass the object is, which this version of Jux
+// cannot do for a generic method (E0438) -- a GENERIC base included, and a
+// package-private method included; both used to reach rustc.
+abstract class Shape<T> {
+    public abstract T area();
+    public <R> R convert((T) -> R f) { return f(area()); }
+}
+class Sq extends Shape<double> {
+    double s;
+    Sq(double s) { this.s = s; }
+    public double area() { return s * s; }
+}
+
+class Mapper {
+    <R> R same(R r) { return r; }
+}
+class Loud extends Mapper { }
+
+public void main() {}

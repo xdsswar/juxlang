@@ -1,0 +1,16 @@
+// An argument must meet EVERY bound of an intersection (E0446), whichever
+// one it misses: a class bound or an interface bound, at a function or a class.
+interface Named { String name(); }
+interface Aged { int age(); }
+abstract class Base { }
+class OnlyNamed implements Named { public String name() { return "n"; } }
+class NoAge extends Base implements Named { public String name() { return "p"; } }
+
+<T extends Base & Named & Aged> String describe(T t) { return t.name(); }
+class Team<T extends Base & Named & Aged> { }
+
+public void main() {
+    print(describe(new OnlyNamed()));
+    print(describe(new NoAge()));
+    Team<NoAge> t = new Team<NoAge>();
+}

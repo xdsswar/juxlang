@@ -389,6 +389,23 @@ Rules:
 5. **Const generics** (`int N`) compose freely with type params and bounds in the
    same `<...>` list; a const param takes no `extends` clause and is read as a
    value (`return N;`).
+6. **A bound admits more than one type** (`ERRATA.md` E1XX-GAP39). A bound
+   naming a type that nothing else extends -- a Rust type (`rust.std.Vec`), a
+   record, an enum, a primitive, `String`, an array, a function or a nullable
+   type -- admits exactly itself, and is **`E0459`**: write that type where
+   the parameter is used, or bound the parameter by an interface. A `final`
+   Jux class is a legal bound. A Jux class cannot extend a Rust type
+   (**`E0420`**).
+7. **An intersection holds at most one class** (**`E0419`**), in any position,
+   and any number of interfaces. A member reached through the parameter is
+   typed by the first bound that declares it, so `t.age() + t.score()` over
+   `int age()` and `double score()` is a `double` (§S.2.6).
+8. **A method's type parameter shadows a class parameter of the same name**
+   (`<T> T echo(T t)` in `class Shelf<T>`): inside the method, and at every
+   call of it, `T` is the method's.
+9. **Every type is written with its parameters' count** (**`E0443`**), at any
+   depth of nesting and in every position; a Rust type may leave its defaulted
+   parameters unwritten (§T.4.7.1).
 
 ### T.4.7. Structural Inference Through Nested Generics
 
@@ -447,7 +464,14 @@ Rust allows it, with three rewrites where it does not:
   FIELD accessors, whose bodies read the field through the shared handle at a
   fixed `__parent` depth. A bound that names an in-scope type param
   (`<R extends K>`) expands to that param's own bounds, since Rust has no `R: K`
-  form.
+  form, and rule 4's "every `R` is usable wherever a `K` is expected" is a
+  conversion: an `R` value in a `K` slot is `.into()`, and the declaration
+  gains `R: Into<K>` -- on the method's or function's own list when its body
+  converts, as a `where` clause on the method when `R` and `K` are the class's,
+  and always on an interface method (every implementer forwards to it). A
+  literal passed as such an `R` takes the type `K` is bound to (`ERRATA.md`
+  E1XX-GAP39). A method type parameter that shadows a class parameter is
+  renamed in the Rust it lowers to.
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard
   whose bound names an in-scope type param substitutes that param directly

@@ -2561,6 +2561,7 @@ impl<'a> Checker<'a> {
         for tp in &fn_decl.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_declared_bounds(&fn_decl.generic_params);
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
         self.env.weak_names.clear();
@@ -3071,6 +3072,7 @@ impl<'a> Checker<'a> {
         for tp in &class.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_declared_bounds(&class.generic_params);
         self.check_supertype_heads(class.extends.iter().chain(&class.implements), &class.generic_params);
         // Const-generic params (`<int N>`) additionally read as VALUES
         // inside every body (`return N;`) — declare them with their
@@ -3581,6 +3583,7 @@ impl<'a> Checker<'a> {
         for tp in &method.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_declared_bounds(&method.generic_params);
         self.declare_const_generic_params(&method.generic_params);
         self.env.weak_names.clear();
         for param in &method.params {
@@ -3840,6 +3843,9 @@ impl<'a> Checker<'a> {
             }
             self.diagnostics.push(diag);
             return; // bogus head — don't descend into its (also bogus) args
+        }
+        if !self.check_type_arity(tref) {
+            return;
         }
         // Head resolves — validate each concrete generic argument too, so
         // `List<Bogus>` is caught at `Bogus`.
@@ -4845,6 +4851,24 @@ impl<'a> Checker<'a> {
     fn check_interface(&mut self, iface: &juxc_ast::InterfaceDecl) {
         self.reject_align_on(&iface.annotations, "an interface", &iface.name.text);
         self.check_supertype_heads(iface.extends.iter(), &iface.generic_params);
+        // The bounds of the interface and of each of its methods, abstract
+        // ones included (a body-less interface is not walked below).
+        {
+            let saved = (self.env.generic_params.clone(), self.env.generic_bounds.clone());
+            for tp in &iface.generic_params {
+                self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
+            }
+            self.check_declared_bounds(&iface.generic_params);
+            for m in iface.methods.iter().filter(|m| m.body.is_none()) {
+                let inner = (self.env.generic_params.clone(), self.env.generic_bounds.clone());
+                for tp in &m.generic_params {
+                    self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
+                }
+                self.check_declared_bounds(&m.generic_params);
+                (self.env.generic_params, self.env.generic_bounds) = inner;
+            }
+            (self.env.generic_params, self.env.generic_bounds) = saved;
+        }
         let has_bodies = iface.methods.iter().any(|m| m.body.is_some());
         if !has_bodies {
             return;
@@ -5284,6 +5308,7 @@ impl<'a> Checker<'a> {
         for tp in &record.generic_params {
             self.env.add_generic_param_bounded(&tp.name.text, &tp.bounds);
         }
+        self.check_declared_bounds(&record.generic_params);
         self.check_supertype_heads(record.implements.iter(), &record.generic_params);
         self.declare_const_generic_params(&record.generic_params);
         self.check_layout_c_record(record);
@@ -8787,6 +8812,183 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// **E0443** for a type written with the wrong number of type arguments
+    /// (`Pair<int>` for a `Pair<K, V>`), at any depth: the signature and
+    /// local-type walks call this on every type they descend through, so
+    /// `Vec<Vec<Pair<String, Vec<Pair<int>>>>>` is caught at the innermost
+    /// `Pair<int>` (ERRATA E1XX-GAP39). It used to reach rustc. Only a Jux
+    /// declaration is held to its count: a Rust type may leave defaulted
+    /// parameters unwritten (§T.4.7.1), and a `type` alias is checked where it
+    /// is expanded. Returns `false` when it reported.
+    fn check_type_arity(&mut self, tref: &TypeRef) -> bool {
+        if tref.generic_args.is_empty() || tref.fn_shape.is_some() || tref.const_literal_text().is_some() {
+            return true;
+        }
+        let Some(last) = tref.name.segments.last() else { return true };
+        let bare = last.text.clone();
+        if bare == juxc_ast::TUPLE_SENTINEL
+            || self.env.generic_params.contains(bare.as_str())
+            || self.symbols.aliases.keys().any(|k| k.rsplit('.').next() == Some(bare.as_str()))
+        {
+            return true;
+        }
+        let probe = TypeRef {
+            name: tref.name.clone(),
+            generic_args: vec![],
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: tref.span,
+        };
+        let Ty::User { name, .. } = ty_from_ref(&probe, &self.env, self.symbols) else { return true };
+        let declared: Option<Vec<String>> = if let Some(c) = self.symbols.classes.get(&name) {
+            (!c.is_external).then(|| c.generic_params.iter().map(|p| p.name.text.clone()).collect())
+        } else if let Some(i) = self.symbols.interfaces.get(&name) {
+            (!i.is_external).then(|| i.generic_params.iter().map(|p| p.name.text.clone()).collect())
+        } else if let Some(r) = self.symbols.records.get(&name) {
+            Some(r.generic_params.iter().map(|p| p.name.text.clone()).collect())
+        } else if let Some(e) = self.symbols.enums.get(&name) {
+            (!e.is_external).then(|| e.generic_params.iter().map(|p| p.name.text.clone()).collect())
+        } else {
+            None
+        };
+        let Some(params) = declared else { return true };
+        let written = tref.generic_args.len();
+        if written == params.len() {
+            return true;
+        }
+        let shown = crate::symbol_table::render_type_ref(tref);
+        let were = if written == 1 { "1 was" } else { "" };
+        let were = if were.is_empty() { format!("{written} were") } else { were.to_string() };
+        let message = if params.is_empty() {
+            format!("`{bare}` is not generic, but `{shown}` gives it {written} type argument{}", if written == 1 { "" } else { "s" })
+        } else {
+            let list = params.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", ");
+            format!(
+                "`{bare}` takes {} type argument{} ({list}), but {were} written in `{shown}`",
+                params.len(),
+                if params.len() == 1 { "" } else { "s" },
+            )
+        };
+        self.diagnostics.push(Diagnostic::error(code::Code::E0443_ExplicitTypeArgs, message).with_span(tref.span));
+        false
+    }
+
+    /// The `extends` bounds a declaration writes on its type parameters, held
+    /// to what §T.4.6 can mean (ERRATA E1XX-GAP39):
+    ///
+    /// - each bound names a real type with the right number of type
+    ///   arguments (E0417, E0443), checked the way a signature type is;
+    /// - no bound names a type nothing else extends (E0459): a Rust type, a
+    ///   record, an enum, a primitive or `String`. Such a bound admits exactly
+    ///   one type, and it has no Jux marker trait to be lowered to, so it used
+    ///   to reach rustc as "cannot find trait `VecKind`";
+    /// - an intersection holds at most one class (E0419). Its position is
+    ///   free: rule 1 says the order of an intersection is not significant.
+    ///
+    /// Called once per declaration, after its parameters are in the env, so a
+    /// bound may name a sibling parameter (`<K, V extends Holder<K>>`).
+    fn check_declared_bounds(&mut self, params: &[TypeParam]) {
+        for tp in params {
+            if tp.is_const() || tp.bounds.is_empty() {
+                continue;
+            }
+            let mut classes: Vec<(String, Span)> = Vec::new();
+            for bound in &tp.bounds {
+                let before = self.diagnostics.len();
+                self.validate_sig_type(bound, &[]);
+                if self.diagnostics.len() > before {
+                    continue;
+                }
+                let shown = crate::symbol_table::render_type_ref(bound);
+                let param = tp.name.text.as_str();
+                let lowered = ty_from_ref(bound, &self.env, self.symbols);
+                let unextendable: Option<String> = match &lowered {
+                    Ty::User { name, .. } => {
+                        if let Some(c) = self.symbols.classes.get(name) {
+                            if c.is_external {
+                                Some(format!(
+                                    "`{shown}` is a Rust type, and no Jux type can extend one"
+                                ))
+                            } else {
+                                classes.push((name.clone(), bound.span));
+                                None
+                            }
+                        } else if self.symbols.records.contains_key(name) {
+                            Some(format!("`{shown}` is a record, and a record is final"))
+                        } else if self.symbols.enums.contains_key(name) {
+                            Some(format!("`{shown}` is an enum, and an enum is final"))
+                        } else {
+                            None
+                        }
+                    }
+                    Ty::String => Some(format!("`{shown}` is final")),
+                    Ty::Primitive(_) => Some(format!("`{shown}` is a primitive type")),
+                    Ty::Array { .. } => Some(format!("`{shown}` is an array type")),
+                    Ty::Fn { .. } | Ty::FnPtr { .. } => Some(format!("`{shown}` is a function type")),
+                    Ty::Nullable(_) => Some(format!("`{shown}` is a nullable type")),
+                    _ => None,
+                };
+                if let Some(why) = unextendable {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0459_BoundCannotBeExtended,
+                            format!(
+                                "`{param} extends {shown}` admits only `{shown}` itself: {why} (§T.4.6)",
+                            ),
+                        )
+                        .with_span(bound.span)
+                        .with_help(format!(
+                            "write `{shown}` where `{param}` is used and drop the parameter, or bound `{param}` \
+                             by an interface that every type you mean to accept implements"
+                        )),
+                    );
+                }
+            }
+            if classes.len() > 1 {
+                let bare = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
+                let (a, _) = &classes[0];
+                let (b, b_span) = &classes[1];
+                let related = if self.extends_chain_reaches(a, b) {
+                    Some((a.clone(), b.clone()))
+                } else if self.extends_chain_reaches(b, a) {
+                    Some((b.clone(), a.clone()))
+                } else {
+                    None
+                };
+                let param = tp.name.text.as_str();
+                let (message, help) = match related {
+                    Some((sub, sup)) => (
+                        format!(
+                            "`{param}` is bounded by two classes, `{}` and `{}`, and `{}` already extends `{}`",
+                            bare(a),
+                            bare(b),
+                            bare(&sub),
+                            bare(&sup)
+                        ),
+                        format!("keep only `{}`: every `{}` is a `{}`", bare(&sub), bare(&sub), bare(&sup)),
+                    ),
+                    None => (
+                        format!(
+                            "`{param}` is bounded by two classes, `{}` and `{}`, and no type extends both: a class extends exactly one class (§T.4.6)",
+                            bare(a),
+                            bare(b)
+                        ),
+                        "an intersection bound holds one class and any number of interfaces; turn the other \
+                         class's surface into an interface and bound by that"
+                            .to_string(),
+                    ),
+                };
+                self.diagnostics.push(
+                    Diagnostic::error(code::Code::E0419_BoundNamesTwoClasses, message)
+                        .with_span(*b_span)
+                        .with_help(help),
+                );
+            }
+        }
+    }
+
     /// Whether interface `name`, or an interface it extends, declares `method`.
     fn interface_provides_method(&self, name: &str, method: &str) -> bool {
         let mut queue = vec![name.to_string()];
@@ -9237,6 +9439,9 @@ impl<'a> Checker<'a> {
                 diag = diag.with_help(help);
             }
             self.diagnostics.push(diag);
+            return false;
+        }
+        if !self.check_type_arity(tref) {
             return false;
         }
         let mut known = true;
@@ -13691,6 +13896,21 @@ impl<'a> Checker<'a> {
             .map(|a| infer_expr(a, &self.env, self.symbols))
             .collect();
         let inferred = infer_generic_args(method_generic_params, &param_tys, &arg_tys);
+        // A method's own `<T>` SHADOWS a class parameter of the same name
+        // (Java's rule): `<T> T echo(T t)` on a `Shelf<int>` takes and returns
+        // what the call passes, not `int` (ERRATA E1XX-GAP39). Substitution
+        // reads the first entry of a name, so the class's is dropped.
+        let mut k = 0;
+        while k < subst_params.len() {
+            if method_generic_params.iter().any(|m| m.name.text == subst_params[k].name.text) {
+                subst_params.remove(k);
+                if k < subst_args.len() {
+                    subst_args.remove(k);
+                }
+            } else {
+                k += 1;
+            }
+        }
         for p in method_generic_params {
             subst_args.push(inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown));
         }

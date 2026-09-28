@@ -1334,6 +1334,21 @@ struct RustEmitter {
     /// accordingly. Empty everywhere else, so non-generic hierarchies are
     /// untouched.
     pub(crate) kind_type_subst: std::collections::HashMap<String, juxc_ast::TypeRef>,
+    /// The ancestor-param map an inherited method's BODY is read through
+    /// while it is copied into a subclass (ERRATA E1XX-GAP39). Its signature
+    /// is substituted before it gets here; its body still names the
+    /// ancestor's params (`new Box<T>(nv)` inside `IntBox extends Box<int>`),
+    /// so [`crate::decls`]'s `emit_method` installs this as
+    /// [`Self::kind_type_subst`] around the body alone. Taken on use.
+    pub(crate) inherited_body_subst: Option<std::collections::HashMap<String, juxc_ast::TypeRef>>,
+    /// Type parameters `R` (of `<R extends K>`) whose values the body being
+    /// emitted converted into a `K` slot (ERRATA E1XX-GAP39).
+    pub(crate) param_into_used: std::collections::HashSet<String>,
+    /// While a method's or function's own generic list is written: where each
+    /// `R` of an `<R extends K>` has its bounds, and `K`'s Rust spelling, so
+    /// `Into<K> + ` can be inserted there once the body shows it is needed.
+    /// `None` outside such a list.
+    pub(crate) param_into_marks: Option<Vec<(String, String, usize)>>,
     /// Spans of local reads that are **not** that local's last read, for the
     /// function body currently being emitted (see [`crate::lastuse`]).
     ///
@@ -6801,6 +6816,9 @@ pub fn jux_enter_thread() {
             poly_base_classes: std::collections::HashSet::new(),
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
+            inherited_body_subst: None,
+            param_into_used: std::collections::HashSet::new(),
+            param_into_marks: None,
             non_final_uses: std::collections::HashSet::new(),
             level: lowering_level::ActiveLevel::from_thread(),
             fixed_array_dynamic_decls: std::collections::HashMap::new(),

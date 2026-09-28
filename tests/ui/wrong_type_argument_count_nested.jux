@@ -1,0 +1,20 @@
+// The wrong number of type arguments is caught at any depth (E0443), in
+// every place a type is written.
+import rust.std.Vec;
+import rust.std.HashMap;
+
+class Pair<K, V> { public K k; public V v; public Pair(K k, V v) { this.k = k; this.v = v; } }
+class Tri<A, B, C> { public A a; public B b; public C c; public Tri(A a, B b, C c) { this.a = a; this.b = b; this.c = c; } }
+interface Holder<K> { K key(); }
+
+class Store {
+    HashMap<String, Vec<Tri<int, Pair<int, int, int>, String>>>? byName = null;
+}
+
+<T extends Holder<int, int>> int f(T t) { return 1; }
+
+int g(Vec<Pair<String>> xs) { return 0; }
+
+public void main() {
+    Vec<Vec<Pair<String, Vec<Pair<int>>>>>? x = null;
+}

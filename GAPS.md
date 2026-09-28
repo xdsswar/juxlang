@@ -369,6 +369,44 @@ Also found and fixed on the way: `W0457` said classes are "`Rc`-refcounted" (ele
 
 Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0413` with help. A stack overflow off Windows and a foreign `Display` stay as E129 left them.
 
+### Generics sweep (added 2026-09-28)
+
+**39. CLOSED 2026-09-28 (ERRATA E1XX-GAP39).** ~~Deeply nested generics and intersection bounds must be no issue.~~ Two bugs were reported against a probe (`Registry<T extends Named & Aged, K, V extends Vec<Pair<K, T>>>` was E0900 "cannot find trait `VecKind`"; `t.ident() + t.age() + t.score()` through `<T extends Base & Named & Aged & Scored>` was E0900 "cannot add `f64` to `isize`"), then the area was swept with probe programs, each run with `JUX_SELFCHECK=1`. Every failure is fixed at source or is now a Jux diagnostic. A member reached through a bound is typed by the bound (numeric promotion follows); a bound on a type nothing else extends (Rust type, record, enum, primitive, `String`) is `E0459` (new), two classes in an intersection `E0419` (new), a wrong type-argument count at any depth `E0443`, extending a Rust type `E0420`; `<R extends K>` converts an `R` into a `K` (`R: Into<K>`, written in when the body needs it); a method's `<T>` shadows the class's; a constructor may call `super(...)` and do other work before assigning a field of a type parameter; an inherited body and an inherited call are read through the `extends` chain's parameter map. Tests: `examples/intersection_bounds.jux`, `examples/generic_supertypes.jux`, `examples/dependent_bounds.jux`, `examples/generics_deep_nesting.jux`, seven `tests/ui` cases.
+
+| Probe | Before | Now | Fix / test |
+|---|---|---|---|
+| `Registry<T extends Named & Aged, K, V extends Vec<Pair<K, T>>>` | E0900 (`VecKind`) | `E0459`: a Rust type admits only itself; write `Vec<Pair<K, T>>` or bound by an interface | `check_declared_bounds`; `ui/bound_on_foreign_type` |
+| bound on a record, an enum, `int`, `String` | E0900 | `E0459` | `ui/bound_on_final_value_types` |
+| bound on a `final` class | worked | works | `intersection_bounds.jux` |
+| `class MyVec extends Vec<int>` | E0429 listing every `Vec` method | `E0420` | `ui/extends_foreign_type` |
+| `t.ident() + t.age() + t.score()`, `t.id + t.score()`, `t.score() * t.big`, `<`, `?:`, `double` slot, `+=`, `/ 4.0`, `* f` through bounds | E0900 (`f64` + `isize`) | promotes | `param_bound_tys` in `infer.rs`; `intersection_bounds.jux` |
+| `T extends Base & I1 & I2 & I3` on a class, interface (with default), record, method; members of every bound; `T` passed as `Base`/`I1`/`I2`, returned, stored in fields, `Vec`, `HashMap` | worked (once typed) | works | `intersection_bounds.jux` |
+| `T extends Box<int> & Named & Tagged<String>` (generic class and interface bounds) | worked | works | `intersection_bounds.jux` |
+| class after interface in `&` (`T extends Named & Base & Aged`) | worked | works (§T.4.6 rule 1: order is not significant) | `intersection_bounds.jux`, `ui/bound_names_two_classes` |
+| two classes in `&` | accepted silently | `E0419` (names the class to keep when related) | `ui/bound_names_two_classes` |
+| argument missing one bound of an intersection | `E0446` | `E0446`, per bound missed | `ui/intersection_bound_one_missing` |
+| wrong type-argument count deep in a nesting (local, field, parameter, bound) | E0900 (rustc E0107) | `E0443` at the inner type | `check_type_arity`; `ui/wrong_type_argument_count_nested` |
+| `class A<T, U> extends B<Pair<T, U>> implements I<Vec<T>>, J<U>` with `super(..); ts.push(t); this.u = u;` | E0900 (`U::default()`) | works | prefix lift past `super` and blind statements; `generic_supertypes.jux` |
+| generic interface hierarchy `I2<T> extends I1<Pair<T,T>>`, `I3<T,S> extends I2<T>`; interface for concrete args; default methods | worked | works | `generic_supertypes.jux` |
+| `IntBox extends Box<int>` inheriting `Box<T> with(T nv) { return new Box<T>(nv); }` | E0900 (`T` not found) | works | inherited body emitted through the parameter map; `generic_supertypes.jux` |
+| `Squad<Person>.add(new Student(..))`, `add(T)` inherited from `Roster<T>` | E0900 (E0308) | works | argument type composed along `extends`; `generic_supertypes.jux` |
+| overriding a generic method on an extended class | `E0438` advising `final`/`sealed` (neither works) | `E0438` advising non-generic, `private` or `static`; generic base and package-private method covered (were E0900) | `ui/generic_method_on_generic_base` |
+| F-bounded `E extends Entity<E>`, `T extends Ord<T>` (a user `Ord`), `where T has operator<=>` | E0900 with a user `interface Ord` (`impl Ord for`) | works | `std::cmp::Ord` by path; `dependent_bounds.jux` |
+| `<K, V extends Holder<K>>` on a class and a method | worked | works | `dependent_bounds.jux` |
+| `<T> T echo(T t)` in `class Shelf<T>` | E0410, then E0900 (E0403) | works | shadowing in the checker, rename in the emitter; `dependent_bounds.jux` |
+| `<U extends T> void putSub(U u) { items.push(u); }`, `<R extends A>` storing `R`, `class Chain<K, V extends K>`, `<K, V extends K>` free function, `<V extends K>` interface default | E0900 (E0308 / `V: K`) | works | `ParamInto` coercion + `Into<K>`; `dependent_bounds.jux` |
+| static generic `Pair.of("a", 1)` then `var` | E0900 (`&str` + float) | works | static call read through its bindings; `dependent_bounds.jux` |
+| interface default body `items().push(k)` | E0900 (no `push` on the handle) | works | bare call typed as `this.items()`; `dependent_bounds.jux` |
+| 4 and 6 parameters, 5 and 6 levels; `HashMap<.., Vec<Pair<.., HashMap<.., Vec<Tri<..>>>>>>` | worked | works | `generics_deep_nesting.jux` |
+| function types / lambdas over nested generics, generic record, payload enum, async of a nested generic, `var` through nested calls, diamond | worked | works | `generics_deep_nesting.jux` |
+| `? extends Pair<String, Vec<int>>`, `? extends Person`, `? super Student` | worked | works | `generics_deep_nesting.jux` |
+| `type Reg<T> = Registry<T, String, Vec<Pair<String, T>>>`, `Table<V>`, `Grid` | worked | works | `generics_deep_nesting.jux` |
+| `Outer<T>.Inner<U>` (static nesting, §M.9) | worked | works | `generics_deep_nesting.jux` |
+| one parameter down `Roster<T> <- Squad<T> <- StudentSquad` under `Base & Named & Aged` | E0900 on `Squad<Person>.add` | works | as above; `generics_deep_nesting.jux` |
+| `Task<Pair<..>> t = spawn(..)` (a written `Task<T>`) | E0900 | **open** | a written `Task<T>` is `jux.std.concurrent`'s `Worker` task, not `spawn`'s; `var t = spawn(..)` works. Async naming, not generics |
+
+Left open: the written `Task<T>` above; a generic method that can be overridden on an extended class (visitor-style `<R> R accept(Visitor<R>)`) stays `E0438`, as §D.4 has always said, because its dispatch goes through a trait object.
+
 ---
 
 ## 4. Three streams stopped mid-flight

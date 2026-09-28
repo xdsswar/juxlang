@@ -1,0 +1,181 @@
+// Intersection bounds (Type system §T.4.6): a class first, then any number
+// of interfaces, on classes, interfaces, records and methods -- and every
+// member of every bound reachable through the parameter, with Java's numeric
+// promotion when the members return different numeric types (ERRATA
+// E1XX-GAP39: `t.ident() + t.age() + t.score()` used to reach rustc as
+// "cannot add `f64` to `isize`", because a call through a bound had no type).
+
+import rust.std.Vec;
+import rust.std.HashMap;
+
+interface Named { String name(); }
+interface Aged { int age(); }
+interface Scored { double score(); }
+interface Tagged<X> { X tag(); }
+
+abstract class Base {
+    public int id = 7;
+    public long big = 5;
+    public int ident() { return id; }
+    public abstract String kind();
+}
+
+class Person extends Base implements Named, Aged, Scored {
+    String n; int a;
+    Person(String n, int a) { this.n = n; this.a = a; }
+    public String name() { return n; }
+    public int age() { return a; }
+    public double score() { return a * 1.5; }
+    public String kind() { return "person"; }
+}
+
+class Robot extends Base implements Named, Aged, Scored {
+    public String name() { return "r2"; }
+    public int age() { return 40; }
+    public double score() { return 0.25; }
+    public String kind() { return "robot"; }
+}
+
+String takeBase(Base b) { return b.kind() + b.ident(); }
+String takeNamed(Named n) { return n.name(); }
+int takeAged(Aged a) { return a.age(); }
+
+// ---- numeric promotion through the bounds ----------------------------------
+
+<T extends Base & Named & Aged & Scored> double all(T t) { return t.ident() + t.age() + t.score(); }
+<T extends Base & Scored> double viaField(T t) { return t.id + t.score(); }
+<T extends Base & Scored> double viaLong(T t) { return t.score() * t.big; }
+<T extends Aged & Scored> bool younger(T t) { return t.age() < t.score(); }
+<T extends Aged & Scored> double either(T t, bool b) { return b ? t.age() : t.score(); }
+<T extends Aged> double widened(T t) { return t.age(); }
+<T extends Aged> long sumLong(T t) { long x = t.age(); return x + t.age(); }
+<T extends Aged & Scored> double compound(T t) { double d = 1.0; d += t.age(); d = d - t.age() + t.score(); return d; }
+<T extends Aged> double quarter(T t) { return t.age() / 4.0; }
+<T extends Aged> double scaled(T t, float f) { return t.age() * f; }
+
+// ---- a class-level bound, members from every bound, T stored and passed ----
+
+class Team<T extends Base & Named & Aged & Scored> {
+    Vec<T> members = new Vec<T>();
+    HashMap<String, T> byName = new HashMap<String, T>();
+    T lead;
+    Team(T lead) { this.lead = lead; add(lead); }
+    void add(T t) { members.push(t); byName.insert(t.name(), t); }
+    T getLead() { return lead; }
+    T first() { return members[0]; }
+    double total() {
+        double s = 0.0;
+        for (T m : members) { s += m.score() + m.age() + m.ident(); }
+        return s;
+    }
+    String roll() {
+        String out = "";
+        for (T m : members) { out = out + takeBase(m) + "/" + takeNamed(m) + "/" + takeAged(m) + ";"; }
+        return out;
+    }
+    int ids() { int s = 0; for (T m : members) { s += m.id; } return s; }
+}
+
+// ---- on an interface, a record and a method ---------------------------------
+
+interface Ranker<T extends Base & Named & Aged> {
+    T best(Vec<T> xs);
+    default String bestName(Vec<T> xs) { return best(xs).name(); }
+}
+
+class OldestRanker<T extends Base & Named & Aged> implements Ranker<T> {
+    public T best(Vec<T> xs) {
+        T b = xs[0];
+        for (T x : xs) { if (x.age() > b.age()) { b = x; } }
+        return b;
+    }
+}
+
+record Entry<T extends Base & Named & Scored>(String key, T value) {
+    double weighted() { return value.score() * value.ident(); }
+}
+
+<T extends Base & Named & Aged & Scored> T pickOlder(T a, T b) { return a.age() >= b.age() ? a : b; }
+
+// ---- a generic class bound and a generic interface bound --------------------
+
+class Box<V> {
+    public V v;
+    public Box(V v) { this.v = v; }
+    public V get() { return v; }
+}
+
+class NamedBox extends Box<int> implements Named, Tagged<String> {
+    public NamedBox(int v) { super(v); }
+    public String name() { return "nb" + v; }
+    public String tag() { return "t"; }
+}
+
+<T extends Box<int> & Named & Tagged<String>> double boxScore(T t) {
+    return t.get() + t.v * 0.5 + t.name().length() + t.tag().length();
+}
+
+class Shelf<T extends Box<int> & Named & Tagged<String>> {
+    Vec<T> xs = new Vec<T>();
+    void add(T t) { xs.push(t); }
+    double avg() { int s = 0; for (T t : xs) { s += t.get(); } return s / (double) xs.len(); }
+}
+
+// ---- the class may come anywhere in the intersection (§T.4.6 rule 1) --------
+
+<T extends Named & Base & Aged> String described(T t) { return t.name() + "@" + t.ident() + "/" + t.age(); }
+
+// ---- a final class is a legal bound -----------------------------------------
+
+final class Leaf { public int v = 3; public int get() { return v; } }
+<L extends Leaf> int leaf(L l) { return l.get() + l.v; }
+
+public void main() {
+    Person ann = new Person("ann", 30);
+    Person bob = new Person("bob", 41);
+
+    print(all(ann));
+    print(viaField(ann));
+    print(viaLong(ann));
+    print(younger(ann));
+    print(either(ann, true));
+    print(either(ann, false));
+    print(widened(ann));
+    print(sumLong(ann));
+    print(compound(ann));
+    print(quarter(ann));
+    print(scaled(ann, 0.5f));
+
+    Team<Person> t = new Team<Person>(ann);
+    t.add(bob);
+    print(t.total());
+    print(t.roll());
+    print(t.ids());
+    print(t.getLead().name());
+    print(t.first().score());
+    print(t.byName.len());
+    Team<Robot> robots = new Team<Robot>(new Robot());
+    print(robots.total());
+
+    OldestRanker<Person> r = new OldestRanker<Person>();
+    print(r.best(t.members).name());
+    Ranker<Person> asRanker = r;
+    print(asRanker.bestName(t.members));
+
+    Entry<Person> e = new Entry<Person>("k", bob);
+    print(e.weighted());
+    print(e.value.name());
+
+    Person older = pickOlder(ann, bob);
+    print(older.kind());
+
+    NamedBox nb = new NamedBox(4);
+    print(boxScore(nb));
+    Shelf<NamedBox> sh = new Shelf<NamedBox>();
+    sh.add(nb);
+    sh.add(new NamedBox(7));
+    print(sh.avg());
+
+    print(described(bob));
+    print(leaf(new Leaf()));
+}

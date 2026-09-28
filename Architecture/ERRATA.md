@@ -4908,6 +4908,130 @@ is replaced by the rule above; `JUX-EXCEPTIONS-ADDENDUM.md` §X.1.2 lists
 so `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is unchanged. E129's "Not guarded" list
 loses these four items. GAPS.md gap 38 is closed.
 
+
+## E1XX-GAP39. Generics at depth: every bound's members typed, a bound only a class can meet, and a parameter usable as its bound
+
+**Conflict.** The requirement is that deeply nested generics with many
+parameters, and a type parameter that extends a class and implements several
+interfaces, are no issue: a valid program builds and runs, an invalid one gets
+a Jux diagnostic. A sweep of probes against the built toolchain (with
+`JUX_SELFCHECK=1`, so a safe-mode heal counts as a failure) found these gaps.
+Nesting itself (six parameters, six levels, lambdas, records, enums, async,
+`var`, the diamond, wildcards, aliases) already worked; the gaps were in what
+a bound promises and how a bound is lowered.
+
+- **A member reached through a bound had no type.** `t.age()` on a
+  `<T extends Named & Aged>` was typed `Unknown`, so `t.ident() + t.age() +
+  t.score()` got no numeric promotion and reached rustc as "cannot add `f64`
+  to `isize`". The same for a field read (`t.id + t.score()`), a comparison,
+  a ternary, a `double` slot, `+=`, and a class-level bound.
+- **A bound on a type nothing else can extend was lowered as a class bound.**
+  `V extends Vec<Pair<K, T>>` became `V: VecKind`, a trait that does not exist;
+  a record, an enum, a primitive or `String` failed the same way. Extending a
+  Rust type (`class MyVec extends Vec<int>`) was E0429 listing every method of
+  `Vec` as unimplemented.
+- **An intersection naming two classes was accepted**, and a type written with
+  the wrong number of type arguments below the top level
+  (`Vec<Vec<Pair<int>>>`, a field, a parameter, a bound) reached rustc.
+- **§T.4.6 rule 4 held only for members.** `<R extends K>` is "every `R` is
+  usable wherever a `K` is expected", but storing an `R` in a `Vec<K>` or
+  returning it as a `K` reached rustc ("expected `K`, found `R`"), in a
+  method, a free function, a class (`class Chain<K, V extends K>`) and an
+  interface's default method. `<V extends K>` on a free function or an
+  interface method emitted `V: K`.
+- **A method's `<T>` did not shadow the class's `T`.** `<T> T echo(T t)` in
+  `class Shelf<T>` was checked as the class's `T` (`echo("s")` on a
+  `Shelf<int>` was E0410) and emitted as a second `T` (rustc E0403).
+- **Generic supertypes.** A constructor `super(...); ts.push(t); this.u = u;`
+  left `U u` to `U::default()`; an inherited method whose body names its class's
+  parameter (`new Box<T>(nv)` copied into `IntBox extends Box<int>`) kept the
+  `T`; `Squad<Person>.add(new Student(..))`, with `add(T)` inherited from
+  `Roster<T>`, did not convert its argument to `Person`'s form.
+- **Smaller ones on the way.** A generic static (`Pair.of("a", 1)`) returned
+  `Pair<X, Y>` unsubstituted, so `var p = Pair.of(..)` had no field types; an
+  interface default body's bare call to its own method (`items().push(k)`) was
+  untyped; a program's own `interface Ord<T>` hid Rust's `Ord` from the code
+  an `operator<=>` lowers to; E0438 missed a generic method on a GENERIC
+  extended class and a package-private one, and advised `final` and `sealed`,
+  neither of which helps.
+
+**Resolution.**
+
+1. **A bound's members are typed by the bound** (`infer.rs`,
+   `param_bound_tys`). A method call or a field read on a receiver of type
+   parameter `T` is answered by `T`'s bounds in the order written, a bound
+   that names another parameter (`<R extends K>`) standing for that
+   parameter's bounds. The intersection's bounds agree where they overlap
+   (they are checked where declared), so the first answer is the answer, and
+   numeric promotion (§S.2.6) follows from the type as everywhere else.
+2. **A bound admits more than one type or it is refused** (§T.4.6, new
+   `E0459`). A bound naming a Rust type, a record, an enum, a primitive,
+   `String`, an array, a function or a nullable type admits exactly that type,
+   and none of them has a marker trait to be lowered to; the diagnostic says
+   so and says what to write instead (the type itself where the parameter was
+   used, or an interface bound). A `final` Jux class stays a legal bound: it
+   has a marker trait carrying its members, and Java accepts it. A Jux class
+   cannot extend a Rust type: `E0420`, which already meant "final".
+3. **An intersection holds at most one class** (new `E0419`), in any position
+   (rule 1: order is not significant, so `T extends Named & Base` is legal and
+   works). When one class extends the other the message names the one to keep.
+4. **The wrong number of type arguments is `E0443` at any depth**, in every
+   place a type is written: field, parameter, return, local, `new`, bound.
+   A Rust type is held to nothing (§T.4.7.1: it may leave defaulted parameters
+   unwritten), a `type` alias is checked where it is expanded, as before.
+5. **`<R extends K>` converts.** A value of `R` flowing into a slot of type
+   `K` is `(r).into()`, and the declaration acquires `R: Into<K>`: on a
+   method's or free function's own generic list, written in only once the body
+   is known to convert (an unconditional bound would reject a caller whose
+   `R` is a class and `K` an interface, which has no conversion); on a method
+   that converts a CLASS parameter, as that method's `where` clause, so the
+   struct is not constrained; on an interface method, unconditionally, since
+   every implementing class forwards to the trait's signature. A number
+   literal passed as such an `R` takes the type `K` is bound to at the
+   receiver (`putSub(9)` on a `Shelf<int>`), as Java's inference would.
+6. **Shadowing.** A method type parameter named like a class parameter
+   shadows it: the checker drops the class's binding of that name at the call,
+   and the emitter renames the method's (`T__m`) through its signature and
+   body.
+7. **Generic supertypes.** The constructor-prefix lift steps over a leading
+   `super(...)` and over statements that cannot observe the object (no `this`
+   or `super` as a value, no call of a class method, no lambda), lifting only
+   a literal or an unreassigned constructor parameter into a slot none of them
+   names. An inherited method's body is emitted with the ancestor-to-child
+   parameter map active, and a call's argument is converted through the
+   parameter map composed along the `extends` chain to the declaring class.
+8. **The rest.** A generic static is read through the types its call binds;
+   an interface default body's bare call is `this.m()`; the code
+   `operator<=>` lowers to names `std::cmp::Ord` by path; E0438 covers
+   generic and package-private cases and advises what works (non-generic,
+   `private`, or `static` taking the object).
+
+**Still a limitation, now a diagnostic.** A generic method that can be
+overridden, on a class that is extended (the visitor pattern's `<R> R
+accept(Visitor<R> v)`), is E0438 as before: its dispatch goes through a trait
+object, which a method with its own type parameters cannot be part of.
+
+**Tests.** `examples/intersection_bounds.jux`,
+`examples/generic_supertypes.jux`, `examples/dependent_bounds.jux` and
+`examples/generics_deep_nesting.jux`, pinned by hand-written expectations;
+`tests/ui/bound_on_foreign_type`, `bound_on_final_value_types`,
+`bound_names_two_classes`, `wrong_type_argument_count_nested`,
+`extends_foreign_type`, `generic_method_on_generic_base` and
+`intersection_bound_one_missing`.
+
+**Known boundary.** A written `Task<T>` type is the `Worker` task of
+`jux.std.concurrent`, not the task `spawn` returns, so `Task<int> t =
+spawn(f())` does not build; `var t = spawn(f())` does. That is the async
+surface's naming, not generics', and is left open. `<R extends K>` at the
+level of a class (`class Chain<K, V extends K>`) converts inside a method
+that is not reached through a trait object; in a method of an extended class
+it would also need the `where` clause on the class's dispatch trait.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 gains the rules for
+`E0459`, `E0419` and shadowing, and §T.4.8 the `Into` lowering of rule 4;
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 lists `E0419` and `E0459`, and `E0443`
+says "at any depth". GAPS.md gap 39 is closed.
+
 ---
 When you edit any addendum that touches one of the items above,
 either:
