@@ -402,6 +402,9 @@ pub(crate) struct Checker<'a> {
     pub(crate) component_names: HashMap<Span, String>,
     /// Anonymous classes to lift to named ones (ERRATA E137).
     pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
+    /// Indices into `anon_lifts` of the anonymous classes whose bodies are
+    /// being checked, innermost last (ERRATA E1XX-GAP39d).
+    pub(crate) anon_stack: Vec<usize>,
     /// The instantiation facts `crate::instantiations` closes over.
     pub(crate) inst_facts: Vec<crate::instantiations::Fact>,
     /// The function or method whose body is being checked, as a fact key.
@@ -624,6 +627,7 @@ impl<'a> Checker<'a> {
             call_expansions: HashMap::new(),
             component_names: HashMap::new(),
             anon_lifts: Vec::new(),
+            anon_stack: Vec::new(),
             inst_facts: Vec::new(),
             inst_ctx_method: None,
             ctor_selections: HashMap::new(),
@@ -9105,7 +9109,7 @@ impl<'a> Checker<'a> {
             }
         }
         used_params.sort();
-        let generics: Vec<(String, String)> = used_params
+        let mut generics: Vec<(String, String)> = used_params
             .iter()
             .map(|p| {
                 let bounds = self
@@ -9118,6 +9122,118 @@ impl<'a> Checker<'a> {
             })
             .collect();
         let target_bare = crate::symbol_table::fqn_bare(class_fqn).to_string();
+        // The enclosing object's members read, written or called bare
+        // (ERRATA E1XX-GAP39d). The body's own declarations and the members
+        // of the type it implements win, as in Java.
+        let mut outer_members: Vec<String> = Vec::new();
+        let enclosing = self.env.current_class.clone().filter(|_| !self.in_static);
+        if let Some(outer) = &enclosing {
+            // Each body with the names it declares for itself (its
+            // parameters and locals), which are not the enclosing object's
+            // there; the driver rewrites each body by the same rule.
+            let mut own_blocks: Vec<(&juxc_ast::Block, std::collections::HashSet<String>)> = Vec::new();
+            for m in &body.methods {
+                let Some(b) = m.body.as_ref() else { continue };
+                let mut own = crate::anon_lift::declared_names(&[b]);
+                own.extend(m.params.iter().map(|p| p.name.text.clone()));
+                own_blocks.push((b, own));
+            }
+            for b in &body.init_blocks {
+                own_blocks.push((b, crate::anon_lift::declared_names(&[b])));
+            }
+            let own_methods: std::collections::HashSet<&str> = body.methods.iter().map(|m| m.name.text.as_str()).collect();
+            let mut seen: Vec<String> = Vec::new();
+            for (b, own) in &own_blocks {
+                juxc_ast::visit::for_each_expr(b, &mut |e| {
+                    if let Expr::Path(qn) = e {
+                        if qn.segments.len() == 1
+                            && !own.contains(&qn.segments[0].text)
+                            && !seen.contains(&qn.segments[0].text)
+                        {
+                            seen.push(qn.segments[0].text.clone());
+                        }
+                    }
+                });
+            }
+            for name in seen {
+                if name == "this"
+                    || own_methods.contains(name.as_str())
+                    || captures.iter().any(|(c, _)| *c == name)
+                {
+                    continue;
+                }
+                let target_has = self.symbols.lookup_field(class_fqn, &name).is_some()
+                    || self.symbols.lookup_method(class_fqn, &name).is_some()
+                    || self.symbols.interfaces.get(class_fqn).is_some_and(|i| {
+                        i.methods.contains_key(&name)
+                            || crate::infer::inherited_interface_method_sig(self.symbols, i, &name).is_some()
+                    });
+                if target_has {
+                    continue;
+                }
+                let field = self.symbols.lookup_field(outer, &name).filter(|(f, _)| !f.is_static);
+                let method = self.symbols.lookup_method(outer, &name).filter(|(m, _)| !m.is_static);
+                let is_member = field.is_some() || self.symbols.lookup_property(outer, &name).is_some() || method.is_some();
+                if !is_member {
+                    continue;
+                }
+                // The handle on a polymorphic base is its dispatch trait
+                // object, and a private member has no slot on it: said here,
+                // at the anonymous class, rather than as the lifted class's.
+                let private = field.as_ref().is_some_and(|(f, _)| matches!(f.visibility, juxc_ast::Visibility::Private))
+                    || (field.is_none()
+                        && method.as_ref().is_some_and(|(m, _)| matches!(m.visibility, juxc_ast::Visibility::Private)));
+                let outer_bare = outer.rsplit('.').next().unwrap_or(outer);
+                if private && self.poly_bases.contains(outer_bare) {
+                    let kind = if field.is_some() { "field" } else { "method" };
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0437_FieldThroughPolymorphicBase,
+                            format!(
+                                "an anonymous class can't reach private {kind} `{name}` of `{outer_bare}` -- \
+                                 `{outer_bare}` has subclasses, so the anonymous class holds the enclosing \
+                                 object as a `{outer_bare}` (a dynamic-dispatch trait object), and a private \
+                                 member has no slot on it"
+                            ),
+                        )
+                        .with_span(n.span)
+                        .with_help(format!("make `{name}` protected or package-private")),
+                    );
+                    continue;
+                }
+                outer_members.push(name);
+            }
+        }
+        let outer_type = if outer_members.is_empty() { None } else { self.anon_outer_type() };
+        if let Some(t) = &outer_type {
+            if !crate::anon_lift::declarable(t) {
+                return;
+            }
+        }
+        // Inside another anonymous class, `this` is that class: the enclosing
+        // object is the handle it holds.
+        let outer_arg = if self.anon_stack.is_empty() {
+            "this".to_string()
+        } else {
+            crate::anon_lift::OUTER_FIELD.to_string()
+        };
+        if outer_type.is_some() {
+            for p in self.env.generic_params.clone() {
+                let is_class_param = enclosing
+                    .as_deref()
+                    .and_then(|c| self.symbols.classes.get(c))
+                    .is_some_and(|c| c.generic_params.iter().any(|g| g.name.text == p));
+                if is_class_param && !generics.iter().any(|(g, _)| *g == p) {
+                    let bounds = self
+                        .env
+                        .generic_bounds
+                        .get(&p)
+                        .map(|bs| bs.iter().map(crate::symbol_table::render_type_ref).collect::<Vec<_>>().join(" & "))
+                        .unwrap_or_default();
+                    generics.push((p, bounds));
+                }
+            }
+        }
         self.anon_lifts.push(crate::anon_lift::AnonLift {
             span: n.span,
             unit: 0,
@@ -9127,7 +9243,22 @@ impl<'a> Checker<'a> {
             generics,
             captures,
             super_arg_types,
+            outer_members,
+            outer_type,
+            outer_arg,
         });
+    }
+
+    /// The enclosing object's type as a lifted anonymous class declares its
+    /// `__jux_outer` field: the enclosing class at its own parameters.
+    fn anon_outer_type(&self) -> Option<String> {
+        let outer = self.env.current_class.as_deref()?;
+        let class = self.symbols.classes.get(outer)?;
+        let ty = Ty::User {
+            name: outer.to_string(),
+            generic_args: class.generic_params.iter().filter(|g| !g.is_const()).map(|g| Ty::Param(g.name.text.clone())).collect(),
+        };
+        Some(ty.to_string())
     }
 
     /// Whether interface `name`, or an interface it extends, declares `method`.
@@ -9820,6 +9951,13 @@ impl<'a> Checker<'a> {
     ) {
         use juxc_ast::Visibility;
         let accessor = self.env.current_class.as_deref();
+        // A lifted anonymous class's bodies were judged where they were
+        // written, with the enclosing class as the accessor (ERRATA E137);
+        // the lifted copy reaches what they reached, the enclosing object's
+        // private members among them (ERRATA E1XX-GAP39d).
+        if accessor.is_some_and(|a| a.rsplit('.').next().unwrap_or(a).starts_with(juxc_ast::ANON_CLASS_PREFIX)) {
+            return;
+        }
         let allowed_code = match vis {
             Visibility::Public => return,
             Visibility::Private => {
@@ -13669,12 +13807,28 @@ impl<'a> Checker<'a> {
             if target_is_class || target_is_iface {
                 self.plan_anon_lift(n, &class_name, target_is_class, body);
             }
+            let planned = self.anon_lifts.last().is_some_and(|l| l.span == n.span).then(|| self.anon_lifts.len() - 1);
+            if let Some(i) = planned {
+                self.anon_stack.push(i);
+            }
+            let first_inner = self.anon_lifts.len();
             let this_ty = Ty::User { name: class_name.clone(), generic_args: Vec::new() };
             let saved_return = self.current_return.take();
             for method in &body.methods {
                 self.check_method(method, &this_ty);
             }
             self.current_return = saved_return;
+            if let Some(i) = planned {
+                self.anon_stack.pop();
+                // An anonymous class inside this one that reaches the
+                // enclosing object reaches it through this one's handle, so
+                // this one holds it too (ERRATA E1XX-GAP39d).
+                let inner_needs = self.anon_lifts[first_inner..].iter().any(|l| l.outer_type.is_some());
+                if inner_needs && self.anon_lifts[i].outer_type.is_none() {
+                    let outer = self.anon_outer_type();
+                    self.anon_lifts[i].outer_type = outer;
+                }
+            }
         }
 
         // Lower the explicit generic args (if any) into `Ty`s. Empty

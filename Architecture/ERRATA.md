@@ -5202,13 +5202,90 @@ none may stay that way:
 `tests/ui/generic_method_dispatch_limits` now holds the polymorphic-recursion
 refusal only (the two shapes it held before build).
 
-**Known boundary.** A lifted anonymous class captures enclosing locals and
+**Known boundary.** Resolved by E1XX-GAP39d: ~~A lifted anonymous class captures enclosing locals and
 parameters, as before; the enclosing object's own fields read bare inside an
-anonymous class were not captured before and are not now.
+anonymous class were not captured before and are not now.~~
 
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and §T.4.8 are
 amended; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's E0438 row names the one case
 left. E136's "Known boundary" is resolved here. GAPS.md gap 39c is closed.
+
+## E1XX-GAP39d. An anonymous class reaches the object it was built in
+
+**Conflict.** `JUX-LANG-V1.md` §7 said an anonymous instance "has no
+implicit reference to the enclosing class's `this`", and E137 left the same
+as its known boundary: inside `new Listener() { .. }` written in a method of
+`Counter`, a bare `count++`, `total += x` or `refresh()` meaning the
+enclosing object's member did not build (the lifted class has no such
+member). Java reads each of them through the enclosing instance, and it is
+the ordinary way to write a listener or a visitor that keeps score.
+
+**Resolution.**
+
+1. **The checker finds the enclosing object's members an anonymous class
+   uses bare.** When it plans the lift (E137) of an anonymous class written
+   in an instance context, a single-name path in one of its bodies names the
+   enclosing object's member when it is a non-static field, property or
+   method of the enclosing class, and is not: `this`; a parameter or local of
+   that body (its own declarations win, one body at a time); one of the
+   anonymous class's own methods; a local of the enclosing method it
+   captures; or a member of the type it implements or extends (that type's
+   own member wins, as in Java). `this` in the body is still the anonymous
+   object, so `this.total` names the anonymous class's member, never the
+   enclosing one's.
+2. **The lifted class holds the enclosing object.** It gets a field
+   `__jux_outer` of the enclosing class's type (at its own type parameters,
+   which the lifted class then takes too) and a constructor parameter for
+   it; the construction passes `this`. Each such bare name in its bodies is
+   rewritten to `__jux_outer.<name>`, so reads, writes (`=`, `+=`, `++`) and
+   calls go through the handle and land on the enclosing object itself: a
+   write is seen there afterwards. An anonymous class inside another reaches
+   the same object: the inner one is passed the outer one's `__jux_outer`,
+   and the outer one holds it whenever an inner one needs it. Inside a
+   lambda the enclosing `this` is the method's, as for any other use of it.
+3. **The handle is borrowed like any field.** A call through it drops every
+   guard on the anonymous object before it runs (`__jux_outer` is a field,
+   not one of the backend's temporaries), so the enclosing object can be
+   busy calling into the anonymous class (iterating its own listeners,
+   walking its own tree with the visitor) while the anonymous class writes
+   its fields. A call on an element of a collection field (`items[0]
+   .accept(v)`) releases the owner's guard the same way; it held it for the
+   whole call before, and a visitor writing the owner stopped the program.
+4. **Where the handle is built.** In a constructor, a body that hands `this`
+   out as a value (to an anonymous class, or `r.add(this)`) runs against the
+   finished object, as a body calling a method on `this` already did; a
+   field of an interface type assigned bare there converts the value it is
+   given. In a method of a class with subclasses, `this` handed out as that
+   class is wrapped as its dispatch value. Such an enclosing object is held
+   as the base's dispatch value, where a private member has no slot:
+   reaching one from an anonymous class is `E0437` at the anonymous class,
+   with the fix (make it protected or package-private). A private member of
+   any other enclosing class is reached as Java reaches it: the body was
+   checked where it was written, so the lifted copy is not checked for
+   access again. A package-private field of a class with subclasses is now
+   written through its setter from outside the class, as it was already
+   read through its getter.
+
+`Outer.this.x` is not part of the language (no section of the spec defines
+it), so it is not added here.
+
+**Tests.** `examples/anonymous_outer_access.jux`, pinned by a hand-written
+expectation: bare writes and a private method call seen on the object
+afterwards, a listener run while its owner iterates its own field, a
+parameter and a captured local shadowing fields, nesting, a lambda, a
+constructor, a generic class, an abstract base's method run on a subclass,
+the superclass's own field winning. `tests/ui/anonymous_outer_private_poly`
+holds the `E0437` refusal.
+
+**Known boundary.** A field initializer that uses the object being built
+(an anonymous class reaching its members there, or `int y = twice(3);`
+calling an instance method) is E0900 whether or not an anonymous class is
+involved: field initializers run before the object exists as a handle.
+That predates this entry.
+
+**Spec status:** `JUX-LANG-V1.md` §7's anonymous-class paragraph is
+amended. E137's "Known boundary" is resolved here. GAPS.md gap 39d is
+closed.
 
 ---
 When you edit any addendum that touches one of the items above,

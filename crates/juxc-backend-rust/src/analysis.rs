@@ -5318,7 +5318,9 @@ impl crate::RustEmitter {
             // returns the dyn base type isn't double-wrapped.
             let concrete_local = matches!(expr, Expr::Path(qn)
                 if qn.segments.len() == 1 && self.concrete_polybase_locals.contains(&qn.segments[0].text));
-            if target_is_polybase && (matches!(expr, Expr::NewObject(_)) || concrete_local) {
+            // So is `this`: a method runs on the concrete struct, never on
+            // the trait object (ERRATA E1XX-GAP39d).
+            if target_is_polybase && (matches!(expr, Expr::NewObject(_) | Expr::This(_)) || concrete_local) {
                 return IfaceCoercion::WrapClass {
                     clone_first: self.wrapper_value_needs_clone(expr),
                 };
@@ -5605,6 +5607,27 @@ impl crate::RustEmitter {
                     .and_then(|s| self.lookup_interface_by_bare_or_fqn(s.text.as_str()))
                     .map(|(_, i)| i.is_external)
                     .unwrap_or(false);
+                // `this` in an abstract polymorphic base's own copy of a
+                // method: that struct implements no `Kind` (each concrete
+                // subclass runs its own copy of the body), and the copy never
+                // runs. It still has to type-check (ERRATA E1XX-GAP39d).
+                let abstract_self = matches!(expr, Expr::This(_))
+                    && !foreign_iface
+                    && self.enclosing_class.as_deref().is_some_and(|c| {
+                        self.is_poly_base_class(c.rsplit('.').next().unwrap_or(c))
+                            && self.lookup_class_ast_by_bare_or_fqn(c).is_some_and(|d| d.is_abstract)
+                    });
+                if abstract_self {
+                    let mut cast_ty = target_ty.clone();
+                    cast_ty.nullable = false;
+                    self.w.push_str("(|| -> ");
+                    self.emit_value_type_as_rust(&cast_ty);
+                    self.w.push_str(" { unreachable!(\"an abstract class's own method body\") })()");
+                    if nullable {
+                        self.w.push(')');
+                    }
+                    return;
+                }
                 self.w
                     .push_str(if foreign_iface { "(Box::new(" } else { "(std::rc::Rc::new(" });
                 self.emit_expr(expr);

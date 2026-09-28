@@ -940,7 +940,29 @@ impl RustEmitter {
                 crate::worker::walk_stmt(stmt, &mut look);
             }
         }
-        found
+        // `this` handed out as a value (`r.add(this)`, and the enclosing
+        // object an anonymous class built here holds, ERRATA E1XX-GAP39d) is
+        // the handle too; `this.f` is only the object being built.
+        let mut field_this: Vec<juxc_source::Span> = Vec::new();
+        let mut all_this: Vec<juxc_source::Span> = Vec::new();
+        let mut this_value = |e: &juxc_ast::Expr| match e {
+            juxc_ast::Expr::Field(f) => {
+                if let juxc_ast::Expr::This(s) = &*f.object {
+                    field_this.push(*s);
+                }
+            }
+            juxc_ast::Expr::This(s) => all_this.push(*s),
+            _ => {}
+        };
+        for stmt in &ctor.body.statements {
+            crate::worker::walk_stmt(stmt, &mut this_value);
+        }
+        for init in &class_decl.init_blocks {
+            for stmt in &init.statements {
+                crate::worker::walk_stmt(stmt, &mut this_value);
+            }
+        }
+        found || all_this.iter().any(|s| !field_this.contains(s))
     }
 
     /// Replay the constructor bodies an ANCESTOR deferred, outermost ancestor

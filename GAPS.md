@@ -441,6 +441,25 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `wrap("x", 7)`: the literal where `B` is the parameter's type | built a `Weird<String, i32>` | builds `Weird<String, int>` |
 | `grow<A, Vec<B>>` inside `<A, B> grow(..)`, building a `Weird<A, B>` | E0438 (the old rule) | `E0438` naming `grow`: polymorphic recursion has no finite set |
 
+**39d. CLOSED 2026-09-28 (ERRATA E1XX-GAP39d).** ~~An anonymous class could not reach the object it was built in (E137's known boundary).~~ The checker finds the enclosing object's members an anonymous class names bare (its own parameters and locals, captured locals and the members of the type it implements or extends win); the lifted class holds the enclosing object in `__jux_outer`, passed `this` at the construction (or the enclosing anonymous class's own `__jux_outer` when nested), and each such name is rewritten to go through it, so writes land on the enclosing object. Calls through the handle, and calls on an element of a collection field, release every guard first, so the enclosing object may be calling into the anonymous class while it writes. A constructor that hands `this` out runs against the finished object; `this` handed out as a class with subclasses is wrapped as its dispatch value. A private member of an enclosing class with subclasses is `E0437` at the anonymous class (the handle is the dispatch value, where it has no slot). `Outer.this` is not in the spec and is not added. Tests: `examples/anonymous_outer_access.jux`, `tests/ui/anonymous_outer_private_poly`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `count++; total += x; note("on" + x);` in an anonymous `Listener` built in a `Counter` method (`note` private) | does not build | works, seen on the `Counter` |
+| the listener run by `fire`, which is iterating the `Counter`'s own `listeners` | does not build | works under `JUX_SELFCHECK=1` |
+| anonymous visitor writing `sum`/`visits` while `walk` calls `items[0].accept(v)` | does not build | works |
+| anonymous class inside an anonymous class, both reaching the `Counter` | does not build | works |
+| anonymous class built in a lambda in a method | does not build | works |
+| a parameter / a captured local named like a field; the superclass's own field named like one | worked (the enclosing object was out of reach) | works; the anonymous class's own name wins |
+| anonymous class built in a constructor, stored in an interface-typed field (`onClick = new Listener() { .. }`) | does not build | works |
+| `r.add(this)` in a constructor | E0900 | works |
+| anonymous class in `Bag<T>` reaching `items` | does not build | works |
+| anonymous class in an abstract `Widget`'s method reaching `hits`, `bump()` and the abstract `name()`, run on a `Knob` | does not build | works |
+| `this` passed as `Base` from a method of an abstract `Base` with subclasses | E0900 | works |
+| `b.hits += x` on a `Base`-typed value, `hits` package-private | E0900 | works |
+| the same reaching a *private* member of that `Widget` | does not build | `E0437` at the anonymous class |
+| a field initializer that uses the object (`int y = twice(3);`) | E0900 | E0900 (predates this; known boundary) |
+
 ---
 
 ## 4. Three streams stopped mid-flight

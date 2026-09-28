@@ -1,0 +1,221 @@
+// An anonymous class reaching the object it was built in (ERRATA
+// E1XX-GAP39d): the enclosing object's fields read and written bare
+// (`count++`, `total += x`), its methods called bare, with every write seen
+// on the object afterwards. The anonymous class's own parameters and locals,
+// the enclosing method's locals it captures, and the members of the type it
+// implements or extends all come first. It works the same inside a lambda,
+// nested in another anonymous class, in a constructor, in a generic class,
+// in a subclass's inherited method, and while the enclosing object is busy
+// calling into it.
+
+import rust.std.Vec;
+
+interface Listener {
+    void on(int x);
+}
+
+interface Visitor<R> {
+    R visitNum(int n);
+}
+
+interface Expr {
+    <R> R accept(Visitor<R> v);
+}
+
+class Num implements Expr {
+    int value;
+    Num(int value) { this.value = value; }
+    public <R> R accept(Visitor<R> v) { return v.visitNum(value); }
+}
+
+class Counter {
+    int count = 0;
+    int total = 0;
+    private String log = "";
+    Vec<Listener> listeners = new Vec<Listener>();
+
+    private void note(String s) { log = log + s + ";"; }
+    String log() { return log; }
+
+    // Bare writes, a bare call to a private method, all through the handle.
+    void wire() {
+        listeners.push(new Listener() {
+            public void on(int x) {
+                count++;
+                total += x;
+                note("on" + x);
+            }
+        });
+    }
+
+    // The listener runs while `fire` is iterating the object's own field.
+    void fire(int x) {
+        for (Listener l : listeners) {
+            l.on(x);
+        }
+    }
+
+    // A parameter and a captured local of the same names as fields win.
+    void shadowing() {
+        int count = 100;
+        Listener l = new Listener() {
+            public void on(int total) { this_total(total + count); }
+        };
+        l.on(7);
+    }
+
+    void this_total(int v) { total = v; }
+
+    // An anonymous class inside another reaches the same object.
+    void nested() {
+        Listener outer = new Listener() {
+            public void on(int x) {
+                Listener inner = new Listener() {
+                    public void on(int y) { count += y; note("inner" + y); }
+                };
+                inner.on(x * 10);
+                note("outer" + x);
+            }
+        };
+        outer.on(2);
+    }
+
+    // Inside a lambda inside a method.
+    void viaLambda() {
+        (int) -> void f = (int x) -> {
+            Listener l = new Listener() {
+                public void on(int y) { total += y; }
+            };
+            l.on(x * 1000);
+        };
+        f(1);
+        f(2);
+    }
+}
+
+// A visitor that writes the tree's fields while the tree walks itself.
+class Tree {
+    Vec<Expr> items = new Vec<Expr>();
+    int sum = 0;
+    int visits = 0;
+
+    int walk() {
+        Visitor<int> v = new Visitor<int>() {
+            public int visitNum(int n) {
+                sum += n;
+                visits++;
+                return sum;
+            }
+        };
+        int last = 0;
+        for (Expr e : items) {
+            last = e.accept(v) + visits;
+        }
+        return items[0].accept(v) + last;
+    }
+}
+
+// Built in a constructor, stored in a field of the object being built.
+class Button {
+    int clicks = 0;
+    Listener onClick;
+    Button() {
+        onClick = new Listener() {
+            public void on(int x) { clicks += x; }
+        };
+    }
+}
+
+// A generic enclosing class.
+class Bag<T> {
+    Vec<T> items = new Vec<T>();
+    int seen = 0;
+    void add(T t) { items.push(t); }
+    Listener counter() {
+        return new Listener() {
+            public void on(int x) { seen += x + (int) items.len(); }
+        };
+    }
+}
+
+// An abstract base whose method builds the anonymous class: it runs on
+// each subclass, and reaches the subclass's overrides.
+abstract class Widget {
+    int hits = 0;
+    abstract String name();
+    void bump() { hits++; }
+    Listener listener() {
+        return new Listener() {
+            public void on(int x) {
+                hits += x;
+                bump();
+                print(name() + " " + hits);
+            }
+        };
+    }
+}
+
+class Knob extends Widget {
+    String name() { return "knob"; }
+}
+
+// The superclass's own field wins over the enclosing object's.
+abstract class Shape {
+    int sides = 0;
+    abstract int area();
+}
+
+class Maker {
+    int sides = 5;
+    int built = 0;
+    Shape make() {
+        return new Shape() {
+            {
+                sides = 3;
+                built++;
+            }
+            public int area() { return sides * 10; }
+        };
+    }
+}
+
+void main() {
+    Counter c = new Counter();
+    c.wire();
+    c.fire(3);
+    c.fire(4);
+    print(c.count + " " + c.total + " " + c.log());
+    c.shadowing();
+    print(c.total);
+    c.nested();
+    print(c.count + " " + c.log());
+    c.viaLambda();
+    print(c.total);
+
+    Tree t = new Tree();
+    t.items.push(new Num(2));
+    t.items.push(new Num(3));
+    print(t.walk());
+    print(t.sum + " " + t.visits);
+
+    Button b = new Button();
+    b.onClick.on(2);
+    b.onClick.on(5);
+    print(b.clicks);
+
+    Bag<String> bag = new Bag<String>();
+    bag.add("x");
+    bag.add("y");
+    bag.counter().on(5);
+    print(bag.seen);
+
+    Knob k = new Knob();
+    k.listener().on(2);
+    Widget w = k;
+    w.listener().on(1);
+    print(k.hits);
+
+    Maker m = new Maker();
+    Shape s = m.make();
+    print(s.area() + " " + s.sides + " " + m.sides + " " + m.built);
+}

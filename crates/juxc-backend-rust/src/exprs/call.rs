@@ -4444,18 +4444,40 @@ impl RustEmitter {
         // `this.sink.on(s)`) reads through the same `self.0.borrow()` guard,
         // and a listener it calls that touches this object would find it
         // borrowed. Hoisted exactly like the explicit form.
-        if let Expr::Path(qn) = recv {
-            // Only a field holding a Jux object can run Jux code that comes
-            // back to this one; a collection, a string or a foreign value
-            // cannot, and keeps its in-place read.
-            let holds_jux_object = matches!(
-                self.expr_types.get(&qn.span).cloned().map(crate::exprs::field::strip_nullable),
+        // Only a Jux object can run Jux code that comes back to this one; a
+        // collection, a string or a foreign value cannot, and keeps its
+        // in-place read.
+        let is_jux_object = |span: &juxc_source::Span| {
+            matches!(
+                self.expr_types.get(span).cloned().map(crate::exprs::field::strip_nullable),
                 Some(juxc_tycheck::Ty::User { ref name, .. })
                     if self.lookup_interface_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
                         .is_some_and(|(_, i)| !i.is_external)
                         || self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
                             .is_some_and(|c| !c.is_external)
-            );
+            )
+        };
+        // An element of a collection field (`items[0].accept(v)`) is read
+        // through the owner's guard too, and the visitor it is handed may
+        // write the owner (ERRATA E1XX-GAP39d).
+        if let Expr::Index(ix) = recv {
+            let through_owner = match ix.array.as_ref() {
+                Expr::Field(af) => {
+                    self.receiver_is_wrapper_class(&af.object)
+                        && self.wrapper_field_parent_depth(&af.object, &af.field.text).is_some()
+                }
+                Expr::Path(qn) => {
+                    qn.segments.len() == 1
+                        && self.emitting_wrapper_class
+                        && self.enclosing_class.as_deref().is_some_and(|c| self.is_wrapper_class(c))
+                        && self.bare_name_is_instance_member(&qn.segments[0].text)
+                }
+                _ => false,
+            };
+            return (through_owner && is_jux_object(&ix.span)).then_some(cf);
+        }
+        if let Expr::Path(qn) = recv {
+            let holds_jux_object = is_jux_object(&qn.span);
             let implicit_this_field = qn.segments.len() == 1
                 && holds_jux_object
                 && self.emitting_wrapper_class
@@ -5208,7 +5230,13 @@ impl RustEmitter {
         // an owned handle and dropping the `borrow()` temporary at the `;`.
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
         let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        let recv_mark = self.w.mark();
         self.emit_expr(&callee.object);
+        // An element read out of a collection is a place, not a value: the
+        // binding takes its own handle on it (ERRATA E1XX-GAP39d).
+        if matches!(&*callee.object, Expr::Index(_)) && !self.w.text_from(recv_mark).ends_with(".clone()") {
+            self.w.push_str(".clone()");
+        }
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
         self.w.push_str("; ");
