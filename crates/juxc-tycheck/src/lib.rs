@@ -43,6 +43,7 @@ use juxc_source::Span;
 
 pub mod aliases;
 pub mod anon_lift;
+pub mod erasure;
 pub mod field_init;
 pub mod late_fields;
 pub mod private_dispatch;
@@ -401,6 +402,18 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // (ERRATA E137), and a dispatch that cannot close is `E0438`.
     let seeds: Vec<ty::Ty> = all_expr_types.values().cloned().collect();
     symbols.instantiations = instantiations::close(&symbols, &all_inst_facts, &seeds);
+    // Polymorphic recursion is lowered by erasure (ERRATA E1XX-GAP39g): the
+    // erased classes have one instantiation, and only what cannot be erased
+    // is left for `E0438`.
+    symbols.erasure = erasure::plan(&symbols);
+    erasure::normalize_instantiations(&mut symbols);
+    if !symbols.erasure.refused.is_empty() {
+        for (idx, d) in erasure::refused_diagnostics(&symbols) {
+            tc.diagnostics.push(d.with_file(idx));
+        }
+        // Said once, at the bound, rather than again at each dispatch.
+        symbols.instantiations.unbounded.clear();
+    }
     for (idx, d) in generic_dispatch::unclosable_diagnostics(&symbols) {
         tc.diagnostics.push(d.with_file(idx));
     }

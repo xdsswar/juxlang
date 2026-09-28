@@ -1,0 +1,10 @@
+depth 0, size 1: Flat 1
+depth 1, size 2: Nest(Flat (2, 2))
+depth 2, size 4: Nest(Nest(Flat ((3, 3), (3, 3))))
+depth 3, size 8: Nest(Nest(Nest(Flat (((4, 4), (4, 4)), ((4, 4), (4, 4))))))
+Nest(Nest(Flat ((s, s), (s, s))))
+true
+false
+2
+2
+42

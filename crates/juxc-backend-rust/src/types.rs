@@ -241,6 +241,17 @@ impl RustEmitter {
             self.kind_type_subst = saved;
             return;
         }
+        // **Erasure** (ERRATA E1XX-GAP39g): a use of a class on a
+        // polymorphic-recursion cycle is its one instantiation, every type
+        // argument the erased type.
+        if Self::is_erased_marker(ty) && !ty.nullable && ty.array_shape.is_none() && ty.ptr_depth == 0 {
+            self.w.push_str(crate::erasure::ERASED_RUST);
+            return;
+        }
+        if let Some(erased) = self.erased_type_ref(ty) {
+            self.emit_type_as_rust(&erased);
+            return;
+        }
         // Raw pointer `T*` is the OUTERMOST modifier (§5.5 / §A.2.7), peeled
         // first: each `*` level emits a Rust `*mut`, then we recurse on the
         // type with the pointer suffix stripped. So `int*` → `*mut isize`,

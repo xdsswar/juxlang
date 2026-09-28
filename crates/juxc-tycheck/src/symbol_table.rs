@@ -154,6 +154,10 @@ pub struct SymbolTable {
     /// Every concrete instantiation of each generic class the program
     /// builds (`crate::instantiations`, ERRATA E137).
     pub instantiations: crate::instantiations::Closure,
+    /// The functions, methods and classes on a polymorphic-recursion cycle,
+    /// lowered with erased type arguments (`crate::erasure`, ERRATA
+    /// E1XX-GAP39g).
+    pub erasure: crate::erasure::Erasure,
 }
 
 /// Per-unit name-resolution context built once during

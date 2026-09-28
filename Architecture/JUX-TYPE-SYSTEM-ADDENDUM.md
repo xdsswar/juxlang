@@ -414,9 +414,13 @@ Rules:
    is: a named class, an anonymous class (lifted to a named one), or a
    subtype with a type parameter the supertype does not fix (`class Weird<T,
    U> extends Tree<T>`), found at every argument the program builds it with.
-   That set is finite in every program but one that builds the subtype at
-   ever-larger arguments by polymorphic recursion, which is **`E0438`**
-   (`ERRATA.md` E136, E137). An override may bound its type parameter
+   A program that builds the subtype at ever-larger arguments by polymorphic
+   recursion (a function calling itself at a larger type argument) has no
+   such set, and is compiled by erasure instead: the functions and classes on
+   that cycle run at one erased type argument that carries each value's own
+   type, with one dispatch for every depth (`ERRATA.md` E136, E137,
+   E1XX-GAP39g). A bounded type parameter on such a cycle cannot be erased,
+   which is **`E0438`**. An override may bound its type parameter
    by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
    `Store<Pet>`).
 

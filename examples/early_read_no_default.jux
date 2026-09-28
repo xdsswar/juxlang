@@ -1,0 +1,33 @@
+// A base constructor calling an override that reads a subclass field before
+// the subclass's initializers have run (ERRATA E140, E1XX-GAP39g): a field
+// with a default value reads it (`0`, and `""` for a String, which is
+// non-null by type), and a field whose type has none (a class) throws
+// `NullPointerException`, as Java's `null` does, naming the field.
+
+class Gear {
+    int teeth;
+    Gear(int teeth) { this.teeth = teeth; }
+}
+
+abstract class Machine {
+    Machine() {
+        try {
+            print("machine sees " + describe());
+        } catch (NullPointerException e) {
+            print("caught: " + e.getMessage());
+        }
+    }
+    abstract String describe();
+}
+
+class Mill extends Machine {
+    int speed = 9;
+    String label = "mill";
+    Gear gear = new Gear(12);
+    String describe() { return speed + " '" + label + "' " + gear.teeth; }
+}
+
+void main() {
+    Mill m = new Mill();
+    print(m.describe());
+}

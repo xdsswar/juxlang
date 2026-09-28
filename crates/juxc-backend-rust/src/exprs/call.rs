@@ -2815,7 +2815,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                if crate::analysis::is_jux_string_type(ty) {
+                if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
                     self.w.push_str("String");
                 } else {
                     self.emit_turbofish_arg(call, ty);
@@ -5076,7 +5076,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                if crate::analysis::is_jux_string_type(ty) {
+                if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
                     self.w.push_str("String");
                 } else {
                     self.emit_turbofish_arg(call, ty);
@@ -5297,7 +5297,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                if crate::analysis::is_jux_string_type(ty) {
+                if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
                     self.w.push_str("String");
                 } else {
                     self.emit_turbofish_arg(call, ty);
@@ -7607,6 +7607,12 @@ impl RustEmitter {
     /// (`collect::<Vec<isize>>()`); the call's result is put behind a handle
     /// where it lands (see `call_returns_foreign_collection`).
     fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
+        // An erased function or method is instantiated at the erased type
+        // only (ERRATA E1XX-GAP39g).
+        if self.call_type_args_erased(call) {
+            self.w.push_str(crate::erasure::ERASED_RUST);
+            return;
+        }
         let foreign = self.foreign_callee_return_type(&call.callee).is_some()
             || self.call_on_untyped_foreign_receiver(call);
         if foreign && self.collection_is_handle(&ty.name) {

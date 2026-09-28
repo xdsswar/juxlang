@@ -5,8 +5,8 @@
 // constructor that calls `super`. A base constructor that calls an overridden
 // method sees the subclass's fields at their default values, as in Java; one
 // with no default value (a class) is unset, and reading it throws
-// `IllegalStateException` ("field 'tag' of Middle read before it was
-// initialized"), where Java reads `null`.
+// `NullPointerException` ("field 'tag' of Middle read before it was
+// initialized"), as Java's `null` does.
 
 import rust.std.Vec;
 
@@ -58,8 +58,7 @@ class Middle extends Root {
         String t;
         try {
             t = tag.text;
-        } catch (IllegalStateException e) {
-            // Java: a NullPointerException, the field still being null.
+        } catch (NullPointerException e) {
             t = "unset";
         }
         return "middle seen=" + seen + " tag=" + t;

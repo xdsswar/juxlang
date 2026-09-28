@@ -45,6 +45,7 @@ use juxc_tycheck::{SymbolTable, Ty};
 mod analysis;
 mod backend_fqn;
 mod decls;
+mod erasure;
 mod exprs;
 mod interp;
 mod lastuse;
@@ -751,6 +752,157 @@ pub(crate) struct PendingSetterObserver {
 /// bare `.unwrap()` stopped the program with Rust's `Option::unwrap()` panic
 /// (gap 33).
 pub(crate) const ARRAY_POP_RAISE: &str = ".unwrap_or_else(|| crate::jux_empty_fail())";
+/// The erased-value support the prelude carries (ERRATA E1XX-GAP39g).
+pub(crate) const ERASED_PRELUDE: &str = r##"#[derive(Clone)]
+pub struct JuxErased(std::rc::Rc<JuxErasedValue>);
+pub struct JuxErasedValue {
+    value: std::rc::Rc<dyn std::any::Any>,
+    type_id: std::any::TypeId,
+    show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
+    eq: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+    hash: Option<fn(&dyn std::any::Any) -> u64>,
+}
+impl JuxErased {
+    pub fn wrap<X: 'static>(
+        v: X,
+        show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
+        eq: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+        hash: Option<fn(&dyn std::any::Any) -> u64>,
+    ) -> JuxErased {
+        let any: &dyn std::any::Any = &v;
+        match any.downcast_ref::<JuxErased>() {
+            Some(already) => already.clone(),
+            None => JuxErased(std::rc::Rc::new(JuxErasedValue {
+                value: std::rc::Rc::new(v),
+                type_id: std::any::TypeId::of::<X>(),
+                show,
+                eq,
+                hash,
+            })),
+        }
+    }
+    pub fn get<X: Clone + 'static>(&self) -> X {
+        let me: &dyn std::any::Any = self;
+        match me.downcast_ref::<X>() {
+            Some(same) => same.clone(),
+            None => match self.0.value.downcast_ref::<X>() {
+                Some(v) => v.clone(),
+                None => jux_erased_mismatch(std::any::type_name::<X>()),
+            },
+        }
+    }
+}
+pub fn jux_erased_mismatch(want: &str) -> ! {
+    std::panic::panic_any(format!(
+        "internal compiler error: an erased value was read as `{}`, which it is not (ERRATA E1XX-GAP39g)",
+        want
+    ))
+}
+pub fn jux_erased_phantom<X>(_: &X) -> std::marker::PhantomData<X> {
+    std::marker::PhantomData
+}
+pub fn jux_erased_cast<X: 'static>(_: std::marker::PhantomData<X>, a: &dyn std::any::Any) -> &X {
+    match a.downcast_ref::<X>() {
+        Some(v) => v,
+        None => jux_erased_mismatch(std::any::type_name::<X>()),
+    }
+}
+pub struct JuxErasedProbe<X>(pub std::marker::PhantomData<X>);
+pub trait JuxErasedEqViaPartialEq { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
+impl<X: PartialEq + 'static> JuxErasedEqViaPartialEq for &&JuxErasedProbe<X> {
+    fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool> {
+        Some(|a, b| match (a.downcast_ref::<X>(), b.downcast_ref::<X>()) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        })
+    }
+}
+pub trait JuxErasedEqViaIdentity { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
+impl<X> JuxErasedEqViaIdentity for &JuxErasedProbe<X> {
+    fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool> { None }
+}
+pub trait JuxErasedHashViaHash { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
+impl<X: std::hash::Hash + 'static> JuxErasedHashViaHash for &&JuxErasedProbe<X> {
+    fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64> {
+        Some(|a| {
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let Some(x) = a.downcast_ref::<X>() {
+                x.hash(&mut h);
+            }
+            h.finish()
+        })
+    }
+}
+pub trait JuxErasedHashViaIdentity { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
+impl<X> JuxErasedHashViaIdentity for &JuxErasedProbe<X> {
+    fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64> { None }
+}
+impl std::fmt::Display for JuxErased {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", (self.0.show)(&*self.0.value))
+    }
+}
+impl std::fmt::Debug for JuxErased {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", (self.0.show)(&*self.0.value))
+    }
+}
+impl PartialEq for JuxErased {
+    fn eq(&self, other: &Self) -> bool {
+        if std::rc::Rc::ptr_eq(&self.0, &other.0) {
+            true
+        } else if self.0.type_id != other.0.type_id {
+            false
+        } else {
+            match self.0.eq {
+                Some(eq) => eq(&*self.0.value, &*other.0.value),
+                None => std::rc::Rc::ptr_eq(&self.0.value, &other.0.value),
+            }
+        }
+    }
+}
+impl Eq for JuxErased {}
+impl std::hash::Hash for JuxErased {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.0.hash {
+            Some(h) => h(&*self.0.value).hash(state),
+            None => std::ptr::hash(std::rc::Rc::as_ptr(&self.0.value) as *const u8, state),
+        }
+    }
+}
+#[macro_export]
+macro_rules! __jux_erase {
+    (@wrap $ev:ident) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            JuxErasedEqViaIdentity as _, JuxErasedEqViaPartialEq as _, JuxErasedHashViaHash as _,
+            JuxErasedHashViaIdentity as _,
+        };
+        let __jux_ep = $crate::jux_erased_phantom(&$ev);
+        let __jux_eq = (&&&$crate::JuxErasedProbe(__jux_ep)).jux_eq_fn();
+        let __jux_eh = (&&&$crate::JuxErasedProbe(__jux_ep)).jux_hash_fn();
+        $crate::JuxErased::wrap(
+            $ev,
+            std::rc::Rc::new(move |a: &dyn std::any::Any| {
+                let x = $crate::jux_erased_cast(__jux_ep, a);
+                $crate::__jux_show!(*x)
+            }),
+            __jux_eq,
+            __jux_eh,
+        )
+    }};
+    ($v:expr, $t:ty) => {{
+        let __jux_ev: $t = ::std::clone::Clone::clone(&$v);
+        $crate::__jux_erase!(@wrap __jux_ev)
+    }};
+    ($v:expr) => {{
+        let __jux_ev = ::std::clone::Clone::clone(&$v);
+        $crate::__jux_erase!(@wrap __jux_ev)
+    }};
+}
+"##;
+
 pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"`!!` asserted on a null value\"))))";
 
 /// How a call through a `null` function pointer raises (Layout-ABI §L.6.4):
@@ -1356,6 +1508,12 @@ struct RustEmitter {
     /// Receivers of a member access typed by one of [`Self::into_params`],
     /// by span: each is emitted converted to the bound it names.
     pub(crate) into_receivers: std::collections::HashMap<juxc_source::Span, juxc_ast::TypeRef>,
+    /// Expressions (by span) that fill a slot declared as an erased type
+    /// parameter, boxed where they are emitted (ERRATA E1XX-GAP39g).
+    pub(crate) erase_on_emit: std::collections::HashMap<crate::erasure::EraseKey, Option<juxc_ast::TypeRef>>,
+    /// The expressions being boxed or unboxed right now, so the recursive
+    /// emission of the value itself does not wrap it again.
+    pub(crate) erasing_now: std::collections::HashSet<(crate::erasure::EraseKey, bool)>,
     /// In a `__jux_via_` twin: each `into` parameter's stand-in for the
     /// supertype's parameter, through which it converts to its bound.
     pub(crate) into_via: Vec<(String, String)>,
@@ -4638,6 +4796,14 @@ fn jux_unescape_debug(inner: &str) -> String {
         w.push_str("        (&&&$crate::JuxShow(&$v)).jux_show()\n");
         w.push_str("    }};\n");
         w.push_str("}\n\n");
+        // An erased type argument's value (ERRATA E1XX-GAP39g): polymorphic
+        // recursion instantiates its functions and classes at this one type.
+        // It holds the value and what the concrete type knows about it, taken
+        // where the value was boxed and its type was still known: its text,
+        // its `==`, its hash. Boxing a value that already is one keeps it,
+        // so generic code that erases a `T` which is itself erased adds no
+        // layer; unboxing at `JuxErased` gives the value back as it is.
+        w.push_str(ERASED_PRELUDE);
         // The handle a class whose instances CROSS A WORKER BOUNDARY lowers to
         // (JUX-ASYNC-ADDENDUM §18.2: "the compiler upgrades the refcount
         // automatically when an instance crosses a worker boundary"). It mirrors
@@ -6894,6 +7060,8 @@ pub fn jux_enter_thread() {
             param_into_marks: None,
             into_params: Vec::new(),
             into_receivers: std::collections::HashMap::new(),
+            erase_on_emit: std::collections::HashMap::new(),
+            erasing_now: std::collections::HashSet::new(),
             into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),
             level: lowering_level::ActiveLevel::from_thread(),

@@ -1,0 +1,67 @@
+// Polymorphic recursion (ERRATA E1XX-GAP39g): `grow<A, B>` calls itself as
+// `grow<A, Vec<B>>`, so it builds a `Weird<A, B>` at a larger `B` at every
+// depth -- a set of instantiations with no last one. Java runs it through
+// erasure, and so does Jux: the functions and classes on the cycle are
+// compiled once, at an erased type argument that carries each value's own
+// type, and the value is boxed and unboxed where it crosses into code that
+// knows its type. `accept` still finds the `Weird` behind a `Tree`, and the
+// values print as the types they are.
+
+import rust.std.Vec;
+
+interface Visitor<R> {
+    R visit(String what);
+}
+
+abstract class Tree<T> {
+    public abstract <R> R accept(Visitor<R> v);
+}
+
+class Weird<T, U> extends Tree<T> {
+    T head;
+    U extra;
+    Weird(T head, U extra) {
+        this.head = head;
+        this.extra = extra;
+    }
+    public <R> R accept(Visitor<R> v) {
+        return v.visit(head + " / " + extra);
+    }
+}
+
+<A, B> Tree<A> grow(A a, B b, int n) {
+    print("depth " + n + ": " + b);
+    if (n == 0) {
+        return new Weird<A, B>(a, b);
+    }
+    Vec<B> wrapped = new Vec<B>();
+    wrapped.push(b);
+    wrapped.push(b);
+    return grow<A, Vec<B>>(a, wrapped, n - 1);
+}
+
+class Show implements Visitor<String> {
+    public String visit(String what) {
+        return "visited " + what;
+    }
+}
+
+class Size implements Visitor<int> {
+    public int visit(String what) {
+        return what.length();
+    }
+}
+
+public void main() {
+    Tree<int> t = grow<int, String>(1, "x", 5);
+    print(t.accept(new Show()));
+    print(t.accept(new Size()));
+
+    // The same classes used directly, off the cycle's own code.
+    Weird<int, String> w = new Weird<int, String>(7, "y");
+    print(w.head + 1);
+    print(w.extra + "!");
+    w.head = 9;
+    print(w.head * 2);
+    print(w.accept(new Show()));
+}
