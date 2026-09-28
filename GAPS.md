@@ -441,7 +441,7 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `wrap("x", 7)`: the literal where `B` is the parameter's type | built a `Weird<String, i32>` | builds `Weird<String, int>` |
 | `grow<A, Vec<B>>` inside `<A, B> grow(..)`, building a `Weird<A, B>` | E0438 (the old rule) | `E0438` naming `grow`: polymorphic recursion has no finite set |
 
-**39d. CLOSED 2026-09-28 (ERRATA E138).** ~~An anonymous class could not reach the object it was built in (E137's known boundary).~~ The checker finds the enclosing object's members an anonymous class names bare (its own parameters and locals, captured locals and the members of the type it implements or extends win); the lifted class holds the enclosing object in `__jux_outer`, passed `this` at the construction (or the enclosing anonymous class's own `__jux_outer` when nested), and each such name is rewritten to go through it, so writes land on the enclosing object. Calls through the handle, and calls on an element of a collection field, release every guard first, so the enclosing object may be calling into the anonymous class while it writes. A constructor that hands `this` out runs against the finished object; `this` handed out as a class with subclasses is wrapped as its dispatch value. A private member of an enclosing class with subclasses is `E0437` at the anonymous class (the handle is the dispatch value, where it has no slot). `Outer.this` is not in the spec and is not added. Tests: `examples/anonymous_outer_access.jux`, `tests/ui/anonymous_outer_private_poly`.
+**39d. CLOSED 2026-09-28 (ERRATA E138).** ~~An anonymous class could not reach the object it was built in (E137's known boundary).~~ The checker finds the enclosing object's members an anonymous class names bare (its own parameters and locals, captured locals and the members of the type it implements or extends win); the lifted class holds the enclosing object in `__jux_outer`, passed `this` at the construction (or the enclosing anonymous class's own `__jux_outer` when nested), and each such name is rewritten to go through it, so writes land on the enclosing object. Calls through the handle, and calls on an element of a collection field, release every guard first, so the enclosing object may be calling into the anonymous class while it writes. A constructor that hands `this` out runs against the finished object; `this` handed out as a class with subclasses is wrapped as its dispatch value. A private member of an enclosing class with subclasses is `E0437` at the anonymous class (the handle is the dispatch value, where it has no slot; reachable since gap 39e). `Outer.this` is not in the spec and is not added. Tests: `examples/anonymous_outer_access.jux`, `tests/ui/anonymous_outer_private_poly`.
 
 | Probe | Before | Now |
 |---|---|---|
@@ -458,7 +458,27 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `this` passed as `Base` from a method of an abstract `Base` with subclasses | E0900 | works |
 | `b.hits += x` on a `Base`-typed value, `hits` package-private | E0900 | works |
 | the same reaching a *private* member of that `Widget` | does not build | `E0437` at the anonymous class |
-| a field initializer that uses the object (`int y = twice(3);`) | E0900 | E0900 (predates this; known boundary) |
+| a field initializer that uses the object (`int y = twice(3);`) | E0900 | E0900 (predates this; known boundary; works since gap 39e) |
+
+**39e. CLOSED 2026-09-28 (ERRATA E1XX-GAP39e).** ~~Field initializers that use the object, and private members of a class with subclasses reached from an anonymous class.~~ An instance field initializer that uses the object runs against the finished object, as do all after it (and all of a class whose ancestor's do), the hierarchy's root first, before any `init` block or constructor body, once per object; `this` is in scope in it. A field with no value to hold meanwhile (a class, a several-method interface, a type parameter) gets a nullable slot while compiling, each read asserting it is set; `E0499` is a direct read of a field that holds no value yet and has no default. `E0981` is left for observers. A private member reached through a class's dispatch value, where visible, is renamed to a hidden non-private stand-in (`__jux_priv_<Class>_<member>`) declared only for compilation; `E0437` is retired. Tests: `examples/field_initializers_use_object.jux`, `examples/anonymous_private_members.jux`, `tests/ui/field_read_before_initialized`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `int y = twice(3);`, `int b = a + 1;`, `int c = this.b * 10;` | E0301 / E0900 | works |
+| `Worker w = new Worker(this);`, then `int seen = w.report();` | E0900 | works |
+| `Shape s = new Shape() { .. n * n .. };` (two methods), `Listener l = new Listener() { .. n += x .. };` | E0900 | works, writes seen on the object |
+| `() -> int peek = () -> n + doubled;` | `E0981` | works |
+| `Vec<Owner> registry = listOf(this);` | E0900 | works |
+| `int early = this.late + 1; int late = 5;` | E0900 | `early` is 1 (reads `late` at 0) |
+| `int boost = engine.power * 2; Engine engine = ..;` | E0900 | `E0499` |
+| `Base`/`Kid` hierarchy with logging initializers, `init` blocks and bodies | E0900 | base.a; base.b; kid.c; base.init; base.body; kid.init; kid.body |
+| `Kid(int x) { this(); .. }` | E0900 | initializers run once |
+| `Stream<T>` with no constructor, `int size = count();` and a lambda over it | E0900 | works |
+| abstract `Figure` whose initializer calls the subclass's override | E0900 | works |
+| `this.w = new Worker(this);` in a constructor, `Worker w;` | E0900 | works |
+| `hits += twice(x); hits++; note(..)` in an anonymous class in an abstract `Panel` (all private) | `E0437` | works |
+| `other.hits`, `other.hits = 0`, `other.note(..)` in `Panel.absorb(Panel other)` | `E0437` / E0900 | works |
+| `a.name` on a private field through `Animal` from `main` | `E0437` | `E0414` |
 
 ---
 

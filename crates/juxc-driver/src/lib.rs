@@ -236,6 +236,7 @@ pub fn cargo_profile_args(release: bool) -> (Vec<String>, String) {
 
 pub mod annotations;
 mod anon_lift;
+mod private_dispatch;
 pub mod big_stack;
 mod borrow_selfcheck;
 pub mod build_failure;
@@ -504,6 +505,21 @@ where
     if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
         typed = juxc_tycheck::typecheck_workspace(&units);
     }
+    // A field whose initializer runs against the finished object and whose
+    // type has no stand-in value gets a nullable slot, and the program is
+    // checked again (ERRATA E1XX-GAP39e).
+    if anon_lift::no_user_errors(&typed.diagnostics, &units) && juxc_tycheck::late_fields::apply(&mut units, &typed) {
+        typed = juxc_tycheck::typecheck_workspace(&units);
+    }
+    // A private member reached through a class's dispatch value gets a hidden
+    // stand-in there, and the program is checked again (ERRATA E1XX-GAP39e).
+    if anon_lift::no_user_errors(&typed.diagnostics, &units) {
+        let accesses = juxc_tycheck::private_dispatch::rename_accesses(&mut units, &typed);
+        if !accesses.is_empty() {
+            private_dispatch::apply(&mut units, &accesses);
+            typed = juxc_tycheck::typecheck_workspace(&units);
+        }
+    }
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
@@ -606,6 +622,21 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
     if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
         typed = juxc_tycheck::typecheck_workspace(&units);
+    }
+    // A field whose initializer runs against the finished object and whose
+    // type has no stand-in value gets a nullable slot, and the program is
+    // checked again (ERRATA E1XX-GAP39e).
+    if anon_lift::no_user_errors(&typed.diagnostics, &units) && juxc_tycheck::late_fields::apply(&mut units, &typed) {
+        typed = juxc_tycheck::typecheck_workspace(&units);
+    }
+    // A private member reached through a class's dispatch value gets a hidden
+    // stand-in there, and the program is checked again (ERRATA E1XX-GAP39e).
+    if anon_lift::no_user_errors(&typed.diagnostics, &units) {
+        let accesses = juxc_tycheck::private_dispatch::rename_accesses(&mut units, &typed);
+        if !accesses.is_empty() {
+            private_dispatch::apply(&mut units, &accesses);
+            typed = juxc_tycheck::typecheck_workspace(&units);
+        }
     }
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain

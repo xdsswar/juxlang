@@ -1,0 +1,63 @@
+// Private members of a class with subclasses, reached where Java reaches
+// them (ERRATA E1XX-GAP39e): from an anonymous class written in the class,
+// through the enclosing object it holds, and from the class's own body
+// through another value of the class. Such a value is the class's dispatch
+// value, so each private member used this way gets a hidden slot there, and
+// every subclass reaches it through what it inherits.
+
+interface Listener {
+    void on(int x);
+}
+
+abstract class Panel {
+    private int hits = 0;
+    private String log = "";
+    private final int limit = 100;
+    abstract String name();
+    private void note(String s) { log = log + s + ";"; }
+    private int twice(int k) { return k * 2; }
+    int hits() { return hits; }
+    String log() { return log; }
+
+    // Private fields read, written (`+=`, `++`, `=`) and private methods
+    // called, from an anonymous class.
+    Listener listener() {
+        return new Listener() {
+            public void on(int x) {
+                hits += twice(x);
+                hits++;
+                note(name() + x);
+                if (hits > limit) {
+                    hits = limit;
+                }
+            }
+        };
+    }
+
+    // Another panel's private members, through a `Panel` value.
+    void absorb(Panel other) {
+        hits += other.hits;
+        other.hits = 0;
+        other.note("absorbed");
+    }
+}
+
+class Side extends Panel {
+    String name() { return "side"; }
+}
+
+class Top extends Panel {
+    String name() { return "top"; }
+}
+
+void main() {
+    Panel p = new Side();
+    Listener l = p.listener();
+    l.on(3);
+    l.on(60);
+    print(p.hits() + " " + p.log());
+    Panel q = new Top();
+    q.listener().on(1);
+    p.absorb(q);
+    print(p.hits() + " " + q.hits() + " " + q.log());
+}

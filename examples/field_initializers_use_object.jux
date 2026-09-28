@@ -1,0 +1,125 @@
+// Field initializers that use the object being built (ERRATA E1XX-GAP39e):
+// an instance method called from one, an earlier field read bare or through
+// `this`, `this` handed out (`new Worker(this)`, a list built from it), an
+// anonymous class or a lambda that reaches the object's members. They run
+// against the finished object, in the order they are written, before any
+// `init` block or constructor body -- every field initializer of the
+// hierarchy first, the root class's first (JUX-LANG-V1 §7.3.1). A field
+// read before its initializer runs holds its default value.
+
+import rust.std.Vec;
+
+interface Listener {
+    void on(int x);
+}
+
+interface Shape {
+    int area();
+    int sides();
+}
+
+class Log {
+    static String text = "";
+    static int note(String s) {
+        text = text + s + ";";
+        return 0;
+    }
+}
+
+class Worker {
+    Owner owner;
+    Worker(Owner owner) { this.owner = owner; }
+    int report() { return owner.n * 10; }
+}
+
+class Owner {
+    int n = 3;
+    int doubled = twice(n);
+    int early = this.late + 1;         // `late` is still 0 here
+    int late = 5;
+    Worker worker = new Worker(this);
+    Shape square = new Shape() {
+        public int area() { return n * n; }
+        public int sides() { return 4; }
+    };
+    Listener bump = new Listener() {
+        public void on(int x) { n += x; }
+    };
+    () -> int peek = () -> n + doubled;
+    Vec<int> snapshot = snapshotOf(this);
+    int seen = worker.report() + square.area();
+
+    int twice(int k) { return k * 2; }
+    static Vec<int> snapshotOf(Owner o) {
+        Vec<int> v = new Vec<int>();
+        v.push(o.n);
+        v.push(o.doubled);
+        return v;
+    }
+}
+
+// The hierarchy's field initializers all run before any init block or body.
+class Base {
+    int a = Log.note("base.a");
+    int b = twice(2) + Log.note("base.b");
+    init { Log.note("base.init b=" + b); }
+    Base() { Log.note("base.body"); }
+    int twice(int k) { return k * 2; }
+}
+
+class Kid extends Base {
+    int c = b + 1 + Log.note("kid.c");
+    Listener grow = new Listener() {
+        public void on(int x) { c += x; }
+    };
+    init { Log.note("kid.init c=" + c); }
+    Kid() { super(); Log.note("kid.body"); }
+    // A `this(..)` chain builds one object: the initializers run once.
+    Kid(int extra) { this(); c += extra; Log.note("kid.extra"); }
+}
+
+// A generic class, with no constructor of its own.
+class Stream<T> {
+    Vec<T> items = new Vec<T>();
+    int size = count();
+    () -> int sizer = () -> count();
+    int count() { return (int) items.len(); }
+}
+
+// An abstract base whose initializer calls a method a subclass overrides.
+abstract class Figure {
+    String label = describe();
+    abstract String kind();
+    String describe() { return "figure:" + kind(); }
+}
+
+class Circle extends Figure {
+    int r = 2;
+    String info = label + " r=" + r;
+    String kind() { return "circle"; }
+}
+
+void main() {
+    Owner o = new Owner();
+    print(o.n + " " + o.doubled + " " + o.early + " " + o.late + " " + o.seen);
+    o.bump.on(4);
+    print(o.n + " " + o.worker.report() + " " + o.square.area() + " " + o.peek());
+    print(o.snapshot.len() + " " + o.snapshot[1]);
+
+    Kid k = new Kid();
+    print(Log.text);
+    k.grow.on(10);
+    print(k.a + " " + k.b + " " + k.c);
+    Log.text = "";
+    Kid k2 = new Kid(7);
+    print(Log.text);
+    print(k2.c);
+
+    Stream<String> s = new Stream<String>();
+    s.items.push("x");
+    s.items.push("y");
+    print(s.size + " " + s.sizer());
+
+    Circle c = new Circle();
+    print(c.label + " | " + c.info);
+}

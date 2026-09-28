@@ -1,0 +1,1 @@
+field_read_before_initialized.jux:13:17: [E0499] error: field `engine` is read by the initializer of `boost` before it holds a value: its initializer runs later, and the type `Engine` has no default value to read until then

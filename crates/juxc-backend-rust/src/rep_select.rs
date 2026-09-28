@@ -139,7 +139,9 @@ impl Index<'_> {
 ///   struct being built (it calls a method on `this`, or hands `this` to a
 ///   lambda), because its stores then go through the handle;
 /// - a class in an `extends` hierarchy whose constructor does more than store
-///   its parameters (ERRATA E21 runs it against the handle).
+///   its parameters (ERRATA E21 runs it against the handle);
+/// - a field initializer that uses the object, its own or an ancestor's: it
+///   runs against the handle too (ERRATA E1XX-GAP39e).
 pub(crate) fn compute_cell_classes(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
@@ -237,6 +239,7 @@ pub(crate) fn compute_cell_classes(
                 .constructors
                 .iter()
                 .any(|c| crate::RustEmitter::ctor_calls_method_on_this(cd, c))
+            || defers_field_inits(fqn, &index, symbols, 0)
             || (in_hierarchy
                 && cd
                     .constructors
@@ -272,6 +275,22 @@ fn unit_package(unit: &juxc_ast::CompilationUnit) -> String {
         .as_ref()
         .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
         .unwrap_or_default()
+}
+
+/// Whether constructing `fqn` runs a field initializer against the handle
+/// (`juxc_tycheck::field_init::deferred_indices`, its own or an ancestor's).
+fn defers_field_inits(fqn: &str, index: &Index<'_>, symbols: &SymbolTable, depth: usize) -> bool {
+    let Some(cd) = index.decls.get(fqn) else { return false };
+    let ancestor = depth < 64 && index.parent.get(fqn).is_some_and(|p| defers_field_inits(p, index, symbols, depth + 1));
+    let is_member = |n: &str| {
+        cd.fields.iter().any(|f| !f.is_static && f.name.text == n)
+            || cd.properties.iter().any(|p| p.name.text == n)
+            || cd.methods.iter().any(|m| m.name.text == n && !m.modifiers.contains(&juxc_ast::FnModifier::Static))
+            || symbols.lookup_field(fqn, n).is_some_and(|(f, _)| !f.is_static)
+            || symbols.lookup_property(fqn, n).is_some_and(|(p, _)| !p.is_static)
+            || symbols.lookup_method(fqn, n).is_some_and(|(m, _)| !m.is_static)
+    };
+    ancestor || !juxc_tycheck::field_init::deferred_indices(&cd.fields, false, &is_member).is_empty()
 }
 
 struct Walker<'a, 'b> {

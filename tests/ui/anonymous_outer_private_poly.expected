@@ -1,1 +1,0 @@
-anonymous_outer_private_poly.jux:12:16: [E0437] error: an anonymous class can't reach private field `hits` of `Panel` -- `Panel` has subclasses, so the anonymous class holds the enclosing object as a `Panel` (a dynamic-dispatch trait object), and a private member has no slot on it

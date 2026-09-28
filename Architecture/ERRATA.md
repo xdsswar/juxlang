@@ -1023,7 +1023,9 @@ as before. Lifting the restriction needs the object's handle to exist before
 its fields are initialized (a cyclic construction).
 
 **Spec status:** the catalog has E0981; §P.2.3 describes the intended
-behaviour and stands.
+behaviour and stands. Resolved by E1XX-GAP39e for every field but an
+observer: a field-initializer lambda that uses the object runs against the
+finished object; `E0981` is left for an observer's lambda.
 
 ---
 
@@ -5277,15 +5279,96 @@ constructor, a generic class, an abstract base's method run on a subclass,
 the superclass's own field winning. `tests/ui/anonymous_outer_private_poly`
 holds the `E0437` refusal.
 
-**Known boundary.** A field initializer that uses the object being built
+**Known boundary.** Resolved by E1XX-GAP39e, which also makes the private
+members above reachable (item 4's `E0437` is retired): ~~A field initializer that uses the object being built
 (an anonymous class reaching its members there, or `int y = twice(3);`
 calling an instance method) is E0900 whether or not an anonymous class is
 involved: field initializers run before the object exists as a handle.
-That predates this entry.
+That predates this entry.~~
 
 **Spec status:** `JUX-LANG-V1.md` §7's anonymous-class paragraph is
 amended. E137's "Known boundary" is resolved here. GAPS.md gap 39d is
 closed.
+
+## E1XX-GAP39e. Field initializers that use the object; private members through a dispatch value
+
+**Conflict.** Two things Java programs do every day were left open by E138:
+
+- **A field initializer that uses the object being built** (`int y =
+  twice(3);`, `int b = a + 1;`, `Worker w = new Worker(this);`, `Listener l =
+  new Listener() { .. n++ .. };`, a lambda over the object's members) was
+  E0900 or, for a lambda, `E0981`: the initializers were evaluated into the
+  struct the object is built from, before the object existed. `this` in an
+  initializer was an unresolved name.
+- **A private member of a class with subclasses**, reached through a value
+  of the class, has no slot on the class's dispatch trait. From an
+  anonymous class written in the class (through the enclosing object it
+  holds, E138) it was `E0437`; from the class's own body (`other.hits`) a
+  field was `E0437` and a method E0900.
+
+**Resolution.**
+
+1. **An instance field initializer may use the object.** `this` is in scope
+   in it (a static field's initializer still has no object). An initializer
+   that uses the object (`this`, `super`, a bare instance field, property or
+   method name) is run against the finished object instead of being
+   evaluated into the struct: the object is built with the field at a
+   stand-in value, and the initializer then assigns it. The order does not
+   change (JUX-LANG-V1 §7.3.1, E21): every initializer from the first such
+   one on is run this way, so they still run in the order written; when an
+   ancestor's are, all of a class's are; and the hierarchy's all run, root
+   class first, before any `init` block or constructor body, once however
+   the constructors delegate with `this(...)`. It holds for a class with
+   no constructor of its own, several constructors, a generic class and a
+   subclass. A class that runs an initializer this way has the
+   interior-mutable representation (E121); the selector reads the same rule.
+   A constructor whose statements are then run after the initializers keeps
+   no leading store in the struct for a field that has a value to hold
+   meanwhile, so an initializer reads the field's default, as in Java.
+2. **What a field holds before its initializer runs.** A number, a string,
+   an optional, an array, a collection and a one-method interface have a
+   value to hold (their default, or a stand-in that throws when called). A
+   class, an interface with several methods and a type parameter have none;
+   such a field is given a nullable slot while the program is compiled, and
+   each read of it asserts it is set, which it always is once construction
+   is over (a method run during construction that reads it first stops with
+   the exception an unset `!!` raises). The same holds for a field of such
+   a type that only a constructor or an `init` block assigns, from a value
+   that uses the object (`this.w = new Worker(this);`), which was E0900.
+3. **`E0499`: an initializer reading a field that holds no value yet.** A
+   field declared later, or one only a constructor assigns (constructors run
+   after every initializer), read directly by an initializer (bare or
+   `this.x`), whose type has no default value (§6.5's list: a class, an
+   interface, a function type, a type parameter). A type with a default is
+   read at it (`int early = this.late + 1;` reads `0`), as Java reads it.
+   What a lambda or an anonymous class in the initializer reads is read when
+   it is called.
+4. **`E0981` is left for observers.** An observer's lambda is attached while
+   the object is built, so it still cannot use the object; any other
+   function-typed field's lambda initializer can (1).
+5. **Private members through a dispatch value.** Where a private member is
+   visible (the class's own body, an anonymous class written in it), a read,
+   write or call of it through a value typed as a class with subclasses is
+   renamed to a hidden stand-in the compiler declares on the declaring class:
+   a property `__jux_priv_<Class>_<field>` over the field (no setter for a
+   `final` one) and a method `__jux_priv_<Class>_<method>` that calls the
+   method. Being non-private, each is on the dispatch trait, implemented by
+   the class and reached from every subclass through what it inherits. The
+   stand-ins exist only while the program is compiled: `check` and the
+   editor never see them. Anywhere the member is not visible it is the
+   ordinary private-access refusal, `E0414`. `E0437` is retired; its number
+   is not reused. An overloaded private method is not given a stand-in.
+
+**Tests.** `examples/field_initializers_use_object.jux` and
+`examples/anonymous_private_members.jux`, pinned by hand-written
+expectations; `tests/ui/field_read_before_initialized` holds `E0499`.
+`tests/ui/anonymous_outer_private_poly` (the `E0437` refusal) is removed:
+the shape it held builds.
+
+**Spec status:** `JUX-LANG-V1.md` §7.3.1 and `JUX-SEMANTICS-ADDENDUM.md`
+§S.4.4 step 3 are amended; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 has `E0499`,
+retires `E0437` and narrows `E0981`. E138's "Known boundary" is resolved
+here, and E43 is resolved except for observers. GAPS.md gap 39e is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

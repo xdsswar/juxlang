@@ -48,7 +48,7 @@ pub fn apply_call_expansions(
     if plans.is_empty() {
         return;
     }
-    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None, outer: None });
+    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None, outer: None, late: None, private: None });
 }
 
 /// Rename the positional component reads the parser writes for a record
@@ -58,7 +58,49 @@ pub fn apply_call_expansions(
 /// field identifier's span. The destructuring temporaries also lose their
 /// written type here (see the `Stmt::VarDecl` arm of the walker).
 pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap<Span, String>) {
-    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None, outer: None });
+    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None, outer: None, late: None, private: None });
+}
+
+/// Assert every read of a field `late_fields` gave a nullable slot:
+/// `w.go()` is `w!!.go()` (ERRATA E1XX-GAP39e). A store into it is left as it
+/// is.
+pub(crate) fn rewrite_late_reads(units: &mut [CompilationUnit], reads: &crate::late_fields::LateReads<'_>) {
+    let rewrites = Rewrites {
+        plans: &HashMap::new(),
+        components: &HashMap::new(),
+        destructuring: false,
+        anon: None,
+        outer: None,
+        late: Some(reads),
+        private: None,
+    };
+    for unit in units.iter_mut().filter(|u| !u.is_external) {
+        for item in &mut unit.items {
+            expand_top_level(item, &rewrites);
+        }
+    }
+}
+
+/// Rename each private member reached through a dispatch value to its hidden
+/// stand-in (`crate::private_dispatch`, ERRATA E1XX-GAP39e).
+pub(crate) fn rename_private_dispatch(
+    units: &mut [CompilationUnit],
+    walk: &crate::private_dispatch::PrivateDispatch<'_>,
+) {
+    let rewrites = Rewrites {
+        plans: &HashMap::new(),
+        components: &HashMap::new(),
+        destructuring: false,
+        anon: None,
+        outer: None,
+        late: None,
+        private: Some(walk),
+    };
+    for unit in units.iter_mut().filter(|u| !u.is_external) {
+        for item in &mut unit.items {
+            expand_top_level(item, &rewrites);
+        }
+    }
 }
 
 /// In a lifted anonymous class's member body, make every bare `names` read,
@@ -78,6 +120,8 @@ pub fn rewrite_outer_refs(block: &mut juxc_ast::Block, names: &std::collections:
             destructuring: false,
             anon: None,
             outer: Some(names),
+            late: None,
+            private: None,
         },
     );
 }
@@ -107,6 +151,8 @@ pub fn lift_anonymous_classes(
             destructuring: false,
             anon: Some(&anon),
             outer: None,
+            late: None,
+            private: None,
         },
     );
     anon.into_inner().1
@@ -125,6 +171,12 @@ pub(crate) struct Rewrites<'a> {
     /// Bare names that mean the enclosing object's members, read through
     /// `__jux_outer` (ERRATA E138).
     outer: Option<&'a std::collections::HashSet<String>>,
+    /// Reads of the fields `late_fields` gave a nullable slot, each asserted
+    /// set (ERRATA E1XX-GAP39e).
+    late: Option<&'a crate::late_fields::LateReads<'a>>,
+    /// Private members reached through a dispatch value, renamed to their
+    /// hidden stand-ins (ERRATA E1XX-GAP39e).
+    private: Option<&'a crate::private_dispatch::PrivateDispatch<'a>>,
 }
 
 fn rewrite_units(units: &mut [CompilationUnit], plans: &Rewrites<'_>) {
@@ -263,7 +315,15 @@ fn expand_stmt(stmt: &mut Stmt, plans: &Rewrites<'_>) {
             expand_block(&mut f.body, plans);
         }
         Stmt::Assign(a) => {
-            expand_expr(&mut a.target, plans);
+            // A store into a late field stays a store; what it is reached
+            // through is still read.
+            if plans.late.is_some_and(|l| l.hits(&a.target)) {
+                if let Expr::Field(f) = &mut a.target {
+                    expand_expr(&mut f.object, plans);
+                }
+            } else {
+                expand_expr(&mut a.target, plans);
+            }
             expand_expr(&mut a.value, plans);
         }
         Stmt::Labeled { stmt, .. } => expand_stmt(stmt, plans),
@@ -313,6 +373,18 @@ fn expand_if(i: &mut juxc_ast::IfStmt, plans: &Rewrites<'_>) {
 }
 
 fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
+    if plans.late.is_some_and(|l| l.hits(expr)) {
+        if let Expr::Field(f) = expr {
+            expand_expr(&mut f.object, plans);
+        }
+        let span = crate::check::expr_span_pub(expr);
+        // Its own span, a point at the read's end, so the read and the
+        // assertion keep separate types.
+        let at = Span { start: span.end, end: span.end, file: span.file };
+        let read = std::mem::replace(expr, Expr::This(Span::DUMMY));
+        *expr = Expr::NotNullAssert(Box::new(read), at);
+        return;
+    }
     match expr {
         // `typeof(expr)` (§5.9.10) — recurse into the operand.
         Expr::TypeOf(inner, _) => expand_expr(inner, plans),
@@ -325,7 +397,16 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
             if let Some(plan) = plans.plans.get(&c.span) {
                 c.eval_order = splice_args(&mut c.args, &mut c.arg_names, plan);
             }
-            expand_expr(&mut c.callee, plans);
+            match (&mut *c.callee, plans.private) {
+                // A callee names a method before a field.
+                (Expr::Field(f), Some(p)) => {
+                    if let Some(hidden) = p.rename(f, true) {
+                        f.field.text = hidden;
+                    }
+                    expand_expr(&mut f.object, plans);
+                }
+                _ => expand_expr(&mut c.callee, plans),
+            }
             for a in &mut c.args {
                 expand_expr(a, plans);
             }
@@ -397,6 +478,9 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
         Expr::Field(f) => {
             if let Some(name) = plans.components.get(&f.field.span) {
                 f.field.text = name.clone();
+            }
+            if let Some(hidden) = plans.private.and_then(|p| p.rename(f, false)) {
+                f.field.text = hidden;
             }
             expand_expr(&mut f.object, plans)
         }

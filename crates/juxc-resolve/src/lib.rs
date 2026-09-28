@@ -1041,19 +1041,28 @@ impl Resolver {
         // reference already reads inside a method body. Resolving these
         // before `member_names` existed made the bare form an E0301 while
         // the qualified `K.NAME` compiled -- a difference the source gives
-        // no hint of. There is no `this` here: an initializer runs before
-        // the constructor body, so only the member NAMES are in scope, and
-        // tycheck and the backend each do their own lookup on what a given
-        // name actually resolves to.
+        // no hint of. Only the member NAMES are in scope, and tycheck and the
+        // backend each do their own lookup on what a given name actually
+        // resolves to. An INSTANCE field's initializer runs as part of
+        // constructing the object, so `this` is there too (ERRATA
+        // E1XX-GAP39e); a static one has no object.
         self.push_scope();
         for name in &member_names {
             self.declare(name);
         }
-        for field in &class_decl.fields {
+        for field in class_decl.fields.iter().filter(|f| f.is_static) {
             if let Some(init) = &field.default {
                 self.visit_expr(init);
             }
         }
+        self.push_scope();
+        self.declare("this");
+        for field in class_decl.fields.iter().filter(|f| !f.is_static) {
+            if let Some(init) = &field.default {
+                self.visit_expr(init);
+            }
+        }
+        self.pop_scope();
         self.pop_scope();
         // Helper closure: predeclared class-member names land in an
         // outer scope so a local/param of the same name shadows them
