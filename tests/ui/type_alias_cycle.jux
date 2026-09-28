@@ -1,0 +1,7 @@
+// Each alias stands for the other, so neither names a type.
+type A = B;
+type B = A;
+
+public void main() {
+    print(1);
+}

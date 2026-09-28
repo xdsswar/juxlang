@@ -7,12 +7,9 @@ out where Jux's abstraction over Rust leaks. The findings are in
 
 The app is written the way a Java programmer would write it, with no
 workarounds: egui's own containers with lambdas, widgets used directly, and a
-real PDF crate. Two leaks are still open, and neither needs code worked
-around it:
-
-- egui's `Frame` cannot be named (L29), so panels are styled only through
-  `Visuals`.
-- Deprecated crate methods are not marked (L39).
+real PDF crate. No leak is open: the last two, egui's `Frame` (L29, now
+`rust.eframe.egui.Frame`, which gives the side navigation its dark fill) and
+deprecated crate methods (L39, now the warning `W0491`), were fixed by gap 37.
 
 ## Build and run
 

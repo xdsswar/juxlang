@@ -1,0 +1,1 @@
+import_alias_clash.jux:3:1: [E0303] error: conflicting imports: the name `Seq` is imported from both `rust.std.Vec` and `rust.std.HashMap` -- import only one of them, give one an `as` alias (`import rust.std.HashMap as Seq2;`), or use a fully-qualified name

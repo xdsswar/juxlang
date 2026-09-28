@@ -808,21 +808,27 @@ impl RustEmitter {
                             // Parenthesize the block expression so it stays an
                             // EXPRESSION in operand position (`x.base * 5`): a
                             // bare leading `{` would parse as a block statement.
+                            //
+                            // The value is copied out in a `let`, so the lock
+                            // guard is gone before the rest of the statement
+                            // runs. As a temporary it lived to the end of the
+                            // statement, and a lambda in the same statement
+                            // that read the same static (`Panel.left(..)
+                            // .frame(.. Palette.NAV_BG ..).show(ui, (nav) ->
+                            // .. Palette.NAV_BG ..)`) waited on it forever.
+                            self.w.push_str("({ ");
                             if has_si {
-                                self.w.push_str("({ ");
                                 self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                                 self.w.push_str("::__static_init(); ");
                             }
+                            self.w.push_str("let __jux_static = ");
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
                             self.w.push_str(&to_rust_ident(&f.field.text));
                             if let Some(sfx) = &method_suffix {
                                 self.w.push_str(sfx);
                             }
-                            self.w.push_str(".lock().unwrap().clone()");
-                            if has_si {
-                                self.w.push_str(" })");
-                            }
+                            self.w.push_str(".lock().unwrap().clone(); __jux_static })");
                         }
                         return;
                     }
@@ -1244,10 +1250,13 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(field_name));
             self.w.push_str(".lock().unwrap()");
         } else {
+            // Copied out in a `let`, so the guard does not outlive the read
+            // (see the qualified read above).
+            self.w.push_str("({ let __jux_static = ");
             self.w.push_str(class_name);
             self.w.push('_');
             self.w.push_str(&to_rust_ident(field_name));
-            self.w.push_str(".lock().unwrap().clone()");
+            self.w.push_str(".lock().unwrap().clone(); __jux_static })");
         }
     }
 

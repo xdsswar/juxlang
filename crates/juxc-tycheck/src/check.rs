@@ -541,6 +541,13 @@ pub(crate) struct Checker<'a> {
     /// The unit being checked is a generated crate stub (`.jux.d`), whose
     /// binding markers are not annotations a program writes (W0241 skips it).
     pub(crate) checking_external_unit: bool,
+    /// Simple names two of the unit's wildcard imports bring for DIFFERENT
+    /// types, with those types' FQNs (§B.4.1, gap 37). A use of one is
+    /// `E0303`; an unused one is not an error, as in Java.
+    pub(crate) ambiguous_imports: HashMap<String, Vec<String>>,
+    /// Where an ambiguous simple name was already reported, so a type the
+    /// checker reads twice is reported once.
+    pub(crate) ambiguous_reported: std::collections::HashSet<Span>,
     /// `var x = new X<>()` declarations whose inferred type carries an
     /// **unresolved** generic argument (nothing at the construction site pinned
     /// it). Flushed at the end of each function/method/constructor body: a
@@ -641,6 +648,8 @@ impl<'a> Checker<'a> {
             in_future_slot: false,
             in_unsafe: false,
             checking_external_unit: false,
+            ambiguous_imports: HashMap::new(),
+            ambiguous_reported: std::collections::HashSet::new(),
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
             poly_bases: crate::symbol_table::polymorphic_base_bare_names(symbols),
@@ -762,9 +771,65 @@ impl<'a> Checker<'a> {
         &mut self,
         package: &[String],
         unqualified: &HashMap<String, String>,
+        ambiguous: &HashMap<String, Vec<String>>,
     ) {
         self.env.current_package = package.to_vec();
         self.env.unqualified = unqualified.clone();
+        self.ambiguous_imports = ambiguous.clone();
+    }
+
+    /// `W0491` for a call to a declaration marked `@Deprecated`, quoting its
+    /// message (LEAKS L39). A crate's `#[deprecated]` item carries the marker
+    /// in its stub, so the program is told in Jux terms, at the call, and the
+    /// toolchain's own warning is never what it sees. A stub's own units are
+    /// not checked for it.
+    fn warn_if_deprecated(&mut self, deprecated: Option<&str>, what: &str, span: Span) {
+        let Some(message) = deprecated else { return };
+        if self.checking_external_unit {
+            return;
+        }
+        let text = if message.trim().is_empty() {
+            format!("`{what}` is deprecated")
+        } else {
+            format!("`{what}` is deprecated: {}", message.trim())
+        };
+        self.diagnostics.push(Diagnostic::warning(code::Code::W0491_DeprecatedUse, text).with_span(span));
+    }
+
+    /// `E0303` for a use of a simple name two wildcard imports bring for
+    /// different types (JLS 6.5.5.1's "ambiguous" reference): which one the
+    /// program means is not written anywhere, so the compiler must not pick.
+    /// `name` is the written head of a type or of a static access; a local of
+    /// that name is not a type, and a qualified name is exact.
+    fn report_ambiguous_simple_name(&mut self, name: &juxc_ast::QualifiedName, span: Span) {
+        let [head] = name.segments.as_slice() else { return };
+        let bare = head.text.as_str();
+        let Some(candidates) = self.ambiguous_imports.get(bare) else { return };
+        if self.env.lookup(bare).is_some() || self.env.generic_params.contains(bare) {
+            return;
+        }
+        if !self.ambiguous_reported.insert(span) {
+            return;
+        }
+        let listed = match candidates.as_slice() {
+            [a, b] => format!("both `{a}` and `{b}`"),
+            many => format!(
+                "all of {}",
+                many.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", ")
+            ),
+        };
+        let example = candidates.last().cloned().unwrap_or_default();
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0303_ConflictingImport,
+                format!(
+                    "reference to `{bare}` is ambiguous: {listed} match, each brought in by a \
+                     wildcard import -- import the one you mean by name (`import {example};`) or \
+                     write its fully-qualified name",
+                ),
+            )
+            .with_span(span),
+        );
     }
 
     /// Infer the type of `expr` against the current env, then record it
@@ -3642,6 +3707,7 @@ impl<'a> Checker<'a> {
         if name.segments.len() != 1 {
             return;
         }
+        self.report_ambiguous_simple_name(name, span);
         let bare = &name.segments[0].text;
         // A generic parameter is not a type declaration, so nothing about
         // visibility applies to it. The name-keyed `resolve_class` below does not
@@ -9712,6 +9778,7 @@ impl<'a> Checker<'a> {
         // so the user isn't told "no field `x`" when there IS one
         // but it lives on instances.
         if let Expr::Path(qn) = f.object.as_ref() {
+            self.report_ambiguous_simple_name(qn, qn.span);
             if let Some(class_fqn) =
                 crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
             {
@@ -12022,6 +12089,8 @@ impl<'a> Checker<'a> {
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
                     let callee_unsafe = fn_sig.is_unsafe;
+                    let callee_deprecated = fn_sig.deprecated.clone();
+                    self.warn_if_deprecated(callee_deprecated.as_deref(), name, c.span);
                     // A C-variadic foreign fn (`printf(String, ...)`) accepts
                     // any number of trailing args beyond its fixed params.
                     let callee_c_variadic = fn_sig.is_c_variadic;
@@ -12352,6 +12421,7 @@ impl<'a> Checker<'a> {
                 // before treating the object as a value. Mirrors
                 // the static-field path in `check_field_access`.
                 if let Expr::Path(qn) = field.object.as_ref() {
+                    self.report_ambiguous_simple_name(qn, qn.span);
                     if let Some(class_fqn) =
                         crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
                     {
@@ -12393,6 +12463,12 @@ impl<'a> Checker<'a> {
                                     c.span,
                                 );
                                 self.require_unsafe_context(method.is_unsafe, method_name, c.span);
+                                let owner = class_fqn.rsplit('.').next().unwrap_or(&class_fqn).to_string();
+                                self.warn_if_deprecated(
+                                    crate::symbol_table::deprecation_of(&method.annotations).as_deref(),
+                                    &format!("{owner}.{method_name}"),
+                                    c.span,
+                                );
                                 // §18.1.2: async static call must be
                                 // awaited (E0705).
                                 let static_is_async = matches!(
@@ -12868,6 +12944,7 @@ impl<'a> Checker<'a> {
                     self.record_callee_throws(&method_throws, c.span);
                     let method_is_static = method.is_static;
                     let method_is_unsafe = method.is_unsafe;
+                    let method_deprecated = crate::symbol_table::deprecation_of(&method.annotations);
                     let method_is_async =
                         matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_),)
                             && !method.is_generator;
@@ -12903,6 +12980,12 @@ impl<'a> Checker<'a> {
                     // diagnostic-pushing helper grabs `&mut self`.
                     self.check_visibility(method_vis, &owner_name, method_name, "method", c.span);
                     self.require_unsafe_context(method_is_unsafe, method_name, c.span);
+                    let owner_bare = owner_name.rsplit('.').next().unwrap_or(&owner_name).to_string();
+                    self.warn_if_deprecated(
+                        method_deprecated.as_deref(),
+                        &format!("{owner_bare}.{method_name}"),
+                        c.span,
+                    );
                     // §18.1.2: an async method call must be awaited (E0705).
                     self.flag_unawaited_async_call(method_name, method_is_async, c.span);
                     // Validate any explicit `<…>` turbofish against the
@@ -13338,10 +13421,13 @@ impl<'a> Checker<'a> {
                 .map(|c| c.visibility)
                 .unwrap_or(juxc_ast::Visibility::Public);
             let subst_params = class.generic_params.clone();
+            let ctor_deprecated = class.constructors.get(selected).and_then(|c| c.deprecated.clone());
             // Visibility check on the constructor itself (E0414 /
             // E0415 / E0416). A synthetic default constructor on a
             // class with no declared ctors is treated as `public`.
             self.check_visibility(ctor_vis, &class_name, "constructor", "constructor", n.span);
+            let bare_class = class_name.rsplit('.').next().unwrap_or(&class_name).to_string();
+            self.warn_if_deprecated(ctor_deprecated.as_deref(), &format!("new {bare_class}"), n.span);
             let subst_args = self.resolve_ctor_generic_args(
                 &subst_params,
                 &explicit_generic_args,
@@ -15175,7 +15261,7 @@ fn collect_sealed_subclasses_covered(
         // captures the matched value while still narrowing the
         // arm to exactly the named subclass.
         Pattern::TypeBind { type_name, .. } => {
-            out.insert(type_name.text.clone());
+            out.insert(juxc_ast::type_pattern_bare(&type_name.text).to_string());
         }
         // Or-pattern coverage is the union of its alternatives.
         Pattern::Or(alts, _) => {
@@ -16036,7 +16122,7 @@ mod tests {
         // `import demo.stub.Sink;` used to be unnecessary here: a bare `Sink`
         // reached `demo.stub` through the cross-package fallback (gap 24).
         let ctx = &symbols.units[1];
-        checker.seed_unit_context(&ctx.package, &ctx.unqualified);
+        checker.seed_unit_context(&ctx.package, &ctx.unqualified, &ctx.ambiguous);
         checker.check_unit(&main_ast);
         diags
     }

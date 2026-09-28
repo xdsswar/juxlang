@@ -425,7 +425,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
 | `E0302`  | Import of a type from the importing file's own package | Build system §B.4 / `ERRATA.md` E25 |
 | `E0308`  | Dependency cycle between modules (`jux.toml` packages) | Build system §B.4.6 / ERRATA E41 |
-| `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
+| `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); import only one, alias one (`as`) or use the FQN. Also a USE of a simple name two wildcard imports bring for different types (JLS 6.5.5.1; an unused one is no error) | Build system §B.4.1, §B.4.2 / `ERRATA.md` E1XX-GAP37 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Two entry points in one binary: both implicit forms, or an `@entry` beside a `main` | Entry Points §E.6 |
@@ -477,7 +477,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
 | `E0442`  | Reference cast / type-test between unrelated types  | Polymorphism                   |
-| `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
+| `E0443`  | Malformed explicit type-argument list: a call's (`id<int>(5)`), a class's, or a generic `type` alias used with the wrong number of type arguments | Generics (Gap 5) / `ERRATA.md` E1XX-GAP37b |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
 | `E0446`  | Generic argument violates its parameter's `extends` bound, or a foreign method's bound on the receiver's element type (`sort` needs `operator<=>`) | Type system §T.2.2, Bindgen §G.6.4.4 |
@@ -528,6 +528,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0495`  | An enum constructor does more than give each field its value once | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0497`  | A cycle among static-field initializers: no order initializes them | Semantics §S.4.2 / `ERRATA.md` E89 |
+| `E0498`  | A `type` alias that stands for itself, directly or through other aliases (`type A = B; type B = A;`): it names no type | Type system §T.1 / `ERRATA.md` E1XX-GAP37b |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
@@ -719,6 +720,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `W0242`  | `@lint(...)` names neither a lint nor a warning code, so it sets nothing | Diagnostics §D.5.4 |
 | `W0470`  | Override of an inherited class method without `@Override` | JUX-LANG-V1 §7.4.1 |
 | `W0490`  | `ref` on a type that is already a reference (class, interface, array, collection) | JUX-MISSING-DEFS §M.13.2, ERRATA E84 |
+| `W0491`  | Use of a `@Deprecated` declaration: a call to a deprecated function, method or constructor, quoting the declaration's `message`. A crate's `#[deprecated]` item reaches its stub as `@Deprecated` | Bindgen §G.5.8 / ERRATA E1XX-GAP37 |
 | `W0301`  | Equality chained with reference identity *(reserved)*       | Grammar §A.4                   |
 | `W0305`  | Two foreign symbols map to one Jux name; the second is renamed *(reserved)* | Bindgen §G.12 |
 | `W0306`  | C-pointer ownership defaulted to `borrow` *(reserved)*       | Bindgen §G.12                  |

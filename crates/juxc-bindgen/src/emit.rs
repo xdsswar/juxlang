@@ -25,6 +25,12 @@ pub fn render(file: &StubFile) -> String {
     if !file.package.is_empty() {
         let _ = writeln!(out, "package {};\n", file.package);
     }
+    for import in &file.imports {
+        let _ = writeln!(out, "import {import};");
+    }
+    if !file.imports.is_empty() {
+        out.push('\n');
+    }
 
     for (i, item) in file.items.iter().enumerate() {
         if i > 0 {
@@ -57,6 +63,10 @@ pub fn render(file: &StubFile) -> String {
 fn render_type(out: &mut String, t: &StubType) {
     if let Some(doc) = &t.doc {
         let _ = writeln!(out, "/** {doc} */");
+    }
+    let deprecated = deprecated_marker(t.deprecated.as_deref());
+    if !deprecated.is_empty() {
+        let _ = writeln!(out, "{}", deprecated.trim_end());
     }
     // `@rust("real::path")` records the true Rust path so the backend can lower a
     // reference to this external type to its real symbol (§G.9.2) instead of the
@@ -246,14 +256,24 @@ fn render_variants(out: &mut String, variants: &[StubVariant], has_members: bool
 }
 
 fn render_field(out: &mut String, f: &StubField) {
+    // A field of a type this stub cannot spell is left out.
+    if !f.ty.is_spellable() {
+        return;
+    }
     // An associated constant is a `static final` field (`Color32.RED`).
     let modifiers = if f.is_static { "static final " } else { "" };
     let _ = writeln!(out, "    {}{modifiers}{} {};", f.visibility.prefix(), f.ty, f.name);
 }
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
+    // A constructor naming a type this stub cannot spell is left out, as a
+    // method is (see [`fn_is_spellable`]).
+    if !c.params.iter().all(|p| p.ty.is_spellable()) {
+        return;
+    }
     let mut s = format!(
-        "    {}{}{}{}({})",
+        "    {}{}{}{}{}({})",
+        deprecated_marker(c.deprecated.as_deref()),
         if c.is_default { "@RustDefault " } else { "" },
         if c.is_tuple { "@RustTuple " } else { "" },
         c.visibility.prefix(),
@@ -278,8 +298,22 @@ fn fn_is_spellable(f: &StubFn) -> bool {
         && f.throws.as_ref().map_or(true, JuxType::is_spellable)
 }
 
+/// The `@Deprecated` marker for an item the crate deprecates (LEAKS L39),
+/// followed by a space, or empty for one it does not. The crate's note rides
+/// as the message the checker's `W0491` quotes.
+fn deprecated_marker(note: Option<&str>) -> String {
+    match note {
+        None => String::new(),
+        Some("") => "@Deprecated ".to_string(),
+        Some(note) => {
+            let escaped = note.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("@Deprecated(message = \"{escaped}\") ")
+        }
+    }
+}
+
 fn render_fn(f: &StubFn, in_interface: bool) -> String {
-    let mut s = String::new();
+    let mut s = deprecated_marker(f.deprecated.as_deref());
     // `&mut self` receiver → `@MutSelf` marker. The compiler reads this
     // off the stub's symbol table to DISCOVER receiver mutability from
     // the real library signature (no hardcoded method-name lists).
@@ -466,6 +500,7 @@ mod tests {
         let mut hm = StubType::new(TypeKind::Class, "HashMap");
         hm.generics = vec!["K".into(), "V".into()];
         hm.constructors.push(StubCtor {
+            deprecated: None,
             is_default: false,
             is_tuple: false,
             visibility: Vis::Public,
@@ -496,6 +531,7 @@ mod tests {
             closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
+            deprecated: None,
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,
@@ -517,12 +553,14 @@ mod tests {
             closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
+            deprecated: None,
         });
 
         let file = StubFile {
             package: "rust.std.collections".into(),
             header: vec![],
             items: vec![StubItem::Type(hm)],
+            ..Default::default()
         };
 
         let out = render(&file);
@@ -555,6 +593,7 @@ mod tests {
             closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
+            deprecated: None,
         };
         assert_eq!(
             render_fn(&f, false),
@@ -613,6 +652,7 @@ mod tests {
             closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
+            deprecated: None,
         };
         let file = StubFile {
             items: vec![StubItem::Function(f)],
@@ -653,6 +693,7 @@ mod tests {
             closure_shared: Vec::new(),
             bounds: Vec::new(),
             projection_role: None,
+            deprecated: None,
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }

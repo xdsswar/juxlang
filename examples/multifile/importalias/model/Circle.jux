@@ -1,0 +1,16 @@
+// A class with a nested builder, reached through the alias `C` from a
+// package that declares a `Circle` of its own.
+package importalias.model;
+
+public class Circle implements Shape {
+    public double r;
+    public Circle(double r) { this.r = r; }
+    public double area() { return 3.0 * r * r; }
+    public static Circle unit() { return new Circle(1.0); }
+    public static final int SIDES = 0;
+
+    public static class Builder {
+        public double r = 2.0;
+        public Circle build() { return new Circle(r); }
+    }
+}

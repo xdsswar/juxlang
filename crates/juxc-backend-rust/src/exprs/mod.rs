@@ -806,10 +806,16 @@ impl RustEmitter {
                     || self.symbols.records.contains_key(f)
                     || self.symbols.enums.contains_key(f)
             };
+            // The owner may be written by its qualified name too
+            // (`new app.model.Circle.Builder()`): every split is tried, the
+            // way a type position tries them.
+            let segs: Vec<&str> = n.class_name.segments.iter().map(|s| s.text.as_str()).collect();
             let mangled_fqn = if is_lifted(&mangled) {
                 Some(mangled.clone())
             } else {
-                self.resolve_bare_type_fqn(&mangled).filter(is_lifted)
+                self.resolve_bare_type_fqn(&mangled)
+                    .filter(is_lifted)
+                    .or_else(|| self.lifted_nested_type_fqn(&segs))
             };
             if let Some(fqn) = mangled_fqn {
                 let cur_pkg = self.current_package_path();

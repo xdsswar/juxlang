@@ -1,0 +1,13 @@
+// Two wildcard imports that both bring a `Widget`. Importing them is fine,
+// and so is a name only one of them brings (`Gauge`); a use of `Widget` is
+// ambiguous, since nothing written says which one is meant.
+package app;
+
+import alpha.*;
+import beta.*;
+
+public void main() {
+    print(new Gauge().level());
+    Widget w = new Widget();
+    print(w.size());
+}

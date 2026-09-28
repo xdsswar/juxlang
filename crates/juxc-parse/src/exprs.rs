@@ -1875,6 +1875,53 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the lambda parameter at the cursor starts with a type: a type
+    /// SHAPE (a name, qualified or not, then optional `<...>`, `[]` / `[N]`
+    /// dimensions and `?`) followed by the parameter's name. `app.model.Circle
+    /// c`, `Vec<int> xs` and `int[] a` are typed; a lone `x` is not.
+    fn lambda_param_is_typed(&self) -> bool {
+        let kind = |j: usize| self.tokens.get(j).map(|t| &t.kind);
+        let mut j = self.pos;
+        if !matches!(kind(j), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        j += 1;
+        while matches!(kind(j), Some(TokenKind::Dot)) && matches!(kind(j + 1), Some(TokenKind::Ident(_))) {
+            j += 2;
+        }
+        if matches!(kind(j), Some(TokenKind::Lt)) {
+            let mut depth = 0i32;
+            loop {
+                match kind(j) {
+                    Some(TokenKind::Lt) => depth += 1,
+                    Some(TokenKind::Gt) => depth -= 1,
+                    Some(TokenKind::GtGt) => depth -= 2,
+                    Some(TokenKind::Eof) | None | Some(TokenKind::RParen) | Some(TokenKind::Arrow) => {
+                        return false
+                    }
+                    _ => {}
+                }
+                j += 1;
+                if depth <= 0 {
+                    break;
+                }
+            }
+        }
+        loop {
+            match kind(j) {
+                Some(TokenKind::Question) => j += 1,
+                Some(TokenKind::LBracket) => {
+                    while !matches!(kind(j), Some(TokenKind::RBracket) | Some(TokenKind::Eof) | None) {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                _ => break,
+            }
+        }
+        matches!(kind(j), Some(TokenKind::Ident(_)))
+    }
+
     /// Parse a lambda assuming the lookahead has confirmed it.
     /// Handles both `x -> …` and `(args) -> …` forms; consumes the
     /// optional `async` prefix.
@@ -1917,13 +1964,7 @@ impl<'a> Parser<'a> {
                     // and rewind if there isn't a following
                     // identifier. Since rewinding the parser is
                     // fiddly here, peek instead.
-                    let typed = matches!(
-                        (
-                            self.tokens.get(self.pos).map(|t| &t.kind),
-                            self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                        ),
-                        (Some(TokenKind::Ident(_)), Some(TokenKind::Ident(_))),
-                    );
+                    let typed = self.lambda_param_is_typed();
                     let ty = if typed { self.parse_type_ref() } else { None };
                     let name = self.parse_ident()?;
                     let p_end = self.last_consumed_span();

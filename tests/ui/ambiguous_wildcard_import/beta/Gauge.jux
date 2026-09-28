@@ -1,0 +1,5 @@
+package beta;
+
+public class Gauge {
+    public int level() { return 7; }
+}

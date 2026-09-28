@@ -72,7 +72,8 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// G.3.6-G.3.7 (`@RustImpl`, `@RustFrom`, `@RustHash`, associated constants),
 /// maps and sets under their own names, and a collection must also iterate.
 /// 46: `@RustClosureShared` (closure arguments lent read-only).
-const STD_STUB_CACHE_VERSION: u32 = 46;
+/// 47: `@Deprecated` on what the library deprecates (LEAKS L39).
+const STD_STUB_CACHE_VERSION: u32 = 47;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -121,7 +122,9 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// a crate bound in its own right; `@RustImpl`, `@RustFrom`, `@RustFromInto`,
 /// `@RustHash`, `@RustTuple`, `@RustStructVariants`, `@RustDerefOut`,
 /// `@RustArc`, associated constants (G.3.6). 21: `@RustClosureShared`.
-const CRATE_STUB_CACHE_VERSION: u32 = 21;
+/// 22: a family's nested packages (`rust.eframe.egui`), a shared simple name
+/// written as the exact type everywhere (LEAKS L29), `@Deprecated` (L39).
+const CRATE_STUB_CACHE_VERSION: u32 = 22;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -625,6 +628,11 @@ pub fn load_declared_stub_sources(
         .filter_map(|d| foreign_dep_kind(&d.name))
         .map(|(kind, krate)| crate_stub_cache_path(project_root, kind, krate))
         .filter(|p| p.is_file())
+        // A family's nested packages come with its stub (§G.6.2.4).
+        .flat_map(|p| {
+            let nested = nested_stub_files(&p);
+            std::iter::once(p).chain(nested)
+        })
         .collect();
     paths.sort();
     paths.dedup();
@@ -650,7 +658,9 @@ pub fn prune_undeclared_stubs(project_root: &Path, deps: &[&crate::manifest::Dep
     let mut found: Vec<PathBuf> = Vec::new();
     collect_stub_files(&dir, &mut found);
     for path in found {
-        if declared.contains(&path) {
+        // A nested package of a declared family stub belongs to it.
+        let nested_of_declared = declared.iter().any(|d| path.starts_with(nested_stub_dir(d)));
+        if declared.contains(&path) || nested_of_declared {
             continue;
         }
         let generated = std::fs::read_to_string(&path)
@@ -1039,8 +1049,51 @@ fn write_family_stub(
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // The family's nested packages (`rust.eframe.egui`, Bindgen §G.6.2.4),
+    // one file each beside the stub, replacing whatever an older generation
+    // left there. Each carries the same cache marker, so it is known as
+    // generated.
+    let nested_dir = nested_stub_dir(cache);
+    if nested_dir.is_dir() {
+        let mut old: Vec<PathBuf> = Vec::new();
+        collect_stub_files(&nested_dir, &mut old);
+        for path in old {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let prefix = format!("{package}.");
+    for nested in &stub_file.nested {
+        let suffix = nested.package.strip_prefix(&prefix).unwrap_or(&nested.package);
+        let path = nested_dir.join(format!("{suffix}{STUB_EXT}"));
+        std::fs::create_dir_all(&nested_dir)?;
+        write_atomic(&path, &format!("{header}{}", juxc_bindgen::render_stub(nested)))?;
+    }
     write_atomic(cache, &stub)?;
     Ok(())
+}
+
+/// Where the nested packages of the family stub at `stub` are written: a
+/// directory named after the crate beside it (`.jux-stubs/rust/eframe/` for
+/// `.jux-stubs/rust/eframe.jux.d`).
+fn nested_stub_dir(stub: &Path) -> PathBuf {
+    let name = stub
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.strip_suffix(STUB_EXT).unwrap_or(n).to_string())
+        .unwrap_or_default();
+    stub.with_file_name(name)
+}
+
+/// The nested-package stubs generated beside the family stub at `stub`,
+/// path-sorted. Empty when it has none.
+fn nested_stub_files(stub: &Path) -> Vec<PathBuf> {
+    let dir = nested_stub_dir(stub);
+    let mut out: Vec<PathBuf> = Vec::new();
+    if dir.is_dir() {
+        collect_stub_files(&dir, &mut out);
+    }
+    out.sort();
+    out
 }
 
 /// Render a `.jux.d` stub from a rustdoc-JSON string for `package`. Thin

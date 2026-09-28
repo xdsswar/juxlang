@@ -125,3 +125,113 @@ fn closure_arguments_lent_read_only_are_recorded() {
     let write = panel.lines().find(|l| l.contains(" write<R>")).expect("write is declared");
     assert!(!write.contains("RustClosureShared"), "a `&mut` argument is not read-only: {write}");
 }
+
+// ---------------------------------------------------------------------------
+// Gap 37: a crate family whose members share a simple name (LEAKS L29), and a
+// crate's deprecated items (LEAKS L39). The fixture is two crates in eframe's
+// and egui's shape, `fixtures/family-src/{g37app,g37ui}/lib.rs`, documented
+// the same way (a scratch workspace with `g37ui` and `g37app` depending on it
+// by path; copy `target/doc/{g37app,g37ui}.json` over the fixtures).
+// ---------------------------------------------------------------------------
+
+/// The family stub for `rust.g37app`, and the program binding `excluded`
+/// crates in their own right, as the driver generates it.
+fn family_stub(excluded: &[(&str, &str)]) -> juxc_bindgen::StubFile {
+    let host = include_str!("fixtures/g37app.rustdoc.json");
+    let member = include_str!("fixtures/g37ui.rustdoc.json");
+    let jsons = [("g37app", host), ("g37ui", member)];
+    let fam = juxc_bindgen::family::FamilyPaths::read("g37app", &jsons).expect("the family reads");
+    let excluded: std::collections::HashMap<String, String> =
+        excluded.iter().map(|(c, p)| (c.to_string(), p.to_string())).collect();
+    let mut stub = juxc_bindgen::ingest::generate_family(&jsons, "rust.g37app", &fam, &excluded)
+        .expect("the family ingests");
+    juxc_bindgen::ingest::rewrite_reexported_paths(&mut stub, "g37app", host).expect("re-exports read");
+    stub
+}
+
+/// The nested package `package` of a family stub.
+fn nested<'a>(stub: &'a juxc_bindgen::StubFile, package: &str) -> &'a juxc_bindgen::StubFile {
+    stub.nested.iter().find(|n| n.package == package).unwrap_or_else(|| {
+        panic!("no nested package `{package}`: {:?}", stub.nested.iter().map(|n| &n.package).collect::<Vec<_>>())
+    })
+}
+
+/// L29: the host keeps its own `Frame` under the plain name, and the member's
+/// is DECLARED in the nested package its Rust path names, with its methods.
+#[test]
+fn both_types_of_a_shared_name_are_declared() {
+    let stub = family_stub(&[]);
+    let host = juxc_bindgen::render_stub(&stub);
+    let host_frame = decl(&host, "class Frame");
+    assert_has(&host_frame, "@rust(\"g37app::Frame\")");
+    assert_has(&host_frame, "public void set_title(&String title);");
+    let member = juxc_bindgen::render_stub(nested(&stub, "rust.g37app.g37ui"));
+    assert_has(&member, "package rust.g37app.g37ui;");
+    assert_has(&member, "import rust.g37app.*;");
+    let member_frame = decl(&member, "class Frame");
+    assert_has(&member_frame, "@rust(\"g37app::g37ui::containers::frame::Frame\")");
+    assert_has(&member_frame, "public rust.g37app.g37ui.Frame fill(Color fill);");
+    assert_has(&member_frame, "public String describe();");
+}
+
+/// L29: every signature names the exact `Frame` it takes, in the member's
+/// types and in the host's own functions alike.
+#[test]
+fn every_signature_names_the_exact_type() {
+    let host = juxc_bindgen::render_stub(&family_stub(&[]));
+    assert_has(&decl(&host, "class Panel"), "public Panel frame(rust.g37app.g37ui.Frame frame);");
+    assert_has(
+        &decl(&host, "class Ui"),
+        "public R drop_zone<R>(rust.g37app.g37ui.Frame frame, (Ui) -> R add_contents);",
+    );
+    assert_has(&host, "public rust.g37app.g37ui.Frame default_panel_frame();");
+    assert_has(&host, "public String run((Ui, rust.g37app.Frame) -> void app);");
+    // No signature is left saying a bare `Frame`.
+    for line in host.lines().filter(|l| l.contains('(')) {
+        assert!(
+            !line.contains(" Frame ") && !line.contains("(Frame ") && !line.contains(", Frame)"),
+            "a bare `Frame` in a signature: {line}"
+        );
+    }
+}
+
+/// L29: the nested package mirrors the member's public path, so its other
+/// types are reachable there too, as aliases of their one declaration.
+#[test]
+fn a_nested_package_aliases_the_members_other_types() {
+    let stub = family_stub(&[]);
+    let member = juxc_bindgen::render_stub(nested(&stub, "rust.g37app.g37ui"));
+    assert_has(&member, "public type Ui = rust.g37app.Ui;");
+    assert_has(&member, "public type Panel = rust.g37app.Panel;");
+    assert_has(&member, "public type Color = rust.g37app.Color;");
+    assert!(!member.contains("public type Frame"), "the member's `Frame` is declared, not aliased:\n{member}");
+    // The host's own items live in the host's package only.
+    assert_eq!(stub.nested.len(), 1, "{:?}", stub.nested.iter().map(|n| &n.package).collect::<Vec<_>>());
+}
+
+/// L29 with the member bound in its own right (`rust.g37ui` beside
+/// `rust.g37app`): the member's `Frame` is that package's, and the nested
+/// package aliases it rather than declaring a second copy.
+#[test]
+fn a_member_bound_in_its_own_right_is_referred_to_by_its_own_package() {
+    let stub = family_stub(&[("g37ui", "rust.g37ui")]);
+    let host = juxc_bindgen::render_stub(&stub);
+    assert_has(&decl(&host, "class Frame"), "@rust(\"g37app::Frame\")");
+    assert_has(&host, "public rust.g37ui.Frame default_panel_frame();");
+    let member = juxc_bindgen::render_stub(nested(&stub, "rust.g37app.g37ui"));
+    assert_has(&member, "public type Frame = rust.g37ui.Frame;");
+    assert_has(&member, "public type Ui = rust.g37ui.Ui;");
+}
+
+/// L39: a deprecated method carries `@Deprecated` with the crate's note.
+#[test]
+fn a_deprecated_method_carries_the_crates_note() {
+    let host = juxc_bindgen::render_stub(&family_stub(&[]));
+    let panel = decl(&host, "class Panel");
+    assert_has(
+        &panel,
+        "@Deprecated(message = \"Renamed to `show`\") @RustClosureRefs(\"1\") public R show_inside<R>",
+    );
+    let show = panel.lines().find(|l| l.contains(" show<R>")).expect("`show` is declared");
+    assert!(!show.contains("@Deprecated"), "`show` is not deprecated: {show}");
+}
