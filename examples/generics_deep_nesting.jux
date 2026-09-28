@@ -1,4 +1,4 @@
-// Deeply nested generics with many parameters (ERRATA E1XX-GAP39): classes
+// Deeply nested generics with many parameters (ERRATA E135): classes
 // of four and six parameters nested five and six levels deep, function types
 // and lambdas over them, generic records and payload enums, an async task
 // of a nested generic, `var` through nested generic calls, the diamond,

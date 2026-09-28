@@ -513,7 +513,7 @@ impl RustEmitter {
         // The function's own parameters are in scope for its own bounds, so
         // `<K, V extends K>` expands `V`'s bound through `K` rather than
         // writing `V: K`; and `V: Into<K>` is written in if the body turns a
-        // `V` into a `K` (ERRATA E1XX-GAP39).
+        // `V` into a `K` (ERRATA E135).
         let prev_sig_bounds = self.type_param_bounds.clone();
         self.type_param_bounds
             .extend(crate::collect_type_param_bounds(&fn_decl.generic_params));

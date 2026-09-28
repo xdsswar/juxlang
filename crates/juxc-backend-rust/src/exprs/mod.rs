@@ -3259,7 +3259,7 @@ impl RustEmitter {
                     // trip through -1/0/+1.
                     let juxc_ast::Expr::Binary(bin) = e.as_ref() else { unreachable!() };
                     // `Ord::cmp` by path: a program's own `Ord` would hide the
-                    // prelude's trait, and with it the method (ERRATA E1XX-GAP39).
+                    // prelude's trait, and with it the method (ERRATA E135).
                     self.w.push_str("std::cmp::Ord::cmp(&(");
                     self.emit_expr(&bin.left);
                     self.w.push_str("), &(");

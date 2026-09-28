@@ -971,7 +971,7 @@ fn peel_safe_receiver(safe: bool, ty: Ty) -> Ty {
 /// THAT parameter's bounds. Empty for an unbounded parameter.
 ///
 /// A member reached through `T` is typed by the first bound that declares it
-/// (ERRATA E1XX-GAP39). The bounds of an intersection are checked for
+/// (ERRATA E135). The bounds of an intersection are checked for
 /// agreement where they are declared, so the first one found is the answer.
 pub(crate) fn param_bound_tys(param: &str, env: &TypeEnv, symbols: &SymbolTable) -> Vec<Ty> {
     let mut out = Vec::new();
@@ -1090,7 +1090,7 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let object_ty = peel_safe_receiver(f.safe, infer_expr(&f.object, env, symbols));
     // A field read through a bounded type parameter (`t.id` on a
     // `<T extends Base & Scored>`) has the type the bound declares
-    // (ERRATA E1XX-GAP39): read it against each bound in turn.
+    // (ERRATA E135): read it against each bound in turn.
     if let Ty::Param(param) = &object_ty {
         for bound in param_bound_tys(param, env, symbols) {
             if let Some(ty) = user_field_type(&bound, f.field.text.as_str(), symbols) {
@@ -1151,7 +1151,7 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// from a value of the user type `object_ty`, through its type arguments.
 /// `None` when the type has no such member. Split out of [`infer_field`] so
 /// a read through a bounded type parameter is typed by its bounds (ERRATA
-/// E1XX-GAP39).
+/// E135).
 fn user_field_type(object_ty: &Ty, field_name: &str, symbols: &SymbolTable) -> Option<Ty> {
     if let Ty::User { name, generic_args } = object_ty {
         if let Some((field, declaring_class)) = symbols.lookup_field(name, field_name) {
@@ -1511,7 +1511,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if let Some(class) = env.current_class.as_deref() {
                 // An interface's default body calls its own methods the same
                 // way (`items().push(k)`); untyped, the collection it returned
-                // was used as a bare sequence (ERRATA E1XX-GAP39).
+                // was used as a bare sequence (ERRATA E135).
                 let on_this = symbols.lookup_method(class, name).is_some()
                     || symbols.lookup_field(class, name).is_some_and(|(f, _)| f.ty.closure_shape().is_some())
                     || symbols.interfaces.get(class).is_some_and(|i| {
@@ -1661,7 +1661,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                                 // A generic static (`static <X, Y> Pair<X, Y>
                                 // of(X x, Y y)`) is read through the types its
                                 // call binds, as an instance method's is
-                                // (ERRATA E1XX-GAP39); left as `Pair<X, Y>`,
+                                // (ERRATA E135); left as `Pair<X, Y>`,
                                 // `var p = Pair.of("a", 1)` had no field types.
                                 let raw = return_type_in_method(
                                     &method.return_type,
@@ -1909,7 +1909,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 return ty;
             }
             // A receiver typed by a bounded type parameter answers through its
-            // bounds, in the order written (ERRATA E1XX-GAP39).
+            // bounds, in the order written (ERRATA E135).
             if let Ty::Param(param) = &receiver_ty {
                 for bound in param_bound_tys(param, env, symbols) {
                     if let Some(ty) = user_method_return(&bound, method_name, c, env, symbols) {
@@ -1940,7 +1940,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// receiver's type arguments. `None` when the type declares no such method.
 ///
 /// Split out of [`infer_call`] so a receiver typed by a BOUNDED type parameter
-/// can be answered by each of its bounds in turn (ERRATA E1XX-GAP39): `t.age()`
+/// can be answered by each of its bounds in turn (ERRATA E135): `t.age()`
 /// on a `<T extends Named & Aged>` is an `int`, and left `Unknown` it reached
 /// the backend untyped, which then wrote `t.age() + t.score()` with no numeric
 /// promotion and rustc refused to add an `f64` to an `isize`.

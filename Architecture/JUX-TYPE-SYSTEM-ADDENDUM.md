@@ -389,7 +389,7 @@ Rules:
 5. **Const generics** (`int N`) compose freely with type params and bounds in the
    same `<...>` list; a const param takes no `extends` clause and is read as a
    value (`return N;`).
-6. **A bound admits more than one type** (`ERRATA.md` E1XX-GAP39). A bound
+6. **A bound admits more than one type** (`ERRATA.md` E135). A bound
    naming a type that nothing else extends -- a Rust type (`rust.std.Vec`), a
    record, an enum, a primitive, `String`, an array, a function or a nullable
    type -- admits exactly itself, and is **`E0459`**: write that type where
@@ -470,7 +470,7 @@ Rust allows it, with three rewrites where it does not:
   converts, as a `where` clause on the method when `R` and `K` are the class's,
   and always on an interface method (every implementer forwards to it). A
   literal passed as such an `R` takes the type `K` is bound to (`ERRATA.md`
-  E1XX-GAP39). A method type parameter that shadows a class parameter is
+  E135). A method type parameter that shadows a class parameter is
   renamed in the Rust it lowers to.
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard

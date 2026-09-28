@@ -164,7 +164,7 @@ pub(crate) enum IfaceCoercion {
     /// another parameter `K` that `R` is bounded by (`<R extends K>`, Type
     /// system §T.4.6 rule 4: every `R` is usable wherever a `K` is expected).
     /// Two distinct Rust generics, so `(r).into()`, and the declaration
-    /// acquires `R: Into<K>` (ERRATA E1XX-GAP39).
+    /// acquires `R: Into<K>` (ERRATA E135).
     ParamInto { param: String },
     /// The target is `any` / `any?` (§T.1.2): box the value in a
     /// `crate::JuxAny`. Every coercion site routes it through
@@ -1667,7 +1667,7 @@ pub(crate) struct CtorPrefixSeed {
 /// output of constructors that are correct today for no gain.
 ///
 /// **Past a `super(...)` call and past statements that cannot see the field**
-/// (ERRATA E1XX-GAP39). `class A<T, U> extends B<Pair<T, U>>` whose
+/// (ERRATA E135). `class A<T, U> extends B<Pair<T, U>>` whose
 /// constructor is `super(new Pair<T, U>(t, u)); ts.push(t); this.u = u;` left
 /// the `U u` slot to `U::default()`, which a type parameter does not have. The
 /// `super(...)` call is lifted into the `__parent` slot anyway, and
@@ -4801,7 +4801,7 @@ impl crate::RustEmitter {
                         // are composed through each `extends` clause, so
                         // `Squad<Person>.add(t)` inherited from `Roster<T>`
                         // converts its argument to `Person`'s element form
-                        // (ERRATA E1XX-GAP39) -- it used to be left unconverted.
+                        // (ERRATA E135) -- it used to be left unconverted.
                         let level: Option<(Vec<juxc_ast::TypeParam>, Vec<juxc_tycheck::Ty>)> = if depth == 0 {
                             Some((class.generic_params.clone(), recv_args.clone()))
                         } else {

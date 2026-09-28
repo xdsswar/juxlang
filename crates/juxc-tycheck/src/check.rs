@@ -8816,7 +8816,7 @@ impl<'a> Checker<'a> {
     /// (`Pair<int>` for a `Pair<K, V>`), at any depth: the signature and
     /// local-type walks call this on every type they descend through, so
     /// `Vec<Vec<Pair<String, Vec<Pair<int>>>>>` is caught at the innermost
-    /// `Pair<int>` (ERRATA E1XX-GAP39). It used to reach rustc. Only a Jux
+    /// `Pair<int>` (ERRATA E135). It used to reach rustc. Only a Jux
     /// declaration is held to its count: a Rust type may leave defaulted
     /// parameters unwritten (§T.4.7.1), and a `type` alias is checked where it
     /// is expanded. Returns `false` when it reported.
@@ -8876,7 +8876,7 @@ impl<'a> Checker<'a> {
     }
 
     /// The `extends` bounds a declaration writes on its type parameters, held
-    /// to what §T.4.6 can mean (ERRATA E1XX-GAP39):
+    /// to what §T.4.6 can mean (ERRATA E135):
     ///
     /// - each bound names a real type with the right number of type
     ///   arguments (E0417, E0443), checked the way a signature type is;
@@ -13898,7 +13898,7 @@ impl<'a> Checker<'a> {
         let inferred = infer_generic_args(method_generic_params, &param_tys, &arg_tys);
         // A method's own `<T>` SHADOWS a class parameter of the same name
         // (Java's rule): `<T> T echo(T t)` on a `Shelf<int>` takes and returns
-        // what the call passes, not `int` (ERRATA E1XX-GAP39). Substitution
+        // what the call passes, not `int` (ERRATA E135). Substitution
         // reads the first entry of a name, so the class's is dropped.
         let mut k = 0;
         while k < subst_params.len() {

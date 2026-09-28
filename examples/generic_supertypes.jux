@@ -1,4 +1,4 @@
-// Generic supertypes (ERRATA E1XX-GAP39): a class that extends a generic
+// Generic supertypes (ERRATA E135): a class that extends a generic
 // class over a nested argument and implements generic interfaces, a generic
 // interface hierarchy, an interface implemented for concrete arguments, and
 // subclasses that fix a parameter.

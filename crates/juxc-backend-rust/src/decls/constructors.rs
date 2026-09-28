@@ -1589,7 +1589,7 @@ impl RustEmitter {
                     // Every OTHER statement, not only the later ones: a seed
                     // may have been lifted past a `super(...)` call or a
                     // statement that reads the same parameter (ERRATA
-                    // E1XX-GAP39), and those now run after it.
+                    // E135), and those now run after it.
                     let rest = juxc_ast::Block {
                         statements: ctor
                             .body

@@ -2,7 +2,7 @@
 // of interfaces, on classes, interfaces, records and methods -- and every
 // member of every bound reachable through the parameter, with Java's numeric
 // promotion when the members return different numeric types (ERRATA
-// E1XX-GAP39: `t.ident() + t.age() + t.score()` used to reach rustc as
+// E135: `t.ident() + t.age() + t.score()` used to reach rustc as
 // "cannot add `f64` to `isize`", because a call through a bound had no type).
 
 import rust.std.Vec;

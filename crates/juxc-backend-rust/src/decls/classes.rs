@@ -6115,7 +6115,7 @@ impl RustEmitter {
     /// enclosing type's (`<T> T echo(T t)` in `class Shelf<T>`, Java's rule)
     /// is a second `T` to Rust, which refuses it (E0403), so it is renamed
     /// for the method's whole signature and body: `T` there is the method's
-    /// (ERRATA E1XX-GAP39).
+    /// (ERRATA E135).
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
         let shadowing: Vec<&juxc_ast::TypeParam> = method
             .generic_params
@@ -6162,7 +6162,7 @@ impl RustEmitter {
 
     /// Write `Into<K> + ` into the generic list just emitted, for each
     /// `<R extends K>` whose `R` the body converted into a `K` (recorded in
-    /// [`crate::RustEmitter::param_into_used`], ERRATA E1XX-GAP39). The marks
+    /// [`crate::RustEmitter::param_into_used`], ERRATA E135). The marks
     /// are positions in that list, so they are filled last to first.
     pub(crate) fn insert_param_into_bounds(&mut self, marks: &[(String, String, usize)]) {
         let mut due: Vec<&(String, String, usize)> =
@@ -6298,7 +6298,7 @@ impl RustEmitter {
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         // Method's own generic parameters plus any synthetic wildcards.
         // `<R extends K>` records where `R: Into<K>` goes (ERRATA
-        // E1XX-GAP39); the body decides whether it is written.
+        // E135); the body decides whether it is written.
         let prev_marks = self.param_into_marks.replace(Vec::new());
         if combined_method_generics.is_empty() {
             self.emit_generic_params(&method.generic_params);
@@ -6408,7 +6408,7 @@ impl RustEmitter {
         let clause = self.relaxed_where(method.span, self.relaxed_member_subst.as_ref());
         self.w.push_str(&clause);
         // A CLASS parameter `V extends K` converted in this body gets its
-        // `V: Into<K>` here, on the method alone (ERRATA E1XX-GAP39): on the
+        // `V: Into<K>` here, on the method alone (ERRATA E135): on the
         // struct it would bind every use of the class.
         let where_mark = self.w.mark();
         let where_open = clause.contains("where");
@@ -6533,7 +6533,7 @@ impl RustEmitter {
                 self.emit_static_init_trigger();
             }
             // An inherited body names its ancestor's type params; read them
-            // in this class's vocabulary (ERRATA E1XX-GAP39).
+            // in this class's vocabulary (ERRATA E135).
             let body_subst = self.inherited_body_subst.take().filter(|m| !m.is_empty());
             let prev_kind_subst = body_subst.map(|m| {
                 let prev = self.kind_type_subst.clone();
@@ -6739,7 +6739,7 @@ fn type_ref_mentions_any(
 /// parameters of the interface declaring the method) rewritten to `Into<K>`:
 /// `<V extends K>` in `interface Store<K>` is `V: Into<K>` (Type system §T.4.6
 /// rule 4, "every `V` is usable wherever a `K` is expected"; ERRATA
-/// E1XX-GAP39). An implementing class forwards to the trait's method with `K`
+/// E135). An implementing class forwards to the trait's method with `K`
 /// replaced by its own argument, so the trait states the conversion outright
 /// rather than only when its default body needs it.
 pub(crate) fn bounds_into_outer_params(

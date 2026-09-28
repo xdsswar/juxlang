@@ -794,7 +794,7 @@ impl RustEmitter {
     /// bridge next to it; `Ord` needs `Eq`, which the caller provides.
     pub(super) fn emit_ord_from_cmp(&mut self, class_name: &str, arg: &str) {
         // Path-qualified: a program may declare its own `Ord` (ERRATA
-        // E1XX-GAP39), which would shadow the prelude's here.
+        // E135), which would shadow the prelude's here.
         self.emit_operator_impl_head("std::cmp::Ord", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();

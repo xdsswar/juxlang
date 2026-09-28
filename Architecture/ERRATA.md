@@ -4909,7 +4909,7 @@ so `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is unchanged. E129's "Not guarded" list
 loses these four items. GAPS.md gap 38 is closed.
 
 
-## E1XX-GAP39. Generics at depth: every bound's members typed, a bound only a class can meet, and a parameter usable as its bound
+## E135. Generics at depth: every bound's members typed, a bound only a class can meet, and a parameter usable as its bound
 
 **Conflict.** The requirement is that deeply nested generics with many
 parameters, and a type parameter that extends a class and implements several

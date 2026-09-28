@@ -3749,7 +3749,7 @@ impl RustEmitter {
     /// method type parameter `R` bounded by a class parameter `K`
     /// (`<U extends T> void putSub(U u)` on a `Shelf<int>`, called
     /// `putSub(9)`). `R` is then known to Rust only as `R: Into<K>`
-    /// (ERRATA E1XX-GAP39), which does not steer a literal's type, so Rust
+    /// (ERRATA E135), which does not steer a literal's type, so Rust
     /// falls back to `i32` and finds no `Into<isize>`. The literal takes the
     /// type `K` is bound to at this receiver, as Java infers `R = K`.
     fn literal_arg_suffix_through_bound(&self, call: &CallExpr, i: usize, arg: &Expr) -> Option<&'static str> {

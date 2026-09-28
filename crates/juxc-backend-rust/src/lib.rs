@@ -1335,14 +1335,14 @@ struct RustEmitter {
     /// untouched.
     pub(crate) kind_type_subst: std::collections::HashMap<String, juxc_ast::TypeRef>,
     /// The ancestor-param map an inherited method's BODY is read through
-    /// while it is copied into a subclass (ERRATA E1XX-GAP39). Its signature
+    /// while it is copied into a subclass (ERRATA E135). Its signature
     /// is substituted before it gets here; its body still names the
     /// ancestor's params (`new Box<T>(nv)` inside `IntBox extends Box<int>`),
     /// so [`crate::decls`]'s `emit_method` installs this as
     /// [`Self::kind_type_subst`] around the body alone. Taken on use.
     pub(crate) inherited_body_subst: Option<std::collections::HashMap<String, juxc_ast::TypeRef>>,
     /// Type parameters `R` (of `<R extends K>`) whose values the body being
-    /// emitted converted into a `K` slot (ERRATA E1XX-GAP39).
+    /// emitted converted into a `K` slot (ERRATA E135).
     pub(crate) param_into_used: std::collections::HashSet<String>,
     /// While a method's or function's own generic list is written: where each
     /// `R` of an `<R extends K>` has its bounds, and `K`'s Rust spelling, so

@@ -3495,7 +3495,7 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
             // Else: unknown name — resolver E0301 covers it.
             continue;
         };
-        // A Rust type is final to Jux (ERRATA E1XX-GAP39): its methods are
+        // A Rust type is final to Jux (ERRATA E135): its methods are
         // the crate's, and there is nothing for a subclass to extend. It used
         // to be refused as E0429 listing every method of the type as one the
         // class "doesn't implement".
@@ -4735,7 +4735,7 @@ fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut
     // A GENERIC class that is extended dispatches through its `Kind` trait
     // too (`Shape<T>` with `class Sq extends Shape<double>`), and a generic
     // method there reached rustc as "cannot find type `R`" (ERRATA
-    // E1XX-GAP39). `polymorphic_base_bare_names` leaves generic classes out
+    // E135). `polymorphic_base_bare_names` leaves generic classes out
     // for its other callers, so they are added for this check alone.
     for (fqn, sig) in &table.classes {
         let bare = fqn.rsplit('.').next().unwrap_or(fqn);
@@ -4783,7 +4783,7 @@ fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut
                 .with_span(sig.span)
                 // `final` and `sealed` used to be offered here. Neither
                 // changes how the method is reached, so neither helped
-                // (ERRATA E1XX-GAP39).
+                // (ERRATA E135).
                 .with_help(format!(
                     "make `{name}` non-generic (a type parameter of the class can take the place \
                      of the method's), make it `private`, or make it a `static` method that takes \

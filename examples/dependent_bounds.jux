@@ -1,4 +1,4 @@
-// Recursive and dependent bounds (Type system §T.4.6, ERRATA E1XX-GAP39):
+// Recursive and dependent bounds (Type system §T.4.6, ERRATA E135):
 // F-bounded interfaces, ordering through `operator<=>` (Jux has no
 // `Comparable`: ordering is an operator, JUX-CORE-LIB-ADDENDUM), bounds that
 // name other parameters, and generic methods inside generic classes that use

@@ -271,7 +271,7 @@ impl RustEmitter {
         self.emit_generic_params_with_bounds(&interface.generic_params, &std::collections::HashSet::new());
         // The interface's own parameters are in scope for every method in it:
         // a method's `<V extends K>` names one, and a default body turns a `V`
-        // into a `K` (ERRATA E1XX-GAP39). Restored at the end of the trait.
+        // into a `K` (ERRATA E135). Restored at the end of the trait.
         let iface_params: Vec<String> = crate::collect_type_param_names(&interface.generic_params).into_iter().collect();
         let prev_iface_scope = (self.current_type_params.clone(), self.type_param_bounds.clone());
         self.current_type_params.extend(iface_params.iter().cloned());

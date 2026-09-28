@@ -472,12 +472,12 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0435`  | Interface not usable as a dyn-dispatched value type (generic interface / generic method) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
-| `E0438`  | Generic virtual method on a polymorphic base class (a generic base and a package-private method included); make it non-generic, `private`, or a `static` taking the object | Polymorphism, stage 2 / `ERRATA.md` E1XX-GAP39 |
+| `E0438`  | Generic virtual method on a polymorphic base class (a generic base and a package-private method included); make it non-generic, `private`, or a `static` taking the object | Polymorphism, stage 2 / `ERRATA.md` E135 |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
 | `E0442`  | Reference cast / type-test between unrelated types  | Polymorphism                   |
-| `E0443`  | Malformed explicit type-argument list: a call's (`id<int>(5)`), a class's, or a generic `type` alias used with the wrong number of type arguments; a Jux type written with the wrong number at any depth of nesting | Generics (Gap 5) / `ERRATA.md` E133, E1XX-GAP39 |
+| `E0443`  | Malformed explicit type-argument list: a call's (`id<int>(5)`), a class's, or a generic `type` alias used with the wrong number of type arguments; a Jux type written with the wrong number at any depth of nesting | Generics (Gap 5) / `ERRATA.md` E133, E135 |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
 | `E0446`  | Generic argument violates its parameter's `extends` bound, or a foreign method's bound on the receiver's element type (`sort` needs `operator<=>`) | Type system §T.2.2, Bindgen §G.6.4.4 |
@@ -494,7 +494,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0488`  | A lambda writes through an argument a crate lends it read-only (a closure slot whose Rust signature passes it as `&T`, recorded as `@RustClosureShared`): assigns to its field or element, or calls a mutating method on it | Bindgen §G.3.4 / `ERRATA.md` E128 |
 | `E0457`  | A type argument lacks a capability the generic declaration asks of it: a member used on `Cell<File>` copies (or prints) its `T` and `File` cannot be copied (or has no debug form); likewise a parameter that keeps `Clone + Debug` given such an argument, an `extends`/`implements` clause whose inherited members need it, a field read that copies one | Type system §T.2.1 / `ERRATA.md` E118, E120 |
 | `E0458`  | `new T[n]` where `T` has no default value to start its elements from (a class, an ordinary struct, an interface, a function type, or an enum or record built only from those); list the elements with `new T[]{…}` or collect them in a `Vec<T>` | JUX-LANG-V1 §5.5 |
-| `E0459`  | A type parameter's `extends` bound names a type no other type can extend: a Rust type (`rust.std.Vec`), a record, an enum, a primitive or `String`. The bound admits only that type, so write the type where the parameter was used, or bound the parameter by an interface; a `final` Jux class is still a legal bound | Type system §T.4.6 / `ERRATA.md` E1XX-GAP39 |
+| `E0459`  | A type parameter's `extends` bound names a type no other type can extend: a Rust type (`rust.std.Vec`), a record, an enum, a primitive or `String`. The bound admits only that type, so write the type where the parameter was used, or bound the parameter by an interface; a `final` Jux class is still a legal bound | Type system §T.4.6 / `ERRATA.md` E135 |
 | `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0464`  | Reassignment of a `final`/`const` binding (parameter or local) | §M.14.2 |
 | `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |
@@ -535,7 +535,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
 | `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
 | `E0418`  | A field, property or method reached on a `T?` receiver no null test has narrowed; also an operator (arithmetic, bitwise, shift, ordering, logical, unary, compound assignment) applied to such an operand | LANG-V1 §7.10 |
-| `E0419`  | An intersection bound names two classes (`T extends Animal & Machine`): a class extends one class, so no argument is both; keep one class (the more derived one when they are related) and any number of interfaces | Type system §T.4.6 / `ERRATA.md` E1XX-GAP39 |
+| `E0419`  | An intersection bound names two classes (`T extends Animal & Machine`): a class extends one class, so no argument is both; keep one class (the more derived one when they are related) and any number of interfaces | Type system §T.4.6 / `ERRATA.md` E135 |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
 > diagnostic ("generic type inference has no solution", §T.4.2) originally
